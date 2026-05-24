@@ -172,6 +172,7 @@ impl<Id, Row> LocalResourceView<Id, Row> {
             .or_else(|| {
                 self.pending_mutations
                     .iter()
+                    .rev()
                     .find(|pending| pending.id.as_ref() == Some(id))
                     .and_then(|pending| pending.base_version.as_ref())
             })
@@ -362,6 +363,91 @@ mod tests {
         assert!(view.has_conflicts());
         assert_eq!(view.conflict_count, 1);
         assert_eq!(view.pending_mutations.len(), 0);
+    }
+
+    #[test]
+    fn resource_view_keeps_conflict_visible_under_later_pending_overlay() {
+        let mut state = initial_state();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:first").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(
+                SyncRow::new(
+                    "post_1",
+                    Post {
+                        title: "Local first".to_string(),
+                    },
+                )
+                .unwrap(),
+            ),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:second").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(
+                SyncRow::new(
+                    "post_1",
+                    Post {
+                        title: "Local second".to_string(),
+                    },
+                )
+                .unwrap(),
+            ),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:first").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(row("post_1", "Server updated", "row_2")),
+            reason: "base version is stale".to_string(),
+        });
+        state.apply_push(response);
+
+        let view = local_resource_view::<String, _>(&state).unwrap();
+
+        assert_eq!(view.rows[0].value.title, "Local second");
+        assert_eq!(view.rows[0].status, LocalResourceRowStatus::Conflict);
+        assert!(view.rows[0].is_conflict());
+        assert!(view.has_pending());
+        assert!(view.has_conflicts());
+        assert_eq!(view.conflict_count, 1);
+    }
+
+    #[test]
+    fn resource_view_base_version_uses_latest_pending_fallback() {
+        let view = LocalResourceView::<String, Post> {
+            rows: Vec::new(),
+            pending_mutations: vec![
+                LocalResourcePendingMutation {
+                    mutation_id: MutationId::new("device_1:first").unwrap(),
+                    id: Some("post_1".to_string()),
+                    op: SyncOp::Delete,
+                    base_version: Some(RowVersion::new("row_1").unwrap()),
+                },
+                LocalResourcePendingMutation {
+                    mutation_id: MutationId::new("device_1:second").unwrap(),
+                    id: Some("post_1".to_string()),
+                    op: SyncOp::Delete,
+                    base_version: Some(RowVersion::new("row_2").unwrap()),
+                },
+            ],
+            loading: false,
+            syncing: false,
+            stale: false,
+            error: String::new(),
+            version: 0,
+            pending_count: 2,
+            conflict_count: 0,
+            rejected_count: 0,
+            last_reason: SyncReason::Push,
+        };
+
+        assert_eq!(
+            view.base_version(&"post_1".to_string()).unwrap(),
+            &RowVersion::new("row_2").unwrap()
+        );
     }
 
     #[test]
