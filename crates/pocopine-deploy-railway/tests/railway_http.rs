@@ -158,6 +158,7 @@ async fn create_service_posts_source_image() {
         .and(body_partial_json(json!({
             "variables": { "input": {
                 "projectId": "proj_42",
+                "environmentId": "env_prod",
                 "name": "myapp-web",
                 "source": { "image": "ghcr.io/owner/myapp:sha" },
             } }
@@ -169,8 +170,16 @@ async fn create_service_posts_source_image() {
         .mount(&server)
         .await;
 
-    let svc = call_client(server.uri(), |c| {
-        c.create_service("proj_42", "myapp-web", "ghcr.io/owner/myapp:sha")
+    let vars = std::collections::BTreeMap::<String, String>::new();
+    let svc = call_client(server.uri(), move |c| {
+        c.create_service(
+            "proj_42",
+            "env_prod",
+            "myapp-web",
+            "ghcr.io/owner/myapp:sha",
+            None,
+            &vars,
+        )
     })
     .await
     .unwrap();
@@ -288,23 +297,44 @@ async fn upsert_variables_posts_variable_collection() {
 // ─── Deployments ────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn deploy_service_instance_posts_deploy_v2() {
+async fn redeploy_deployment_posts_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(bearer_token(TEST_TOKEN))
-        .and(body_string_contains("serviceInstanceDeployV2"))
+        .and(body_string_contains("deploymentRedeploy"))
+        .and(body_partial_json(json!({
+            "variables": { "id": "deploy_1" }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "deploymentRedeploy": { "id": "deploy_2" } }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    call_client(server.uri(), |c| c.redeploy_deployment("deploy_1"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn deploy_latest_source_posts_service_instance_deploy() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(bearer_token(TEST_TOKEN))
+        .and(body_string_contains("serviceInstanceDeploy"))
         .and(body_partial_json(json!({
             "variables": { "serviceId": "svc_1", "environmentId": "env_prod" }
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": { "serviceInstanceDeployV2": "deploy_1" }
+            "data": { "serviceInstanceDeploy": true }
         })))
         .expect(1)
         .mount(&server)
         .await;
 
     call_client(server.uri(), |c| {
-        c.deploy_service_instance("svc_1", "env_prod")
+        c.deploy_latest_source("svc_1", "env_prod")
     })
     .await
     .unwrap();

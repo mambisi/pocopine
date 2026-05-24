@@ -29,6 +29,10 @@ pub const RAILWAY_GRAPHQL: &str = "https://backboard.railway.com/graphql/v2";
 #[allow(clippy::upper_case_acronyms)]
 type JSON = serde_json::Value;
 type EnvironmentVariables = serde_json::Value;
+// `DateTime` shows up in `LatestDeployment.createdAt` and
+// `Project.deletedAt`. Represented as a raw ISO-8601 string — we only
+// surface it to the user / logs, never compute against it.
+type DateTime = String;
 
 /// Declare a `graphql_client` query/mutation struct against the pinned
 /// schema. One per operation in `graphql/railway.graphql`.
@@ -47,10 +51,18 @@ macro_rules! railway_op {
 railway_op!(FindProjects);
 railway_op!(CreateProject);
 railway_op!(CreateService);
+railway_op!(ConnectServiceImage);
 railway_op!(UpdateServiceInstance);
 railway_op!(UpsertVariables);
-railway_op!(DeployServiceInstance);
 railway_op!(CreateServiceDomain);
+railway_op!(LatestDeployment);
+railway_op!(BuildLogs);
+railway_op!(DeploymentLogs);
+railway_op!(RedeployDeployment);
+railway_op!(FetchDeployment);
+railway_op!(DeployLatestSource);
+railway_op!(FetchServiceInstance);
+railway_op!(FetchAutoDeployStatus);
 
 pub struct RailwayClient {
     /// Full GraphQL endpoint URL (every request POSTs here).
@@ -113,7 +125,9 @@ impl RailwayClient {
     // ─── Projects ────────────────────────────────────────────────────────
 
     /// List the caller's projects and return the first whose name
-    /// matches exactly.
+    /// matches exactly. Includes soft-deleted projects so the caller
+    /// can distinguish "no such project" from "project is in the 2-day
+    /// soft-delete window"; see [`Self::ensure_project`].
     pub fn find_project(&self, name: &str) -> Result<Option<Project>> {
         let data = self.run::<FindProjects>(find_projects::Variables {}, "projects")?;
         Ok(data
@@ -125,6 +139,7 @@ impl RailwayClient {
                 Project {
                     id: node.id,
                     name: node.name,
+                    deleted_at: node.deleted_at,
                     environments: node
                         .environments
                         .edges
@@ -141,6 +156,7 @@ impl RailwayClient {
                         .map(|e| Service {
                             id: e.node.id,
                             name: e.node.name,
+                            deleted_at: e.node.deleted_at,
                         })
                         .collect(),
                 }
@@ -152,8 +168,24 @@ impl RailwayClient {
     /// `projectUpsert`, so this lists projects and matches on name; a
     /// fresh project is created via `projectCreate` then re-queried so
     /// the caller always gets a uniformly-shaped [`Project`].
+    ///
+    /// Soft-deleted projects (within Railway's 2-day delete window) are
+    /// refused with an actionable error: the dashboard hides them but
+    /// the API still returns them, and using one as if it were live
+    /// silently drops every subsequent mutation — `serviceCreate`
+    /// returns a real-looking id that immediately becomes a tombstone,
+    /// then the deploy "succeeds" with a URL that resolves to nothing.
     pub fn ensure_project(&self, name: &str, workspace_id: Option<&str>) -> Result<Project> {
         if let Some(existing) = self.find_project(name)? {
+            if let Some(deleted_at) = existing.deleted_at.as_deref() {
+                bail!(
+                    "railway: project `{name}` is in the 2-day soft-delete window (deletedAt={deleted_at}). \
+                     Railway reserves the name during this period and silently drops mutations against the project. \
+                     Permanently delete it from the Railway dashboard (Project settings → Danger Zone → Delete project, \
+                     then confirm again under the deleted-projects view), or rename the app in Cargo.toml \
+                     (`[package].name` or `[deploy.railway].project = \"...\"`).",
+                );
+            }
             info!(target: "pocopine.log", project = %name, id = %existing.id, "railway project resolved");
             return Ok(existing);
         }
@@ -183,30 +215,101 @@ impl RailwayClient {
     /// Create an image-backed service in a project. Railway creates a
     /// service instance per environment automatically; per-env config is
     /// then pushed via [`Self::update_service_instance`].
-    pub fn create_service(&self, project_id: &str, name: &str, image: &str) -> Result<Service> {
-        info!(target: "pocopine.log", project = %project_id, service = %name, "railway serviceCreate");
+    ///
+    /// `registry_credentials` is mandatory for private images: Railway
+    /// binds them to the source at create time, and the dashboard shows
+    /// the credential under "Source". Passing `None` later via update
+    /// doesn't re-bind them (visually or for pulls), so first-deploy
+    /// callers must include credentials here when the image is private.
+    ///
+    /// `variables` is folded into the initial deploy Railway implicitly
+    /// queues from `serviceCreate`, so the first running container has
+    /// `POCOPINE_PROCESS`/`PORT`/etc already in scope rather than
+    /// needing a follow-up redeploy.
+    ///
+    /// **`environment_id` is required** — Railway's `ServiceCreateInput`
+    /// schema marks it `String` (not `String!`), but in practice it is
+    /// the field that actually binds the image source to the per-env
+    /// `ServiceInstance.source`. Without it the dashboard shows the
+    /// empty-state "choose an image" picker and no deploy fires.
+    /// Mirrors Railway's own CLI (`railway add --image`).
+    pub fn create_service(
+        &self,
+        project_id: &str,
+        environment_id: &str,
+        name: &str,
+        image: &str,
+        registry_credentials: Option<&pocopine_deploy::RegistryCredentials>,
+        variables: &BTreeMap<String, String>,
+    ) -> Result<Service> {
+        info!(
+            target: "pocopine.log",
+            project = %project_id,
+            env = %environment_id,
+            service = %name,
+            n_vars = variables.len(),
+            "railway serviceCreate",
+        );
+        let variables_json = if variables.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(
+                variables
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect(),
+            ))
+        };
         let vars = create_service::Variables {
             input: create_service::ServiceCreateInput {
                 branch: None,
-                environment_id: None,
+                environment_id: Some(environment_id.to_owned()),
                 icon: None,
                 name: Some(name.to_owned()),
                 project_id: project_id.to_owned(),
-                registry_credentials: None,
+                registry_credentials: registry_credentials.map(|c| {
+                    create_service::RegistryCredentialsInput {
+                        username: c.username.clone(),
+                        password: c.token.clone(),
+                    }
+                }),
                 source: Some(create_service::ServiceSourceInput {
                     image: Some(image.to_owned()),
                     repo: None,
                 }),
                 template_id: None,
                 template_service_id: None,
-                variables: None,
+                variables: variables_json,
             },
         };
         let data = self.run::<CreateService>(vars, "serviceCreate")?;
         Ok(Service {
             id: data.service_create.id,
             name: data.service_create.name,
+            deleted_at: None,
         })
+    }
+
+    /// Recovery: bind an image source to a service whose
+    /// `ServiceInstance.source` is currently unset. This is the state
+    /// legacy pocopine deploys left behind when `serviceCreate` ran
+    /// without `environmentId` — the dashboard shows the service but
+    /// with the empty-state image picker, and `serviceInstanceUpdate`
+    /// won't rebind because it treats the source assignment as a no-op.
+    /// `serviceConnect` is the only API surface that re-attaches a
+    /// source to an existing service without recreating it.
+    pub fn connect_service_image(&self, service_id: &str, image: &str) -> Result<()> {
+        info!(target: "pocopine.log", service = %service_id, image = %image, "railway serviceConnect (recover image source)");
+        let vars = connect_service_image::Variables {
+            id: service_id.to_owned(),
+            input: connect_service_image::ServiceConnectInput {
+                branch: None,
+                image: Some(image.to_owned()),
+                repo: None,
+            },
+        };
+        self.run::<ConnectServiceImage>(vars, "serviceConnect")?;
+        Ok(())
     }
 
     /// Push per-environment service-instance config: the image to run,
@@ -295,16 +398,312 @@ impl RailwayClient {
 
     // ─── Deployments ─────────────────────────────────────────────────────
 
-    /// Trigger a deployment of a service instance via the documented
-    /// `serviceInstanceDeployV2` mutation.
-    pub fn deploy_service_instance(&self, service_id: &str, environment_id: &str) -> Result<()> {
-        info!(target: "pocopine.log", service = %service_id, env = %environment_id, "railway serviceInstanceDeployV2");
-        let vars = deploy_service_instance::Variables {
+    /// Redeploy a specific deployment by id via `deploymentRedeploy` —
+    /// the same mutation Railway's own CLI uses for `railway redeploy`.
+    /// Use this when `serviceInstanceUpdate` was a no-op but we still
+    /// need to re-roll the container (updated env vars or rotated
+    /// registry credentials).
+    ///
+    /// "Not found" is tolerated: the deployment may have been
+    /// hard-deleted between when the caller read its id and this call,
+    /// and the original deploy flow will surface that via
+    /// `wait_for_deployment`.
+    pub fn redeploy_deployment(&self, deployment_id: &str) -> Result<Option<String>> {
+        info!(target: "pocopine.log", deployment = %deployment_id, "railway deploymentRedeploy");
+        let vars = redeploy_deployment::Variables {
+            id: deployment_id.to_owned(),
+        };
+        match self.run::<RedeployDeployment>(vars, "deploymentRedeploy") {
+            Ok(data) => Ok(Some(data.deployment_redeploy.id)),
+            Err(e) if e.to_string().to_lowercase().contains("not found") => {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    deployment = %deployment_id,
+                    "railway: deploymentRedeploy returned 'not found'; relying on implicit deploy from prior mutations",
+                );
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Fetch a specific deployment by id. Used as the wait anchor when
+    /// the caller has just triggered (or redeployed) a specific
+    /// deployment and wants to poll *that one* — not whatever
+    /// `latest_deployment(input)` happens to return, which Railway may
+    /// not have promoted to "latest" by the first poll.
+    pub fn fetch_deployment(&self, deployment_id: &str) -> Result<Option<DeploymentInfo>> {
+        let vars = fetch_deployment::Variables {
+            id: deployment_id.to_owned(),
+        };
+        match self.run::<FetchDeployment>(vars, "deployment") {
+            Ok(d) => {
+                let n = d.deployment;
+                Ok(Some(DeploymentInfo {
+                    id: n.id,
+                    status: format!("{:?}", n.status).to_uppercase(),
+                    url: n.url,
+                    static_url: n.static_url,
+                    created_at: format!("{:?}", n.created_at),
+                }))
+            }
+            Err(e) if e.to_string().to_lowercase().contains("not found") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Read the auto-deploy state for a service instance. Returns
+    /// `(enabled, can_enable, reason)`. Best-effort: returns
+    /// `(None, None, None)` on any error so the caller can keep
+    /// going.
+    pub fn fetch_auto_deploy_status(
+        &self,
+        project_id: &str,
+        service_id: &str,
+        environment_id: &str,
+    ) -> (Option<bool>, Option<bool>, Option<String>) {
+        let vars = fetch_auto_deploy_status::Variables {
+            project_id: project_id.to_owned(),
+            environment_id: environment_id.to_owned(),
+            service_id: service_id.to_owned(),
+        };
+        match self.run::<FetchAutoDeployStatus>(vars, "serviceInstanceAutoDeployStatus") {
+            Ok(d) => {
+                let s = d.service_instance_auto_deploy_status;
+                // Schema lists these as nullable; graphql_client may
+                // pull them as plain bool in some schema revisions —
+                // wrap explicitly with Into so either flavor compiles.
+                (Some(s.enabled), Some(s.can_enable), s.reason)
+            }
+            Err(_) => (None, None, None),
+        }
+    }
+
+    /// Kick a deploy from the source currently bound to the
+    /// ServiceInstance, regardless of whether a prior deployment
+    /// exists. Calls `serviceInstanceDeploy(latestCommit: true)` —
+    /// the same mutation Railway's CLI uses for
+    /// `railway redeploy --from-source`. Critical for recovering
+    /// services left in the "configured but never deployed" state by
+    /// earlier pocopine versions (or any wedged `isUpdatable=false`
+    /// instance with no `latestDeployment`).
+    pub fn deploy_latest_source(&self, service_id: &str, environment_id: &str) -> Result<()> {
+        info!(
+            target: "pocopine.log",
+            service = %service_id,
+            env = %environment_id,
+            "railway serviceInstanceDeploy(latestCommit: true)",
+        );
+        let vars = deploy_latest_source::Variables {
             service_id: service_id.to_owned(),
             environment_id: environment_id.to_owned(),
         };
-        self.run::<DeployServiceInstance>(vars, "serviceInstanceDeployV2")?;
+        let data = self.run::<DeployLatestSource>(vars, "serviceInstanceDeploy")?;
+        // Mutation returns Boolean — true == accepted, false == rejected.
+        // Log it either way so we know Railway didn't silently no-op.
+        info!(
+            target: "pocopine.log",
+            service = %service_id,
+            accepted = data.service_instance_deploy,
+            "railway serviceInstanceDeploy response",
+        );
+        if !data.service_instance_deploy {
+            anyhow::bail!(
+                "railway serviceInstanceDeploy returned false — Railway rejected the deploy trigger. \
+                 Likely causes: invalid registry credentials, image-pull permission denied, or the \
+                 service is in a transitional state (`isUpdatable=false`). Check the service in the \
+                 Railway dashboard.",
+            );
+        }
         Ok(())
+    }
+
+    /// Read the per-environment `ServiceInstance` — Railway's
+    /// "Settings" tab plus the pointer to its latest deployment.
+    /// Returns `None` when Railway has no instance record yet (the
+    /// `serviceCreate` ack hasn't materialized one).
+    pub fn fetch_service_instance(
+        &self,
+        service_id: &str,
+        environment_id: &str,
+    ) -> Result<Option<ServiceInstanceSnapshot>> {
+        let vars = fetch_service_instance::Variables {
+            service_id: service_id.to_owned(),
+            environment_id: environment_id.to_owned(),
+        };
+        let data = match self.run::<FetchServiceInstance>(vars, "serviceInstance") {
+            Ok(d) => d,
+            // Railway sometimes returns "Not found" rather than null
+            // when the instance hasn't been created yet — treat both as
+            // "not ready".
+            Err(e) if e.to_string().to_lowercase().contains("not found") => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let si = data.service_instance;
+        Ok(Some(ServiceInstanceSnapshot {
+            id: si.id,
+            is_updatable: si.is_updatable,
+            num_replicas: si.num_replicas.map(|n| n as u32),
+            region: si.region,
+            healthcheck_path: si.healthcheck_path,
+            source_image: si.source.and_then(|s| s.image),
+            latest_deployment_id: si.latest_deployment.as_ref().map(|d| d.id.clone()),
+            latest_deployment_status: si
+                .latest_deployment
+                .map(|d| format!("{:?}", d.status).to_uppercase()),
+        }))
+    }
+
+    // ─── Deployment verification ────────────────────────────────────────
+
+    /// Fetch the most recent deployment for a (project, service,
+    /// environment) triple. Returns `None` when Railway has no
+    /// deployment on record yet — caller decides whether to retry or
+    /// bail.
+    pub fn latest_deployment(
+        &self,
+        project_id: &str,
+        service_id: &str,
+        environment_id: &str,
+    ) -> Result<Option<DeploymentInfo>> {
+        let vars = latest_deployment::Variables {
+            input: latest_deployment::DeploymentListInput {
+                environment_id: Some(environment_id.to_owned()),
+                project_id: Some(project_id.to_owned()),
+                service_id: Some(service_id.to_owned()),
+                include_deleted: None,
+                status: None,
+            },
+        };
+        let data = self.run::<LatestDeployment>(vars, "deployments")?;
+        let Some(edge) = data.deployments.edges.into_iter().next() else {
+            return Ok(None);
+        };
+        let node = edge.node;
+        Ok(Some(DeploymentInfo {
+            id: node.id,
+            status: format!("{:?}", node.status).to_uppercase(),
+            url: node.url,
+            static_url: node.static_url,
+            created_at: format!("{:?}", node.created_at),
+        }))
+    }
+
+    /// Poll `latest_deployment` until it returns a deployment whose
+    /// status is a terminal one (success or failure) or the deadline
+    /// elapses. A spinner ticks with the current status so callers can
+    /// see progress.
+    pub fn wait_for_deployment(
+        &self,
+        project_id: &str,
+        service_id: &str,
+        environment_id: &str,
+        service_name: &str,
+        timeout_secs: u64,
+        target_deployment_id: Option<&str>,
+    ) -> Result<DeploymentOutcome> {
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(timeout_secs);
+        loop {
+            let elapsed = started.elapsed().as_secs();
+            // When the caller just triggered a *specific* deployment
+            // (e.g. via `deploymentRedeploy` which returns a new id),
+            // poll that one by id rather than "latest for the service"
+            // — Railway may not have promoted the freshly-cloned
+            // deployment to latest yet, and accepting an older
+            // SUCCESS deployment as the wait anchor would be a false
+            // positive.
+            let latest = match target_deployment_id {
+                Some(id) => self.fetch_deployment(id)?,
+                None => self.latest_deployment(project_id, service_id, environment_id)?,
+            };
+            match latest.as_ref() {
+                Some(d) => {
+                    info!(
+                        target: "pocopine.log",
+                        service = %service_name,
+                        deployment = %d.id,
+                        status = %d.status,
+                        elapsed_s = elapsed,
+                        "railway deployment status",
+                    );
+                    match d.status.as_str() {
+                        "SUCCESS" | "SLEEPING" => {
+                            return Ok(DeploymentOutcome::Live(latest.unwrap()));
+                        }
+                        "FAILED" | "CRASHED" | "REMOVED" => {
+                            return Ok(DeploymentOutcome::Failed(latest.unwrap()));
+                        }
+                        "SKIPPED" => return Ok(DeploymentOutcome::Skipped(latest.unwrap())),
+                        // BUILDING / DEPLOYING / QUEUED / INITIALIZING /
+                        // WAITING / NEEDS_APPROVAL / REMOVING — still in
+                        // flight; keep polling.
+                        _ => {}
+                    }
+                }
+                None => {
+                    info!(
+                        target: "pocopine.log",
+                        service = %service_name,
+                        elapsed_s = elapsed,
+                        "railway: no deployment record yet — waiting for Railway to register the trigger",
+                    );
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(DeploymentOutcome::Timeout(latest));
+            }
+            std::thread::sleep(Duration::from_secs(4));
+        }
+    }
+
+    /// Fetch the latest `limit` build + runtime log lines for a
+    /// deployment, build-phase first then runtime. Best-effort: log
+    /// queries can fail independently (e.g. build never started, so
+    /// `buildLogs` returns an empty list), and we'd rather print
+    /// whatever we have than swallow the original deploy failure.
+    pub fn fetch_deployment_logs(&self, deployment_id: &str, limit: i64) -> Vec<LogEntry> {
+        let mut out = Vec::new();
+
+        let build = self
+            .run::<BuildLogs>(
+                build_logs::Variables {
+                    deployment_id: deployment_id.to_owned(),
+                    limit: Some(limit),
+                },
+                "buildLogs",
+            )
+            .map(|d| d.build_logs)
+            .unwrap_or_default();
+        for l in build {
+            out.push(LogEntry {
+                phase: LogPhase::Build,
+                timestamp: l.timestamp,
+                severity: l.severity,
+                message: l.message,
+            });
+        }
+
+        let runtime = self
+            .run::<DeploymentLogs>(
+                deployment_logs::Variables {
+                    deployment_id: deployment_id.to_owned(),
+                    limit: Some(limit),
+                },
+                "deploymentLogs",
+            )
+            .map(|d| d.deployment_logs)
+            .unwrap_or_default();
+        for l in runtime {
+            out.push(LogEntry {
+                phase: LogPhase::Runtime,
+                timestamp: l.timestamp,
+                severity: l.severity,
+                message: l.message,
+            });
+        }
+
+        out
     }
 
     // ─── Domains ─────────────────────────────────────────────────────────
@@ -354,6 +753,11 @@ pub struct ServiceInstanceConfig {
 pub struct Project {
     pub id: String,
     pub name: String,
+    /// `Some(timestamp)` while Railway is holding the project in its
+    /// 2-day soft-delete window. The dashboard hides these but the
+    /// `projects` query still returns them — using one as if it were
+    /// live is the "deploy succeeded but I see nothing" footgun.
+    pub deleted_at: Option<String>,
     environments: Vec<Environment>,
     services: Vec<Service>,
 }
@@ -372,8 +776,14 @@ impl Project {
     }
 
     /// The service in this project with the given name, if any.
+    /// Soft-deleted services are skipped — Railway holds the name
+    /// reserved for ~2 days after deletion but the dashboard hides
+    /// them; treating one as "existing" would put us back on the bad
+    /// path where downstream mutations land in the void.
     pub fn service(&self, name: &str) -> Option<&Service> {
-        self.services.iter().find(|s| s.name == name)
+        self.services
+            .iter()
+            .find(|s| s.name == name && s.deleted_at.is_none())
     }
 }
 
@@ -383,10 +793,78 @@ pub struct Environment {
     pub name: String,
 }
 
+/// Read-only view of a [`ServiceInstance`] — the per-environment row
+/// the Railway dashboard shows on the "Settings" tab. Used to detect
+/// whether a `serviceInstanceUpdate` actually queued a new deployment
+/// (via `latest_deployment_id` diff) and to dump diagnostics when the
+/// deploy gets wedged.
+#[derive(Debug, Clone)]
+pub struct ServiceInstanceSnapshot {
+    pub id: String,
+    pub is_updatable: bool,
+    pub num_replicas: Option<u32>,
+    pub region: Option<String>,
+    pub healthcheck_path: Option<String>,
+    pub source_image: Option<String>,
+    pub latest_deployment_id: Option<String>,
+    pub latest_deployment_status: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeploymentInfo {
+    pub id: String,
+    /// Uppercase status string (e.g. `SUCCESS`, `BUILDING`,
+    /// `FAILED`). Mirrors Railway's `DeploymentStatus` enum.
+    pub status: String,
+    pub url: Option<String>,
+    pub static_url: Option<String>,
+    pub created_at: String,
+}
+
+/// Which phase a log line was emitted from. Build logs are usually
+/// where deploy failures surface (image pull, registry auth, missing
+/// binaries); runtime logs surface crashes after the container starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogPhase {
+    Build,
+    Runtime,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub phase: LogPhase,
+    pub timestamp: String,
+    pub severity: Option<String>,
+    pub message: String,
+}
+
+/// Terminal outcome from [`RailwayClient::wait_for_deployment`].
+/// `Timeout` carries the last status we saw (or `None` if no deployment
+/// ever appeared) so the caller can describe the wedge.
+#[derive(Debug, Clone)]
+pub enum DeploymentOutcome {
+    /// Reached `SUCCESS` / `SLEEPING`.
+    Live(DeploymentInfo),
+    /// Reached `FAILED` / `CRASHED` / `REMOVED`.
+    Failed(DeploymentInfo),
+    /// Reached `SKIPPED` — Railway no-opped the deploy (e.g. an
+    /// identical image was already running). Not a failure; callers
+    /// should treat the prior live deployment as the current state.
+    Skipped(DeploymentInfo),
+    /// Timed out before reaching a terminal state.
+    Timeout(Option<DeploymentInfo>),
+}
+
 #[derive(Debug, Clone)]
 pub struct Service {
     pub id: String,
     pub name: String,
+    /// `Some(timestamp)` while Railway is holding the service in its
+    /// soft-delete window (same 2-day grace period that applies to
+    /// projects). The dashboard hides these but `projects` still
+    /// returns them — re-using one as if it were live silently drops
+    /// every subsequent mutation. `Project::service` filters them out.
+    pub deleted_at: Option<String>,
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────
@@ -399,6 +877,7 @@ mod tests {
         Project {
             id: "proj_1".into(),
             name: "myapp".into(),
+            deleted_at: None,
             environments: vec![
                 Environment {
                     id: "env_prod".into(),
@@ -412,6 +891,7 @@ mod tests {
             services: vec![Service {
                 id: "svc_web".into(),
                 name: "myapp-web".into(),
+                deleted_at: None,
             }],
         }
     }

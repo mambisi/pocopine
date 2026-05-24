@@ -11,6 +11,7 @@ query FindProjects {
       node {
         id
         name
+        deletedAt
         environments {
           edges {
             node {
@@ -24,6 +25,7 @@ query FindProjects {
             node {
               id
               name
+              deletedAt
             }
           }
         }
@@ -45,6 +47,20 @@ mutation CreateService($input: ServiceCreateInput!) {
   }
 }
 
+# Recovery mutation: bind an image source to a service whose
+# ServiceInstance currently has `source.image = null`. This is the
+# state legacy pocopine deploys left behind when `serviceCreate` was
+# called without `environmentId` — Railway shows the service in the
+# dashboard but with the empty-state "choose an image" picker, and
+# `serviceInstanceUpdate(source.image=…)` won't rebind it. Calling
+# `serviceConnect` after the fact is the only API path to recover
+# such a service without deleting + recreating.
+mutation ConnectServiceImage($id: String!, $input: ServiceConnectInput!) {
+  serviceConnect(id: $id, input: $input) {
+    id
+  }
+}
+
 mutation UpdateServiceInstance(
   $serviceId: String!
   $environmentId: String
@@ -61,12 +77,135 @@ mutation UpsertVariables($input: VariableCollectionUpsertInput!) {
   variableCollectionUpsert(input: $input)
 }
 
-mutation DeployServiceInstance($serviceId: String!, $environmentId: String!) {
-  serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
+# Redeploy a specific deployment by id. This is the mutation Railway's
+# own CLI uses for `railway redeploy` (see
+# `railwayapp/cli/src/gql/mutations/strings/DeploymentRedeploy.graphql`).
+# We call it when `serviceInstanceUpdate` was a no-op on an existing
+# service so env-var / cred changes still ship — Railway needs a
+# concrete deployment id to clone, hence callers must read
+# `ServiceInstance.latestDeployment.id` first.
+mutation RedeployDeployment($id: String!) {
+  deploymentRedeploy(id: $id) {
+    id
+  }
+}
+
+# Fetch a deployment by id. Used to poll the *specific* deployment a
+# redeploy/trigger returns, rather than `latest` for the service —
+# Railway doesn't always promote a freshly-cloned redeploy to "latest"
+# by the first poll, and accepting the old `SUCCESS` deployment as the
+# wait anchor would be a false positive.
+query FetchDeployment($id: String!) {
+  deployment(id: $id) {
+    id
+    status
+    url
+    staticUrl
+    createdAt
+  }
+}
+
+# Kick off a deploy from the current source on the ServiceInstance,
+# regardless of whether a prior deployment exists. This is the
+# mutation Railway's CLI uses for `railway redeploy --from-source` and
+# is the only path that fires the *first* deploy on a service whose
+# source.image is set but `latestDeployment` is None. Critical for
+# recovering services left in the "configured but never deployed"
+# limbo by earlier pocopine versions.
+#
+# Mirrors `railwayapp/cli/src/gql/mutations/strings/ServiceInstanceDeployLatestCommit.graphql`.
+mutation DeployLatestSource($serviceId: String!, $environmentId: String!) {
+  serviceInstanceDeploy(
+    serviceId: $serviceId
+    environmentId: $environmentId
+    latestCommit: true
+  )
+}
+
+# Read the auto-deploy state for a service instance. When `enabled` is
+# false on a freshly-created service, mutations succeed but no
+# deployment fires until something flips the flag. The dashboard
+# enables this implicitly when the user clicks "Deploy"; the API does
+# not. `canEnable=false, reason=...` tells us why if Railway is
+# refusing to enable it.
+query FetchAutoDeployStatus($projectId: String!, $environmentId: String!, $serviceId: String!) {
+  serviceInstanceAutoDeployStatus(
+    projectId: $projectId
+    environmentId: $environmentId
+    serviceId: $serviceId
+  ) {
+    canEnable
+    enabled
+    reason
+  }
+}
+
+# Read the per-environment ServiceInstance — the canonical "Settings"
+# row in Railway's dashboard. `latestDeployment.id` is our anchor for
+# detecting whether `serviceInstanceUpdate` actually queued a new
+# deployment; `isUpdatable` flags when Railway considers the instance
+# in a settle-able state.
+query FetchServiceInstance($serviceId: String!, $environmentId: String!) {
+  serviceInstance(serviceId: $serviceId, environmentId: $environmentId) {
+    id
+    serviceId
+    environmentId
+    isUpdatable
+    numReplicas
+    region
+    healthcheckPath
+    source {
+      image
+      repo
+    }
+    latestDeployment {
+      id
+      status
+    }
+  }
 }
 
 mutation CreateServiceDomain($input: ServiceDomainCreateInput!) {
   serviceDomainCreate(input: $input) {
     domain
+  }
+}
+
+# The most recent deployment for a (project, service, environment)
+# triple. Used post-deploy to verify a real deployment exists so we
+# don't print a "deployed to <url>" line when Railway silently dropped
+# the work (e.g. against a soft-deleted project or a no-op update).
+query LatestDeployment($input: DeploymentListInput!) {
+  deployments(input: $input, first: 1) {
+    edges {
+      node {
+        id
+        status
+        url
+        staticUrl
+        createdAt
+      }
+    }
+  }
+}
+
+# Logs printed when a deployment ends in a failure state. Build logs
+# cover the image-pull / pre-deploy phase (most failures land here);
+# deployment logs cover the runtime container (crashes after start).
+# Both are requested with a tight limit so failed-deploy output stays
+# scannable in a terminal.
+query BuildLogs($deploymentId: String!, $limit: Int) {
+  buildLogs(deploymentId: $deploymentId, limit: $limit) {
+    message
+    severity
+    timestamp
+  }
+}
+
+query DeploymentLogs($deploymentId: String!, $limit: Int) {
+  deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
+    message
+    severity
+    timestamp
   }
 }
