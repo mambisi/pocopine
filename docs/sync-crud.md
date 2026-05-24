@@ -101,6 +101,7 @@ pieces:
 
 The remaining higher-level layer is deliberately smaller now:
 
+- scoped generated `observe_view(...)` hooks for framework-native resource subscriptions,
 - fluent options builders such as `customers.create_options().optimistic(row).send(...)`,
 - transaction convenience helpers such as `customers.transaction_options().require_online().run(...)`,
 - macro tests that exercise more complete generated browser-style call sites,
@@ -442,6 +443,84 @@ contract has a durable row-scoped pending-mutation purge operation.
 using the latest canonical `base_version` from the view. The conflict
 marker remains visible until the server accepts the retry and returns a
 new canonical row.
+
+## Local Resource Subscriptions
+
+`view()` is an owned snapshot. It is still useful inside event handlers,
+server-rendered tests, and one-shot calculations. Component UIs usually
+need a subscription instead: run once with the current typed view, then
+run again whenever the collection's owning scope is updated by open,
+pull, push, conflict clearing, or any other `Handle::update` path.
+
+Generated resources will expose that path as a scoped observer:
+
+```rust
+let page = pocopine::this::<CustomersPage>();
+
+customers.observe_view(move |state, previous| {
+    page.update(|page| {
+        match state {
+            pocopine_sync_crud::LocalResourceViewState::Ready(view) => {
+                page.pending_count = view.pending_count;
+                page.conflict_count = view.conflict_count;
+                page.rows = view.rows.iter().map(|row| row.value.clone()).collect();
+            }
+            pocopine_sync_crud::LocalResourceViewState::Error(err) => {
+                page.error = err.clone();
+            }
+        }
+
+        if previous.map(|prev| prev.has_conflicts()) != Some(state.has_conflicts()) {
+            page.show_conflict_banner = state.has_conflicts();
+        }
+    });
+});
+```
+
+The observer is framework-native:
+
+- it is installed against the current Pocopine scope,
+- it is released automatically when that scope unmounts,
+- it tracks the resource owner's scope and re-runs when that scope is
+  triggered,
+- it passes the same typed `LocalResourceView` shape that CRUD writes use,
+- it never exposes raw `CollectionState`, `SyncRow`, or protocol mutation
+  structs to component code.
+
+The first callback invocation will be deferred to the next tick so
+callers can install the observer from lifecycle code and still call
+`Handle::update` inside the callback without re-entering the lifecycle
+borrow.
+
+`LocalResourceViewState` will be a small comparable wrapper around either
+a ready view or a local view-construction error such as an
+already-borrowed component/store handle:
+
+```rust
+pub enum LocalResourceViewState<Id, Row> {
+    Ready(LocalResourceView<Id, Row>),
+    Error(String),
+}
+
+impl<Id, Row> LocalResourceViewState<Id, Row> {
+    pub fn view(&self) -> Option<&LocalResourceView<Id, Row>>;
+    pub fn error(&self) -> Option<&str>;
+    pub fn has_pending(&self) -> bool;
+    pub fn has_conflicts(&self) -> bool;
+}
+```
+
+The error variant stores a displayable string instead of `SyncError`, so
+the observer state can be compared. The generated `observe_view(...)`
+method will require `Id: PartialEq` and `Row: PartialEq` because it
+compares the typed view to avoid invoking the callback for repeated
+framework updates that do not change the resource view. Those bounds are
+local to the observer path; create/save/remove do not need row equality.
+
+This is still a component subscription, not a database query planner. It
+does not read arbitrary SQLite tables, push filters into SQL, or replace
+the server-side source query. Database-specific query adapters remain a
+later layer.
 
 ## Generated Client API
 
