@@ -7,8 +7,24 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::info;
+
+/// Read the response body as text and parse it as `T`, including the
+/// status and the raw body in the error when parsing fails (or when the
+/// body is empty). Used at every JSON-parse site so debug output always
+/// surfaces what the host actually returned.
+fn parse_json<T: DeserializeOwned>(resp: reqwest::blocking::Response, ctx: &str) -> Result<T> {
+    let status = resp.status();
+    let body = resp
+        .text()
+        .with_context(|| format!("{ctx}: reading response body (status {status})"))?;
+    if body.trim().is_empty() {
+        bail!("{ctx}: empty response body (status {status})");
+    }
+    serde_json::from_str(&body)
+        .with_context(|| format!("{ctx}: parse failed (status {status}, body: {body})"))
+}
 
 pub const RENDER_API_BASE: &str = "https://api.render.com/v1";
 
@@ -64,13 +80,25 @@ impl RenderClient {
             .context("render find_service_by_name: request failed")?
             .error_for_status()
             .context("render find_service_by_name")?;
-        let envelopes: Vec<Envelope> = resp
-            .json()
-            .context("render find_service_by_name: parse response")?;
+        let envelopes: Vec<Envelope> = parse_json(resp, "render find_service_by_name")?;
         Ok(envelopes
             .into_iter()
             .map(|e| e.service)
             .find(|s| s.name == name))
+    }
+
+    /// GET /services/{id} — fetch a single service. Used to refresh the
+    /// onrender.com URL after a deploy goes live (the URL isn't
+    /// populated at create time).
+    pub fn get_service(&self, service_id: &str) -> Result<Service> {
+        let path = format!("/services/{service_id}");
+        let resp = self
+            .req(reqwest::Method::GET, &path)
+            .send()
+            .context("render get_service: request failed")?
+            .error_for_status()
+            .context("render get_service")?;
+        parse_json(resp, "render get_service")
     }
 
     /// POST /services — create a new service.
@@ -91,9 +119,7 @@ impl RenderClient {
         struct CreateResp {
             service: Service,
         }
-        let resp: CreateResp = resp
-            .json()
-            .context("render create_service: parse response")?;
+        let resp: CreateResp = parse_json(resp, "render create_service")?;
         Ok(resp.service)
     }
 
@@ -147,9 +173,8 @@ impl RenderClient {
             .context("render ensure_registry_credential: list")?;
         // List items are either flat credential objects or
         // `{ registryCredential, cursor }` envelopes — accept both.
-        let items: Vec<serde_json::Value> = resp
-            .json()
-            .context("render ensure_registry_credential: parse list")?;
+        let items: Vec<serde_json::Value> =
+            parse_json(resp, "render ensure_registry_credential: list")?;
         let existing_id = items.into_iter().find_map(|item| {
             let obj = item.get("registryCredential").unwrap_or(&item);
             let id = obj.get("id")?.as_str()?;
@@ -193,9 +218,8 @@ impl RenderClient {
                 }
                 // Render returns the created credential, flat or under a
                 // `registryCredential` envelope — accept both.
-                let v: serde_json::Value = resp
-                    .json()
-                    .context("render ensure_registry_credential: parse create response")?;
+                let v: serde_json::Value =
+                    parse_json(resp, "render ensure_registry_credential: create")?;
                 let id = v
                     .get("id")
                     .or_else(|| v.get("registryCredential").and_then(|rc| rc.get("id")))
@@ -261,7 +285,16 @@ impl RenderClient {
     /// POST /services/{id}/deploys — trigger a new deploy with the
     /// given image URL. Render queues a build/deploy and returns the
     /// `Deploy` record; poll with `wait_deploy`.
+    ///
+    /// Snapshots the prior latest-deploy id before POSTing so the
+    /// empty-body fallback (Render sometimes responds 2xx with no body
+    /// when a PATCH already queued a deploy) can wait for a *new*
+    /// deployment matching the requested image, rather than accepting
+    /// whatever `/deploys?limit=1` returns — which could be the prior
+    /// `live` deploy and would cause `wait_deploy` to immediately
+    /// report success for the old image tag.
     pub fn trigger_deploy(&self, service_id: &str, image_url: &str) -> Result<Deploy> {
+        let prior_id = self.latest_deploy(service_id).ok().flatten().map(|d| d.id);
         let path = format!("/services/{service_id}/deploys");
         let body = serde_json::json!({ "imageUrl": image_url });
         let resp = self
@@ -274,10 +307,86 @@ impl RenderClient {
             let b = resp.text().unwrap_or_default();
             bail!("render trigger_deploy failed ({status}): {b}");
         }
-        let deploy: Deploy = resp
-            .json()
-            .context("render trigger_deploy: parse response")?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .context("render trigger_deploy: reading response body")?;
+        if body.trim().is_empty() {
+            info!(
+                target: "pocopine.log",
+                service = %service_id,
+                status = %status,
+                prior_deploy = ?prior_id,
+                image = %image_url,
+                "render trigger_deploy: empty body, polling for a new deploy with the requested image",
+            );
+            return self.poll_for_new_deploy(service_id, image_url, prior_id.as_deref());
+        }
+        let deploy: Deploy = serde_json::from_str(&body).with_context(|| {
+            format!("render trigger_deploy: parse failed (status {status}, body: {body})")
+        })?;
         Ok(deploy)
+    }
+
+    /// Wait for `latest_deploy` to return a Deploy that is strictly
+    /// newer than `prior_id` and whose `image_ref` matches the
+    /// requested `image_url`. Used by `trigger_deploy` when Render
+    /// returned an empty 2xx body so we don't latch onto the previous
+    /// `live` deploy. Caps at 30 s — long enough for Render to register
+    /// the new deploy, short enough that a wedge surfaces quickly.
+    fn poll_for_new_deploy(
+        &self,
+        service_id: &str,
+        image_url: &str,
+        prior_id: Option<&str>,
+    ) -> Result<Deploy> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(latest) = self.latest_deploy(service_id)? {
+                let id_is_new = prior_id.is_none_or(|p| latest.id != p);
+                let image_matches = latest.image_ref() == Some(image_url);
+                if id_is_new && image_matches {
+                    return Ok(latest);
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!(
+                    "render trigger_deploy: empty body and no new deploy with image `{image_url}` \
+                     appeared within 30s (last seen latest: {prior_id:?}). Render may not have \
+                     registered the new deploy yet; re-run or check the dashboard."
+                );
+            }
+            std::thread::sleep(Duration::from_secs(3));
+        }
+    }
+
+    /// GET /services/{id}/deploys?limit=1 — return the most recent deploy
+    /// for a service, if any. Used as a fallback when `trigger_deploy`
+    /// gets an empty 2xx body so the caller still has a deploy handle to
+    /// poll.
+    pub fn latest_deploy(&self, service_id: &str) -> Result<Option<Deploy>> {
+        let path = format!("/services/{service_id}/deploys");
+        let resp = self
+            .req(reqwest::Method::GET, &path)
+            .query(&[("limit", "1")])
+            .send()
+            .context("render latest_deploy: request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let b = resp.text().unwrap_or_default();
+            bail!("render latest_deploy failed ({status}): {b}");
+        }
+        // Tolerate either an envelope list or a flat deploy list.
+        let v: serde_json::Value = parse_json(resp, "render latest_deploy")?;
+        let arr = v.as_array().cloned().unwrap_or_default();
+        let Some(first) = arr.into_iter().next() else {
+            return Ok(None);
+        };
+        let deploy_val = first.get("deploy").cloned().unwrap_or(first);
+        let deploy: Deploy = serde_json::from_value(deploy_val.clone()).with_context(|| {
+            format!("render latest_deploy: parse failed (body item: {deploy_val})")
+        })?;
+        Ok(Some(deploy))
     }
 
     /// GET /services/{id}/deploys/{deploy_id} — fetch a single deploy.
@@ -289,32 +398,159 @@ impl RenderClient {
             .context("render get_deploy: request failed")?
             .error_for_status()
             .context("render get_deploy")?;
-        resp.json().context("render get_deploy: parse response")
+        parse_json(resp, "render get_deploy")
     }
 
     /// Poll the deploy until it reaches `live` (success) or one of the
     /// terminal failure states. `timeout_secs` caps the overall wait;
-    /// each poll uses a short HTTP timeout.
-    pub fn wait_deploy(&self, service_id: &str, deploy_id: &str, timeout_secs: u64) -> Result<()> {
+    /// each poll uses a short HTTP timeout. A spinner ticks while
+    /// waiting and the message reflects the latest Render status so the
+    /// user can see progress through `build_in_progress` →
+    /// `update_in_progress` → `live`.
+    pub fn wait_deploy(
+        &self,
+        service_id: &str,
+        deploy_id: &str,
+        owner_id: &str,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let style = indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner());
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_style(style);
+        pb.enable_steady_tick(Duration::from_millis(120));
+        pb.set_message(format!("render deploy {deploy_id}: queued"));
+
         let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
-        loop {
-            let d = self.get_deploy(service_id, deploy_id)?;
+        let result = loop {
+            let d = match self.get_deploy(service_id, deploy_id) {
+                Ok(d) => d,
+                Err(e) => break Err(e),
+            };
+            let status = d.status.as_deref().unwrap_or("(no status)");
+            pb.set_message(format!("render deploy {deploy_id}: {status}"));
             match d.status.as_deref() {
-                Some("live") => return Ok(()),
+                Some("live") => break Ok(()),
                 Some(s) if is_terminal_failure(s) => {
-                    bail!("render deploy {deploy_id} ended in `{s}` state");
+                    break Err(anyhow::anyhow!(
+                        "render deploy {deploy_id} ended in `{s}` state"
+                    ));
                 }
                 _ => {}
             }
             if std::time::Instant::now() >= deadline {
-                bail!(
+                break Err(anyhow::anyhow!(
                     "render deploy {deploy_id} did not reach `live` within {timeout_secs}s (last status: {:?})",
                     d.status,
-                );
+                ));
             }
             std::thread::sleep(Duration::from_secs(5));
+        };
+
+        match &result {
+            Ok(()) => pb.finish_with_message(format!("render deploy {deploy_id}: live ✓")),
+            Err(e) => pb.finish_with_message(format!("render deploy {deploy_id}: {e}")),
+        }
+
+        // On failure / timeout, dump the tail of Render's logs to
+        // stderr so the user can diagnose without opening the
+        // dashboard. Best-effort — printing the log error would just
+        // bury the original deploy error.
+        if result.is_err() {
+            let logs = self.fetch_logs(owner_id, service_id, FAIL_LOG_LINES);
+            print_render_logs(service_id, deploy_id, &logs);
+        }
+        result
+    }
+
+    /// Fetch the most recent `limit` log lines for a service via
+    /// `GET /v1/logs?resource[]=<service_id>&direction=backward`.
+    /// Returns an empty list on any error — caller is expected to be
+    /// already reporting a primary failure and shouldn't double-fault.
+    pub fn fetch_logs(&self, owner_id: &str, service_id: &str, limit: u32) -> Vec<RenderLog> {
+        let resp = match self
+            .req(reqwest::Method::GET, "/logs")
+            .query(&[
+                ("ownerId", owner_id),
+                ("resource", service_id),
+                ("limit", &limit.to_string()),
+                ("direction", "backward"),
+            ])
+            .send()
+        {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                tracing::debug!(
+                    target: "pocopine.log",
+                    status = %r.status(),
+                    "render fetch_logs: non-success",
+                );
+                return Vec::new();
+            }
+            Err(e) => {
+                tracing::debug!(target: "pocopine.log", error = %e, "render fetch_logs: request failed");
+                return Vec::new();
+            }
+        };
+        let body: serde_json::Value = match resp.json() {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        let logs = body.get("logs").and_then(|l| l.as_array());
+        let Some(logs) = logs else { return Vec::new() };
+        // Render returns newest-first when direction=backward; flip so
+        // callers see chronological order.
+        let mut out: Vec<RenderLog> = logs
+            .iter()
+            .map(|l| RenderLog {
+                timestamp: l
+                    .get("timestamp")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+                message: l
+                    .get("message")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+            })
+            .collect();
+        out.reverse();
+        out
+    }
+}
+
+/// Default tail size when a deploy fails / times out. Wide enough to
+/// capture a typical Rust build error or panic trace, tight enough to
+/// stay scannable in a terminal.
+const FAIL_LOG_LINES: u32 = 80;
+
+/// Dump the tail of Render logs for a failed deployment to stderr.
+fn print_render_logs(service_id: &str, deploy_id: &str, logs: &[RenderLog]) {
+    eprintln!();
+    eprintln!("── render logs · service {service_id} · deploy {deploy_id} ──────────");
+    if logs.is_empty() {
+        eprintln!("(no logs returned — Render may not have captured any yet, or the credential lacks the `logs` scope)");
+        return;
+    }
+    for entry in logs {
+        if entry.timestamp.is_empty() {
+            eprintln!("{}", entry.message);
+        } else {
+            eprintln!("{} {}", entry.timestamp, entry.message);
         }
     }
+    eprintln!("── end logs ────────────────────────────────────");
+    eprintln!();
+}
+
+/// Minimal Render log entry — the API has many more fields (labels,
+/// instance id, etc.) that we don't surface to keep the failed-deploy
+/// output scannable.
+#[derive(Debug, Clone)]
+pub struct RenderLog {
+    pub timestamp: String,
+    pub message: String,
 }
 
 fn is_terminal_failure(status: &str) -> bool {
@@ -421,11 +657,39 @@ pub struct Service {
     pub name: String,
     #[serde(default, rename = "type")]
     pub service_type: Option<String>,
-    /// Public URL of the service (web services only).
+    /// Some response shapes carry the public URL at the top level; most
+    /// nest it under `serviceDetails.url`. Use [`Service::public_url`]
+    /// rather than reading this field directly.
     #[serde(default)]
     pub url: Option<String>,
+    /// Nested details Render returns on GET — includes the assigned
+    /// onrender.com URL for web services.
+    #[serde(default, rename = "serviceDetails")]
+    pub service_details: Option<ServiceDetails>,
+    /// Render dashboard URL for this service. Surfaced so the CLI can
+    /// print a clickable link even before the public URL is assigned.
+    #[serde(default, rename = "dashboardUrl")]
+    pub dashboard_url: Option<String>,
     #[serde(default)]
     pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServiceDetails {
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+impl Service {
+    /// The public onrender.com URL Render has assigned, regardless of
+    /// whether the response carries it at the top level or under
+    /// `serviceDetails`. Returns `None` for background workers or
+    /// before Render has finished provisioning the hostname.
+    pub fn public_url(&self) -> Option<&str> {
+        self.url
+            .as_deref()
+            .or_else(|| self.service_details.as_ref().and_then(|d| d.url.as_deref()))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -433,6 +697,30 @@ pub struct Deploy {
     pub id: String,
     #[serde(default)]
     pub status: Option<String>,
+    /// Image descriptor (Render returns `{ ref, sha }` for image-backed
+    /// services). We surface the `ref` via [`Deploy::image_ref`].
+    #[serde(default)]
+    pub image: Option<DeployImage>,
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(default, rename = "finishedAt")]
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployImage {
+    #[serde(default, rename = "ref")]
+    pub image_ref: Option<String>,
+    #[serde(default)]
+    pub sha: Option<String>,
+}
+
+impl Deploy {
+    /// Convenience: return the image ref (`ghcr.io/owner/app:tag`) if
+    /// Render included one on this deploy.
+    pub fn image_ref(&self) -> Option<&str> {
+        self.image.as_ref().and_then(|i| i.image_ref.as_deref())
+    }
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────
