@@ -35,7 +35,7 @@ pub fn run(args: &DeployArgs) -> Result<()> {
         Some(DeployCmd::Auth(a)) => run_auth(a),
         Some(DeployCmd::Doctor) => run_doctor(),
         Some(DeployCmd::Status(s)) => run_status(args, s),
-        Some(DeployCmd::Config(c)) => run_config(c),
+        Some(DeployCmd::Config(c)) => run_config(args, c),
     }
 }
 
@@ -280,7 +280,7 @@ fn run_auth(args: &AuthArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_config(args: &ConfigArgs) -> Result<()> {
+fn run_config(parent: &DeployArgs, args: &ConfigArgs) -> Result<()> {
     match &args.cmd {
         ConfigCmd::Set { host, field, value } => {
             let value = match value.as_deref() {
@@ -295,30 +295,45 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
                     line.trim().to_owned()
                 }
             };
-            if value.is_empty() {
+            // Reject whitespace-only too — these would pass an
+            // `is_empty()` check but would be sent verbatim to host
+            // APIs and produce confusing 4xx errors.
+            if value.trim().is_empty() {
                 bail!("empty value");
             }
+            // Stash the original (pre-trim) value if it survives the
+            // whitespace check, but strip leading/trailing whitespace
+            // so a copy-paste with a trailing newline doesn't corrupt
+            // the stored field. Inner whitespace is preserved.
+            let value = value.trim().to_owned();
             config::store_field(host, field, &value)?;
             eprintln!("Stored `[default.{host}] {field} = {value:?}` to ~/.pocopine/config.toml.",);
             Ok(())
         }
-        ConfigCmd::Get { host, field, path } => {
-            // Read the project tier from the given path so users can
-            // see exactly which tier wins for their checkout, not just
-            // env + file. Surfacing the source name is the whole
-            // point of this command.
-            let project_value = read_project_field(path, host, field).ok();
+        ConfigCmd::Get { host, field } => {
+            // Resolve the project tier the same way `deploy()` will:
+            // apply the `[deploy.production.<host>]` overlay when the
+            // parent --prod flag is set. Without this the `get`
+            // command would report `[deploy.<host>].<field>` for a
+            // project whose --prod deploy actually resolves to the
+            // production-overlay value.
+            let project_path = parent.path.as_path();
+            let project_value = read_project_field(project_path, host, field, parent.prod).ok();
             let resolved = config::resolve_with_source(host, field, project_value.as_deref());
             match resolved {
                 Some((value, source)) => {
                     let src = match source {
                         config::Source::Env => {
-                            format!("env (${})", config::env_var_name(host, field),)
+                            format!("env (${})", config::env_var_name(host, field))
                         }
-                        config::Source::Project => format!(
-                            "project ({}/Cargo.toml [deploy.{host}].{field})",
-                            path.display(),
-                        ),
+                        config::Source::Project => {
+                            let suffix = if parent.prod {
+                                format!(" [deploy.production.{host}].{field}")
+                            } else {
+                                format!(" [deploy.{host}].{field}")
+                            };
+                            format!("project ({}/Cargo.toml{suffix})", project_path.display(),)
+                        }
                         config::Source::File => "file (~/.pocopine/config.toml)".to_owned(),
                     };
                     println!("{value}");
@@ -367,18 +382,35 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
 /// project's Cargo.toml — used by `config get` to surface the
 /// project-tier value when reporting the resolved source. Best-effort;
 /// any read/parse error is treated as "no project value".
-fn read_project_field(project: &Path, host: &str, field: &str) -> Result<String> {
+fn read_project_field(project: &Path, host: &str, field: &str, prod: bool) -> Result<String> {
     let manifest = read_manifest(project)?;
-    let value = manifest
+    let deploy = manifest
         .get("package")
         .and_then(|p| p.get("metadata"))
         .and_then(|m| m.get("pocopine"))
         .and_then(|p| p.get("deploy"))
-        .and_then(|d| d.get(host))
+        .context("not set in project Cargo.toml")?;
+
+    // When `--prod` is set, the deploy path merges the
+    // `[deploy.production.<host>]` overlay on top of the base
+    // `[deploy.<host>]`. The `get` command must do the same so its
+    // "source" report matches what an actual --prod deploy resolves.
+    if prod {
+        if let Some(v) = deploy
+            .get("production")
+            .and_then(|p| p.get(host))
+            .and_then(|h| h.get(field))
+            .and_then(|v| v.as_str())
+        {
+            return Ok(v.to_owned());
+        }
+    }
+    deploy
+        .get(host)
         .and_then(|h| h.get(field))
         .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    value.context("not set in project Cargo.toml")
+        .map(str::to_owned)
+        .context("not set in project Cargo.toml")
 }
 
 fn run_status(args: &DeployArgs, opts: &StatusArgs) -> Result<()> {
