@@ -311,12 +311,13 @@ impl DeployAdapter for FlyAdapter {
         // 1. Ensure the app exists FIRST — `registry.fly.io/<app>:<sha>`
         //    requires the app namespace to exist before `docker push`
         //    can target it (regression fix for the Phase 4 review).
+        //
+        // Three-tier resolution for org + primary_region:
+        //   $POCOPINE_FLY_<FIELD>  →  [deploy.fly].<field>  →  ~/.pocopine/config.toml
         let overrides = fly_override(spec);
-        let org = overrides
-            .org
-            .clone()
+        let org = pocopine_deploy::config::resolve("fly", "org", overrides.org.as_deref())
             .unwrap_or_else(|| "personal".to_owned());
-        let region = primary_region(&overrides);
+        let region = resolved_primary_region(&overrides);
 
         let client = machines::MachinesClient::new(&token);
         client.ensure_app(&spec.app_name, &org)?;
@@ -603,6 +604,22 @@ fn primary_region(o: &FlyOverride) -> String {
         .clone()
         .or_else(|| o.regions.first().cloned())
         .unwrap_or_else(|| "fra".into())
+}
+
+/// Three-tier resolver layered on top of [`primary_region`]:
+/// `$POCOPINE_FLY_PRIMARY_REGION` → `[deploy.fly].primary_region` →
+/// `~/.pocopine/config.toml [default.fly] primary_region` → first
+/// entry of `[deploy.fly].regions` → `"fra"`. Keeps the existing
+/// regions-array + hardcoded fallback for projects that haven't moved
+/// to the per-user config.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolved_primary_region(o: &FlyOverride) -> String {
+    if let Some(v) =
+        pocopine_deploy::config::resolve("fly", "primary_region", o.primary_region.as_deref())
+    {
+        return v;
+    }
+    o.regions.first().cloned().unwrap_or_else(|| "fra".into())
 }
 
 /// Returns true iff the machine carries our `pocopine.process` metadata
