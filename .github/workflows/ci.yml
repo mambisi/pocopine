@@ -225,6 +225,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-host
+          # Host workspace tests compile multiple cdylib/rlib crates and
+          # examples with colliding output names. Reusing target artifacts
+          # from a broad restore key can leave Cargo pointing at stale local
+          # crate metadata, so this job only caches registry/git deps.
+          cache-targets: false
       # `pine-icons` ships fs-based manifest tests; `pocopine-cli`
       # is host-only; `observability-smoke` owns a local OTLP
       # collector and has a dedicated job below. Other crates'
