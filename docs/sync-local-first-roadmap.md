@@ -215,6 +215,13 @@ The framework needs a typed client-side view layer that can:
 This can borrow ideas from TanStack DB, but Pocopine should keep the API
 resource-oriented and framework-native.
 
+The first implementation step is a scoped generated resource observer,
+not a database query engine. `Resource::observe_view(...)` will watch the
+Pocopine scope that owns the resource collection and emit a typed
+`LocalResourceViewState<Id, Row>` whenever the view changes. It gives
+component authors a reactive read path while preserving the existing
+`CollectionState` boundary as an implementation detail.
+
 ### 7. Auth And Multi-Tenant Boundaries
 
 Sync does not make local data trusted.
