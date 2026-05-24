@@ -24,9 +24,11 @@ pub mod client;
 #[cfg(not(target_arch = "wasm32"))]
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(not(target_arch = "wasm32"))]
+use pocopine_deploy::DeployState;
 use pocopine_deploy::{
     common, AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint,
-    Mode, StagedFiles,
+    Mode, ProcessStatus, StagedFiles,
 };
 use serde::Deserialize;
 
@@ -363,22 +365,33 @@ impl DeployAdapter for RenderAdapter {
 
             // 4. Trigger deploy with the new image URL and wait for live.
             let deploy = client.trigger_deploy(&svc.id, tag)?;
-            client.wait_deploy(&svc.id, &deploy.id, WAIT_LIVE_SECS)?;
+            client.wait_deploy(&svc.id, &deploy.id, owner_id, WAIT_LIVE_SECS)?;
 
+            // Re-fetch the service to pick up the assigned onrender.com
+            // URL (Render doesn't populate it on the create/list shape
+            // returned earlier, and on first deploy it's only assigned
+            // once the service is live).
             if proc.is_public() {
-                if let Some(url) = svc.url.clone() {
-                    last_url = url;
+                let refreshed = client
+                    .get_service(&svc.id)
+                    .with_context(|| format!("render: refreshing `{}` after deploy", svc.name))?;
+                if let Some(url) = refreshed.public_url() {
+                    last_url = url.to_owned();
                 }
             }
             let _ = (env_vars.len(), BTreeMap::<String, String>::new()); // silence unused warning on minimal builds
         }
 
+        if last_url.is_empty() {
+            tracing::warn!(
+                target: "pocopine.log",
+                "render: deploy completed but no public URL was reported by Render for any web process. \
+                 Check the Render dashboard for the assigned hostname.",
+            );
+        }
+
         Ok(DeployOutcome {
-            url: if last_url.is_empty() {
-                format!("https://{}.onrender.com", spec.app_name)
-            } else {
-                last_url
-            },
+            url: last_url,
             host_ids: vec![owner_id.to_owned()],
         })
     }
@@ -390,6 +403,85 @@ impl DeployAdapter for RenderAdapter {
 
     fn post_deploy_hint(&self, _spec: &DeploySpec, outcome: &DeployOutcome) -> Vec<Hint> {
         vec![Hint::Info(format!("deployed to {}", outcome.url))]
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn status(&self, spec: &DeploySpec) -> Result<Vec<ProcessStatus>> {
+        let token = load_render_token()?;
+        let client = client::RenderClient::new(&token);
+        let mut out = Vec::new();
+        for (proc_name, _proc) in spec.processes() {
+            let service_name = format!("{}-{proc_name}", spec.app_name);
+            let svc = client
+                .find_service_by_name(&service_name)
+                .with_context(|| format!("render status: lookup `{service_name}`"))?;
+            let Some(svc) = svc else {
+                out.push(ProcessStatus {
+                    process: proc_name.to_owned(),
+                    host_service_id: None,
+                    deploy_id: None,
+                    state: DeployState::Unknown,
+                    raw_state: String::new(),
+                    url: None,
+                    image: None,
+                    created_at: None,
+                    finished_at: None,
+                });
+                continue;
+            };
+            // The list endpoint (find_service_by_name) doesn't reliably
+            // populate `serviceDetails.url`; fetch the service detail
+            // so the status table reports the actual onrender.com URL
+            // for live web services instead of `-`. Best-effort —
+            // fall back to the list-shape `svc` on error.
+            let detailed = client.get_service(&svc.id).unwrap_or_else(|_| svc.clone());
+            let latest = client
+                .latest_deploy(&svc.id)
+                .with_context(|| format!("render status: latest_deploy for `{service_name}`"))?;
+            let (deploy_id, raw_state, image, created_at, finished_at, state) = match latest {
+                Some(d) => {
+                    let raw = d.status.clone().unwrap_or_default();
+                    let state = map_render_state(&raw);
+                    let image = d.image_ref().map(str::to_owned);
+                    (Some(d.id), raw, image, d.created_at, d.finished_at, state)
+                }
+                None => (None, String::new(), None, None, None, DeployState::Unknown),
+            };
+            let url = detailed.public_url().map(str::to_owned);
+            out.push(ProcessStatus {
+                process: proc_name.to_owned(),
+                host_service_id: Some(svc.id),
+                deploy_id,
+                state,
+                raw_state,
+                url,
+                image,
+                created_at,
+                finished_at,
+            });
+        }
+        Ok(out)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn status(&self, _spec: &DeploySpec) -> Result<Vec<ProcessStatus>> {
+        anyhow::bail!("render adapter not available on wasm32 target")
+    }
+}
+
+/// Translate a Render deploy status string into the normalised
+/// [`DeployState`]. Unknown strings map to [`DeployState::Unknown`]; the
+/// caller still gets the raw value on [`ProcessStatus::raw_state`].
+#[cfg(not(target_arch = "wasm32"))]
+fn map_render_state(s: &str) -> DeployState {
+    match s {
+        "created" | "queued" => DeployState::Pending,
+        "build_in_progress" | "pre_deploy_in_progress" => DeployState::Building,
+        "update_in_progress" => DeployState::Deploying,
+        "live" => DeployState::Live,
+        "build_failed" | "update_failed" | "pre_deploy_failed" => DeployState::Failed,
+        "canceled" | "build_canceled" | "deactivated" => DeployState::Canceled,
+        _ => DeployState::Unknown,
     }
 }
 
@@ -649,6 +741,7 @@ mod tests {
             workspace_subpath: String::new(),
             has_rust_toolchain: false,
             static_files: vec!["index.html".into(), "pkg".into()],
+            build_dir: None,
         }
     }
 
