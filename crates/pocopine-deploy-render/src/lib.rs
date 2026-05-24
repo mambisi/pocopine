@@ -123,21 +123,26 @@ impl DeployAdapter for RenderAdapter {
             )));
         }
 
-        // Required Render override fields.
+        // Required Render override fields. Resolve via the three-tier
+        // resolver — env var → Cargo.toml → ~/.pocopine/config.toml —
+        // so OSS forks can set their own `owner_id` without touching
+        // the repo and CI can use `POCOPINE_RENDER_OWNER_ID`.
         let overrides = render_override(spec);
-        let raw_owner = overrides.owner_id.as_deref().unwrap_or("");
+        let raw_owner =
+            pocopine_deploy::config::resolve("render", "owner_id", overrides.owner_id.as_deref())
+                .unwrap_or_default();
         if raw_owner.is_empty() {
             out.push(Constraint::Refuse(
-                "render requires `[deploy.render].owner_id` (workspace ID — copy it from your Render dashboard's Account Settings → Workspaces)."
+                "render requires `owner_id` (workspace ID — copy it from your Render dashboard's Account Settings → Workspaces). Set via `pocopine deploy config set render owner_id <id>`, $POCOPINE_RENDER_OWNER_ID, or `[deploy.render].owner_id` in Cargo.toml."
                     .into(),
             ));
-        } else if is_placeholder_owner_id(raw_owner) {
+        } else if is_placeholder_owner_id(&raw_owner) {
             // Templates ship a `REPLACE_WITH_RENDER_WORKSPACE_ID`
             // sentinel so users know where to paste. Catching it here
             // turns a confusing 404 from Render's API ("owner not
             // found") into a clear next step before the deploy starts.
             out.push(Constraint::Refuse(format!(
-                "render: `[deploy.render].owner_id = \"{raw_owner}\"` is still the placeholder value. Replace it with your real workspace ID from Render's dashboard (Account Settings → Workspaces).",
+                "render: `owner_id = \"{raw_owner}\"` is still the placeholder value. Replace it via `pocopine deploy config set render owner_id <id>` or in Cargo.toml.",
             )));
         }
         // Resolve the container registry — explicit `image_registry`,
@@ -252,12 +257,17 @@ impl DeployAdapter for RenderAdapter {
 
         let token = load_render_token()?;
         let overrides = render_override(spec);
-        let owner_id = overrides
-            .owner_id
-            .as_deref()
-            .expect("detect_constraints refuses missing owner_id");
-        let region = overrides.region.as_deref().unwrap_or("oregon");
-        let plan = overrides.plan.as_deref().unwrap_or("starter");
+        // Three-tier resolution: env > Cargo.toml > ~/.pocopine/config.toml.
+        // `owner_id` is required; `detect_constraints` already refused
+        // when all three tiers were empty, so unwrap is safe here.
+        let owner_id =
+            pocopine_deploy::config::resolve("render", "owner_id", overrides.owner_id.as_deref())
+                .expect("detect_constraints refuses missing owner_id");
+        let region =
+            pocopine_deploy::config::resolve("render", "region", overrides.region.as_deref())
+                .unwrap_or_else(|| "oregon".to_owned());
+        let plan = pocopine_deploy::config::resolve("render", "plan", overrides.plan.as_deref())
+            .unwrap_or_else(|| "starter".to_owned());
 
         let env_vars = resolve_env_for_render(spec)?;
 
@@ -287,9 +297,14 @@ impl DeployAdapter for RenderAdapter {
         // For a private image, register a pull credential with Render
         // and attach it to each service — no dashboard step. `None` →
         // the image is assumed public and Render pulls anonymously.
+        let registry_username = pocopine_deploy::config::resolve(
+            "render",
+            "registry_username",
+            overrides.registry_username.as_deref(),
+        );
         let registry_credential_id = match pocopine_deploy::resolve_registry_credentials(
             &registry,
-            overrides.registry_username.as_deref(),
+            registry_username.as_deref(),
             spec.git_remote.as_deref(),
         ) {
             Some(creds) => Some(client.ensure_registry_credential(
@@ -339,7 +354,7 @@ impl DeployAdapter for RenderAdapter {
                         &s.id,
                         tag,
                         registry_credential_id.as_deref(),
-                        owner_id,
+                        &owner_id,
                     )?;
                     s
                 }
@@ -365,7 +380,7 @@ impl DeployAdapter for RenderAdapter {
 
             // 4. Trigger deploy with the new image URL and wait for live.
             let deploy = client.trigger_deploy(&svc.id, tag)?;
-            client.wait_deploy(&svc.id, &deploy.id, owner_id, WAIT_LIVE_SECS)?;
+            client.wait_deploy(&svc.id, &deploy.id, &owner_id, WAIT_LIVE_SECS)?;
 
             // Re-fetch the service to pick up the assigned onrender.com
             // URL (Render doesn't populate it on the create/list shape
