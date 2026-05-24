@@ -1,20 +1,19 @@
 use std::{marker::PhantomData, rc::Rc};
 
 use pocopine_core::{App, AppPlugin, Handle};
-#[cfg(target_arch = "wasm32")]
 use serde_json::Value;
 
 use crate::{
-    ClientMutation, ClientMutationDraft, CollectionState, MemoryLocalStore, SyncCursor, SyncError,
-    SyncLocalStore, SyncReason, SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+    ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation, MemoryLocalStore,
+    MutationId, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason, SyncResult,
+    SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
 };
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    sync_stream_tag, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
-    LocalStreamSnapshot, PendingMutation, SyncChange, SyncConflict, SyncOp, SyncOpenRequest,
-    SyncOpenResponse, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
-    SyncPushResponse,
+    sync_stream_tag, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
+    PendingMutation, SyncChange, SyncConflict, SyncOp, SyncOpenRequest, SyncOpenResponse,
+    SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
 };
 
 /// Selector from an app-owned component/store into one sync collection field.
@@ -265,6 +264,53 @@ where
         self.push_with_generated_id_online_impl(mutation, optimistic)
     }
 
+    /// Reserve a durable mutation id, enqueue the mutation locally, apply
+    /// optimistic state, and return the reserved id after the local enqueue
+    /// succeeds.
+    ///
+    /// This is the stronger local-first boundary used by generated CRUD
+    /// resource helpers. The returned id is safe to expose because the local
+    /// store has already persisted the incremented mutation counter and queued
+    /// mutation before this future resolves.
+    ///
+    /// Mutation ids are monotonic, not dense: if id reservation succeeds but
+    /// enqueueing fails, the reserved id is intentionally skipped instead of
+    /// reused. On the browser runtime, a successful local enqueue immediately
+    /// starts a background push; network errors are reflected in collection
+    /// state, not in this returned queued outcome. The host implementation is a
+    /// compile/test stub and only reserves and enqueues locally.
+    pub async fn queue_with_generated_id<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<MutationId>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.queue_with_generated_id_impl(mutation, optimistic)
+            .await
+    }
+
+    /// Reserve a durable mutation id and push one generated-id mutation without
+    /// adding it to the durable offline queue, waiting for the server response.
+    ///
+    /// This is the async primitive for `WritePolicy::RequireOnline`. The host
+    /// implementation returns `SyncError::Unsupported`; confirmed browser
+    /// pushes require the wasm fetch runtime.
+    pub async fn push_with_generated_id_online_confirmed<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<(MutationId, SyncPushResponse<T>)>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.push_with_generated_id_online_confirmed_impl(mutation, optimistic)
+            .await
+    }
+
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
         self.stream
             .clone()
@@ -459,6 +505,78 @@ where
         );
         Ok(())
     }
+
+    async fn queue_with_generated_id_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<MutationId>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        let stream = self.stream_value()?;
+        let scope_id = self.handle.scope_id();
+        let push_url = endpoint_path(&self.endpoint, "push");
+        let pull_endpoint = self.endpoint.clone();
+        let pull_after_accept = !self.live_wakeup;
+        let mutation_id = self.local_store.reserve_mutation_id().await?;
+        let mutation = mutation.with_id(mutation_id.clone());
+        enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
+            .await?;
+        apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
+
+        pocopine_core::spawn_for_scope(scope_id, async move {
+            let _ = send_push_and_reconcile(
+                scope_id,
+                self.handle,
+                self.selector,
+                push_url,
+                pull_endpoint,
+                self.local_store,
+                stream,
+                mutation,
+                pull_after_accept,
+                true,
+            )
+            .await;
+        });
+
+        Ok(mutation_id)
+    }
+
+    async fn push_with_generated_id_online_confirmed_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<(MutationId, SyncPushResponse<T>)>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        let stream = self.stream_value()?;
+        let scope_id = self.handle.scope_id();
+        let push_url = endpoint_path(&self.endpoint, "push");
+        let pull_endpoint = self.endpoint.clone();
+        let pull_after_accept = !self.live_wakeup;
+        let mutation_id = self.local_store.reserve_mutation_id().await?;
+        let mutation = mutation.with_id(mutation_id.clone());
+        apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
+        let response = send_push_and_reconcile(
+            scope_id,
+            self.handle,
+            self.selector,
+            push_url,
+            pull_endpoint,
+            self.local_store,
+            stream,
+            mutation,
+            pull_after_accept,
+            false,
+        )
+        .await?;
+        Ok((mutation_id, response))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -537,6 +655,44 @@ where
         let _ = self.stream_value()?;
         let _ = (mutation, optimistic);
         Ok(())
+    }
+
+    async fn queue_with_generated_id_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<MutationId>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.touch_host_fields();
+        let stream = self.stream_value()?;
+        let mutation_id = self.local_store.reserve_mutation_id().await?;
+        let mutation = mutation.with_id(mutation_id.clone());
+        enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
+            .await?;
+        // Host-side collection calls are no-op stubs; the browser path applies
+        // the optimistic row before starting the background push.
+        let _ = optimistic;
+        Ok(mutation_id)
+    }
+
+    async fn push_with_generated_id_online_confirmed_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<(MutationId, SyncPushResponse<T>)>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.touch_host_fields();
+        let _ = self.stream_value()?;
+        let _ = (mutation, optimistic);
+        Err(SyncError::unsupported(
+            "online sync push confirmation is only available in the browser runtime",
+        ))
     }
 }
 
@@ -952,42 +1108,108 @@ async fn run_push<C, T, M>(
     let mutation_key = mutation.key.clone();
 
     if queue_offline {
-        let local_pending = match pending_mutation_to_value(&mutation, optimistic.as_ref()) {
-            Ok(pending) => pending,
-            Err(err) => {
-                handle.update(|state| {
-                    selector(state).set_error(format!("sync mutation encode failed: {err}"));
-                });
-                return;
-            }
-        };
-        if let Err(err) = local_store
-            .enqueue_pending_mutation(&stream, local_pending)
-            .await
+        if let Err(err) =
+            enqueue_pending_mutation(&local_store, &stream, &mutation, optimistic.as_ref()).await
         {
             handle.update(|state| {
-                selector(state).set_error(format!("local sync mutation enqueue failed: {err}"));
+                selector(state).set_error(err.to_string());
             });
             return;
         }
     }
 
-    let optimistic_mutation_id = mutation_id.clone();
     handle.update(|state| {
         selector(state).apply_optimistic_mutation(
-            optimistic_mutation_id,
+            mutation_id,
             mutation_op,
             mutation_key,
             optimistic,
         );
     });
 
+    let _ = send_push_and_reconcile(
+        scope_id,
+        handle,
+        selector,
+        push_url,
+        pull_endpoint,
+        local_store,
+        stream,
+        mutation,
+        pull_after_accept,
+        queue_offline,
+    )
+    .await;
+}
+
+async fn enqueue_pending_mutation<T, M>(
+    local_store: &SyncLocalStoreHandle,
+    stream: &SyncStreamName,
+    mutation: &ClientMutation<M>,
+    optimistic: Option<&SyncRow<T>>,
+) -> SyncResult<()>
+where
+    M: serde::Serialize,
+    T: serde::Serialize,
+{
+    let local_pending = pending_mutation_to_value(mutation, optimistic)
+        .map_err(|err| SyncError::client(format!("sync mutation encode failed: {err}")))?;
+    local_store
+        .enqueue_pending_mutation(stream, local_pending)
+        .await
+        .map_err(|err| SyncError::client(format!("local sync mutation enqueue failed: {err}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn apply_optimistic_mutation<C, T, M>(
+    handle: &Handle<C>,
+    selector: CollectionSelector<C, T>,
+    mutation: &ClientMutation<M>,
+    optimistic: Option<SyncRow<T>>,
+) where
+    C: 'static,
+    T: Clone + 'static,
+{
+    let mutation_id = mutation.id.clone();
+    let mutation_op = mutation.op;
+    let mutation_key = mutation.key.clone();
+    handle.update(|state| {
+        selector(state).apply_optimistic_mutation(
+            mutation_id,
+            mutation_op,
+            mutation_key,
+            optimistic,
+        );
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+async fn send_push_and_reconcile<C, T, M>(
+    scope_id: pocopine_core::ScopeId,
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    push_url: String,
+    pull_endpoint: String,
+    local_store: SyncLocalStoreHandle,
+    stream: SyncStreamName,
+    mutation: ClientMutation<M>,
+    pull_after_accept: bool,
+    queue_offline: bool,
+) -> SyncResult<SyncPushResponse<T>>
+where
+    C: 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+    M: serde::Serialize + 'static,
+{
+    let mutation_id = mutation.id.clone();
+
     let request = SyncPushRequest::new(stream.clone(), [mutation]);
     let result =
         pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(&push_url, &request)
             .await;
     let mut local_error = None;
-    let result = match result {
+    let result: Result<SyncPushResponse<T>, String> = match result {
         Ok(response) => {
             if queue_offline {
                 match local_push_result_from_response(&response) {
@@ -1004,7 +1226,11 @@ async fn run_push<C, T, M>(
             }
             Ok(response)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(err.to_string()),
+    };
+    let return_result = match &result {
+        Ok(response) => Ok(response.clone()),
+        Err(err) => Err(SyncError::client(err.clone())),
     };
     let should_pull = handle.update(|state| {
         let collection = selector(state);
@@ -1040,6 +1266,8 @@ async fn run_push<C, T, M>(
             false,
         );
     }
+
+    return_result
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1203,7 +1431,6 @@ where
     })
 }
 
-#[cfg(target_arch = "wasm32")]
 fn mutation_to_value<M>(mutation: &ClientMutation<M>) -> SyncResult<ClientMutation<Value>>
 where
     M: serde::Serialize,
@@ -1217,7 +1444,6 @@ where
     })
 }
 
-#[cfg(target_arch = "wasm32")]
 fn pending_mutation_to_value<M, T>(
     mutation: &ClientMutation<M>,
     optimistic: Option<&SyncRow<T>>,
@@ -1230,7 +1456,6 @@ where
         .with_optimistic_row(optimistic.map(row_to_value).transpose()?))
 }
 
-#[cfg(target_arch = "wasm32")]
 fn row_to_value<T>(row: &SyncRow<T>) -> SyncResult<SyncRow<Value>>
 where
     T: serde::Serialize,
@@ -1284,6 +1509,81 @@ where
         server_row: conflict.server_row.as_ref().map(row_to_value).transpose()?,
         reason: conflict.reason.clone(),
     })
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::{cell::RefCell, marker::PhantomData, rc::Rc};
+
+    use pocopine_core::{Handle, ScopeId};
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+    use crate::{
+        ClientMutationDraft, CollectionState, MemoryLocalStore, SyncDeviceId, SyncLocalIdentity,
+        SyncOp, SyncRow,
+    };
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    struct Post {
+        title: String,
+    }
+
+    #[derive(Default)]
+    struct TestState {
+        posts: CollectionState<Post>,
+    }
+
+    fn posts(state: &mut TestState) -> &mut CollectionState<Post> {
+        &mut state.posts
+    }
+
+    #[tokio::test]
+    async fn queue_with_generated_id_reserves_and_enqueues_before_returning() {
+        let store: SyncLocalStoreHandle = Rc::new(MemoryLocalStore::new());
+        store
+            .save_identity(SyncLocalIdentity::new(
+                SyncDeviceId::new("device_local").unwrap(),
+            ))
+            .await
+            .unwrap();
+        let state = Rc::new(RefCell::new(TestState::default()));
+        let handle = Handle::new(state.clone(), ScopeId(1));
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollection {
+            handle,
+            selector: posts,
+            endpoint: SYNC_ENDPOINT_PREFIX.to_string(),
+            live_endpoint: None,
+            live_wakeup: false,
+            with_credentials: false,
+            local_store: store.clone(),
+            stream: Some(stream.clone()),
+            cursor: None,
+            _marker: PhantomData,
+        };
+        let row = SyncRow::new(
+            "post_1",
+            Post {
+                title: "queued".to_string(),
+            },
+        )
+        .unwrap();
+        let draft =
+            ClientMutationDraft::new(SyncOp::Upsert, row.value.clone()).row_key(row.key.clone());
+
+        let mutation_id = collection
+            .queue_with_generated_id(draft, Some(row.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(mutation_id.as_str(), "device_local:1");
+        let pending = store.pending_mutations(&stream).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, mutation_id);
+        assert_eq!(pending[0].key.as_ref().unwrap().as_str(), "post_1");
+        assert!(state.borrow().posts.rows.is_empty());
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
