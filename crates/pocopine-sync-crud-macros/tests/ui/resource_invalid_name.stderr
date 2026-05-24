@@ -1,0 +1,5 @@
+error: invalid CRUD resource name: expected a non-empty sync token no longer than 1024 bytes without leading/trailing whitespace or control characters
+ --> tests/ui/resource_invalid_name.rs:3:39
+  |
+3 | #[pocopine_sync_crud::resource(name = " customers ")]
+  |                                       ^^^^^^^^^^^^^

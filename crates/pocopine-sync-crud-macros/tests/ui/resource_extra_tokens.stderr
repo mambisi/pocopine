@@ -1,0 +1,5 @@
+error: unexpected tokens after CRUD resource name
+ --> tests/ui/resource_extra_tokens.rs:3:52
+  |
+3 | #[pocopine_sync_crud::resource(name = "customers", unexpected)]
+  |                                                    ^^^^^^^^^^
