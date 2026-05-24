@@ -17,7 +17,7 @@ use anyhow::Context;
 use anyhow::Result;
 use pocopine_deploy::{
     common, AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint,
-    Mode, StagedFiles,
+    Mode, ProcessStatus, StagedFiles,
 };
 use serde::Deserialize;
 
@@ -431,6 +431,13 @@ impl DeployAdapter for FlyAdapter {
     fn post_deploy_hint(&self, _spec: &DeploySpec, outcome: &DeployOutcome) -> Vec<Hint> {
         vec![Hint::Info(format!("deployed to {}", outcome.url))]
     }
+
+    fn status(&self, _spec: &DeploySpec) -> Result<Vec<ProcessStatus>> {
+        anyhow::bail!(
+            "fly: `pocopine deploy status` not yet implemented for the fly adapter. \
+             Track via the Fly dashboard or `flyctl status -a <app>` in the meantime."
+        )
+    }
 }
 
 /// Ensure every declared `[deploy.fly].volumes` entry exists on Fly.
@@ -821,6 +828,7 @@ mod tests {
             workspace_subpath: String::new(),
             has_rust_toolchain: false,
             static_files: vec!["index.html".into(), "pkg".into()],
+            build_dir: None,
         }
     }
 

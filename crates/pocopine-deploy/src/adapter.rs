@@ -37,6 +37,57 @@ pub struct DeployOutcome {
     pub host_ids: Vec<String>,
 }
 
+/// Normalised deploy state for cross-host comparison. Adapters
+/// translate their host-specific state strings into this enum and also
+/// return the raw value on [`ProcessStatus::raw_state`] so callers can
+/// inspect host-specific nuance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployState {
+    /// Queued/accepted, no work started.
+    Pending,
+    /// Building image or running pre-deploy steps.
+    Building,
+    /// Image built, rolling out (pulling, starting instances).
+    Deploying,
+    /// Serving traffic.
+    Live,
+    /// Terminal failure.
+    Failed,
+    /// User-canceled or superseded.
+    Canceled,
+    /// Host returned a state we don't recognise — see `raw_state`.
+    Unknown,
+}
+
+/// Per-process status entry returned by [`DeployAdapter::status`]. One
+/// per process declared in the spec, in declaration order. Processes
+/// that have never been deployed appear with `deploy_id: None` and
+/// `state: Unknown`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessStatus {
+    /// Logical process name from the spec (e.g. `"web"`, `"worker"`).
+    pub process: String,
+    /// Host-side service identifier (e.g. Render `srv-XXXX`, Fly app
+    /// name, Railway service id). `None` if the host has no record of
+    /// this process yet.
+    pub host_service_id: Option<String>,
+    /// Most recent deploy id, if any.
+    pub deploy_id: Option<String>,
+    /// Normalised state for cross-host comparison.
+    pub state: DeployState,
+    /// Host-specific state string verbatim (e.g. `"build_in_progress"`).
+    /// Empty when the host has no deploy on record.
+    pub raw_state: String,
+    /// Public URL, if the host exposes one.
+    pub url: Option<String>,
+    /// Image reference this status describes.
+    pub image: Option<String>,
+    /// ISO-8601 timestamps when the host returns them.
+    pub created_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum AdapterSource {
     Builtin,
@@ -90,6 +141,13 @@ pub trait DeployAdapter {
     /// (one-time provisioning prompts) and informational lines
     /// (deployment URL, etc.). The adapter never runs these.
     fn post_deploy_hint(&self, spec: &DeploySpec, outcome: &DeployOutcome) -> Vec<Hint>;
+
+    /// I/O: query the host API for the current deploy state of each
+    /// process declared in `spec`. No build or push. Returns one
+    /// [`ProcessStatus`] per process in declaration order; processes
+    /// that have never been deployed appear with `deploy_id: None` and
+    /// `state: Unknown` rather than as an error.
+    fn status(&self, spec: &DeploySpec) -> anyhow::Result<Vec<ProcessStatus>>;
 
     fn source(&self) -> AdapterSource {
         AdapterSource::Builtin
