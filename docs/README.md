@@ -69,6 +69,10 @@ looks the way it does — the code itself tells you *what*.
   transaction binding, the non-macro runtime adapter, planned proc-macro
   generated typed CRUD methods, and the boundary that keeps Pocopine out
   of ORM territory.
+- [`sync-crud-macro-contract.md`](./sync-crud-macro-contract.md) —
+  concrete generated CRUD macro API contract, including the server
+  resource module shape, client binding helpers, queued/online handling,
+  and conflict outcome semantics.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.
