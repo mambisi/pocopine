@@ -338,7 +338,7 @@ where
         let handle = self.handle;
         let selector = self.selector;
         local_store.clear_conflict(&stream, &key).await?;
-        Ok(handle.update(|state| selector(state).clear_conflict(&key)))
+        clear_conflict_in_handle(handle, selector, &key)
     }
 
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
@@ -359,6 +359,37 @@ where
             &self.local_store,
         );
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn clear_conflict_in_handle<C, T>(
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    key: &RowKey,
+) -> SyncResult<bool>
+where
+    C: 'static,
+    T: Clone,
+{
+    Ok(handle.update(|state| selector(state).clear_conflict(key)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_conflict_in_handle<C, T>(
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    key: &RowKey,
+) -> SyncResult<bool>
+where
+    C: 'static,
+    T: Clone,
+{
+    // Host sync collection methods are test stubs, so use the borrowable
+    // handle directly. The browser path keeps `Handle::update` reactivity.
+    let mut state = handle.try_borrow_mut().map_err(|_| {
+        SyncError::client("sync collection state is already borrowed while clearing conflict")
+    })?;
+    Ok(selector(&mut state).clear_conflict(key))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1554,8 +1585,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        ClientMutationDraft, CollectionState, MemoryLocalStore, RowKey, SyncDeviceId,
-        SyncLocalIdentity, SyncOp, SyncRow,
+        ClientMutationDraft, CollectionState, LocalSnapshotBatch, MemoryLocalStore, RowKey,
+        SyncCollectionName, SyncDeviceId, SyncLocalIdentity, SyncOp, SyncRow,
     };
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1647,6 +1678,49 @@ mod tests {
 
         assert!(matches!(err, SyncError::Unsupported(_)));
         assert!(store.pending_mutations(&stream).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_conflict_updates_store_and_state_on_host() {
+        let store: SyncLocalStoreHandle = Rc::new(MemoryLocalStore::new());
+        let stream = SyncStreamName::new("posts").unwrap();
+        let (state, collection) = test_collection(store.clone(), stream.clone());
+        let row = SyncRow::new(
+            "post_1",
+            Post {
+                title: "server".to_string(),
+            },
+        )
+        .unwrap()
+        .conflict(true);
+
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![
+                    SyncRow::new("post_1", serde_json::json!({"title": "server"}))
+                        .unwrap()
+                        .conflict(true),
+                ],
+                None,
+            ))
+            .await
+            .unwrap();
+        state
+            .borrow_mut()
+            .posts
+            .apply_local_snapshot(vec![row], None, 0);
+
+        let changed = collection
+            .clear_conflict(RowKey::new("post_1").unwrap())
+            .await
+            .unwrap();
+
+        assert!(changed);
+        assert!(!state.borrow().posts.rows[0].conflict);
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert!(!snapshot.rows[0].conflict);
     }
 }
 

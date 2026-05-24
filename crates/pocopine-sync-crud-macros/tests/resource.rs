@@ -110,6 +110,9 @@ fn resource_attribute_generates_module_contract() {
     let _resource_new = customers::Resource::<()>::new;
     let _use_resource = customers::use_resource::<()>;
     let _collection = customers::collection::<()>;
+    let _use_server = customers::Resource::<()>::use_server;
+    let _retry_local = customers::Resource::<()>::retry_local;
+    let _merge_with = customers::Resource::<()>::merge_with;
 
     fn assert_aliases<C: 'static>(
         collection: SyncCollection<C, customers::Row>,

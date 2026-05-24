@@ -146,11 +146,22 @@ impl<Id, Row> LocalResourceView<Id, Row> {
         self.conflict_count > 0 || self.rows.iter().any(LocalResourceRow::is_conflict)
     }
 
+    pub fn conflicts(&self) -> Vec<&LocalResourceRow<Id, Row>> {
+        self.rows.iter().filter(|row| row.is_conflict()).collect()
+    }
+
     pub fn get(&self, id: &Id) -> Option<&LocalResourceRow<Id, Row>>
     where
         Id: Eq,
     {
         self.rows.iter().find(|row| &row.id == id)
+    }
+
+    pub fn conflict_for(&self, id: &Id) -> Option<&LocalResourceRow<Id, Row>>
+    where
+        Id: Eq,
+    {
+        self.get(id).filter(|row| row.is_conflict())
     }
 
     pub fn pending_for(&self, id: &Id) -> Vec<&LocalResourcePendingMutation<Id>>
@@ -361,6 +372,15 @@ mod tests {
         assert_eq!(view.rows[0].status, LocalResourceRowStatus::Conflict);
         assert!(view.rows[0].is_conflict());
         assert!(view.has_conflicts());
+        assert_eq!(view.conflicts().len(), 1);
+        assert_eq!(
+            view.conflict_for(&"post_1".to_string())
+                .unwrap()
+                .value
+                .title,
+            "Server updated"
+        );
+        assert!(view.conflict_for(&"post_2".to_string()).is_none());
         assert_eq!(view.conflict_count, 1);
         assert_eq!(view.pending_mutations.len(), 0);
     }

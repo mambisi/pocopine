@@ -284,6 +284,68 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
                 {
                     self.client()?.remove_with_options(id, options).await
                 }
+
+                pub async fn use_server(&self, id: Id) -> ::pocopine_sync::SyncResult<bool>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                {
+                    self.client()?.use_server(id).await
+                }
+
+                pub async fn retry_local(
+                    &self,
+                    id: Id,
+                    draft: Draft,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.retry_local(id, draft).await
+                }
+
+                pub async fn retry_local_with_options(
+                    &self,
+                    id: Id,
+                    draft: Draft,
+                    options: SaveOptions,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.retry_local_with_options(id, draft, options).await
+                }
+
+                pub async fn merge_with(
+                    &self,
+                    id: Id,
+                    draft: Draft,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.merge_with(id, draft).await
+                }
+
+                pub async fn merge_with_options(
+                    &self,
+                    id: Id,
+                    draft: Draft,
+                    options: SaveOptions,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.merge_with_options(id, draft, options).await
+                }
             }
 
             pub fn use_resource<C: 'static>(

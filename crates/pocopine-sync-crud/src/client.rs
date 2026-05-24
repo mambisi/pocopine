@@ -125,6 +125,60 @@ where
             .await
     }
 
+    /// Resolve a conflict by accepting the currently known server row.
+    ///
+    /// This clears the local conflict marker only. It does not write a new row
+    /// to the server and does not remove still-pending mutations for the same
+    /// id.
+    pub async fn use_server(self, id: Id) -> SyncResult<bool> {
+        self.collection.clear_conflict(id.to_row_key()?).await
+    }
+
+    /// Retry a conflicted local edit against the latest canonical base version.
+    ///
+    /// This queues a new save. The existing conflict marker stays visible until
+    /// the server accepts the retry and returns a new canonical row.
+    pub async fn retry_local<Draft>(self, id: Id, draft: Draft) -> SyncResult<CrudOutcome<Id, Row>>
+    where
+        Draft: serde::Serialize + 'static,
+    {
+        self.save(id, draft).await
+    }
+
+    /// Retry a conflicted local edit with explicit save options.
+    pub async fn retry_local_with_options<Draft>(
+        self,
+        id: Id,
+        draft: Draft,
+        options: SaveOptions<Row>,
+    ) -> SyncResult<CrudOutcome<Id, Row>>
+    where
+        Draft: serde::Serialize + 'static,
+    {
+        self.save_with_options(id, draft, options).await
+    }
+
+    /// Submit an app-approved merge draft against the latest canonical base.
+    pub async fn merge_with<Draft>(self, id: Id, draft: Draft) -> SyncResult<CrudOutcome<Id, Row>>
+    where
+        Draft: serde::Serialize + 'static,
+    {
+        self.save(id, draft).await
+    }
+
+    /// Submit an app-approved merge draft with explicit save options.
+    pub async fn merge_with_options<Draft>(
+        self,
+        id: Id,
+        draft: Draft,
+        options: SaveOptions<Row>,
+    ) -> SyncResult<CrudOutcome<Id, Row>>
+    where
+        Draft: serde::Serialize + 'static,
+    {
+        self.save_with_options(id, draft, options).await
+    }
+
     async fn send<Draft>(
         self,
         id: Id,
@@ -233,6 +287,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::{cell::RefCell, rc::Rc};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    use pocopine_core::{Handle, ScopeId};
+    #[cfg(not(target_arch = "wasm32"))]
+    use pocopine_sync::{
+        sync_plugin, CollectionState, LocalSnapshotBatch, MemoryLocalStore, SyncDeviceId,
+        SyncLocalIdentity, SyncLocalStore, SyncStreamName,
+    };
     use pocopine_sync::{
         MutationId, RowKey, RowVersion, SyncConflict, SyncPushResponse, SyncRejectedMutation,
         SyncRow,
@@ -240,10 +304,23 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::local_resource_view;
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     struct Post {
         title: String,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[derive(Default)]
+    struct TestState {
+        posts: CollectionState<Post>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn posts(state: &mut TestState) -> &mut CollectionState<Post> {
+        &mut state.posts
     }
 
     #[test]
@@ -438,5 +515,124 @@ mod tests {
             view.base_version(&"post_1".to_string()).unwrap().as_str(),
             "canonical"
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn use_server_clears_conflict_in_store_and_state() {
+        let store = Rc::new(MemoryLocalStore::new());
+        let stream = SyncStreamName::new("posts").unwrap();
+        let state = Rc::new(RefCell::new(TestState::default()));
+        let handle = Handle::new(state.clone(), ScopeId(1));
+        let row = SyncRow::new(
+            "post_1",
+            Post {
+                title: "server".to_string(),
+            },
+        )
+        .unwrap()
+        .conflict(true);
+
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                pocopine_sync::SyncCollectionName::new("posts").unwrap(),
+                vec![
+                    SyncRow::new("post_1", serde_json::json!({"title": "server"}))
+                        .unwrap()
+                        .conflict(true),
+                ],
+                None,
+            ))
+            .await
+            .unwrap();
+        state
+            .borrow_mut()
+            .posts
+            .apply_local_snapshot(vec![row], None, 0);
+
+        let sync = sync_plugin()
+            .shared_local_store(store.clone())
+            .into_client();
+        let collection = sync
+            .collection(handle, posts)
+            .stream(stream.as_str())
+            .unwrap();
+        let view = local_resource_view::<String, _>(&state.borrow().posts).unwrap();
+        let client = client_resource(collection, view);
+
+        assert!(client.use_server("post_1".to_string()).await.unwrap());
+
+        assert!(!state.borrow().posts.rows[0].conflict);
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert!(!snapshot.rows[0].conflict);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn retry_local_queues_save_with_conflict_base_version() {
+        let store = Rc::new(MemoryLocalStore::new());
+        store
+            .save_identity(SyncLocalIdentity::new(
+                SyncDeviceId::new("device_retry_test").unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        let stream = SyncStreamName::new("posts").unwrap();
+        let state = Rc::new(RefCell::new(TestState::default()));
+        let handle = Handle::new(state.clone(), ScopeId(2));
+        state.borrow_mut().posts.apply_local_snapshot(
+            vec![SyncRow::new(
+                "post_1",
+                Post {
+                    title: "server".to_string(),
+                },
+            )
+            .unwrap()
+            .version("server_v2")
+            .unwrap()
+            .conflict(true)],
+            None,
+            0,
+        );
+
+        let sync = sync_plugin()
+            .shared_local_store(store.clone())
+            .into_client();
+        let collection = sync
+            .collection(handle, posts)
+            .stream(stream.as_str())
+            .unwrap();
+        let view = local_resource_view::<String, _>(&state.borrow().posts).unwrap();
+        let client = client_resource(collection, view);
+
+        let outcome = client
+            .retry_local(
+                "post_1".to_string(),
+                Post {
+                    title: "local retry".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            CrudOutcome::Queued(crate::Queued::new(
+                MutationId::new("device_retry_test:1").unwrap(),
+                "post_1".to_string()
+            ))
+        );
+
+        let pending = store.pending_mutations(&stream).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].key.as_ref().unwrap().as_str(), "post_1");
+        assert_eq!(
+            pending[0].base_version.as_ref().unwrap().as_str(),
+            "server_v2"
+        );
+        assert_eq!(pending[0].payload["op"], "save");
+        assert!(state.borrow().posts.rows[0].conflict);
     }
 }
