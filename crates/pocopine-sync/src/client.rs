@@ -580,12 +580,12 @@ fn start_open_then_pull<C, T>(
                     .map(|pending| pending.mutation.clone())
                     .collect();
                 match decode_local_snapshot(snapshot) {
-                    Ok((rows, cursor, pending_for_state)) => {
+                    Ok(decoded) => {
                         handle.update(|state| {
                             selector(state).apply_local_snapshot_with_pending(
-                                rows,
-                                cursor,
-                                pending_for_state,
+                                decoded.rows,
+                                decoded.cursor,
+                                decoded.pending_mutations,
                             );
                         });
                     }
@@ -1043,9 +1043,14 @@ async fn run_push<C, T, M>(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn decode_local_snapshot<T>(
-    snapshot: LocalStreamSnapshot,
-) -> SyncResult<(Vec<SyncRow<T>>, Option<SyncCursor>, Vec<PendingMutation<T>>)>
+struct DecodedLocalSnapshot<T> {
+    rows: Vec<SyncRow<T>>,
+    cursor: Option<SyncCursor>,
+    pending_mutations: Vec<PendingMutation<T>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_local_snapshot<T>(snapshot: LocalStreamSnapshot) -> SyncResult<DecodedLocalSnapshot<T>>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -1059,7 +1064,11 @@ where
         .into_iter()
         .map(row_from_value)
         .collect::<SyncResult<Vec<_>>>()?;
-    Ok((rows, snapshot.cursor, pending_mutations))
+    Ok(DecodedLocalSnapshot {
+        rows,
+        cursor: snapshot.cursor,
+        pending_mutations,
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
