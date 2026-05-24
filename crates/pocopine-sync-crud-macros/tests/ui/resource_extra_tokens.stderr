@@ -1,4 +1,4 @@
-error: unexpected tokens after CRUD resource name
+error: expected `name = "..."` or `module = ident` in CRUD resource attribute
  --> tests/ui/resource_extra_tokens.rs:3:52
   |
 3 | #[pocopine_sync_crud::resource(name = "customers", unexpected)]
