@@ -92,6 +92,11 @@ pub const UPDATE_ROW_CONFLICT_SQL: &str =
     "update __pocopine_rows set pending = 0, conflict = 1, updated_at_ms = ?3
      where stream = ?1 and row_key = ?2";
 
+/// SQL update used when a user resolves a local conflict marker.
+pub const CLEAR_ROW_CONFLICT_SQL: &str =
+    "update __pocopine_rows set conflict = 0, updated_at_ms = ?3
+     where stream = ?1 and row_key = ?2";
+
 /// SQL upsert used for durable pending mutations.
 pub const UPSERT_MUTATION_SQL: &str = "insert into __pocopine_mutations
     (stream, mutation_id, row_key, base_version, op, payload, optimistic_row, status, error, created_at_ms, updated_at_ms)

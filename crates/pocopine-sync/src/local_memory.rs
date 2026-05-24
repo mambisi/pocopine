@@ -218,6 +218,19 @@ impl SyncLocalStore for MemoryLocalStore {
         }))
     }
 
+    fn clear_conflict(&self, stream: &SyncStreamName, key: &RowKey) -> SyncLocalFuture<'_, ()> {
+        let stream = stream.clone();
+        let key = key.clone();
+        Self::ready(self.with_inner(|inner| {
+            if let Some(state) = inner.streams.get_mut(&stream) {
+                if let Some(row) = state.rows.get_mut(&key) {
+                    row.conflict = false;
+                }
+            }
+            Ok(())
+        }))
+    }
+
     fn pending_mutations(
         &self,
         stream: &SyncStreamName,
@@ -564,6 +577,35 @@ mod tests {
         assert_eq!(snapshot.rows.len(), 1);
         assert!(snapshot.rows[0].conflict);
         assert!(!snapshot.rows[0].pending);
+    }
+
+    #[tokio::test]
+    async fn memory_store_clears_conflict_rows() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
+        let row = SyncRow::new("post_1", serde_json::json!({"title": "Server"}))
+            .unwrap()
+            .conflict(true);
+
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                collection,
+                vec![row],
+                None,
+            ))
+            .await
+            .unwrap();
+
+        store
+            .clear_conflict(&stream, &RowKey::new("post_1").unwrap())
+            .await
+            .unwrap();
+
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert_eq!(snapshot.rows.len(), 1);
+        assert!(!snapshot.rows[0].conflict);
     }
 
     #[tokio::test]

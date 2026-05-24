@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    ClientMutation, MutationId, SyncChange, SyncCollectionName, SyncConflict, SyncCursor,
+    ClientMutation, MutationId, RowKey, SyncChange, SyncCollectionName, SyncConflict, SyncCursor,
     SyncDeviceId, SyncError, SyncPushResponse, SyncRejectedMutation, SyncResult, SyncRow,
     SyncStreamName,
 };
@@ -338,6 +338,12 @@ pub trait SyncLocalStore {
     /// understate pending UI state until the client replays the queued
     /// mutations.
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()>;
+
+    /// Clear a persisted row conflict marker after the user resolves it.
+    ///
+    /// This only clears local metadata. It does not write application data to
+    /// the server and does not remove any still-pending mutations for the row.
+    fn clear_conflict(&self, stream: &SyncStreamName, key: &RowKey) -> SyncLocalFuture<'_, ()>;
 
     /// Load pending mutations that should be replayed for one stream.
     fn pending_mutations(

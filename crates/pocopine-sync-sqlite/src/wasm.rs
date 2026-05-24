@@ -12,10 +12,10 @@ use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, DELETE_MUTATION_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID,
-    META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
-    SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
-    UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
+    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_ROW_SQL,
+    DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
+    SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL, SELECT_STREAM_SQL,
+    UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
 
 const DEFAULT_DATABASE_NAME: &str = "pocopine_sync.sqlite3";
@@ -132,6 +132,10 @@ impl SyncLocalStore for SqliteLocalStore {
 
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()> {
         self.run(mark_push_result(result))
+    }
+
+    fn clear_conflict(&self, stream: &SyncStreamName, key: &RowKey) -> SyncLocalFuture<'_, ()> {
+        self.run(clear_conflict(stream.clone(), key.clone()))
     }
 
     fn pending_mutations(
@@ -484,6 +488,18 @@ async fn mark_push_result(result: LocalPushResult) -> SyncResult<()> {
     }
     .await;
     finish_transaction(tx_result).await
+}
+
+async fn clear_conflict(stream: SyncStreamName, key: RowKey) -> SyncResult<()> {
+    exec(
+        CLEAR_ROW_CONFLICT_SQL,
+        vec![
+            JsValue::from_str(stream.as_str()),
+            JsValue::from_str(key.as_str()),
+            JsValue::from_f64(epoch_ms() as f64),
+        ],
+    )
+    .await
 }
 
 async fn pending_mutations(

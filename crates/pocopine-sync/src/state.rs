@@ -541,6 +541,40 @@ where
         true
     }
 
+    /// Clear the local conflict marker for a row and rebase the rendered view.
+    ///
+    /// This is the client-side half of a user choosing the current server row
+    /// as the winner. Pending mutations are left intact; if a later pending
+    /// overlay still targets the row, the rendered row remains pending after
+    /// the conflict marker is cleared.
+    pub fn clear_conflict(&mut self, key: &RowKey) -> bool {
+        let mut changed = false;
+
+        if let Some(row) = self.canonical_row_mut(key) {
+            if row.conflict {
+                row.conflict = false;
+                changed = true;
+            }
+        }
+
+        if let Some(row) = self.row_mut(key) {
+            if row.conflict {
+                row.conflict = false;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.last_reason = SyncReason::Manual;
+            self.rebase_rows_from_canonical();
+            if self.conflict_count == 0 && self.rejected_count == 0 {
+                self.error.clear();
+            }
+        }
+
+        changed
+    }
+
     fn accept_mutation(&mut self, id: &MutationId) {
         let Some(pending) = self.remove_pending_mutation(id) else {
             return;
@@ -1452,6 +1486,103 @@ mod tests {
         assert!(state.rows[0].conflict);
         assert_eq!(state.conflict_count, 1);
         assert_eq!(state.error, "base version is stale");
+    }
+
+    #[test]
+    fn clear_conflict_keeps_server_row_and_recounts_flags() {
+        let mut state = CollectionState::<String>::default();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local".to_string()).unwrap()),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(SyncRow::new("post_1", "server".to_string()).unwrap()),
+            reason: "base version is stale".to_string(),
+        });
+        state.apply_push(response);
+
+        assert!(state.clear_conflict(&RowKey::new("post_1").unwrap()));
+
+        assert_eq!(state.rows[0].value, "server");
+        assert!(!state.rows[0].conflict);
+        assert_eq!(state.conflict_count, 0);
+        assert!(state.error.is_empty());
+        assert_eq!(state.last_reason, SyncReason::Manual);
+    }
+
+    #[test]
+    fn clear_conflict_keeps_later_pending_overlay() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "server v1".to_string()).unwrap()],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local first".to_string()).unwrap()),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:2").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local second".to_string()).unwrap()),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(SyncRow::new("post_1", "server v2".to_string()).unwrap()),
+            reason: "base version is stale".to_string(),
+        });
+        state.apply_push(response);
+
+        assert!(state.clear_conflict(&RowKey::new("post_1").unwrap()));
+
+        assert_eq!(state.rows[0].value, "local second");
+        assert!(state.rows[0].pending);
+        assert!(!state.rows[0].conflict);
+        assert_eq!(state.pending_count, 1);
+        assert_eq!(state.conflict_count, 0);
+    }
+
+    #[test]
+    fn clear_conflict_preserves_error_when_rejections_remain() {
+        let mut state = CollectionState::<String>::default();
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.rejected.push(SyncRejectedMutation {
+            mutation_id: MutationId::new("device_1:reject").unwrap(),
+            key: Some(RowKey::new("post_0").unwrap()),
+            reason: "first rejection".to_string(),
+        });
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:conflict").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(SyncRow::new("post_1", "server".to_string()).unwrap()),
+            reason: "base version is stale".to_string(),
+        });
+        state.apply_push(response);
+
+        assert!(state.clear_conflict(&RowKey::new("post_1").unwrap()));
+
+        assert_eq!(state.conflict_count, 0);
+        assert_eq!(state.rejected_count, 1);
+        assert_eq!(
+            state.error,
+            "1 rejected, 1 conflicted; first: first rejection"
+        );
     }
 
     #[test]
