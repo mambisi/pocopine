@@ -232,13 +232,23 @@ jobs:
           cache-targets: false
       # `pine-icons` ships fs-based manifest tests; `pocopine-cli`
       # is host-only; `observability-smoke` owns a local OTLP
-      # collector and has a dedicated job below. Other crates'
-      # #[test]s either have no
-      # host-runnable shape (gated on `cfg(target_arch = "wasm32")`)
-      # or live in `src/` and run cleanly on host. `--tests` skips
-      # doc-tests (a few example snippets reference deps the
-      # workspace doesn't carry — they're not the contract here).
-      - run: cargo test --workspace --exclude pine --exclude observability-smoke --tests
+      # collector and has a dedicated job below. Other crates' #[test]s
+      # either have no host-runnable shape (gated on wasm32) or live in
+      # `src/` and run cleanly on host.
+      #
+      # The sync CRUD macro crate is the exception: its trybuild suite
+      # spawns nested cargo builds and dev-depends on `pocopine-sync-crud`,
+      # while `pocopine-sync-crud` normally depends on the macro crate.
+      # Keeping those nested builds in an isolated target dir avoids
+      # CI-only local crate metadata misses in the broad workspace graph.
+      # `--tests` skips doc-tests (a few example snippets reference deps
+      # the workspace doesn't carry — they're not the contract here).
+      - name: sync CRUD macro host tests
+        run: cargo test -p pocopine-sync-crud-macros --tests
+        env:
+          CARGO_TARGET_DIR: target/sync-crud-macros-host
+      - name: workspace host tests
+        run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-crud-macros --tests
 
   observability-otlp:
     name: observability OTLP smoke
