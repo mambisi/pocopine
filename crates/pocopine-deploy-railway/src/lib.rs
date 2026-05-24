@@ -861,7 +861,14 @@ fn render_railway_json(spec: &DeploySpec) -> String {
         },
         "services": services,
     });
-    if let Some(region) = overrides.region.as_deref() {
+    // Use the three-tier resolver — same as `deploy()` — so the audit
+    // artefact reflects what the deploy actually sent. Reading
+    // `overrides.region` directly would diverge whenever the value
+    // comes from $POCOPINE_RAILWAY_REGION or
+    // `~/.pocopine/config.toml [default.railway] region`.
+    if let Some(region) =
+        pocopine_deploy::config::resolve("railway", "region", overrides.region.as_deref())
+    {
         doc["deploy"] = serde_json::json!({ "region": region });
     }
 

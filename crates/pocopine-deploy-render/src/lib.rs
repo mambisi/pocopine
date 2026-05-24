@@ -638,12 +638,18 @@ fn resolve_env_for_render(spec: &DeploySpec) -> Result<Vec<(String, String)>> {
 fn render_yaml(spec: &DeploySpec) -> String {
     use std::fmt::Write as _;
     let overrides = render_override(spec);
-    let region = overrides.region.clone().unwrap_or_else(|| "oregon".into());
-    let plan = overrides.plan.clone().unwrap_or_else(|| "starter".into());
-    let owner = overrides
-        .owner_id
-        .clone()
-        .unwrap_or_else(|| "REPLACE_ME".into());
+    // Use the three-tier resolver — same as `deploy()` — so the
+    // audit artefact reflects what the deploy actually sent.
+    // Reading `overrides.*` directly would diverge from the deploy
+    // path whenever a value comes from an env var or
+    // `~/.pocopine/config.toml` rather than `[deploy.render]`.
+    let region = pocopine_deploy::config::resolve("render", "region", overrides.region.as_deref())
+        .unwrap_or_else(|| "oregon".into());
+    let plan = pocopine_deploy::config::resolve("render", "plan", overrides.plan.as_deref())
+        .unwrap_or_else(|| "starter".into());
+    let owner =
+        pocopine_deploy::config::resolve("render", "owner_id", overrides.owner_id.as_deref())
+            .unwrap_or_else(|| "REPLACE_ME".into());
 
     let mut out = String::new();
     let _ = writeln!(
