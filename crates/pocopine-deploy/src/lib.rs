@@ -23,7 +23,10 @@ pub mod docker;
 pub mod registry;
 pub mod spec;
 
-pub use adapter::{AdapterMode, AdapterSource, Constraint, DeployAdapter, DeployOutcome, Hint};
+pub use adapter::{
+    AdapterMode, AdapterSource, Constraint, DeployAdapter, DeployOutcome, DeployState, Hint,
+    ProcessStatus,
+};
 pub use artefact::{Artefact, StagedFiles};
 pub use registry::{
     resolve_registry, resolve_registry_credentials, GitProvider, RegistryCredentials,
