@@ -57,6 +57,9 @@ looks the way it does — the code itself tells you *what*.
   current roadmap for turning the shipped sync protocol, local store, and
   SQLite backend into a database-agnostic local-first sync engine without
   becoming a sync database.
+- [`sync-local-first-architecture-review.md`](./sync-local-first-architecture-review.md) —
+  architecture review against established local-first systems, with the
+  phase plan for the next resource-runtime slice.
 - [`sync-conflict-architecture.md`](./sync-conflict-architecture.md) —
   deep dive on the sync layers, canonical-vs-rendered local state,
   pending overlays, push outcomes, conflict resolution direction, and the
