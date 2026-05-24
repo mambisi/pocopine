@@ -16,7 +16,9 @@ syn = { workspace = true }
 
 [dev-dependencies]
 pocopine-auth = { workspace = true }
+pocopine-core = { workspace = true }
 pocopine-sync = { workspace = true }
 pocopine-sync-crud = { workspace = true }
 serde = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt"] }
 trybuild = "1"

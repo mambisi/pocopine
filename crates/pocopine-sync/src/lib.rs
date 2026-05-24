@@ -34,7 +34,11 @@ pub use protocol::{
 };
 pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};
 
-pub use client::{sync_plugin, SyncClient, SyncClientPlugin, SyncCollection, SyncLocalStoreHandle};
+pub use client::{
+    sync_plugin, CollectionSelector, SyncClient, SyncClientPlugin, SyncCollection,
+    SyncLocalStoreHandle,
+};
+pub use pocopine_core::Handle;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use memory::{MemorySyncState, MemorySyncStream};

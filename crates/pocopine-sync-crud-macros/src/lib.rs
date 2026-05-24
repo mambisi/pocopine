@@ -135,6 +135,168 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
             pub type Queued = ::pocopine_sync_crud::Queued<Id>;
             pub type Client<C> = ::pocopine_sync_crud::CrudClientResource<C, Id, Row>;
 
+            pub struct Resource<C: 'static> {
+                sync: ::pocopine_sync::SyncClient,
+                handle: ::pocopine_sync::Handle<C>,
+                selector: ::pocopine_sync::CollectionSelector<C, Row>,
+            }
+
+            impl<C: 'static> Clone for Resource<C> {
+                fn clone(&self) -> Self {
+                    Self {
+                        sync: self.sync.clone(),
+                        handle: self.handle.clone(),
+                        selector: self.selector,
+                    }
+                }
+            }
+
+            impl<C: 'static> Resource<C>
+            where
+                Row: 'static,
+            {
+                pub fn new(
+                    sync: &::pocopine_sync::SyncClient,
+                    handle: ::pocopine_sync::Handle<C>,
+                    selector: ::pocopine_sync::CollectionSelector<C, Row>,
+                ) -> Self {
+                    Self {
+                        sync: sync.clone(),
+                        handle,
+                        selector,
+                    }
+                }
+
+                pub fn collection(
+                    &self,
+                ) -> ::pocopine_sync::SyncResult<::pocopine_sync::SyncCollection<C, Row>> {
+                    self.sync.collection(self.handle.clone(), self.selector).stream(NAME)
+                }
+
+                pub fn open(&self) -> ::pocopine_sync::SyncResult<()>
+                where
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                {
+                    self.collection()?.open()
+                }
+
+                pub fn pull(&self) -> ::pocopine_sync::SyncResult<()>
+                where
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                {
+                    self.collection()?.pull()
+                }
+
+                pub fn view(
+                    &self,
+                ) -> ::pocopine_sync::SyncResult<::pocopine_sync_crud::LocalResourceView<Id, Row>>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone,
+                {
+                    let mut state = self.handle.try_borrow_mut().map_err(|_| {
+                        ::pocopine_sync::SyncError::client(
+                            "sync CRUD resource state is already borrowed",
+                        )
+                    })?;
+                    view((self.selector)(&mut state))
+                }
+
+                pub fn client(&self) -> ::pocopine_sync::SyncResult<Client<C>>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone,
+                {
+                    let collection = self.collection()?;
+                    let view = {
+                        let mut state = self.handle.try_borrow_mut().map_err(|_| {
+                            ::pocopine_sync::SyncError::client(
+                                "sync CRUD resource state is already borrowed",
+                            )
+                        })?;
+                        view((self.selector)(&mut state))?
+                    };
+                    Ok(::pocopine_sync_crud::client_resource(collection, view))
+                }
+
+                pub async fn create(&self, id: Id, draft: Draft) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.create(id, draft).await
+                }
+
+                pub async fn create_with_options(
+                    &self,
+                    id: Id,
+                    draft: Draft,
+                    options: CreateOptions,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.create_with_options(id, draft, options).await
+                }
+
+                pub async fn save(&self, id: Id, draft: Draft) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.save(id, draft).await
+                }
+
+                pub async fn save_with_options(
+                    &self,
+                    id: Id,
+                    draft: Draft,
+                    options: SaveOptions,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                    Draft: ::serde::Serialize + 'static,
+                {
+                    self.client()?.save_with_options(id, draft, options).await
+                }
+
+                pub async fn remove(&self, id: Id) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                {
+                    self.client()?.remove(id).await
+                }
+
+                pub async fn remove_with_options(
+                    &self,
+                    id: Id,
+                    options: RemoveOptions,
+                ) -> ::pocopine_sync::SyncResult<Outcome>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                {
+                    self.client()?.remove_with_options(id, options).await
+                }
+            }
+
+            pub fn use_resource<C: 'static>(
+                sync: &::pocopine_sync::SyncClient,
+                handle: ::pocopine_sync::Handle<C>,
+                selector: ::pocopine_sync::CollectionSelector<C, Row>,
+            ) -> Resource<C>
+            where
+                Row: 'static,
+            {
+                Resource::new(sync, handle, selector)
+            }
+
             #[cfg(not(target_arch = "wasm32"))]
             pub fn resource(
                 source: #source,
@@ -160,12 +322,14 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
                 Ok(::pocopine_sync_crud::client_resource(collection, view))
             }
 
-            #[cfg(target_arch = "wasm32")]
             pub fn collection<C: 'static>(
                 sync: &::pocopine_sync::SyncClient,
-                handle: ::pocopine::Handle<C>,
+                handle: ::pocopine_sync::Handle<C>,
                 selector: ::pocopine_sync::CollectionSelector<C, Row>,
-            ) -> ::pocopine_sync::SyncResult<::pocopine_sync::SyncCollection<C, Row>> {
+            ) -> ::pocopine_sync::SyncResult<::pocopine_sync::SyncCollection<C, Row>>
+            where
+                Row: 'static,
+            {
                 sync.collection(handle, selector).stream(NAME)
             }
         }

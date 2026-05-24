@@ -91,6 +91,20 @@ impl SyncClientPlugin {
         self.local_store = store;
         self
     }
+
+    /// Build the runtime sync client from this plugin configuration.
+    ///
+    /// Most apps install the plugin on [`App`]; tests and custom runners can
+    /// use this to bind generated resource helpers without mounting an app.
+    pub fn into_client(self) -> SyncClient {
+        SyncClient {
+            endpoint: self.endpoint,
+            live_endpoint: self.live_endpoint,
+            live_wakeup: self.live_wakeup,
+            with_credentials: self.with_credentials,
+            local_store: self.local_store,
+        }
+    }
 }
 
 impl AppPlugin for SyncClientPlugin {
@@ -99,13 +113,7 @@ impl AppPlugin for SyncClientPlugin {
     }
 
     fn install(self, app: App) -> App {
-        app.provide_plugin(SyncClient {
-            endpoint: self.endpoint,
-            live_endpoint: self.live_endpoint,
-            live_wakeup: self.live_wakeup,
-            with_credentials: self.with_credentials,
-            local_store: self.local_store,
-        })
+        app.provide_plugin(self.into_client())
     }
 }
 
