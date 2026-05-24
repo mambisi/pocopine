@@ -297,7 +297,11 @@ where
     ///
     /// This is the async primitive for `WritePolicy::RequireOnline`. The host
     /// implementation returns `SyncError::Unsupported`; confirmed browser
-    /// pushes require the wasm fetch runtime.
+    /// pushes require the wasm fetch runtime. Mutation ids are still
+    /// monotonic, not dense: a failed confirmed push may skip an id after the
+    /// counter has been durably reserved. On request errors, collection state
+    /// reflects the push error for the optimistic mutation before this future
+    /// returns `Err`.
     pub async fn push_with_generated_id_online_confirmed<M>(
         self,
         mutation: ClientMutationDraft<M>,
@@ -1195,7 +1199,7 @@ async fn send_push_and_reconcile<C, T, M>(
     stream: SyncStreamName,
     mutation: ClientMutation<M>,
     pull_after_accept: bool,
-    queue_offline: bool,
+    reconcile_queued_mutation: bool,
 ) -> SyncResult<SyncPushResponse<T>>
 where
     C: 'static,
@@ -1204,6 +1208,10 @@ where
 {
     let mutation_id = mutation.id.clone();
 
+    // `reconcile_queued_mutation` means the mutation is already in the
+    // durable local queue. A server response should therefore be persisted as
+    // the local push result so the queue can clear accepted/rejected/conflict
+    // outcomes. Online-only pushes skip this local queue reconciliation.
     let request = SyncPushRequest::new(stream.clone(), [mutation]);
     let result =
         pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(&push_url, &request)
@@ -1211,7 +1219,7 @@ where
     let mut local_error = None;
     let result: Result<SyncPushResponse<T>, String> = match result {
         Ok(response) => {
-            if queue_offline {
+            if reconcile_queued_mutation {
                 match local_push_result_from_response(&response) {
                     Ok(result) => {
                         if let Err(err) = local_store.mark_push_result(result).await {
@@ -1243,7 +1251,7 @@ where
                 should_pull
             }
             Err(err) => {
-                if queue_offline {
+                if reconcile_queued_mutation {
                     collection.set_error(err.to_string());
                 } else {
                     collection.apply_push_error(&mutation_id, err.to_string());

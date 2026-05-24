@@ -652,6 +652,11 @@ complete the request, the operation fails and no pending mutation is
 queued. The host implementation returns `SyncError::Unsupported` because
 confirmed pushes require the browser fetch runtime.
 
+`RequireOnline` still reserves a durable mutation id before the request,
+so failed attempts can leave gaps in mutation ids. If the request errors
+after an optimistic row was applied, collection state reflects the push
+error/rollback for that mutation before the method returns `Err`.
+
 `LocalResourceView` is the read side generated components should render:
 
 ```rust
@@ -1066,6 +1071,12 @@ view instead of exposing raw protocol structs to application code.
 need a single-row refresh. When a save/remove conflicts, the CRUD layer
 can call `get(ctx, key)` to fetch the current server-visible row and mark
 it conflicted locally.
+
+`CrudOutcome::Conflict` returns `server_row: Option<Row>` for rendering
+and comparison, not `Option<SyncRow<Row>>`. The row version stays in the
+canonical sync state. A retry should read the refreshed
+`LocalResourceView::base_version(&id)` after reconciliation or after a
+pull, rather than deriving a retry version from the typed conflict row.
 
 If `get` returns `None`, the client should treat the row as gone or not
 visible. It should not assume the caller is allowed to know which case it
