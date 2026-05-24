@@ -21,5 +21,16 @@ target/
 # Playwright screenshot output — regenerated on every e2e run.
 examples/*/e2e/screenshots/
 examples/*/e2e/*.png
+
+# `pocopine deploy` artefacts (RFC 080 §4.2 / §7). Mirrors Rust's
+# `target/` convention: the Dockerfile, dockerignore, host-specific
+# config (`fly.toml` / `render.yaml` / `railway.json`), and per-
+# (target, env) first-deploy state all live under `.pocopine/` so a
+# single ignore rule covers every project and `rm -rf .pocopine/build`
+# is the clean-rebuild command. Override the build sub-path via
+# `[deploy] build_dir = "..."` in Cargo.toml when a project needs its
+# own location.
+.pocopine/
+
 .idea/
 .codex
