@@ -122,12 +122,16 @@ pub fn env_var_name(host: &str, field: &str) -> String {
     format!("POCOPINE_{h}_{f}")
 }
 
-/// Field names probed when listing env-only entries. Adapters extend
-/// this list as new override fields are added; the list is not the
-/// source of truth for the resolver itself (`resolve` accepts any
-/// field name), only for the `list` command.
+/// Field names probed when listing env-only entries. Must include
+/// every field name any adapter passes to [`resolve`] — otherwise an
+/// env-only `$POCOPINE_<HOST>_<FIELD>` would be honored at deploy
+/// time but invisible in `pocopine deploy config list`. `resolve`
+/// itself accepts any string; this list is just the inventory for
+/// the `list` command.
 pub const KNOWN_FIELDS: &[&str] = &[
+    "environment",
     "image_registry",
+    "org",
     "owner_id",
     "plan",
     "primary_region",

@@ -742,14 +742,19 @@ fn railway_override(spec: &DeploySpec) -> RailwayOverride {
         .unwrap_or_default()
 }
 
-/// Resolve the container registry for this deploy: explicit
-/// `[deploy.railway].image_registry`, else derived from the git remote.
+/// Resolve the container registry for this deploy. Three-tier
+/// resolver for `image_registry`: `$POCOPINE_RAILWAY_IMAGE_REGISTRY` →
+/// `[deploy.railway].image_registry` → `~/.pocopine/config.toml`.
+/// Falls back to `pocopine_deploy::resolve_registry`'s git-remote
+/// derivation when all three tiers are silent.
 fn resolved_registry(spec: &DeploySpec) -> Result<pocopine_deploy::ResolvedRegistry> {
     let overrides = railway_override(spec);
-    pocopine_deploy::resolve_registry(
+    let image_registry = pocopine_deploy::config::resolve(
+        "railway",
+        "image_registry",
         overrides.image_registry.as_deref(),
-        spec.git_remote.as_deref(),
-    )
+    );
+    pocopine_deploy::resolve_registry(image_registry.as_deref(), spec.git_remote.as_deref())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
