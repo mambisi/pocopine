@@ -275,10 +275,30 @@ impl DeployAdapter for RailwayAdapter {
 
         let token = load_railway_token()?;
         let overrides = railway_override(spec);
-        let project_name = overrides
-            .project
-            .clone()
-            .unwrap_or_else(|| spec.app_name.clone());
+        // Three-tier resolution: env > Cargo.toml > ~/.pocopine/config.toml.
+        // `project` defaults to the app name when all three tiers are
+        // silent (most projects don't need a custom Railway project
+        // name — the app name is fine).
+        let project_name =
+            pocopine_deploy::config::resolve("railway", "project", overrides.project.as_deref())
+                .unwrap_or_else(|| spec.app_name.clone());
+        let workspace_id = pocopine_deploy::config::resolve(
+            "railway",
+            "workspace_id",
+            overrides.workspace_id.as_deref(),
+        );
+        let environment_name = pocopine_deploy::config::resolve(
+            "railway",
+            "environment",
+            overrides.environment.as_deref(),
+        );
+        let registry_username = pocopine_deploy::config::resolve(
+            "railway",
+            "registry_username",
+            overrides.registry_username.as_deref(),
+        );
+        let region =
+            pocopine_deploy::config::resolve("railway", "region", overrides.region.as_deref());
 
         // Resolve every `[deploy.env]` entry before touching Railway —
         // a missing `{ from = "env" }` value must fail before we push.
@@ -289,7 +309,7 @@ impl DeployAdapter for RailwayAdapter {
         let registry = resolved_registry(spec)?;
         let registry_creds = pocopine_deploy::resolve_registry_credentials(
             &registry,
-            overrides.registry_username.as_deref(),
+            registry_username.as_deref(),
             spec.git_remote.as_deref(),
         );
         if registry_creds.is_none() {
@@ -318,8 +338,8 @@ impl DeployAdapter for RailwayAdapter {
         let client = client::RailwayClient::new(&token);
 
         // 2. Resolve (or create) the project, then pick the environment.
-        let project = client.ensure_project(&project_name, overrides.workspace_id.as_deref())?;
-        let environment = match overrides.environment.as_deref() {
+        let project = client.ensure_project(&project_name, workspace_id.as_deref())?;
+        let environment = match environment_name.as_deref() {
             Some(name) => project.environment(name).cloned().ok_or_else(|| {
                 anyhow::anyhow!("railway: project `{project_name}` has no environment `{name}`")
             })?,
@@ -421,7 +441,7 @@ impl DeployAdapter for RailwayAdapter {
                 image: tag.clone(),
                 num_replicas: proc.scale.min.max(1),
                 healthcheck_path: proc.healthcheck.clone(),
-                region: overrides.region.clone(),
+                region: region.clone(),
                 registry_credentials: registry_creds.clone(),
             };
             client.update_service_instance(&service.id, &environment.id, &config)?;
