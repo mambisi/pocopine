@@ -140,6 +140,13 @@ impl SyncLocalStore for IndexedDbLocalStore {
         self.run(mark_push_result(database_name, result))
     }
 
+    fn clear_conflict(&self, stream: &SyncStreamName, key: &RowKey) -> SyncLocalFuture<'_, ()> {
+        let database_name = self.database_name.clone();
+        let stream = stream.clone();
+        let key = key.clone();
+        self.run(clear_conflict(database_name, stream, key))
+    }
+
     fn pending_mutations(
         &self,
         stream: &SyncStreamName,
@@ -339,6 +346,25 @@ async fn mark_push_result(database_name: String, result: LocalPushResult) -> Syn
 
     state.rows = rows.into_values().collect();
     put_stream_state(&store, &state).await?;
+    await_transaction(done).await?;
+    database.close();
+    Ok(())
+}
+
+async fn clear_conflict(
+    database_name: String,
+    stream: SyncStreamName,
+    key: RowKey,
+) -> SyncResult<()> {
+    let database = open_database(&database_name).await?;
+    let transaction = transaction(&database, STREAMS_STORE, IdbTransactionMode::Readwrite)?;
+    let done = transaction_done(&transaction);
+    let store = transaction.object_store(STREAMS_STORE).map_err(js_error)?;
+    let mut state = load_stream_state(&store, stream).await?;
+    if let Some(row) = state.rows.iter_mut().find(|row| row.key == key) {
+        row.conflict = false;
+        put_stream_state(&store, &state).await?;
+    }
     await_transaction(done).await?;
     database.close();
     Ok(())

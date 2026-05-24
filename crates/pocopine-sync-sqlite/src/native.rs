@@ -14,10 +14,10 @@ use pocopine_sync::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, DELETE_MUTATION_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID,
-    META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
-    SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
-    UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
+    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_ROW_SQL,
+    DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
+    SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL, SELECT_STREAM_SQL,
+    UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
 
 /// SQLite-backed [`SyncLocalStore`] for host/native targets.
@@ -106,6 +106,12 @@ impl SyncLocalStore for SqliteLocalStore {
 
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()> {
         Self::ready(self.with_conn(|conn| mark_push_result(conn, result)))
+    }
+
+    fn clear_conflict(&self, stream: &SyncStreamName, key: &RowKey) -> SyncLocalFuture<'_, ()> {
+        let stream = stream.clone();
+        let key = key.clone();
+        Self::ready(self.with_conn(|conn| clear_conflict(conn, &stream, &key)))
     }
 
     fn pending_mutations(
@@ -442,6 +448,15 @@ fn mark_push_result(conn: &mut Connection, result: LocalPushResult) -> SyncResul
     }
 
     tx.commit().map_err(sqlite_error)
+}
+
+fn clear_conflict(conn: &mut Connection, stream: &SyncStreamName, key: &RowKey) -> SyncResult<()> {
+    conn.execute(
+        CLEAR_ROW_CONFLICT_SQL,
+        params![stream.as_str(), key.as_str(), epoch_ms()],
+    )
+    .map_err(sqlite_error)?;
+    Ok(())
 }
 
 fn pending_mutations(
@@ -950,6 +965,36 @@ mod tests {
         assert!(block(store.pending_mutations(&stream)).unwrap().is_empty());
         assert_eq!(snapshot.rows.len(), 1);
         assert!(snapshot.rows[0].conflict);
+    }
+
+    #[test]
+    fn sqlite_store_clears_conflict_rows() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+
+        block(store.mark_push_result(LocalPushResult {
+            stream: stream.clone(),
+            collection: Some(SyncCollectionName::new("posts").unwrap()),
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+            rows: Vec::new(),
+            conflicts: vec![SyncConflict {
+                mutation_id: MutationId::new("device_abc:1").unwrap(),
+                key: Some(RowKey::new("post_1").unwrap()),
+                server_row: Some(
+                    SyncRow::new("post_1", serde_json::json!({"title": "Server"})).unwrap(),
+                ),
+                reason: "stale".to_string(),
+            }],
+            cursor: None,
+        }))
+        .unwrap();
+
+        block(store.clear_conflict(&stream, &RowKey::new("post_1").unwrap())).unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.rows.len(), 1);
+        assert!(!snapshot.rows[0].conflict);
     }
 
     #[test]

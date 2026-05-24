@@ -2,7 +2,7 @@ use std::future;
 
 use pocopine_sync::{
     ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
-    MutationId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncResult,
+    MutationId, RowKey, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncResult,
     SyncStreamName,
 };
 
@@ -83,6 +83,10 @@ impl SyncLocalStore for IndexedDbLocalStore {
     }
 
     fn mark_push_result(&self, _result: LocalPushResult) -> SyncLocalFuture<'_, ()> {
+        Self::unsupported()
+    }
+
+    fn clear_conflict(&self, _stream: &SyncStreamName, _key: &RowKey) -> SyncLocalFuture<'_, ()> {
         Self::unsupported()
     }
 

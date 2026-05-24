@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::{
     ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation, MemoryLocalStore,
-    MutationId, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason, SyncResult,
-    SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+    MutationId, RowKey, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason,
+    SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -321,6 +321,24 @@ where
     {
         self.push_with_generated_id_online_confirmed_impl(mutation, optimistic)
             .await
+    }
+
+    /// Clear a local conflict marker for one row after the user resolves it.
+    ///
+    /// This persists the local metadata change before updating mounted
+    /// collection state. It does not write server data or clear unrelated
+    /// pending mutations, so stale pending writes for the same row may still
+    /// conflict again when replayed.
+    pub async fn clear_conflict(self, key: RowKey) -> SyncResult<bool>
+    where
+        T: Clone,
+    {
+        let stream = self.stream_value()?;
+        let local_store = self.local_store.clone();
+        let handle = self.handle;
+        let selector = self.selector;
+        local_store.clear_conflict(&stream, &key).await?;
+        Ok(handle.update(|state| selector(state).clear_conflict(&key)))
     }
 
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
