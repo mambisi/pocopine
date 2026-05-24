@@ -364,7 +364,7 @@ where
             SyncOp::Upsert => {
                 if let Some(mut row) = pending.optimistic.clone() {
                     row.pending = true;
-                    row.conflict = false;
+                    row.conflict = self.canonical_conflict(&row.key);
                     self.upsert_row(row);
                 } else if let Some(key) = &pending.key {
                     if let Some(row) = self.row_mut(key) {
@@ -374,18 +374,65 @@ where
             }
             SyncOp::Delete => {
                 if let Some(key) = &pending.key {
-                    self.remove_row(key);
+                    if self.canonical_conflict(key) {
+                        if let Some(row) = self.row_mut(key) {
+                            row.pending = true;
+                            row.conflict = true;
+                        }
+                    } else {
+                        self.remove_row(key);
+                    }
                 }
             }
             SyncOp::Reset => {
                 self.rows.clear();
                 if let Some(mut row) = pending.optimistic.clone() {
                     row.pending = true;
-                    row.conflict = false;
+                    row.conflict = self.canonical_conflict(&row.key);
                     self.rows.push(row);
                 }
             }
         }
+    }
+
+    fn canonical_conflict(&self, key: &RowKey) -> bool {
+        self.canonical_row(key)
+            .map(|row| row.conflict)
+            .unwrap_or(false)
+    }
+
+    fn bootstrap_canonical_rows_from_legacy_rows(&mut self) {
+        if !self.canonical_rows.is_empty() || self.rows.is_empty() {
+            return;
+        }
+
+        let mut rows = self.rows.clone();
+        for pending in self.pending_mutations.iter().rev() {
+            match pending.op {
+                SyncOp::Upsert => {
+                    if let Some(before) = pending.before.clone() {
+                        upsert_row_in(&mut rows, before);
+                    } else if let Some(key) = &pending.key {
+                        remove_row_from(&mut rows, key);
+                    }
+                }
+                SyncOp::Delete => {
+                    if let Some(before) = pending.before.clone() {
+                        upsert_row_in(&mut rows, before);
+                    }
+                }
+                SyncOp::Reset => {
+                    if !pending.before_rows.is_empty() {
+                        rows = pending.before_rows.clone();
+                    }
+                }
+            }
+        }
+
+        for row in &mut rows {
+            row.pending = false;
+        }
+        self.canonical_rows = rows;
     }
 
     pub fn apply_optimistic_mutation(
@@ -395,12 +442,7 @@ where
         key: Option<RowKey>,
         optimistic: Option<SyncRow<T>>,
     ) {
-        if self.canonical_rows.is_empty()
-            && !self.rows.is_empty()
-            && self.pending_mutations.is_empty()
-        {
-            self.canonical_rows = self.rows.clone();
-        }
+        self.bootstrap_canonical_rows_from_legacy_rows();
         self.pending_mutations.retain(|pending| pending.id != id);
         self.rebase_rows_from_canonical();
 
@@ -523,21 +565,25 @@ where
     }
 
     fn upsert_row(&mut self, row: SyncRow<T>) {
-        if let Some(existing) = self
-            .rows
-            .iter_mut()
-            .find(|existing| existing.key == row.key)
-        {
-            *existing = row;
-        } else {
-            self.rows.push(row);
-        }
+        upsert_row_in(&mut self.rows, row);
     }
 
     fn remove_row(&mut self, key: &RowKey) {
-        if let Some(index) = self.rows.iter().position(|row| &row.key == key) {
-            self.rows.remove(index);
-        }
+        remove_row_from(&mut self.rows, key);
+    }
+}
+
+fn upsert_row_in<T>(rows: &mut Vec<SyncRow<T>>, row: SyncRow<T>) {
+    if let Some(existing) = rows.iter_mut().find(|existing| existing.key == row.key) {
+        *existing = row;
+    } else {
+        rows.push(row);
+    }
+}
+
+fn remove_row_from<T>(rows: &mut Vec<SyncRow<T>>, key: &RowKey) {
+    if let Some(index) = rows.iter().position(|row| &row.key == key) {
+        rows.remove(index);
     }
 }
 
@@ -1197,6 +1243,99 @@ mod tests {
         assert_eq!(
             state.rows[0].version.as_ref().unwrap(),
             &RowVersion::new("row_2").unwrap()
+        );
+    }
+
+    #[test]
+    fn conflicted_stacked_mutation_keeps_later_overlay_marked_conflicted() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "server v1".to_string())
+                    .unwrap()
+                    .version("row_1")
+                    .unwrap()],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local first".to_string()).unwrap()),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:2").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local second".to_string()).unwrap()),
+        );
+
+        let mut conflicted = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        conflicted.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(
+                SyncRow::new("post_1", "server v2".to_string())
+                    .unwrap()
+                    .version("row_2")
+                    .unwrap(),
+            ),
+            reason: "base version is stale".to_string(),
+        });
+        state.apply_push(conflicted);
+
+        assert_eq!(state.rows[0].value, "local second");
+        assert!(state.rows[0].pending);
+        assert!(state.rows[0].conflict);
+        assert_eq!(state.pending_count, 1);
+        assert_eq!(state.conflict_count, 1);
+        assert_eq!(
+            state.base_version(&RowKey::new("post_1").unwrap()).unwrap(),
+            RowVersion::new("row_2").unwrap()
+        );
+    }
+
+    #[test]
+    fn legacy_rendered_rows_with_pending_without_optimistic_do_not_get_wiped() {
+        let mut state = CollectionState::<String>::default();
+        let key = RowKey::new("post_1").unwrap();
+        let canonical = SyncRow::new("post_1", "server".to_string())
+            .unwrap()
+            .version("row_1")
+            .unwrap();
+        state.rows = vec![canonical.clone()];
+        state.pending_mutations.push(PendingMutation {
+            id: MutationId::new("device_1:existing").unwrap(),
+            op: SyncOp::Upsert,
+            key: Some(key.clone()),
+            before: Some(canonical),
+            before_rows: Vec::new(),
+            optimistic: None,
+        });
+
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:new").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_2").unwrap()),
+            Some(SyncRow::new("post_2", "new local".to_string()).unwrap()),
+        );
+
+        assert_eq!(state.rows.len(), 2);
+        assert_eq!(state.row(&key).unwrap().value, "server");
+        assert!(state.row(&key).unwrap().pending);
+        assert_eq!(
+            state.base_version(&key).unwrap(),
+            RowVersion::new("row_1").unwrap()
+        );
+        assert_eq!(
+            state.row(&RowKey::new("post_2").unwrap()).unwrap().value,
+            "new local"
         );
     }
 
