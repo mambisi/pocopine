@@ -49,6 +49,9 @@ pub enum CrudOutcome<Id, Row> {
         id: Id,
         row: Row,
     },
+    Removed {
+        id: Id,
+    },
     Rejected {
         id: Id,
         reason: String,
@@ -83,6 +86,10 @@ mod tests {
         assert!(CrudOutcome::<String, String>::Rejected {
             id: "post_1".to_string(),
             reason: "invalid".to_string()
+        }
+        .is_terminal());
+        assert!(CrudOutcome::<String, String>::Removed {
+            id: "post_1".to_string()
         }
         .is_terminal());
     }

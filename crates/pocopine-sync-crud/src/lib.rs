@@ -5,6 +5,7 @@
 //! contracts that a later proc macro will target. It does not generate SQL and
 //! it is not an ORM.
 
+mod client;
 mod id;
 mod mutation;
 mod options;
@@ -20,6 +21,7 @@ mod source;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use async_trait::async_trait;
+pub use client::{client_resource, CrudClientResource};
 pub use id::{new_id, ResourceId};
 pub use mutation::{CreatePayload, CrudMutationPayload, RemovePayload, SavePayload};
 pub use options::{CreateOptions, RemoveOptions, SaveOptions, TransactionOptions, WritePolicy};
