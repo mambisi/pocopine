@@ -18,6 +18,7 @@
 pub mod adapter;
 pub mod artefact;
 pub mod common;
+pub mod config;
 pub mod credentials;
 pub mod docker;
 pub mod registry;
