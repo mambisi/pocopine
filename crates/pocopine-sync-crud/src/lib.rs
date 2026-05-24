@@ -5,6 +5,8 @@
 //! contracts that a later proc macro will target. It does not generate SQL and
 //! it is not an ORM.
 
+pub use pocopine_sync_crud_macros::resource;
+
 mod client;
 mod id;
 mod mutation;
