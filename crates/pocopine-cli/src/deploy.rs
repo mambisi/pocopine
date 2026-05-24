@@ -27,30 +27,64 @@ use pocopine_deploy::{
     credentials, docker::DockerClient, spec, Constraint, DeployAdapter, Hint, StagedFiles,
 };
 
-use crate::args::{AuthArgs, DeployArgs, DeployCmd};
+use crate::args::{AuthArgs, DeployArgs, DeployCmd, StatusArgs};
 
 pub fn run(args: &DeployArgs) -> Result<()> {
     match &args.cmd {
         None => run_deploy(args),
         Some(DeployCmd::Auth(a)) => run_auth(a),
         Some(DeployCmd::Doctor) => run_doctor(),
+        Some(DeployCmd::Status(s)) => run_status(args, s),
     }
 }
 
 fn run_deploy(args: &DeployArgs) -> Result<()> {
+    if args.workspace {
+        let entry = args
+            .path
+            .canonicalize()
+            .with_context(|| format!("resolving project path {}", args.path.display()))?;
+        let workspace_root = discover_workspace_root(&entry)?;
+        let members = discover_deployable_members(&workspace_root)?;
+        if members.is_empty() {
+            bail!(
+                "no deployable workspace members under `{}` (looked for `[package.metadata.pocopine.deploy]` in each crate's Cargo.toml)",
+                workspace_root.display()
+            );
+        }
+        eprintln!(
+            "▶ workspace deploy: {} member(s) under `{}`",
+            members.len(),
+            workspace_root.display()
+        );
+        for member in members {
+            let app = member
+                .file_name()
+                .map(|s: &std::ffi::OsStr| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| member.display().to_string());
+            eprintln!("\n── {app} ─────────────────────────────────────────────");
+            deploy_one_project(args, &member)
+                .with_context(|| format!("deploying workspace member `{app}`"))?;
+        }
+        return Ok(());
+    }
+
     let project = args
         .path
         .canonicalize()
         .with_context(|| format!("resolving project path {}", args.path.display()))?;
+    deploy_one_project(args, &project)
+}
 
-    let manifest = read_manifest(&project)?;
+fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
+    let manifest = read_manifest(project)?;
     let app_name = app_name_from_manifest(&manifest)?;
     let deploy_table = deploy_table_from_manifest(&manifest)?;
-    let git_sha = short_git_sha(&project)?;
+    let git_sha = short_git_sha(project)?;
 
     // workspace_root → docker build context; subpath is "" for
     // standalone projects, e.g. "examples/keep" for workspace members.
-    let workspace_root = discover_workspace_root(&project)?;
+    let workspace_root = discover_workspace_root(project)?;
     let workspace_subpath =
         normalize_workspace_subpath(project.strip_prefix(&workspace_root).ok())?;
 
@@ -73,7 +107,7 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
     let state_file = project.join(".pocopine/deploy").join(&state_basename);
     spec.first_deploy = !state_file.exists();
     spec.skip_build = args.skip_build;
-    spec.git_remote = discover_git_remote(&project);
+    spec.git_remote = discover_git_remote(project);
     spec.workspace_subpath = workspace_subpath.clone();
     spec.has_rust_toolchain = workspace_root.join("rust-toolchain.toml").exists();
 
@@ -101,19 +135,21 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
     adapter.render_config(&spec, &mut staged);
 
     if args.dry_run {
+        let build_root = project.join(spec.build_dir());
         if workspace_subpath.is_empty() {
             eprintln!(
                 "--dry-run: would write {} file(s) under {}",
                 staged.len(),
-                project.display(),
+                build_root.display(),
             );
         } else {
             eprintln!(
                 "--dry-run: workspace member detected — project `{}` at `{}/` \
-                 (docker build context: workspace root). Would write {} file(s) under the project dir.",
+                 (docker build context: workspace root). Would write {} file(s) under `{}`.",
                 spec.app_name,
                 workspace_subpath,
                 staged.len(),
+                build_root.display(),
             );
         }
         for (path, content) in staged.iter() {
@@ -128,22 +164,33 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
         return Ok(());
     }
 
-    // 3. Flush staged files. flush_one refuses to clobber hand-edited
-    //    files that lack GENERATED_MARKER (RFC 080 §7).
+    // 3. Flush staged files under `<project>/<spec.build_dir()>`.
+    //    Default is `.pocopine/build` (mirrors Rust's `target/`
+    //    convention: one `.pocopine/` gitignore rule, `rm -rf
+    //    .pocopine/build` clean). Override with `[deploy] build_dir =
+    //    "..."` in Cargo.toml. `flush_one` refuses to clobber
+    //    hand-edited files that lack GENERATED_MARKER (RFC 080 §7).
+    let build_root = project.join(spec.build_dir());
+    std::fs::create_dir_all(&build_root)
+        .with_context(|| format!("creating {}", build_root.display()))?;
     for (path, content) in staged.iter() {
-        let dest = project.join(path);
+        let dest = build_root.join(path);
         flush_one(&dest, content)?;
     }
 
     // 4. Build the same artefacts as `pocopine build --release` so
     //    the Dockerfile's COPY picks up fresh wasm + bundles.
+    //    Read config + build configured bins from `project`, not
+    //    `args.path` — in workspace mode they're different (`args.path`
+    //    is the workspace root or another member) and the wrong path
+    //    would skip the member's Tailwind / configured-bin settings.
     if !args.skip_build {
-        let cfg = crate::config::load(&args.path)?;
-        crate::build::wasm(&project, true)?;
-        crate::client_modules::build(&project, true)?;
-        crate::build::configured_bins(&args.path, &cfg, true)?;
+        let cfg = crate::config::load(project)?;
+        crate::build::wasm(project, true)?;
+        crate::client_modules::build(project, true)?;
+        crate::build::configured_bins(project, &cfg, true)?;
         if let Some(tw) = cfg.tailwind.as_ref() {
-            crate::tailwind::run_once(&project, tw, true)?;
+            crate::tailwind::run_once(project, tw, true)?;
         }
     }
 
@@ -230,6 +277,253 @@ fn run_auth(args: &AuthArgs) -> Result<()> {
     credentials::store(host, token)?;
     eprintln!("Stored token for `{host}` to ~/.pocopine/credentials.toml (mode 0600).");
     Ok(())
+}
+
+fn run_status(args: &DeployArgs, opts: &StatusArgs) -> Result<()> {
+    use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
+
+    let entry = args
+        .path
+        .canonicalize()
+        .with_context(|| format!("resolving project path {}", args.path.display()))?;
+
+    let projects: Vec<PathBuf> = if args.workspace {
+        let workspace_root = discover_workspace_root(&entry)?;
+        let members = discover_deployable_members(&workspace_root)?;
+        if members.is_empty() {
+            bail!(
+                "no deployable workspace members under `{}` (looked for `[package.metadata.pocopine.deploy]` in each crate's Cargo.toml)",
+                workspace_root.display()
+            );
+        }
+        members
+    } else {
+        vec![entry]
+    };
+
+    // Per project, fan out across one or more targets. With `--target`
+    // explicit, that target is used everywhere. Without it, each
+    // project's configured hosts (`[deploy.<host>]` sub-tables that
+    // resolve to a known adapter) are queried in turn — so the table
+    // shows every platform the project is wired up to.
+    let show_platform = args.target.is_none();
+    let mut rows: Vec<StatusRow> = Vec::new();
+    for project in &projects {
+        let targets = targets_for_project(args, project)?;
+        if targets.is_empty() {
+            // Project has no host sub-table and no `--target` — surface
+            // the row with an empty target so workspace status doesn't
+            // silently skip it.
+            rows.push(StatusRow {
+                app: read_manifest(project)
+                    .ok()
+                    .and_then(|m| app_name_from_manifest(&m).ok())
+                    .unwrap_or_else(|| project.display().to_string()),
+                target: "(none)".to_owned(),
+                processes: Vec::new(),
+                error: Some("no [deploy.<host>] sub-table; pass --target explicitly".to_owned()),
+            });
+            continue;
+        }
+        for target in targets {
+            let (app, processes, error) = match status_one_project(args, project, target) {
+                Ok((a, p)) => (a, p, None),
+                Err(e) => {
+                    // Don't abort the whole command on per-platform
+                    // failure — surface it as a row instead so the
+                    // user sees which targets responded.
+                    let app = read_manifest(project)
+                        .ok()
+                        .and_then(|m| app_name_from_manifest(&m).ok())
+                        .unwrap_or_else(|| project.display().to_string());
+                    (app, Vec::new(), Some(format!("{e:#}")))
+                }
+            };
+            rows.push(StatusRow {
+                app,
+                target: target.to_owned(),
+                processes,
+                error,
+            });
+        }
+    }
+
+    if opts.json {
+        #[derive(serde::Serialize)]
+        struct AppStatus<'a> {
+            app: &'a str,
+            target: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            error: Option<&'a str>,
+            processes: &'a [pocopine_deploy::ProcessStatus],
+        }
+        let payload: Vec<AppStatus<'_>> = rows
+            .iter()
+            .map(|r| AppStatus {
+                app: &r.app,
+                target: &r.target,
+                error: r.error.as_deref(),
+                processes: r.processes.as_slice(),
+            })
+            .collect();
+        let s = serde_json::to_string_pretty(&payload).context("serialising status to JSON")?;
+        println!("{s}");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    let mut header: Vec<&str> = Vec::new();
+    if args.workspace {
+        header.push("APP");
+    }
+    if show_platform {
+        header.push("PLATFORM");
+    }
+    header.extend(["PROCESS", "STATE", "DEPLOY", "SERVICE", "URL"]);
+    table.set_header(header);
+
+    let mut had_any_rows = false;
+    for row in &rows {
+        if let Some(err) = &row.error {
+            had_any_rows = true;
+            let mut cells = Vec::new();
+            if args.workspace {
+                cells.push(Cell::new(&row.app));
+            }
+            if show_platform {
+                cells.push(Cell::new(&row.target).fg(Color::Magenta));
+            }
+            cells.push(Cell::new("-"));
+            cells.push(Cell::new(format!("error: {err}")).fg(Color::Red));
+            cells.push(Cell::new("-"));
+            cells.push(Cell::new("-"));
+            cells.push(Cell::new("-"));
+            table.add_row(cells);
+            continue;
+        }
+        for s in &row.processes {
+            had_any_rows = true;
+            let state_label = format!("{:?}", s.state).to_lowercase();
+            let state_cell = if !s.raw_state.is_empty() && s.raw_state != state_label {
+                format!("{state_label} ({})", s.raw_state)
+            } else {
+                state_label.clone()
+            };
+            let state_color = match s.state {
+                pocopine_deploy::DeployState::Live => Color::Green,
+                pocopine_deploy::DeployState::Failed => Color::Red,
+                pocopine_deploy::DeployState::Canceled => Color::Yellow,
+                pocopine_deploy::DeployState::Building
+                | pocopine_deploy::DeployState::Deploying
+                | pocopine_deploy::DeployState::Pending => Color::Cyan,
+                pocopine_deploy::DeployState::Unknown => Color::DarkGrey,
+            };
+            let mut cells = Vec::new();
+            if args.workspace {
+                cells.push(Cell::new(&row.app));
+            }
+            if show_platform {
+                cells.push(Cell::new(&row.target).fg(Color::Magenta));
+            }
+            cells.push(Cell::new(&s.process));
+            cells.push(Cell::new(state_cell).fg(state_color));
+            cells.push(Cell::new(s.deploy_id.as_deref().unwrap_or("-")));
+            cells.push(Cell::new(s.host_service_id.as_deref().unwrap_or("-")));
+            cells.push(Cell::new(s.url.as_deref().unwrap_or("-")));
+            table.add_row(cells);
+        }
+    }
+
+    if !had_any_rows {
+        println!("(no processes declared in any deployable member)");
+        return Ok(());
+    }
+    println!("{table}");
+    Ok(())
+}
+
+struct StatusRow {
+    app: String,
+    target: String,
+    processes: Vec<pocopine_deploy::ProcessStatus>,
+    error: Option<String>,
+}
+
+/// Pick which target(s) to query for a single project.
+/// - `--target` set → use it verbatim, single entry.
+/// - `--target` unset → enumerate `[deploy.<host>]` sub-tables that
+///   resolve to a known adapter. Empty list means the project hasn't
+///   declared a platform; the caller surfaces that to the user.
+fn targets_for_project(args: &DeployArgs, project: &Path) -> Result<Vec<&'static str>> {
+    if let Some(t) = args.target.as_deref() {
+        // Validate so an unknown --target name fails once with a clear
+        // error, not silently per-project.
+        let _ = resolve_adapter(t)?;
+        return Ok(KNOWN_TARGETS.iter().copied().filter(|k| *k == t).collect());
+    }
+
+    let manifest = match read_manifest(project) {
+        Ok(m) => m,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let deploy_table = match deploy_table_from_manifest(&manifest) {
+        Ok(t) => t,
+        Err(_) => return Ok(Vec::new()),
+    };
+    // A project can declare a host either at the base
+    // `[deploy.<host>]` sub-table or only under an environment
+    // override block such as `[deploy.production.<host>]`. The deploy
+    // path merges them via `spec::parse` — discovery has to look at
+    // both, otherwise `--prod status` (without an explicit --target)
+    // misses production-only host config and reports "no target".
+    let env_table = if args.prod {
+        deploy_table.get("production")
+    } else {
+        None
+    };
+    Ok(KNOWN_TARGETS
+        .iter()
+        .copied()
+        .filter(|name| {
+            deploy_table.get(*name).is_some() || env_table.and_then(|t| t.get(*name)).is_some()
+        })
+        .collect())
+}
+
+/// Adapter names supported by the built-in [`resolve_adapter`]. Source
+/// of truth for `--target`-less status discovery.
+const KNOWN_TARGETS: &[&str] = &["fly", "railway", "render"];
+
+fn status_one_project(
+    args: &DeployArgs,
+    project: &Path,
+    target: &str,
+) -> Result<(String, Vec<pocopine_deploy::ProcessStatus>)> {
+    let manifest = read_manifest(project)?;
+    let app_name = app_name_from_manifest(&manifest)?;
+    let deploy_table = deploy_table_from_manifest(&manifest)?;
+    let git_sha = short_git_sha(project)?;
+
+    let workspace_root = discover_workspace_root(project)?;
+    let workspace_subpath =
+        normalize_workspace_subpath(project.strip_prefix(&workspace_root).ok())?;
+
+    let environment = if args.prod {
+        Some("production".to_owned())
+    } else {
+        None
+    };
+    let mut spec = spec::parse(deploy_table.clone(), app_name.clone(), git_sha, environment)?;
+    spec.git_remote = discover_git_remote(project);
+    spec.workspace_subpath = workspace_subpath;
+    spec.has_rust_toolchain = workspace_root.join("rust-toolchain.toml").exists();
+
+    let adapter = resolve_adapter(target)?;
+    let statuses = adapter.status(&spec)?;
+    Ok((spec.app_name, statuses))
 }
 
 fn run_doctor() -> Result<()> {
@@ -399,6 +693,92 @@ fn discover_workspace_root(project: &Path) -> Result<PathBuf> {
         cursor = dir.parent();
     }
     Ok(project.to_path_buf())
+}
+
+/// Workspace members with a `[package.metadata.pocopine.deploy]` table.
+/// Reads `[workspace].members` from the workspace `Cargo.toml`, expands
+/// trailing-`*` directory globs (e.g. `examples/*`), and filters to
+/// crates that actually declare a deploy block. Sorted by path so the
+/// per-deploy output order is stable.
+fn discover_deployable_members(workspace_root: &Path) -> Result<Vec<PathBuf>> {
+    let cargo_toml = workspace_root.join("Cargo.toml");
+    let raw = std::fs::read_to_string(&cargo_toml)
+        .with_context(|| format!("reading `{}`", cargo_toml.display()))?;
+    let v: toml::Value = raw
+        .parse()
+        .with_context(|| format!("parsing `{}`", cargo_toml.display()))?;
+    let members = v
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .with_context(|| {
+            format!(
+                "workspace Cargo.toml at `{}` has no [workspace].members array",
+                cargo_toml.display()
+            )
+        })?;
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in members {
+        let pattern = entry
+            .as_str()
+            .context("workspace member entry is not a string")?;
+        for path in expand_workspace_member(workspace_root, pattern) {
+            if has_deploy_metadata(&path)? {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+/// Expand a `[workspace].members` entry to a list of crate directories.
+/// Supports literal paths and trailing-`*` directory globs (`crates/*`,
+/// `examples/*`). Unsupported patterns return an empty list.
+fn expand_workspace_member(workspace_root: &Path, pattern: &str) -> Vec<PathBuf> {
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        let dir = workspace_root.join(prefix);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() && p.join("Cargo.toml").exists() {
+                out.push(p);
+            }
+        }
+        out
+    } else if pattern.contains('*') {
+        // Other glob shapes (`**`, `**/*`) — not handled; users can
+        // enumerate explicit members. Empty list keeps discovery
+        // safe rather than crashing.
+        Vec::new()
+    } else {
+        vec![workspace_root.join(pattern)]
+    }
+}
+
+/// `true` when the project's Cargo.toml carries a
+/// `[package.metadata.pocopine.deploy]` table. Missing files / parse
+/// failures yield `false` so workspaces with unrelated members don't
+/// break workspace discovery.
+fn has_deploy_metadata(project: &Path) -> Result<bool> {
+    let cargo_toml = project.join("Cargo.toml");
+    let raw = match std::fs::read_to_string(&cargo_toml) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("reading `{}`", cargo_toml.display())),
+    };
+    let Ok(v) = raw.parse::<toml::Value>() else {
+        return Ok(false);
+    };
+    Ok(v.get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("pocopine"))
+        .and_then(|p| p.get("deploy"))
+        .is_some())
 }
 
 /// Best-effort `git remote get-url origin`. Returns `None` when there is

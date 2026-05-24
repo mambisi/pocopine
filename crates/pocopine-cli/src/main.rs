@@ -32,7 +32,28 @@ use clap::Parser;
 
 use args::{Cli, Cmd, JsCmd};
 
+/// Install a `tracing` subscriber so `tracing::info!`/`warn!` from
+/// every dependency (including the deploy adapters) actually surfaces
+/// to the user. Defaults to `info` for first-party crates and `warn`
+/// for everything else; `RUST_LOG` overrides verbatim.
+fn install_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    let default = "warn,pocopine=info,pocopine_cli=info,pocopine_deploy=info,\
+                   pocopine_deploy_fly=info,pocopine_deploy_railway=info,\
+                   pocopine_deploy_render=info";
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .without_time()
+        .compact()
+        .try_init();
+}
+
 fn main() -> Result<()> {
+    install_tracing();
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Build(args) => run_build(args),
