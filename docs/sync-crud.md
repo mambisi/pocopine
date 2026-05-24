@@ -99,6 +99,10 @@ should target. The current `#[resource(...)]` macro validates the
 attribute grammar and `CrudSource` impl boundary, then preserves the impl
 unchanged.
 
+The concrete generated server/client API is tracked in
+[`sync-crud-macro-contract.md`](./sync-crud-macro-contract.md). That
+contract is the review target for the next macro slices.
+
 The current non-macro client shape is explicit about the two moving
 parts a generated module will hide: the low-level sync collection and the
 typed local resource view.
