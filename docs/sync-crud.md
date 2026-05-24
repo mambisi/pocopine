@@ -87,21 +87,21 @@ The first crate slice provides the reusable contracts:
   are explicit and replayed writes do not silently run twice,
 - `client_resource(collection, view)` and `CrudClientResource` for the
   non-macro client runtime that generated modules should call,
-- `#[pocopine_sync_crud::resource(name = "...")]` as a validation-only
-  macro scaffold for `CrudSource` impls,
+- `#[pocopine_sync_crud::resource(name = "...")]` for generating a typed
+  resource module from a `CrudSource` impl,
 - low-level `pocopine-sync` online-only push helpers that give
   `WritePolicy::RequireOnline` a runtime target without changing the
   queue-offline default.
 
-The crate deliberately does not yet generate typed client modules. The
-non-macro client runtime is the contract the later proc macro expansion
-should target. The current `#[resource(...)]` macro validates the
-attribute grammar and `CrudSource` impl boundary, then preserves the impl
-unchanged.
+The crate now generates the first typed resource module: stream name,
+associated type aliases, server `resource(source)` registration, typed
+`new_id()`, `view(...)`, and `client(...)` helpers. The generated client
+handle still targets the non-macro `CrudClientResource` runtime; fluent
+`use_resource()` convenience wrappers remain future work.
 
 The concrete generated server/client API is tracked in
 [`sync-crud-macro-contract.md`](./sync-crud-macro-contract.md). That
-contract is the review target for the next macro slices.
+contract is the review target for macro changes.
 
 The current non-macro client shape is explicit about the two moving
 parts a generated module will hide: the low-level sync collection and the
@@ -148,14 +148,12 @@ generic builder type. The macro reads a normal `CrudSource`
 implementation and generates a typed resource module for server
 registration and browser calls.
 
-The first proc-macro slice is intentionally smaller than that final
-shape: it accepts `#[pocopine_sync_crud::resource(name = "...")]`,
-validates the resource name as a sync token, verifies that the attribute
-is attached to an impl of a trait named `CrudSource`, and emits the
-original impl unchanged. A valid sync token is non-empty, at most 1024
-bytes, has no leading/trailing whitespace, and contains no control
-characters. Later slices can add generated modules without changing the
-attribute syntax authors start with.
+The current macro accepts
+`#[pocopine_sync_crud::resource(name = "...")]`. If the resource name is
+not a valid Rust module identifier, authors can add
+`module = module_name` while keeping the sync stream name unchanged. A
+valid sync token is non-empty, at most 1024 bytes, has no
+leading/trailing whitespace, and contains no control characters.
 
 Sketch:
 
@@ -214,12 +212,14 @@ The macro generates a module named after the resource:
 
 ```rust
 customers::resource(source)
-customers::use_resource()
+customers::new_id()
+customers::view(&state)
+customers::client(collection, &state)
 customers::CreateOptions
 customers::SaveOptions
 customers::RemoveOptions
 customers::Queued
-customers::Conflict
+customers::Outcome
 ```
 
 The generated API should not make users name or import a public builder
@@ -708,8 +708,13 @@ server responses still return explicit conflicts.
 
 ## Generated Client API
 
-The macro layer should wrap the runtime above. The generated client gets
-a typed resource handle:
+The current macro layer wraps the runtime above through
+`customers::client(collection, &state)`, which returns the typed
+`CrudClientResource` handle. A later convenience layer can add
+`use_resource()` and fluent open/options helpers on top of the same
+runtime contract.
+
+Future ergonomic shape:
 
 ```rust
 let customers = customers::use_resource();
@@ -717,7 +722,7 @@ let customers = customers::use_resource();
 customers.open();
 ```
 
-The default methods should be the normal path:
+The default methods are the normal path:
 
 ```rust
 customers

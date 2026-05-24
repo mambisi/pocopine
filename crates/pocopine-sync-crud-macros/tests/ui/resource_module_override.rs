@@ -1,7 +1,5 @@
-use pocopine_sync::{CollectionState, RowVersion, SyncCollection, SyncResult};
-use pocopine_sync_crud::{
-    CrudClientResource, CrudOutcome, CrudRemoveResult, CrudSource, CrudWriteResult, Queued,
-};
+use pocopine_sync::{CollectionState, RowVersion, SyncResult};
+use pocopine_sync_crud::{CrudRemoveResult, CrudSource, CrudWriteResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -16,7 +14,7 @@ pub struct CustomerDraft {
 
 pub struct Customers;
 
-#[pocopine_sync_crud::resource(name = "customers")]
+#[pocopine_sync_crud::resource(name = "tenant-customers", module = tenant_customers)]
 #[pocopine_sync_crud::async_trait]
 impl CrudSource for Customers {
     type Id = String;
@@ -68,39 +66,9 @@ impl CrudSource for Customers {
     }
 }
 
-#[test]
-fn resource_attribute_preserves_crud_source_impl() {
-    fn assert_crud_source<S: CrudSource>() {}
-
-    assert_crud_source::<Customers>();
-}
-
-#[test]
-fn resource_attribute_generates_module_contract() {
-    assert_eq!(customers::NAME, "customers");
-
+fn main() {
+    assert_eq!(tenant_customers::NAME, "tenant-customers");
     let state = CollectionState::<Customer>::default();
-    let view = customers::view(&state).unwrap();
-    assert!(view.is_empty());
-
-    let _id: SyncResult<customers::Id> = customers::new_id();
-    let _create_options = customers::CreateOptions::new();
-    let _save_options = customers::SaveOptions::new();
-    let _remove_options = customers::RemoveOptions::new();
-    let _builder = customers::resource(Customers).unwrap();
-
-    fn assert_aliases<C: 'static>(
-        collection: SyncCollection<C, customers::Row>,
-        state: &CollectionState<customers::Row>,
-    ) -> SyncResult<customers::Client<C>> {
-        let _outcome: Option<customers::Outcome> = None;
-        let _queued: Option<customers::Queued> = None;
-        let _runtime_outcome: Option<CrudOutcome<customers::Id, customers::Row>> = None;
-        let _runtime_queued: Option<Queued<customers::Id>> = None;
-        let _runtime_client: Option<CrudClientResource<C, customers::Id, customers::Row>> = None;
-
-        customers::client(collection, state)
-    }
-
-    let _ = assert_aliases::<()>;
+    let _ = tenant_customers::view(&state).unwrap();
+    let _ = tenant_customers::resource(Customers).unwrap();
 }

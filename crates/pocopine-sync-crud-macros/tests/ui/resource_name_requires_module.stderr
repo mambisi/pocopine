@@ -1,0 +1,5 @@
+error: CRUD resource name is not a Rust module identifier; add `module = ident`
+ --> tests/ui/resource_name_requires_module.rs:3:39
+  |
+3 | #[pocopine_sync_crud::resource(name = "tenant-customers")]
+  |                                       ^^^^^^^^^^^^^^^^^^

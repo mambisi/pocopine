@@ -232,6 +232,9 @@ database boundary.
 For the example above, the macro generates a sibling `customers` module.
 Conceptually, authors can treat it as if this code existed:
 
+If the sync name is not a valid Rust module identifier, use
+`#[pocopine_sync_crud::resource(name = "tenant-customers", module = customers)]`.
+
 ```rust
 pub mod customers {
     pub const NAME: &str = "customers";

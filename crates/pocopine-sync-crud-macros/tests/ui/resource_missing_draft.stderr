@@ -1,0 +1,5 @@
+error: `#[pocopine_sync_crud::resource]` requires associated type `Draft`
+ --> tests/ui/resource_missing_draft.rs:6:1
+  |
+6 | impl pocopine_sync_crud::CrudSource for Customers {
+  | ^^^^
