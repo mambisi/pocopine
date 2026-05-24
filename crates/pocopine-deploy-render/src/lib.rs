@@ -545,14 +545,19 @@ fn render_override(spec: &DeploySpec) -> RenderOverride {
         .unwrap_or_default()
 }
 
-/// Resolve the container registry for this deploy: explicit
-/// `[deploy.render].image_registry`, else derived from the git remote.
+/// Resolve the container registry for this deploy. Three-tier
+/// resolver for `image_registry`: `$POCOPINE_RENDER_IMAGE_REGISTRY` →
+/// `[deploy.render].image_registry` → `~/.pocopine/config.toml`.
+/// Falls back to `pocopine_deploy::resolve_registry`'s git-remote
+/// derivation when all three tiers are silent.
 fn resolved_registry(spec: &DeploySpec) -> Result<pocopine_deploy::ResolvedRegistry> {
     let overrides = render_override(spec);
-    pocopine_deploy::resolve_registry(
+    let image_registry = pocopine_deploy::config::resolve(
+        "render",
+        "image_registry",
         overrides.image_registry.as_deref(),
-        spec.git_remote.as_deref(),
-    )
+    );
+    pocopine_deploy::resolve_registry(image_registry.as_deref(), spec.git_remote.as_deref())
 }
 
 /// Map a registry host to Render's `registrycredentials` `registry`
