@@ -64,6 +64,14 @@ pub struct DeploySpec {
     /// `["index.html", "pkg"]`; users add `app.css`, `public/`, etc.
     /// via `[deploy] static_files`.
     pub static_files: Vec<String>,
+
+    /// Override for the build-artefact output directory (where the
+    /// Dockerfile, dockerignore, and host-specific config files are
+    /// written, relative to the project root). When `None` the default
+    /// [`crate::common::BUILD_DIR`] (`".pocopine/build"`) is used. Set
+    /// via `[package.metadata.pocopine.deploy] build_dir = "..."` in
+    /// Cargo.toml.
+    pub build_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,15 +201,30 @@ impl DeploySpec {
         self.first_deploy
     }
 
+    /// Effective build directory (project-root-relative). The default
+    /// is `.pocopine/build` (see [`crate::common::BUILD_DIR`]); projects
+    /// override via `[package.metadata.pocopine.deploy] build_dir =
+    /// "..."`. Mirrors how `cargo` honours `[build] target-dir` /
+    /// `CARGO_TARGET_DIR`.
+    pub fn build_dir(&self) -> &str {
+        self.build_dir
+            .as_deref()
+            .unwrap_or(crate::common::BUILD_DIR)
+    }
+
     /// Path of the rendered `Dockerfile` relative to the docker-build
-    /// context (the workspace root). Returns `"Dockerfile"` for
-    /// standalone projects and `"<subpath>/Dockerfile"` for workspace
-    /// members. Adapters pass this to `docker build -f`.
+    /// context (the workspace root). The CLI writes generated artefacts
+    /// under each project's [build dir](Self::build_dir) (default
+    /// `.pocopine/build/`), so the build-context-relative path is
+    /// `<subpath>/<build_dir>/Dockerfile` for workspace members and
+    /// `<build_dir>/Dockerfile` for standalone projects. Adapters pass
+    /// this to `docker build -f`.
     pub fn dockerfile_path(&self) -> String {
+        let build_dir = self.build_dir();
         if self.workspace_subpath.is_empty() {
-            "Dockerfile".to_owned()
+            format!("{build_dir}/Dockerfile")
         } else {
-            format!("{}/Dockerfile", self.workspace_subpath)
+            format!("{}/{}/Dockerfile", self.workspace_subpath, build_dir)
         }
     }
 }
@@ -237,6 +260,11 @@ pub fn parse(
         env: BTreeMap<String, EnvValue>,
         #[serde(default)]
         static_files: Option<Vec<String>>,
+        /// `[deploy] build_dir = "..."` — override where rendered
+        /// artefacts (Dockerfile, host config) land relative to the
+        /// project root. Default `.pocopine/build`.
+        #[serde(default)]
+        build_dir: Option<String>,
         #[serde(flatten)]
         host_overrides: BTreeMap<String, toml::Value>,
     }
@@ -252,6 +280,15 @@ pub fn parse(
         if entry.is_empty() || entry.starts_with('/') || entry.split('/').any(|seg| seg == "..") {
             anyhow::bail!(
                 "[deploy] static_files entries must be project-relative and contain no `..` segments; got `{entry}`",
+            );
+        }
+    }
+    if let Some(dir) = raw.build_dir.as_deref() {
+        // Same validation as static_files — keep it inside the project
+        // tree, no traversal, no absolute paths.
+        if dir.is_empty() || dir.starts_with('/') || dir.split('/').any(|seg| seg == "..") {
+            anyhow::bail!(
+                "[deploy] build_dir must be project-relative and contain no `..` segments; got `{dir}`",
             );
         }
     }
@@ -282,6 +319,7 @@ pub fn parse(
         workspace_subpath: String::new(),
         has_rust_toolchain: false,
         static_files,
+        build_dir: raw.build_dir,
     };
 
     if let Some(env) = environment.as_deref() {
