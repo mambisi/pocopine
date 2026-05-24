@@ -24,10 +24,10 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use pocopine_deploy::{
-    credentials, docker::DockerClient, spec, Constraint, DeployAdapter, Hint, StagedFiles,
+    config, credentials, docker::DockerClient, spec, Constraint, DeployAdapter, Hint, StagedFiles,
 };
 
-use crate::args::{AuthArgs, DeployArgs, DeployCmd, StatusArgs};
+use crate::args::{AuthArgs, ConfigArgs, ConfigCmd, DeployArgs, DeployCmd, StatusArgs};
 
 pub fn run(args: &DeployArgs) -> Result<()> {
     match &args.cmd {
@@ -35,6 +35,7 @@ pub fn run(args: &DeployArgs) -> Result<()> {
         Some(DeployCmd::Auth(a)) => run_auth(a),
         Some(DeployCmd::Doctor) => run_doctor(),
         Some(DeployCmd::Status(s)) => run_status(args, s),
+        Some(DeployCmd::Config(c)) => run_config(c),
     }
 }
 
@@ -277,6 +278,107 @@ fn run_auth(args: &AuthArgs) -> Result<()> {
     credentials::store(host, token)?;
     eprintln!("Stored token for `{host}` to ~/.pocopine/credentials.toml (mode 0600).");
     Ok(())
+}
+
+fn run_config(args: &ConfigArgs) -> Result<()> {
+    match &args.cmd {
+        ConfigCmd::Set { host, field, value } => {
+            let value = match value.as_deref() {
+                Some(v) => v.to_owned(),
+                None => {
+                    eprint!("value for `{host}.{field}`: ");
+                    std::io::stderr().flush().ok();
+                    let mut line = String::new();
+                    std::io::stdin()
+                        .read_line(&mut line)
+                        .context("reading value from stdin")?;
+                    line.trim().to_owned()
+                }
+            };
+            if value.is_empty() {
+                bail!("empty value");
+            }
+            config::store_field(host, field, &value)?;
+            eprintln!("Stored `[default.{host}] {field} = {value:?}` to ~/.pocopine/config.toml.",);
+            Ok(())
+        }
+        ConfigCmd::Get { host, field, path } => {
+            // Read the project tier from the given path so users can
+            // see exactly which tier wins for their checkout, not just
+            // env + file. Surfacing the source name is the whole
+            // point of this command.
+            let project_value = read_project_field(path, host, field).ok();
+            let resolved = config::resolve_with_source(host, field, project_value.as_deref());
+            match resolved {
+                Some((value, source)) => {
+                    let src = match source {
+                        config::Source::Env => {
+                            format!("env (${})", config::env_var_name(host, field),)
+                        }
+                        config::Source::Project => format!(
+                            "project ({}/Cargo.toml [deploy.{host}].{field})",
+                            path.display(),
+                        ),
+                        config::Source::File => "file (~/.pocopine/config.toml)".to_owned(),
+                    };
+                    println!("{value}");
+                    eprintln!("  source: {src}");
+                }
+                None => {
+                    eprintln!(
+                        "no value for `{host}.{field}` in env, project, or file. \
+                         Set via `pocopine deploy config set {host} {field} <value>`, \
+                         export ${}, or add to `[deploy.{host}]` in Cargo.toml.",
+                        config::env_var_name(host, field),
+                    );
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        ConfigCmd::List => {
+            let entries = config::list()?;
+            if entries.is_empty() {
+                println!("No host config configured.");
+                return Ok(());
+            }
+            // Compact table: HOST, FIELD, SOURCE — keeps the output
+            // scannable for users with a handful of entries; bigger
+            // setups can grep.
+            for (host, field, source) in entries {
+                let src = match source {
+                    config::Source::Env => "env",
+                    config::Source::File => "file",
+                    config::Source::Project => "project",
+                };
+                println!("{host:<12} {field:<22} {src}");
+            }
+            Ok(())
+        }
+        ConfigCmd::Revoke { host, field } => {
+            config::revoke_field(host, field)?;
+            eprintln!("Revoked `[default.{host}] {field}`.");
+            Ok(())
+        }
+    }
+}
+
+/// Read `[package.metadata.pocopine.deploy.<host>] <field>` from the
+/// project's Cargo.toml — used by `config get` to surface the
+/// project-tier value when reporting the resolved source. Best-effort;
+/// any read/parse error is treated as "no project value".
+fn read_project_field(project: &Path, host: &str, field: &str) -> Result<String> {
+    let manifest = read_manifest(project)?;
+    let value = manifest
+        .get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("pocopine"))
+        .and_then(|p| p.get("deploy"))
+        .and_then(|d| d.get(host))
+        .and_then(|h| h.get(field))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    value.context("not set in project Cargo.toml")
 }
 
 fn run_status(args: &DeployArgs, opts: &StatusArgs) -> Result<()> {

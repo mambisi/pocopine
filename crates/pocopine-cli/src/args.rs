@@ -123,6 +123,46 @@ pub enum DeployCmd {
     Doctor,
     /// Show the current deploy state per process on the target host.
     Status(StatusArgs),
+    /// Manage per-user host config (`~/.pocopine/config.toml`) — the
+    /// fallback tier for `owner_id` / `workspace_id` / `region` /
+    /// `org` when neither $POCOPINE_<HOST>_<FIELD> nor the project's
+    /// `[deploy.<host>]` block is set.
+    Config(ConfigArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub cmd: ConfigCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConfigCmd {
+    /// Write `[default.<host>] <field> = <value>` to
+    /// `~/.pocopine/config.toml`. If `<value>` is omitted, read it
+    /// from stdin (so secrets aren't visible in shell history).
+    Set {
+        /// Host name (`render`, `railway`, `fly`, …).
+        host: String,
+        /// Field name (`owner_id`, `workspace_id`, `region`, …).
+        field: String,
+        /// Value. Omit to read from stdin.
+        value: Option<String>,
+    },
+    /// Show the resolved value of a field across all three tiers
+    /// (env / project / file), naming the tier each came from.
+    Get {
+        host: String,
+        field: String,
+        /// Path to the project crate; used to read the project tier.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show every (host, field, source) tuple visible across the
+    /// file and the env.
+    List,
+    /// Remove `<field>` from `[default.<host>]`. Idempotent.
+    Revoke { host: String, field: String },
 }
 
 #[derive(Parser, Debug, Clone)]
