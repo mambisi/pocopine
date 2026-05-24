@@ -5,8 +5,31 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[package.metadata.pocopine]
+bin = "server"
+port = 3001
+
+[package.metadata.pocopine.deploy]
+mode = "fullstack"
+
+[package.metadata.pocopine.deploy.processes.web]
+bin = "server"
+port = 3001
+
+[package.metadata.pocopine.deploy.railway]
+# Defaults: project name = app name ("website"), environment = "production",
+# image_registry derived from the git remote (GitHub → ghcr.io/<owner>).
+# Override here when you need a non-default workspace or region.
+# workspace_id = "ws-..."
+# region = "us-west1"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+required-features = []
 
 [dependencies]
 pine = { path = "../../crates/pine" }
@@ -16,4 +39,10 @@ pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
+tracing = { workspace = true }
 web-sys = { version = "0.3", features = ["Performance", "Window"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-logging = { workspace = true }
+pocopine-server = { path = "../../crates/pocopine-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

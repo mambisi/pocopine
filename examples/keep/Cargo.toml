@@ -20,7 +20,7 @@ port = 3022
 # Replace with your Render workspace ID (Account Settings -> Workspaces).
 owner_id = "REPLACE_WITH_RENDER_WORKSPACE_ID"
 region = "oregon"
-plan = "starter"
+plan = "free"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
