@@ -39,7 +39,7 @@ use anyhow::Context;
 use anyhow::Result;
 use pocopine_deploy::{
     common, AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint,
-    Mode, StagedFiles,
+    Mode, ProcessStatus, StagedFiles,
 };
 use serde::Deserialize;
 
@@ -82,6 +82,21 @@ struct RailwayOverride {
 /// value in `Pocopine.toml` should fail fast rather than spin up a
 /// fleet. Lift this in a follow-up once budget guardrails exist.
 const SCALE_MIN_CAP: u32 = 20;
+
+/// Wait timeout (seconds) for a Railway deployment to reach a terminal
+/// state. Short on purpose — when a deploy fails to even start (stuck
+/// in `isUpdatable=false` or queue limbo) we'd rather surface a clear
+/// timeout in a minute than burn 8 minutes waiting for nothing. If a
+/// real build/pull is in flight the user can re-run with `--skip-build`
+/// once the registry has the image.
+#[cfg(not(target_arch = "wasm32"))]
+const WAIT_DEPLOY_SECS: u64 = 60;
+
+/// How many log lines to dump per phase (build / runtime) when a
+/// deployment fails or times out. Tight enough to stay scannable in a
+/// terminal, large enough to capture the actual error.
+#[cfg(not(target_arch = "wasm32"))]
+const FAIL_LOG_LINES: i64 = 80;
 
 pub struct RailwayAdapter;
 
@@ -319,18 +334,88 @@ impl DeployAdapter for RailwayAdapter {
         for (proc_name, proc) in spec.processes() {
             let service_name = format!("{}-{proc_name}", spec.app_name);
 
-            let service = match project.service(&service_name) {
-                Some(s) => s.clone(),
-                None => client.create_service(&project.id, &service_name, tag)?,
-            };
-
             // POCOPINE_PROCESS dispatches the shared launcher to the
             // right bin (RFC 080 §5.3); PORT aligns app bind with
-            // Railway's ingress.
+            // Railway's ingress. Build the var-set up-front so we can
+            // either fold it into `serviceCreate` (so the implicit
+            // initial deploy has them) or upsert it for existing
+            // services.
             let mut variables: BTreeMap<String, String> = env_vars.iter().cloned().collect();
             variables.insert("POCOPINE_PROCESS".into(), proc_name.to_owned());
             variables.extend(common::port_env(proc));
-            client.upsert_variables(&project.id, &environment.id, &service.id, &variables)?;
+
+            // Track whether the service was just created — Railway's
+            // `serviceCreate` queues an initial deploy implicitly with
+            // the variables and source we hand it. For existing
+            // services we upsert variables, then `serviceInstanceUpdate`
+            // pushes settings; if Railway considers that a no-op we
+            // explicitly redeploy so var changes still propagate.
+            let (service, freshly_created) = match project.service(&service_name) {
+                Some(s) => {
+                    client.upsert_variables(&project.id, &environment.id, &s.id, &variables)?;
+                    (s.clone(), false)
+                }
+                None => (
+                    client.create_service(
+                        &project.id,
+                        &environment.id,
+                        &service_name,
+                        tag,
+                        registry_creds.as_ref(),
+                        &variables,
+                    )?,
+                    true,
+                ),
+            };
+
+            // Snapshot the ServiceInstance before pushing settings so
+            // we can detect whether the update actually queued a new
+            // deployment (latest_deployment_id changes) or no-opped.
+            let before = client
+                .fetch_service_instance(&service.id, &environment.id)
+                .ok()
+                .flatten();
+            if let Some(b) = &before {
+                tracing::info!(
+                    target: "pocopine.log",
+                    service = %service_name,
+                    instance = %b.id,
+                    is_updatable = b.is_updatable,
+                    source = ?b.source_image,
+                    latest_deployment = ?b.latest_deployment_id,
+                    "railway serviceInstance (before update)",
+                );
+                // Probe auto-deploy state — if disabled on a service
+                // that has source bound but no deployment, that's why
+                // mutations succeed but nothing fires.
+                let (enabled, can_enable, reason) =
+                    client.fetch_auto_deploy_status(&project.id, &service.id, &environment.id);
+                tracing::info!(
+                    target: "pocopine.log",
+                    service = %service_name,
+                    auto_deploy_enabled = ?enabled,
+                    can_enable = ?can_enable,
+                    reason = ?reason,
+                    "railway autoDeployStatus",
+                );
+            }
+
+            // `serviceConnect` is what wires the dashboard's Source
+            // panel and Railway's deploy pipeline to the image.
+            // `serviceCreate(source.image)` sets `ServiceInstance.source`
+            // — visible via the API — but the dashboard reads a
+            // different source-of-truth that only `serviceConnect`
+            // populates. Without this call, the service shows up
+            // "unconnected" in the UI and no deployment ever fires,
+            // even though the API reports a bound source. Call it
+            // unconditionally; the mutation is idempotent.
+            tracing::info!(
+                target: "pocopine.log",
+                service = %service_name,
+                image = %tag,
+                "railway: calling serviceConnect to wire the dashboard source + deploy pipeline",
+            );
+            client.connect_service_image(&service.id, tag)?;
 
             let config = client::ServiceInstanceConfig {
                 image: tag.clone(),
@@ -340,10 +425,188 @@ impl DeployAdapter for RailwayAdapter {
                 registry_credentials: registry_creds.clone(),
             };
             client.update_service_instance(&service.id, &environment.id, &config)?;
-            client.deploy_service_instance(&service.id, &environment.id)?;
 
-            // Generate a public domain for the web-facing service.
-            if proc.is_public() {
+            // For existing services, check whether the update queued a
+            // new deployment. If not, force one via the same mutation
+            // Railway's CLI uses — `deploymentRedeploy(id)` — so var /
+            // cred changes still ship. Three sub-cases:
+            //
+            //   (a) before=None, after=Some — update kicked off the
+            //       first ever deployment. Nothing more to do.
+            //   (b) before=Some, after=different — update queued a new
+            //       deploy. Nothing more to do.
+            //   (c) before=Some, after=same — update was a no-op.
+            //       Redeploy the prior deployment so variables /
+            //       credentials ship.
+            //   (d) before=None, after=None — service exists but has
+            //       never deployed AND the update didn't trigger one.
+            //       We can't redeploy from nothing; `wait_for_deployment`
+            //       will surface the wedge with a clear error + logs.
+            // When set, makes `wait_for_deployment` poll a specific
+            // deployment id (via `deployment(id)`) instead of "latest
+            // for the service" — needed when we just triggered a new
+            // deployment whose id we know, but Railway hasn't promoted
+            // it to "latest" yet.
+            let mut wait_target: Option<String> = None;
+
+            if !freshly_created {
+                let after = client
+                    .fetch_service_instance(&service.id, &environment.id)
+                    .ok()
+                    .flatten();
+                let before_id = before
+                    .as_ref()
+                    .and_then(|b| b.latest_deployment_id.as_deref());
+                let after_id = after
+                    .as_ref()
+                    .and_then(|a| a.latest_deployment_id.as_deref());
+                // (a) and (b): update kicked off a NEW deploy whose
+                // id is `after_id`. Pin the wait to that one so a slow
+                // promote-to-latest doesn't make us latch the prior
+                // SUCCESS deployment.
+                match (before_id, after_id) {
+                    (Some(b), Some(a)) if b != a => wait_target = Some(a.to_owned()),
+                    (None, Some(a)) => wait_target = Some(a.to_owned()),
+                    _ => {}
+                }
+                match (before_id, after_id) {
+                    (Some(b_id), Some(a_id)) if b_id == a_id => {
+                        tracing::info!(
+                            target: "pocopine.log",
+                            service = %service_name,
+                            deployment = %b_id,
+                            "railway: serviceInstanceUpdate was a no-op; calling deploymentRedeploy",
+                        );
+                        // `deploymentRedeploy` returns a *new* clone id.
+                        // Capture it so the wait below polls that
+                        // specific deployment — Railway doesn't always
+                        // promote the clone to "latest" by the first
+                        // poll, and waiting on "latest" would latch
+                        // onto the prior SUCCESS deployment and report
+                        // success without verifying the new clone
+                        // actually shipped.
+                        wait_target = client.redeploy_deployment(b_id)?;
+                    }
+                    (None, None) => {
+                        // Service exists with source set but has never
+                        // deployed (Railway's `isUpdatable=false`
+                        // limbo). `deploymentRedeploy` can't help —
+                        // no deployment id to clone. Use the same
+                        // mutation Railway CLI uses for the
+                        // "deploy from current source" gesture; it
+                        // works even when latestDeployment is None.
+                        tracing::info!(
+                            target: "pocopine.log",
+                            service = %service_name,
+                            "railway: no prior deployment; calling serviceInstanceDeploy(latestCommit:true) to kick the first deploy",
+                        );
+                        client.deploy_latest_source(&service.id, &environment.id)?;
+                        // Re-snapshot so we can tell whether Railway
+                        // queued a deployment in response. If
+                        // latest_deployment_id is still None after
+                        // this, the wait below will surface it.
+                        let after_kick = client
+                            .fetch_service_instance(&service.id, &environment.id)
+                            .ok()
+                            .flatten();
+                        if let Some(s) = &after_kick {
+                            tracing::info!(
+                                target: "pocopine.log",
+                                service = %service_name,
+                                is_updatable = s.is_updatable,
+                                latest_deployment = ?s.latest_deployment_id,
+                                latest_status = ?s.latest_deployment_status,
+                                "railway serviceInstance (after kick)",
+                            );
+                        }
+                        // Pin the wait to the deployment Railway just
+                        // queued, if one materialised — same reason
+                        // as the redeploy branch.
+                        if let Some(id) = after_kick.and_then(|s| s.latest_deployment_id) {
+                            wait_target = Some(id);
+                        }
+                    }
+                    _ => {} // (a) or (b): update kicked off a new deploy
+                }
+            }
+
+            // Verify a real deployment exists for this service. Without
+            // this check we used to print "deployed to <url>" even when
+            // Railway silently dropped the work (soft-deleted project,
+            // no-op update, missing image, …).
+            let outcome = client.wait_for_deployment(
+                &project.id,
+                &service.id,
+                &environment.id,
+                &service_name,
+                WAIT_DEPLOY_SECS,
+                wait_target.as_deref(),
+            )?;
+            match &outcome {
+                client::DeploymentOutcome::Live(d) => {
+                    tracing::info!(
+                        target: "pocopine.log",
+                        service = %service_name,
+                        deployment = %d.id,
+                        "railway deployment live",
+                    );
+                }
+                client::DeploymentOutcome::Failed(d) => {
+                    let logs = client.fetch_deployment_logs(&d.id, FAIL_LOG_LINES);
+                    print_deployment_logs(&service_name, &d.id, &logs);
+                    anyhow::bail!(
+                        "railway: deployment {} for service `{service_name}` ended in `{}`. \
+                         Logs printed above; full history at \
+                         `https://railway.com/project/{}/service/{}`.",
+                        d.id,
+                        d.status,
+                        project.id,
+                        service.id,
+                    );
+                }
+                client::DeploymentOutcome::Skipped(d) => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        service = %service_name,
+                        deployment = %d.id,
+                        "railway deployment skipped — Railway no-opped (identical image already running)",
+                    );
+                }
+                client::DeploymentOutcome::Timeout(Some(d)) => {
+                    // Long-running deploys often wedge in BUILDING /
+                    // DEPLOYING — dump a tail of logs so the user can
+                    // diagnose without leaving the terminal, then bail.
+                    // We deliberately do *not* fall through to domain
+                    // creation + the "deployed to …" line: an unresolved
+                    // build/deploy is not a success even if the prior
+                    // deployment (still serving) is healthy.
+                    let logs = client.fetch_deployment_logs(&d.id, FAIL_LOG_LINES);
+                    print_deployment_logs(&service_name, &d.id, &logs);
+                    anyhow::bail!(
+                        "railway: deployment {} for service `{service_name}` still in `{}` after {WAIT_DEPLOY_SECS}s. \
+                         Logs printed above; the previous deployment may still be serving traffic. \
+                         Check `https://railway.com/project/{}/service/{}` for build/runtime state.",
+                        d.id,
+                        d.status,
+                        project.id,
+                        service.id,
+                    );
+                }
+                client::DeploymentOutcome::Timeout(None) => {
+                    anyhow::bail!(
+                        "railway: no deployment appeared for service `{service_name}` within {WAIT_DEPLOY_SECS}s. \
+                         Railway accepted the mutations but never created a deployment record — common causes: \
+                         image-pull credentials missing on the source, or the service got stuck in an internal state. \
+                         Inspect the service at `https://railway.com/project/{}/service/{}`.",
+                        project.id,
+                        service.id,
+                    );
+                }
+            }
+
+            // Generate a public domain for the web-facing service —
+            // only after we've confirmed a real, non-failed deployment.
+            if proc.is_public() && !matches!(outcome, client::DeploymentOutcome::Failed(_)) {
                 if let Some(domain) = client.create_service_domain(&service.id, &environment.id) {
                     public_url = Some(domain);
                 }
@@ -392,9 +655,51 @@ impl DeployAdapter for RailwayAdapter {
 
         hints
     }
+
+    fn status(&self, _spec: &DeploySpec) -> Result<Vec<ProcessStatus>> {
+        anyhow::bail!(
+            "railway: `pocopine deploy status` not yet implemented for the railway adapter. \
+             Track via the Railway dashboard or `railway status` in the meantime."
+        )
+    }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
+
+/// Dump the tail of build + runtime logs for a failed/timed-out
+/// deployment to stderr so the user sees what went wrong without
+/// opening the dashboard. Empty log lists print a one-line note.
+#[cfg(not(target_arch = "wasm32"))]
+fn print_deployment_logs(service_name: &str, deployment_id: &str, logs: &[client::LogEntry]) {
+    eprintln!();
+    eprintln!("── railway logs · {service_name} · deployment {deployment_id} ──────────");
+    if logs.is_empty() {
+        eprintln!("(no logs returned — Railway may not have captured any yet)");
+        return;
+    }
+    let mut last_phase: Option<client::LogPhase> = None;
+    for entry in logs {
+        if last_phase != Some(entry.phase) {
+            eprintln!(
+                "── {} logs ──",
+                match entry.phase {
+                    client::LogPhase::Build => "build",
+                    client::LogPhase::Runtime => "runtime",
+                }
+            );
+            last_phase = Some(entry.phase);
+        }
+        let sev = entry.severity.as_deref().unwrap_or("");
+        let sev_tag = if sev.is_empty() {
+            String::new()
+        } else {
+            format!("[{sev}] ")
+        };
+        eprintln!("{} {sev_tag}{}", entry.timestamp, entry.message);
+    }
+    eprintln!("── end logs ────────────────────────────────────");
+    eprintln!();
+}
 
 /// Railway service names: lowercase `[a-z0-9]`, `-`, `_`; must start
 /// with a letter or digit. We re-check the process name here so the
@@ -602,6 +907,7 @@ mod tests {
             workspace_subpath: String::new(),
             has_rust_toolchain: false,
             static_files: vec!["index.html".into(), "pkg".into()],
+            build_dir: None,
         }
     }
 
