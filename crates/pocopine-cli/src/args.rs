@@ -106,6 +106,13 @@ pub struct DeployArgs {
     /// host-API deploy.
     #[arg(long)]
     pub skip_build: bool,
+
+    /// Operate on every deployable workspace member (any crate with a
+    /// `[package.metadata.pocopine.deploy]` table). Resolves the
+    /// workspace root from `--path`. Without this flag the command
+    /// runs against a single project.
+    #[arg(long, alias = "all")]
+    pub workspace: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -114,6 +121,15 @@ pub enum DeployCmd {
     Auth(AuthArgs),
     /// Validate config, probe host APIs, check tokens + docker daemon.
     Doctor,
+    /// Show the current deploy state per process on the target host.
+    Status(StatusArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct StatusArgs {
+    /// Emit JSON instead of the human-readable table.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
