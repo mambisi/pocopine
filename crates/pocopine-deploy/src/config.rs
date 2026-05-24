@@ -179,7 +179,7 @@ fn store_field_inner(home: &Path, host: &str, field: &str, value: &str) -> Resul
         .or_default()
         .insert(field.to_owned(), toml::Value::String(value.to_owned()));
     let raw = toml::to_string_pretty(&store).context("serialising host config")?;
-    fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))
+    write_atomic(&path, raw.as_bytes())
 }
 
 fn revoke_field_inner(home: &Path, host: &str, field: &str) -> Result<()> {
@@ -199,7 +199,7 @@ fn revoke_field_inner(home: &Path, host: &str, field: &str) -> Result<()> {
         return Ok(());
     }
     let raw = toml::to_string_pretty(&store).context("serialising host config")?;
-    fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))
+    write_atomic(&path, raw.as_bytes())
 }
 
 fn list_inner<F>(home: &Path, env: F) -> Result<Vec<(String, String, Source)>>
@@ -272,9 +272,41 @@ fn normalise(s: &str) -> String {
 }
 
 fn home() -> Result<PathBuf> {
+    // Mirrors `credentials::home`: prefer $HOME (Unix / macOS / WSL),
+    // fall back to %USERPROFILE% (stock Windows). Without the
+    // fallback `pocopine deploy auth` would work on Windows while
+    // `pocopine deploy config` would error, since the two modules
+    // share a crate but used to drift on this lookup.
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .context("$HOME is unset; cannot resolve ~/.pocopine/config.toml location")
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+        .context("could not determine home directory ($HOME / %USERPROFILE% unset)")
+}
+
+/// Atomic write: write to `<path>.tmp`, fsync, then rename. Prevents
+/// a crash mid-write from truncating the live file (which would lose
+/// every other host's entries since the store is rewritten in one
+/// pass). Mirrors `credentials::write_secure` but without the 0600
+/// mode — host-config fields are identifiers, not credentials.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let tmp = path.with_extension("toml.tmp");
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)
+            .with_context(|| format!("opening {}", tmp.display()))?;
+        f.write_all(bytes)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        f.sync_all()
+            .with_context(|| format!("fsync {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
 }
 
 fn env_lookup(key: &str) -> Option<String> {
