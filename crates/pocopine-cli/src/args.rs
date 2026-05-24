@@ -150,14 +150,10 @@ pub enum ConfigCmd {
         value: Option<String>,
     },
     /// Show the resolved value of a field across all three tiers
-    /// (env / project / file), naming the tier each came from.
-    Get {
-        host: String,
-        field: String,
-        /// Path to the project crate; used to read the project tier.
-        #[arg(long, default_value = ".")]
-        path: PathBuf,
-    },
+    /// (env / project / file), naming the tier each came from. The
+    /// project tier is read from the directory passed via the
+    /// `--path` global flag on `pocopine deploy` (defaults to `.`).
+    Get { host: String, field: String },
     /// Show every (host, field, source) tuple visible across the
     /// file and the env.
     List,
