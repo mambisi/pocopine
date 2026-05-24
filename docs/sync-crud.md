@@ -85,30 +85,53 @@ The first crate slice provides the reusable contracts:
   registering a non-macro `CrudSource` as a `pocopine-sync` stream,
 - `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids
   are explicit and replayed writes do not silently run twice,
+- `client_resource(collection, view)` and `CrudClientResource` for the
+  non-macro client runtime that generated modules should call,
 - low-level `pocopine-sync` online-only push helpers that give
   `WritePolicy::RequireOnline` a runtime target without changing the
   queue-offline default.
 
 The crate deliberately does not yet generate typed client modules. The
-non-macro adapter is the runtime contract the later proc macro should
+non-macro client runtime is the contract the later proc macro should
 target.
 
-The current manual client shape is intentionally low level:
+The current non-macro client shape is explicit about the two moving
+parts a generated module will hide: the low-level sync collection and the
+typed local resource view.
 
 ```rust
-use pocopine_sync_crud::{new_id, CrudMutationPayload};
+use pocopine_sync_crud::{
+    client_resource, local_resource_view, CreateOptions, CrudOutcome,
+};
 
-let id = new_id::<uuid::Uuid>()?;
-let payload = CrudMutationPayload::create(id.clone(), CustomerDraft { name, email });
-let optimistic = pocopine_sync_crud::optimistic_row(&id, customer)?;
+let view = local_resource_view::<uuid::Uuid, Customer>(&self.customers)?;
+let customers = client_resource(customers_collection, view);
 
-customers_collection.push_with_generated_id(
-    payload.into_sync_draft()?,
-    Some(optimistic),
-)?;
+let outcome = customers
+    .create_with_options(
+        customer_id,
+        CustomerDraft { name, email },
+        CreateOptions {
+            optimistic: Some(optimistic_customer),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+match outcome {
+    CrudOutcome::Queued(queued) => {
+        tracing::debug!(mutation_id = %queued.mutation_id, "customer queued");
+    }
+    CrudOutcome::Accepted { .. }
+    | CrudOutcome::Removed { .. }
+    | CrudOutcome::Rejected { .. }
+    | CrudOutcome::Conflict { .. } => {}
+}
 ```
 
-That is the code the macro should hide later.
+Ordinary CRUD callers should not build `ClientMutationDraft` directly.
+That remains the protocol escape hatch for custom sync flows that do not
+fit generated create/save/remove methods.
 
 ## Proc Macro Shape
 
@@ -304,7 +327,9 @@ generation:
 
 ```rust
 let customer_id = customers::new_id()?;
-customers.create(customer_id, CustomerDraft { name, email })?;
+customers
+    .create(customer_id, CustomerDraft { name, email })
+    .await?;
 ```
 
 Apps can still pass ids explicitly. That remains the clearest path when
@@ -519,9 +544,150 @@ from the mutation log; the next pull is the source of canonical row data.
 This avoids leaking a row accepted under one principal into another
 principal's retry path.
 
+## Client Runtime Walkthrough
+
+The non-macro runtime is the author-visible shape until the proc macro
+generates resource modules. It keeps the app's component state in
+`pocopine-sync`, then layers typed CRUD methods over that state.
+
+```rust
+pub struct CustomersPage {
+    customers: pocopine_sync::CollectionState<Customer>,
+}
+
+fn customers_state(
+    page: &mut CustomersPage,
+) -> &mut pocopine_sync::CollectionState<Customer> {
+    &mut page.customers
+}
+```
+
+Open/pull still belongs to the sync collection:
+
+```rust
+let collection = sync
+    .collection(pocopine::this::<CustomersPage>(), customers_state)
+    .stream("customers")?;
+
+collection.open()?;
+```
+
+Create/save/remove use `CrudClientResource`. The handle is cheap to
+rebuild for each event handler because it only binds the current sync
+collection and the current typed view.
+
+```rust
+use pocopine_sync_crud::{
+    client_resource, local_resource_view, CreateOptions, CrudOutcome,
+};
+
+let collection = sync
+    .collection(pocopine::this::<CustomersPage>(), customers_state)
+    .stream("customers")?;
+let view = local_resource_view::<uuid::Uuid, Customer>(&self.customers)?;
+let customers = client_resource(collection, view);
+
+let outcome = customers
+    .create_with_options(
+        customer_id,
+        CustomerDraft { name, email },
+        CreateOptions {
+            optimistic: Some(optimistic_customer),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+match outcome {
+    CrudOutcome::Queued(queued) => {
+        self.last_mutation = Some(queued.mutation_id);
+    }
+    CrudOutcome::Accepted { row, .. } => {
+        self.form_name = row.name;
+    }
+    CrudOutcome::Rejected { reason, .. } => {
+        self.error = reason;
+    }
+    CrudOutcome::Conflict {
+        server_row, reason, ..
+    } => {
+        self.conflict_reason = Some(reason);
+        self.server_customer = server_row;
+    }
+    CrudOutcome::Removed { .. } => {
+        // Not expected for create; included for exhaustive matching.
+    }
+}
+```
+
+The default write policy is `QueueOffline`. A queued outcome means the
+mutation id has been durably reserved and the pending mutation has been
+stored locally. In the browser runtime Pocopine then starts a background
+push; the queued outcome is not server acceptance.
+
+`RequireOnline` changes the contract:
+
+```rust
+use pocopine_sync_crud::{SaveOptions, WritePolicy};
+
+let outcome = customers
+    .save_with_options(
+        customer.id,
+        CustomerDraft {
+            name: edited_name,
+            email: edited_email,
+        },
+        SaveOptions {
+            optimistic: Some(edited_customer),
+            write_policy: WritePolicy::RequireOnline,
+            ..Default::default()
+        },
+    )
+    .await?;
+```
+
+`RequireOnline` waits for a server push response and returns
+`Accepted`, `Removed`, `Rejected`, or `Conflict`. If the browser cannot
+complete the request, the operation fails and no pending mutation is
+queued. The host implementation returns `SyncError::Unsupported` because
+confirmed pushes require the browser fetch runtime.
+
+`LocalResourceView` is the read side generated components should render:
+
+```rust
+let view = local_resource_view::<uuid::Uuid, Customer>(&self.customers)?;
+
+if view.has_pending() {
+    self.badge = "syncing".to_string();
+}
+
+if view.has_conflicts() {
+    self.badge = "conflict".to_string();
+}
+
+for row in &view.rows {
+    match row.status {
+        pocopine_sync_crud::LocalResourceRowStatus::Synced => {}
+        pocopine_sync_crud::LocalResourceRowStatus::Pending => {
+            // render local draft styling
+        }
+        pocopine_sync_crud::LocalResourceRowStatus::Conflict => {
+            // render conflict affordance
+        }
+    }
+}
+```
+
+`LocalResourceRow::base_version` is the latest canonical server version
+known for that id, even when the visible row includes a local optimistic
+overlay. `save` and `remove` use that value by default. Pending writes
+for the same id are not silently merged into a synthetic version; stale
+server responses still return explicit conflicts.
+
 ## Generated Client API
 
-The client gets a typed resource handle:
+The macro layer should wrap the runtime above. The generated client gets
+a typed resource handle:
 
 ```rust
 let customers = customers::use_resource();
@@ -532,14 +698,18 @@ customers.open();
 The default methods should be the normal path:
 
 ```rust
-customers.create(customer_id, CustomerDraft { name, email })?;
+customers
+    .create(customer_id, CustomerDraft { name, email })
+    .await?;
 
-customers.save(customer.id, CustomerDraft {
-    name: edited_name,
-    email: edited_email,
-})?;
+customers
+    .save(customer.id, CustomerDraft {
+        name: edited_name,
+        email: edited_email,
+    })
+    .await?;
 
-customers.remove(customer.id)?;
+customers.remove(customer.id).await?;
 ```
 
 The generated methods choose good sync defaults:
@@ -562,7 +732,8 @@ customers.create_with_options(
         optimistic: Some(customer),
         ..Default::default()
     },
-)?;
+)
+.await?;
 
 customers.save_with_options(
     customer.id,
@@ -575,7 +746,8 @@ customers.save_with_options(
         optimistic: Some(edited_customer),
         ..Default::default()
     },
-)?;
+)
+.await?;
 
 customers.remove_with_options(
     customer.id,
@@ -583,7 +755,8 @@ customers.remove_with_options(
         base_version: Some(customer_version),
         ..Default::default()
     },
-)?;
+)
+.await?;
 ```
 
 The macro can also generate `OpenOptions`-style fluent options methods
@@ -593,7 +766,8 @@ for advanced call sites that read better as chained configuration:
 customers
     .create_options()
     .optimistic(customer)
-    .send(customer_id, CustomerDraft { name, email })?;
+    .send(customer_id, CustomerDraft { name, email })
+    .await?;
 
 customers
     .save_options()
@@ -602,12 +776,14 @@ customers
     .send(customer.id, CustomerDraft {
         name: edited_name,
         email: edited_email,
-    })?;
+    })
+    .await?;
 
 customers
     .remove_options()
     .base_version(customer_version)
-    .send(customer.id)?;
+    .send(customer.id)
+    .await?;
 ```
 
 The public authoring shape is the method chain, not a generic upsert
@@ -649,7 +825,8 @@ pub struct Queued {
 
 ## Generated Mutation Lifecycle
 
-Each generated client CRUD method owns the sync lifecycle:
+The non-macro runtime already owns the sync lifecycle that generated
+client CRUD methods should call:
 
 1. load or create the durable `SyncDeviceId`,
 2. reserve the next durable mutation counter,
@@ -673,8 +850,7 @@ pub struct Queued {
 }
 ```
 
-Generated remove methods have different optimistic behavior from
-create/save:
+Remove methods have different optimistic behavior from create/save:
 
 1. allocates a durable mutation id,
 2. enqueues a delete mutation,
@@ -820,9 +996,9 @@ side-effecting domains.
 Generated simple methods should keep `QueueOffline` as the default:
 
 ```rust
-customers.create(id, draft)?;
-customers.save(id, draft)?;
-customers.remove(id)?;
+customers.create(id, draft).await?;
+customers.save(id, draft).await?;
+customers.remove(id).await?;
 ```
 
 Advanced call sites can opt into server-required behavior:
@@ -832,7 +1008,8 @@ customers
     .save_options()
     .require_online()
     .base_version(row_version)
-    .send(customer.id, draft)?;
+    .send(customer.id, draft)
+    .await?;
 ```
 
 The transaction options API should use the same policy vocabulary:
@@ -896,12 +1073,10 @@ is.
 
 ## Implementation Slices
 
-The first `pocopine-sync-crud` PR avoids proc-macro complexity and ships
-the testable contract:
+The current `pocopine-sync-crud` foundation avoids proc-macro complexity
+and ships the testable contract:
 
-- crate scaffold,
-- `CrudSource` trait,
-- `ResourceId` trait with built-in UUID/string/integer implementations,
+- `CrudSource` and `ResourceId`,
 - CRUD payload types for create/save/remove,
 - queued/outcome/status types,
 - `WritePolicy` and transaction options,
@@ -909,17 +1084,8 @@ the testable contract:
   internally,
 - transaction lifecycle API using `TransactionRunner` and
   `TransactionOptions::run(...)`,
-- mapping into `SyncCollection::push_with_generated_id` through
-  `ClientMutationDraft`,
 - helper APIs for optimistic rows,
 - typed local resource views over `CollectionState<Row>`,
-- unit tests for ids, payload mapping, write policies, queued outcomes,
-  local views, and transaction binding,
-- low-level sync helpers for online-only push behavior,
-- docs for the next non-macro and macro slices.
-
-The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
-
 - resource registration against `SyncServer` through the existing
   `pocopine-sync` server plugin,
 - snapshot pull through bounded `list(limit)` and row id extraction,
@@ -930,23 +1096,14 @@ The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
   mutation ids do not duplicate writes,
 - exact replay validation so a reused mutation id with different
   operation, row id, or payload is rejected,
-- tests for accepted, rejected, conflict, snapshot-limit, empty-version,
-  and duplicate-replay flows,
-- route-level integration coverage proving a CRUD resource registered with
-  `SyncServer` serves `/pull` and `/push` through the normal sync plugin,
-- customer-style SQLx documentation showing explicit app-owned `list`,
-  `get`, `create`, `save`, and `remove` queries.
+- non-macro `CrudClientResource` methods for create/save/remove,
+- durable generated-id queueing for `QueueOffline`,
+- online-confirmed generated-id push for `RequireOnline`,
+- route-level integration coverage proving a CRUD resource registered
+  with `SyncServer` serves `/pull` and `/push` through the normal sync
+  plugin.
 
-Still left before the macro layer:
-
-- generated CRUD methods and source adapters that use `TransactionRunner`
-  or an app-owned SQL transaction to pair a source write and durable
-  mutation-log record in one database transaction,
-- generated CRUD methods that map `WritePolicy::RequireOnline` to the
-  low-level online-only sync push helpers.
-
-The third PR should add the macro layer once the runtime contract is
-stable:
+The macro layer should come after this runtime contract is stable:
 
 - `#[resource(name = "...")]` proc macro,
 - generated typed client resource module,

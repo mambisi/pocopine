@@ -1520,8 +1520,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        ClientMutationDraft, CollectionState, MemoryLocalStore, SyncDeviceId, SyncLocalIdentity,
-        SyncOp, SyncRow,
+        ClientMutationDraft, CollectionState, MemoryLocalStore, RowKey, SyncDeviceId,
+        SyncLocalIdentity, SyncOp, SyncRow,
     };
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1538,6 +1538,27 @@ mod tests {
         &mut state.posts
     }
 
+    fn test_collection(
+        store: SyncLocalStoreHandle,
+        stream: SyncStreamName,
+    ) -> (Rc<RefCell<TestState>>, SyncCollection<TestState, Post>) {
+        let state = Rc::new(RefCell::new(TestState::default()));
+        let handle = Handle::new(state.clone(), ScopeId(1));
+        let collection = SyncCollection {
+            handle,
+            selector: posts,
+            endpoint: SYNC_ENDPOINT_PREFIX.to_string(),
+            live_endpoint: None,
+            live_wakeup: false,
+            with_credentials: false,
+            local_store: store,
+            stream: Some(stream),
+            cursor: None,
+            _marker: PhantomData,
+        };
+        (state, collection)
+    }
+
     #[tokio::test]
     async fn queue_with_generated_id_reserves_and_enqueues_before_returning() {
         let store: SyncLocalStoreHandle = Rc::new(MemoryLocalStore::new());
@@ -1547,21 +1568,8 @@ mod tests {
             ))
             .await
             .unwrap();
-        let state = Rc::new(RefCell::new(TestState::default()));
-        let handle = Handle::new(state.clone(), ScopeId(1));
         let stream = SyncStreamName::new("posts").unwrap();
-        let collection = SyncCollection {
-            handle,
-            selector: posts,
-            endpoint: SYNC_ENDPOINT_PREFIX.to_string(),
-            live_endpoint: None,
-            live_wakeup: false,
-            with_credentials: false,
-            local_store: store.clone(),
-            stream: Some(stream.clone()),
-            cursor: None,
-            _marker: PhantomData,
-        };
+        let (state, collection) = test_collection(store.clone(), stream.clone());
         let row = SyncRow::new(
             "post_1",
             Post {
@@ -1583,6 +1591,28 @@ mod tests {
         assert_eq!(pending[0].id, mutation_id);
         assert_eq!(pending[0].key.as_ref().unwrap().as_str(), "post_1");
         assert!(state.borrow().posts.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn generated_id_online_confirmed_is_unsupported_on_host() {
+        let store: SyncLocalStoreHandle = Rc::new(MemoryLocalStore::new());
+        let stream = SyncStreamName::new("posts").unwrap();
+        let (_state, collection) = test_collection(store.clone(), stream.clone());
+        let draft = ClientMutationDraft::new(
+            SyncOp::Upsert,
+            Post {
+                title: "online".to_string(),
+            },
+        )
+        .row_key(RowKey::new("post_1").unwrap());
+
+        let err = collection
+            .push_with_generated_id_online_confirmed(draft, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SyncError::Unsupported(_)));
+        assert!(store.pending_mutations(&stream).await.unwrap().is_empty());
     }
 }
 
