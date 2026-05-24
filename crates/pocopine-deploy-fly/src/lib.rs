@@ -599,6 +599,10 @@ fn fly_override(spec: &DeploySpec) -> FlyOverride {
         .unwrap_or_default()
 }
 
+// Kept for tests that don't want to depend on the env / config-file
+// tiers of the resolver. Production code (`deploy()` +
+// `render_fly_toml`) uses `resolved_primary_region` instead.
+#[allow(dead_code)]
 fn primary_region(o: &FlyOverride) -> String {
     o.primary_region
         .clone()
@@ -612,7 +616,11 @@ fn primary_region(o: &FlyOverride) -> String {
 /// entry of `[deploy.fly].regions` → `"fra"`. Keeps the existing
 /// regions-array + hardcoded fallback for projects that haven't moved
 /// to the per-user config.
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Not cfg-gated: `render_config` runs on every target (wasm32
+/// callers can still construct staged artefacts), and
+/// `pocopine_deploy::config::resolve` returns `None` gracefully on
+/// wasm where `$HOME` isn't set.
 fn resolved_primary_region(o: &FlyOverride) -> String {
     if let Some(v) =
         pocopine_deploy::config::resolve("fly", "primary_region", o.primary_region.as_deref())
@@ -728,7 +736,12 @@ fn collect_secret_values(spec: &DeploySpec) -> std::collections::BTreeMap<String
 
 fn render_fly_toml(spec: &DeploySpec) -> String {
     let overrides = fly_override(spec);
-    let primary_region = primary_region(&overrides);
+    // Three-tier resolver — same as `deploy()` — so the audit
+    // artefact reflects what the deploy actually sent. Reading
+    // `primary_region(&overrides)` (struct-only) would diverge
+    // whenever the value comes from $POCOPINE_FLY_PRIMARY_REGION or
+    // `~/.pocopine/config.toml [default.fly] primary_region`.
+    let primary_region = resolved_primary_region(&overrides);
 
     use std::fmt::Write as _;
     let mut out = String::new();
