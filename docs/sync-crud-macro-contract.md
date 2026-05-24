@@ -300,6 +300,29 @@ pub mod customers {
             id: Id,
             options: RemoveOptions,
         ) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn use_server(&self, id: Id) -> pocopine_sync::SyncResult<bool>;
+        pub async fn retry_local(
+            &self,
+            id: Id,
+            draft: Draft,
+        ) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn retry_local_with_options(
+            &self,
+            id: Id,
+            draft: Draft,
+            options: SaveOptions,
+        ) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn merge_with(
+            &self,
+            id: Id,
+            draft: Draft,
+        ) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn merge_with_options(
+            &self,
+            id: Id,
+            draft: Draft,
+            options: SaveOptions,
+        ) -> pocopine_sync::SyncResult<Outcome>;
     }
 
     pub fn use_resource<C: 'static>(
@@ -578,6 +601,8 @@ What the client sees:
 - `Resource::view()` returns typed rendered rows, pending flags, conflicts, and canonical base versions.
 - `Resource::create/save/remove` use `WritePolicy::QueueOffline` defaults.
 - `Resource::*_with_options` lets callers set optimistic rows, explicit base versions, or `RequireOnline`.
+- `Resource::use_server` clears a local conflict marker after the user accepts the known server row.
+- `Resource::retry_local` and `Resource::merge_with` queue a new save against the latest canonical base version.
 - `customers::collection(...)` and `customers::client(...)` remain lower-level escape hatches.
 - `customers::new_id()` creates an offline-capable id when the id type supports local id generation.
 - `customers::Outcome` is the typed create/save/remove result.
@@ -592,6 +617,8 @@ What the client handles at runtime:
 6. A pull received while local writes are pending updates canonical rows first, then replays pending local overlays over the new canonical base.
 7. Rejections roll back to the latest canonical row.
 8. Conflicts keep user-visible data available and mark the row so the app can show explicit resolution UI.
+9. `use_server` clears only the local conflict marker; it does not purge queued pending mutations for that row.
+10. `retry_local` and `merge_with` leave the conflict marker visible until the server accepts the new save.
 
 ## Outcome Mapping
 
@@ -621,7 +648,22 @@ This preserves the local-first invariant documented in
 rendered rows = canonical server rows + pending local overlay
 ```
 
-Higher-level helpers such as `retry_local`, `use_server`, `merge_with`,
-fluent options builders, and transaction convenience methods are future
-work. They must still map back to explicit sync mutations and must not
-overwrite newer server data by default.
+The shipped helper surface is intentionally conservative:
+
+```rust
+customers.use_server(id).await?;
+customers.retry_local(id, draft).await?;
+customers.merge_with(id, merged_draft).await?;
+```
+
+`use_server` clears only the local conflict marker and keeps the known
+server row. `retry_local` and `merge_with` queue a new save through the
+same mutation lifecycle as `save`, using the latest canonical
+`base_version` by default. They do not hide the conflict until the server
+accepts the retry.
+
+`discard_local` is not generated yet. That name implies a durable
+row-scoped pending queue purge, and the current local-store contract does
+not expose that operation. Future fluent options builders and transaction
+convenience methods must still map back to explicit sync mutations and
+must not overwrite newer server data by default.

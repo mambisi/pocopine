@@ -30,13 +30,18 @@ Pocopine already has the pieces needed to build on:
 - `pocopine-sync-crud` defines the first resource contract:
   `ResourceId`, CRUD mutation payloads, write policies, transaction
   binding, `CrudSource`, bounded snapshot pulls, exact mutation replay
-  dedupe, and a typed `LocalResourceView` over rebased sync state.
+  dedupe, a typed `LocalResourceView` over rebased sync state, generated
+  resource methods, and the first conservative conflict helpers.
 
 That means we are past "can the browser persist sync state?" The next
 work is making persisted sync state behave like a complete local-first
 resource model.
 
 ## What Is Still Missing
+
+The first two stepping stones below are now implemented enough for the
+framework contract. They stay in this section because follow-up work still
+needs richer subscriptions, examples, and broader browser coverage.
 
 ### 1. Local View Rebase
 
@@ -59,9 +64,11 @@ hydration before replay.
 The first typed view slice is now in place: `LocalResourceView<Id, Row>`
 turns `CollectionState<Row>` into typed visible rows, canonical
 `base_version` values, hidden pending deletes, pending/conflict flags, and
-collection metadata. Generated CRUD methods still need to produce durable
-optimistic rows automatically and build on that view instead of exposing
-protocol structs directly.
+collection metadata. Generated CRUD methods now build on that view
+instead of exposing protocol structs directly. They can create, save,
+remove, queue offline, require online confirmation, use canonical
+`base_version` defaults, and surface typed accepted/rejected/conflict
+outcomes.
 
 Deliverables:
 
@@ -75,21 +82,21 @@ Deliverables:
 
 Users should not hand-build sync envelopes for normal CRUD.
 
-The macro layer should generate simple methods:
+The macro layer now generates simple methods:
 
 ```rust
-customers.create(id, draft)?;
-customers.save(id, draft)?;
-customers.remove(id)?;
+customers.create(id, draft).await?;
+customers.save(id, draft).await?;
+customers.remove(id).await?;
 ```
 
 Defaults:
 
 - queue offline,
 - reserve a durable mutation id,
-- use the current local row version as `base_version`,
-- apply an optimistic row when possible,
-- push when online,
+- use the latest canonical row version as `base_version`,
+- apply an explicit optimistic row when supplied,
+- push in the background when the browser runtime is online,
 - rebase after canonical pulls,
 - surface accepted/rejected/conflict states through typed helpers.
 
@@ -97,10 +104,14 @@ Advanced call sites use explicit escape hatches:
 
 ```rust
 customers
-    .save_options()
-    .require_online()
-    .base_version(version)
-    .send(id, draft)?;
+    .save_with_options(
+        id,
+        draft,
+        customers::SaveOptions::new()
+            .base_version(version)
+            .require_online(),
+    )
+    .await?;
 ```
 
 The generated API should hide protocol plumbing, not database access.
@@ -163,19 +174,30 @@ The protocol already separates:
 - `rejected`: mutation is invalid or not allowed,
 - `conflicts`: mutation is valid but based on stale server state.
 
-The framework still needs author-facing helpers:
+The first author-facing helpers now exist on generated resources and on
+`CrudClientResource`:
 
 ```rust
-conflict.use_server();
-conflict.retry_local();
-conflict.merge_with(draft);
-conflict.discard_local();
+customers.use_server(id).await?;
+customers.retry_local(id, draft).await?;
+customers.merge_with(id, merged_draft).await?;
 ```
+
+`use_server` clears the local conflict marker after the user accepts the
+known server row. It does not remove unrelated pending mutations for that
+row. `retry_local` and `merge_with` queue a new save against the latest
+canonical `base_version`; the conflict marker remains visible until the
+server accepts the retry and returns a new canonical row.
 
 The default should be conservative: never silently overwrite newer server
 data when a `base_version` was supplied. Automatic CRDT merging belongs in
 `pocopine-collab` / Yrs-backed document fields, not in the default CRUD
 row model.
+
+What is still missing here is a real "discard local pending edits" helper.
+That requires a durable queue-purge operation scoped to one row key. Do
+not expose a `discard_local` alias until it can clear the conflict and
+remove pending mutations with the same durability guarantees.
 
 ### 6. Local Query Layer
 
@@ -252,18 +274,17 @@ simple and hard to misuse.
 
 ## Recommended Implementation Order
 
-1. Harden generated resource methods on top of the core canonical/overlay
-   state model and typed `LocalResourceView`.
-2. Extend typed local resource/query views beyond owned snapshots into
+1. Extend typed local resource/query views beyond owned snapshots into
    framework-native subscriptions.
-3. Generate CRUD client methods and options APIs that use the typed view.
-4. Add transaction-backed server helper paths for source write + mutation
+2. Add transaction-backed server helper paths for source write + mutation
    log insert.
-5. Add SQLx helper adapters for server CRUD sources, without becoming an
+3. Add SQLx helper adapters for server CRUD sources, without becoming an
    ORM.
-6. Document auth/cache partitioning and sign-out reset behavior.
-7. Add broader browser CI around SQLite local-first flows.
-8. Only then consider database-specific changefeed adapters.
+4. Add a durable row-scoped pending-mutation purge operation if the
+   author-facing API needs true "discard local edits" semantics.
+5. Document auth/cache partitioning and sign-out reset behavior.
+6. Add broader browser CI around SQLite local-first flows.
+7. Only then consider database-specific changefeed adapters.
 
 This order uses the SQLite sync store we already have while preserving the
 database-agnostic engine boundary.

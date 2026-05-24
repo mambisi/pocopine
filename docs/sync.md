@@ -44,7 +44,9 @@ mutation payloads, write-policy types, transaction binding contract, and
 non-macro `resource(...).id(...).mutation_log(...)` sync-stream adapter.
 Its transaction runner contract gives database adapters a tested
 begin/commit/rollback shape without turning Pocopine into an ORM.
-Proc-macro generated typed CRUD methods come next. SQL and persistence
+Proc-macro generated typed CRUD methods now cover `open`, `pull`,
+`view`, `create`, `save`, `remove`, and the first conflict helpers:
+`use_server`, `retry_local`, and `merge_with`. SQL and persistence
 ownership stay with the app.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).

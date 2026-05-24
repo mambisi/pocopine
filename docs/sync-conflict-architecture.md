@@ -223,35 +223,47 @@ The view also exposes pending deletes that have no visible row. That
 matters for UI affordances such as "undo delete", disabled save buttons,
 or a compact pending-mutations tray.
 
-Generated CRUD methods should use this view instead of directly poking at
+Generated CRUD methods use this view instead of directly poking at
 `SyncRow` flags. That keeps protocol structs as an implementation detail
 and gives future query/resource layers one place to improve.
 
 ## Conflict Resolution Shape
 
 The first conflict contract is conservative: mark the conflict, keep data
-visible, and make the state machine deterministic. Rich resolution APIs
-can build on top of that.
-
-The intended future author surface is:
+visible, and make the state machine deterministic. The first explicit
+resolution helpers now build on top of that contract:
 
 ```rust
-conflict.use_server();
-conflict.retry_local();
-conflict.merge_with(draft);
-conflict.discard_local();
+customers.use_server(id).await?;
+customers.retry_local(id, draft).await?;
+customers.merge_with(id, merged_draft).await?;
 ```
 
-Those helpers should map to normal sync operations:
+Those helpers map back to normal sync operations:
 
-- `use_server` clears the local pending/conflict marker and keeps the
+- `use_server` clears the local conflict marker and keeps the known
   canonical server row.
-- `discard_local` is equivalent for simple row edits, but can include
-  app-specific audit or UI behavior.
-- `retry_local` creates a new mutation with the latest canonical
+- `retry_local` creates a new save mutation with the latest canonical
   `base_version`.
-- `merge_with` creates a new mutation whose payload is the user-approved
-  merge result, also based on the latest canonical `base_version`.
+- `merge_with` creates a new save mutation whose payload is the
+  user-approved merge result, also based on the latest canonical
+  `base_version`.
+
+`retry_local` and `merge_with` leave the conflict marker visible until the
+server accepts the new mutation and returns a canonical row. That avoids
+claiming the conflict is resolved before the server confirms the retry.
+
+A future richer author surface can add:
+
+```rust
+customers.discard_local(id).await?;
+```
+
+Do not add `discard_local` as a cosmetic alias for `use_server`. The name
+implies pending local edits for that row are removed from the durable
+queue. It should wait for a `SyncLocalStore` operation that can atomically
+purge pending mutations by row key and update the in-memory state with the
+same ordering guarantees as `clear_conflict`.
 
 Do not hide conflicts by silently overwriting local or server state. For
 ordinary CRUD, explicit conflict UI is safer than automatic last-write
@@ -320,4 +332,3 @@ Backend-specific adapters should add integration tests for their own
 database, transaction, migration, and changefeed behavior. The core
 contract should stay green with protocol/state tests, memory-store tests,
 native SQLite tests, and targeted browser/wasm checks.
-
