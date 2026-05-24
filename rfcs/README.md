@@ -88,3 +88,5 @@ Conventions:
 | 078 | [Client route guards, loaders, and fetch middleware](./rfc-078-client-route-guards-and-loaders.md) | Implemented |
 | 079 | [`pine-richtext` TablesExtension](./rfc-079-pine-richtext-tables-extension.md) | Draft |
 | 080 | [Heroku-style deploy contract (process graph + services)](./rfc-080-deploy-contract.md) | Draft |
+| 081 | [Component handle refs](./rfc-081-component-handle-refs.md) | Draft (Phase 1 landed) |
+| 082 | [Storage-agnostic file/object storage](./rfc-082-pocopine-storage.md) | Accepted |
