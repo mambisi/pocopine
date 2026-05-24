@@ -29,7 +29,7 @@
 //! when the closure returns — same semantics as a regular handler
 //! invocation.
 
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::reactive::{trigger_scope, ScopeId};
@@ -107,6 +107,11 @@ impl<T: 'static> Handle<T> {
     /// `RefMut` that outlives a single closure.
     pub fn borrow_mut(&self) -> RefMut<'_, T> {
         self.inner.borrow_mut()
+    }
+
+    /// Fallible mutable borrow. Does not trigger reactivity.
+    pub fn try_borrow_mut(&self) -> Result<RefMut<'_, T>, BorrowMutError> {
+        self.inner.try_borrow_mut()
     }
 
     pub fn scope_id(&self) -> ScopeId {

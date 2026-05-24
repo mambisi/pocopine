@@ -4664,12 +4664,14 @@ name = "pocopine-sync-crud-macros"
 version = "0.1.0"
 dependencies = [
  "pocopine-auth",
+ "pocopine-core",
  "pocopine-sync",
  "pocopine-sync-crud",
  "proc-macro2",
  "quote",
  "serde",
  "syn 2.0.117",
+ "tokio",
  "trybuild",
 ]
 

@@ -1,9 +1,9 @@
 # Sync CRUD Macro API Contract
 
-This document is the concrete author-facing contract for the
-`pocopine-sync-crud` resource macro. It explains what the server sees,
-what the client sees, and how both sides map back to the non-macro sync
-runtime.
+This document is the concrete author-facing contract for
+`pocopine-sync-crud` resource macros. It shows what server code writes,
+what client code sees, and how the generated module maps back to the
+runtime sync and conflict-resolution layers.
 
 The macro generates CRUD and sync glue only. It does not generate SQL,
 schema, authorization rules, mutation-log storage, or conflict UI.
@@ -11,7 +11,7 @@ schema, authorization rules, mutation-log storage, or conflict UI.
 ## Resource Definition
 
 An app defines normal row and draft types, then implements `CrudSource`
-for its own repository type.
+for an app-owned repository type.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,11 @@ impl pocopine_sync_crud::CrudSource for Customers {
         base_version: Option<pocopine_sync::RowVersion>,
     ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudWriteResult<Customer>> {
         let tenant_id = tenant_from(ctx.clone())?;
-        let expected_version = parse_customer_version(base_version.as_ref())?;
+        let expected_version = base_version
+            .as_ref()
+            .map(|version| version.as_str().parse::<i64>())
+            .transpose()
+            .map_err(|err| pocopine_sync::SyncError::client(err.to_string()))?;
 
         let row = if let Some(expected_version) = expected_version {
             sqlx::query_as!(
@@ -162,10 +166,9 @@ impl pocopine_sync_crud::CrudSource for Customers {
 
         match row {
             Some(row) => Ok(pocopine_sync_crud::CrudWriteResult::applied(row)),
-            None => {
-                let server_row = self.get(ctx, id).await?;
-                Ok(pocopine_sync_crud::CrudWriteResult::stale(server_row))
-            }
+            None => Ok(pocopine_sync_crud::CrudWriteResult::stale(
+                self.get(ctx, id).await?,
+            )),
         }
     }
 
@@ -176,39 +179,44 @@ impl pocopine_sync_crud::CrudSource for Customers {
         base_version: Option<pocopine_sync::RowVersion>,
     ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudRemoveResult<Customer>> {
         let tenant_id = tenant_from(ctx.clone())?;
-        let expected_version = parse_customer_version(base_version.as_ref())?;
+        let expected_version = base_version
+            .as_ref()
+            .map(|version| version.as_str().parse::<i64>())
+            .transpose()
+            .map_err(|err| pocopine_sync::SyncError::client(err.to_string()))?;
 
-        let deleted = if let Some(expected_version) = expected_version {
-            sqlx::query!(
-                r#"
-                delete from customers
-                where tenant_id = $1 and id = $2 and version = $3
-                "#,
-                tenant_id,
-                id,
-                expected_version,
-            )
-            .execute(&self.pool)
-            .await
-            .map_err(sync_db_error)?
-            .rows_affected()
-        } else {
-            sqlx::query!(
-                "delete from customers where tenant_id = $1 and id = $2",
-                tenant_id,
-                id,
-            )
-            .execute(&self.pool)
-            .await
-            .map_err(sync_db_error)?
-            .rows_affected()
+        let deleted = match expected_version {
+            Some(expected_version) => {
+                sqlx::query!(
+                    "delete from customers where tenant_id = $1 and id = $2 and version = $3",
+                    tenant_id,
+                    id,
+                    expected_version,
+                )
+                .execute(&self.pool)
+                .await
+                .map_err(sync_db_error)?
+                .rows_affected()
+            }
+            None => {
+                sqlx::query!(
+                    "delete from customers where tenant_id = $1 and id = $2",
+                    tenant_id,
+                    id,
+                )
+                .execute(&self.pool)
+                .await
+                .map_err(sync_db_error)?
+                .rows_affected()
+            }
         };
 
         if deleted == 1 {
             Ok(pocopine_sync_crud::CrudRemoveResult::applied())
         } else {
-            let server_row = self.get(ctx, id).await?;
-            Ok(pocopine_sync_crud::CrudRemoveResult::stale(server_row))
+            Ok(pocopine_sync_crud::CrudRemoveResult::stale(
+                self.get(ctx, id).await?,
+            ))
         }
     }
 }
@@ -217,23 +225,20 @@ impl pocopine_sync_crud::CrudSource for Customers {
 The associated types are the shared contract:
 
 - `Id` is the app-visible resource id and maps to a sync row key.
-- `Row` is the rendered/canonical row shape stored in
-  `CollectionState<Row>`.
+- `Row` is the rendered/canonical row shape stored in `CollectionState<Row>`.
 - `Draft` is the write payload sent by generated create/save methods.
 
-The `tenant_from`, `sync_db_error`, and `parse_customer_version` helpers
-above are app-owned code. The macro neither generates nor requires those
-helpers. `RowVersion` is an opaque validated string newtype, so apps with
-numeric database versions should parse `row_version.as_str()` at their
-database boundary.
+The `tenant_from` and `sync_db_error` helpers above are app-owned code.
+`RowVersion` is an opaque validated string newtype, so apps with numeric
+database versions parse `row_version.as_str()` at their database boundary.
 
 ## Generated Module
 
 For the example above, the macro generates a sibling `customers` module.
-Conceptually, authors can treat it as if this code existed:
-
 If the sync name is not a valid Rust module identifier, use
 `#[pocopine_sync_crud::resource(name = "tenant-customers", module = customers)]`.
+
+Conceptually, authors can treat the generated code as this shape:
 
 ```rust
 pub mod customers {
@@ -253,110 +258,111 @@ pub mod customers {
     pub type Queued = pocopine_sync_crud::Queued<Id>;
     pub type Client<C> = pocopine_sync_crud::CrudClientResource<C, Id, Row>;
 
+    pub struct Resource<C: 'static> {
+        sync: pocopine_sync::SyncClient,
+        handle: pocopine_sync::Handle<C>,
+        selector: pocopine_sync::CollectionSelector<C, Row>,
+    }
+
+    impl<C: 'static> Resource<C>
+    where
+        Row: 'static,
+    {
+        pub fn new(
+            sync: &pocopine_sync::SyncClient,
+            handle: pocopine_sync::Handle<C>,
+            selector: pocopine_sync::CollectionSelector<C, Row>,
+        ) -> Self;
+
+        pub fn collection(&self) -> pocopine_sync::SyncResult<pocopine_sync::SyncCollection<C, Row>>;
+        pub fn open(&self) -> pocopine_sync::SyncResult<()>;
+        pub fn pull(&self) -> pocopine_sync::SyncResult<()>;
+        pub fn view(&self) -> pocopine_sync::SyncResult<pocopine_sync_crud::LocalResourceView<Id, Row>>;
+        pub fn client(&self) -> pocopine_sync::SyncResult<Client<C>>;
+
+        pub async fn create(&self, id: Id, draft: Draft) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn create_with_options(
+            &self,
+            id: Id,
+            draft: Draft,
+            options: CreateOptions,
+        ) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn save(&self, id: Id, draft: Draft) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn save_with_options(
+            &self,
+            id: Id,
+            draft: Draft,
+            options: SaveOptions,
+        ) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn remove(&self, id: Id) -> pocopine_sync::SyncResult<Outcome>;
+        pub async fn remove_with_options(
+            &self,
+            id: Id,
+            options: RemoveOptions,
+        ) -> pocopine_sync::SyncResult<Outcome>;
+    }
+
+    pub fn use_resource<C: 'static>(
+        sync: &pocopine_sync::SyncClient,
+        handle: pocopine_sync::Handle<C>,
+        selector: pocopine_sync::CollectionSelector<C, Row>,
+    ) -> Resource<C>;
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resource(
         source: Customers,
-    ) -> pocopine_sync::SyncResult<
-        pocopine_sync_crud::CrudResourceBuilder<Customers>,
-    > {
-        pocopine_sync_crud::resource(NAME, source)
-    }
+    ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudResourceBuilder<Customers>>;
 
-    pub fn new_id() -> pocopine_sync::SyncResult<Id> {
-        pocopine_sync_crud::new_id()
-    }
-
+    pub fn new_id() -> pocopine_sync::SyncResult<Id>;
     pub fn view(
         state: &pocopine_sync::CollectionState<Row>,
-    ) -> pocopine_sync::SyncResult<
-        pocopine_sync_crud::LocalResourceView<Id, Row>,
-    > {
-        pocopine_sync_crud::local_resource_view(state)
-    }
-
+    ) -> pocopine_sync::SyncResult<pocopine_sync_crud::LocalResourceView<Id, Row>>;
     pub fn client<C: 'static>(
         collection: pocopine_sync::SyncCollection<C, Row>,
         state: &pocopine_sync::CollectionState<Row>,
-    ) -> pocopine_sync::SyncResult<Client<C>> {
-        let view = view(state)?;
-        Ok(pocopine_sync_crud::client_resource(collection, view))
-    }
-
-    #[cfg(target_arch = "wasm32")]
+    ) -> pocopine_sync::SyncResult<Client<C>>;
     pub fn collection<C: 'static>(
         sync: &pocopine_sync::SyncClient,
-        handle: pocopine::Handle<C>,
+        handle: pocopine_sync::Handle<C>,
         selector: pocopine_sync::CollectionSelector<C, Row>,
-    ) -> pocopine_sync::SyncResult<pocopine_sync::SyncCollection<C, Row>> {
-        sync.collection(handle, selector).stream(NAME)
-    }
+    ) -> pocopine_sync::SyncResult<pocopine_sync::SyncCollection<C, Row>>;
 }
 ```
 
-The generated module does not reference `CrudSource` in its shared type
-aliases. It copies the associated type right-hand sides from the impl so
-the same module can be visible to wasm client code even though
-`CrudSource` itself is server-only.
+The generated module copies the associated type right-hand sides from the
+`CrudSource` impl. That keeps the shared aliases visible to wasm client
+code even though `CrudSource` itself is server-only.
 
-The generated macro output also gates the original `CrudSource` impl to
-server targets. That lets authors keep the resource definition in a
-shared crate without making the browser compile server-only traits,
-database clients, or `async_trait`.
+The macro gates the original `CrudSource` impl to server targets. If the
+source type itself contains server-only fields such as `sqlx::PgPool`,
+the app must also gate that source type or keep it in a server-only
+module. Shared row and draft types should remain available to both
+targets.
 
-Only the impl is gated by the macro. If the source type itself contains
-server-only fields such as `sqlx::PgPool`, the app must also gate that
-source type or keep it in a server-only module. Shared row and draft
-types should remain available to both targets.
+`Resource<C>` is an ergonomic wrapper around three existing runtime
+pieces: a cloned `SyncClient`, the component/store `Handle<C>`, and the
+selector into `CollectionState<Row>`. It rebuilds the cheap
+`SyncCollection` and typed `LocalResourceView` when each operation runs.
+The lower-level `collection(...)` and `client(...)` functions remain
+available as escape hatches and tests can still target the runtime layer
+directly.
 
-`Client<C>` and `client(...)` are portable type/runtime helpers. Only
-`collection(...)` is wasm-only because it references `pocopine::Handle`
-and the browser sync plugin. `client(...)` owns the `LocalResourceView`
-snapshot it builds from `&CollectionState<Row>`; the returned
-`CrudClientResource` does not borrow the component state and can be moved
-into an async `dispatch!(...).await` future. State changes still flow
-through the owned `SyncCollection<C, Row>`, which carries the component
-handle and selector.
+The generated helpers use `pocopine_sync::Handle`, re-exported from
+`pocopine-core`, so apps can depend on `pocopine-sync` without requiring
+the umbrella `pocopine` crate in generated code. Client components will
+usually pass `pocopine::this::<Self>()`, whose type is the same handle.
 
 `view(...)` and `client(...)` are fallible because the typed view checks
-that existing sync rows can be converted back into the resource `Id`.
-An empty collection is valid. Failures usually mean the app changed its
-id encoding or loaded rows for the wrong resource type.
-
-The generated `new_id()` wrapper specializes the runtime helper to the
-resource `Id`, so callers never write turbofish syntax.
-
-The generated `collection(...)` helper assumes the client crate depends
-on the umbrella `pocopine` crate because it names `pocopine::Handle`.
-Apps that build on `pocopine-sync` without the umbrella can still call
-`SyncClient::collection(...).stream(customers::NAME)` directly, then
-pass the returned streamed collection to `customers::client(...)`.
-
-Generated outcome aliases expose the runtime fields exactly:
-
-```rust
-pub struct Queued<Id> {
-    pub mutation_id: pocopine_sync::MutationId,
-    pub id: Id,
-    pub status: pocopine_sync_crud::QueuedStatus,
-}
-
-pub enum Outcome {
-    Queued(Queued),
-    Accepted { id: Id, row: Row },
-    Removed { id: Id },
-    Rejected { id: Id, reason: String },
-    Conflict {
-        id: Id,
-        server_row: Option<Row>,
-        reason: String,
-    },
-}
-```
+that existing sync rows can be converted back into the resource `Id`. The
+generated `Resource::view()` and `Resource::client()` wrappers can also
+return a borrow-contention error if the same component/store state is
+already borrowed. Other failures usually mean the app changed its id
+encoding or loaded rows for the wrong resource type.
 
 ## Server API
 
-Server setup calls the generated module's server resource helper, then
-keeps the explicit production hooks visible:
+Server setup calls the generated module's server helper, then supplies the
+production hooks explicitly:
 
 ```rust
 pub async fn build_server(pool: sqlx::PgPool) -> anyhow::Result<pocopine_server::Server> {
@@ -370,9 +376,7 @@ pub async fn build_server(pool: sqlx::PgPool) -> anyhow::Result<pocopine_server:
         .events(live_backend(pool.clone()))
         .build();
 
-    let router = pocopine_server::axum::Router::new();
-
-    Ok(pocopine_server::Server::new(router)
+    Ok(pocopine_server::Server::new(router())
         .plugin(pocopine_sync::sync_server_plugin(sync))
         .try_finalize()?)
 }
@@ -392,25 +396,10 @@ What the server handles at runtime:
 2. `/pull` calls `CrudSource::list` and returns canonical rows.
 3. `/push` deserializes the CRUD payload envelope.
 4. Replayed mutation ids are deduped by the mutation log.
-5. `save` and `remove` compare the client `base_version` to the latest
-   canonical version before calling app write code.
-6. Accepted writes record the mutation id and publish live invalidation
-   after commit.
+5. `save` and `remove` compare the client `base_version` to the latest canonical version before calling app write code.
+6. Accepted writes record the mutation id and publish live invalidation after commit.
 7. Stale writes return `Conflict` with the server row when available.
-8. Invalid payloads, auth failures, and domain validation failures return
-   `Rejected`.
-
-Server write results map to client outcomes through the sync push
-response:
-
-| Server result | Push response | Online client outcome |
-| --- | --- | --- |
-| `create -> Row` | accepted mutation plus returned row | `Accepted { id, row }` |
-| `save -> CrudWriteResult::Applied(row)` | accepted mutation plus returned row | `Accepted { id, row }` |
-| `remove -> CrudRemoveResult::Applied` | accepted mutation without a row | `Removed { id }` |
-| `CrudWriteResult::Conflict(conflict)` | conflict with optional server row and reason | `Conflict { id, server_row, reason }` |
-| `CrudRemoveResult::Conflict(conflict)` | conflict with optional server row and reason | `Conflict { id, server_row, reason }` |
-| malformed payload, auth failure, replay mismatch, or domain rejection | rejected mutation with reason | `Rejected { id, reason }` |
+8. Invalid payloads, auth failures, and domain validation failures return `Rejected`.
 
 The server resource helper intentionally does not hide `.mutation_log`.
 Production idempotency must stay tied to the same database and tenant
@@ -419,7 +408,7 @@ scope as the source query.
 ## Client API
 
 Client components keep normal `CollectionState<Row>` fields. The
-generated module binds that state to the sync client and the typed CRUD
+generated module binds that state to the sync client and typed CRUD
 runtime.
 
 ```rust
@@ -457,15 +446,16 @@ fn customers_state(
 
 #[handlers]
 impl CustomersPage {
-    pub fn on_mount(&mut self) {
-        let result = customers::collection(
+    fn customers(&self) -> customers::Resource<Self> {
+        customers::use_resource(
             &self.plugin::<pocopine_sync::SyncClient>(),
             pocopine::this::<Self>(),
             customers_state,
         )
-        .and_then(|collection| collection.open());
+    }
 
-        if let Err(err) = result {
+    pub fn on_mount(&mut self) {
+        if let Err(err) = self.customers().open() {
             self.error = Some(err.to_string());
         }
     }
@@ -489,29 +479,10 @@ impl CustomersPage {
             email: draft.email.clone(),
             version: 0,
         };
-
-        let collection = match customers::collection(
-            &self.plugin::<pocopine_sync::SyncClient>(),
-            pocopine::this::<Self>(),
-            customers_state,
-        ) {
-            Ok(collection) => collection,
-            Err(err) => {
-                self.error = Some(err.to_string());
-                return;
-            }
-        };
-
-        let handle = match customers::client(collection, &self.customers) {
-            Ok(handle) => handle,
-            Err(err) => {
-                self.error = Some(err.to_string());
-                return;
-            }
-        };
+        let customers = self.customers();
 
         dispatch!(
-            handle
+            customers
                 .create_with_options(
                     id,
                     draft,
@@ -534,24 +505,10 @@ impl CustomersPage {
             email: draft.email.clone(),
             ..row.clone()
         };
-
-        let result = customers::collection(
-            &self.plugin::<pocopine_sync::SyncClient>(),
-            pocopine::this::<Self>(),
-            customers_state,
-        )
-        .and_then(|collection| customers::client(collection, &self.customers));
-
-        let handle = match result {
-            Ok(handle) => handle,
-            Err(err) => {
-                self.error = Some(err.to_string());
-                return;
-            }
-        };
+        let customers = self.customers();
 
         dispatch!(
-            handle
+            customers
                 .save_with_options(
                     row.id,
                     draft,
@@ -565,22 +522,9 @@ impl CustomersPage {
     }
 
     pub fn remove_customer(&mut self, id: uuid::Uuid) {
-        let result = customers::collection(
-            &self.plugin::<pocopine_sync::SyncClient>(),
-            pocopine::this::<Self>(),
-            customers_state,
-        )
-        .and_then(|collection| customers::client(collection, &self.customers));
+        let customers = self.customers();
 
-        let handle = match result {
-            Ok(handle) => handle,
-            Err(err) => {
-                self.error = Some(err.to_string());
-                return;
-            }
-        };
-
-        dispatch!(handle.remove(id).await, |state, result| {
+        dispatch!(customers.remove(id).await, |state, result| {
             state.handle_customer_outcome(result);
         });
     }
@@ -629,45 +573,46 @@ impl CustomersPage {
 
 What the client sees:
 
-- `customers::collection(...)` applies the generated stream name.
-- `customers::client(collection, &state)` builds the typed runtime handle.
-- `customers::new_id()` creates an offline-capable id when the id type
-  supports local id generation.
-- `customers::CreateOptions`, `SaveOptions`, and `RemoveOptions` are
-  row-specialized aliases for the runtime options.
+- `customers::use_resource(sync, handle, selector)` is the normal entry point.
+- `Resource::open()` and `Resource::pull()` apply the generated stream name.
+- `Resource::view()` returns typed rendered rows, pending flags, conflicts, and canonical base versions.
+- `Resource::create/save/remove` use `WritePolicy::QueueOffline` defaults.
+- `Resource::*_with_options` lets callers set optimistic rows, explicit base versions, or `RequireOnline`.
+- `customers::collection(...)` and `customers::client(...)` remain lower-level escape hatches.
+- `customers::new_id()` creates an offline-capable id when the id type supports local id generation.
 - `customers::Outcome` is the typed create/save/remove result.
-- `customers::Queued` carries `mutation_id`, `id`, and `QueuedStatus` so
-  UI can show pending state without parsing protocol strings.
 
 What the client handles at runtime:
 
-1. `collection.open()` hydrates cached canonical rows and pending
-   mutations from the local store, then pulls the server snapshot.
-2. `customers::view(&state)` exposes rendered rows, pending flags,
-   conflicts, and canonical `base_version` values.
-3. `QueueOffline` reserves a durable mutation id and returns
-   `CrudOutcome::Queued` after local enqueue, not after server acceptance.
-4. `RequireOnline` waits for `/push` and returns accepted, removed,
-   rejected, or conflict outcomes from the server response.
-5. `save` and `remove` default `base_version` from
-   `LocalResourceView::base_version(&id)`.
-6. A pull received while local writes are pending updates canonical rows
-   first, then replays pending local overlays over the new canonical base.
+1. `open()` hydrates cached canonical rows and pending mutations from the local store, then pulls the server snapshot.
+2. `view()` exposes rendered rows, pending flags, conflicts, and canonical `base_version` values.
+3. `QueueOffline` reserves a durable mutation id and returns `CrudOutcome::Queued` after local enqueue, not after server acceptance.
+4. `RequireOnline` waits for `/push` and returns accepted, removed, rejected, or conflict outcomes from the server response.
+5. `save` and `remove` default `base_version` from `LocalResourceView::base_version(&id)`.
+6. A pull received while local writes are pending updates canonical rows first, then replays pending local overlays over the new canonical base.
 7. Rejections roll back to the latest canonical row.
-8. Conflicts keep user-visible data available and mark the row so the app
-   can show explicit resolution UI.
+8. Conflicts keep user-visible data available and mark the row so the app can show explicit resolution UI.
+
+## Outcome Mapping
+
+| Server result | Push response | Online client outcome |
+| --- | --- | --- |
+| `create -> Row` | accepted mutation plus returned row | `Accepted { id, row }` |
+| `save -> CrudWriteResult::Applied(row)` | accepted mutation plus returned row | `Accepted { id, row }` |
+| `remove -> CrudRemoveResult::Applied` | accepted mutation without a row | `Removed { id }` |
+| `CrudWriteResult::Conflict(conflict)` | conflict with optional server row and reason | `Conflict { id, server_row, reason }` |
+| `CrudRemoveResult::Conflict(conflict)` | conflict with optional server row and reason | `Conflict { id, server_row, reason }` |
+| malformed payload, auth failure, replay mismatch, or domain rejection | rejected mutation with reason | `Rejected { id, reason }` |
 
 ## Conflict Contract
 
-Generated CRUD does not silently merge conflicts. The first contract is:
+Generated CRUD does not silently merge conflicts. The contract is:
 
 - accepted write: clear pending state and apply the returned canonical row,
 - accepted remove: clear pending state and remove the row,
 - rejected write: drop the pending mutation and rebase to canonical rows,
-- conflicted write: drop the pending mutation, mark the row conflicted,
-  and expose the server row when the server supplied one,
-- offline write: keep the optimistic row visible and durable until replay
-  resolves it.
+- conflicted write: drop the pending mutation, mark the row conflicted, and expose the server row when supplied,
+- offline write: keep the optimistic row visible and durable until replay resolves it.
 
 This preserves the local-first invariant documented in
 `sync-conflict-architecture.md`:
@@ -676,8 +621,7 @@ This preserves the local-first invariant documented in
 rendered rows = canonical server rows + pending local overlay
 ```
 
-The generated API can add higher-level helpers later, such as
-`retry_local`, `use_server`, and `merge_with`, but those helpers must map
-back to explicit sync mutations and must not overwrite newer server data
-by default. Those helpers are out of scope for the first generated macro
-slice.
+Higher-level helpers such as `retry_local`, `use_server`, `merge_with`,
+fluent options builders, and transaction convenience methods are future
+work. They must still map back to explicit sync mutations and must not
+overwrite newer server data by default.
