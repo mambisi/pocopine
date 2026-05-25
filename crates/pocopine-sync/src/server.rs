@@ -373,6 +373,7 @@ fn server_error(error: SyncError) -> ServerError {
         SyncError::UnknownStream(_) => ServerError::Forbidden(error.to_string()),
         SyncError::Unsupported(_) => ServerError::BadRequest(error.to_string()),
         SyncError::Gap(_) => ServerError::BadRequest(error.to_string()),
+        SyncError::Unauthorized(msg) => ServerError::Unauthorized(msg),
         SyncError::Json(err) => {
             tracing::error!(target: "pocopine.log", error = %err, "sync json error");
             ServerError::App("sync internal error".to_string())

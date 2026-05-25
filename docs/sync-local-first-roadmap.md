@@ -244,9 +244,16 @@ component authors a reactive read path while preserving the existing
 
 Sync does not make local data trusted.
 
-Server guards and source filters run on every `/open`, `/pull`, and
-`/push` — see `pocopine_sync::SyncServerBuilder::guarded_stream` and the
-auth tests in `crates/pocopine-sync/src/server.rs`. Mutation logs must be
+The per-stream guard registered via
+`pocopine_sync::SyncServerBuilder::guarded_stream` runs on every `/open`,
+`/pull`, and `/push`. The app's `CrudSource` / `SyncStreamSource` filters
+run on `/pull` and `/push` — `/open` only resolves the stream and runs
+the registered guard. Sources that need to surface a per-request
+authorization failure (for example a missing tenant header) return
+`SyncError::unauthorized(msg)`; the server maps that to
+`ServerError::Unauthorized` so app errors and framework guard errors
+share one wire shape. See the auth tests in
+`crates/pocopine-sync/src/server.rs`. Mutation logs must be
 scoped to the same authorization domain as the source query, for example
 `(tenant_id, mutation_id)`, not only `mutation_id`. Both
 `SqlxCrudMutationLog::new(scope_fn)` and
