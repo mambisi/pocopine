@@ -400,8 +400,8 @@ pub async fn build_server(pool: sqlx::PgPool) -> anyhow::Result<pocopine_server:
         .id(|row: &Customer| row.id)
         .version(|row: &Customer| row.version)
         .transactional(
-            SqlxCrudTransactions { pool: pool.clone() },
-            CustomerMutationLog,
+            pocopine_sync_sqlx::postgres(pool.clone()),
+            pocopine_sync_sqlx::SqlxCrudMutationLog::<sqlx::Postgres>::new(tenant_scope),
         );
 
     let sync = pocopine_sync::SyncServer::builder()
@@ -445,6 +445,11 @@ or SQL. Production code should use `.transactional(...)` and implement
 as the source query. The accepted-mutation table needs a unique key over
 that scope and `mutation_id`; the lookup alone is not a concurrency
 boundary.
+
+For SQLx-backed resources, `pocopine-sync-sqlx` supplies the transaction
+runner and durable accepted-mutation log helper. Apps still implement
+`CrudSource` and `TransactionalCrudSource` with normal backend-specific
+SQLx queries. See [`sync-sqlx.md`](./sync-sqlx.md).
 
 ## Client API
 

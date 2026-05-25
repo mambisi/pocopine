@@ -73,6 +73,9 @@ looks the way it does — the code itself tells you *what*.
   concrete generated CRUD macro API contract, including the server
   resource module shape, client binding helpers, queued/online handling,
   and conflict outcome semantics.
+- [`sync-sqlx.md`](./sync-sqlx.md) — host/server SQLx helpers for
+  transactional CRUD sync resources, including backend feature flags,
+  accepted-mutation schema, and the app-owned SQL boundary.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.
