@@ -4725,6 +4725,7 @@ dependencies = [
 name = "pocopine-storage"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "http-body-util",
  "js-sys",

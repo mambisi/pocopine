@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_server::auth::{Decision, Predicate, RequestContext};
@@ -13,7 +14,7 @@ use pocopine_server::axum::http::{
     HeaderMap, HeaderValue, Request, StatusCode,
 };
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
-use pocopine_server::axum::routing::{get, patch, post};
+use pocopine_server::axum::routing::{get, head, options, patch, post};
 use pocopine_server::{Server, ServerPlugin};
 use uuid::Uuid;
 
@@ -28,6 +29,9 @@ use crate::{
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JSON_CONTROL_BYTES: usize = 64 * 1024;
 const STORAGE_COOKIE_PATH: &str = "/__pocopine/storage";
+const TUS_PROTOCOL_VERSION: &str = "1.0.0";
+const TUS_UPLOADS_ROUTE: &str = "/__pocopine/storage/tus/v1/:scope/uploads";
+const TUS_UPLOAD_ROUTE: &str = "/__pocopine/storage/tus/v1/:scope/uploads/:session";
 
 /// Future returned by storage backend methods.
 pub type StorageBoxFuture<'a, T> = Pin<Box<dyn Future<Output = StorageResult<T>> + Send + 'a>>;
@@ -655,9 +659,24 @@ pub struct StorageServerPlugin {
     storage: StorageServer,
 }
 
+/// Server plugin that mounts a tus 1.0-compatible endpoint surface.
+#[derive(Clone)]
+pub struct StorageTusServerPlugin {
+    storage: StorageServer,
+}
+
 /// Build a storage server plugin.
 pub fn storage_server_plugin(storage: StorageServer) -> StorageServerPlugin {
     StorageServerPlugin { storage }
+}
+
+/// Build a tus 1.0-compatible storage server plugin.
+///
+/// This is intentionally a separate mount from Pocopine's native JSON storage
+/// protocol. tus clients speak header/status-code based upload semantics, while
+/// the native protocol keeps typed JSON envelopes for browser integrations.
+pub fn storage_tus_server_plugin(storage: StorageServer) -> StorageTusServerPlugin {
+    StorageTusServerPlugin { storage }
 }
 
 impl ServerPlugin for StorageServerPlugin {
@@ -690,6 +709,31 @@ impl ServerPlugin for StorageServerPlugin {
             .route(
                 "/__pocopine/storage/v1/uploads/:session/complete",
                 post(complete_handler).with_state(storage),
+            )
+    }
+}
+
+impl ServerPlugin for StorageTusServerPlugin {
+    fn name(&self) -> &'static str {
+        "pocopine-storage-tus"
+    }
+
+    fn install(self, server: Server) -> Server {
+        let storage = self.storage;
+        server
+            .provide_plugin(storage.clone())
+            .route(
+                TUS_UPLOADS_ROUTE,
+                options(tus_options_handler)
+                    .post(tus_create_handler)
+                    .with_state(storage.clone()),
+            )
+            .route(
+                TUS_UPLOAD_ROUTE,
+                head(tus_head_handler)
+                    .patch(tus_patch_handler)
+                    .delete(tus_delete_handler)
+                    .with_state(storage),
             )
     }
 }
@@ -839,6 +883,219 @@ async fn abort_handler(
         }
         Err(err) => storage_response::<()>(Err(err), None),
     }
+}
+
+async fn tus_options_handler(
+    State(storage): State<StorageServer>,
+    Path(scope): Path<String>,
+    request: Request<Body>,
+) -> Response {
+    tus_route_response(
+        async {
+            let request = context_from_request(request, &storage);
+            let descriptor = storage.descriptor(request.ctx, &scope).await?;
+            let mut response = tus_empty_response(StatusCode::NO_CONTENT);
+            set_response_header(&mut response, "tus-version", TUS_PROTOCOL_VERSION)?;
+            set_response_header(
+                &mut response,
+                "tus-extension",
+                "creation,creation-with-upload,termination,expiration",
+            )?;
+            set_response_header(
+                &mut response,
+                "tus-max-size",
+                descriptor.max_bytes.to_string(),
+            )?;
+            apply_set_cookie(&mut response, request.set_cookie);
+            Ok(response)
+        }
+        .await,
+    )
+}
+
+async fn tus_create_handler(
+    State(storage): State<StorageServer>,
+    Path(scope): Path<String>,
+    request: Request<Body>,
+) -> Response {
+    tus_route_response(
+        async {
+            let request = bytes_request(request, &storage).await?;
+            require_tus_version(&request.headers)?;
+            let metadata = tus_metadata(&request.headers)?;
+            let size = tus_upload_length(&request.headers)?;
+            let upload = storage
+                .initiate_upload(
+                    request.ctx.clone(),
+                    InitiateUploadRequest {
+                        protocol: STORAGE_PROTOCOL_V1.to_string(),
+                        scope: scope.clone(),
+                        file_name: metadata
+                            .file_name
+                            .clone()
+                            .unwrap_or_else(|| "upload".to_string()),
+                        size,
+                        content_type: metadata.content_type.clone(),
+                        metadata: metadata.values,
+                        requested_strategy: UploadStrategy::Sequential,
+                    },
+                )
+                .await?;
+
+            let mut offset = upload.next_offset.unwrap_or(0);
+            maybe_tus_complete(&storage, request.ctx.clone(), &upload).await?;
+            if content_length(&request.headers).unwrap_or(0) > 0
+                || has_tus_octet_stream(&request.headers)
+            {
+                require_tus_octet_stream(&request.headers)?;
+                let max_body_bytes = max_patch_body_bytes(&upload, 0);
+                let bytes = to_bytes(request.body, max_body_bytes as usize)
+                    .await
+                    .map_err(|err| {
+                        StorageError::policy_rejected(format!("upload chunk is too large: {err}"))
+                    })?;
+                if !bytes.is_empty() {
+                    let updated = storage
+                        .append_upload_bytes(request.ctx.clone(), upload.id.clone(), 0, bytes)
+                        .await?;
+                    offset = updated.next_offset.unwrap_or(offset);
+                    maybe_tus_complete(&storage, request.ctx.clone(), &updated).await?;
+                }
+            }
+
+            let mut response = tus_empty_response(StatusCode::CREATED);
+            set_response_header(
+                &mut response,
+                "location",
+                format!(
+                    "/__pocopine/storage/tus/v1/{}/uploads/{}",
+                    scope,
+                    upload.id.as_str()
+                ),
+            )?;
+            set_response_header(&mut response, "upload-offset", offset.to_string())?;
+            set_tus_upload_length_headers(&mut response, size)?;
+            set_response_header(
+                &mut response,
+                "upload-expires",
+                upload
+                    .expires_at
+                    .format(&time::format_description::well_known::Rfc2822)
+                    .map_err(|err| {
+                        StorageError::backend(format!("format tus expiration: {err}"))
+                    })?,
+            )?;
+            apply_set_cookie(&mut response, request.set_cookie);
+            Ok(response)
+        }
+        .await,
+    )
+}
+
+async fn tus_head_handler(
+    State(storage): State<StorageServer>,
+    Path((_scope, session)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    tus_route_response(
+        async {
+            let request = context_from_request(request, &storage);
+            require_tus_version(request.ctx.request.as_ref().unwrap().headers())?;
+            let session = UploadSessionId::new(session)?;
+            let upload = storage.inspect_upload(request.ctx, session).await?;
+            let mut response = tus_empty_response(StatusCode::NO_CONTENT);
+            set_response_header(
+                &mut response,
+                "upload-offset",
+                upload.next_offset.unwrap_or(0).to_string(),
+            )?;
+            set_tus_upload_length_headers(&mut response, upload.size)?;
+            set_response_header(
+                &mut response,
+                "upload-expires",
+                upload
+                    .expires_at
+                    .format(&time::format_description::well_known::Rfc2822)
+                    .map_err(|err| {
+                        StorageError::backend(format!("format tus expiration: {err}"))
+                    })?,
+            )?;
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            apply_set_cookie(&mut response, request.set_cookie);
+            Ok(response)
+        }
+        .await,
+    )
+}
+
+async fn tus_patch_handler(
+    State(storage): State<StorageServer>,
+    Path((_scope, session)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    tus_route_response(
+        async {
+            let request = bytes_request(request, &storage).await?;
+            require_tus_version(&request.headers)?;
+            require_tus_octet_stream(&request.headers)?;
+            let offset = upload_offset(&request.headers)?;
+            let session = UploadSessionId::new(session)?;
+            let upload = storage
+                .inspect_upload(request.ctx.clone(), session.clone())
+                .await?;
+            let expected_offset = upload.next_offset.unwrap_or(0);
+            if expected_offset != offset {
+                return Err(StorageError::offset_mismatch(expected_offset, offset).into());
+            }
+            storage
+                .scope(&upload.scope)?
+                .authorize_write(request.ctx.clone())
+                .await
+                .map_err(storage_auth_error)?;
+            let max_body_bytes = max_patch_body_bytes(&upload, offset);
+            reject_oversized_content_length(&request.headers, max_body_bytes)?;
+            let bytes = to_bytes(request.body, max_body_bytes as usize)
+                .await
+                .map_err(|err| {
+                    StorageError::policy_rejected(format!("upload chunk is too large: {err}"))
+                })?;
+            let updated = storage
+                .append_upload_bytes(request.ctx.clone(), session, offset, bytes)
+                .await?;
+            maybe_tus_complete(&storage, request.ctx, &updated).await?;
+
+            let mut response = tus_empty_response(StatusCode::NO_CONTENT);
+            set_response_header(
+                &mut response,
+                "upload-offset",
+                updated.next_offset.unwrap_or(offset).to_string(),
+            )?;
+            apply_set_cookie(&mut response, request.set_cookie);
+            Ok(response)
+        }
+        .await,
+    )
+}
+
+async fn tus_delete_handler(
+    State(storage): State<StorageServer>,
+    Path((_scope, session)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    tus_route_response(
+        async {
+            let request = mutation_context_from_request(request, &storage)?;
+            require_tus_version(request.ctx.request.as_ref().unwrap().headers())?;
+            let session = UploadSessionId::new(session)?;
+            storage.abort_upload(request.ctx, session).await?;
+            let mut response = tus_empty_response(StatusCode::NO_CONTENT);
+            apply_set_cookie(&mut response, request.set_cookie);
+            Ok(response)
+        }
+        .await,
+    )
 }
 
 struct StorageRequest {
@@ -1004,6 +1261,249 @@ fn anonymous_binding_cookie(binding: &str, secure: bool) -> String {
     format!(
         "{STORAGE_ANON_COOKIE}={binding}; Path={STORAGE_COOKIE_PATH}; HttpOnly; SameSite=Strict{secure}"
     )
+}
+
+#[derive(Debug)]
+enum TusError {
+    VersionMismatch,
+    Storage(StorageError),
+}
+
+impl From<StorageError> for TusError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+struct TusMetadata {
+    file_name: Option<String>,
+    content_type: Option<String>,
+    values: BTreeMap<String, String>,
+}
+
+async fn maybe_tus_complete(
+    storage: &StorageServer,
+    ctx: StorageContext,
+    upload: &UploadSession,
+) -> Result<(), TusError> {
+    if upload
+        .size
+        .is_some_and(|size| upload.next_offset == Some(size))
+    {
+        storage
+            .complete_upload(
+                ctx,
+                CompleteUpload {
+                    session: upload.id.clone(),
+                    checksum: None,
+                },
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn require_tus_version(headers: &HeaderMap) -> Result<(), TusError> {
+    match headers
+        .get("tus-resumable")
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(value) if value == TUS_PROTOCOL_VERSION => Ok(()),
+        _ => Err(TusError::VersionMismatch),
+    }
+}
+
+fn tus_upload_length(headers: &HeaderMap) -> StorageResult<Option<u64>> {
+    let upload_length = headers
+        .get("upload-length")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| StorageError::invalid_value("Upload-Length", value.to_string()))
+        })
+        .transpose()?;
+    let defer_length = headers
+        .get("upload-defer-length")
+        .and_then(|value| value.to_str().ok());
+    if upload_length.is_some() && defer_length.is_some() {
+        return Err(StorageError::invalid_value(
+            "Upload-Length",
+            "cannot be combined with Upload-Defer-Length",
+        ));
+    }
+    match (upload_length, defer_length) {
+        (Some(length), None) => Ok(Some(length)),
+        (None, Some("1")) => Ok(None),
+        (None, Some(value)) => Err(StorageError::invalid_value(
+            "Upload-Defer-Length",
+            value.to_string(),
+        )),
+        (None, None) => Err(StorageError::invalid_value("Upload-Length", "<missing>")),
+        (Some(_), Some(_)) => unreachable!(),
+    }
+}
+
+fn upload_offset(headers: &HeaderMap) -> StorageResult<u64> {
+    headers
+        .get("upload-offset")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| StorageError::invalid_value("Upload-Offset", "<missing>"))?
+        .parse::<u64>()
+        .map_err(|_| StorageError::invalid_value("Upload-Offset", "<invalid>"))
+}
+
+fn tus_metadata(headers: &HeaderMap) -> StorageResult<TusMetadata> {
+    let mut values = BTreeMap::new();
+    if let Some(header) = headers
+        .get("upload-metadata")
+        .and_then(|value| value.to_str().ok())
+    {
+        for pair in header.split(',') {
+            let pair = pair.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            let (key, encoded) = pair
+                .split_once(' ')
+                .ok_or_else(|| StorageError::invalid_value("Upload-Metadata", pair.to_string()))?;
+            if key.is_empty() {
+                return Err(StorageError::invalid_value("Upload-Metadata", pair));
+            }
+            let bytes = BASE64_STANDARD
+                .decode(encoded)
+                .map_err(|_| StorageError::invalid_value("Upload-Metadata", pair.to_string()))?;
+            let value = String::from_utf8(bytes)
+                .map_err(|_| StorageError::invalid_value("Upload-Metadata", pair.to_string()))?;
+            values.insert(key.to_string(), value);
+        }
+    }
+    Ok(TusMetadata {
+        file_name: values.get("filename").cloned(),
+        content_type: values.get("filetype").cloned(),
+        values,
+    })
+}
+
+fn content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn require_tus_octet_stream(headers: &HeaderMap) -> StorageResult<()> {
+    if has_tus_octet_stream(headers) {
+        Ok(())
+    } else {
+        let content_type = headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        Err(StorageError::invalid_value(
+            "Content-Type",
+            content_type.to_string(),
+        ))
+    }
+}
+
+fn has_tus_octet_stream(headers: &HeaderMap) -> bool {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    content_type.split(';').next().is_some_and(|value| {
+        value
+            .trim()
+            .eq_ignore_ascii_case("application/offset+octet-stream")
+    })
+}
+
+fn set_tus_upload_length_headers(response: &mut Response, size: Option<u64>) -> StorageResult<()> {
+    match size {
+        Some(size) => set_response_header(response, "upload-length", size.to_string()),
+        None => set_response_header(response, "upload-defer-length", "1"),
+    }
+}
+
+fn tus_route_response(result: Result<Response, TusError>) -> Response {
+    match result {
+        Ok(response) => response,
+        Err(error) => tus_error_response(error),
+    }
+}
+
+fn tus_empty_response(status: StatusCode) -> Response {
+    let mut response = Response::builder()
+        .status(status)
+        .body(Body::empty())
+        .expect("valid tus response");
+    response.headers_mut().insert(
+        "tus-resumable",
+        HeaderValue::from_static(TUS_PROTOCOL_VERSION),
+    );
+    response
+}
+
+fn tus_error_response(error: TusError) -> Response {
+    let version_mismatch = matches!(error, TusError::VersionMismatch);
+    let (status, message) = match error {
+        TusError::VersionMismatch => (
+            StatusCode::PRECONDITION_FAILED,
+            "tus version mismatch".to_string(),
+        ),
+        TusError::Storage(error) => (tus_storage_error_status(&error), error.to_string()),
+    };
+    let mut response = Response::builder()
+        .status(status)
+        .body(Body::from(message))
+        .expect("valid tus error response");
+    response.headers_mut().insert(
+        "tus-resumable",
+        HeaderValue::from_static(TUS_PROTOCOL_VERSION),
+    );
+    if version_mismatch {
+        response.headers_mut().insert(
+            "tus-version",
+            HeaderValue::from_static(TUS_PROTOCOL_VERSION),
+        );
+    }
+    response
+}
+
+fn tus_storage_error_status(error: &StorageError) -> StatusCode {
+    match error {
+        StorageError::PolicyRejected { reason }
+            if reason.contains("too large")
+                || reason.contains("exceeds")
+                || reason.contains("file is too large") =>
+        {
+            StatusCode::PAYLOAD_TOO_LARGE
+        }
+        StorageError::InvalidValue { field, .. } if field == "Tus-Resumable" => {
+            StatusCode::PRECONDITION_FAILED
+        }
+        _ => storage_error_status(error),
+    }
+}
+
+fn set_response_header(
+    response: &mut Response,
+    name: &'static str,
+    value: impl AsRef<str>,
+) -> StorageResult<()> {
+    let value = HeaderValue::from_str(value.as_ref())
+        .map_err(|_| StorageError::invalid_value(name, value.as_ref()))?;
+    response.headers_mut().insert(name, value);
+    Ok(())
+}
+
+fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
+    if let Some(set_cookie) = set_cookie {
+        if let Ok(value) = HeaderValue::from_str(&set_cookie) {
+            response.headers_mut().insert(SET_COOKIE, value);
+        }
+    }
 }
 
 fn require_bound_actor(ctx: &StorageContext) -> StorageResult<()> {

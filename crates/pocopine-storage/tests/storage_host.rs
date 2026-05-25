@@ -10,15 +10,16 @@ use http_body_util::BodyExt;
 use pocopine_core::ServerError;
 use pocopine_server::auth::{AuthUser, RequestContext};
 use pocopine_server::axum::body::Body;
-use pocopine_server::axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
+use pocopine_server::axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use pocopine_server::axum::Router;
 use pocopine_storage::{
-    storage_server_plugin, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
-    InitiateUploadRequest, LocalFsStorageBackend, MemoryStorageBackend, ObjectChecksum,
-    ObjectMetadata, ObjectOwnerRef, SafeObjectKey, StorageBackend, StorageContext, StorageError,
-    StorageKey, StorageKeyFuture, StorageKeyResolver, StorageResponse, StorageResult, StorageScope,
-    StorageServer, UploadIntent, UploadPolicy, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH,
+    storage_server_plugin, storage_tus_server_plugin, ChecksumAlgorithm, ChecksumPolicy,
+    CompleteUpload, InitiateUpload, InitiateUploadRequest, LocalFsStorageBackend,
+    MemoryStorageBackend, ObjectChecksum, ObjectMetadata, ObjectOwnerRef, SafeObjectKey,
+    StorageBackend, StorageContext, StorageError, StorageKey, StorageKeyFuture, StorageKeyResolver,
+    StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent, UploadPolicy,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, STORAGE_ANON_COOKIE,
+    STORAGE_UPLOADS_PATH,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -224,6 +225,129 @@ async fn route_accepts_configured_trusted_origin() -> StorageResult<()> {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session?.status, UploadSessionStatus::Open);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tus_options_advertises_creation_resume_and_termination() -> StorageResult<()> {
+    let router = finalize_tus(memory_storage()?);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri(tus_uploads_uri("avatars"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.headers().get("tus-resumable").unwrap(), "1.0.0");
+    assert_eq!(response.headers().get("tus-version").unwrap(), "1.0.0");
+    assert!(response
+        .headers()
+        .get("tus-extension")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .contains("creation"));
+    assert_eq!(response.headers().get("tus-max-size").unwrap(), "1024");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tus_create_head_patch_and_delete_use_tus_wire_contract() -> StorageResult<()> {
+    let storage = memory_storage()?;
+    let router = finalize_tus(storage.clone());
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "5")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers().get("tus-resumable").unwrap(), "1.0.0");
+    assert_eq!(response.headers().get("upload-offset").unwrap(), "0");
+    assert_eq!(response.headers().get("upload-length").unwrap(), "5");
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("cookie", anon_cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.headers().get("upload-offset").unwrap(), "0");
+    assert_eq!(response.headers().get("upload-length").unwrap(), "5");
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "0")
+                .header("content-type", "application/offset+octet-stream")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.headers().get("upload-offset").unwrap(), "5");
+
+    let session = UploadSessionId::new(location.rsplit('/').next().unwrap())?;
+    let inspected = storage.inspect_upload(anon_ctx(), session.clone()).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Complete);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(matches!(
+        storage.inspect_upload(anon_ctx(), session).await,
+        Err(StorageError::UnknownUploadSession { .. })
+    ));
     Ok(())
 }
 
@@ -753,6 +877,18 @@ fn finalize(storage: StorageServer) -> Router {
         .unwrap()
 }
 
+fn finalize_tus(storage: StorageServer) -> Router {
+    pocopine_server::__reset_for_test();
+    pocopine_server::Server::new(Router::new())
+        .plugin(storage_tus_server_plugin(storage))
+        .try_finalize()
+        .unwrap()
+}
+
+fn tus_uploads_uri(scope: &str) -> String {
+    format!("/__pocopine/storage/tus/v1/{scope}/uploads")
+}
+
 async fn post_json<T, R>(router: Router, uri: &str, payload: &T) -> StorageResult<R>
 where
     T: Serialize,
@@ -964,6 +1100,16 @@ fn policy(backend: &str) -> StorageResult<UploadPolicy> {
 
 fn ctx() -> StorageContext {
     StorageContext::system("test")
+}
+
+fn anon_ctx() -> StorageContext {
+    let mut headers = HeaderMap::new();
+    headers.insert("cookie", HeaderValue::from_str(&anon_cookie()).unwrap());
+    StorageContext::from_request(RequestContext::new(
+        Method::GET,
+        Uri::from_static("/storage-test"),
+        headers,
+    ))
 }
 
 fn principal_ctx(id: &str, claim: &str) -> StorageContext {
