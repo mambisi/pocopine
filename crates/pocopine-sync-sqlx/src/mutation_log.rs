@@ -1,11 +1,18 @@
 use std::{fmt, marker::PhantomData, sync::Arc};
 
 use pocopine_auth::RequestContext;
-use pocopine_sync::{MutationId, RowKey, SyncError, SyncOp, SyncResult};
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+use pocopine_sync::{MutationId, RowKey, SyncOp};
+use pocopine_sync::{SyncError, SyncResult};
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use pocopine_sync_crud::{CrudAcceptedMutation, TransactionalCrudMutationLog};
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use serde_json::Value;
-use sqlx::{ColumnIndex, Database, Decode, Row, Transaction, Type};
+use sqlx::Database;
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+use sqlx::{ColumnIndex, Decode, Row, Transaction, Type};
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use crate::sync_sqlx_error;
 
 /// Default table used by [`SqlxCrudMutationLog`].
@@ -61,6 +68,10 @@ where
     DB: Database,
 {
     table: String,
+    #[cfg_attr(
+        not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
+        allow(dead_code)
+    )]
     scope: Arc<ScopeFn>,
     _marker: PhantomData<fn() -> DB>,
 }
@@ -123,6 +134,7 @@ where
         &self.table
     }
 
+    #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
     fn scope(&self, ctx: &RequestContext) -> SyncResult<String> {
         let scope = (self.scope)(ctx)?;
         if scope.trim().is_empty() {
@@ -134,6 +146,7 @@ where
     }
 }
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 macro_rules! impl_sqlx_crud_mutation_log {
     ($feature:literal, $db:path, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
         #[cfg(feature = $feature)]
@@ -198,10 +211,14 @@ macro_rules! impl_sqlx_crud_mutation_log {
     };
 }
 
+#[cfg(feature = "sqlite")]
 impl_sqlx_crud_mutation_log!("sqlite", sqlx::Sqlite, "?", "?", "?", "?", "?");
+#[cfg(feature = "mysql")]
 impl_sqlx_crud_mutation_log!("mysql", sqlx::MySql, "?", "?", "?", "?", "?");
+#[cfg(feature = "postgres")]
 impl_sqlx_crud_mutation_log!("postgres", sqlx::Postgres, "$1", "$2", "$3", "$4", "$5");
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 fn accepted_from_row<R>(
     mutation_id: &MutationId,
     row: R,
@@ -229,6 +246,7 @@ where
     )))
 }
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 fn op_to_db(op: SyncOp) -> &'static str {
     match op {
         SyncOp::Upsert => "upsert",
@@ -237,6 +255,7 @@ fn op_to_db(op: SyncOp) -> &'static str {
     }
 }
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 fn op_from_db(value: String) -> SyncResult<SyncOp> {
     match value.as_str() {
         "upsert" => Ok(SyncOp::Upsert),
@@ -267,7 +286,7 @@ fn validate_identifier(identifier: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use http::{HeaderMap, Method, Uri};
     use pocopine_sync_crud::{
