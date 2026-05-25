@@ -131,6 +131,8 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
             pub type CreateOptions = ::pocopine_sync_crud::CreateOptions<Row>;
             pub type SaveOptions = ::pocopine_sync_crud::SaveOptions<Row>;
             pub type RemoveOptions = ::pocopine_sync_crud::RemoveOptions;
+            pub type View = ::pocopine_sync_crud::LocalResourceView<Id, Row>;
+            pub type ViewState = ::pocopine_sync_crud::LocalResourceViewState<Id, Row>;
             pub type Outcome = ::pocopine_sync_crud::CrudOutcome<Id, Row>;
             pub type Queued = ::pocopine_sync_crud::Queued<Id>;
             pub type Client<C> = ::pocopine_sync_crud::CrudClientResource<C, Id, Row>;
@@ -189,7 +191,7 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
 
                 pub fn view(
                     &self,
-                ) -> ::pocopine_sync::SyncResult<::pocopine_sync_crud::LocalResourceView<Id, Row>>
+                ) -> ::pocopine_sync::SyncResult<View>
                 where
                     Id: ::pocopine_sync_crud::ResourceId,
                     Row: Clone,
@@ -200,6 +202,19 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
                         )
                     })?;
                     view((self.selector)(&mut state))
+                }
+
+                pub fn observe_view<F>(&self, callback: F) -> ::pocopine_sync::SyncResult<()>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone,
+                    F: Fn(&ViewState, Option<&ViewState>) + 'static,
+                {
+                    ::pocopine_sync_crud::observe_local_resource_view::<C, Id, Row, F>(
+                        self.handle.clone(),
+                        self.selector,
+                        callback,
+                    )
                 }
 
                 pub fn client(&self) -> ::pocopine_sync::SyncResult<Client<C>>
@@ -372,7 +387,7 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
 
             pub fn view(
                 state: &::pocopine_sync::CollectionState<Row>,
-            ) -> ::pocopine_sync::SyncResult<::pocopine_sync_crud::LocalResourceView<Id, Row>> {
+            ) -> ::pocopine_sync::SyncResult<View> {
                 ::pocopine_sync_crud::local_resource_view(state)
             }
 

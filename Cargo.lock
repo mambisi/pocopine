@@ -4665,6 +4665,7 @@ dependencies = [
 name = "pocopine-sync-crud-macros"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "pocopine-auth",
  "pocopine-core",
  "pocopine-sync",
@@ -4675,6 +4676,7 @@ dependencies = [
  "syn 2.0.117",
  "tokio",
  "trybuild",
+ "wasm-bindgen",
 ]
 
 [[package]]

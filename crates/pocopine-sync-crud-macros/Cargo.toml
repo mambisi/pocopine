@@ -15,6 +15,7 @@ quote = { workspace = true }
 syn = { workspace = true }
 
 [dev-dependencies]
+js-sys = { workspace = true }
 pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true }
 pocopine-sync = { workspace = true }
@@ -22,3 +23,4 @@ pocopine-sync-crud = { workspace = true }
 serde = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt"] }
 trybuild = "1"
+wasm-bindgen = { workspace = true }
