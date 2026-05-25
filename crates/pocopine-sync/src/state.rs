@@ -541,6 +541,44 @@ where
         true
     }
 
+    /// Drop every pending mutation targeting one row and clear its conflict
+    /// marker, then rebase the rendered view from canonical.
+    ///
+    /// This is the client-side half of `discard_local`: the user chose to
+    /// throw away their queued local edits for the row. Unkeyed pending
+    /// mutations (`key == None`) and mutations for other rows are left
+    /// intact. Returns `true` if the in-memory view changed.
+    pub fn discard_local(&mut self, key: &RowKey) -> bool {
+        let before = self.pending_mutations.len();
+        self.pending_mutations
+            .retain(|pending| pending.key.as_ref() != Some(key));
+        let dropped_pending = self.pending_mutations.len() != before;
+
+        let mut cleared_conflict = false;
+        if let Some(row) = self.canonical_row_mut(key) {
+            if row.conflict {
+                row.conflict = false;
+                cleared_conflict = true;
+            }
+        }
+        if let Some(row) = self.row_mut(key) {
+            if row.conflict {
+                row.conflict = false;
+                cleared_conflict = true;
+            }
+        }
+
+        let changed = dropped_pending || cleared_conflict;
+        if changed {
+            self.last_reason = SyncReason::Manual;
+            self.rebase_rows_from_canonical();
+            if self.conflict_count == 0 && self.rejected_count == 0 {
+                self.error.clear();
+            }
+        }
+        changed
+    }
+
     /// Clear the local conflict marker for a row and rebase the rendered view.
     ///
     /// This is the client-side half of a user choosing the current server row
@@ -1486,6 +1524,86 @@ mod tests {
         assert!(state.rows[0].conflict);
         assert_eq!(state.conflict_count, 1);
         assert_eq!(state.error, "base version is stale");
+    }
+
+    #[test]
+    fn discard_local_drops_pending_overlay_and_clears_conflict() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "server v1".to_string()).unwrap()],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local v1".to_string()).unwrap()),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(SyncRow::new("post_1", "server v2".to_string()).unwrap()),
+            reason: "base version is stale".to_string(),
+        });
+        state.apply_push(response);
+
+        assert!(state.discard_local(&RowKey::new("post_1").unwrap()));
+
+        assert_eq!(state.rows[0].value, "server v2");
+        assert!(!state.rows[0].pending);
+        assert!(!state.rows[0].conflict);
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(state.conflict_count, 0);
+        assert!(state.error.is_empty());
+        assert_eq!(state.last_reason, SyncReason::Manual);
+    }
+
+    #[test]
+    fn discard_local_leaves_other_rows_and_unkeyed_pending_alone() {
+        let mut state = CollectionState::<String>::default();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local 1".to_string()).unwrap()),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:2").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_2").unwrap()),
+            Some(SyncRow::new("post_2", "local 2".to_string()).unwrap()),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:3").unwrap(),
+            SyncOp::Reset,
+            None,
+            None,
+        );
+
+        assert!(state.discard_local(&RowKey::new("post_1").unwrap()));
+
+        let surviving_keys: Vec<_> = state
+            .pending_mutations
+            .iter()
+            .map(|p| p.key.clone())
+            .collect();
+        assert_eq!(
+            surviving_keys,
+            vec![Some(RowKey::new("post_2").unwrap()), None]
+        );
+    }
+
+    #[test]
+    fn discard_local_unknown_key_returns_false() {
+        let mut state = CollectionState::<String>::default();
+        assert!(!state.discard_local(&RowKey::new("nope").unwrap()));
     }
 
     #[test]

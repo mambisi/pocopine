@@ -189,13 +189,14 @@ The protocol already separates:
 - `rejected`: mutation is invalid or not allowed,
 - `conflicts`: mutation is valid but based on stale server state.
 
-The first author-facing helpers now exist on generated resources and on
+The author-facing helpers on generated resources and on
 `CrudClientResource`:
 
 ```rust
 customers.use_server(id).await?;
 customers.retry_local(id, draft).await?;
 customers.merge_with(id, merged_draft).await?;
+customers.discard_local(id).await?;
 ```
 
 `use_server` clears the local conflict marker after the user accepts the
@@ -204,15 +205,17 @@ row. `retry_local` and `merge_with` queue a new save against the latest
 canonical `base_version`; the conflict marker remains visible until the
 server accepts the retry and returns a new canonical row.
 
+`discard_local` is the inverse of `use_server` for pending edits: it
+durably purges every queued mutation targeting one row, clears the
+conflict marker, and rebases the rendered view from canonical. The
+durable purge runs before the in-memory rebase so a mid-flight crash
+cannot leave the rendered view ahead of disk. Unkeyed pending mutations
+and mutations for other rows are left untouched.
+
 The default should be conservative: never silently overwrite newer server
 data when a `base_version` was supplied. Automatic CRDT merging belongs in
 `pocopine-collab` / Yrs-backed document fields, not in the default CRUD
 row model.
-
-What is still missing here is a real "discard local pending edits" helper.
-That requires a durable queue-purge operation scoped to one row key. Do
-not expose a `discard_local` alias until it can clear the conflict and
-remove pending mutations with the same durability guarantees.
 
 ### 6. Local Query Layer
 

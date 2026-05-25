@@ -341,6 +341,28 @@ where
         clear_conflict_in_handle(handle, selector, &key)
     }
 
+    /// Discard every pending mutation for one row, clear its conflict marker,
+    /// and rebase the rendered view from canonical.
+    ///
+    /// This is the local-edit equivalent of `clear_conflict`: queued local
+    /// writes for the row are dropped from the durable mutation queue and
+    /// from in-memory state. Unkeyed pending mutations (e.g. a stream-wide
+    /// `Reset`) and mutations for other rows are left intact. The durable
+    /// purge happens before the in-memory rebase so a mid-flight crash
+    /// cannot leave the in-memory view ahead of disk.
+    pub async fn discard_local(self, key: RowKey) -> SyncResult<bool>
+    where
+        T: Clone,
+    {
+        let stream = self.stream_value()?;
+        let local_store = self.local_store.clone();
+        let handle = self.handle;
+        let selector = self.selector;
+        local_store.purge_pending_for_row(&stream, &key).await?;
+        local_store.clear_conflict(&stream, &key).await?;
+        discard_local_in_handle(handle, selector, &key)
+    }
+
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
         self.stream
             .clone()
@@ -390,6 +412,35 @@ where
         SyncError::client("sync collection state is already borrowed while clearing conflict")
     })?;
     Ok(selector(&mut state).clear_conflict(key))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn discard_local_in_handle<C, T>(
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    key: &RowKey,
+) -> SyncResult<bool>
+where
+    C: 'static,
+    T: Clone,
+{
+    Ok(handle.update(|state| selector(state).discard_local(key)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn discard_local_in_handle<C, T>(
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    key: &RowKey,
+) -> SyncResult<bool>
+where
+    C: 'static,
+    T: Clone,
+{
+    let mut state = handle.try_borrow_mut().map_err(|_| {
+        SyncError::client("sync collection state is already borrowed while discarding local edits")
+    })?;
+    Ok(selector(&mut state).discard_local(key))
 }
 
 #[cfg(target_arch = "wasm32")]
