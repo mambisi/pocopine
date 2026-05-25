@@ -3,6 +3,8 @@
 //! This crate is an explicit extension. Apps opt in by installing the browser
 //! app plugin and the host server plugin.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod checksum;
 mod client;
 mod error;
 mod protocol;
@@ -32,8 +34,8 @@ pub use protocol::{
     SignedRead, StorageBackendKind, StorageBackendName, StorageKey, TransferPlan, UploadIntent,
     UploadPhase, UploadPolicy, UploadPolicyDescriptor, UploadProgress, UploadSession,
     UploadSessionId, UploadSessionStatus, UploadStrategy, UploadTarget, UploadedPartStatus,
-    UploadedPartView, MAX_STORAGE_TOKEN_LEN, STORAGE_ENDPOINT_PREFIX, STORAGE_PROTOCOL_V1,
-    STORAGE_SCOPES_PREFIX, STORAGE_UPLOADS_PATH, STORAGE_UPLOADS_PREFIX,
+    UploadedPartView, MAX_STORAGE_TOKEN_LEN, STORAGE_ANON_COOKIE, STORAGE_ENDPOINT_PREFIX,
+    STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX, STORAGE_UPLOADS_PATH, STORAGE_UPLOADS_PREFIX,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

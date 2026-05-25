@@ -8,7 +8,7 @@ use pocopine_core::{ServerError, ServerResult};
 use pocopine_server::auth::{Decision, Predicate, RequestContext};
 use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::extract::{FromRequest, Path, State};
-use pocopine_server::axum::http::Request;
+use pocopine_server::axum::http::{HeaderMap, Request};
 use pocopine_server::axum::response::Json;
 use pocopine_server::axum::routing::{get, patch, post};
 use pocopine_server::{Server, ServerPlugin};
@@ -18,8 +18,11 @@ use crate::{
     AnonymousUploadBinding, CompleteUpload, CompleteUploadRequest, InitiateUpload,
     InitiateUploadRequest, ObjectMetadata, PrincipalRef, SafeObjectKey, StorageBackendName,
     StorageError, StorageKey, StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor,
-    UploadSession, UploadSessionId, UploadStrategy, STORAGE_PROTOCOL_V1, STORAGE_UPLOADS_PATH,
+    UploadSession, UploadSessionId, UploadStrategy, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1,
+    STORAGE_UPLOADS_PATH,
 };
+
+const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Future returned by storage backend methods.
 pub type StorageBoxFuture<'a, T> = Pin<Box<dyn Future<Output = StorageResult<T>> + Send + 'a>>;
@@ -68,8 +71,8 @@ impl StorageContext {
                 StorageActor::Anonymous(AnonymousUploadBinding {
                     id: request
                         .session_id()
-                        .or_else(|| request.cookie("pocopine_storage_anon"))
-                        .unwrap_or("anonymous")
+                        .or_else(|| request.cookie(STORAGE_ANON_COOKIE))
+                        .unwrap_or_default()
                         .to_string(),
                 })
             });
@@ -198,7 +201,6 @@ pub trait StorageBackend: Send + Sync + 'static {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct RegisteredStorageScope {
     policy: UploadPolicy,
     write_guard: Option<Arc<dyn StorageScopeGuard>>,
@@ -213,6 +215,22 @@ impl RegisteredStorageScope {
             guard.check(ctx).await
         } else {
             Ok(())
+        }
+    }
+
+    async fn authorize_read(&self, ctx: StorageContext) -> ServerResult<()> {
+        if let Some(guard) = &self.read_guard {
+            guard.check(ctx).await
+        } else {
+            self.authorize_write(ctx).await
+        }
+    }
+
+    async fn authorize_delete(&self, ctx: StorageContext) -> ServerResult<()> {
+        if let Some(guard) = &self.delete_guard {
+            guard.check(ctx).await
+        } else {
+            self.authorize_write(ctx).await
         }
     }
 }
@@ -314,7 +332,7 @@ impl StorageServer {
     ) -> StorageResult<UploadPolicyDescriptor> {
         let scope_registration = self.scope(scope)?;
         scope_registration
-            .authorize_write(ctx)
+            .authorize_read(ctx)
             .await
             .map_err(storage_auth_error)?;
         Ok(scope_registration.policy.descriptor(scope))
@@ -328,6 +346,7 @@ impl StorageServer {
         if request.protocol != STORAGE_PROTOCOL_V1 {
             return Err(StorageError::invalid_value("protocol", request.protocol));
         }
+        require_bound_actor(&ctx)?;
         let scope = self.scope(&request.scope)?;
         scope
             .authorize_write(ctx.clone())
@@ -377,10 +396,11 @@ impl StorageServer {
         ctx: StorageContext,
         session: UploadSessionId,
     ) -> StorageResult<UploadSession> {
+        require_bound_actor(&ctx)?;
         let (_backend, upload) = self.backend_for_session(&ctx, session).await?;
         let scope = self.scope(&upload.scope)?;
         scope
-            .authorize_write(ctx)
+            .authorize_read(ctx)
             .await
             .map_err(storage_auth_error)?;
         Ok(upload)
@@ -393,6 +413,7 @@ impl StorageServer {
         offset: u64,
         bytes: Bytes,
     ) -> StorageResult<UploadSession> {
+        require_bound_actor(&ctx)?;
         let (backend, upload) = self.backend_for_session(&ctx, session.clone()).await?;
         let scope = self.scope(&upload.scope)?;
         scope
@@ -409,6 +430,7 @@ impl StorageServer {
         ctx: StorageContext,
         request: CompleteUpload,
     ) -> StorageResult<crate::ObjectRef> {
+        require_bound_actor(&ctx)?;
         let (backend, upload) = self
             .backend_for_session(&ctx, request.session.clone())
             .await?;
@@ -425,12 +447,13 @@ impl StorageServer {
         ctx: StorageContext,
         session: UploadSessionId,
     ) -> StorageResult<()> {
+        require_bound_actor(&ctx)?;
         let Ok((backend, upload)) = self.backend_for_session(&ctx, session.clone()).await else {
             return Ok(());
         };
         let scope = self.scope(&upload.scope)?;
         scope
-            .authorize_write(ctx.clone())
+            .authorize_delete(ctx.clone())
             .await
             .map_err(storage_auth_error)?;
         backend.abort_upload(&ctx, session).await
@@ -461,6 +484,7 @@ impl StorageServer {
             match backend.inspect_upload(ctx, session.clone()).await {
                 Ok(upload) => return Ok((backend.clone(), upload)),
                 Err(StorageError::UnknownUploadSession { .. }) => {}
+                Err(StorageError::Forbidden { .. }) => {}
                 Err(err) => return Err(err),
             }
         }
@@ -658,10 +682,20 @@ async fn bytes_handler(
                 .ok_or_else(|| StorageError::invalid_value("Upload-Offset", "<missing>"))?
                 .parse::<u64>()
                 .map_err(|_| StorageError::invalid_value("Upload-Offset", "<invalid>"))?;
-            let bytes = to_bytes(body, usize::MAX)
-                .await
-                .map_err(|err| StorageError::client(format!("read upload body: {err}")))?;
             let session = UploadSessionId::new(session)?;
+            let upload = storage.inspect_upload(ctx.clone(), session.clone()).await?;
+            storage
+                .scope(&upload.scope)?
+                .authorize_write(ctx.clone())
+                .await
+                .map_err(storage_auth_error)?;
+            let max_body_bytes = max_patch_body_bytes(&upload, offset);
+            reject_oversized_content_length(&parts.headers, max_body_bytes)?;
+            let bytes = to_bytes(body, max_body_bytes as usize)
+                .await
+                .map_err(|err| {
+                    StorageError::policy_rejected(format!("upload chunk is too large: {err}"))
+                })?;
             storage
                 .append_upload_bytes(ctx, session, offset, bytes)
                 .await
@@ -759,6 +793,46 @@ fn context_from_request(request: Request<Body>) -> StorageContext {
         parts.headers,
         parts.extensions,
     ))
+}
+
+fn require_bound_actor(ctx: &StorageContext) -> StorageResult<()> {
+    match &ctx.actor {
+        StorageActor::Anonymous(binding) if binding.id.is_empty() => {
+            Err(StorageError::unauthorized(
+                "anonymous storage uploads require a session cookie or storage binding cookie",
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn max_patch_body_bytes(upload: &UploadSession, offset: u64) -> u64 {
+    let policy_cap = upload
+        .plan
+        .max_part_size
+        .unwrap_or(MAX_PROXY_PATCH_BYTES)
+        .min(MAX_PROXY_PATCH_BYTES);
+    let size_cap = upload
+        .size
+        .map_or(u64::MAX, |size| size.saturating_sub(offset));
+    policy_cap.min(size_cap).min(usize::MAX as u64)
+}
+
+fn reject_oversized_content_length(headers: &HeaderMap, limit: u64) -> StorageResult<()> {
+    let Some(content_length) = headers.get("content-length") else {
+        return Ok(());
+    };
+    let content_length = content_length
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| StorageError::invalid_value("Content-Length", "<invalid>"))?;
+    if content_length > limit {
+        return Err(StorageError::policy_rejected(format!(
+            "upload chunk is too large: max {limit} bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn storage_auth_error(error: ServerError) -> StorageError {
