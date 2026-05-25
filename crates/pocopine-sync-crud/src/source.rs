@@ -1,3 +1,4 @@
+use pocopine_auth::RequestContext;
 use pocopine_sync::{RowVersion, SyncResult};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -116,7 +117,44 @@ pub trait CrudSource: Send + Sync + 'static {
 
     async fn remove(
         &self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: RequestContext,
+        id: Self::Id,
+        base_version: Option<RowVersion>,
+    ) -> SyncResult<CrudRemoveResult<Self::Row>>;
+}
+
+/// Server-side CRUD source contract for transaction-backed writes.
+///
+/// Implement this in addition to [`CrudSource`] when the source write and
+/// accepted-mutation log insert can share one app/database transaction. Reads
+/// still use [`CrudSource::list`] and [`CrudSource::get`]; only mutating writes
+/// receive the active transaction handle.
+#[async_trait::async_trait]
+pub trait TransactionalCrudSource<Tx>: CrudSource
+where
+    Tx: Send,
+{
+    async fn create_in_tx(
+        &self,
+        tx: &mut Tx,
+        ctx: &RequestContext,
+        id: Self::Id,
+        draft: Self::Draft,
+    ) -> SyncResult<Self::Row>;
+
+    async fn save_in_tx(
+        &self,
+        tx: &mut Tx,
+        ctx: &RequestContext,
+        id: Self::Id,
+        draft: Self::Draft,
+        base_version: Option<RowVersion>,
+    ) -> SyncResult<CrudWriteResult<Self::Row>>;
+
+    async fn remove_in_tx(
+        &self,
+        tx: &mut Tx,
+        ctx: &RequestContext,
         id: Self::Id,
         base_version: Option<RowVersion>,
     ) -> SyncResult<CrudRemoveResult<Self::Row>>;

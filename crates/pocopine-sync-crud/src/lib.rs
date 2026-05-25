@@ -33,16 +33,20 @@ pub use outcome::{CrudOutcome, Queued, QueuedStatus};
 pub use resource::{
     resource, CrudAcceptedMutation, CrudMutationLog, CrudResource, CrudResourceBuilder,
     MemoryCrudMutationLog, MissingMutationLog, NoRowVersion, RowVersionValue,
-    DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
+    TransactionalCrudMutationLog, TransactionalCrudResource, DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
 };
 pub use row::optimistic_row;
 #[cfg(not(target_arch = "wasm32"))]
-pub use source::{CrudConflict, CrudRemoveResult, CrudSource, CrudWriteResult};
+pub use source::{
+    CrudConflict, CrudRemoveResult, CrudSource, CrudWriteResult, TransactionalCrudSource,
+};
 pub use subscription::observe_local_resource_view;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use resource::RowVersionOf;
-pub use transaction::{Transaction, TransactionBindable, TransactionFuture, TransactionRunner};
+pub use transaction::{
+    CrudTransactionRunner, Transaction, TransactionBindable, TransactionFuture, TransactionRunner,
+};
 pub use view::{
     local_resource_view, LocalResourcePendingMutation, LocalResourceRow, LocalResourceRowStatus,
     LocalResourceView, LocalResourceViewState,
