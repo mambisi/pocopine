@@ -273,6 +273,13 @@ impl SyncLocalStore for MemoryLocalStore {
             Ok(before - state.pending.len())
         }))
     }
+
+    fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
+        Self::ready(self.with_inner(|inner| {
+            inner.streams.clear();
+            Ok(())
+        }))
+    }
 }
 
 struct LocalChanges {
@@ -1149,5 +1156,83 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(purged, 0);
+    }
+
+    #[tokio::test]
+    async fn clear_all_streams_drops_rows_and_pendings_across_streams() {
+        let store = MemoryLocalStore::new();
+        let posts = SyncStreamName::new("posts").unwrap();
+        let comments = SyncStreamName::new("comments").unwrap();
+        let collection_posts = SyncCollectionName::new("posts").unwrap();
+        let collection_comments = SyncCollectionName::new("comments").unwrap();
+
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                posts.clone(),
+                collection_posts,
+                vec![SyncRow::new("post_1", serde_json::json!({"title": "p1"})).unwrap()],
+                Some(SyncCursor::new("c_posts").unwrap()),
+            ))
+            .await
+            .unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                comments.clone(),
+                collection_comments,
+                vec![SyncRow::new("c_1", serde_json::json!({"body": "hi"})).unwrap()],
+                Some(SyncCursor::new("c_comments").unwrap()),
+            ))
+            .await
+            .unwrap();
+        store
+            .enqueue_mutation(
+                &posts,
+                ClientMutation {
+                    id: MutationId::new("device_abc:1").unwrap(),
+                    key: Some(RowKey::new("post_1").unwrap()),
+                    op: SyncOp::Upsert,
+                    base_version: None,
+                    payload: serde_json::json!({"title": "edit"}),
+                },
+            )
+            .await
+            .unwrap();
+
+        store.clear_all_streams().await.unwrap();
+
+        let posts_after = store.hydrate_stream(&posts).await.unwrap();
+        let comments_after = store.hydrate_stream(&comments).await.unwrap();
+        assert!(posts_after.rows.is_empty());
+        assert!(posts_after.cursor.is_none());
+        assert!(posts_after.pending_mutations.is_empty());
+        assert!(comments_after.rows.is_empty());
+        assert!(comments_after.cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_all_streams_preserves_identity_and_counter() {
+        let store = MemoryLocalStore::new();
+        store
+            .save_identity(
+                SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_abc").unwrap(), 42)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        store.clear_all_streams().await.unwrap();
+
+        let identity = store.load_identity().await.unwrap().unwrap();
+        assert_eq!(identity.device_id.as_str(), "device_abc");
+        assert_eq!(identity.next_mutation_counter, 42);
+    }
+
+    #[tokio::test]
+    async fn clear_all_streams_is_safe_on_empty_store() {
+        let store = MemoryLocalStore::new();
+        store.clear_all_streams().await.unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert!(snapshot.rows.is_empty());
     }
 }

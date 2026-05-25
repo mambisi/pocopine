@@ -12,11 +12,11 @@ use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL,
-    DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER,
-    META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL,
-    SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL,
-    UPSERT_STREAM_SQL,
+    BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL,
+    DELETE_PENDING_FOR_ROW_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID,
+    META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
+    SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
+    UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
 
 const DEFAULT_DATABASE_NAME: &str = "pocopine_sync.sqlite3";
@@ -152,6 +152,10 @@ impl SyncLocalStore for SqliteLocalStore {
         key: &RowKey,
     ) -> SyncLocalFuture<'_, usize> {
         self.run(purge_pending_for_row(stream.clone(), key.clone()))
+    }
+
+    fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
+        self.run(clear_all_streams())
     }
 }
 
@@ -519,6 +523,17 @@ async fn pending_mutations(
         .into_iter()
         .map(|pending| pending.mutation)
         .collect())
+}
+
+async fn clear_all_streams() -> SyncResult<()> {
+    // SQLite WASM exposes no transaction-block primitive. The three
+    // table wipes run sequentially on the single-threaded event loop;
+    // the gate at the SqliteLocalStore layer keeps other adapter calls
+    // from interleaving.
+    for sql in CLEAR_ALL_STREAMS_SQL {
+        exec(sql, Vec::new()).await?;
+    }
+    Ok(())
 }
 
 async fn purge_pending_for_row(stream: SyncStreamName, key: RowKey) -> SyncResult<usize> {
