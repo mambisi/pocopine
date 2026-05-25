@@ -101,6 +101,9 @@ fn validate_token(field: &'static str, value: String) -> StorageResult<String> {
         || value.chars().any(char::is_control)
         || value.contains('/')
         || value.contains('\\')
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(StorageError::invalid_value(field, value));
     }
@@ -540,10 +543,7 @@ impl UploadPolicy {
     pub(crate) fn validate_initiate(&self, request: &InitiateUploadRequest) -> StorageResult<()> {
         if let Some(size) = request.size {
             if size > self.max_bytes {
-                return Err(StorageError::policy_rejected(format!(
-                    "file is too large: max {} bytes",
-                    self.max_bytes
-                )));
+                return Err(StorageError::payload_too_large(self.max_bytes));
             }
         }
 

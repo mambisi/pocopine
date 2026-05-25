@@ -57,7 +57,9 @@ impl StorageActor {
     pub fn same_owner(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Principal(left), Self::Principal(right)) => left.subject == right.subject,
-            (Self::Anonymous(left), Self::Anonymous(right)) => left.id == right.id,
+            (Self::Anonymous(left), Self::Anonymous(right)) => {
+                !left.id.is_empty() && left.id == right.id
+            }
             (Self::System(left), Self::System(right)) => left == right,
             _ => false,
         }
@@ -817,11 +819,7 @@ async fn bytes_handler(
                     reject_oversized_content_length(&request.headers, max_body_bytes)?;
                     let bytes = to_bytes(request.body, max_body_bytes as usize)
                         .await
-                        .map_err(|err| {
-                            StorageError::policy_rejected(format!(
-                                "upload chunk is too large: {err}"
-                            ))
-                        })?;
+                        .map_err(|_err| StorageError::payload_too_large(max_body_bytes))?;
                     storage
                         .append_upload_bytes(request.ctx, session, offset, bytes)
                         .await
@@ -892,21 +890,20 @@ async fn tus_options_handler(
 ) -> Response {
     tus_route_response(
         async {
-            let request = context_from_request(request, &storage);
-            let descriptor = storage.descriptor(request.ctx, &scope).await?;
+            let _ = request;
+            let scope = storage.scope(&scope)?;
             let mut response = tus_empty_response(StatusCode::NO_CONTENT);
             set_response_header(&mut response, "tus-version", TUS_PROTOCOL_VERSION)?;
             set_response_header(
                 &mut response,
                 "tus-extension",
-                "creation,creation-with-upload,termination,expiration",
+                "creation,creation-with-upload,creation-defer-length,termination,expiration",
             )?;
             set_response_header(
                 &mut response,
                 "tus-max-size",
-                descriptor.max_bytes.to_string(),
+                scope.policy.max_bytes.to_string(),
             )?;
-            apply_set_cookie(&mut response, request.set_cookie);
             Ok(response)
         }
         .await,
@@ -951,9 +948,7 @@ async fn tus_create_handler(
                 let max_body_bytes = max_patch_body_bytes(&upload, 0);
                 let bytes = to_bytes(request.body, max_body_bytes as usize)
                     .await
-                    .map_err(|err| {
-                        StorageError::policy_rejected(format!("upload chunk is too large: {err}"))
-                    })?;
+                    .map_err(|_err| StorageError::payload_too_large(max_body_bytes))?;
                 if !bytes.is_empty() {
                     let updated = storage
                         .append_upload_bytes(request.ctx.clone(), upload.id.clone(), 0, bytes)
@@ -1058,9 +1053,7 @@ async fn tus_patch_handler(
             reject_oversized_content_length(&request.headers, max_body_bytes)?;
             let bytes = to_bytes(request.body, max_body_bytes as usize)
                 .await
-                .map_err(|err| {
-                    StorageError::policy_rejected(format!("upload chunk is too large: {err}"))
-                })?;
+                .map_err(|_err| StorageError::payload_too_large(max_body_bytes))?;
             let updated = storage
                 .append_upload_bytes(request.ctx.clone(), session, offset, bytes)
                 .await?;
@@ -1473,15 +1466,15 @@ fn tus_error_response(error: TusError) -> Response {
 
 fn tus_storage_error_status(error: &StorageError) -> StatusCode {
     match error {
-        StorageError::PolicyRejected { reason }
-            if reason.contains("too large")
-                || reason.contains("exceeds")
-                || reason.contains("file is too large") =>
-        {
-            StatusCode::PAYLOAD_TOO_LARGE
+        StorageError::PayloadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+        StorageError::InvalidValue { field, .. } if field == "Content-Type" => {
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
         }
         StorageError::InvalidValue { field, .. } if field == "Tus-Resumable" => {
             StatusCode::PRECONDITION_FAILED
+        }
+        StorageError::UploadComplete { .. } => {
+            StatusCode::from_u16(423).expect("423 Locked is a valid HTTP status")
         }
         _ => storage_error_status(error),
     }
@@ -1539,9 +1532,7 @@ fn reject_oversized_content_length(headers: &HeaderMap, limit: u64) -> StorageRe
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| StorageError::invalid_value("Content-Length", "<invalid>"))?;
     if content_length > limit {
-        return Err(StorageError::policy_rejected(format!(
-            "upload chunk is too large: max {limit} bytes"
-        )));
+        return Err(StorageError::payload_too_large(limit));
     }
     Ok(())
 }
@@ -1679,6 +1670,7 @@ fn storage_error_status(error: &StorageError) -> StatusCode {
         | StorageError::UnknownUploadSession { .. } => StatusCode::NOT_FOUND,
         StorageError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
         StorageError::Forbidden { .. } => StatusCode::FORBIDDEN,
+        StorageError::PayloadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         StorageError::PolicyRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         StorageError::Unsupported { .. } => StatusCode::NOT_IMPLEMENTED,
         StorageError::OffsetMismatch { .. } => StatusCode::CONFLICT,

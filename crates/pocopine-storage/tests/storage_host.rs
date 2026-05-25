@@ -250,7 +250,7 @@ async fn tus_options_advertises_creation_resume_and_termination() -> StorageResu
         .get("tus-extension")
         .and_then(|value| value.to_str().ok())
         .unwrap()
-        .contains("creation"));
+        .contains("creation-defer-length"));
     assert_eq!(response.headers().get("tus-max-size").unwrap(), "1024");
     Ok(())
 }
@@ -330,6 +330,24 @@ async fn tus_create_head_patch_and_delete_use_tus_wire_contract() -> StorageResu
     let inspected = storage.inspect_upload(anon_ctx(), session.clone()).await?;
     assert_eq!(inspected.status, UploadSessionStatus::Complete);
 
+    let locked = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "5")
+                .header("content-type", "application/offset+octet-stream")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(locked.status(), StatusCode::from_u16(423).unwrap());
+
     let response = router
         .oneshot(
             Request::builder()
@@ -348,6 +366,171 @@ async fn tus_create_head_patch_and_delete_use_tus_wire_contract() -> StorageResu
         storage.inspect_upload(anon_ctx(), session).await,
         Err(StorageError::UnknownUploadSession { .. })
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tus_error_paths_use_tus_status_codes() -> StorageResult<()> {
+    let router = finalize_tus(memory_storage()?);
+    let create = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("upload-length", "5")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(create.headers().get("tus-version").unwrap(), "1.0.0");
+
+    let create = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "5")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = create
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let wrong_type = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "0")
+                .header("content-type", "application/json")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_type.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let mismatch = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "1")
+                .header("content-type", "application/offset+octet-stream")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+
+    let mut small_policy = policy("memory")?;
+    small_policy.max_part_size = Some(4);
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .public_scope("avatars", small_policy)?
+        .build();
+    let router = finalize_tus(storage);
+    let create = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "5")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = create
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+    let too_large = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "0")
+                .header("content-type", "application/offset+octet-stream")
+                .header("content-length", "5")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tus_accepts_deferred_upload_length() -> StorageResult<()> {
+    let router = finalize_tus(memory_storage()?);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-defer-length", "1")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers().get("upload-defer-length").unwrap(), "1");
     Ok(())
 }
 
@@ -472,7 +655,10 @@ async fn route_rejects_patch_body_over_part_cap() -> StorageResult<()> {
 
     let rejected: StorageResult<UploadSession> =
         patch_bytes_outer(router, &session.id, 0, "hello".as_bytes()).await;
-    assert!(matches!(rejected, Err(StorageError::PolicyRejected { .. })));
+    assert!(matches!(
+        rejected,
+        Err(StorageError::PayloadTooLarge { .. })
+    ));
     Ok(())
 }
 
