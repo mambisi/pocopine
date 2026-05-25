@@ -284,17 +284,20 @@ Server-side CRUD writes must be atomic at the app database boundary:
 ```text
 begin transaction
   -> authorize and validate
+  -> reserve accepted mutation id
   -> check base_version
   -> write row
-  -> record accepted mutation id
-commit
+  -> commit accepted writes
+  -> rollback conflicts, rejections, and errors
 publish live wake-up after commit
 ```
 
 `CrudMutationLog` exists so a replayed mutation id does not duplicate a
 write. Production logs must be scoped to the same authorization domain as
 the source rows, for example `(tenant_id, mutation_id)`, not only
-`mutation_id`.
+`mutation_id`. The accepted-mutation reservation must happen before the
+source write under a unique key so concurrent retries cannot both apply
+the same mutation.
 
 Production CRUD resources should use the transaction-backed path:
 `.transactional(runner, log)`. The runner owns begin/commit/rollback, the

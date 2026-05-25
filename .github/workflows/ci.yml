@@ -247,6 +247,12 @@ jobs:
         run: cargo test -p pocopine-sync-crud-macros --tests
         env:
           CARGO_TARGET_DIR: target/sync-crud-macros-host
+      - name: SQLx sync helper tests
+        run: cargo test -p pocopine-sync-sqlx --features sqlite --tests
+      - name: SQLx sync backend feature checks
+        run: |
+          cargo check -p pocopine-sync-sqlx --features postgres
+          cargo check -p pocopine-sync-sqlx --features mysql
       - name: workspace host tests
         run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-crud-macros --tests
 

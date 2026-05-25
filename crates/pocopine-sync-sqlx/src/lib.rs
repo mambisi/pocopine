@@ -24,8 +24,8 @@ pub use mutation_log::{
 pub type SqlxCrudTransaction<DB> = Transaction<'static, DB>;
 
 /// Map a SQLx error into Pocopine's sync error type.
-pub fn sync_sqlx_error(error: sqlx::Error) -> SyncError {
-    SyncError::backend(format!("SQLx error: {error}"))
+pub fn sync_sqlx_error(_error: sqlx::Error) -> SyncError {
+    SyncError::backend("SQLx backend operation failed")
 }
 
 /// Transaction runner backed by a SQLx pool.
@@ -87,12 +87,10 @@ where
     }
 
     fn commit<'runner>(&'runner self, tx: Self::Tx) -> TransactionFuture<'runner, ()> {
-        let _ = self;
         Box::pin(async move { tx.commit().await.map_err(sync_sqlx_error) })
     }
 
     fn rollback<'runner>(&'runner self, tx: Self::Tx) -> TransactionFuture<'runner, ()> {
-        let _ = self;
         Box::pin(async move { tx.rollback().await.map_err(sync_sqlx_error) })
     }
 }

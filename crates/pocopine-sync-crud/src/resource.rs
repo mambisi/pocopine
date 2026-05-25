@@ -148,10 +148,10 @@ where
     /// Attach a transaction runner and mutation log for atomic server writes.
     ///
     /// This path runs each accepted CRUD mutation in one app/database
-    /// transaction: check the accepted-mutation log, apply the source write,
-    /// record the accepted mutation id, then commit. Use this for production
-    /// resources where the source write and idempotency insert must not split
-    /// across separate commits.
+    /// transaction: reserve the accepted-mutation id, apply the source write,
+    /// then commit both together. Use this for production resources where the
+    /// source write and idempotency reservation must not split across separate
+    /// commits.
     pub fn transactional<Runner, Log>(
         self,
         transaction_runner: Runner,
@@ -319,6 +319,16 @@ impl CrudAcceptedMutation {
     }
 }
 
+/// Result of reserving an accepted mutation id inside a transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CrudMutationReservation {
+    /// The caller reserved this mutation id and should continue applying the
+    /// source write in the same transaction.
+    Reserved,
+    /// The mutation id already exists in the accepted log.
+    AlreadyAccepted(CrudAcceptedMutation),
+}
+
 /// Idempotency log for CRUD mutations.
 ///
 /// Production implementations must scope lookups to the same authorization
@@ -347,9 +357,11 @@ where
 ///
 /// Production implementations should use the same transaction handle and
 /// authorization scope as the corresponding [`TransactionalCrudSource`].
-/// The accepted-mutation table should also enforce uniqueness for that scope
-/// and mutation id so concurrent retries cannot both observe "missing" and
-/// apply the same write.
+/// The reservation method must be the concurrency boundary: production
+/// implementations should insert first under a unique key for the same scope
+/// and mutation id, then return the existing accepted mutation on duplicate.
+/// This prevents concurrent retries from both observing "missing" before the
+/// source write.
 #[async_trait::async_trait]
 pub trait TransactionalCrudMutationLog<Tx, Row>: Send + Sync + 'static
 where
@@ -369,6 +381,13 @@ where
         ctx: &RequestContext,
         accepted: CrudAcceptedMutation,
     ) -> SyncResult<()>;
+
+    async fn reserve_accepted_mutation_in_tx(
+        &self,
+        tx: &mut Tx,
+        ctx: &RequestContext,
+        accepted: CrudAcceptedMutation,
+    ) -> SyncResult<CrudMutationReservation>;
 }
 
 /// Process-local mutation log for tests and single-process demos.
@@ -869,48 +888,59 @@ where
         } = mutation;
         let mut tx = self.transaction_runner.begin().await?;
         let result = async {
-            if let Some(accepted) = self
-                .mutation_log
-                .accepted_mutation_in_tx(&mut tx, ctx, &mutation_id)
-                .await?
-            {
-                if accepted.matches(op, Some(&key), &payload_value) {
-                    return Ok(CrudApplyOutcome::Accepted {
-                        mutation_id,
-                        row: None,
-                    });
-                }
-
-                return Ok(CrudApplyOutcome::Rejected(SyncRejectedMutation {
-                    mutation_id,
-                    key: Some(key),
-                    reason: "mutation id was already accepted with different contents".to_string(),
-                }));
-            }
-
             let accepted = CrudAcceptedMutation::new(
                 mutation_id.clone(),
                 op,
                 Some(key.clone()),
-                payload_value,
+                payload_value.clone(),
             );
+
+            match self
+                .mutation_log
+                .reserve_accepted_mutation_in_tx(&mut tx, ctx, accepted)
+                .await?
+            {
+                CrudMutationReservation::AlreadyAccepted(accepted) => {
+                    if accepted.matches(op, Some(&key), &payload_value) {
+                        return Ok(CrudTransactionDecision::Commit(
+                            CrudApplyOutcome::Accepted {
+                                mutation_id,
+                                row: None,
+                            },
+                        ));
+                    }
+
+                    return Ok(CrudTransactionDecision::Commit(CrudApplyOutcome::Rejected(
+                        SyncRejectedMutation {
+                            mutation_id,
+                            key: Some(key),
+                            reason: "mutation id was already accepted with different contents"
+                                .to_string(),
+                        },
+                    )));
+                }
+                CrudMutationReservation::Reserved => {}
+            }
+
             let outcome = self
                 .apply_payload_in_tx(&mut tx, ctx, mutation_id, key, base_version, payload)
                 .await?;
 
             if matches!(outcome, CrudApplyOutcome::Accepted { .. }) {
-                self.mutation_log
-                    .record_accepted_mutation_in_tx(&mut tx, ctx, accepted)
-                    .await?;
+                Ok(CrudTransactionDecision::Commit(outcome))
+            } else {
+                Ok(CrudTransactionDecision::Rollback(outcome))
             }
-
-            Ok(outcome)
         }
         .await;
 
         match result {
-            Ok(outcome) => {
+            Ok(CrudTransactionDecision::Commit(outcome)) => {
                 self.transaction_runner.commit(tx).await?;
+                Ok(outcome)
+            }
+            Ok(CrudTransactionDecision::Rollback(outcome)) => {
+                self.transaction_runner.rollback(tx).await?;
                 Ok(outcome)
             }
             Err(err) => {
@@ -1030,6 +1060,11 @@ enum CrudApplyOutcome<Row> {
     },
     Rejected(SyncRejectedMutation),
     Conflict(SyncConflict<Row>),
+}
+
+enum CrudTransactionDecision<Row> {
+    Commit(CrudApplyOutcome<Row>),
+    Rollback(CrudApplyOutcome<Row>),
 }
 
 struct TransactionalCrudMutation<Id, Draft> {
@@ -1482,6 +1517,24 @@ mod tests {
             }
             Ok(())
         }
+
+        async fn reserve_accepted_mutation_in_tx(
+            &self,
+            tx: &mut FakeTx,
+            ctx: &RequestContext,
+            accepted: CrudAcceptedMutation,
+        ) -> SyncResult<CrudMutationReservation> {
+            if let Some(existing) = self
+                .accepted_mutation_in_tx(tx, ctx, &accepted.mutation_id)
+                .await?
+            {
+                return Ok(CrudMutationReservation::AlreadyAccepted(existing));
+            }
+
+            self.record_accepted_mutation_in_tx(tx, ctx, accepted)
+                .await?;
+            Ok(CrudMutationReservation::Reserved)
+        }
     }
 
     fn transactional_posts_resource(
@@ -1660,8 +1713,8 @@ mod tests {
             vec![
                 "begin",
                 "log:lookup:device_1:1",
-                "source:create:post_1",
                 "log:record:device_1:1",
+                "source:create:post_1",
                 "commit"
             ]
         );
@@ -1704,7 +1757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transactional_conflict_commits_without_recording_mutation_log() {
+    async fn transactional_conflict_rolls_back_reserved_mutation_log() {
         let harness = TxHarness::default();
         harness.insert(Post {
             id: "post_1".to_string(),
@@ -1738,8 +1791,9 @@ mod tests {
             vec![
                 "begin",
                 "log:lookup:device_1:stale",
+                "log:record:device_1:stale",
                 "source:save:post_1",
-                "commit"
+                "rollback"
             ]
         );
     }
@@ -1783,13 +1837,13 @@ mod tests {
             vec![
                 "begin",
                 "log:lookup:device_1:1",
-                "source:create:post_1",
                 "log:record:device_1:1",
+                "source:create:post_1",
                 "commit",
                 "begin",
                 "log:lookup:device_1:2",
-                "source:create:post_2",
                 "log:record:device_1:2",
+                "source:create:post_2",
                 "commit",
             ]
         );
@@ -1825,7 +1879,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transactional_source_error_rolls_back_without_recording_mutation_log() {
+    async fn transactional_source_error_rolls_back_reserved_mutation_log() {
         let harness = TxHarness::default();
         harness.fail_source_write();
         let resource = transactional_posts_resource(harness.clone());
@@ -1854,6 +1908,7 @@ mod tests {
             vec![
                 "begin",
                 "log:lookup:device_1:1",
+                "log:record:device_1:1",
                 "source:create:post_1",
                 "rollback"
             ]
@@ -1861,7 +1916,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transactional_log_record_error_rolls_back_source_write() {
+    async fn transactional_log_record_error_rolls_back_reserved_mutation() {
         let harness = TxHarness::default();
         harness.fail_log_record();
         let resource = transactional_posts_resource(harness.clone());
@@ -1890,7 +1945,6 @@ mod tests {
             vec![
                 "begin",
                 "log:lookup:device_1:1",
-                "source:create:post_1",
                 "log:record:device_1:1",
                 "rollback"
             ]
@@ -1929,6 +1983,7 @@ mod tests {
             vec![
                 "begin",
                 "log:lookup:device_1:1",
+                "log:record:device_1:1",
                 "source:create:post_1",
                 "rollback"
             ]

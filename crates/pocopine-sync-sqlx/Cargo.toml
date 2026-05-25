@@ -8,13 +8,13 @@ description = "SQLx helpers for Pocopine sync CRUD transactions."
 
 [features]
 default = []
-postgres = ["sqlx/postgres"]
-mysql = ["sqlx/mysql"]
-sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres", "runtime-tokio"]
+mysql = ["sqlx/mysql", "runtime-tokio"]
+sqlite = ["sqlx/sqlite", "runtime-tokio"]
 runtime-tokio = ["sqlx/runtime-tokio"]
 tls-rustls = ["sqlx/tls-rustls-ring-webpki"]
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-auth = { workspace = true }
 pocopine-sync = { workspace = true }
 pocopine-sync-crud = { workspace = true }

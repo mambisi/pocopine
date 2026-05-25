@@ -31,8 +31,8 @@ pub use options::{CreateOptions, RemoveOptions, SaveOptions, TransactionOptions,
 pub use outcome::{CrudOutcome, Queued, QueuedStatus};
 #[cfg(not(target_arch = "wasm32"))]
 pub use resource::{
-    resource, CrudAcceptedMutation, CrudMutationLog, CrudResource, CrudResourceBuilder,
-    MemoryCrudMutationLog, MissingMutationLog, NoRowVersion, RowVersionValue,
+    resource, CrudAcceptedMutation, CrudMutationLog, CrudMutationReservation, CrudResource,
+    CrudResourceBuilder, MemoryCrudMutationLog, MissingMutationLog, NoRowVersion, RowVersionValue,
     TransactionalCrudMutationLog, TransactionalCrudResource, DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
 };
 pub use row::optimistic_row;

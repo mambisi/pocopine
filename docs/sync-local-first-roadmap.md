@@ -123,9 +123,10 @@ Production server writes must be atomic:
 ```text
 begin transaction
   -> authorize and validate
+  -> reserve accepted mutation id
   -> check base_version and write row
-  -> record accepted mutation id
-commit
+  -> commit accepted writes
+  -> rollback conflicts, rejections, and errors
 publish live wake-up after commit
 ```
 
@@ -133,14 +134,16 @@ The first transaction-backed server slice is now in place. Resources can
 opt into `.transactional(runner, log)`, where `CrudTransactionRunner`
 owns begin/commit/rollback, `TransactionalCrudSource<Tx>` applies the
 CRUD write with the active transaction handle, and
-`TransactionalCrudMutationLog<Tx, Row>` checks and records accepted
+`TransactionalCrudMutationLog<Tx, Row>` reserves and reads accepted
 mutation ids with the same handle.
 
 The older `.mutation_log(...)` terminator remains available for simple
 adapters and tests, but it cannot force the source write and
 accepted-mutation insert to share one transaction. Production resources
 should use the transaction-backed path and enforce a unique accepted-log
-key over the same authorization scope as the source query.
+key over the same authorization scope as the source query. The reservation
+insert is the retry/concurrency boundary; conflicts and rejections roll
+back that reservation.
 
 What is still left is backend-specific packaging, not the core contract:
 
