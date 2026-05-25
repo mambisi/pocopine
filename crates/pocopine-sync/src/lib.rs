@@ -9,6 +9,7 @@ mod error;
 mod local_memory;
 mod local_store;
 mod protocol;
+mod sign_out;
 mod state;
 
 mod client;
@@ -39,6 +40,7 @@ pub use client::{
     SyncLocalStoreHandle,
 };
 pub use pocopine_core::Handle;
+pub use sign_out::SignOutSubscription;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use memory::{MemorySyncState, MemorySyncStream};

@@ -244,22 +244,50 @@ component authors a reactive read path while preserving the existing
 
 Sync does not make local data trusted.
 
-Server guards and source filters must run on every `/open`, `/pull`, and
-`/push`. Mutation logs must be scoped to the same authorization domain as
-the source query, for example `(tenant_id, mutation_id)`, not only
-`mutation_id`.
+Server guards and source filters run on every `/open`, `/pull`, and
+`/push` — see `pocopine_sync::SyncServerBuilder::guarded_stream` and the
+auth tests in `crates/pocopine-sync/src/server.rs`. Mutation logs must be
+scoped to the same authorization domain as the source query, for example
+`(tenant_id, mutation_id)`, not only `mutation_id`. Both
+`SqlxCrudMutationLog::new(scope_fn)` and
+`MemoryCrudMutationLog::with_scope_fn(scope_fn)` derive the scope from
+the per-request context, so the source query and the mutation log share
+one tenant boundary without app-side glue. The end-to-end example is in
+`crates/pocopine-sync-crud/tests/tenant_boundary.rs`.
 
-The local store may cache data that was once visible to a user. Apps that
-switch users, tenants, or auth scopes need a clear cache reset or
-partition strategy.
+The local store is not an authorization boundary. It may legitimately
+cache data that was once visible to a previous user, tenant, or auth
+scope. Apps that switch identities call
+`SyncClient::sign_out` from the auth-aware code path — it durably wipes
+every stream snapshot, cached row, pending mutation, and conflict marker
+via `SyncLocalStore::clear_all_streams`, then broadcasts a sign-out
+event so sibling tabs in the same browser origin can drop their
+in-memory `CollectionState` and re-hydrate from the (now empty) local
+store. Subscribe to the broadcast with `SyncClient::watch_sign_outs`.
 
-Deliverables:
+The persisted `SyncLocalIdentity` (device id + mutation counter) is
+intentionally **preserved** across sign-out. Rotating the device id
+would silently reset the mutation counter and could collide with
+accepted-log entries the server still retains — the same `(client_id,
+counter)` shape used by Yjs, Automerge, Loro, Jazz, Replicache, and
+Linear keeps the identity stable per browser-origin-bucket and lets
+future P2P modes coordinate without changing the id format.
 
-- documented user/tenant cache partitioning,
-- helpers for clearing sync state on sign-out or tenant switch,
-- tests that a guarded stream cannot be pulled or pushed anonymously,
-- examples where source queries and mutation logs use the same tenant
-  boundary.
+Deliverables (status):
+
+- documented user/tenant cache partitioning — this section + roadmap §3
+  on transactional source/log scoping,
+- helpers for clearing sync state on sign-out or tenant switch —
+  `SyncClient::sign_out`, `SyncLocalStore::clear_all_streams`,
+  `SyncClient::watch_sign_outs`,
+- tests that a guarded stream cannot be pulled or pushed anonymously —
+  `guarded_stream_denies_anonymous_open_and_pull`,
+  `guarded_stream_denies_push_before_default_unsupported`,
+  `role_guard_checks_authenticated_principal_roles` in
+  `pocopine-sync/src/server.rs`,
+- end-to-end example where source queries and mutation logs use the
+  same tenant boundary — `tests/tenant_boundary.rs` in
+  `pocopine-sync-crud`.
 
 ### 8. CI And Regression Tests
 
@@ -299,16 +327,20 @@ simple and hard to misuse.
 
 ## Recommended Implementation Order
 
-1. Extend typed local resource/query views beyond owned snapshots into
-   framework-native subscriptions.
-2. Add transaction-backed server helper paths for source write + mutation
-   log insert.
+1. ~~Extend typed local resource/query views beyond owned snapshots into
+   framework-native subscriptions.~~ Done — `Resource::observe_view`.
+2. ~~Add transaction-backed server helper paths for source write + mutation
+   log insert.~~ Done — `TransactionalCrudSource` + `CrudTransactionRunner`.
 3. Add SQLx helper adapters for server CRUD sources, without becoming an
-   ORM. The first transaction-runner and accepted-mutation-log helper is
-   in place; richer source examples remain.
-4. Add a durable row-scoped pending-mutation purge operation if the
-   author-facing API needs true "discard local edits" semantics.
-5. Document auth/cache partitioning and sign-out reset behavior.
+   ORM. Transaction-runner and accepted-mutation-log helpers are in
+   place; richer source examples remain.
+4. ~~Add a durable row-scoped pending-mutation purge operation if the
+   author-facing API needs true "discard local edits" semantics.~~ Done —
+   `SyncLocalStore::purge_pending_for_row` + `CrudClientResource::discard_local`.
+5. ~~Document auth/cache partitioning and sign-out reset behavior.~~
+   Done — `SyncLocalStore::clear_all_streams`,
+   `SyncClient::sign_out` / `watch_sign_outs`, and the §7 deliverables
+   above.
 6. Add broader browser CI around SQLite local-first flows.
 7. Only then consider database-specific changefeed adapters.
 
