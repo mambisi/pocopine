@@ -26,6 +26,8 @@ pub const STORAGE_SCOPES_PREFIX: &str = storage_path!("/scopes");
 pub const STORAGE_UPLOADS_PREFIX: &str = storage_path!("/uploads");
 /// Upload creation route.
 pub const STORAGE_UPLOADS_PATH: &str = storage_path!("/uploads");
+/// Anonymous upload binding cookie read by the storage server.
+pub const STORAGE_ANON_COOKIE: &str = "pocopine_storage_anon";
 
 fn validate_token(field: &'static str, value: String) -> StorageResult<String> {
     let trimmed = value.trim();
@@ -158,12 +160,17 @@ impl SafeObjectKey {
             return Err(StorageError::invalid_value("object key", key));
         }
 
-        let mut segments = key.split('/').peekable();
-        while let Some(segment) = segments.next() {
+        for segment in key.split('/') {
             if segment.is_empty() || segment == "." || segment == ".." {
                 return Err(StorageError::invalid_value("object key", key));
             }
-            if segments.peek().is_none() && segment.is_empty() {
+            if segment
+                .chars()
+                .any(|ch| matches!(ch, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+                || segment.ends_with(' ')
+                || segment.ends_with('.')
+                || is_windows_reserved_segment(segment)
+            {
                 return Err(StorageError::invalid_value("object key", key));
             }
         }
@@ -183,6 +190,36 @@ impl SafeObjectKey {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+}
+
+fn is_windows_reserved_segment(segment: &str) -> bool {
+    let stem = segment.split_once('.').map_or(segment, |(stem, _)| stem);
+    let stem = stem.trim_end_matches([' ', '.']);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 impl fmt::Display for SafeObjectKey {

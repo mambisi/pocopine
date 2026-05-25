@@ -6,10 +6,11 @@ use bytes::Bytes;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::checksum::validate_complete_checksum;
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
-    CompleteUpload, InitiateUpload, ObjectRef, SafeObjectKey, StorageError, StorageKey,
-    StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
+    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRef, SafeObjectKey, StorageError,
+    StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
     UploadStrategy,
 };
 
@@ -19,6 +20,8 @@ struct StoredUploadSession {
     owner: StorageActor,
     storage_key: StorageKey,
     visibility: crate::ObjectVisibility,
+    max_bytes: u64,
+    checksum_policy: ChecksumPolicy,
     request_metadata: std::collections::BTreeMap<String, String>,
     object: Option<ObjectRef>,
 }
@@ -166,6 +169,8 @@ impl StorageBackend for LocalFsStorageBackend {
                 owner: ctx.actor.clone(),
                 storage_key: request.storage_key,
                 visibility: request.policy.visibility,
+                max_bytes: request.policy.max_bytes,
+                checksum_policy: request.policy.checksum,
                 request_metadata: request.metadata,
                 object: None,
             };
@@ -206,6 +211,8 @@ impl StorageBackend for LocalFsStorageBackend {
             if expected != offset {
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
+            let new_offset = checked_new_offset(offset, bytes.len())?;
+            ensure_size_limit(&stored, new_offset)?;
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -215,7 +222,7 @@ impl StorageBackend for LocalFsStorageBackend {
                 .map_err(|err| StorageError::backend(format!("append upload temp file: {err}")))?;
             file.flush()
                 .map_err(|err| StorageError::backend(format!("flush upload temp file: {err}")))?;
-            stored.public.next_offset = Some(expected + bytes.len() as u64);
+            stored.public.next_offset = Some(new_offset);
             self.write_session(&session, &stored)?;
             Ok(stored.public)
         })
@@ -241,6 +248,14 @@ impl StorageBackend for LocalFsStorageBackend {
                     )));
                 }
             }
+            ensure_size_limit(&stored, actual)?;
+            let uploaded_bytes = fs::read(self.session_tmp_path(&request.session))
+                .map_err(|err| StorageError::backend(format!("read upload temp file: {err}")))?;
+            let checksum = validate_complete_checksum(
+                &stored.checksum_policy,
+                &uploaded_bytes,
+                request.checksum,
+            )?;
 
             let final_path = self.object_path(&stored.storage_key.key);
             if let Some(parent) = final_path.parent() {
@@ -258,7 +273,7 @@ impl StorageBackend for LocalFsStorageBackend {
                 key: stored.storage_key.key.to_string(),
                 version: None,
                 etag: None,
-                checksum: request.checksum,
+                checksum,
                 content_type: stored.public.content_type.clone(),
                 size: actual,
                 visibility: stored.visibility,
@@ -332,6 +347,29 @@ fn ensure_open(stored: &StoredUploadSession) -> StorageResult<()> {
             session: stored.public.id.to_string(),
         }),
     }
+}
+
+fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
+    offset
+        .checked_add(byte_count as u64)
+        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))
+}
+
+fn ensure_size_limit(stored: &StoredUploadSession, new_offset: u64) -> StorageResult<()> {
+    if new_offset > stored.max_bytes {
+        return Err(StorageError::policy_rejected(format!(
+            "upload exceeds scope max of {} bytes",
+            stored.max_bytes
+        )));
+    }
+    if let Some(size) = stored.public.size {
+        if new_offset > size {
+            return Err(StorageError::policy_rejected(format!(
+                "upload exceeds declared size of {size} bytes"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn move_or_copy(from: PathBuf, to: &Path) -> StorageResult<()> {

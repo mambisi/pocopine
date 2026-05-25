@@ -4733,6 +4733,7 @@ dependencies = [
  "pocopine-server",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "time",
  "tokio",

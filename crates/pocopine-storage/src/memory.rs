@@ -5,10 +5,12 @@ use bytes::Bytes;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::checksum::validate_complete_checksum;
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
-    CompleteUpload, InitiateUpload, ObjectRef, StorageError, StorageKey, StorageResult,
-    TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRef, StorageError, StorageKey,
+    StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
+    UploadStrategy,
 };
 
 #[derive(Clone, Debug)]
@@ -17,6 +19,8 @@ struct StoredUpload {
     owner: StorageActor,
     storage_key: StorageKey,
     visibility: crate::ObjectVisibility,
+    max_bytes: u64,
+    checksum_policy: ChecksumPolicy,
     request_metadata: std::collections::BTreeMap<String, String>,
     bytes: Vec<u8>,
     object: Option<ObjectRef>,
@@ -106,6 +110,8 @@ impl StorageBackend for MemoryStorageBackend {
                 owner: ctx.actor.clone(),
                 storage_key: request.storage_key,
                 visibility: request.policy.visibility,
+                max_bytes: request.policy.max_bytes,
+                checksum_policy: request.policy.checksum,
                 request_metadata: request.metadata,
                 bytes: Vec::new(),
                 object: None,
@@ -159,6 +165,8 @@ impl StorageBackend for MemoryStorageBackend {
             if expected != offset {
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
+            let new_offset = checked_new_offset(offset, bytes.len())?;
+            ensure_size_limit(stored, new_offset)?;
             stored.bytes.extend_from_slice(&bytes);
             stored.public.next_offset = Some(stored.bytes.len() as u64);
             Ok(stored.public.clone())
@@ -192,6 +200,12 @@ impl StorageBackend for MemoryStorageBackend {
                         )));
                     }
                 }
+                ensure_size_limit(stored, stored.bytes.len() as u64)?;
+                let checksum = validate_complete_checksum(
+                    &stored.checksum_policy,
+                    &stored.bytes,
+                    request.checksum,
+                )?;
 
                 let key = stored.storage_key.key.to_string();
                 let mut metadata = stored.storage_key.metadata.0.clone();
@@ -202,7 +216,7 @@ impl StorageBackend for MemoryStorageBackend {
                     key: key.clone(),
                     version: None,
                     etag: None,
-                    checksum: request.checksum,
+                    checksum,
                     content_type: stored.public.content_type.clone(),
                     size: stored.bytes.len() as u64,
                     visibility: stored.visibility,
@@ -273,4 +287,27 @@ fn ensure_open(stored: &StoredUpload) -> StorageResult<()> {
             session: stored.public.id.to_string(),
         }),
     }
+}
+
+fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
+    offset
+        .checked_add(byte_count as u64)
+        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))
+}
+
+fn ensure_size_limit(stored: &StoredUpload, new_offset: u64) -> StorageResult<()> {
+    if new_offset > stored.max_bytes {
+        return Err(StorageError::policy_rejected(format!(
+            "upload exceeds scope max of {} bytes",
+            stored.max_bytes
+        )));
+    }
+    if let Some(size) = stored.public.size {
+        if new_offset > size {
+            return Err(StorageError::policy_rejected(format!(
+                "upload exceeds declared size of {size} bytes"
+            )));
+        }
+    }
+    Ok(())
 }
