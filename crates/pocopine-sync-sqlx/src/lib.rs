@@ -7,8 +7,6 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::marker::PhantomData;
-
 use pocopine_sync::SyncError;
 use pocopine_sync_crud::{CrudTransactionRunner, TransactionFuture};
 use sqlx::{Database, Pool, Transaction};
@@ -38,7 +36,6 @@ where
     DB: Database,
 {
     pool: Pool<DB>,
-    _marker: PhantomData<fn() -> DB>,
 }
 
 impl<DB> Clone for SqlxCrudTransactionRunner<DB>
@@ -48,7 +45,6 @@ where
     fn clone(&self) -> Self {
         Self {
             pool: self.pool.clone(),
-            _marker: PhantomData,
         }
     }
 }
@@ -59,10 +55,7 @@ where
 {
     /// Build a transaction runner from an existing SQLx pool.
     pub fn new(pool: Pool<DB>) -> Self {
-        Self {
-            pool,
-            _marker: PhantomData,
-        }
+        Self { pool }
     }
 
     /// Borrow the underlying SQLx pool.

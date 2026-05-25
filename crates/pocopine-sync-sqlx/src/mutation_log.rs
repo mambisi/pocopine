@@ -20,8 +20,7 @@ use crate::sync_sqlx_error;
 /// Default table used by [`SqlxCrudMutationLog`].
 pub const DEFAULT_CRUD_MUTATION_LOG_TABLE: &str = "__pocopine_crud_mutations";
 
-/// SQLite schema for the default CRUD mutation log table.
-pub const SQLITE_CRUD_MUTATION_LOG_SCHEMA: &str = r#"create table if not exists __pocopine_crud_mutations (
+const SQLITE_POSTGRES_CRUD_MUTATION_LOG_SCHEMA: &str = r#"create table if not exists __pocopine_crud_mutations (
   scope text not null,
   mutation_id text not null,
   op text not null,
@@ -30,15 +29,11 @@ pub const SQLITE_CRUD_MUTATION_LOG_SCHEMA: &str = r#"create table if not exists 
   primary key (scope, mutation_id)
 )"#;
 
+/// SQLite schema for the default CRUD mutation log table.
+pub const SQLITE_CRUD_MUTATION_LOG_SCHEMA: &str = SQLITE_POSTGRES_CRUD_MUTATION_LOG_SCHEMA;
+
 /// Postgres schema for the default CRUD mutation log table.
-pub const POSTGRES_CRUD_MUTATION_LOG_SCHEMA: &str = r#"create table if not exists __pocopine_crud_mutations (
-  scope text not null,
-  mutation_id text not null,
-  op text not null,
-  row_key text,
-  payload text not null,
-  primary key (scope, mutation_id)
-)"#;
+pub const POSTGRES_CRUD_MUTATION_LOG_SCHEMA: &str = SQLITE_POSTGRES_CRUD_MUTATION_LOG_SCHEMA;
 
 /// MySQL schema for the default CRUD mutation log table.
 ///
@@ -167,7 +162,9 @@ macro_rules! impl_sqlx_crud_mutation_log_conflict_clause {
                 accepted: CrudAcceptedMutation,
             ) -> SyncResult<CrudMutationReservation> {
                 let scope = self.scope(ctx)?;
+                let scope_for_lookup = scope.clone();
                 let mutation_id = accepted.mutation_id.clone();
+                let mutation_id_for_bind = mutation_id.as_str();
                 let payload = serde_json::to_string(&accepted.payload)?;
                 let row_key = accepted.key.as_ref().map(|key| key.as_str().to_string());
                 let sql = format!(
@@ -177,8 +174,8 @@ macro_rules! impl_sqlx_crud_mutation_log_conflict_clause {
 
                 let result = sqlx::query(&sql)
                     .bind(scope)
-                    .bind(mutation_id.as_str().to_string())
-                    .bind(op_to_db(accepted.op).to_string())
+                    .bind(mutation_id_for_bind)
+                    .bind(op_to_db(accepted.op))
                     .bind(row_key)
                     .bind(payload)
                     .execute(&mut **tx)
@@ -189,14 +186,13 @@ macro_rules! impl_sqlx_crud_mutation_log_conflict_clause {
                     return Ok(CrudMutationReservation::Reserved);
                 }
 
-                let scope = self.scope(ctx)?;
                 let sql = format!(
-                    "select mutation_id, op, row_key, payload from {} where scope = {} and mutation_id = {}",
+                    "select op, row_key, payload from {} where scope = {} and mutation_id = {}",
                     self.table, $p1, $p2
                 );
                 let row = sqlx::query(&sql)
-                    .bind(scope)
-                    .bind(mutation_id.as_str().to_string())
+                    .bind(scope_for_lookup)
+                    .bind(mutation_id_for_bind)
                     .fetch_optional(&mut **tx)
                     .await
                     .map_err(sync_sqlx_error)?
@@ -206,8 +202,7 @@ macro_rules! impl_sqlx_crud_mutation_log_conflict_clause {
                         )
                     })?;
 
-                let existing = accepted_from_row(&mutation_id, row)?
-                    .ok_or_else(|| SyncError::backend("SQLx CRUD mutation reservation was empty"))?;
+                let existing = accepted_from_row(&mutation_id, row)?;
                 Ok(CrudMutationReservation::AlreadyAccepted(existing))
             }
         }
@@ -231,7 +226,9 @@ macro_rules! impl_mysql_sqlx_crud_mutation_log {
                 accepted: CrudAcceptedMutation,
             ) -> SyncResult<CrudMutationReservation> {
                 let scope = self.scope(ctx)?;
+                let scope_for_lookup = scope.clone();
                 let mutation_id = accepted.mutation_id.clone();
+                let mutation_id_for_bind = mutation_id.as_str();
                 let payload = serde_json::to_string(&accepted.payload)?;
                 let row_key = accepted.key.as_ref().map(|key| key.as_str().to_string());
                 let sql = format!(
@@ -241,8 +238,8 @@ macro_rules! impl_mysql_sqlx_crud_mutation_log {
 
                 match sqlx::query(&sql)
                     .bind(scope)
-                    .bind(mutation_id.as_str().to_string())
-                    .bind(op_to_db(accepted.op).to_string())
+                    .bind(mutation_id_for_bind)
+                    .bind(op_to_db(accepted.op))
                     .bind(row_key)
                     .bind(payload)
                     .execute(&mut **tx)
@@ -250,14 +247,13 @@ macro_rules! impl_mysql_sqlx_crud_mutation_log {
                 {
                     Ok(_) => Ok(CrudMutationReservation::Reserved),
                     Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        let scope = self.scope(ctx)?;
                         let sql = format!(
-                            "select mutation_id, op, row_key, payload from {} where scope = ? and mutation_id = ?",
+                            "select op, row_key, payload from {} where scope = ? and mutation_id = ?",
                             self.table
                         );
                         let row = sqlx::query(&sql)
-                            .bind(scope)
-                            .bind(mutation_id.as_str().to_string())
+                            .bind(scope_for_lookup)
+                            .bind(mutation_id_for_bind)
                             .fetch_optional(&mut **tx)
                             .await
                             .map_err(sync_sqlx_error)?
@@ -267,9 +263,7 @@ macro_rules! impl_mysql_sqlx_crud_mutation_log {
                                 )
                             })?;
 
-                        let existing = accepted_from_row(&mutation_id, row)?.ok_or_else(|| {
-                            SyncError::backend("SQLx CRUD mutation reservation was empty")
-                        })?;
+                        let existing = accepted_from_row(&mutation_id, row)?;
                         Ok(CrudMutationReservation::AlreadyAccepted(existing))
                     }
                     Err(err) => Err(sync_sqlx_error(err)),
@@ -305,39 +299,28 @@ impl_sqlx_crud_mutation_log_conflict_clause!(
 );
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
-fn accepted_from_row<R>(
-    mutation_id: &MutationId,
-    row: R,
-) -> SyncResult<Option<CrudAcceptedMutation>>
+fn accepted_from_row<R>(mutation_id: &MutationId, row: R) -> SyncResult<CrudAcceptedMutation>
 where
     R: Row,
     for<'row> String: Decode<'row, R::Database> + Type<R::Database>,
     for<'row> Option<String>: Decode<'row, R::Database> + Type<R::Database>,
     usize: ColumnIndex<R>,
 {
-    let stored_mutation_id =
-        MutationId::new(row.try_get::<String, _>(0).map_err(sync_sqlx_error)?)?;
-    if &stored_mutation_id != mutation_id {
-        return Err(SyncError::backend(
-            "SQLx CRUD mutation lookup returned mismatched mutation id",
-        ));
-    }
-
-    let op = op_from_db(row.try_get::<String, _>(1).map_err(sync_sqlx_error)?)?;
+    let op = op_from_db(row.try_get::<String, _>(0).map_err(sync_sqlx_error)?)?;
     let key = row
-        .try_get::<Option<String>, _>(2)
+        .try_get::<Option<String>, _>(1)
         .map_err(sync_sqlx_error)?
         .map(RowKey::new)
         .transpose()?;
     let payload =
-        serde_json::from_str::<Value>(&row.try_get::<String, _>(3).map_err(sync_sqlx_error)?)?;
+        serde_json::from_str::<Value>(&row.try_get::<String, _>(2).map_err(sync_sqlx_error)?)?;
 
-    Ok(Some(CrudAcceptedMutation::new(
-        stored_mutation_id,
+    Ok(CrudAcceptedMutation::new(
+        mutation_id.clone(),
         op,
         key,
         payload,
-    )))
+    ))
 }
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
