@@ -350,6 +350,42 @@ pub trait SyncLocalStore {
         &self,
         stream: &SyncStreamName,
     ) -> SyncLocalFuture<'_, Vec<ClientMutation<serde_json::Value>>>;
+
+    /// Durably remove every still-pending mutation whose `key` matches
+    /// the given row, scoped to one stream. Returns the number of
+    /// mutations removed.
+    ///
+    /// This is the storage primitive behind
+    /// `CrudClientResource::discard_local`: it lets the author-facing
+    /// helper back out a row's queued edits with the same durability
+    /// guarantees as `enqueue_mutation` — a reload cannot resurrect
+    /// the purged mutations.
+    ///
+    /// Implementations MUST:
+    ///
+    /// * Persist the removal before returning. The whole point of a
+    ///   durable purge is that reload doesn't replay the dropped
+    ///   mutations.
+    /// * Leave mutations whose `key` is `None` or differs from `key`
+    ///   untouched — purging one row must not touch another row's
+    ///   queue.
+    /// * Leave non-pending records (accepted / rejected / conflict
+    ///   history) alone. Those are server outcomes, not local edits.
+    /// * Leave the row's conflict marker untouched; clearing it is
+    ///   `clear_conflict`'s job and the caller composes the two.
+    ///
+    /// The default implementation falls back to no-op + `0` for stores
+    /// that haven't been updated yet — existing impls without this
+    /// method continue to compile, but generated `discard_local`
+    /// helpers will silently leave durable entries behind until the
+    /// store opts in.
+    fn purge_pending_for_row(
+        &self,
+        _stream: &SyncStreamName,
+        _key: &RowKey,
+    ) -> SyncLocalFuture<'_, usize> {
+        Box::pin(std::future::ready(Ok(0)))
+    }
 }
 
 #[cfg(test)]

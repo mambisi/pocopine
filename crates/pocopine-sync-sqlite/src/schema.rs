@@ -115,6 +115,13 @@ pub const UPSERT_MUTATION_SQL: &str = "insert into __pocopine_mutations
 /// SQL delete used when a mutation reaches a terminal server outcome.
 pub const DELETE_MUTATION_SQL: &str = "delete from __pocopine_mutations where mutation_id = ?1";
 
+/// SQL delete used by `SyncLocalStore::purge_pending_for_row`. Removes
+/// every still-pending mutation for one `(stream, row_key)` pair.
+/// Restricted to `status = 'pending'` — accepted / rejected / conflict
+/// rows are historical outcomes, not queued edits, so they stay put.
+pub const DELETE_PENDING_FOR_ROW_SQL: &str = "delete from __pocopine_mutations
+    where stream = ?1 and row_key = ?2 and status = 'pending'";
+
 /// SQL query used to load pending mutations for a stream in enqueue order.
 pub const SELECT_PENDING_MUTATIONS_SQL: &str =
     "select mutation_id, row_key, base_version, op, payload, optimistic_row

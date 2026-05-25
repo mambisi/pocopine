@@ -162,6 +162,17 @@ impl SyncLocalStore for IndexedDbLocalStore {
                 .collect())
         })
     }
+
+    fn purge_pending_for_row(
+        &self,
+        stream: &SyncStreamName,
+        key: &RowKey,
+    ) -> SyncLocalFuture<'_, usize> {
+        let database_name = self.database_name.clone();
+        let stream = stream.clone();
+        let key = key.clone();
+        self.run(purge_pending_for_row(database_name, stream, key))
+    }
 }
 
 async fn load_identity(database_name: String) -> SyncResult<Option<SyncLocalIdentity>> {
@@ -368,6 +379,36 @@ async fn clear_conflict(
     await_transaction(done).await?;
     database.close();
     Ok(())
+}
+
+/// Atomically drop every still-pending mutation for `(stream, key)`
+/// from the IndexedDB store. Mirrors the SQLite store's contract:
+/// only `status = Pending` rows are removed; accepted / rejected /
+/// conflict history stays. Returns the number of mutations dropped.
+async fn purge_pending_for_row(
+    database_name: String,
+    stream: SyncStreamName,
+    key: RowKey,
+) -> SyncResult<usize> {
+    let database = open_database(&database_name).await?;
+    let transaction = transaction(&database, STREAMS_STORE, IdbTransactionMode::Readwrite)?;
+    let done = transaction_done(&transaction);
+    let store = transaction.object_store(STREAMS_STORE).map_err(js_error)?;
+    let mut state = load_stream_state(&store, stream).await?;
+    let before = state.pending_mutations.len();
+    // Retain pendings that do NOT target `key`. Mutations without a
+    // row anchor (`key = None`) and mutations for any other row are
+    // left alone — the purge is scoped to this one row.
+    state
+        .pending_mutations
+        .retain(|pending| pending.mutation.key.as_ref() != Some(&key));
+    let purged = before - state.pending_mutations.len();
+    if purged > 0 {
+        put_stream_state(&store, &state).await?;
+    }
+    await_transaction(done).await?;
+    database.close();
+    Ok(purged)
 }
 
 async fn open_database(database_name: &str) -> SyncResult<IdbDatabase> {

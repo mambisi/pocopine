@@ -14,10 +14,11 @@ use pocopine_sync::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_ROW_SQL,
-    DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
-    SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL, SELECT_STREAM_SQL,
-    UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
+    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL,
+    DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER,
+    META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL,
+    SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL,
+    UPSERT_STREAM_SQL,
 };
 
 /// SQLite-backed [`SyncLocalStore`] for host/native targets.
@@ -120,6 +121,16 @@ impl SyncLocalStore for SqliteLocalStore {
     ) -> SyncLocalFuture<'_, Vec<ClientMutation<serde_json::Value>>> {
         let stream = stream.clone();
         Self::ready(self.with_conn(|conn| pending_mutations(conn, &stream)))
+    }
+
+    fn purge_pending_for_row(
+        &self,
+        stream: &SyncStreamName,
+        key: &RowKey,
+    ) -> SyncLocalFuture<'_, usize> {
+        let stream = stream.clone();
+        let key = key.clone();
+        Self::ready(self.with_conn(|conn| purge_pending_for_row(conn, &stream, &key)))
     }
 }
 
@@ -457,6 +468,20 @@ fn clear_conflict(conn: &mut Connection, stream: &SyncStreamName, key: &RowKey) 
     )
     .map_err(sqlite_error)?;
     Ok(())
+}
+
+fn purge_pending_for_row(
+    conn: &mut Connection,
+    stream: &SyncStreamName,
+    key: &RowKey,
+) -> SyncResult<usize> {
+    let affected = conn
+        .execute(
+            DELETE_PENDING_FOR_ROW_SQL,
+            params![stream.as_str(), key.as_str()],
+        )
+        .map_err(sqlite_error)?;
+    Ok(affected)
 }
 
 fn pending_mutations(
@@ -1280,6 +1305,68 @@ mod tests {
         assert!(snapshot.cursor.is_none());
         assert!(snapshot.rows.is_empty());
         assert!(snapshot.pending_mutations.is_empty());
+    }
+
+    #[test]
+    fn sqlite_purge_pending_for_row_drops_only_target_row_pendings() {
+        // Cover the durability + scope contract: purge a row's pending
+        // mutations and confirm only that row's queue is affected,
+        // and that hydration (via a fresh connection) reflects the
+        // purge. This is the test that distinguishes a real durable
+        // purge from a cosmetic in-memory clear.
+        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        let store = SqliteLocalStore::open_path(&path).unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+
+        let post_a_first = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_a").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "A1"}),
+        };
+        let post_a_second = ClientMutation {
+            id: MutationId::new("device_abc:2").unwrap(),
+            key: Some(RowKey::new("post_a").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "A2"}),
+        };
+        let post_b = ClientMutation {
+            id: MutationId::new("device_abc:3").unwrap(),
+            key: Some(RowKey::new("post_b").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "B"}),
+        };
+        for m in [&post_a_first, &post_a_second, &post_b] {
+            block(store.enqueue_mutation(&stream, m.clone())).unwrap();
+        }
+
+        let purged =
+            block(store.purge_pending_for_row(&stream, &RowKey::new("post_a").unwrap())).unwrap();
+        assert_eq!(purged, 2);
+
+        // Drop the live store and reopen against the same SQLite file.
+        // If the durable layer leaked anything we'll see it now.
+        drop(store);
+        let reopened = SqliteLocalStore::open_path(&path).unwrap();
+        let snapshot = block(reopened.hydrate_stream(&stream)).unwrap();
+        let surviving_ids: Vec<_> = snapshot
+            .pending_mutations
+            .iter()
+            .map(|p| p.mutation.id.as_str().to_owned())
+            .collect();
+        assert_eq!(surviving_ids, vec!["device_abc:3"]);
+    }
+
+    #[test]
+    fn sqlite_purge_pending_for_row_idempotent_returns_zero_for_unknown_row() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let purged =
+            block(store.purge_pending_for_row(&stream, &RowKey::new("never").unwrap())).unwrap();
+        assert_eq!(purged, 0);
     }
 
     fn block<T>(future: SyncLocalFuture<'_, T>) -> SyncResult<T> {

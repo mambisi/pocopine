@@ -12,10 +12,11 @@ use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_ROW_SQL,
-    DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
-    SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL, SELECT_STREAM_SQL,
-    UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
+    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL,
+    DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER,
+    META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL,
+    SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL,
+    UPSERT_STREAM_SQL,
 };
 
 const DEFAULT_DATABASE_NAME: &str = "pocopine_sync.sqlite3";
@@ -143,6 +144,14 @@ impl SyncLocalStore for SqliteLocalStore {
         stream: &SyncStreamName,
     ) -> SyncLocalFuture<'_, Vec<ClientMutation<serde_json::Value>>> {
         self.run(pending_mutations(stream.clone()))
+    }
+
+    fn purge_pending_for_row(
+        &self,
+        stream: &SyncStreamName,
+        key: &RowKey,
+    ) -> SyncLocalFuture<'_, usize> {
+        self.run(purge_pending_for_row(stream.clone(), key.clone()))
     }
 }
 
@@ -510,6 +519,36 @@ async fn pending_mutations(
         .into_iter()
         .map(|pending| pending.mutation)
         .collect())
+}
+
+async fn purge_pending_for_row(stream: SyncStreamName, key: RowKey) -> SyncResult<usize> {
+    // SQLite WASM's exec wrapper doesn't return an affected-rows
+    // count, so SELECT-then-DELETE the matching rows in the same
+    // async task. Single-threaded WASM event loop guarantees no
+    // interleaving between the two queries.
+    let count_rows = query_rows(
+        "select count(*) as n from __pocopine_mutations \
+         where stream = ?1 and row_key = ?2 and status = 'pending'",
+        vec![
+            JsValue::from_str(stream.as_str()),
+            JsValue::from_str(key.as_str()),
+        ],
+    )
+    .await?;
+    let count = count_rows
+        .first()
+        .and_then(|row| row.get("n"))
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0) as usize;
+    exec(
+        DELETE_PENDING_FOR_ROW_SQL,
+        vec![
+            JsValue::from_str(stream.as_str()),
+            JsValue::from_str(key.as_str()),
+        ],
+    )
+    .await?;
+    Ok(count)
 }
 
 async fn pending_mutation_records(stream: SyncStreamName) -> SyncResult<Vec<LocalPendingMutation>> {
