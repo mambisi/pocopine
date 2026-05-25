@@ -92,6 +92,68 @@ pub struct LocalResourceView<Id, Row> {
     pub last_reason: SyncReason,
 }
 
+/// Comparable state emitted by resource-view subscriptions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Id: Serialize, Row: Serialize",
+    deserialize = "Id: Deserialize<'de>, Row: Deserialize<'de>"
+))]
+pub enum LocalResourceViewState<Id, Row> {
+    Ready(LocalResourceView<Id, Row>),
+    Error(String),
+}
+
+impl<Id, Row> LocalResourceViewState<Id, Row> {
+    pub fn ready(view: LocalResourceView<Id, Row>) -> Self {
+        Self::Ready(view)
+    }
+
+    pub fn from_error(error: impl ToString) -> Self {
+        Self::Error(error.to_string())
+    }
+
+    pub fn from_result(result: SyncResult<LocalResourceView<Id, Row>>) -> Self {
+        match result {
+            Ok(view) => Self::Ready(view),
+            Err(err) => Self::Error(err.to_string()),
+        }
+    }
+
+    pub fn from_collection_state(state: &CollectionState<Row>) -> Self
+    where
+        Id: ResourceId,
+        Row: Clone,
+    {
+        Self::from_result(LocalResourceView::from_collection_state(state))
+    }
+
+    pub fn view(&self) -> Option<&LocalResourceView<Id, Row>> {
+        match self {
+            Self::Ready(view) => Some(view),
+            Self::Error(_) => None,
+        }
+    }
+
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            Self::Ready(_) => None,
+            Self::Error(error) => Some(error.as_str()),
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.error_message()
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.view().is_some_and(LocalResourceView::has_pending)
+    }
+
+    pub fn has_conflicts(&self) -> bool {
+        self.view().is_some_and(LocalResourceView::has_conflicts)
+    }
+}
+
 impl<Id, Row> LocalResourceView<Id, Row> {
     /// Build a typed resource view from the low-level sync collection state.
     pub fn from_collection_state(state: &CollectionState<Row>) -> SyncResult<Self>
@@ -487,5 +549,23 @@ mod tests {
         let err = local_resource_view::<i64, _>(&state).unwrap_err();
 
         assert!(err.to_string().contains("invalid resource id"));
+    }
+
+    #[test]
+    fn view_state_wraps_ready_views_and_errors() {
+        let state = initial_state();
+        let view_state = LocalResourceViewState::<String, Post>::from_collection_state(&state);
+
+        let view = view_state.view().expect("view state should be ready");
+        assert_eq!(view.rows.len(), 1);
+        assert!(!view_state.has_pending());
+        assert!(!view_state.has_conflicts());
+        assert_eq!(view_state.error(), None);
+
+        let error_state = LocalResourceViewState::<String, Post>::from_error("already borrowed");
+        assert!(error_state.view().is_none());
+        assert_eq!(error_state.error(), Some("already borrowed"));
+        assert!(!error_state.has_pending());
+        assert!(!error_state.has_conflicts());
     }
 }

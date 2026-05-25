@@ -13,6 +13,7 @@ mod mutation;
 mod options;
 mod outcome;
 mod row;
+mod subscription;
 mod transaction;
 mod view;
 
@@ -37,11 +38,12 @@ pub use resource::{
 pub use row::optimistic_row;
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{CrudConflict, CrudRemoveResult, CrudSource, CrudWriteResult};
+pub use subscription::observe_local_resource_view;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use resource::RowVersionOf;
 pub use transaction::{Transaction, TransactionBindable, TransactionFuture, TransactionRunner};
 pub use view::{
     local_resource_view, LocalResourcePendingMutation, LocalResourceRow, LocalResourceRowStatus,
-    LocalResourceView,
+    LocalResourceView, LocalResourceViewState,
 };

@@ -487,10 +487,11 @@ The observer is framework-native:
 - it never exposes raw `CollectionState`, `SyncRow`, or protocol mutation
   structs to component code.
 
-The first callback invocation will be deferred to the next tick so
-callers can install the observer from lifecycle code and still call
-`Handle::update` inside the callback without re-entering the lifecycle
-borrow.
+In browser components, the first callback invocation will be deferred to
+the next tick so callers can install the observer from lifecycle code and
+still call `Handle::update` inside the callback without re-entering the
+lifecycle borrow. Native host tests install synchronously so they can
+assert observer state without a browser microtask queue.
 
 `LocalResourceViewState` will be a small comparable wrapper around either
 a ready view or a local view-construction error such as an
