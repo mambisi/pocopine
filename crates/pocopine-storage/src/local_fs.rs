@@ -3,9 +3,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::backend_common::{
+    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit, expires_at, object_ref,
+    refresh_expired, selected_strategy,
+};
 use crate::checksum::validate_complete_checksum;
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
@@ -116,7 +119,7 @@ impl LocalFsStorageBackend {
         })?;
         let mut stored: StoredUploadSession = serde_json::from_slice(&bytes)
             .map_err(|err| StorageError::backend(format!("read local upload metadata: {err}")))?;
-        refresh_expired(&mut stored);
+        refresh_expired(&mut stored.public);
         Ok(stored)
     }
 
@@ -208,7 +211,7 @@ impl StorageBackend for LocalFsStorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             let stored = self.read_session(&session)?;
-            ensure_owner(ctx, &stored)?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
             Ok(stored.public)
         })
     }
@@ -222,9 +225,9 @@ impl StorageBackend for LocalFsStorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             let mut stored = self.read_session(&session)?;
-            ensure_owner(ctx, &stored)?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
             self.persist_expired_if_needed(&session, &stored)?;
-            ensure_open(&stored)?;
+            ensure_open(&stored.public)?;
             if stored.public.strategy != UploadStrategy::Sequential {
                 return Err(StorageError::unsupported(
                     "local filesystem backend only supports sequential proxy upload",
@@ -242,7 +245,7 @@ impl StorageBackend for LocalFsStorageBackend {
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
             let new_offset = checked_new_offset(offset, bytes.len())?;
-            ensure_size_limit(&stored, new_offset)?;
+            ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
             self.reconcile_temp_len(&session, expected)?;
             let mut file = OpenOptions::new()
                 .create(true)
@@ -266,12 +269,12 @@ impl StorageBackend for LocalFsStorageBackend {
     ) -> StorageBoxFuture<'a, ObjectRef> {
         Box::pin(async move {
             let mut stored = self.read_session(&request.session)?;
-            ensure_owner(ctx, &stored)?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
             if let Some(object) = &stored.object {
                 return Ok(object.clone());
             }
             self.persist_expired_if_needed(&request.session, &stored)?;
-            ensure_open(&stored)?;
+            ensure_open(&stored.public)?;
             let final_path = self.object_path(&stored.storage_key.key);
             if !self.session_tmp_path(&request.session).exists() && final_path.exists() {
                 let actual = fs::metadata(&final_path)
@@ -295,7 +298,7 @@ impl StorageBackend for LocalFsStorageBackend {
                     )));
                 }
             }
-            ensure_size_limit(&stored, actual)?;
+            ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
             let uploaded_bytes = fs::read(self.session_tmp_path(&request.session))
                 .map_err(|err| local_io_error("read upload temp file", err))?;
             let checksum = validate_complete_checksum(
@@ -310,20 +313,7 @@ impl StorageBackend for LocalFsStorageBackend {
             }
             commit_completed_object(self.session_tmp_path(&request.session), &final_path)?;
 
-            let mut metadata = stored.storage_key.metadata.0.clone();
-            metadata.extend(stored.request_metadata.clone());
-            let object = ObjectRef {
-                backend: self.name.to_string(),
-                scope: stored.public.scope.clone(),
-                key: stored.storage_key.key.to_string(),
-                version: None,
-                etag: None,
-                checksum,
-                content_type: stored.public.content_type.clone(),
-                size: actual,
-                visibility: stored.visibility,
-                metadata,
-            };
+            let object = self.object_ref(&stored, actual, checksum);
             stored.public.status = UploadSessionStatus::Complete;
             stored.public.next_offset = Some(actual);
             stored.object = Some(object.clone());
@@ -339,7 +329,7 @@ impl StorageBackend for LocalFsStorageBackend {
     ) -> StorageBoxFuture<'a, ()> {
         Box::pin(async move {
             match self.read_session(&session) {
-                Ok(stored) => ensure_owner(ctx, &stored)?,
+                Ok(stored) => ensure_owner(&ctx.actor, &stored.owner)?,
                 Err(StorageError::UnknownUploadSession { .. }) => return Ok(()),
                 Err(err) => return Err(err),
             }
@@ -406,7 +396,7 @@ impl LocalFsStorageBackend {
                 )));
             }
         }
-        ensure_size_limit(stored, actual)?;
+        ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
         let object_bytes =
             fs::read(final_path).map_err(|err| local_io_error("read completed object", err))?;
         let checksum =
@@ -425,100 +415,16 @@ impl LocalFsStorageBackend {
         size: u64,
         checksum: Option<crate::ObjectChecksum>,
     ) -> ObjectRef {
-        let mut metadata = stored.storage_key.metadata.0.clone();
-        metadata.extend(stored.request_metadata.clone());
-        ObjectRef {
-            backend: self.name.to_string(),
-            scope: stored.public.scope.clone(),
-            key: stored.storage_key.key.to_string(),
-            version: None,
-            etag: None,
-            checksum,
-            content_type: stored.public.content_type.clone(),
+        object_ref(
+            self.name,
+            &stored.public,
+            &stored.storage_key,
+            stored.visibility,
+            &stored.request_metadata,
             size,
-            visibility: stored.visibility,
-            metadata,
-        }
+            checksum,
+        )
     }
-}
-
-fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
-    match strategy {
-        UploadStrategy::Auto | UploadStrategy::Sequential => Ok(UploadStrategy::Sequential),
-        UploadStrategy::SingleRequest | UploadStrategy::Multipart => {
-            Err(StorageError::unsupported(
-                "only sequential proxy uploads are implemented in pocopine-storage PR 1",
-            ))
-        }
-    }
-}
-
-fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
-    OffsetDateTime::now_utc()
-        + time::Duration::seconds(duration.as_secs().min(i64::MAX as u64) as i64)
-}
-
-fn ensure_owner(ctx: &StorageContext, stored: &StoredUploadSession) -> StorageResult<()> {
-    if ctx.actor.same_owner(&stored.owner) {
-        Ok(())
-    } else {
-        Err(StorageError::forbidden(
-            "upload session belongs to a different storage actor",
-        ))
-    }
-}
-
-fn ensure_open(stored: &StoredUploadSession) -> StorageResult<()> {
-    match stored.public.status {
-        UploadSessionStatus::Open => Ok(()),
-        UploadSessionStatus::Complete => Err(StorageError::UploadComplete {
-            session: stored.public.id.to_string(),
-        }),
-        UploadSessionStatus::Aborted
-        | UploadSessionStatus::Expired
-        | UploadSessionStatus::Completing => {
-            tracing::debug!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.upload_closed",
-                session = %stored.public.id,
-                status = ?stored.public.status,
-            );
-            Err(StorageError::UploadClosed {
-                session: stored.public.id.to_string(),
-            })
-        }
-    }
-}
-
-fn refresh_expired(stored: &mut StoredUploadSession) {
-    if stored.public.status == UploadSessionStatus::Open
-        && OffsetDateTime::now_utc() >= stored.public.expires_at
-    {
-        stored.public.status = UploadSessionStatus::Expired;
-    }
-}
-
-fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
-    offset
-        .checked_add(byte_count as u64)
-        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))
-}
-
-fn ensure_size_limit(stored: &StoredUploadSession, new_offset: u64) -> StorageResult<()> {
-    if new_offset > stored.max_bytes {
-        return Err(StorageError::policy_rejected(format!(
-            "upload exceeds scope max of {} bytes",
-            stored.max_bytes
-        )));
-    }
-    if let Some(size) = stored.public.size {
-        if new_offset > size {
-            return Err(StorageError::policy_rejected(format!(
-                "upload exceeds declared size of {size} bytes"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn commit_completed_object(from: PathBuf, to: &Path) -> StorageResult<()> {

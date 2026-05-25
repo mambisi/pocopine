@@ -4,6 +4,8 @@
 //! app plugin and the host server plugin.
 
 #[cfg(not(target_arch = "wasm32"))]
+mod backend_common;
+#[cfg(not(target_arch = "wasm32"))]
 mod checksum;
 mod client;
 mod error;

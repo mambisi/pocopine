@@ -11,7 +11,7 @@ pub(crate) fn validate_complete_checksum(
         crate::ChecksumPolicy::None => Ok(None),
         crate::ChecksumPolicy::Optional(allowed) => {
             if let Some(checksum) = &provided {
-                if !allowed.iter().any(|allowed| *allowed == checksum.algorithm) {
+                if !allowed.contains(&checksum.algorithm) {
                     return Err(StorageError::policy_rejected(
                         "checksum algorithm is not allowed",
                     ));

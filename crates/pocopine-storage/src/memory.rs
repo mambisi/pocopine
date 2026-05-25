@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::backend_common::{
+    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit, expires_at, object_ref,
+    refresh_expired, selected_strategy,
+};
 use crate::checksum::validate_complete_checksum;
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
@@ -69,7 +72,7 @@ impl MemoryStorageBackend {
         let mut inner = self.lock()?;
         let before = inner.sessions.len();
         inner.sessions.retain(|_, stored| {
-            refresh_expired(stored);
+            refresh_expired_public(stored);
             stored.public.status != UploadSessionStatus::Expired
         });
         Ok(before.saturating_sub(inner.sessions.len()))
@@ -143,8 +146,8 @@ impl StorageBackend for MemoryStorageBackend {
                 .sessions
                 .get_mut(session.as_str())
                 .ok_or_else(|| StorageError::unknown_upload_session(session.to_string()))?;
-            ensure_owner(ctx, stored)?;
-            refresh_expired(stored);
+            ensure_owner(&ctx.actor, &stored.owner)?;
+            refresh_expired_public(stored);
             let mut public = stored.public.clone();
             if public.status == UploadSessionStatus::Open {
                 public.next_offset = Some(stored.bytes.len() as u64);
@@ -166,9 +169,9 @@ impl StorageBackend for MemoryStorageBackend {
                 .sessions
                 .get_mut(session.as_str())
                 .ok_or_else(|| StorageError::unknown_upload_session(session.to_string()))?;
-            ensure_owner(ctx, stored)?;
-            refresh_expired(stored);
-            ensure_open(stored)?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
+            refresh_expired_public(stored);
+            ensure_open(&stored.public)?;
             if stored.public.strategy != UploadStrategy::Sequential {
                 return Err(StorageError::unsupported(
                     "memory backend only supports sequential proxy upload",
@@ -186,7 +189,7 @@ impl StorageBackend for MemoryStorageBackend {
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
             let new_offset = checked_new_offset(offset, bytes.len())?;
-            ensure_size_limit(stored, new_offset)?;
+            ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
             stored.bytes.extend_from_slice(&bytes);
             stored.public.next_offset = Some(stored.bytes.len() as u64);
             Ok(stored.public.clone())
@@ -207,12 +210,12 @@ impl StorageBackend for MemoryStorageBackend {
                     .ok_or_else(|| {
                         StorageError::unknown_upload_session(request.session.to_string())
                     })?;
-                ensure_owner(ctx, stored)?;
-                refresh_expired(stored);
+                ensure_owner(&ctx.actor, &stored.owner)?;
+                refresh_expired_public(stored);
                 if let Some(object) = &stored.object {
                     return Ok(object.clone());
                 }
-                ensure_open(stored)?;
+                ensure_open(&stored.public)?;
                 if let Some(size) = stored.public.size {
                     let actual = stored.bytes.len() as u64;
                     if actual != size {
@@ -221,7 +224,11 @@ impl StorageBackend for MemoryStorageBackend {
                         )));
                     }
                 }
-                ensure_size_limit(stored, stored.bytes.len() as u64)?;
+                ensure_size_limit(
+                    stored.max_bytes,
+                    stored.public.size,
+                    stored.bytes.len() as u64,
+                )?;
                 let checksum = validate_complete_checksum(
                     &stored.checksum_policy,
                     &stored.bytes,
@@ -229,20 +236,15 @@ impl StorageBackend for MemoryStorageBackend {
                 )?;
 
                 let key = stored.storage_key.key.to_string();
-                let mut metadata = stored.storage_key.metadata.0.clone();
-                metadata.extend(stored.request_metadata.clone());
-                let object = ObjectRef {
-                    backend: self.name.to_string(),
-                    scope: stored.public.scope.clone(),
-                    key: key.clone(),
-                    version: None,
-                    etag: None,
+                let object = object_ref(
+                    self.name,
+                    &stored.public,
+                    &stored.storage_key,
+                    stored.visibility,
+                    &stored.request_metadata,
+                    stored.bytes.len() as u64,
                     checksum,
-                    content_type: stored.public.content_type.clone(),
-                    size: stored.bytes.len() as u64,
-                    visibility: stored.visibility,
-                    metadata,
-                };
+                );
                 stored.public.status = UploadSessionStatus::Complete;
                 stored.public.next_offset = Some(stored.bytes.len() as u64);
                 stored.object = Some(object.clone());
@@ -263,89 +265,15 @@ impl StorageBackend for MemoryStorageBackend {
             let Some(stored) = inner.sessions.get(session.as_str()) else {
                 return Ok(());
             };
-            ensure_owner(ctx, stored)?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
             inner.sessions.remove(session.as_str());
             Ok(())
         })
     }
 }
 
-fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
-    match strategy {
-        UploadStrategy::Auto | UploadStrategy::Sequential => Ok(UploadStrategy::Sequential),
-        UploadStrategy::SingleRequest | UploadStrategy::Multipart => {
-            Err(StorageError::unsupported(
-                "only sequential proxy uploads are implemented in pocopine-storage PR 1",
-            ))
-        }
-    }
-}
-
-fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
-    OffsetDateTime::now_utc()
-        + time::Duration::seconds(duration.as_secs().min(i64::MAX as u64) as i64)
-}
-
-fn ensure_owner(ctx: &StorageContext, stored: &StoredUpload) -> StorageResult<()> {
-    if ctx.actor.same_owner(&stored.owner) {
-        Ok(())
-    } else {
-        Err(StorageError::forbidden(
-            "upload session belongs to a different storage actor",
-        ))
-    }
-}
-
-fn ensure_open(stored: &StoredUpload) -> StorageResult<()> {
-    match stored.public.status {
-        UploadSessionStatus::Open => Ok(()),
-        UploadSessionStatus::Complete => Err(StorageError::UploadComplete {
-            session: stored.public.id.to_string(),
-        }),
-        UploadSessionStatus::Aborted
-        | UploadSessionStatus::Expired
-        | UploadSessionStatus::Completing => {
-            tracing::debug!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.upload_closed",
-                session = %stored.public.id,
-                status = ?stored.public.status,
-            );
-            Err(StorageError::UploadClosed {
-                session: stored.public.id.to_string(),
-            })
-        }
-    }
-}
-
-fn refresh_expired(stored: &mut StoredUpload) {
-    if stored.public.status == UploadSessionStatus::Open
-        && OffsetDateTime::now_utc() >= stored.public.expires_at
-    {
-        stored.public.status = UploadSessionStatus::Expired;
+fn refresh_expired_public(stored: &mut StoredUpload) {
+    if refresh_expired(&mut stored.public) {
         stored.public.next_offset = Some(stored.bytes.len() as u64);
     }
-}
-
-fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
-    offset
-        .checked_add(byte_count as u64)
-        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))
-}
-
-fn ensure_size_limit(stored: &StoredUpload, new_offset: u64) -> StorageResult<()> {
-    if new_offset > stored.max_bytes {
-        return Err(StorageError::policy_rejected(format!(
-            "upload exceeds scope max of {} bytes",
-            stored.max_bytes
-        )));
-    }
-    if let Some(size) = stored.public.size {
-        if new_offset > size {
-            return Err(StorageError::policy_rejected(format!(
-                "upload exceeds declared size of {size} bytes"
-            )));
-        }
-    }
-    Ok(())
 }
