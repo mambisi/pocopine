@@ -5,6 +5,8 @@
 //! act as an ORM. Apps still implement `CrudSource` /
 //! `TransactionalCrudSource` with normal SQLx queries.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::marker::PhantomData;
 
 use pocopine_sync::SyncError;
