@@ -8,7 +8,10 @@ use pocopine_core::{ServerError, ServerResult};
 use pocopine_server::auth::{Decision, Predicate, RequestContext};
 use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::extract::{Path, State};
-use pocopine_server::axum::http::{HeaderMap, Request, StatusCode};
+use pocopine_server::axum::http::{
+    header::{CACHE_CONTROL, SET_COOKIE, VARY},
+    HeaderMap, HeaderValue, Request, StatusCode,
+};
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
 use pocopine_server::axum::routing::{get, patch, post};
 use pocopine_server::{Server, ServerPlugin};
@@ -24,6 +27,7 @@ use crate::{
 
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JSON_CONTROL_BYTES: usize = 64 * 1024;
+const STORAGE_COOKIE_PATH: &str = "/__pocopine/storage";
 
 /// Future returned by storage backend methods.
 pub type StorageBoxFuture<'a, T> = Pin<Box<dyn Future<Output = StorageResult<T>> + Send + 'a>>;
@@ -44,6 +48,18 @@ pub enum StorageActor {
     System(String),
 }
 
+impl StorageActor {
+    /// Compare stable owner identity while ignoring mutable principal attributes.
+    pub fn same_owner(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Principal(left), Self::Principal(right)) => left.subject == right.subject,
+            (Self::Anonymous(left), Self::Anonymous(right)) => left.id == right.id,
+            (Self::System(left), Self::System(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
 /// Context passed into guards, resolvers, and backend adapters.
 #[derive(Clone, Debug)]
 pub struct StorageContext {
@@ -53,6 +69,13 @@ pub struct StorageContext {
 
 impl StorageContext {
     pub fn from_request(request: RequestContext) -> Self {
+        Self::from_request_with_anonymous_binding(request, None)
+    }
+
+    fn from_request_with_anonymous_binding(
+        request: RequestContext,
+        anonymous_binding: Option<String>,
+    ) -> Self {
         let actor = request
             .user
             .user()
@@ -73,6 +96,7 @@ impl StorageContext {
                     id: request
                         .session_id()
                         .or_else(|| request.cookie(STORAGE_ANON_COOKIE))
+                        .or(anonymous_binding.as_deref())
                         .unwrap_or_default()
                         .to_string(),
                 })
@@ -313,6 +337,8 @@ impl StorageScopeBuilder {
 struct StorageServerInner {
     backends: Arc<HashMap<String, Arc<dyn StorageBackend>>>,
     scopes: Arc<HashMap<String, Arc<RegisteredStorageScope>>>,
+    trusted_origins: Arc<Vec<TrustedOrigin>>,
+    secure_anonymous_cookies: bool,
 }
 
 /// Host-side storage server service.
@@ -485,11 +511,21 @@ impl StorageServer {
             match backend.inspect_upload(ctx, session.clone()).await {
                 Ok(upload) => return Ok((backend.clone(), upload)),
                 Err(StorageError::UnknownUploadSession { .. }) => {}
-                Err(StorageError::Forbidden { .. }) => {}
                 Err(err) => return Err(err),
             }
         }
         Err(StorageError::unknown_upload_session(session.to_string()))
+    }
+
+    fn is_trusted_origin(&self, origin: &TrustedOrigin) -> bool {
+        self.inner
+            .trusted_origins
+            .iter()
+            .any(|trusted| trusted == origin)
+    }
+
+    fn secure_anonymous_cookies(&self) -> bool {
+        self.inner.secure_anonymous_cookies
     }
 }
 
@@ -498,6 +534,8 @@ impl StorageServer {
 pub struct StorageServerBuilder {
     backends: HashMap<String, Arc<dyn StorageBackend>>,
     scopes: HashMap<String, Arc<RegisteredStorageScope>>,
+    trusted_origins: Vec<TrustedOrigin>,
+    secure_anonymous_cookies: bool,
 }
 
 impl StorageServerBuilder {
@@ -509,6 +547,36 @@ impl StorageServerBuilder {
         self.backends
             .insert(name.as_str().to_string(), Arc::new(backend));
         Ok(self)
+    }
+
+    /// Trust an application origin for storage mutation requests.
+    ///
+    /// Origins are matched by scheme and authority. Configure this when the app
+    /// is served behind a proxy whose external origin cannot be inferred from
+    /// the request `Host` header.
+    pub fn trusted_origin(mut self, origin: impl AsRef<str>) -> StorageResult<Self> {
+        self.trusted_origins
+            .push(TrustedOrigin::parse(origin.as_ref())?);
+        Ok(self)
+    }
+
+    /// Add multiple trusted application origins.
+    pub fn trusted_origins<I, S>(mut self, origins: I) -> StorageResult<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for origin in origins {
+            self.trusted_origins
+                .push(TrustedOrigin::parse(origin.as_ref())?);
+        }
+        Ok(self)
+    }
+
+    /// Whether the anonymous storage binding cookie should include `Secure`.
+    pub fn secure_anonymous_cookies(mut self, secure: bool) -> Self {
+        self.secure_anonymous_cookies = secure;
+        self
     }
 
     pub fn public_scope(
@@ -563,6 +631,8 @@ impl StorageServerBuilder {
             inner: Arc::new(StorageServerInner {
                 backends: Arc::new(self.backends),
                 scopes: Arc::new(self.scopes),
+                trusted_origins: Arc::new(self.trusted_origins),
+                secure_anonymous_cookies: self.secure_anonymous_cookies,
             }),
         }
     }
@@ -626,12 +696,10 @@ async fn scope_handler(
     Path(scope): Path<String>,
     request: Request<Body>,
 ) -> Response {
+    let request = context_from_request(request, &storage);
     storage_response(
-        async {
-            let ctx = context_from_request(request);
-            storage.descriptor(ctx, &scope).await
-        }
-        .await,
+        storage.descriptor(request.ctx, &scope).await,
+        request.set_cookie,
     )
 }
 
@@ -639,13 +707,16 @@ async fn initiate_handler(
     State(storage): State<StorageServer>,
     request: Request<Body>,
 ) -> Response {
-    storage_response(
-        async {
-            let (ctx, request) = parse_json_request::<InitiateUploadRequest>(request).await?;
-            storage.initiate_upload(ctx, request).await
+    match parse_json_request::<InitiateUploadRequest>(request, &storage).await {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            storage_response(
+                storage.initiate_upload(request.ctx, request.payload).await,
+                set_cookie,
+            )
         }
-        .await,
-    )
+        Err(err) => storage_response::<UploadSession>(Err(err), None),
+    }
 }
 
 async fn inspect_handler(
@@ -653,14 +724,16 @@ async fn inspect_handler(
     Path(session): Path<String>,
     request: Request<Body>,
 ) -> Response {
-    storage_response(
+    let request = context_from_request(request, &storage);
+    let response = storage_response(
         async {
-            let ctx = context_from_request(request);
             let session = UploadSessionId::new(session)?;
-            storage.inspect_upload(ctx, session).await
+            storage.inspect_upload(request.ctx, session).await
         }
         .await,
-    )
+        request.set_cookie,
+    );
+    no_store_response(response)
 }
 
 async fn bytes_handler(
@@ -668,43 +741,46 @@ async fn bytes_handler(
     Path(session): Path<String>,
     request: Request<Body>,
 ) -> Response {
-    storage_response(
-        async {
-            let (parts, body) = request.into_parts();
-            reject_cross_site_mutation(&parts.headers)?;
-            let ctx = StorageContext::from_request(RequestContext::from_parts(
-                parts.method.clone(),
-                parts.uri.clone(),
-                parts.headers.clone(),
-                parts.extensions.clone(),
-            ));
-            let offset = parts
-                .headers
-                .get("Upload-Offset")
-                .and_then(|value| value.to_str().ok())
-                .ok_or_else(|| StorageError::invalid_value("Upload-Offset", "<missing>"))?
-                .parse::<u64>()
-                .map_err(|_| StorageError::invalid_value("Upload-Offset", "<invalid>"))?;
-            let session = UploadSessionId::new(session)?;
-            let upload = storage.inspect_upload(ctx.clone(), session.clone()).await?;
-            storage
-                .scope(&upload.scope)?
-                .authorize_write(ctx.clone())
-                .await
-                .map_err(storage_auth_error)?;
-            let max_body_bytes = max_patch_body_bytes(&upload, offset);
-            reject_oversized_content_length(&parts.headers, max_body_bytes)?;
-            let bytes = to_bytes(body, max_body_bytes as usize)
-                .await
-                .map_err(|err| {
-                    StorageError::policy_rejected(format!("upload chunk is too large: {err}"))
-                })?;
-            storage
-                .append_upload_bytes(ctx, session, offset, bytes)
-                .await
+    match bytes_request(request, &storage).await {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            storage_response(
+                async {
+                    let offset = request
+                        .headers
+                        .get("Upload-Offset")
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| StorageError::invalid_value("Upload-Offset", "<missing>"))?
+                        .parse::<u64>()
+                        .map_err(|_| StorageError::invalid_value("Upload-Offset", "<invalid>"))?;
+                    let session = UploadSessionId::new(session)?;
+                    let upload = storage
+                        .inspect_upload(request.ctx.clone(), session.clone())
+                        .await?;
+                    storage
+                        .scope(&upload.scope)?
+                        .authorize_write(request.ctx.clone())
+                        .await
+                        .map_err(storage_auth_error)?;
+                    let max_body_bytes = max_patch_body_bytes(&upload, offset);
+                    reject_oversized_content_length(&request.headers, max_body_bytes)?;
+                    let bytes = to_bytes(request.body, max_body_bytes as usize)
+                        .await
+                        .map_err(|err| {
+                            StorageError::policy_rejected(format!(
+                                "upload chunk is too large: {err}"
+                            ))
+                        })?;
+                    storage
+                        .append_upload_bytes(request.ctx, session, offset, bytes)
+                        .await
+                }
+                .await,
+                set_cookie,
+            )
         }
-        .await,
-    )
+        Err(err) => storage_response::<UploadSession>(Err(err), None),
+    }
 }
 
 async fn complete_handler(
@@ -712,23 +788,29 @@ async fn complete_handler(
     Path(session): Path<String>,
     request: Request<Body>,
 ) -> Response {
-    storage_response(
-        async {
-            let (ctx, request) =
-                parse_optional_json_request::<CompleteUploadRequest>(request).await?;
-            let session = UploadSessionId::new(session)?;
-            storage
-                .complete_upload(
-                    ctx,
-                    CompleteUpload {
-                        session,
-                        checksum: request.checksum,
-                    },
-                )
-                .await
+    match parse_optional_json_request::<CompleteUploadRequest>(request, &storage).await {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            storage_response(
+                async {
+                    let payload = request.payload;
+                    let session = UploadSessionId::new(session)?;
+                    storage
+                        .complete_upload(
+                            request.ctx,
+                            CompleteUpload {
+                                session,
+                                checksum: payload.checksum,
+                            },
+                        )
+                        .await
+                }
+                .await,
+                set_cookie,
+            )
         }
-        .await,
-    )
+        Err(err) => storage_response::<crate::ObjectRef>(Err(err), None),
+    }
 }
 
 async fn abort_handler(
@@ -736,35 +818,56 @@ async fn abort_handler(
     Path(session): Path<String>,
     request: Request<Body>,
 ) -> Response {
-    storage_response(
-        async {
-            let (parts, _body) = request.into_parts();
-            reject_cross_site_mutation(&parts.headers)?;
-            let ctx = StorageContext::from_request(RequestContext::from_parts(
-                parts.method,
-                parts.uri,
-                parts.headers,
-                parts.extensions,
-            ));
-            let session = UploadSessionId::new(session)?;
-            storage.abort_upload(ctx, session).await
+    match mutation_context_from_request(request, &storage) {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            storage_response(
+                async {
+                    let session = UploadSessionId::new(session)?;
+                    storage.abort_upload(request.ctx, session).await
+                }
+                .await,
+                set_cookie,
+            )
         }
-        .await,
-    )
+        Err(err) => storage_response::<()>(Err(err), None),
+    }
 }
 
-async fn parse_json_request<T>(request: Request<Body>) -> StorageResult<(StorageContext, T)>
+struct StorageRequest {
+    ctx: StorageContext,
+    set_cookie: Option<String>,
+}
+
+struct ParsedStorageRequest<T> {
+    ctx: StorageContext,
+    payload: T,
+    set_cookie: Option<String>,
+}
+
+struct BytesStorageRequest {
+    ctx: StorageContext,
+    headers: HeaderMap,
+    body: Body,
+    set_cookie: Option<String>,
+}
+
+async fn parse_json_request<T>(
+    request: Request<Body>,
+    storage: &StorageServer,
+) -> StorageResult<ParsedStorageRequest<T>>
 where
     T: serde::de::DeserializeOwned + Send + 'static,
 {
     let (parts, body) = request.into_parts();
-    reject_cross_site_mutation(&parts.headers)?;
-    let ctx = StorageContext::from_request(RequestContext::from_parts(
+    reject_cross_site_mutation(storage, &parts.headers)?;
+    let request = context_from_parts(
         parts.method.clone(),
         parts.uri.clone(),
         parts.headers.clone(),
         parts.extensions.clone(),
-    ));
+        storage,
+    );
     let bytes = to_bytes(body, MAX_JSON_CONTROL_BYTES)
         .await
         .map_err(|err| StorageError::client(format!("read json body: {err}")))?;
@@ -774,43 +877,126 @@ where
     require_json_content_type(&parts.headers)?;
     let payload = serde_json::from_slice(&bytes)
         .map_err(|err| StorageError::invalid_value("json", err.to_string()))?;
-    Ok((ctx, payload))
+    Ok(ParsedStorageRequest {
+        ctx: request.ctx,
+        payload,
+        set_cookie: request.set_cookie,
+    })
 }
 
 async fn parse_optional_json_request<T>(
     request: Request<Body>,
-) -> StorageResult<(StorageContext, T)>
+    storage: &StorageServer,
+) -> StorageResult<ParsedStorageRequest<T>>
 where
     T: serde::de::DeserializeOwned + Default + Send + 'static,
 {
     let (parts, body) = request.into_parts();
-    reject_cross_site_mutation(&parts.headers)?;
-    let ctx = StorageContext::from_request(RequestContext::from_parts(
+    reject_cross_site_mutation(storage, &parts.headers)?;
+    let request = context_from_parts(
         parts.method.clone(),
         parts.uri.clone(),
         parts.headers.clone(),
         parts.extensions.clone(),
-    ));
+        storage,
+    );
     let bytes = to_bytes(body, MAX_JSON_CONTROL_BYTES)
         .await
         .map_err(|err| StorageError::client(format!("read json body: {err}")))?;
     if bytes.is_empty() {
-        return Ok((ctx, T::default()));
+        return Ok(ParsedStorageRequest {
+            ctx: request.ctx,
+            payload: T::default(),
+            set_cookie: request.set_cookie,
+        });
     }
     require_json_content_type(&parts.headers)?;
     let payload = serde_json::from_slice(&bytes)
         .map_err(|err| StorageError::invalid_value("json", err.to_string()))?;
-    Ok((ctx, payload))
+    Ok(ParsedStorageRequest {
+        ctx: request.ctx,
+        payload,
+        set_cookie: request.set_cookie,
+    })
 }
 
-fn context_from_request(request: Request<Body>) -> StorageContext {
+async fn bytes_request(
+    request: Request<Body>,
+    storage: &StorageServer,
+) -> StorageResult<BytesStorageRequest> {
+    let (parts, body) = request.into_parts();
+    reject_cross_site_mutation(storage, &parts.headers)?;
+    let request = context_from_parts(
+        parts.method,
+        parts.uri,
+        parts.headers.clone(),
+        parts.extensions,
+        storage,
+    );
+    Ok(BytesStorageRequest {
+        ctx: request.ctx,
+        headers: parts.headers,
+        body,
+        set_cookie: request.set_cookie,
+    })
+}
+
+fn mutation_context_from_request(
+    request: Request<Body>,
+    storage: &StorageServer,
+) -> StorageResult<StorageRequest> {
     let (parts, _body) = request.into_parts();
-    StorageContext::from_request(RequestContext::from_parts(
+    reject_cross_site_mutation(storage, &parts.headers)?;
+    Ok(context_from_parts(
         parts.method,
         parts.uri,
         parts.headers,
         parts.extensions,
+        storage,
     ))
+}
+
+fn context_from_request(request: Request<Body>, storage: &StorageServer) -> StorageRequest {
+    let (parts, _body) = request.into_parts();
+    context_from_parts(
+        parts.method,
+        parts.uri,
+        parts.headers,
+        parts.extensions,
+        storage,
+    )
+}
+
+fn context_from_parts(
+    method: pocopine_server::axum::http::Method,
+    uri: pocopine_server::axum::http::Uri,
+    headers: HeaderMap,
+    extensions: pocopine_server::axum::http::Extensions,
+    storage: &StorageServer,
+) -> StorageRequest {
+    let request = RequestContext::from_parts(method, uri, headers, extensions);
+    let anonymous_binding = if request.user.user().is_none()
+        && request.session_id().is_none()
+        && request.cookie(STORAGE_ANON_COOKIE).is_none()
+    {
+        Some(Uuid::new_v4().to_string())
+    } else {
+        None
+    };
+    let set_cookie = anonymous_binding
+        .as_ref()
+        .map(|binding| anonymous_binding_cookie(binding, storage.secure_anonymous_cookies()));
+    StorageRequest {
+        ctx: StorageContext::from_request_with_anonymous_binding(request, anonymous_binding),
+        set_cookie,
+    }
+}
+
+fn anonymous_binding_cookie(binding: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!(
+        "{STORAGE_ANON_COOKIE}={binding}; Path={STORAGE_COOKIE_PATH}; HttpOnly; SameSite=Strict{secure}"
+    )
 }
 
 fn require_bound_actor(ctx: &StorageContext) -> StorageResult<()> {
@@ -853,41 +1039,82 @@ fn reject_oversized_content_length(headers: &HeaderMap, limit: u64) -> StorageRe
     Ok(())
 }
 
-fn reject_cross_site_mutation(headers: &HeaderMap) -> StorageResult<()> {
-    if headers
+fn reject_cross_site_mutation(storage: &StorageServer, headers: &HeaderMap) -> StorageResult<()> {
+    if let Some(fetch_site) = headers
         .get("sec-fetch-site")
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.eq_ignore_ascii_case("cross-site") || value.eq_ignore_ascii_case("none")
-        })
     {
-        return Err(StorageError::forbidden(
-            "cross-site storage mutation rejected",
-        ));
+        if fetch_site.eq_ignore_ascii_case("same-origin")
+            || fetch_site.eq_ignore_ascii_case("same-site")
+        {
+            return Ok(());
+        }
+        if fetch_site.eq_ignore_ascii_case("cross-site") || fetch_site.eq_ignore_ascii_case("none")
+        {
+            return Err(StorageError::forbidden(
+                "cross-site storage mutation rejected",
+            ));
+        }
     }
 
     let Some(origin) = headers.get("origin").and_then(|value| value.to_str().ok()) else {
-        return Ok(());
-    };
-    let Some(host) = headers.get("host").and_then(|value| value.to_str().ok()) else {
         return Err(StorageError::forbidden(
             "storage mutation origin could not be validated",
         ));
     };
-    if origin_authority(origin).is_some_and(|authority| authority.eq_ignore_ascii_case(host)) {
+    let origin = TrustedOrigin::parse(origin)?;
+    if storage.is_trusted_origin(&origin) || origin_matches_request_host(&origin, headers) {
         Ok(())
     } else {
-        Err(StorageError::forbidden(
+        return Err(StorageError::forbidden(
             "cross-origin storage mutation rejected",
-        ))
+        ));
     }
 }
 
-fn origin_authority(origin: &str) -> Option<&str> {
-    let (_, rest) = origin.split_once("://")?;
-    rest.split('/')
-        .next()
-        .filter(|authority| !authority.is_empty())
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TrustedOrigin {
+    scheme: String,
+    authority: String,
+}
+
+impl TrustedOrigin {
+    fn parse(origin: &str) -> StorageResult<Self> {
+        let (scheme, rest) = origin
+            .trim()
+            .split_once("://")
+            .ok_or_else(|| StorageError::invalid_value("Origin", origin.to_string()))?;
+        let authority = rest
+            .split('/')
+            .next()
+            .filter(|authority| !authority.is_empty())
+            .ok_or_else(|| StorageError::invalid_value("Origin", origin.to_string()))?;
+        if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")) {
+            return Err(StorageError::invalid_value("Origin", origin.to_string()));
+        }
+        Ok(Self {
+            scheme: scheme.to_ascii_lowercase(),
+            authority: authority.to_ascii_lowercase(),
+        })
+    }
+}
+
+fn origin_matches_request_host(origin: &TrustedOrigin, headers: &HeaderMap) -> bool {
+    let Some(host) = headers.get("host").and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    if !origin.authority.eq_ignore_ascii_case(host) {
+        return false;
+    }
+    origin.scheme == "https" || (origin.scheme == "http" && is_localhost_authority(host))
+}
+
+fn is_localhost_authority(authority: &str) -> bool {
+    let host = authority
+        .rsplit_once(':')
+        .map(|(host, _port)| host)
+        .unwrap_or(authority);
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
 }
 
 fn require_json_content_type(headers: &HeaderMap) -> StorageResult<()> {
@@ -909,7 +1136,7 @@ fn require_json_content_type(headers: &HeaderMap) -> StorageResult<()> {
     }
 }
 
-fn storage_response<T>(result: StorageResult<T>) -> Response
+fn storage_response<T>(result: StorageResult<T>, set_cookie: Option<String>) -> Response
 where
     T: serde::Serialize,
 {
@@ -918,7 +1145,23 @@ where
         .err()
         .map(storage_error_status)
         .unwrap_or(StatusCode::OK);
-    (status, Json(StorageResponse::from_result(result))).into_response()
+    let mut response = (status, Json(StorageResponse::from_result(result))).into_response();
+    if let Some(set_cookie) = set_cookie {
+        if let Ok(value) = HeaderValue::from_str(&set_cookie) {
+            response.headers_mut().insert(SET_COOKIE, value);
+        }
+    }
+    response
+}
+
+fn no_store_response(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static("Cookie"));
+    response
 }
 
 fn storage_error_status(error: &StorageError) -> StatusCode {

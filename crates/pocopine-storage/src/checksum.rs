@@ -8,7 +8,7 @@ pub(crate) fn validate_complete_checksum(
     provided: Option<ObjectChecksum>,
 ) -> StorageResult<Option<ObjectChecksum>> {
     match policy {
-        crate::ChecksumPolicy::None => Ok(provided),
+        crate::ChecksumPolicy::None => Ok(None),
         crate::ChecksumPolicy::Optional(allowed) => {
             if let Some(checksum) = &provided {
                 if !allowed.iter().any(|allowed| *allowed == checksum.algorithm) {
@@ -16,8 +16,15 @@ pub(crate) fn validate_complete_checksum(
                         "checksum algorithm is not allowed",
                     ));
                 }
+                let computed = compute_checksum(checksum.algorithm, bytes)?;
+                if !checksum.value.eq_ignore_ascii_case(&computed.value) {
+                    return Err(StorageError::policy_rejected(
+                        "upload checksum does not match uploaded bytes",
+                    ));
+                }
+                return Ok(Some(computed));
             }
-            Ok(provided)
+            Ok(None)
         }
         crate::ChecksumPolicy::Required(algorithm) => {
             let provided = provided.ok_or_else(|| {
