@@ -22,6 +22,8 @@ pub enum StorageError {
     Forbidden { message: String },
     /// The upload violates the registered scope policy.
     PolicyRejected { reason: String },
+    /// The upload body or declared size exceeds a server limit.
+    PayloadTooLarge { limit: u64 },
     /// The current backend or first implementation slice does not support this.
     Unsupported { message: String },
     /// Sequential upload offset did not match the backend's committed offset.
@@ -80,6 +82,10 @@ impl StorageError {
         }
     }
 
+    pub fn payload_too_large(limit: u64) -> Self {
+        Self::PayloadTooLarge { limit }
+    }
+
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::Unsupported {
             message: message.into(),
@@ -122,6 +128,9 @@ impl fmt::Display for StorageError {
             Self::Forbidden { message } => write!(f, "forbidden storage request: {message}"),
             Self::PolicyRejected { reason } => {
                 write!(f, "storage policy rejected upload: {reason}")
+            }
+            Self::PayloadTooLarge { limit } => {
+                write!(f, "storage upload exceeds maximum size of {limit} bytes")
             }
             Self::Unsupported { message } => write!(f, "unsupported storage operation: {message}"),
             Self::OffsetMismatch { expected, provided } => write!(

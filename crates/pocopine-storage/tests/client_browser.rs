@@ -351,6 +351,7 @@ fn json_response<T: Serialize>(result: StorageResult<T>) -> BrowserStorageRespon
         Err(StorageError::Unauthorized { .. }) => 401,
         Err(StorageError::Forbidden { .. }) => 403,
         Err(StorageError::UnknownUploadSession { .. }) => 404,
+        Err(StorageError::PayloadTooLarge { .. }) => 413,
         Err(StorageError::PolicyRejected { .. }) => 422,
         Err(_) => 500,
     };
