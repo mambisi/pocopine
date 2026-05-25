@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::marker::PhantomData;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::{StorageError, StorageResult};
@@ -35,24 +33,18 @@ pub const STORAGE_ANON_COOKIE: &str = "pocopine_storage_anon";
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StorageResponse<T> {
     pub ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub data: Option<T>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<StorageError>,
-    #[serde(skip)]
-    marker: PhantomData<T>,
 }
 
 impl<T> StorageResponse<T> {
-    pub fn ok(data: T) -> Self
-    where
-        T: Serialize,
-    {
+    pub fn ok(data: T) -> Self {
         Self {
             ok: true,
-            data: Some(serde_json::to_value(data).unwrap_or(Value::Null)),
+            data: Some(data),
             error: None,
-            marker: PhantomData,
         }
     }
 
@@ -61,30 +53,20 @@ impl<T> StorageResponse<T> {
             ok: false,
             data: None,
             error: Some(error),
-            marker: PhantomData,
         }
     }
 
-    pub fn from_result(result: StorageResult<T>) -> Self
-    where
-        T: Serialize,
-    {
+    pub fn from_result(result: StorageResult<T>) -> Self {
         match result {
             Ok(data) => Self::ok(data),
             Err(error) => Self::err(error),
         }
     }
 
-    pub fn into_result(self) -> StorageResult<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
+    pub fn into_result(self) -> StorageResult<T> {
         if self.ok {
-            let data = self
-                .data
-                .ok_or_else(|| StorageError::client("storage response omitted data"))?;
-            serde_json::from_value(data)
-                .map_err(|err| StorageError::client(format!("decode storage response data: {err}")))
+            self.data
+                .ok_or_else(|| StorageError::client("storage response omitted data"))
         } else {
             Err(self
                 .error
@@ -93,14 +75,15 @@ impl<T> StorageResponse<T> {
     }
 }
 
+fn none<T>() -> Option<T> {
+    None
+}
+
 fn validate_token(field: &'static str, value: String) -> StorageResult<String> {
     let trimmed = value.trim();
     if value.len() > MAX_STORAGE_TOKEN_LEN
         || trimmed.is_empty()
         || trimmed != value
-        || value.chars().any(char::is_control)
-        || value.contains('/')
-        || value.contains('\\')
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
@@ -321,18 +304,13 @@ impl<'de> Deserialize<'de> for SafeObjectKey {
 }
 
 /// Visibility selected for a completed object.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ObjectVisibility {
+    #[default]
     Private,
     Public,
-}
-
-impl Default for ObjectVisibility {
-    fn default() -> Self {
-        Self::Private
-    }
 }
 
 /// Upload strategy requested by a client or selected by the backend.
@@ -382,19 +360,14 @@ pub struct UploadProgress {
 }
 
 /// Checksum policy advertised by a scope/backend.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ChecksumPolicy {
+    #[default]
     None,
     Optional(Vec<ChecksumAlgorithm>),
     Required(ChecksumAlgorithm),
-}
-
-impl Default for ChecksumPolicy {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Supported checksum algorithms.
@@ -709,7 +682,7 @@ impl ObjectOwnerRef {
 pub struct ObjectMetadata(pub BTreeMap<String, String>);
 
 impl ObjectMetadata {
-    pub fn from_iter<K, V>(entries: impl IntoIterator<Item = (K, V)>) -> Self
+    pub fn from_entries<K, V>(entries: impl IntoIterator<Item = (K, V)>) -> Self
     where
         K: Into<String>,
         V: Into<String>,
@@ -724,6 +697,16 @@ impl ObjectMetadata {
 
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.0.insert(key.into(), value.into());
+    }
+}
+
+impl<K, V> FromIterator<(K, V)> for ObjectMetadata
+where
+    K: Into<String>,
+    V: Into<String>,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Self::from_entries(iter)
     }
 }
 

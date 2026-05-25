@@ -1394,7 +1394,7 @@ fn storage_key() -> StorageResult<StorageKey> {
     Ok(
         StorageKey::new(SafeObjectKey::parse("avatars/user-1/photo.txt")?)
             .owner(ObjectOwnerRef::principal("user-1"))
-            .metadata(ObjectMetadata::from_iter([("kind", "avatar")])),
+            .metadata(ObjectMetadata::from_entries([("kind", "avatar")])),
     )
 }
 

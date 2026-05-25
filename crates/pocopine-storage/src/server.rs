@@ -1484,9 +1484,7 @@ fn tus_storage_error_status(error: &StorageError) -> StatusCode {
         StorageError::InvalidValue { field, .. } if field == "Tus-Resumable" => {
             StatusCode::PRECONDITION_FAILED
         }
-        StorageError::UploadComplete { .. } => {
-            StatusCode::from_u16(423).expect("423 Locked is a valid HTTP status")
-        }
+        StorageError::UploadComplete { .. } => StatusCode::LOCKED,
         _ => storage_error_status(error),
     }
 }
@@ -1575,9 +1573,9 @@ fn reject_cross_site_mutation(storage: &StorageServer, headers: &HeaderMap) -> S
     if storage.is_trusted_origin(&origin) || origin_matches_request_host(&origin, headers) {
         Ok(())
     } else {
-        return Err(StorageError::forbidden(
+        Err(StorageError::forbidden(
             "cross-origin storage mutation rejected",
-        ));
+        ))
     }
 }
 

@@ -640,7 +640,7 @@ mod wasm {
         let response = send_request(request).await?;
         let envelope: StorageResponse<T> = match serde_json::from_str(&response.body) {
             Ok(envelope) => envelope,
-            Err(err) if !(200..300).contains(&response.status) => {
+            Err(_err) if !(200..300).contains(&response.status) => {
                 return Err(StorageError::client(format!(
                     "{operation} failed with HTTP {}",
                     response.status
