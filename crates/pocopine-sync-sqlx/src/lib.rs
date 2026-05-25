@@ -24,8 +24,8 @@ pub use mutation_log::{
 pub type SqlxCrudTransaction<DB> = Transaction<'static, DB>;
 
 /// Map a SQLx error into Pocopine's sync error type.
-pub fn sync_sqlx_error(_error: sqlx::Error) -> SyncError {
-    SyncError::backend("SQLx backend operation failed")
+pub fn sync_sqlx_error(error: sqlx::Error) -> SyncError {
+    SyncError::backend(format!("SQLx backend operation failed: {error}"))
 }
 
 /// Transaction runner backed by a SQLx pool.
@@ -127,6 +127,7 @@ pub fn sqlite(pool: sqlx::SqlitePool) -> SqliteCrudTransactionRunner {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "sqlite")]
     use super::*;
 
     #[cfg(feature = "sqlite")]
