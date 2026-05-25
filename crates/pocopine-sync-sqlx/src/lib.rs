@@ -11,6 +11,13 @@ use pocopine_sync::SyncError;
 use pocopine_sync_crud::{CrudTransactionRunner, TransactionFuture};
 use sqlx::{Database, Pool, Transaction};
 
+mod mutation_log;
+
+pub use mutation_log::{
+    SqlxCrudMutationLog, DEFAULT_CRUD_MUTATION_LOG_TABLE, MYSQL_CRUD_MUTATION_LOG_SCHEMA,
+    POSTGRES_CRUD_MUTATION_LOG_SCHEMA, SQLITE_CRUD_MUTATION_LOG_SCHEMA,
+};
+
 /// SQLx transaction type used by [`SqlxCrudTransactionRunner`].
 pub type SqlxCrudTransaction<DB> = Transaction<'static, DB>;
 

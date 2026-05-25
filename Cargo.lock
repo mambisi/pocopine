@@ -4817,8 +4817,11 @@ dependencies = [
 name = "pocopine-sync-sqlx"
 version = "0.1.0"
 dependencies = [
+ "http 1.4.0",
+ "pocopine-auth",
  "pocopine-sync",
  "pocopine-sync-crud",
+ "serde_json",
  "sqlx",
  "tokio",
 ]
