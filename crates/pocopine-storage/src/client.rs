@@ -2,7 +2,7 @@ use pocopine_core::{App, AppPlugin};
 
 use crate::{
     StorageError, StorageResult, UploadPolicyDescriptor, UploadSession, UploadSessionId,
-    STORAGE_ENDPOINT_PREFIX,
+    STORAGE_ENDPOINT_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX,
 };
 
 /// App plugin that provides [`StorageClient`] to components.
@@ -24,6 +24,59 @@ impl Default for StorageClientPlugin {
 /// Build the storage app plugin.
 pub fn storage_plugin() -> StorageClientPlugin {
     StorageClientPlugin::default()
+}
+
+/// App plugin that provides [`TusClient`] to components.
+#[derive(Clone, Debug)]
+pub struct TusClientPlugin {
+    endpoint: String,
+    with_credentials: bool,
+}
+
+impl Default for TusClientPlugin {
+    fn default() -> Self {
+        Self {
+            endpoint: STORAGE_TUS_ENDPOINT_PREFIX.to_string(),
+            with_credentials: false,
+        }
+    }
+}
+
+/// Build the tus app plugin.
+pub fn tus_plugin() -> TusClientPlugin {
+    TusClientPlugin::default()
+}
+
+impl TusClientPlugin {
+    /// Override the tus HTTP endpoint prefix.
+    pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
+    /// Set browser credentials mode for tus fetches.
+    pub fn with_credentials(mut self, enabled: bool) -> Self {
+        self.with_credentials = enabled;
+        self
+    }
+
+    /// Build a runtime client without mounting an app.
+    pub fn into_client(self) -> TusClient {
+        TusClient {
+            endpoint: self.endpoint,
+            with_credentials: self.with_credentials,
+        }
+    }
+}
+
+impl AppPlugin for TusClientPlugin {
+    fn name(&self) -> &'static str {
+        "pocopine-storage-tus"
+    }
+
+    fn install(self, app: App) -> App {
+        app.provide_plugin(self.into_client())
+    }
 }
 
 impl StorageClientPlugin {
@@ -99,6 +152,63 @@ impl StorageClient {
     }
 }
 
+/// Runtime tus 1.0 client service installed by [`tus_plugin`].
+#[derive(Clone, Debug)]
+pub struct TusClient {
+    endpoint: String,
+    with_credentials: bool,
+}
+
+impl Default for TusClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TusClient {
+    /// Build a tus client using the default storage tus endpoint.
+    pub fn new() -> Self {
+        TusClientPlugin::default().into_client()
+    }
+
+    /// Override the endpoint on a direct client.
+    pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
+    /// Set browser credentials mode on a direct client.
+    pub fn with_credentials(mut self, enabled: bool) -> Self {
+        self.with_credentials = enabled;
+        self
+    }
+
+    /// Bind this client to a server-registered storage scope.
+    pub fn scope(&self, scope: impl Into<String>) -> TusScopeClient {
+        TusScopeClient {
+            endpoint: self.endpoint.clone(),
+            with_credentials: self.with_credentials,
+            scope: scope.into(),
+        }
+    }
+}
+
+/// Scope-bound tus client.
+#[derive(Clone, Debug)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub struct TusScopeClient {
+    endpoint: String,
+    with_credentials: bool,
+    scope: String,
+}
+
+/// Result returned by the native Rust tus client.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TusUploadResult {
+    pub upload_url: String,
+    pub bytes_uploaded: u64,
+}
+
 /// Scope-bound storage client.
 #[derive(Clone, Debug)]
 pub struct StorageScopeClient {
@@ -130,6 +240,10 @@ impl StorageScopeClient {
 #[derive(Debug)]
 pub struct UploadBuilder;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub struct TusUploadBuilder;
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::cell::RefCell;
@@ -138,6 +252,7 @@ mod wasm {
     use std::pin::Pin;
     use std::rc::Rc;
 
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use js_sys::Promise;
     use serde::de::DeserializeOwned;
     use wasm_bindgen::prelude::*;
@@ -154,6 +269,7 @@ mod wasm {
     };
 
     const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
+    const TUS_PROTOCOL_VERSION: &str = "1.0.0";
 
     /// Test hook for the browser upload transport.
     #[doc(hidden)]
@@ -182,7 +298,17 @@ mod wasm {
     #[derive(Clone, Debug)]
     pub struct BrowserStorageResponse {
         pub status: u16,
+        pub headers: Vec<(String, String)>,
         pub body: String,
+    }
+
+    impl BrowserStorageResponse {
+        pub fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        }
     }
 
     thread_local! {
@@ -280,6 +406,59 @@ mod wasm {
                 abort_signal: None,
                 resume_session: None,
                 auto_resume: false,
+            }
+        }
+    }
+
+    impl super::TusScopeClient {
+        /// Start a tus upload from a browser [`File`].
+        pub fn upload(&self, file: File) -> TusUploadBuilder {
+            let name = file.name();
+            let size = file.size() as u64;
+            let content_type = empty_to_none(file.type_());
+            let last_modified = Some(file.last_modified() as i64);
+            let blob: Blob = file.unchecked_into();
+            self.upload_source(UploadSource {
+                blob,
+                name,
+                size,
+                content_type,
+                last_modified,
+            })
+        }
+
+        /// Start a tus upload from a browser [`Blob`] with an app-provided name.
+        pub fn upload_blob(&self, blob: Blob, name: impl Into<String>) -> TusUploadBuilder {
+            let size = blob.size() as u64;
+            let content_type = empty_to_none(blob.type_());
+            self.upload_source(UploadSource {
+                blob,
+                name: name.into(),
+                size,
+                content_type,
+                last_modified: None,
+            })
+        }
+
+        /// Resume a tus upload from a known upload URL.
+        pub fn resume(&self, file: File, upload_url: impl Into<String>) -> TusUploadBuilder {
+            self.upload(file).upload_url(upload_url)
+        }
+
+        fn upload_source(&self, source: UploadSource) -> TusUploadBuilder {
+            TusUploadBuilder {
+                endpoint: self.endpoint.clone(),
+                with_credentials: self.with_credentials,
+                scope: self.scope.clone(),
+                source,
+                metadata: BTreeMap::new(),
+                progress: None,
+                retry_limit: 2,
+                retry_base_delay_ms: 100,
+                abort_signal: None,
+                upload_url: None,
+                auto_resume: false,
+                chunk_size: DEFAULT_CHUNK_SIZE,
             }
         }
     }
@@ -570,6 +749,290 @@ mod wasm {
         }
     }
 
+    /// Browser tus upload builder.
+    #[must_use]
+    pub struct TusUploadBuilder {
+        endpoint: String,
+        with_credentials: bool,
+        scope: String,
+        source: UploadSource,
+        metadata: BTreeMap<String, String>,
+        progress: Option<Rc<dyn Fn(UploadProgress)>>,
+        retry_limit: u32,
+        retry_base_delay_ms: u32,
+        abort_signal: Option<AbortSignal>,
+        upload_url: Option<String>,
+        auto_resume: bool,
+        chunk_size: u64,
+    }
+
+    struct TusHead {
+        offset: u64,
+        length: Option<u64>,
+    }
+
+    enum TusPatchOutcome {
+        Advanced(u64),
+        Conflict,
+    }
+
+    impl TusUploadBuilder {
+        /// Add string metadata to the tus creation request.
+        pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+            self.metadata.insert(key.into(), value.into());
+            self
+        }
+
+        /// Observe upload progress.
+        pub fn on_progress<F>(mut self, callback: F) -> Self
+        where
+            F: Fn(UploadProgress) + 'static,
+        {
+            self.progress = Some(Rc::new(callback));
+            self
+        }
+
+        /// Set the number of retries for transient browser transport errors.
+        pub fn retry_limit(mut self, retry_limit: u32) -> Self {
+            self.retry_limit = retry_limit;
+            self
+        }
+
+        /// Set the base retry backoff in milliseconds.
+        pub fn retry_base_delay_ms(mut self, retry_base_delay_ms: u32) -> Self {
+            self.retry_base_delay_ms = retry_base_delay_ms;
+            self
+        }
+
+        /// Attach a browser abort signal to every tus request in this upload.
+        pub fn abort_signal(mut self, signal: AbortSignal) -> Self {
+            self.abort_signal = Some(signal);
+            self
+        }
+
+        /// Resume from an existing tus upload URL.
+        pub fn upload_url(mut self, upload_url: impl Into<String>) -> Self {
+            self.upload_url = Some(upload_url.into());
+            self
+        }
+
+        /// Opt into browser localStorage tus URL lookup for this source.
+        ///
+        /// This is disabled by default so same-name/same-size files never resume
+        /// implicitly into an unrelated tus upload.
+        pub fn auto_resume(mut self, enabled: bool) -> Self {
+            self.auto_resume = enabled;
+            self
+        }
+
+        /// Set the tus PATCH chunk size in bytes.
+        pub fn chunk_size(mut self, chunk_size: u64) -> Self {
+            self.chunk_size = chunk_size.max(1);
+            self
+        }
+
+        /// Upload the file/blob through the tus 1.0 creation and PATCH flow.
+        pub async fn send(self) -> StorageResult<TusUploadResult> {
+            self.emit(UploadPhase::Initiating, 0);
+
+            let explicit_resume = self.upload_url.is_some();
+            let resume_url = self.upload_url.clone().or_else(|| {
+                self.auto_resume
+                    .then(|| read_tus_resume_url(&self.resume_key()))
+                    .flatten()
+            });
+            let (upload_url, mut offset) = if let Some(upload_url) = resume_url {
+                match self.head_upload(&upload_url).await {
+                    Ok(head) => {
+                        self.validate_head_length(&head)?;
+                        (upload_url, head.offset)
+                    }
+                    Err(err) if self.auto_resume && !explicit_resume => {
+                        remove_tus_resume_url(&self.resume_key());
+                        let created = self.create_upload().await?;
+                        write_tus_resume_url(&self.resume_key(), &created.0);
+                        created
+                    }
+                    Err(err) => return Err(err),
+                }
+            } else {
+                let created = self.create_upload().await?;
+                if self.auto_resume {
+                    write_tus_resume_url(&self.resume_key(), &created.0);
+                }
+                created
+            };
+            if self.auto_resume {
+                write_tus_resume_url(&self.resume_key(), &upload_url);
+            }
+
+            while offset < self.source.size {
+                self.emit(UploadPhase::Uploading, offset);
+                let end = offset.saturating_add(self.chunk_size).min(self.source.size);
+                let chunk = self.slice(offset, end)?;
+                let mut attempts = 0;
+                loop {
+                    match self.patch_chunk(&upload_url, offset, chunk.clone()).await {
+                        Ok(TusPatchOutcome::Advanced(next_offset)) => {
+                            offset = next_offset;
+                            self.emit(UploadPhase::Uploading, offset);
+                            break;
+                        }
+                        Ok(TusPatchOutcome::Conflict) => {
+                            let head = self.head_upload(&upload_url).await?;
+                            self.validate_head_length(&head)?;
+                            offset = head.offset;
+                            break;
+                        }
+                        Err(err)
+                            if err.is_retryable_client_error() && attempts < self.retry_limit =>
+                        {
+                            attempts += 1;
+                            self.emit(UploadPhase::Retrying, offset);
+                            retry_delay(self.retry_base_delay_ms, attempts).await?;
+                        }
+                        Err(err) => {
+                            self.emit(UploadPhase::Failed, offset);
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+
+            self.emit(UploadPhase::Complete, offset);
+            if self.auto_resume {
+                remove_tus_resume_url(&self.resume_key());
+            }
+            Ok(TusUploadResult {
+                upload_url,
+                bytes_uploaded: offset,
+            })
+        }
+
+        async fn create_upload(&self) -> StorageResult<(String, u64)> {
+            let create_url = tus_uploads_url(&self.endpoint, &self.scope);
+            let response = send_request(BrowserStorageRequest::tus_create(
+                create_url.clone(),
+                self.source.size,
+                self.tus_metadata_header()?,
+                self.with_credentials,
+                self.abort_signal.clone(),
+            ))
+            .await?;
+            ensure_tus_status(&response, "create tus upload", &[201])?;
+            let location = response
+                .header("location")
+                .ok_or_else(|| StorageError::client("create tus upload omitted Location"))?;
+            let upload_url = resolve_tus_location(&create_url, location);
+            let offset = response
+                .header("upload-offset")
+                .map(parse_upload_offset_header)
+                .transpose()?
+                .unwrap_or(0);
+            Ok((upload_url, offset))
+        }
+
+        async fn head_upload(&self, upload_url: &str) -> StorageResult<TusHead> {
+            let response = send_request(BrowserStorageRequest::head(
+                upload_url.to_string(),
+                self.with_credentials,
+                self.abort_signal.clone(),
+            ))
+            .await?;
+            ensure_tus_status(&response, "inspect tus upload", &[200, 204])?;
+            let offset = response
+                .header("upload-offset")
+                .ok_or_else(|| StorageError::client("inspect tus upload omitted Upload-Offset"))
+                .and_then(parse_upload_offset_header)?;
+            let length = response
+                .header("upload-length")
+                .map(parse_upload_length_header)
+                .transpose()?;
+            Ok(TusHead { offset, length })
+        }
+
+        async fn patch_chunk(
+            &self,
+            upload_url: &str,
+            offset: u64,
+            chunk: Blob,
+        ) -> StorageResult<TusPatchOutcome> {
+            let response = send_request(BrowserStorageRequest::tus_patch(
+                upload_url.to_string(),
+                offset,
+                chunk,
+                self.with_credentials,
+                self.abort_signal.clone(),
+            ))
+            .await?;
+            if response.status == 409 {
+                return Ok(TusPatchOutcome::Conflict);
+            }
+            ensure_tus_status(&response, "patch tus upload", &[204])?;
+            let next_offset = response
+                .header("upload-offset")
+                .ok_or_else(|| StorageError::client("patch tus upload omitted Upload-Offset"))
+                .and_then(parse_upload_offset_header)?;
+            Ok(TusPatchOutcome::Advanced(next_offset))
+        }
+
+        fn validate_head_length(&self, head: &TusHead) -> StorageResult<()> {
+            if let Some(length) = head.length {
+                if length != self.source.size {
+                    return Err(StorageError::client(format!(
+                        "tus upload length mismatch: remote {length}, local {}",
+                        self.source.size
+                    )));
+                }
+            }
+            Ok(())
+        }
+
+        fn tus_metadata_header(&self) -> StorageResult<Option<String>> {
+            let mut metadata = self.metadata.clone();
+            metadata
+                .entry("filename".to_string())
+                .or_insert_with(|| self.source.name.clone());
+            if let Some(content_type) = &self.source.content_type {
+                metadata
+                    .entry("filetype".to_string())
+                    .or_insert_with(|| content_type.clone());
+            }
+            encode_tus_metadata(&metadata)
+        }
+
+        fn slice(&self, start: u64, end: u64) -> StorageResult<Blob> {
+            self.source
+                .blob
+                .slice_with_f64_and_f64(start as f64, end as f64)
+                .map_err(|err| StorageError::client(format!("slice tus upload blob: {err:?}")))
+        }
+
+        fn emit(&self, phase: UploadPhase, bytes_sent: u64) {
+            if let Some(callback) = &self.progress {
+                callback(UploadProgress {
+                    bytes_sent,
+                    bytes_total: Some(self.source.size),
+                    current_part: None,
+                    phase,
+                });
+            }
+        }
+
+        fn resume_key(&self) -> String {
+            format!(
+                "pocopine.storage.tus.resume.v1:{}:{}:{}:{}",
+                self.scope,
+                self.source.name,
+                self.source.size,
+                self.source
+                    .last_modified
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "blob".to_string())
+            )
+        }
+    }
+
     impl BrowserStorageRequest {
         fn get(url: String, with_credentials: bool) -> Self {
             Self {
@@ -580,6 +1043,21 @@ mod wasm {
                 blob_body: None,
                 with_credentials,
                 abort_signal: None,
+            }
+        }
+
+        fn head(url: String, with_credentials: bool, abort_signal: Option<AbortSignal>) -> Self {
+            Self {
+                method: "HEAD".to_string(),
+                url,
+                headers: vec![(
+                    "Tus-Resumable".to_string(),
+                    TUS_PROTOCOL_VERSION.to_string(),
+                )],
+                json_body: None,
+                blob_body: None,
+                with_credentials,
+                abort_signal,
             }
         }
 
@@ -606,6 +1084,34 @@ mod wasm {
             })
         }
 
+        fn tus_create(
+            url: String,
+            upload_length: u64,
+            upload_metadata: Option<String>,
+            with_credentials: bool,
+            abort_signal: Option<AbortSignal>,
+        ) -> Self {
+            let mut headers = vec![
+                (
+                    "Tus-Resumable".to_string(),
+                    TUS_PROTOCOL_VERSION.to_string(),
+                ),
+                ("Upload-Length".to_string(), upload_length.to_string()),
+            ];
+            if let Some(upload_metadata) = upload_metadata {
+                headers.push(("Upload-Metadata".to_string(), upload_metadata));
+            }
+            Self {
+                method: "POST".to_string(),
+                url,
+                headers,
+                json_body: None,
+                blob_body: None,
+                with_credentials,
+                abort_signal,
+            }
+        }
+
         fn patch_blob(
             url: String,
             offset: u64,
@@ -617,6 +1123,34 @@ mod wasm {
                 method: "PATCH".to_string(),
                 url,
                 headers: vec![("Upload-Offset".to_string(), offset.to_string())],
+                json_body: None,
+                blob_body: Some(blob),
+                with_credentials,
+                abort_signal,
+            }
+        }
+
+        fn tus_patch(
+            url: String,
+            offset: u64,
+            blob: Blob,
+            with_credentials: bool,
+            abort_signal: Option<AbortSignal>,
+        ) -> Self {
+            Self {
+                method: "PATCH".to_string(),
+                url,
+                headers: vec![
+                    (
+                        "Tus-Resumable".to_string(),
+                        TUS_PROTOCOL_VERSION.to_string(),
+                    ),
+                    ("Upload-Offset".to_string(), offset.to_string()),
+                    (
+                        "Content-Type".to_string(),
+                        "application/offset+octet-stream".to_string(),
+                    ),
+                ],
                 json_body: None,
                 blob_body: Some(blob),
                 with_credentials,
@@ -660,6 +1194,66 @@ mod wasm {
             )));
         }
         result
+    }
+
+    fn ensure_tus_status(
+        response: &BrowserStorageResponse,
+        operation: &'static str,
+        expected: &[u16],
+    ) -> StorageResult<()> {
+        if expected.contains(&response.status) {
+            Ok(())
+        } else {
+            Err(StorageError::client(format!(
+                "{operation} failed with HTTP {}{}",
+                response.status,
+                if response.body.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", response.body)
+                }
+            )))
+        }
+    }
+
+    fn parse_upload_offset_header(value: &str) -> StorageResult<u64> {
+        value
+            .parse::<u64>()
+            .map_err(|_| StorageError::client(format!("invalid tus Upload-Offset: {value}")))
+    }
+
+    fn parse_upload_length_header(value: &str) -> StorageResult<u64> {
+        value
+            .parse::<u64>()
+            .map_err(|_| StorageError::client(format!("invalid tus Upload-Length: {value}")))
+    }
+
+    fn encode_tus_metadata(metadata: &BTreeMap<String, String>) -> StorageResult<Option<String>> {
+        if metadata.is_empty() {
+            return Ok(None);
+        }
+        let mut encoded = Vec::with_capacity(metadata.len());
+        for (key, value) in metadata {
+            if key.is_empty()
+                || key
+                    .bytes()
+                    .any(|byte| byte == b',' || byte.is_ascii_whitespace())
+            {
+                return Err(StorageError::client(format!(
+                    "invalid tus metadata key: {key:?}"
+                )));
+            }
+            if value.is_empty() {
+                encoded.push(key.clone());
+            } else {
+                encoded.push(format!(
+                    "{} {}",
+                    key,
+                    BASE64_STANDARD.encode(value.as_bytes())
+                ));
+            }
+        }
+        Ok(Some(encoded.join(",")))
     }
 
     async fn send_request(request: BrowserStorageRequest) -> StorageResult<BrowserStorageResponse> {
@@ -706,6 +1300,7 @@ mod wasm {
             .dyn_into()
             .map_err(|_| StorageError::client("fetch returned non-Response"))?;
         let status = response.status();
+        let headers = collect_response_headers(&response)?;
         let text = response
             .text()
             .map_err(|err| StorageError::client(format!("read response: {err:?}")))?;
@@ -715,7 +1310,37 @@ mod wasm {
         let body = body_js
             .as_string()
             .ok_or_else(|| StorageError::client("response body was not a string"))?;
-        Ok(BrowserStorageResponse { status, body })
+        Ok(BrowserStorageResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    fn collect_response_headers(response: &Response) -> StorageResult<Vec<(String, String)>> {
+        let headers = response.headers();
+        let mut values = Vec::new();
+        for name in [
+            "location",
+            "upload-offset",
+            "upload-length",
+            "upload-defer-length",
+            "upload-expires",
+            "upload-metadata",
+            "tus-resumable",
+            "tus-version",
+            "tus-extension",
+            "tus-max-size",
+            "cache-control",
+        ] {
+            if let Some(value) = headers
+                .get(name)
+                .map_err(|err| StorageError::client(format!("read response header: {err:?}")))?
+            {
+                values.push((name.to_string(), value));
+            }
+        }
+        Ok(values)
     }
 
     fn read_resume_session(key: &str) -> Option<UploadSession> {
@@ -730,6 +1355,22 @@ mod wasm {
     }
 
     fn remove_resume_session(key: &str) {
+        if let Some(storage) = local_storage() {
+            let _ = storage.remove_item(key);
+        }
+    }
+
+    fn read_tus_resume_url(key: &str) -> Option<String> {
+        local_storage()?.get_item(key).ok().flatten()
+    }
+
+    fn write_tus_resume_url(key: &str, upload_url: &str) {
+        if let Some(storage) = local_storage() {
+            let _ = storage.set_item(key, upload_url);
+        }
+    }
+
+    fn remove_tus_resume_url(key: &str) {
         if let Some(storage) = local_storage() {
             let _ = storage.remove_item(key);
         }
@@ -782,6 +1423,29 @@ mod wasm {
         endpoint.trim_end_matches('/').to_string() + "/uploads"
     }
 
+    fn tus_uploads_url(endpoint: &str, scope: &str) -> String {
+        format!(
+            "{}/{}/uploads",
+            endpoint.trim_end_matches('/'),
+            percent_encode_path_segment(scope)
+        )
+    }
+
+    fn resolve_tus_location(create_url: &str, location: &str) -> String {
+        if location.starts_with('/')
+            || location.starts_with("http://")
+            || location.starts_with("https://")
+        {
+            location.to_string()
+        } else {
+            format!(
+                "{}/{}",
+                create_url.trim_end_matches('/'),
+                location.trim_start_matches('/')
+            )
+        }
+    }
+
     fn scope_url(endpoint: &str, scope: &str) -> String {
         format!(
             "{}/scopes/{}",
@@ -825,6 +1489,6 @@ mod wasm {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{
-    BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, UploadBuilder,
-    __reset_browser_transport_for_test, __set_browser_transport_for_test,
+    BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, TusUploadBuilder,
+    UploadBuilder, __reset_browser_transport_for_test, __set_browser_transport_for_test,
 };
