@@ -292,8 +292,8 @@ The transaction-backed path requires three app-owned pieces:
   transaction handle.
 - `TransactionalCrudSource<Tx>` applies `create_in_tx`, `save_in_tx`, and
   `remove_in_tx` using that handle.
-- `TransactionalCrudMutationLog<Tx, Row>` checks and records accepted
-  mutation ids using the same handle and tenant/auth scope.
+- `TransactionalCrudMutationLog<Tx, Row>` reserves, checks, and records
+  accepted mutation ids using the same handle and tenant/auth scope.
 
 `pocopine-sync-sqlx` now supplies the common SQLx transaction runner and
 accepted-mutation log helper for Postgres, MySQL, and SQLite feature
@@ -305,24 +305,23 @@ The sync adapter opens one transaction per mutation in a push request:
 
 ```text
 begin transaction
-  -> check accepted mutation id for this tenant/auth scope
+  -> reserve accepted mutation id for this tenant/auth scope
+  -> if already accepted, acknowledge exact replay or reject changed contents
   -> apply source write and base_version check
-  -> record accepted mutation id
-commit
+  -> commit accepted writes
+  -> roll back conflicts, rejections, and backend errors
 ```
 
-Conflicts and rejected outcomes do not record an accepted mutation id. The
-adapter still commits a conflict transaction because the source may have
-performed safe validation reads, but source implementations that return
-`Conflict` or `Rejected` must not leave business side effects in the
-transaction.
+The mutation id is reserved before the source write so concurrent retries
+cannot both pass the idempotency check. Conflicts and rejected outcomes
+roll back the transaction, which removes the reservation and leaves the
+client free to correct and retry the mutation.
 
 The accepted-mutation table should enforce a unique key over the same
 authorization scope used by the source query, for example
-`(tenant_id, mutation_id)`. The lookup alone is not enough under
-concurrent retry; a unique constraint or equivalent isolation rule must
-prevent two transactions from both observing "missing" and applying the
-same write.
+`(tenant_id, mutation_id)`. The reservation insert, not a prior lookup,
+is the concurrency boundary that prevents two transactions from both
+applying the same write.
 
 `MutationId` only dedupes sync replay. It is not a complete business
 idempotency key. External side effects such as payments, inventory
@@ -754,11 +753,11 @@ Server-side sync replay should use the transaction-backed resource path:
 
 ```text
 begin transaction
-  -> check accepted mutation id
+  -> reserve accepted mutation id
+  -> if already accepted, acknowledge exact replay or reject changed contents
   -> run one CRUD source write and base_version check
-  -> record accepted mutation id when the write is accepted
-  -> commit on success
-  -> rollback on error
+  -> commit accepted writes
+  -> rollback conflicts, rejections, and errors
   -> after commit, publish sync/live invalidations
 ```
 

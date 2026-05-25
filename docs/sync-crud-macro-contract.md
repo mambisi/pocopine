@@ -429,12 +429,12 @@ What the server handles at runtime:
 1. `/open` discovers the guarded stream and checks the guard.
 2. `/pull` calls `CrudSource::list` and returns canonical rows.
 3. `/push` deserializes the CRUD payload envelope.
-4. On the transactional path, replayed mutation ids are deduped by the
-   mutation log in the same transaction boundary used for writes.
+4. On the transactional path, mutation ids are reserved by the mutation
+   log in the same transaction boundary used for writes.
 5. `save` and `remove` pass the client `base_version` into the source so
    the source can compare and write atomically inside the same transaction.
-6. Accepted writes record the mutation id before commit, and live
-   invalidation is published after commit.
+6. Accepted writes commit the reserved mutation id with the row write, and
+   live invalidation is published after commit.
 7. Stale writes return `Conflict` with the server row when available.
 8. Invalid payloads, auth failures, and domain validation failures return `Rejected`.
 
@@ -443,7 +443,7 @@ or SQL. Production code should use `.transactional(...)` and implement
 `CrudTransactionRunner`, `TransactionalCrudSource`, and
 `TransactionalCrudMutationLog` against the same database and tenant scope
 as the source query. The accepted-mutation table needs a unique key over
-that scope and `mutation_id`; the lookup alone is not a concurrency
+that scope and `mutation_id`; the reservation insert is the concurrency
 boundary.
 
 For SQLx-backed resources, `pocopine-sync-sqlx` supplies the transaction
