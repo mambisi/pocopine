@@ -19,7 +19,8 @@ mod memory;
 mod server;
 
 pub use client::{
-    storage_plugin, StorageClient, StorageClientPlugin, StorageScopeClient, UploadBuilder,
+    storage_plugin, tus_plugin, StorageClient, StorageClientPlugin, StorageScopeClient, TusClient,
+    TusClientPlugin, TusScopeClient, TusUploadBuilder, TusUploadResult, UploadBuilder,
 };
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
@@ -36,7 +37,8 @@ pub use protocol::{
     UploadPhase, UploadPolicy, UploadPolicyDescriptor, UploadProgress, UploadSession,
     UploadSessionId, UploadSessionStatus, UploadStrategy, UploadTarget, UploadedPartStatus,
     UploadedPartView, MAX_STORAGE_TOKEN_LEN, STORAGE_ANON_COOKIE, STORAGE_ENDPOINT_PREFIX,
-    STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX, STORAGE_UPLOADS_PATH, STORAGE_UPLOADS_PREFIX,
+    STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX, STORAGE_UPLOADS_PATH,
+    STORAGE_UPLOADS_PREFIX,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

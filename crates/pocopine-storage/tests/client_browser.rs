@@ -13,10 +13,10 @@ use std::rc::Rc;
 use js_sys::{Array, Promise};
 use pocopine::prelude::*;
 use pocopine_storage::{
-    storage_plugin, BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport,
-    ObjectRef, ObjectVisibility, StorageClient, StorageError, StorageResponse, StorageResult,
-    TransferPlan, UploadPhase, UploadProgress, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy,
+    storage_plugin, tus_plugin, BrowserStorageRequest, BrowserStorageResponse,
+    BrowserStorageTransport, ObjectRef, ObjectVisibility, StorageClient, StorageError,
+    StorageResponse, StorageResult, TransferPlan, TusClient, UploadPhase, UploadProgress,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -29,6 +29,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 thread_local! {
     static PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
+    static TUS_PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -43,6 +44,21 @@ impl StoragePluginProbe {
     pub fn on_mount(&mut self) {
         let _client = self.plugin::<StorageClient>();
         PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = true);
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "tus-plugin-probe",
+    template_inline = r#"<div class="tus-plugin-probe"></div>"#
+)]
+struct TusPluginProbe;
+
+#[handlers]
+impl TusPluginProbe {
+    pub fn on_mount(&mut self) {
+        let _client = self.plugin::<TusClient>();
+        TUS_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = true);
     }
 }
 
@@ -62,6 +78,25 @@ async fn storage_plugin_installs_client_service() {
     settle().await;
 
     assert!(PLUGIN_RESOLVED.with(|resolved| *resolved.borrow()));
+    host.remove();
+}
+
+#[wasm_bindgen_test(async)]
+async fn tus_plugin_installs_client_service() {
+    TUS_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = false);
+    let document = window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    host.set_attribute("pp-app", "").unwrap();
+    host.set_inner_html("<tus-plugin-probe></tus-plugin-probe>");
+    document.body().unwrap().append_child(&host).unwrap();
+
+    App::new()
+        .plugin(tus_plugin())
+        .register::<TusPluginProbe>()
+        .run();
+    settle().await;
+
+    assert!(TUS_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow()));
     host.remove();
 }
 
@@ -216,6 +251,135 @@ async fn abort_signal_stops_upload_request() {
     pocopine_storage::__reset_browser_transport_for_test();
 }
 
+#[wasm_bindgen_test(async)]
+async fn tus_upload_blob_sends_create_and_patch_requests() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let progress = Rc::new(RefCell::new(Vec::<UploadProgress>::new()));
+    let progress_for_callback = progress.clone();
+    let result = TusClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .metadata("filetype", "text/plain")
+        .chunk_size(2)
+        .on_progress(move |event| progress_for_callback.borrow_mut().push(event))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.upload_url,
+        "/__pocopine/storage/tus/v1/avatars/uploads/tus-session-1"
+    );
+    assert_eq!(result.bytes_uploaded, 5);
+    let state = state.borrow();
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|request| request.url.starts_with("/__pocopine/storage/tus/v1"))
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST", "PATCH", "PATCH", "PATCH"]
+    );
+    assert_eq!(state.tus_patch_offsets, [0, 2, 4]);
+    let create = state
+        .requests
+        .iter()
+        .find(|request| request.method == "POST" && request.url.contains("/tus/v1/"))
+        .unwrap();
+    assert_eq!(header(create, "Tus-Resumable"), Some("1.0.0"));
+    assert_eq!(header(create, "Upload-Length"), Some("5"));
+    assert_eq!(
+        header(create, "Upload-Metadata"),
+        Some("filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==")
+    );
+    assert_eq!(
+        progress.borrow().last().unwrap().phase,
+        UploadPhase::Complete
+    );
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn tus_offset_conflict_heads_and_resumes() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    fake.state.borrow_mut().tus_conflict_once = true;
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let result = TusClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .chunk_size(2)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(result.bytes_uploaded, 5);
+    let state = state.borrow();
+    assert_eq!(state.tus_patch_offsets, [0, 2, 4]);
+    let head_count = state
+        .requests
+        .iter()
+        .filter(|request| request.method == "HEAD" && request.url.contains("/tus/v1/"))
+        .count();
+    assert_eq!(head_count, 1);
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn tus_local_storage_resume_is_opt_in() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let key = "pocopine.storage.tus.resume.v1:avatars:photo.txt:5:blob";
+    window()
+        .unwrap()
+        .local_storage()
+        .unwrap()
+        .unwrap()
+        .set_item(
+            key,
+            "/__pocopine/storage/tus/v1/avatars/uploads/tus-session-1",
+        )
+        .unwrap();
+    let fake = FakeStorageTransport::default();
+    fake.state.borrow_mut().tus_offset = 2;
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    TusClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .chunk_size(2)
+        .auto_resume(true)
+        .send()
+        .await
+        .unwrap();
+
+    let state = state.borrow();
+    let tus_methods = state
+        .requests
+        .iter()
+        .filter(|request| request.url.starts_with("/__pocopine/storage/tus/v1"))
+        .map(|request| request.method.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(tus_methods, ["HEAD", "PATCH", "PATCH"]);
+    assert_eq!(state.tus_patch_offsets, [2, 4]);
+    assert!(window()
+        .unwrap()
+        .local_storage()
+        .unwrap()
+        .unwrap()
+        .get_item(key)
+        .unwrap()
+        .is_none());
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
 #[derive(Clone, Default)]
 struct FakeStorageTransport {
     state: Rc<RefCell<FakeState>>,
@@ -228,11 +392,16 @@ struct FakeState {
     patch_offsets: Vec<u64>,
     mismatch_once: bool,
     client_error_once: bool,
+    tus_offset: u64,
+    tus_patch_offsets: Vec<u64>,
+    tus_conflict_once: bool,
 }
 
 #[derive(Clone, Debug)]
 struct SeenRequest {
     method: String,
+    url: String,
+    headers: Vec<(String, String)>,
 }
 
 impl BrowserStorageTransport for FakeStorageTransport {
@@ -253,6 +422,8 @@ impl BrowserStorageTransport for FakeStorageTransport {
             let mut state = state.borrow_mut();
             state.requests.push(SeenRequest {
                 method: request.method.clone(),
+                url: request.url.clone(),
+                headers: request.headers.clone(),
             });
             match (request.method.as_str(), request.url.as_str()) {
                 ("POST", "/__pocopine/storage/v1/uploads") => {
@@ -297,6 +468,63 @@ impl BrowserStorageTransport for FakeStorageTransport {
                 ("POST", "/__pocopine/storage/v1/uploads/session-1/complete") => {
                     Ok(json_response(Ok(object_ref(state.offset))))
                 }
+                ("POST", "/__pocopine/storage/tus/v1/avatars/uploads") => {
+                    state.tus_offset = 0;
+                    Ok(tus_response(
+                        201,
+                        [
+                            (
+                                "location",
+                                "/__pocopine/storage/tus/v1/avatars/uploads/tus-session-1",
+                            ),
+                            ("upload-offset", "0"),
+                            ("tus-resumable", "1.0.0"),
+                        ],
+                        "",
+                    ))
+                }
+                ("HEAD", "/__pocopine/storage/tus/v1/avatars/uploads/tus-session-1") => {
+                    Ok(tus_response(
+                        204,
+                        vec![
+                            ("upload-offset".to_string(), state.tus_offset.to_string()),
+                            ("upload-length".to_string(), "5".to_string()),
+                            ("tus-resumable".to_string(), "1.0.0".to_string()),
+                        ],
+                        "",
+                    ))
+                }
+                ("PATCH", "/__pocopine/storage/tus/v1/avatars/uploads/tus-session-1") => {
+                    let provided = request
+                        .headers
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("Upload-Offset"))
+                        .and_then(|(_, value)| value.parse::<u64>().ok())
+                        .unwrap();
+                    state.tus_patch_offsets.push(provided);
+                    if state.tus_conflict_once {
+                        state.tus_conflict_once = false;
+                        state.tus_offset = 2;
+                        return Ok(tus_response(409, [("tus-resumable", "1.0.0")], "conflict"));
+                    }
+                    if provided != state.tus_offset {
+                        return Ok(tus_response(409, [("tus-resumable", "1.0.0")], "conflict"));
+                    }
+                    let size = request
+                        .blob_body
+                        .as_ref()
+                        .map(|blob| blob.size() as u64)
+                        .unwrap_or(0);
+                    state.tus_offset += size;
+                    Ok(tus_response(
+                        204,
+                        vec![
+                            ("upload-offset".to_string(), state.tus_offset.to_string()),
+                            ("tus-resumable".to_string(), "1.0.0".to_string()),
+                        ],
+                        "",
+                    ))
+                }
                 other => Err(StorageError::client(format!(
                     "unexpected storage request: {other:?}"
                 ))),
@@ -312,6 +540,7 @@ fn session(offset: u64) -> UploadSession {
         file_name: "photo.txt".to_string(),
         size: Some(5),
         content_type: None,
+        metadata: Default::default(),
         strategy: UploadStrategy::Sequential,
         status: UploadSessionStatus::Open,
         next_offset: Some(offset),
@@ -357,8 +586,33 @@ fn json_response<T: Serialize>(result: StorageResult<T>) -> BrowserStorageRespon
     };
     BrowserStorageResponse {
         status,
+        headers: Vec::new(),
         body: serde_json::to_string(&StorageResponse::from_result(result)).unwrap(),
     }
+}
+
+fn tus_response<K, V, I>(status: u16, headers: I, body: &str) -> BrowserStorageResponse
+where
+    K: Into<String>,
+    V: Into<String>,
+    I: IntoIterator<Item = (K, V)>,
+{
+    BrowserStorageResponse {
+        status,
+        headers: headers
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect(),
+        body: body.to_string(),
+    }
+}
+
+fn header<'a>(request: &'a SeenRequest, name: &str) -> Option<&'a str> {
+    request
+        .headers
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 fn blob(text: &str) -> Blob {

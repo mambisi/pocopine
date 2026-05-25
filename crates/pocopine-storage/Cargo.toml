@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Storage protocol, browser client, and server plugin extension for Pocopine apps."
 
 [dependencies]
+base64 = "0.22"
 bytes = "1"
 pocopine-core = { workspace = true, default-features = false }
 serde = { workspace = true }
@@ -15,7 +16,6 @@ time = { version = "0.3", features = ["serde", "formatting"] }
 uuid = { version = "1", features = ["v4", "js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-base64 = "0.22"
 pocopine-server = { workspace = true }
 sha2 = "0.10"
 tracing = { workspace = true }
