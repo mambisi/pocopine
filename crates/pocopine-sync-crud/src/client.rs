@@ -158,6 +158,17 @@ where
         self.save_with_options(id, draft, options).await
     }
 
+    /// Discard every queued local mutation for one row and clear its conflict
+    /// marker.
+    ///
+    /// This is the "throw away my local edits" resolution. The durable
+    /// mutation queue purges first, then the in-memory pending overlay is
+    /// dropped and the row falls back to its canonical (last server) value.
+    /// Returns `true` if any in-memory state actually changed.
+    pub async fn discard_local(self, id: Id) -> SyncResult<bool> {
+        self.collection.discard_local(id.to_row_key()?).await
+    }
+
     /// Submit an app-approved merge draft against the latest canonical base.
     pub async fn merge_with<Draft>(self, id: Id, draft: Draft) -> SyncResult<CrudOutcome<Id, Row>>
     where
@@ -564,6 +575,90 @@ mod tests {
         assert!(client.use_server("post_1".to_string()).await.unwrap());
 
         assert!(!state.borrow().posts.rows[0].conflict);
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert!(!snapshot.rows[0].conflict);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn discard_local_drops_pending_and_clears_conflict() {
+        let store = Rc::new(MemoryLocalStore::new());
+        store
+            .save_identity(SyncLocalIdentity::new(
+                SyncDeviceId::new("device_discard_test").unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        let stream = SyncStreamName::new("posts").unwrap();
+        let state = Rc::new(RefCell::new(TestState::default()));
+        let handle = Handle::new(state.clone(), ScopeId(3));
+
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                pocopine_sync::SyncCollectionName::new("posts").unwrap(),
+                vec![
+                    SyncRow::new("post_1", serde_json::json!({"title": "server"}))
+                        .unwrap()
+                        .version("server_v1")
+                        .unwrap()
+                        .conflict(true),
+                ],
+                None,
+            ))
+            .await
+            .unwrap();
+        state.borrow_mut().posts.apply_local_snapshot(
+            vec![SyncRow::new(
+                "post_1",
+                Post {
+                    title: "server".to_string(),
+                },
+            )
+            .unwrap()
+            .version("server_v1")
+            .unwrap()
+            .conflict(true)],
+            None,
+            0,
+        );
+
+        let sync = sync_plugin()
+            .shared_local_store(store.clone())
+            .into_client();
+
+        let collection = sync
+            .clone()
+            .collection(handle.clone(), posts)
+            .stream(stream.as_str())
+            .unwrap();
+        let view = local_resource_view::<String, _>(&state.borrow().posts).unwrap();
+        let client = client_resource(collection, view);
+        let _ = client
+            .retry_local(
+                "post_1".to_string(),
+                Post {
+                    title: "local edit".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.pending_mutations(&stream).await.unwrap().len(), 1);
+
+        let collection = sync
+            .collection(handle, posts)
+            .stream(stream.as_str())
+            .unwrap();
+        let view = local_resource_view::<String, _>(&state.borrow().posts).unwrap();
+        let client = client_resource(collection, view);
+
+        assert!(client.discard_local("post_1".to_string()).await.unwrap());
+
+        assert!(store.pending_mutations(&stream).await.unwrap().is_empty());
+        assert!(!state.borrow().posts.rows[0].conflict);
+        assert!(!state.borrow().posts.rows[0].pending);
+        assert_eq!(state.borrow().posts.rows[0].value.title, "server");
         let snapshot = store.hydrate_stream(&stream).await.unwrap();
         assert!(!snapshot.rows[0].conflict);
     }

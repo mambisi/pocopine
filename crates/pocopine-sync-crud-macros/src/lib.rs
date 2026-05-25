@@ -308,6 +308,14 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
                     self.client()?.use_server(id).await
                 }
 
+                pub async fn discard_local(&self, id: Id) -> ::pocopine_sync::SyncResult<bool>
+                where
+                    Id: ::pocopine_sync_crud::ResourceId,
+                    Row: Clone + ::serde::de::DeserializeOwned + ::serde::Serialize,
+                {
+                    self.client()?.discard_local(id).await
+                }
+
                 pub async fn retry_local(
                     &self,
                     id: Id,
