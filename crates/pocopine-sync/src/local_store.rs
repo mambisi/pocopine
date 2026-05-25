@@ -386,6 +386,38 @@ pub trait SyncLocalStore {
     ) -> SyncLocalFuture<'_, usize> {
         Box::pin(std::future::ready(Ok(0)))
     }
+
+    /// Durably drop every persisted stream snapshot, cached row, pending
+    /// mutation, and conflict marker. The persisted `SyncLocalIdentity`
+    /// (device id + mutation counter) is left intact so future mutation
+    /// ids stay globally unique against any server log entry the local
+    /// store has already produced.
+    ///
+    /// This is the storage primitive behind `SyncClient::sign_out` and
+    /// per-tenant cache resets. Authorization is enforced by the server
+    /// on every `/open`, `/pull`, and `/push`; the local store is not a
+    /// trust boundary and may legitimately hold rows that were once
+    /// visible to the previous user. Apps that switch users, tenants,
+    /// or auth scopes call this helper to drop the stale cache before
+    /// re-mounting collections.
+    ///
+    /// Implementations MUST:
+    ///
+    /// * Persist the wipe before returning. Reload must observe an empty
+    ///   sync cache, not the pre-wipe state.
+    /// * Leave the device identity row untouched. Rotating the device id
+    ///   would silently reset the mutation counter and could collide with
+    ///   any accepted-log entry the server still retains.
+    /// * Be safe to call on a never-populated store — calling
+    ///   `clear_all_streams` on a fresh install is a successful no-op.
+    ///
+    /// The default implementation falls back to no-op for stores that
+    /// haven't been updated yet; existing impls without this method
+    /// continue to compile, but `SyncClient::sign_out` will silently
+    /// leave durable entries behind until the store opts in.
+    fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
+        Box::pin(std::future::ready(Ok(())))
+    }
 }
 
 #[cfg(test)]

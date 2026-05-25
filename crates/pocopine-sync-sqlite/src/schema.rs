@@ -122,6 +122,17 @@ pub const DELETE_MUTATION_SQL: &str = "delete from __pocopine_mutations where mu
 pub const DELETE_PENDING_FOR_ROW_SQL: &str = "delete from __pocopine_mutations
     where stream = ?1 and row_key = ?2 and status = 'pending'";
 
+/// SQL statements used by `SyncLocalStore::clear_all_streams`. Drops
+/// every stream snapshot, cached row, and mutation queue entry across
+/// the store. `__pocopine_meta` is intentionally NOT touched: the
+/// device identity row and mutation counter must survive a sign-out so
+/// future mutation ids stay globally unique against the server log.
+pub const CLEAR_ALL_STREAMS_SQL: &[&str] = &[
+    "delete from __pocopine_mutations",
+    "delete from __pocopine_rows",
+    "delete from __pocopine_streams",
+];
+
 /// SQL query used to load pending mutations for a stream in enqueue order.
 pub const SELECT_PENDING_MUTATIONS_SQL: &str =
     "select mutation_id, row_key, base_version, op, payload, optimistic_row

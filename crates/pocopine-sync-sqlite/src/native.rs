@@ -14,11 +14,11 @@ use pocopine_sync::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL,
-    DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID, META_NEXT_MUTATION_COUNTER,
-    META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL,
-    SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL, UPSERT_ROW_SQL,
-    UPSERT_STREAM_SQL,
+    BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL,
+    DELETE_PENDING_FOR_ROW_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID,
+    META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
+    SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
+    UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
 
 /// SQLite-backed [`SyncLocalStore`] for host/native targets.
@@ -131,6 +131,10 @@ impl SyncLocalStore for SqliteLocalStore {
         let stream = stream.clone();
         let key = key.clone();
         Self::ready(self.with_conn(|conn| purge_pending_for_row(conn, &stream, &key)))
+    }
+
+    fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
+        Self::ready(self.with_conn(clear_all_streams))
     }
 }
 
@@ -482,6 +486,14 @@ fn purge_pending_for_row(
         )
         .map_err(sqlite_error)?;
     Ok(affected)
+}
+
+fn clear_all_streams(conn: &mut Connection) -> SyncResult<()> {
+    let tx = conn.transaction().map_err(sqlite_error)?;
+    for sql in CLEAR_ALL_STREAMS_SQL {
+        tx.execute(sql, []).map_err(sqlite_error)?;
+    }
+    tx.commit().map_err(sqlite_error)
 }
 
 fn pending_mutations(
@@ -1367,6 +1379,63 @@ mod tests {
         let purged =
             block(store.purge_pending_for_row(&stream, &RowKey::new("never").unwrap())).unwrap();
         assert_eq!(purged, 0);
+    }
+
+    #[test]
+    fn sqlite_clear_all_streams_wipes_durable_state_but_preserves_identity() {
+        // Sign-out semantics: drop every stream/row/mutation across
+        // the whole store, but leave the device id and counter alone.
+        // Drop + reopen against the same file proves the wipe is
+        // durable and the identity meta row survives.
+        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        let store = SqliteLocalStore::open_path(&path).unwrap();
+        let identity =
+            SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_abc").unwrap(), 17)
+                .unwrap();
+        block(store.save_identity(identity.clone())).unwrap();
+
+        let posts = SyncStreamName::new("posts").unwrap();
+        let comments = SyncStreamName::new("comments").unwrap();
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            posts.clone(),
+            SyncCollectionName::new("posts").unwrap(),
+            vec![SyncRow::new("post_1", serde_json::json!({"title": "p"})).unwrap()],
+            Some(SyncCursor::new("c1").unwrap()),
+        )))
+        .unwrap();
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            comments.clone(),
+            SyncCollectionName::new("comments").unwrap(),
+            vec![SyncRow::new("c_1", serde_json::json!({"body": "hi"})).unwrap()],
+            Some(SyncCursor::new("c2").unwrap()),
+        )))
+        .unwrap();
+        block(store.enqueue_mutation(
+            &posts,
+            ClientMutation {
+                id: MutationId::new("device_abc:1").unwrap(),
+                key: Some(RowKey::new("post_1").unwrap()),
+                op: SyncOp::Upsert,
+                base_version: None,
+                payload: serde_json::json!({"title": "edit"}),
+            },
+        ))
+        .unwrap();
+
+        block(store.clear_all_streams()).unwrap();
+
+        drop(store);
+        let reopened = SqliteLocalStore::open_path(&path).unwrap();
+        let posts_after = block(reopened.hydrate_stream(&posts)).unwrap();
+        let comments_after = block(reopened.hydrate_stream(&comments)).unwrap();
+        assert!(posts_after.rows.is_empty());
+        assert!(posts_after.pending_mutations.is_empty());
+        assert!(posts_after.cursor.is_none());
+        assert!(comments_after.rows.is_empty());
+
+        let surviving_identity = block(reopened.load_identity()).unwrap().unwrap();
+        assert_eq!(surviving_identity.device_id.as_str(), "device_abc");
+        assert_eq!(surviving_identity.next_mutation_counter, 17);
     }
 
     fn block<T>(future: SyncLocalFuture<'_, T>) -> SyncResult<T> {

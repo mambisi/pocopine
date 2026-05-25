@@ -104,6 +104,10 @@ impl SyncLocalStore for IndexedDbLocalStore {
     ) -> SyncLocalFuture<'_, usize> {
         Self::unsupported()
     }
+
+    fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
+        Self::unsupported()
+    }
 }
 
 fn validate_database_name(database_name: String) -> SyncResult<String> {

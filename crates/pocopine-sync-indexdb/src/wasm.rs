@@ -173,6 +173,11 @@ impl SyncLocalStore for IndexedDbLocalStore {
         let key = key.clone();
         self.run(purge_pending_for_row(database_name, stream, key))
     }
+
+    fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
+        let database_name = self.database_name.clone();
+        self.run(clear_all_streams(database_name))
+    }
 }
 
 async fn load_identity(database_name: String) -> SyncResult<Option<SyncLocalIdentity>> {
@@ -385,6 +390,21 @@ async fn clear_conflict(
 /// from the IndexedDB store. Mirrors the SQLite store's contract:
 /// only `status = Pending` rows are removed; accepted / rejected /
 /// conflict history stays. Returns the number of mutations dropped.
+/// Clears every entry from the IndexedDB streams object store. The
+/// `meta` store (device identity, mutation counter) is intentionally
+/// left intact so future mutation ids stay globally unique against
+/// any server log entry this device has already produced.
+async fn clear_all_streams(database_name: String) -> SyncResult<()> {
+    let database = open_database(&database_name).await?;
+    let transaction = transaction(&database, STREAMS_STORE, IdbTransactionMode::Readwrite)?;
+    let done = transaction_done(&transaction);
+    let store = transaction.object_store(STREAMS_STORE).map_err(js_error)?;
+    store.clear().map_err(js_error)?;
+    await_transaction(done).await?;
+    database.close();
+    Ok(())
+}
+
 async fn purge_pending_for_row(
     database_name: String,
     stream: SyncStreamName,
