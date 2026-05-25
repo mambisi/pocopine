@@ -45,7 +45,8 @@ pub use memory::MemoryStorageBackend;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    storage_server_plugin, StorageActor, StorageBackend, StorageBoxFuture, StorageContext,
-    StorageGuardFuture, StorageKeyFuture, StorageKeyResolver, StorageScope, StorageScopeBuilder,
-    StorageScopeGuard, StorageServer, StorageServerBuilder, StorageServerPlugin,
+    storage_server_plugin, storage_tus_server_plugin, StorageActor, StorageBackend,
+    StorageBoxFuture, StorageContext, StorageGuardFuture, StorageKeyFuture, StorageKeyResolver,
+    StorageScope, StorageScopeBuilder, StorageScopeGuard, StorageServer, StorageServerBuilder,
+    StorageServerPlugin, StorageTusServerPlugin,
 };
