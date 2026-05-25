@@ -481,8 +481,10 @@ impl StorageServer {
         session: UploadSessionId,
     ) -> StorageResult<()> {
         require_bound_actor(&ctx)?;
-        let Ok((backend, upload)) = self.backend_for_session(&ctx, session.clone()).await else {
-            return Ok(());
+        let (backend, upload) = match self.backend_for_session(&ctx, session.clone()).await {
+            Ok(found) => found,
+            Err(StorageError::UnknownUploadSession { .. }) => return Ok(()),
+            Err(err) => return Err(err),
         };
         let scope = self.scope(&upload.scope)?;
         scope
@@ -536,12 +538,22 @@ impl StorageServer {
 }
 
 /// Builder for [`StorageServer`].
-#[derive(Default)]
 pub struct StorageServerBuilder {
     backends: HashMap<String, Arc<dyn StorageBackend>>,
     scopes: HashMap<String, Arc<RegisteredStorageScope>>,
     trusted_origins: Vec<TrustedOrigin>,
     secure_anonymous_cookies: bool,
+}
+
+impl Default for StorageServerBuilder {
+    fn default() -> Self {
+        Self {
+            backends: HashMap::new(),
+            scopes: HashMap::new(),
+            trusted_origins: Vec::new(),
+            secure_anonymous_cookies: true,
+        }
+    }
 }
 
 impl StorageServerBuilder {
@@ -581,8 +593,8 @@ impl StorageServerBuilder {
 
     /// Whether the anonymous storage binding cookie should include `Secure`.
     ///
-    /// Keep this enabled for HTTPS production deployments; it is configurable
-    /// because local HTTP development cannot persist `Secure` cookies.
+    /// Enabled by default for HTTPS deployments. Set this to `false` only for
+    /// local HTTP development where browsers cannot persist `Secure` cookies.
     pub fn secure_anonymous_cookies(mut self, secure: bool) -> Self {
         self.secure_anonymous_cookies = secure;
         self
@@ -921,7 +933,7 @@ async fn tus_create_handler(
             require_tus_version(&request.headers)?;
             let metadata = tus_metadata(&request.headers)?;
             let size = tus_upload_length(&request.headers)?;
-            let upload = storage
+            let mut upload = storage
                 .initiate_upload(
                     request.ctx.clone(),
                     InitiateUploadRequest {
@@ -940,7 +952,6 @@ async fn tus_create_handler(
                 .await?;
 
             let mut offset = upload.next_offset.unwrap_or(0);
-            maybe_tus_complete(&storage, request.ctx.clone(), &upload).await?;
             if content_length(&request.headers).unwrap_or(0) > 0
                 || has_tus_octet_stream(&request.headers)
             {
@@ -950,13 +961,13 @@ async fn tus_create_handler(
                     .await
                     .map_err(|_err| StorageError::payload_too_large(max_body_bytes))?;
                 if !bytes.is_empty() {
-                    let updated = storage
+                    upload = storage
                         .append_upload_bytes(request.ctx.clone(), upload.id.clone(), 0, bytes)
                         .await?;
-                    offset = updated.next_offset.unwrap_or(offset);
-                    maybe_tus_complete(&storage, request.ctx.clone(), &updated).await?;
+                    offset = upload.next_offset.unwrap_or(offset);
                 }
             }
+            maybe_tus_complete(&storage, request.ctx.clone(), &upload).await?;
 
             let mut response = tus_empty_response(StatusCode::CREATED);
             set_response_header(

@@ -60,17 +60,12 @@ impl LocalFsStorageBackend {
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(err) => {
-                return Err(StorageError::backend(format!(
-                    "read upload sessions dir: {err}"
-                )))
-            }
+            Err(err) => return Err(local_io_error("read upload sessions dir", err)),
         };
 
         let mut removed = 0;
         for entry in entries {
-            let entry =
-                entry.map_err(|err| StorageError::backend(format!("read session dir: {err}")))?;
+            let entry = entry.map_err(|err| local_io_error("read session dir", err))?;
             let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
                 continue;
             };
@@ -79,9 +74,8 @@ impl LocalFsStorageBackend {
             };
             let stored = self.read_session(&session)?;
             if stored.public.status == UploadSessionStatus::Expired {
-                fs::remove_dir_all(self.session_dir(&session)).map_err(|err| {
-                    StorageError::backend(format!("remove expired upload: {err}"))
-                })?;
+                fs::remove_dir_all(self.session_dir(&session))
+                    .map_err(|err| local_io_error("remove expired upload", err))?;
                 removed += 1;
             }
         }
@@ -132,16 +126,13 @@ impl LocalFsStorageBackend {
         stored: &StoredUploadSession,
     ) -> StorageResult<()> {
         let dir = self.session_dir(session);
-        fs::create_dir_all(&dir)
-            .map_err(|err| StorageError::backend(format!("create upload session dir: {err}")))?;
+        fs::create_dir_all(&dir).map_err(|err| local_io_error("create upload session dir", err))?;
         let path = self.session_meta_path(session);
         let tmp = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(stored)
             .map_err(|err| StorageError::backend(format!("encode upload metadata: {err}")))?;
-        fs::write(&tmp, bytes)
-            .map_err(|err| StorageError::backend(format!("write upload metadata: {err}")))?;
-        fs::rename(&tmp, &path)
-            .map_err(|err| StorageError::backend(format!("commit upload metadata: {err}")))?;
+        fs::write(&tmp, bytes).map_err(|err| local_io_error("write upload metadata", err))?;
+        fs::rename(&tmp, &path).map_err(|err| local_io_error("commit upload metadata", err))?;
         Ok(())
     }
 
@@ -149,9 +140,7 @@ impl LocalFsStorageBackend {
         match fs::metadata(self.session_tmp_path(session)) {
             Ok(metadata) => Ok(metadata.len()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
-            Err(err) => Err(StorageError::backend(format!(
-                "read upload temp file: {err}"
-            ))),
+            Err(err) => Err(local_io_error("read upload temp file", err)),
         }
     }
 }
@@ -168,7 +157,7 @@ impl StorageBackend for LocalFsStorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             fs::create_dir_all(&self.root)
-                .map_err(|err| StorageError::backend(format!("create storage root: {err}")))?;
+                .map_err(|err| local_io_error("create storage root", err))?;
             let strategy = selected_strategy(request.requested_strategy)?;
             let id = UploadSessionId::new(Uuid::new_v4().to_string())?;
             let session = UploadSession {
@@ -193,11 +182,10 @@ impl StorageBackend for LocalFsStorageBackend {
                 expires_at: expires_at(request.policy.expires_after),
             };
             let dir = self.session_dir(&id);
-            fs::create_dir_all(&dir).map_err(|err| {
-                StorageError::backend(format!("create upload session dir: {err}"))
-            })?;
+            fs::create_dir_all(&dir)
+                .map_err(|err| local_io_error("create upload session dir", err))?;
             File::create(self.session_tmp_path(&id))
-                .map_err(|err| StorageError::backend(format!("create upload temp file: {err}")))?;
+                .map_err(|err| local_io_error("create upload temp file", err))?;
             let stored = StoredUploadSession {
                 public: session.clone(),
                 owner: ctx.actor.clone(),
@@ -260,11 +248,11 @@ impl StorageBackend for LocalFsStorageBackend {
                 .create(true)
                 .append(true)
                 .open(self.session_tmp_path(&session))
-                .map_err(|err| StorageError::backend(format!("open upload temp file: {err}")))?;
+                .map_err(|err| local_io_error("open upload temp file", err))?;
             file.write_all(&bytes)
-                .map_err(|err| StorageError::backend(format!("append upload temp file: {err}")))?;
+                .map_err(|err| local_io_error("append upload temp file", err))?;
             file.flush()
-                .map_err(|err| StorageError::backend(format!("flush upload temp file: {err}")))?;
+                .map_err(|err| local_io_error("flush upload temp file", err))?;
             stored.public.next_offset = Some(new_offset);
             self.write_session(&session, &stored)?;
             Ok(stored.public)
@@ -287,7 +275,7 @@ impl StorageBackend for LocalFsStorageBackend {
             let final_path = self.object_path(&stored.storage_key.key);
             if !self.session_tmp_path(&request.session).exists() && final_path.exists() {
                 let actual = fs::metadata(&final_path)
-                    .map_err(|err| StorageError::backend(format!("read completed object: {err}")))?
+                    .map_err(|err| local_io_error("read completed object", err))?
                     .len();
                 return self.finish_existing_completed_object(
                     &request.session,
@@ -309,7 +297,7 @@ impl StorageBackend for LocalFsStorageBackend {
             }
             ensure_size_limit(&stored, actual)?;
             let uploaded_bytes = fs::read(self.session_tmp_path(&request.session))
-                .map_err(|err| StorageError::backend(format!("read upload temp file: {err}")))?;
+                .map_err(|err| local_io_error("read upload temp file", err))?;
             let checksum = validate_complete_checksum(
                 &stored.checksum_policy,
                 &uploaded_bytes,
@@ -317,9 +305,8 @@ impl StorageBackend for LocalFsStorageBackend {
             )?;
 
             if let Some(parent) = final_path.parent() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    StorageError::backend(format!("create object parent directory: {err}"))
-                })?;
+                fs::create_dir_all(parent)
+                    .map_err(|err| local_io_error("create object parent directory", err))?;
             }
             commit_completed_object(self.session_tmp_path(&request.session), &final_path)?;
 
@@ -359,9 +346,7 @@ impl StorageBackend for LocalFsStorageBackend {
             match fs::remove_dir_all(self.session_dir(&session)) {
                 Ok(()) => Ok(()),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(err) => Err(StorageError::backend(format!(
-                    "remove upload session: {err}"
-                ))),
+                Err(err) => Err(local_io_error("remove upload session", err)),
             }
         })
     }
@@ -396,10 +381,9 @@ impl LocalFsStorageBackend {
             let file = OpenOptions::new()
                 .write(true)
                 .open(path)
-                .map_err(|err| StorageError::backend(format!("open upload temp file: {err}")))?;
-            file.set_len(trusted_len).map_err(|err| {
-                StorageError::backend(format!("truncate upload temp file: {err}"))
-            })?;
+                .map_err(|err| local_io_error("open upload temp file", err))?;
+            file.set_len(trusted_len)
+                .map_err(|err| local_io_error("truncate upload temp file", err))?;
             return Ok(());
         }
         Err(StorageError::backend(format!(
@@ -423,8 +407,8 @@ impl LocalFsStorageBackend {
             }
         }
         ensure_size_limit(stored, actual)?;
-        let object_bytes = fs::read(final_path)
-            .map_err(|err| StorageError::backend(format!("read completed object: {err}")))?;
+        let object_bytes =
+            fs::read(final_path).map_err(|err| local_io_error("read completed object", err))?;
         let checksum =
             validate_complete_checksum(&stored.checksum_policy, &object_bytes, checksum)?;
         let object = self.object_ref(stored, actual, checksum);
@@ -553,10 +537,10 @@ fn commit_completed_object(from: PathBuf, to: &Path) -> StorageResult<()> {
             );
             let partial = partial_object_path(to);
             fs::copy(&from, &partial)
-                .map_err(|err| StorageError::backend(format!("copy completed object: {err}")))?;
+                .map_err(|err| local_io_error("copy completed object", err))?;
             sync_file(&partial)?;
             fs::rename(&partial, to)
-                .map_err(|err| StorageError::backend(format!("commit completed object: {err}")))?;
+                .map_err(|err| local_io_error("commit completed object", err))?;
             if let Some(parent) = to.parent() {
                 sync_dir(parent);
             }
@@ -583,7 +567,7 @@ fn partial_object_path(to: &Path) -> PathBuf {
 fn sync_file(path: &Path) -> StorageResult<()> {
     File::open(path)
         .and_then(|file| file.sync_all())
-        .map_err(|err| StorageError::backend(format!("sync completed object: {err}")))
+        .map_err(|err| local_io_error("sync completed object", err))
 }
 
 fn sync_dir(path: &Path) {
@@ -599,6 +583,23 @@ where
     if err.kind() == std::io::ErrorKind::NotFound {
         not_found()
     } else {
-        StorageError::backend(format!("read local upload metadata: {err}"))
+        local_io_error("read local upload metadata", err)
     }
+}
+
+fn local_io_error(operation: &'static str, err: std::io::Error) -> StorageError {
+    let kind = err.kind();
+    let raw_os_error = err.raw_os_error();
+    tracing::error!(
+        target: "pocopine.log",
+        event_name = "pocopine.storage.local_fs_error",
+        operation,
+        error = %err,
+        ?kind,
+        ?raw_os_error,
+    );
+    let raw = raw_os_error
+        .map(|code| format!(" (os error {code})"))
+        .unwrap_or_default();
+    StorageError::backend(format!("{operation}: {kind:?}{raw}"))
 }
