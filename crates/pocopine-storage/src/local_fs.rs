@@ -6,8 +6,8 @@ use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::backend_common::{
-    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit, expires_at, object_ref,
-    refresh_expired, selected_strategy,
+    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
+    ensure_upload_length_can_be_set, expires_at, object_ref, refresh_expired, selected_strategy,
 };
 use crate::checksum::validate_complete_checksum;
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
@@ -169,6 +169,7 @@ impl StorageBackend for LocalFsStorageBackend {
                 file_name: request.file_name.clone(),
                 size: request.size,
                 content_type: request.content_type.clone(),
+                metadata: request.metadata.clone(),
                 strategy,
                 status: UploadSessionStatus::Open,
                 next_offset: Some(0),
@@ -212,6 +213,30 @@ impl StorageBackend for LocalFsStorageBackend {
         Box::pin(async move {
             let stored = self.read_session(&session)?;
             ensure_owner(&ctx.actor, &stored.owner)?;
+            Ok(stored.public)
+        })
+    }
+
+    fn set_upload_length<'a>(
+        &'a self,
+        ctx: &'a StorageContext,
+        session: UploadSessionId,
+        size: u64,
+    ) -> StorageBoxFuture<'a, UploadSession> {
+        Box::pin(async move {
+            let mut stored = self.read_session(&session)?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
+            self.persist_expired_if_needed(&session, &stored)?;
+            let committed_offset = stored.public.next_offset.unwrap_or(0);
+            self.reconcile_temp_len(&session, committed_offset)?;
+            ensure_upload_length_can_be_set(
+                stored.max_bytes,
+                &stored.public,
+                committed_offset,
+                size,
+            )?;
+            stored.public.size = Some(size);
+            self.write_session(&session, &stored)?;
             Ok(stored.public)
         })
     }
