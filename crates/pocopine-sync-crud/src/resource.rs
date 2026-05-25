@@ -827,12 +827,14 @@ where
             match self
                 .apply_transactional_payload(
                     &ctx,
-                    mutation_id,
-                    expected_key,
-                    op,
-                    base_version,
-                    payload_value,
-                    payload,
+                    TransactionalCrudMutation {
+                        mutation_id,
+                        key: expected_key,
+                        op,
+                        base_version,
+                        payload_value,
+                        payload,
+                    },
                 )
                 .await?
             {
@@ -855,13 +857,16 @@ where
     async fn apply_transactional_payload(
         &self,
         ctx: &RequestContext,
-        mutation_id: MutationId,
-        key: RowKey,
-        op: SyncOp,
-        base_version: Option<RowVersion>,
-        payload_value: Value,
-        payload: CrudMutationPayload<S::Id, S::Draft>,
+        mutation: TransactionalCrudMutation<S::Id, S::Draft>,
     ) -> SyncResult<CrudApplyOutcome<S::Row>> {
+        let TransactionalCrudMutation {
+            mutation_id,
+            key,
+            op,
+            base_version,
+            payload_value,
+            payload,
+        } = mutation;
         let mut tx = self.transaction_runner.begin().await?;
         let result = async {
             if let Some(accepted) = self
@@ -1025,6 +1030,15 @@ enum CrudApplyOutcome<Row> {
     },
     Rejected(SyncRejectedMutation),
     Conflict(SyncConflict<Row>),
+}
+
+struct TransactionalCrudMutation<Id, Draft> {
+    mutation_id: MutationId,
+    key: RowKey,
+    op: SyncOp,
+    base_version: Option<RowVersion>,
+    payload_value: Value,
+    payload: CrudMutationPayload<Id, Draft>,
 }
 
 fn row_to_value<Row>(row: SyncRow<Row>) -> SyncResult<SyncRow<Value>>
