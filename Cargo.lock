@@ -4647,6 +4647,7 @@ dependencies = [
  "async-trait",
  "http 1.4.0",
  "http-body-util",
+ "js-sys",
  "pocopine-auth",
  "pocopine-core",
  "pocopine-server",
@@ -4657,6 +4658,7 @@ dependencies = [
  "tokio",
  "tower",
  "uuid",
+ "wasm-bindgen",
 ]
 
 [[package]]
