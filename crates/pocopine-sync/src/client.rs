@@ -4,6 +4,7 @@ use pocopine_core::{App, AppPlugin, Handle};
 use serde_json::Value;
 
 use crate::{
+    sign_out::{broadcast_sign_out, SignOutSubscription},
     ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation, MemoryLocalStore,
     MutationId, RowKey, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason,
     SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
@@ -150,6 +151,49 @@ impl SyncClient {
             cursor: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Durably drop the local sync cache and tell other tabs to do the same.
+    ///
+    /// This is the helper apps call from their auth-aware sign-out / tenant-
+    /// switch path. The wipe happens first (the durability contract is
+    /// [`SyncLocalStore::clear_all_streams`](crate::SyncLocalStore::clear_all_streams));
+    /// the cross-tab broadcast goes out after, so any sibling tab that
+    /// receives the event sees an already-empty store on the next read.
+    ///
+    /// The local store is not an authorization boundary — call this whenever
+    /// the user identity, tenant, or auth scope changes. Mounted collections
+    /// in this tab continue to hold their in-memory `CollectionState` until
+    /// the app re-mounts them; sibling tabs registered with
+    /// [`watch_sign_outs`](Self::watch_sign_outs) receive a notification so
+    /// they can do the same.
+    pub async fn sign_out(&self) -> SyncResult<()> {
+        self.local_store.clear_all_streams().await?;
+        broadcast_sign_out();
+        Ok(())
+    }
+
+    /// Subscribe to cross-tab sign-out broadcasts.
+    ///
+    /// When another tab in the same browser origin calls
+    /// [`sign_out`](Self::sign_out), the handler runs in this tab. Typical
+    /// usage is to navigate back to a sign-in screen or drop mounted
+    /// `CollectionState`s so the next render hydrates from the (now empty)
+    /// local store.
+    ///
+    /// On host targets this is a no-op stub — there is no cross-process
+    /// cascade today. The returned guard is still valid and dropping it is
+    /// safe.
+    #[cfg(target_arch = "wasm32")]
+    pub fn watch_sign_outs(&self, handler: impl Fn() + 'static) -> SignOutSubscription {
+        let inner = crate::sign_out::subscribe_sign_out(std::rc::Rc::new(handler));
+        SignOutSubscription::wasm(inner)
+    }
+
+    /// Host-target stub. See the wasm32 doc comment.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn watch_sign_outs(&self, _handler: impl Fn() + 'static) -> SignOutSubscription {
+        SignOutSubscription::noop()
     }
 }
 
@@ -1772,6 +1816,50 @@ mod tests {
         assert!(!state.borrow().posts.rows[0].conflict);
         let snapshot = store.hydrate_stream(&stream).await.unwrap();
         assert!(!snapshot.rows[0].conflict);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn sign_out_wipes_durable_store_and_preserves_identity() {
+        let store = Rc::new(MemoryLocalStore::new());
+        let stream = SyncStreamName::new("posts").unwrap();
+        store
+            .save_identity(
+                SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_local").unwrap(), 7)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", serde_json::json!({"title": "server"})).unwrap()],
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let client = sync_plugin()
+            .shared_local_store(store.clone())
+            .into_client();
+        client.sign_out().await.unwrap();
+
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert!(snapshot.rows.is_empty());
+        let identity = store.load_identity().await.unwrap().unwrap();
+        assert_eq!(identity.device_id.as_str(), "device_local");
+        assert_eq!(identity.next_mutation_counter, 7);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn watch_sign_outs_returns_a_valid_guard_on_host() {
+        let store = Rc::new(MemoryLocalStore::new());
+        let client = sync_plugin().shared_local_store(store).into_client();
+        // Host stub: should not panic, returns a guard, dropping is fine.
+        let guard = client.watch_sign_outs(|| {});
+        drop(guard);
     }
 }
 
