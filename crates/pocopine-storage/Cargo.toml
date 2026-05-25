@@ -1,0 +1,47 @@
+[package]
+name = "pocopine-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Storage protocol, browser client, and server plugin extension for Pocopine apps."
+
+[dependencies]
+bytes = "1"
+pocopine-core = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { version = "0.3", features = ["serde", "formatting"] }
+uuid = { version = "1", features = ["v4", "js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-server = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { version = "0.3", features = [
+    "AbortController",
+    "AbortSignal",
+    "Blob",
+    "File",
+    "Headers",
+    "Request",
+    "RequestCredentials",
+    "RequestInit",
+    "Response",
+    "Storage",
+    "Window",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+pocopine = { path = "../pocopine" }
+wasm-bindgen-test = "0.3"
