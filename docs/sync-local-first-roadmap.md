@@ -144,11 +144,15 @@ key over the same authorization scope as the source query.
 
 What is still left is backend-specific packaging, not the core contract:
 
-- SQLx or other database-specific convenience adapters,
-- complete durable mutation log examples against real databases,
+- richer SQLx source examples for full CRUD resources,
 - integration tests for backend-specific crash/retry boundaries where possible,
 - more docs for app-level idempotency keys in payments,
   inventory, uniqueness-sensitive, or other side-effecting domains.
+
+The first SQLx packaging slice now exists in `pocopine-sync-sqlx`. It
+ships a generic SQLx transaction runner, backend-feature constructors for
+Postgres/MySQL/SQLite, and a durable accepted-mutation log helper with
+SQLite-backed tests. Source SQL remains app-owned and backend-specific.
 
 ### 4. Backend-Agnostic Change Sources
 
@@ -294,7 +298,8 @@ simple and hard to misuse.
 2. Add transaction-backed server helper paths for source write + mutation
    log insert.
 3. Add SQLx helper adapters for server CRUD sources, without becoming an
-   ORM.
+   ORM. The first transaction-runner and accepted-mutation-log helper is
+   in place; richer source examples remain.
 4. Add a durable row-scoped pending-mutation purge operation if the
    author-facing API needs true "discard local edits" semantics.
 5. Document auth/cache partitioning and sign-out reset behavior.

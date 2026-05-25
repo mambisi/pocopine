@@ -242,8 +242,8 @@ let customers = customers::resource(Customers {
 .id(|row: &Customer| row.id)
 .version(|row: &Customer| row.version)
 .transactional(
-    SqlxCrudTransactions { pool: pool.clone() },
-    CustomerMutationLog,
+    pocopine_sync_sqlx::postgres(pool.clone()),
+    pocopine_sync_sqlx::SqlxCrudMutationLog::<sqlx::Postgres>::new(tenant_scope),
 );
 
 let sync = pocopine_sync::SyncServer::builder()
@@ -294,6 +294,12 @@ The transaction-backed path requires three app-owned pieces:
   `remove_in_tx` using that handle.
 - `TransactionalCrudMutationLog<Tx, Row>` checks and records accepted
   mutation ids using the same handle and tenant/auth scope.
+
+`pocopine-sync-sqlx` now supplies the common SQLx transaction runner and
+accepted-mutation log helper for Postgres, MySQL, and SQLite feature
+flags. Apps still implement `CrudSource` and `TransactionalCrudSource`
+with normal SQLx queries. See [`sync-sqlx.md`](./sync-sqlx.md) for the
+schema and backend-specific notes.
 
 The sync adapter opens one transaction per mutation in a push request:
 
