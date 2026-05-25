@@ -1731,6 +1731,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transactional_push_uses_one_transaction_per_mutation() {
+        let harness = TxHarness::default();
+        let resource = transactional_posts_resource(harness.clone());
+        let first = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "one".to_string(),
+            },
+        )
+        .into_sync_draft()
+        .unwrap()
+        .with_id(MutationId::new("device_1:1").unwrap());
+        let second = CrudMutationPayload::create(
+            "post_2".to_string(),
+            PostDraft {
+                title: "two".to_string(),
+            },
+        )
+        .into_sync_draft()
+        .unwrap()
+        .with_id(MutationId::new("device_1:2").unwrap());
+
+        let response = resource
+            .push(ctx(), push_request([first, second]))
+            .await
+            .unwrap();
+        let state = harness.state();
+
+        assert_eq!(response.accepted.len(), 2);
+        assert_eq!(state.rows["post_1"].title, "one");
+        assert_eq!(state.rows["post_2"].title, "two");
+        assert!(state.accepted.contains_key("device_1:1"));
+        assert!(state.accepted.contains_key("device_1:2"));
+        assert_eq!(
+            harness.events(),
+            vec![
+                "begin",
+                "log:lookup:device_1:1",
+                "source:create:post_1",
+                "log:record:device_1:1",
+                "commit",
+                "begin",
+                "log:lookup:device_1:2",
+                "source:create:post_2",
+                "log:record:device_1:2",
+                "commit",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_pull_uses_source_snapshot_without_write_transaction() {
+        let harness = TxHarness::default();
+        harness.insert(Post {
+            id: "post_1".to_string(),
+            title: "cached".to_string(),
+            version: 9,
+        });
+        let resource = transactional_posts_resource(harness.clone());
+
+        let response = resource
+            .pull(
+                ctx(),
+                SyncPullRequest::new(SyncStreamName::new("posts").unwrap()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.mode, SyncPullMode::Snapshot);
+        assert_eq!(response.rows.len(), 1);
+        assert_eq!(response.rows[0].key.as_str(), "post_1");
+        assert_eq!(response.rows[0].version.as_ref().unwrap().as_str(), "9");
+        assert_eq!(
+            harness.events(),
+            Vec::<String>::new(),
+            "snapshot reads should not begin a write transaction"
+        );
+    }
+
+    #[tokio::test]
     async fn transactional_source_error_rolls_back_without_recording_mutation_log() {
         let harness = TxHarness::default();
         harness.fail_source_write();
