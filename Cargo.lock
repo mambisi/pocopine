@@ -4722,6 +4722,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-storage"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "js-sys",
+ "pocopine",
+ "pocopine-core",
+ "pocopine-server",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
 name = "pocopine-sync"
 version = "0.1.0"
 dependencies = [
