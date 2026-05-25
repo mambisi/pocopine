@@ -82,6 +82,7 @@ pieces:
 - `CrudMutationPayload::{create, save, remove}` and `into_sync_draft(...)` for mapping CRUD writes into `pocopine-sync` push drafts,
 - `CreateOptions`, `SaveOptions`, `RemoveOptions`, `WritePolicy`, and `QueuedStatus` for the client lifecycle,
 - `Transaction`, `TransactionBindable`, `TransactionRunner`, and `TransactionOptions::run(...)` so the public transaction API can stay `tx.with(resource)` while the app owns begin/commit/rollback,
+- `CrudTransactionRunner`, `TransactionalCrudSource`, `TransactionalCrudMutationLog`, and `.transactional(...)` for production server resources that need the source write and accepted-mutation log insert in one transaction,
 - `resource(name, source)?.id(...).version(...).mutation_log(...)` for registering a non-macro `CrudSource` as a `pocopine-sync` stream,
 - `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids are explicit and replayed writes do not silently run twice,
 - exact replay validation so a reused mutation id with a different operation, row id, or payload is rejected,
@@ -240,7 +241,10 @@ let customers = customers::resource(Customers {
 })?
 .id(|row: &Customer| row.id)
 .version(|row: &Customer| row.version)
-.mutation_log(CustomerMutationLog { pool: pool.clone() });
+.transactional(
+    SqlxCrudTransactions { pool: pool.clone() },
+    CustomerMutationLog,
+);
 
 let sync = pocopine_sync::SyncServer::builder()
     .guarded_stream(customers, pocopine_auth::require_auth())
@@ -256,10 +260,13 @@ There is no separate stream setting in the first version. If a later
 version needs stream overrides, add them only after a real use case proves
 the need.
 
-The adapter requires a mutation log before it implements
+The adapter requires an idempotency path before it implements
 `SyncStreamSource`. This is deliberate: a replayed `MutationId` must not
-run `create`, `save`, or `remove` twice. `MemoryCrudMutationLog` is
-available for tests and single-process demos:
+run `create`, `save`, or `remove` twice. The recommended production path
+is `.transactional(...)`, shown above.
+
+`MemoryCrudMutationLog` is available for tests and single-process demos
+with the older non-transactional `.mutation_log(...)` terminator:
 
 ```rust
 let customers = customers::resource(Customers::new())?
@@ -268,11 +275,9 @@ let customers = customers::resource(Customers::new())?
     .memory_mutation_log();
 ```
 
-Production apps should implement `CrudMutationLog` against the same
-database as the `CrudSource`, and record accepted mutation ids in the
-same transaction as the row write. The idempotency lookup must be scoped
-to the same authorization domain as the source query, for example
-`(tenant_id, mutation_id)`, not only `mutation_id`.
+The non-transactional `.mutation_log(...)` terminator remains available
+for simple adapters and compatibility, but it cannot force the source
+write and log insert to share one database transaction.
 
 On replay, the adapter only acknowledges an accepted mutation id when the
 operation, row id, and serialized payload are an exact match for the
@@ -280,6 +285,44 @@ previously accepted mutation. It intentionally does not return cached rows
 from the mutation log; the next pull is the source of canonical row data.
 This avoids leaking a row accepted under one principal into another
 principal's retry path.
+
+The transaction-backed path requires three app-owned pieces:
+
+- `CrudTransactionRunner` begins, commits, and rolls back the database
+  transaction handle.
+- `TransactionalCrudSource<Tx>` applies `create_in_tx`, `save_in_tx`, and
+  `remove_in_tx` using that handle.
+- `TransactionalCrudMutationLog<Tx, Row>` checks and records accepted
+  mutation ids using the same handle and tenant/auth scope.
+
+The sync adapter opens one transaction per mutation in a push request:
+
+```text
+begin transaction
+  -> check accepted mutation id for this tenant/auth scope
+  -> apply source write and base_version check
+  -> record accepted mutation id
+commit
+```
+
+Conflicts and rejected outcomes do not record an accepted mutation id. The
+adapter still commits a conflict transaction because the source may have
+performed safe validation reads, but source implementations that return
+`Conflict` or `Rejected` must not leave business side effects in the
+transaction.
+
+The accepted-mutation table should enforce a unique key over the same
+authorization scope used by the source query, for example
+`(tenant_id, mutation_id)`. The lookup alone is not enough under
+concurrent retry; a unique constraint or equivalent isolation rule must
+prevent two transactions from both observing "missing" and applying the
+same write.
+
+`MutationId` only dedupes sync replay. It is not a complete business
+idempotency key. External side effects such as payments, inventory
+reservations, email sends, uniqueness-sensitive workflows, or third-party
+API calls still need app-level idempotency keys and domain-specific
+transaction rules.
 
 ## Client Runtime
 
@@ -698,12 +741,16 @@ is.
 ## Transactions And Online Policy
 
 CRUD needs a transaction boundary for server-side writes and custom
-domain operations. Pocopine should provide the transaction lifecycle, but
-the app still owns the database code:
+domain operations. Pocopine provides two related contracts, but the app
+still owns the database code.
+
+Server-side sync replay should use the transaction-backed resource path:
 
 ```text
 begin transaction
-  -> run user CRUD/repository/domain code
+  -> check accepted mutation id
+  -> run one CRUD source write and base_version check
+  -> record accepted mutation id when the write is accepted
   -> commit on success
   -> rollback on error
   -> after commit, publish sync/live invalidations
@@ -728,10 +775,11 @@ two should remain committed. Apps that require all-or-nothing behavior
 should model that as one explicit domain operation, then run it through
 the transaction API.
 
-Generated transaction convenience methods are not shipped yet. They
-should build on the existing `TransactionRunner` and
-`TransactionOptions::run(...)` contract instead of creating a second
-transaction model.
+Author-facing transaction convenience methods are separate from sync
+replay. They are represented by `TransactionRunner`,
+`TransactionOptions::run(...)`, and `tx.with(resource)`, and are not
+generated yet. When generated later, they should stay centered on the
+same public operation body rather than exposing raw sync envelopes.
 
 ## Pre-CRUD Sync Helpers
 

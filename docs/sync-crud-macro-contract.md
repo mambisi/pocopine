@@ -399,7 +399,10 @@ pub async fn build_server(pool: sqlx::PgPool) -> anyhow::Result<pocopine_server:
     let customers = customers::resource(Customers { pool: pool.clone() })?
         .id(|row: &Customer| row.id)
         .version(|row: &Customer| row.version)
-        .mutation_log(CustomerMutationLog { pool: pool.clone() });
+        .transactional(
+            SqlxCrudTransactions { pool: pool.clone() },
+            CustomerMutationLog,
+        );
 
     let sync = pocopine_sync::SyncServer::builder()
         .guarded_stream(customers, pocopine_auth::require_auth())
@@ -417,7 +420,8 @@ What the server sees:
 - `customers::resource(source)` registers stream name `"customers"`.
 - `.id(...)` maps each returned row to the resource id and sync row key.
 - `.version(...)` maps each returned row to the canonical row version.
-- `.mutation_log(...)` provides idempotency for accepted mutation ids.
+- `.transactional(...)` binds source writes and accepted mutation ids to
+  one database transaction.
 - `SyncServer::builder().guarded_stream(...)` owns the auth boundary.
 
 What the server handles at runtime:
@@ -425,15 +429,20 @@ What the server handles at runtime:
 1. `/open` discovers the guarded stream and checks the guard.
 2. `/pull` calls `CrudSource::list` and returns canonical rows.
 3. `/push` deserializes the CRUD payload envelope.
-4. Replayed mutation ids are deduped by the mutation log.
+4. Replayed mutation ids are deduped by the mutation log in the same
+   transaction boundary used for writes.
 5. `save` and `remove` compare the client `base_version` to the latest canonical version before calling app write code.
-6. Accepted writes record the mutation id and publish live invalidation after commit.
+6. Accepted writes record the mutation id before commit, and live invalidation is published after commit.
 7. Stale writes return `Conflict` with the server row when available.
 8. Invalid payloads, auth failures, and domain validation failures return `Rejected`.
 
-The server resource helper intentionally does not hide `.mutation_log`.
-Production idempotency must stay tied to the same database and tenant
-scope as the source query.
+The server resource helper intentionally does not generate transactions
+or SQL. Production code should use `.transactional(...)` and implement
+`CrudTransactionRunner`, `TransactionalCrudSource`, and
+`TransactionalCrudMutationLog` against the same database and tenant scope
+as the source query. The accepted-mutation table needs a unique key over
+that scope and `mutation_id`; the lookup alone is not a concurrency
+boundary.
 
 ## Client API
 
