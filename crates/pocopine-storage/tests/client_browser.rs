@@ -14,8 +14,8 @@ use js_sys::{Array, Promise};
 use pocopine::prelude::*;
 use pocopine_storage::{
     storage_plugin, BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport,
-    ObjectRef, ObjectVisibility, StorageClient, StorageError, StorageResult, TransferPlan,
-    UploadPhase, UploadProgress, UploadSession, UploadSessionId, UploadSessionStatus,
+    ObjectRef, ObjectVisibility, StorageClient, StorageError, StorageResponse, StorageResult,
+    TransferPlan, UploadPhase, UploadProgress, UploadSession, UploadSessionId, UploadSessionStatus,
     UploadStrategy,
 };
 use serde::{Deserialize, Serialize};
@@ -141,6 +141,63 @@ async fn offset_mismatch_inspects_and_resumes_from_server_offset() {
 }
 
 #[wasm_bindgen_test(async)]
+async fn transient_client_error_retries_with_backoff() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    fake.state.borrow_mut().client_error_once = true;
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let object = StorageClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .retry_limit(1)
+        .retry_base_delay_ms(0)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(object.size, 5);
+    assert_eq!(state.borrow().patch_offsets, [0, 0, 2, 4]);
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn local_storage_resume_is_opt_in() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    window()
+        .unwrap()
+        .local_storage()
+        .unwrap()
+        .unwrap()
+        .set_item(
+            "pocopine.storage.resume.v1:avatars:photo.txt:5:blob",
+            &serde_json::to_string(&session(2)).unwrap(),
+        )
+        .unwrap();
+    let fake = FakeStorageTransport::default();
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    StorageClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(state.borrow().requests.first().unwrap().method, "POST");
+    window()
+        .unwrap()
+        .local_storage()
+        .unwrap()
+        .unwrap()
+        .remove_item("pocopine.storage.resume.v1:avatars:photo.txt:5:blob")
+        .unwrap();
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
 async fn abort_signal_stops_upload_request() {
     pocopine_storage::__reset_browser_transport_for_test();
     let fake = FakeStorageTransport::default();
@@ -170,6 +227,7 @@ struct FakeState {
     offset: u64,
     patch_offsets: Vec<u64>,
     mismatch_once: bool,
+    client_error_once: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +270,10 @@ impl BrowserStorageTransport for FakeStorageTransport {
                         .and_then(|(_, value)| value.parse::<u64>().ok())
                         .unwrap();
                     state.patch_offsets.push(provided);
+                    if state.client_error_once {
+                        state.client_error_once = false;
+                        return Err(StorageError::client("temporary transport failure"));
+                    }
                     if state.mismatch_once {
                         state.mismatch_once = false;
                         state.offset = 2;
@@ -283,9 +345,18 @@ fn object_ref(size: u64) -> ObjectRef {
 }
 
 fn json_response<T: Serialize>(result: StorageResult<T>) -> BrowserStorageResponse {
+    let status = match &result {
+        Ok(_) => 200,
+        Err(StorageError::OffsetMismatch { .. }) => 409,
+        Err(StorageError::Unauthorized { .. }) => 401,
+        Err(StorageError::Forbidden { .. }) => 403,
+        Err(StorageError::UnknownUploadSession { .. }) => 404,
+        Err(StorageError::PolicyRejected { .. }) => 422,
+        Err(_) => 500,
+    };
     BrowserStorageResponse {
-        status: 200,
-        body: serde_json::to_string(&result).unwrap(),
+        status,
+        body: serde_json::to_string(&StorageResponse::from_result(result)).unwrap(),
     }
 }
 

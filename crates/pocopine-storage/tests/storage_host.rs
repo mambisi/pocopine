@@ -1,7 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
@@ -13,9 +15,9 @@ use pocopine_storage::{
     storage_server_plugin, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
     InitiateUploadRequest, LocalFsStorageBackend, MemoryStorageBackend, ObjectChecksum,
     ObjectMetadata, ObjectOwnerRef, SafeObjectKey, StorageBackend, StorageContext, StorageError,
-    StorageKey, StorageKeyFuture, StorageKeyResolver, StorageResult, StorageScope, StorageServer,
-    UploadIntent, UploadPolicy, UploadSession, UploadSessionId, UploadStrategy,
-    STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH,
+    StorageKey, StorageKeyFuture, StorageKeyResolver, StorageResponse, StorageResult, StorageScope,
+    StorageServer, UploadIntent, UploadPolicy, UploadSession, UploadSessionId, UploadSessionStatus,
+    UploadStrategy, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -52,14 +54,67 @@ fn safe_object_key_rejects_path_escape_and_reserved_prefixes() {
 #[tokio::test]
 async fn route_rejects_unbound_anonymous_uploads() -> StorageResult<()> {
     let router = finalize(memory_storage()?);
-    let rejected: StorageResult<UploadSession> = post_json_without_cookie(
+    let (status, rejected): (StatusCode, StorageResult<UploadSession>) = post_json_status(
         router,
         STORAGE_UPLOADS_PATH,
         &initiate_request("avatars", UploadStrategy::Auto),
+        false,
     )
     .await;
 
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(matches!(rejected, Err(StorageError::Unauthorized { .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_errors_use_explicit_response_envelope() -> StorageResult<()> {
+    let router = finalize(memory_storage()?);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(STORAGE_UPLOADS_PATH)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&initiate_request("avatars", UploadStrategy::Auto))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains(r#""ok":false"#));
+    assert!(body.contains(r#""error":"#));
+    assert!(!body.contains(r#""Err":"#));
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_rejects_cross_origin_mutations() -> StorageResult<()> {
+    let router = finalize(memory_storage()?);
+    let (status, rejected): (StatusCode, StorageResult<UploadSession>) = post_json_with_headers(
+        router,
+        STORAGE_UPLOADS_PATH,
+        &initiate_request("avatars", UploadStrategy::Auto),
+        true,
+        [("host", "app.example"), ("origin", "https://evil.example")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(matches!(rejected, Err(StorageError::Forbidden { .. })));
     Ok(())
 }
 
@@ -91,6 +146,46 @@ async fn scope_registration_and_write_guard_run_before_key_resolution() -> Stora
 
     let unknown = storage.descriptor(ctx(), "unknown").await;
     assert!(matches!(unknown, Err(StorageError::UnknownScope { .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn predicate_guards_do_not_implicitly_allow_system_context() -> StorageResult<()> {
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .guarded_scope(
+            "avatars",
+            policy("memory")?,
+            pocopine_server::auth::require_auth(),
+        )?
+        .build();
+
+    let denied = storage
+        .initiate_upload(ctx(), initiate_request("avatars", UploadStrategy::Auto))
+        .await;
+    assert!(matches!(denied, Err(StorageError::Unauthorized { .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn expired_sessions_close_and_sweep() -> StorageResult<()> {
+    let backend = MemoryStorageBackend::new();
+    let mut expiring = policy(backend.name())?;
+    expiring.expires_after = Duration::from_secs(0);
+    let session = initiate_direct_with(&backend, Some(5), expiring).await?;
+
+    let inspected = backend.inspect_upload(&ctx(), session.id.clone()).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Expired);
+
+    let append = backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"h"))
+        .await;
+    assert!(matches!(append, Err(StorageError::UploadClosed { .. })));
+    assert_eq!(backend.sweep_expired_uploads()?, 1);
+    assert!(matches!(
+        backend.inspect_upload(&ctx(), session.id).await,
+        Err(StorageError::UnknownUploadSession { .. })
+    ));
     Ok(())
 }
 
@@ -267,6 +362,33 @@ async fn local_fs_persists_session_and_resumes_after_backend_reload() -> Storage
 }
 
 #[tokio::test]
+async fn local_fs_resume_trusts_persisted_offset_not_temp_length() -> StorageResult<()> {
+    let tmp = tempdir().unwrap();
+    let backend = LocalFsStorageBackend::new(tmp.path());
+    let session = initiate_direct(&backend).await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"hello"))
+        .await?;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(
+            tmp.path()
+                .join(".pocopine-storage")
+                .join("sessions")
+                .join(session.id.as_str())
+                .join("bytes.tmp"),
+        )
+        .unwrap()
+        .write_all(b"torn")
+        .unwrap();
+
+    let reloaded = LocalFsStorageBackend::new(tmp.path());
+    let inspected = reloaded.inspect_upload(&ctx(), session.id).await?;
+    assert_eq!(inspected.next_offset, Some(5));
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_fs_complete_is_stable_and_moves_temp_file_to_final_key() -> StorageResult<()> {
     let tmp = tempdir().unwrap();
     let backend = LocalFsStorageBackend::new(tmp.path());
@@ -298,6 +420,48 @@ async fn local_fs_complete_is_stable_and_moves_temp_file_to_final_key() -> Stora
     );
 
     let repeated = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(repeated, object);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_fs_complete_recovers_when_final_exists_before_metadata() -> StorageResult<()> {
+    let tmp = tempdir().unwrap();
+    let backend = LocalFsStorageBackend::new(tmp.path());
+    let session = initiate_direct(&backend).await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"hello"))
+        .await?;
+    let session_tmp = tmp
+        .path()
+        .join(".pocopine-storage")
+        .join("sessions")
+        .join(session.id.as_str())
+        .join("bytes.tmp");
+    let final_path = tmp.path().join("avatars/user-1/photo.txt");
+    std::fs::create_dir_all(final_path.parent().unwrap()).unwrap();
+    std::fs::rename(session_tmp, &final_path).unwrap();
+
+    let reloaded = LocalFsStorageBackend::new(tmp.path());
+    let object = reloaded
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, 5);
+    let repeated = reloaded
         .complete_upload(
             &ctx(),
             CompleteUpload {
@@ -351,20 +515,47 @@ where
     post_json_inner(router, uri, payload, true).await
 }
 
-async fn post_json_without_cookie<T, R>(router: Router, uri: &str, payload: &T) -> StorageResult<R>
-where
-    T: Serialize,
-    R: DeserializeOwned,
-{
-    post_json_inner(router, uri, payload, false).await
-}
-
 async fn post_json_inner<T, R>(
     router: Router,
     uri: &str,
     payload: &T,
     include_cookie: bool,
 ) -> StorageResult<R>
+where
+    T: Serialize,
+    R: DeserializeOwned,
+{
+    let (_status, result) = post_json_status(router, uri, payload, include_cookie).await;
+    result
+}
+
+async fn post_json_status<T, R>(
+    router: Router,
+    uri: &str,
+    payload: &T,
+    include_cookie: bool,
+) -> (StatusCode, StorageResult<R>)
+where
+    T: Serialize,
+    R: DeserializeOwned,
+{
+    post_json_with_headers(
+        router,
+        uri,
+        payload,
+        include_cookie,
+        std::iter::empty::<(&str, &str)>(),
+    )
+    .await
+}
+
+async fn post_json_with_headers<T, R>(
+    router: Router,
+    uri: &str,
+    payload: &T,
+    include_cookie: bool,
+    headers: impl IntoIterator<Item = (&'static str, &'static str)>,
+) -> (StatusCode, StorageResult<R>)
 where
     T: Serialize,
     R: DeserializeOwned,
@@ -376,6 +567,9 @@ where
     if include_cookie {
         builder = builder.header("cookie", anon_cookie());
     }
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
     let response = router
         .oneshot(
             builder
@@ -384,10 +578,10 @@ where
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let outer: StorageResult<R> = serde_json::from_slice(&bytes).unwrap();
-    outer
+    let outer: StorageResponse<R> = serde_json::from_slice(&bytes).unwrap();
+    (status, outer.into_result())
 }
 
 async fn patch_bytes(
@@ -423,10 +617,9 @@ where
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let outer: StorageResult<R> = serde_json::from_slice(&bytes).unwrap();
-    outer
+    let outer: StorageResponse<R> = serde_json::from_slice(&bytes).unwrap();
+    outer.into_result()
 }
 
 async fn delete_upload(router: Router, session: &UploadSessionId) -> StorageResult<()> {
@@ -444,9 +637,9 @@ async fn delete_upload(router: Router, session: &UploadSessionId) -> StorageResu
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
+    let outer: StorageResponse<()> = serde_json::from_slice(&bytes).unwrap();
+    outer.into_result()
 }
 
 async fn initiate_direct<B>(backend: &B) -> StorageResult<UploadSession>

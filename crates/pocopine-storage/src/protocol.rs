@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::{StorageError, StorageResult};
@@ -28,6 +30,68 @@ pub const STORAGE_UPLOADS_PREFIX: &str = storage_path!("/uploads");
 pub const STORAGE_UPLOADS_PATH: &str = storage_path!("/uploads");
 /// Anonymous upload binding cookie read by the storage server.
 pub const STORAGE_ANON_COOKIE: &str = "pocopine_storage_anon";
+
+/// Stable JSON envelope used by storage HTTP routes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StorageResponse<T> {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<StorageError>,
+    #[serde(skip)]
+    marker: PhantomData<T>,
+}
+
+impl<T> StorageResponse<T> {
+    pub fn ok(data: T) -> Self
+    where
+        T: Serialize,
+    {
+        Self {
+            ok: true,
+            data: Some(serde_json::to_value(data).unwrap_or(Value::Null)),
+            error: None,
+            marker: PhantomData,
+        }
+    }
+
+    pub fn err(error: StorageError) -> Self {
+        Self {
+            ok: false,
+            data: None,
+            error: Some(error),
+            marker: PhantomData,
+        }
+    }
+
+    pub fn from_result(result: StorageResult<T>) -> Self
+    where
+        T: Serialize,
+    {
+        match result {
+            Ok(data) => Self::ok(data),
+            Err(error) => Self::err(error),
+        }
+    }
+
+    pub fn into_result(self) -> StorageResult<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        if self.ok {
+            let data = self
+                .data
+                .ok_or_else(|| StorageError::client("storage response omitted data"))?;
+            serde_json::from_value(data)
+                .map_err(|err| StorageError::client(format!("decode storage response data: {err}")))
+        } else {
+            Err(self
+                .error
+                .unwrap_or_else(|| StorageError::client("storage response omitted error")))
+        }
+    }
+}
 
 fn validate_token(field: &'static str, value: String) -> StorageResult<String> {
     let trimmed = value.trim();
@@ -419,6 +483,49 @@ impl UploadPolicy {
     pub fn visibility(mut self, visibility: ObjectVisibility) -> Self {
         self.visibility = visibility;
         self
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn validate_configuration(&self) -> StorageResult<()> {
+        if self.max_bytes == 0 {
+            return Err(StorageError::policy_rejected(
+                "upload policy max_bytes must be greater than zero",
+            ));
+        }
+        if self.max_concurrent_parts == 0 {
+            return Err(StorageError::policy_rejected(
+                "upload policy max_concurrent_parts must be greater than zero",
+            ));
+        }
+        if let Some(max_parts) = self.max_parts {
+            if max_parts == 0 {
+                return Err(StorageError::policy_rejected(
+                    "upload policy max_parts must be greater than zero",
+                ));
+            }
+        }
+        if let (Some(min), Some(preferred)) = (self.min_part_size, self.preferred_chunk_size) {
+            if min > preferred {
+                return Err(StorageError::policy_rejected(
+                    "upload policy min_part_size cannot exceed preferred_chunk_size",
+                ));
+            }
+        }
+        if let (Some(preferred), Some(max)) = (self.preferred_chunk_size, self.max_part_size) {
+            if preferred > max {
+                return Err(StorageError::policy_rejected(
+                    "upload policy preferred_chunk_size cannot exceed max_part_size",
+                ));
+            }
+        }
+        if let (Some(min), Some(max)) = (self.min_part_size, self.max_part_size) {
+            if min > max {
+                return Err(StorageError::policy_rejected(
+                    "upload policy min_part_size cannot exceed max_part_size",
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]

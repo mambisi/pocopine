@@ -64,6 +64,17 @@ impl MemoryStorageBackend {
         Ok(self.lock()?.objects.get(key).cloned())
     }
 
+    /// Remove expired in-memory upload sessions.
+    pub fn sweep_expired_uploads(&self) -> StorageResult<usize> {
+        let mut inner = self.lock()?;
+        let before = inner.sessions.len();
+        inner.sessions.retain(|_, stored| {
+            refresh_expired(stored);
+            stored.public.status != UploadSessionStatus::Expired
+        });
+        Ok(before.saturating_sub(inner.sessions.len()))
+    }
+
     fn lock(&self) -> StorageResult<std::sync::MutexGuard<'_, Inner>> {
         self.inner
             .lock()
@@ -127,12 +138,13 @@ impl StorageBackend for MemoryStorageBackend {
         session: UploadSessionId,
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
-            let inner = self.lock()?;
+            let mut inner = self.lock()?;
             let stored = inner
                 .sessions
-                .get(session.as_str())
+                .get_mut(session.as_str())
                 .ok_or_else(|| StorageError::unknown_upload_session(session.to_string()))?;
             ensure_owner(ctx, stored)?;
+            refresh_expired(stored);
             let mut public = stored.public.clone();
             if public.status == UploadSessionStatus::Open {
                 public.next_offset = Some(stored.bytes.len() as u64);
@@ -155,6 +167,7 @@ impl StorageBackend for MemoryStorageBackend {
                 .get_mut(session.as_str())
                 .ok_or_else(|| StorageError::unknown_upload_session(session.to_string()))?;
             ensure_owner(ctx, stored)?;
+            refresh_expired(stored);
             ensure_open(stored)?;
             if stored.public.strategy != UploadStrategy::Sequential {
                 return Err(StorageError::unsupported(
@@ -163,6 +176,13 @@ impl StorageBackend for MemoryStorageBackend {
             }
             let expected = stored.bytes.len() as u64;
             if expected != offset {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    event_name = "pocopine.storage.offset_mismatch",
+                    session = %session,
+                    expected,
+                    provided = offset,
+                );
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
             let new_offset = checked_new_offset(offset, bytes.len())?;
@@ -188,6 +208,7 @@ impl StorageBackend for MemoryStorageBackend {
                         StorageError::unknown_upload_session(request.session.to_string())
                     })?;
                 ensure_owner(ctx, stored)?;
+                refresh_expired(stored);
                 if let Some(object) = &stored.object {
                     return Ok(object.clone());
                 }
@@ -283,9 +304,26 @@ fn ensure_open(stored: &StoredUpload) -> StorageResult<()> {
         }),
         UploadSessionStatus::Aborted
         | UploadSessionStatus::Expired
-        | UploadSessionStatus::Completing => Err(StorageError::UploadClosed {
-            session: stored.public.id.to_string(),
-        }),
+        | UploadSessionStatus::Completing => {
+            tracing::warn!(
+                target: "pocopine.log",
+                event_name = "pocopine.storage.upload_closed",
+                session = %stored.public.id,
+                status = ?stored.public.status,
+            );
+            Err(StorageError::UploadClosed {
+                session: stored.public.id.to_string(),
+            })
+        }
+    }
+}
+
+fn refresh_expired(stored: &mut StoredUpload) {
+    if stored.public.status == UploadSessionStatus::Open
+        && OffsetDateTime::now_utc() >= stored.public.expires_at
+    {
+        stored.public.status = UploadSessionStatus::Expired;
+        stored.public.next_offset = Some(stored.bytes.len() as u64);
     }
 }
 

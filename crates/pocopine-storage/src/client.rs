@@ -149,8 +149,8 @@ mod wasm {
 
     use super::*;
     use crate::{
-        CompleteUploadRequest, InitiateUploadRequest, ObjectRef, UploadPhase, UploadProgress,
-        UploadStrategy, STORAGE_PROTOCOL_V1,
+        CompleteUploadRequest, InitiateUploadRequest, ObjectRef, StorageResponse, UploadPhase,
+        UploadProgress, UploadStrategy, STORAGE_PROTOCOL_V1,
     };
 
     const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
@@ -276,8 +276,10 @@ mod wasm {
                 metadata: BTreeMap::new(),
                 progress: None,
                 retry_limit: 2,
+                retry_base_delay_ms: 100,
                 abort_signal: None,
                 resume_session: None,
+                auto_resume: false,
             }
         }
     }
@@ -302,8 +304,10 @@ mod wasm {
         metadata: BTreeMap<String, String>,
         progress: Option<Rc<dyn Fn(UploadProgress)>>,
         retry_limit: u32,
+        retry_base_delay_ms: u32,
         abort_signal: Option<AbortSignal>,
         resume_session: Option<UploadSession>,
+        auto_resume: bool,
     }
 
     impl UploadBuilder {
@@ -334,6 +338,12 @@ mod wasm {
             self
         }
 
+        /// Set the base retry backoff in milliseconds.
+        pub fn retry_base_delay_ms(mut self, retry_base_delay_ms: u32) -> Self {
+            self.retry_base_delay_ms = retry_base_delay_ms;
+            self
+        }
+
         /// Attach a browser abort signal to every request in this upload.
         pub fn abort_signal(mut self, signal: AbortSignal) -> Self {
             self.abort_signal = Some(signal);
@@ -346,19 +356,29 @@ mod wasm {
             self
         }
 
+        /// Opt into browser localStorage session lookup for this source.
+        ///
+        /// This is disabled by default so same-name/same-size files never resume
+        /// implicitly into an unrelated upload session.
+        pub fn auto_resume(mut self, enabled: bool) -> Self {
+            self.auto_resume = enabled;
+            self
+        }
+
         /// Upload the file/blob through the sequential proxy route.
         pub async fn send(self) -> StorageResult<ObjectRef> {
             self.emit(UploadPhase::Initiating, 0);
 
             let mut session = match self.resume_session.clone() {
                 Some(session) => session,
-                None => {
+                None if self.auto_resume => {
                     if let Some(session) = self.load_resume_session().await? {
                         session
                     } else {
                         self.initiate().await?
                     }
                 }
+                None => self.initiate().await?,
             };
             self.store_resume_session(&session);
 
@@ -397,6 +417,7 @@ mod wasm {
                         {
                             attempts += 1;
                             self.emit(UploadPhase::Retrying, offset);
+                            retry_delay(self.retry_base_delay_ms, attempts).await?;
                         }
                         Err(err) => {
                             self.emit(UploadPhase::Failed, offset);
@@ -617,15 +638,28 @@ mod wasm {
         T: DeserializeOwned,
     {
         let response = send_request(request).await?;
-        if !(200..300).contains(&response.status) {
+        let envelope: StorageResponse<T> = match serde_json::from_str(&response.body) {
+            Ok(envelope) => envelope,
+            Err(err) if !(200..300).contains(&response.status) => {
+                return Err(StorageError::client(format!(
+                    "{operation} failed with HTTP {}",
+                    response.status
+                )));
+            }
+            Err(err) => {
+                return Err(StorageError::client(format!(
+                    "parse {operation} response: {err}"
+                )));
+            }
+        };
+        let result = envelope.into_result();
+        if !(200..300).contains(&response.status) && result.is_ok() {
             return Err(StorageError::client(format!(
                 "{operation} failed with HTTP {}",
                 response.status
             )));
         }
-        let outer: StorageResult<T> = serde_json::from_str(&response.body)
-            .map_err(|err| StorageError::client(format!("parse {operation} response: {err}")))?;
-        outer
+        result
     }
 
     async fn send_request(request: BrowserStorageRequest) -> StorageResult<BrowserStorageResponse> {
@@ -699,6 +733,45 @@ mod wasm {
         if let Some(storage) = local_storage() {
             let _ = storage.remove_item(key);
         }
+    }
+
+    async fn retry_delay(base_ms: u32, attempt: u32) -> StorageResult<()> {
+        let Some(delay) = base_ms.checked_mul(1_u32 << attempt.saturating_sub(1).min(5)) else {
+            return delay_ms(u32::MAX as i32).await;
+        };
+        delay_ms(delay.min(i32::MAX as u32) as i32).await
+    }
+
+    async fn delay_ms(ms: i32) -> StorageResult<()> {
+        if ms <= 0 {
+            let _ = JsFuture::from(Promise::resolve(&JsValue::NULL)).await;
+            return Ok(());
+        }
+        let promise = Promise::new(&mut |resolve, _reject| {
+            let Some(window) = web_sys::window() else {
+                let _ = resolve.call0(&JsValue::NULL);
+                return;
+            };
+            let callback_resolve = resolve.clone();
+            let callback = Closure::once(move || {
+                let _ = callback_resolve.call0(&JsValue::NULL);
+            });
+            if window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    callback.as_ref().unchecked_ref(),
+                    ms,
+                )
+                .is_ok()
+            {
+                callback.forget();
+            } else {
+                let _ = resolve.call0(&JsValue::NULL);
+            }
+        });
+        let _ = JsFuture::from(promise)
+            .await
+            .map_err(|err| StorageError::client(format!("retry delay failed: {err:?}")))?;
+        Ok(())
     }
 
     fn local_storage() -> Option<web_sys::Storage> {
