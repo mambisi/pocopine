@@ -120,12 +120,7 @@ impl LocalFsStorageBackend {
         })?;
         let mut stored: StoredUploadSession = serde_json::from_slice(&bytes)
             .map_err(|err| StorageError::backend(format!("read local upload metadata: {err}")))?;
-        if stored.public.status == UploadSessionStatus::Open {
-            if OffsetDateTime::now_utc() >= stored.public.expires_at {
-                stored.public.status = UploadSessionStatus::Expired;
-                self.write_session(session, &stored)?;
-            }
-        }
+        refresh_expired(&mut stored);
         Ok(stored)
     }
 
@@ -238,6 +233,7 @@ impl StorageBackend for LocalFsStorageBackend {
         Box::pin(async move {
             let mut stored = self.read_session(&session)?;
             ensure_owner(ctx, &stored)?;
+            self.persist_expired_if_needed(&session, &stored)?;
             ensure_open(&stored)?;
             if stored.public.strategy != UploadStrategy::Sequential {
                 return Err(StorageError::unsupported(
@@ -246,7 +242,7 @@ impl StorageBackend for LocalFsStorageBackend {
             }
             let expected = stored.public.next_offset.unwrap_or(0);
             if expected != offset {
-                tracing::warn!(
+                tracing::debug!(
                     target: "pocopine.log",
                     event_name = "pocopine.storage.offset_mismatch",
                     session = %session,
@@ -284,6 +280,7 @@ impl StorageBackend for LocalFsStorageBackend {
             if let Some(object) = &stored.object {
                 return Ok(object.clone());
             }
+            self.persist_expired_if_needed(&request.session, &stored)?;
             ensure_open(&stored)?;
             let final_path = self.object_path(&stored.storage_key.key);
             if !self.session_tmp_path(&request.session).exists() && final_path.exists() {
@@ -369,6 +366,17 @@ impl StorageBackend for LocalFsStorageBackend {
 }
 
 impl LocalFsStorageBackend {
+    fn persist_expired_if_needed(
+        &self,
+        session: &UploadSessionId,
+        stored: &StoredUploadSession,
+    ) -> StorageResult<()> {
+        if stored.public.status == UploadSessionStatus::Expired {
+            self.write_session(session, stored)?;
+        }
+        Ok(())
+    }
+
     fn reconcile_temp_len(&self, session: &UploadSessionId, trusted_len: u64) -> StorageResult<()> {
         let path = self.session_tmp_path(session);
         let actual = self.temp_len(session)?;
@@ -465,7 +473,7 @@ fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
 }
 
 fn ensure_owner(ctx: &StorageContext, stored: &StoredUploadSession) -> StorageResult<()> {
-    if ctx.actor == stored.owner {
+    if ctx.actor.same_owner(&stored.owner) {
         Ok(())
     } else {
         Err(StorageError::forbidden(
@@ -483,7 +491,7 @@ fn ensure_open(stored: &StoredUploadSession) -> StorageResult<()> {
         UploadSessionStatus::Aborted
         | UploadSessionStatus::Expired
         | UploadSessionStatus::Completing => {
-            tracing::warn!(
+            tracing::debug!(
                 target: "pocopine.log",
                 event_name = "pocopine.storage.upload_closed",
                 session = %stored.public.id,
@@ -493,6 +501,14 @@ fn ensure_open(stored: &StoredUploadSession) -> StorageResult<()> {
                 session: stored.public.id.to_string(),
             })
         }
+    }
+}
+
+fn refresh_expired(stored: &mut StoredUploadSession) {
+    if stored.public.status == UploadSessionStatus::Open
+        && OffsetDateTime::now_utc() >= stored.public.expires_at
+    {
+        stored.public.status = UploadSessionStatus::Expired;
     }
 }
 

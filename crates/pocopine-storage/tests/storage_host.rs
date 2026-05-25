@@ -8,8 +8,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use pocopine_core::ServerError;
+use pocopine_server::auth::{AuthUser, RequestContext};
 use pocopine_server::axum::body::Body;
-use pocopine_server::axum::http::{Request, StatusCode};
+use pocopine_server::axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use pocopine_server::axum::Router;
 use pocopine_storage::{
     storage_server_plugin, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
@@ -52,18 +53,56 @@ fn safe_object_key_rejects_path_escape_and_reserved_prefixes() {
 }
 
 #[tokio::test]
-async fn route_rejects_unbound_anonymous_uploads() -> StorageResult<()> {
+async fn route_mints_anonymous_binding_cookie_for_public_uploads() -> StorageResult<()> {
     let router = finalize(memory_storage()?);
-    let (status, rejected): (StatusCode, StorageResult<UploadSession>) = post_json_status(
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(STORAGE_UPLOADS_PATH)
+                .header("content-type", "application/json")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(
+                    serde_json::to_string(&initiate_request("avatars", UploadStrategy::Auto))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("storage response should bind anonymous uploads");
+    assert!(set_cookie.starts_with(STORAGE_ANON_COOKIE));
+    assert!(set_cookie.contains("Path=/__pocopine/storage"));
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Strict"));
+
+    let outer: StorageResponse<UploadSession> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let session = outer.into_result()?;
+    assert_eq!(session.status, UploadSessionStatus::Open);
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_rejects_mutations_without_csrf_proof() -> StorageResult<()> {
+    let router = finalize(memory_storage()?);
+    let (status, rejected): (StatusCode, StorageResult<UploadSession>) = post_json_with_headers(
         router,
         STORAGE_UPLOADS_PATH,
         &initiate_request("avatars", UploadStrategy::Auto),
-        false,
+        true,
+        std::iter::empty::<(&str, &str)>(),
     )
     .await;
 
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(matches!(rejected, Err(StorageError::Unauthorized { .. })));
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(matches!(rejected, Err(StorageError::Forbidden { .. })));
     Ok(())
 }
 
@@ -76,15 +115,17 @@ async fn route_errors_use_explicit_response_envelope() -> StorageResult<()> {
                 .method("POST")
                 .uri(STORAGE_UPLOADS_PATH)
                 .header("content-type", "application/json")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
                 .body(Body::from(
-                    serde_json::to_string(&initiate_request("avatars", UploadStrategy::Auto))
+                    serde_json::to_string(&initiate_request("unknown", UploadStrategy::Auto))
                         .unwrap(),
                 ))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body = String::from_utf8(
         response
             .into_body()
@@ -109,7 +150,24 @@ async fn route_rejects_cross_origin_mutations() -> StorageResult<()> {
         STORAGE_UPLOADS_PATH,
         &initiate_request("avatars", UploadStrategy::Auto),
         true,
-        [("host", "app.example"), ("origin", "https://evil.example")],
+        [("sec-fetch-site", "cross-site")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(matches!(rejected, Err(StorageError::Forbidden { .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_rejects_scheme_mismatched_origins() -> StorageResult<()> {
+    let router = finalize(memory_storage()?);
+    let (status, rejected): (StatusCode, StorageResult<UploadSession>) = post_json_with_headers(
+        router,
+        STORAGE_UPLOADS_PATH,
+        &initiate_request("avatars", UploadStrategy::Auto),
+        true,
+        [("host", "app.example"), ("origin", "http://app.example")],
     )
     .await;
 
@@ -164,6 +222,41 @@ async fn predicate_guards_do_not_implicitly_allow_system_context() -> StorageRes
         .initiate_upload(ctx(), initiate_request("avatars", UploadStrategy::Auto))
         .await;
     assert!(matches!(denied, Err(StorageError::Unauthorized { .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn principal_owner_binding_ignores_mutable_claims() -> StorageResult<()> {
+    let backend = MemoryStorageBackend::new();
+    let session = initiate_direct_with_ctx(
+        &backend,
+        &principal_ctx("user-1", "initial"),
+        Some(5),
+        policy(backend.name())?,
+    )
+    .await?;
+
+    let inspected = backend
+        .inspect_upload(&principal_ctx("user-1", "changed"), session.id)
+        .await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Open);
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_returns_forbidden_for_other_actor_sessions() -> StorageResult<()> {
+    let storage = memory_storage()?;
+    let session = storage
+        .initiate_upload(
+            principal_ctx("user-1", "initial"),
+            initiate_request("avatars", UploadStrategy::Auto),
+        )
+        .await?;
+
+    let denied = storage
+        .inspect_upload(principal_ctx("user-2", "initial"), session.id)
+        .await;
+    assert!(matches!(denied, Err(StorageError::Forbidden { .. })));
     Ok(())
 }
 
@@ -287,6 +380,57 @@ async fn required_sha256_checksum_is_verified() -> StorageResult<()> {
 }
 
 #[tokio::test]
+async fn optional_sha256_checksum_is_verified_when_present() -> StorageResult<()> {
+    let backend = MemoryStorageBackend::new();
+    let mut checksum_policy = policy(backend.name())?;
+    checksum_policy.checksum = ChecksumPolicy::Optional(vec![ChecksumAlgorithm::Sha256]);
+    let session = initiate_direct_with(&backend, Some(5), checksum_policy).await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"hello"))
+        .await?;
+
+    let wrong = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: Some(ObjectChecksum {
+                    algorithm: ChecksumAlgorithm::Sha256,
+                    value: "00".to_string(),
+                }),
+            },
+        )
+        .await;
+    assert!(matches!(wrong, Err(StorageError::PolicyRejected { .. })));
+
+    let checksum = ObjectChecksum {
+        algorithm: ChecksumAlgorithm::Sha256,
+        value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".to_string(),
+    };
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: Some(checksum.clone()),
+            },
+        )
+        .await?;
+    assert_eq!(object.checksum, Some(checksum));
+    Ok(())
+}
+
+#[test]
+fn required_unsupported_checksum_algorithms_fail_configuration() -> StorageResult<()> {
+    let mut checksum_policy = policy("memory")?;
+    checksum_policy.checksum = ChecksumPolicy::Required(ChecksumAlgorithm::Md5);
+    let builder = StorageServer::builder().backend("memory", MemoryStorageBackend::new())?;
+    let rejected = builder.public_scope("avatars", checksum_policy);
+    assert!(matches!(rejected, Err(StorageError::Unsupported { .. })));
+    Ok(())
+}
+
+#[tokio::test]
 async fn abort_uses_delete_guard() -> StorageResult<()> {
     let scope = StorageScope::builder(policy("memory")?)
         .delete_guard(|_ctx| async { Err(ServerError::forbidden("delete denied")) })
@@ -385,6 +529,28 @@ async fn local_fs_resume_trusts_persisted_offset_not_temp_length() -> StorageRes
     let reloaded = LocalFsStorageBackend::new(tmp.path());
     let inspected = reloaded.inspect_upload(&ctx(), session.id).await?;
     assert_eq!(inspected.next_offset, Some(5));
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_fs_inspect_expired_session_does_not_write_metadata() -> StorageResult<()> {
+    let tmp = tempdir().unwrap();
+    let backend = LocalFsStorageBackend::new(tmp.path());
+    let mut expiring = policy(backend.name())?;
+    expiring.expires_after = Duration::from_secs(0);
+    let session = initiate_direct_with(&backend, Some(5), expiring).await?;
+    let meta = tmp
+        .path()
+        .join(".pocopine-storage")
+        .join("sessions")
+        .join(session.id.as_str())
+        .join("session.json");
+    let before = std::fs::read(&meta).unwrap();
+
+    let inspected = backend.inspect_upload(&ctx(), session.id).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Expired);
+    let after = std::fs::read(&meta).unwrap();
+    assert_eq!(after, before);
     Ok(())
 }
 
@@ -544,7 +710,7 @@ where
         uri,
         payload,
         include_cookie,
-        std::iter::empty::<(&str, &str)>(),
+        [("sec-fetch-site", "same-origin")],
     )
     .await
 }
@@ -612,6 +778,7 @@ where
                 ))
                 .header("Upload-Offset", offset.to_string())
                 .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
                 .body(Body::from(bytes.to_vec()))
                 .unwrap(),
         )
@@ -632,6 +799,7 @@ async fn delete_upload(router: Router, session: &UploadSessionId) -> StorageResu
                     session.as_str()
                 ))
                 .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -657,9 +825,21 @@ async fn initiate_direct_with<B>(
 where
     B: StorageBackend,
 {
+    initiate_direct_with_ctx(backend, &ctx(), size, policy).await
+}
+
+async fn initiate_direct_with_ctx<B>(
+    backend: &B,
+    ctx: &StorageContext,
+    size: Option<u64>,
+    policy: UploadPolicy,
+) -> StorageResult<UploadSession>
+where
+    B: StorageBackend,
+{
     backend
         .initiate_upload(
-            &ctx(),
+            ctx,
             InitiateUpload {
                 scope: "avatars".to_string(),
                 storage_key: storage_key()?,
@@ -704,6 +884,21 @@ fn policy(backend: &str) -> StorageResult<UploadPolicy> {
 
 fn ctx() -> StorageContext {
     StorageContext::system("test")
+}
+
+fn principal_ctx(id: &str, claim: &str) -> StorageContext {
+    let mut claims = std::collections::BTreeMap::new();
+    claims.insert("mutable".to_string(), serde_json::json!(claim));
+    let mut user = AuthUser::new(id);
+    user.claims = claims;
+    StorageContext::from_request(
+        RequestContext::new(
+            Method::GET,
+            Uri::from_static("/storage-test"),
+            HeaderMap::new(),
+        )
+        .with_user(user),
+    )
 }
 
 fn anon_cookie() -> String {

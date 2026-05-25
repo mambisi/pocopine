@@ -176,7 +176,7 @@ impl StorageBackend for MemoryStorageBackend {
             }
             let expected = stored.bytes.len() as u64;
             if expected != offset {
-                tracing::warn!(
+                tracing::debug!(
                     target: "pocopine.log",
                     event_name = "pocopine.storage.offset_mismatch",
                     session = %session,
@@ -287,7 +287,7 @@ fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
 }
 
 fn ensure_owner(ctx: &StorageContext, stored: &StoredUpload) -> StorageResult<()> {
-    if ctx.actor == stored.owner {
+    if ctx.actor.same_owner(&stored.owner) {
         Ok(())
     } else {
         Err(StorageError::forbidden(
@@ -305,7 +305,7 @@ fn ensure_open(stored: &StoredUpload) -> StorageResult<()> {
         UploadSessionStatus::Aborted
         | UploadSessionStatus::Expired
         | UploadSessionStatus::Completing => {
-            tracing::warn!(
+            tracing::debug!(
                 target: "pocopine.log",
                 event_name = "pocopine.storage.upload_closed",
                 session = %stored.public.id,
