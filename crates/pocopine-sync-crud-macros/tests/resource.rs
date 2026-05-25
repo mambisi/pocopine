@@ -14,7 +14,7 @@ use pocopine_sync_crud::{
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Customer {
     pub id: String,
 }
