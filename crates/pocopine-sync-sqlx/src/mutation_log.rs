@@ -45,7 +45,8 @@ pub const POSTGRES_CRUD_MUTATION_LOG_SCHEMA: &str = r#"create table if not exist
 /// The default uses bounded indexed columns because MySQL cannot index
 /// unbounded `text` columns in a primary key. Apps with longer mutation ids or
 /// scope values should use their own table and point [`SqlxCrudMutationLog`] at
-/// it with [`SqlxCrudMutationLog::with_table`].
+/// it with [`SqlxCrudMutationLog::with_table`]. The helper validates sync token
+/// shape, but it does not know the configured MySQL column widths.
 pub const MYSQL_CRUD_MUTATION_LOG_SCHEMA: &str = r#"create table if not exists __pocopine_crud_mutations (
   scope varchar(191) not null,
   mutation_id varchar(191) not null,
@@ -149,9 +150,9 @@ where
     }
 }
 
-#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
-macro_rules! impl_sqlx_crud_mutation_log {
-    ($feature:literal, $db:path, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+macro_rules! impl_sqlx_crud_mutation_log_conflict_clause {
+    ($feature:literal, $db:path, $conflict:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
         #[cfg(feature = $feature)]
         #[pocopine_sync_crud::async_trait]
         impl<RowValue> TransactionalCrudMutationLog<Transaction<'static, $db>, RowValue>
@@ -159,58 +160,6 @@ macro_rules! impl_sqlx_crud_mutation_log {
         where
             RowValue: Clone + Send + Sync + 'static,
         {
-            async fn accepted_mutation_in_tx(
-                &self,
-                tx: &mut Transaction<'static, $db>,
-                ctx: &RequestContext,
-                mutation_id: &MutationId,
-            ) -> SyncResult<Option<CrudAcceptedMutation>> {
-                let scope = self.scope(ctx)?;
-                let sql = format!(
-                    "select mutation_id, op, row_key, payload from {} where scope = {} and mutation_id = {}",
-                    self.table, $p1, $p2
-                );
-                let row = sqlx::query(&sql)
-                    .bind(scope)
-                    .bind(mutation_id.as_str().to_string())
-                    .fetch_optional(&mut **tx)
-                    .await
-                    .map_err(sync_sqlx_error)?;
-
-                let Some(row) = row else {
-                    return Ok(None);
-                };
-
-                accepted_from_row(mutation_id, row)
-            }
-
-            async fn record_accepted_mutation_in_tx(
-                &self,
-                tx: &mut Transaction<'static, $db>,
-                ctx: &RequestContext,
-                accepted: CrudAcceptedMutation,
-            ) -> SyncResult<()> {
-                let scope = self.scope(ctx)?;
-                let payload = serde_json::to_string(&accepted.payload)?;
-                let row_key = accepted.key.as_ref().map(|key| key.as_str().to_string());
-                let sql = format!(
-                    "insert into {} (scope, mutation_id, op, row_key, payload) values ({}, {}, {}, {}, {})",
-                    self.table, $p1, $p2, $p3, $p4, $p5
-                );
-
-                sqlx::query(&sql)
-                    .bind(scope)
-                    .bind(accepted.mutation_id.as_str().to_string())
-                    .bind(op_to_db(accepted.op).to_string())
-                    .bind(row_key)
-                    .bind(payload)
-                    .execute(&mut **tx)
-                    .await
-                    .map_err(sync_sqlx_error)?;
-
-                Ok(())
-            }
-
             async fn reserve_accepted_mutation_in_tx(
                 &self,
                 tx: &mut Transaction<'static, $db>,
@@ -222,8 +171,72 @@ macro_rules! impl_sqlx_crud_mutation_log {
                 let payload = serde_json::to_string(&accepted.payload)?;
                 let row_key = accepted.key.as_ref().map(|key| key.as_str().to_string());
                 let sql = format!(
-                    "insert into {} (scope, mutation_id, op, row_key, payload) values ({}, {}, {}, {}, {})",
-                    self.table, $p1, $p2, $p3, $p4, $p5
+                    "insert into {} (scope, mutation_id, op, row_key, payload) values ({}, {}, {}, {}, {}){}",
+                    self.table, $p1, $p2, $p3, $p4, $p5, $conflict
+                );
+
+                let result = sqlx::query(&sql)
+                    .bind(scope)
+                    .bind(mutation_id.as_str().to_string())
+                    .bind(op_to_db(accepted.op).to_string())
+                    .bind(row_key)
+                    .bind(payload)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(sync_sqlx_error)?;
+
+                if result.rows_affected() == 1 {
+                    return Ok(CrudMutationReservation::Reserved);
+                }
+
+                let scope = self.scope(ctx)?;
+                let sql = format!(
+                    "select mutation_id, op, row_key, payload from {} where scope = {} and mutation_id = {}",
+                    self.table, $p1, $p2
+                );
+                let row = sqlx::query(&sql)
+                    .bind(scope)
+                    .bind(mutation_id.as_str().to_string())
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(sync_sqlx_error)?
+                    .ok_or_else(|| {
+                        SyncError::backend(
+                            "SQLx CRUD mutation reservation conflict was not readable",
+                        )
+                    })?;
+
+                let existing = accepted_from_row(&mutation_id, row)?
+                    .ok_or_else(|| SyncError::backend("SQLx CRUD mutation reservation was empty"))?;
+                Ok(CrudMutationReservation::AlreadyAccepted(existing))
+            }
+        }
+    };
+}
+
+#[cfg(feature = "mysql")]
+macro_rules! impl_mysql_sqlx_crud_mutation_log {
+    () => {
+        #[pocopine_sync_crud::async_trait]
+        impl<RowValue>
+            TransactionalCrudMutationLog<Transaction<'static, sqlx::MySql>, RowValue>
+            for SqlxCrudMutationLog<sqlx::MySql>
+        where
+            RowValue: Clone + Send + Sync + 'static,
+        {
+            async fn reserve_accepted_mutation_in_tx(
+                &self,
+                tx: &mut Transaction<'static, sqlx::MySql>,
+                ctx: &RequestContext,
+                accepted: CrudAcceptedMutation,
+            ) -> SyncResult<CrudMutationReservation> {
+                let scope = self.scope(ctx)?;
+                let mutation_id = accepted.mutation_id.clone();
+                let payload = serde_json::to_string(&accepted.payload)?;
+                let row_key = accepted.key.as_ref().map(|key| key.as_str().to_string());
+                let sql = format!(
+                    "insert into {} (scope, mutation_id, op, row_key, payload) values (?, ?, ?, ?, ?)",
+                    self.table
                 );
 
                 match sqlx::query(&sql)
@@ -237,16 +250,26 @@ macro_rules! impl_sqlx_crud_mutation_log {
                 {
                     Ok(_) => Ok(CrudMutationReservation::Reserved),
                     Err(sqlx::Error::Database(db_error)) if db_error.is_unique_violation() => {
-                        let existing = <Self as TransactionalCrudMutationLog<
-                            Transaction<'static, $db>,
-                            RowValue,
-                        >>::accepted_mutation_in_tx(self, tx, ctx, &mutation_id)
-                        .await?;
-                        let Some(existing) = existing else {
-                            return Err(SyncError::backend(
-                                "SQLx CRUD mutation reservation conflict was not readable",
-                            ));
-                        };
+                        let scope = self.scope(ctx)?;
+                        let sql = format!(
+                            "select mutation_id, op, row_key, payload from {} where scope = ? and mutation_id = ?",
+                            self.table
+                        );
+                        let row = sqlx::query(&sql)
+                            .bind(scope)
+                            .bind(mutation_id.as_str().to_string())
+                            .fetch_optional(&mut **tx)
+                            .await
+                            .map_err(sync_sqlx_error)?
+                            .ok_or_else(|| {
+                                SyncError::backend(
+                                    "SQLx CRUD mutation reservation conflict was not readable",
+                                )
+                            })?;
+
+                        let existing = accepted_from_row(&mutation_id, row)?.ok_or_else(|| {
+                            SyncError::backend("SQLx CRUD mutation reservation was empty")
+                        })?;
                         Ok(CrudMutationReservation::AlreadyAccepted(existing))
                     }
                     Err(err) => Err(sync_sqlx_error(err)),
@@ -257,11 +280,29 @@ macro_rules! impl_sqlx_crud_mutation_log {
 }
 
 #[cfg(feature = "sqlite")]
-impl_sqlx_crud_mutation_log!("sqlite", sqlx::Sqlite, "?", "?", "?", "?", "?");
+impl_sqlx_crud_mutation_log_conflict_clause!(
+    "sqlite",
+    sqlx::Sqlite,
+    " on conflict(scope, mutation_id) do nothing",
+    "?",
+    "?",
+    "?",
+    "?",
+    "?"
+);
 #[cfg(feature = "mysql")]
-impl_sqlx_crud_mutation_log!("mysql", sqlx::MySql, "?", "?", "?", "?", "?");
+impl_mysql_sqlx_crud_mutation_log!();
 #[cfg(feature = "postgres")]
-impl_sqlx_crud_mutation_log!("postgres", sqlx::Postgres, "$1", "$2", "$3", "$4", "$5");
+impl_sqlx_crud_mutation_log_conflict_clause!(
+    "postgres",
+    sqlx::Postgres,
+    " on conflict(scope, mutation_id) do nothing",
+    "$1",
+    "$2",
+    "$3",
+    "$4",
+    "$5"
+);
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 fn accepted_from_row<R>(
@@ -321,7 +362,18 @@ fn op_from_db(value: String) -> SyncResult<SyncOp> {
 }
 
 fn validate_table_name(table: String) -> SyncResult<String> {
-    if table.split('.').all(validate_identifier) {
+    let mut parts = table.split('.');
+    let Some(first) = parts.next() else {
+        return Err(SyncError::client(format!(
+            "invalid SQLx CRUD mutation log table name: {table}"
+        )));
+    };
+    let second = parts.next();
+
+    if parts.next().is_none()
+        && validate_identifier(first)
+        && second.is_none_or(validate_identifier)
+    {
         Ok(table)
     } else {
         Err(SyncError::client(format!(
@@ -365,32 +417,6 @@ mod tests {
         })
     }
 
-    async fn accepted_in_tx(
-        log: &SqlxCrudMutationLog<sqlx::Sqlite>,
-        tx: &mut Transaction<'static, sqlx::Sqlite>,
-        ctx: &RequestContext,
-        mutation_id: &MutationId,
-    ) -> SyncResult<Option<CrudAcceptedMutation>> {
-        <SqlxCrudMutationLog<sqlx::Sqlite> as TransactionalCrudMutationLog<
-            Transaction<'static, sqlx::Sqlite>,
-            (),
-        >>::accepted_mutation_in_tx(log, tx, ctx, mutation_id)
-        .await
-    }
-
-    async fn record_in_tx(
-        log: &SqlxCrudMutationLog<sqlx::Sqlite>,
-        tx: &mut Transaction<'static, sqlx::Sqlite>,
-        ctx: &RequestContext,
-        accepted: CrudAcceptedMutation,
-    ) -> SyncResult<()> {
-        <SqlxCrudMutationLog<sqlx::Sqlite> as TransactionalCrudMutationLog<
-            Transaction<'static, sqlx::Sqlite>,
-            (),
-        >>::record_accepted_mutation_in_tx(log, tx, ctx, accepted)
-        .await
-    }
-
     async fn reserve_in_tx(
         log: &SqlxCrudMutationLog<sqlx::Sqlite>,
         tx: &mut Transaction<'static, sqlx::Sqlite>,
@@ -413,6 +439,11 @@ mod tests {
 
         let err = SqlxCrudMutationLog::<sqlx::Sqlite>::global()
             .with_table("__pocopine_crud_mutations; drop table posts")
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid SQLx CRUD mutation"));
+
+        let err = SqlxCrudMutationLog::<sqlx::Sqlite>::global()
+            .with_table("too.many.segments")
             .unwrap_err();
         assert!(err.to_string().contains("invalid SQLx CRUD mutation"));
     }
@@ -439,39 +470,40 @@ mod tests {
 
         let mut tx = runner.begin().await.unwrap();
         assert_eq!(
-            accepted_in_tx(&log, &mut tx, &ctx_with_tenant("tenant_a"), &mutation_id)
-                .await
-                .unwrap(),
-            None
-        );
-        record_in_tx(
-            &log,
-            &mut tx,
-            &ctx_with_tenant("tenant_a"),
-            accepted.clone(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            accepted_in_tx(&log, &mut tx, &ctx_with_tenant("tenant_a"), &mutation_id)
-                .await
-                .unwrap(),
-            Some(accepted.clone())
-        );
-        assert_eq!(
-            accepted_in_tx(&log, &mut tx, &ctx_with_tenant("tenant_b"), &mutation_id)
-                .await
-                .unwrap(),
-            None
+            reserve_in_tx(
+                &log,
+                &mut tx,
+                &ctx_with_tenant("tenant_a"),
+                accepted.clone(),
+            )
+            .await
+            .unwrap(),
+            CrudMutationReservation::Reserved
         );
         runner.commit(tx).await.unwrap();
 
         let mut tx = runner.begin().await.unwrap();
         assert_eq!(
-            accepted_in_tx(&log, &mut tx, &ctx_with_tenant("tenant_a"), &mutation_id)
-                .await
-                .unwrap(),
-            Some(accepted)
+            reserve_in_tx(
+                &log,
+                &mut tx,
+                &ctx_with_tenant("tenant_a"),
+                accepted.clone(),
+            )
+            .await
+            .unwrap(),
+            CrudMutationReservation::AlreadyAccepted(accepted.clone())
+        );
+        assert_eq!(
+            reserve_in_tx(
+                &log,
+                &mut tx,
+                &ctx_with_tenant("tenant_b"),
+                accepted.clone(),
+            )
+            .await
+            .unwrap(),
+            CrudMutationReservation::Reserved
         );
         runner.rollback(tx).await.unwrap();
     }
@@ -547,15 +579,18 @@ mod tests {
         );
 
         let mut tx = runner.begin().await.unwrap();
-        record_in_tx(&log, &mut tx, &ctx, accepted).await.unwrap();
+        assert_eq!(
+            reserve_in_tx(&log, &mut tx, &ctx, accepted.clone())
+                .await
+                .unwrap(),
+            CrudMutationReservation::Reserved
+        );
         runner.rollback(tx).await.unwrap();
 
         let mut tx = runner.begin().await.unwrap();
         assert_eq!(
-            accepted_in_tx(&log, &mut tx, &ctx, &mutation_id)
-                .await
-                .unwrap(),
-            None
+            reserve_in_tx(&log, &mut tx, &ctx, accepted).await.unwrap(),
+            CrudMutationReservation::Reserved
         );
         runner.rollback(tx).await.unwrap();
     }
@@ -572,15 +607,16 @@ mod tests {
         let runner: SqlxCrudTransactionRunner<sqlx::Sqlite> = sqlite(pool.clone());
         let log = SqlxCrudMutationLog::<sqlx::Sqlite>::constant_scope(" tenant ");
         let ctx = RequestContext::new(Method::POST, Uri::from_static("/sync"), HeaderMap::new());
+        let accepted = CrudAcceptedMutation::new(
+            MutationId::new("device_a:scope").unwrap(),
+            SyncOp::Delete,
+            Some(RowKey::new("post_2").unwrap()),
+            serde_json::json!({"id": "post_2"}),
+        );
         let mut tx = runner.begin().await.unwrap();
-        let err = accepted_in_tx(
-            &log,
-            &mut tx,
-            &ctx,
-            &MutationId::new("device_a:scope").unwrap(),
-        )
-        .await
-        .unwrap_err();
+        let err = reserve_in_tx(&log, &mut tx, &ctx, accepted)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("non-empty and trimmed"));
         runner.rollback(tx).await.unwrap();
     }
@@ -609,15 +645,16 @@ mod tests {
         let runner: SqlxCrudTransactionRunner<sqlx::Sqlite> = sqlite(pool.clone());
         let log = SqlxCrudMutationLog::<sqlx::Sqlite>::global();
         let ctx = RequestContext::new(Method::POST, Uri::from_static("/sync"), HeaderMap::new());
+        let accepted = CrudAcceptedMutation::new(
+            MutationId::new("device_a:bad_op").unwrap(),
+            SyncOp::Delete,
+            Some(RowKey::new("post_1").unwrap()),
+            serde_json::json!({"id": "post_1"}),
+        );
         let mut tx = runner.begin().await.unwrap();
-        let err = accepted_in_tx(
-            &log,
-            &mut tx,
-            &ctx,
-            &MutationId::new("device_a:bad_op").unwrap(),
-        )
-        .await
-        .unwrap_err();
+        let err = reserve_in_tx(&log, &mut tx, &ctx, accepted)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("unknown SQLx CRUD mutation op"));
         runner.rollback(tx).await.unwrap();
     }

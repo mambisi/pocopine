@@ -233,6 +233,8 @@ Postgres:
 
 - feature: `postgres`,
 - placeholders: `$1`, `$2`, etc.,
+- mutation reservations use `ON CONFLICT ... DO NOTHING` so duplicate
+  replay does not abort the transaction,
 - `RETURNING` is the preferred write path,
 - `text` primary key columns are acceptable for the default schema.
 
@@ -240,6 +242,7 @@ SQLite:
 
 - feature: `sqlite`,
 - placeholders: `?`,
+- mutation reservations use `ON CONFLICT ... DO NOTHING`,
 - used for local crate tests with an in-memory database,
 - useful for native apps, but browser-local sync still uses
   `pocopine-sync-sqlite`, not SQLx.
@@ -248,6 +251,8 @@ MySQL:
 
 - feature: `mysql`,
 - placeholders: `?`,
+- mutation reservations catch duplicate-key errors and then read the
+  accepted row in the same transaction,
 - default schema uses bounded indexed columns,
 - apps often need a write followed by a select inside the same
   transaction instead of relying on Postgres-style `RETURNING`.

@@ -21,6 +21,6 @@ pocopine-sync-crud = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { version = "0.8", default-features = false }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 http = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt"] }

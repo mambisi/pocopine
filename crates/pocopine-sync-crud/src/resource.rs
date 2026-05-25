@@ -368,20 +368,6 @@ where
     Tx: Send,
     Row: Clone + Send + Sync + 'static,
 {
-    async fn accepted_mutation_in_tx(
-        &self,
-        tx: &mut Tx,
-        ctx: &RequestContext,
-        mutation_id: &MutationId,
-    ) -> SyncResult<Option<CrudAcceptedMutation>>;
-
-    async fn record_accepted_mutation_in_tx(
-        &self,
-        tx: &mut Tx,
-        ctx: &RequestContext,
-        accepted: CrudAcceptedMutation,
-    ) -> SyncResult<()>;
-
     async fn reserve_accepted_mutation_in_tx(
         &self,
         tx: &mut Tx,
@@ -1490,24 +1476,23 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TransactionalCrudMutationLog<FakeTx, Post> for TxHarness {
-        async fn accepted_mutation_in_tx(
-            &self,
-            tx: &mut FakeTx,
-            ctx: &RequestContext,
-            mutation_id: &MutationId,
-        ) -> SyncResult<Option<CrudAcceptedMutation>> {
-            let _ = ctx;
-            self.record(format!("log:lookup:{mutation_id}"));
-            Ok(tx.state.accepted.get(mutation_id.as_str()).cloned())
-        }
-
-        async fn record_accepted_mutation_in_tx(
+        async fn reserve_accepted_mutation_in_tx(
             &self,
             tx: &mut FakeTx,
             ctx: &RequestContext,
             accepted: CrudAcceptedMutation,
-        ) -> SyncResult<()> {
+        ) -> SyncResult<CrudMutationReservation> {
             let _ = ctx;
+            self.record(format!("log:lookup:{}", accepted.mutation_id));
+            if let Some(existing) = tx
+                .state
+                .accepted
+                .get(accepted.mutation_id.as_str())
+                .cloned()
+            {
+                return Ok(CrudMutationReservation::AlreadyAccepted(existing));
+            }
+
             self.record(format!("log:record:{}", accepted.mutation_id));
             tx.state
                 .accepted
@@ -1515,24 +1500,6 @@ mod tests {
             if self.failures.lock().unwrap().log_record {
                 return Err(SyncError::backend("mutation log failed"));
             }
-            Ok(())
-        }
-
-        async fn reserve_accepted_mutation_in_tx(
-            &self,
-            tx: &mut FakeTx,
-            ctx: &RequestContext,
-            accepted: CrudAcceptedMutation,
-        ) -> SyncResult<CrudMutationReservation> {
-            if let Some(existing) = self
-                .accepted_mutation_in_tx(tx, ctx, &accepted.mutation_id)
-                .await?
-            {
-                return Ok(CrudMutationReservation::AlreadyAccepted(existing));
-            }
-
-            self.record_accepted_mutation_in_tx(tx, ctx, accepted)
-                .await?;
             Ok(CrudMutationReservation::Reserved)
         }
     }
