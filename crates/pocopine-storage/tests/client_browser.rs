@@ -13,9 +13,9 @@ use std::rc::Rc;
 use js_sys::{Array, Promise};
 use pocopine::prelude::*;
 use pocopine_storage::{
-    storage_plugin, tus_plugin, BrowserStorageRequest, BrowserStorageResponse,
+    storage_plugin, upload_plugin, BrowserStorageRequest, BrowserStorageResponse,
     BrowserStorageTransport, ObjectRef, ObjectVisibility, StorageClient, StorageError,
-    StorageResponse, StorageResult, TransferPlan, TusClient, UploadPhase, UploadProgress,
+    StorageResponse, StorageResult, TransferPlan, UploadClient, UploadPhase, UploadProgress,
     UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 thread_local! {
     static PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
-    static TUS_PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
+    static UPLOAD_PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -49,16 +49,16 @@ impl StoragePluginProbe {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(
-    name = "tus-plugin-probe",
-    template_inline = r#"<div class="tus-plugin-probe"></div>"#
+    name = "upload-plugin-probe",
+    template_inline = r#"<div class="upload-plugin-probe"></div>"#
 )]
-struct TusPluginProbe;
+struct UploadPluginProbe;
 
 #[handlers]
-impl TusPluginProbe {
+impl UploadPluginProbe {
     pub fn on_mount(&mut self) {
-        let _client = self.plugin::<TusClient>();
-        TUS_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = true);
+        let _client = self.plugin::<UploadClient>();
+        UPLOAD_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = true);
     }
 }
 
@@ -82,21 +82,21 @@ async fn storage_plugin_installs_client_service() {
 }
 
 #[wasm_bindgen_test(async)]
-async fn tus_plugin_installs_client_service() {
-    TUS_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = false);
+async fn upload_plugin_installs_client_service() {
+    UPLOAD_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow_mut() = false);
     let document = window().unwrap().document().unwrap();
     let host = document.create_element("div").unwrap();
     host.set_attribute("pp-app", "").unwrap();
-    host.set_inner_html("<tus-plugin-probe></tus-plugin-probe>");
+    host.set_inner_html("<upload-plugin-probe></upload-plugin-probe>");
     document.body().unwrap().append_child(&host).unwrap();
 
     App::new()
-        .plugin(tus_plugin())
-        .register::<TusPluginProbe>()
+        .plugin(upload_plugin())
+        .register::<UploadPluginProbe>()
         .run();
     settle().await;
 
-    assert!(TUS_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow()));
+    assert!(UPLOAD_PLUGIN_RESOLVED.with(|resolved| *resolved.borrow()));
     host.remove();
 }
 
@@ -252,7 +252,7 @@ async fn abort_signal_stops_upload_request() {
 }
 
 #[wasm_bindgen_test(async)]
-async fn tus_upload_blob_sends_create_and_patch_requests() {
+async fn upload_client_sends_create_and_patch_requests() {
     pocopine_storage::__reset_browser_transport_for_test();
     let fake = FakeStorageTransport::default();
     let state = fake.state.clone();
@@ -260,7 +260,7 @@ async fn tus_upload_blob_sends_create_and_patch_requests() {
 
     let progress = Rc::new(RefCell::new(Vec::<UploadProgress>::new()));
     let progress_for_callback = progress.clone();
-    let result = TusClient::new()
+    let result = UploadClient::new()
         .scope("avatars")
         .upload_blob(blob("hello"), "photo.txt")
         .metadata("filetype", "text/plain")
@@ -305,14 +305,14 @@ async fn tus_upload_blob_sends_create_and_patch_requests() {
 }
 
 #[wasm_bindgen_test(async)]
-async fn tus_offset_conflict_heads_and_resumes() {
+async fn upload_client_heads_and_resumes_on_offset_conflict() {
     pocopine_storage::__reset_browser_transport_for_test();
     let fake = FakeStorageTransport::default();
     fake.state.borrow_mut().tus_conflict_once = true;
     let state = fake.state.clone();
     pocopine_storage::__set_browser_transport_for_test(fake);
 
-    let result = TusClient::new()
+    let result = UploadClient::new()
         .scope("avatars")
         .upload_blob(blob("hello"), "photo.txt")
         .chunk_size(2)
@@ -333,9 +333,9 @@ async fn tus_offset_conflict_heads_and_resumes() {
 }
 
 #[wasm_bindgen_test(async)]
-async fn tus_local_storage_resume_is_opt_in() {
+async fn upload_client_local_storage_resume_is_opt_in() {
     pocopine_storage::__reset_browser_transport_for_test();
-    let key = "pocopine.storage.tus.resume.v1:avatars:photo.txt:5:blob";
+    let key = "pocopine.storage.upload.resume.v1:avatars:photo.txt:5:blob";
     window()
         .unwrap()
         .local_storage()
@@ -351,7 +351,7 @@ async fn tus_local_storage_resume_is_opt_in() {
     let state = fake.state.clone();
     pocopine_storage::__set_browser_transport_for_test(fake);
 
-    TusClient::new()
+    UploadClient::new()
         .scope("avatars")
         .upload_blob(blob("hello"), "photo.txt")
         .chunk_size(2)
