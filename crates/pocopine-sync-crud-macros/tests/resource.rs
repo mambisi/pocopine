@@ -2,18 +2,19 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use pocopine_core::ScopeId;
+use pocopine_core::{ComponentState, Scope, ScopeId};
 use pocopine_sync::{
     sync_plugin, CollectionSelector, CollectionState, Handle, MemoryLocalStore, RowVersion,
-    SyncClient, SyncCollection, SyncDeviceId, SyncLocalIdentity, SyncLocalStoreHandle, SyncResult,
-    SyncStreamName,
+    SyncClient, SyncCollection, SyncCollectionName, SyncCursor, SyncDeviceId, SyncLocalIdentity,
+    SyncLocalStoreHandle, SyncPullResponse, SyncResult, SyncRow, SyncStreamName,
 };
 use pocopine_sync_crud::{
     CrudClientResource, CrudOutcome, CrudRemoveResult, CrudSource, CrudWriteResult, Queued,
 };
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Customer {
     pub id: String,
 }
@@ -30,8 +31,56 @@ struct TestPage {
     customers: CollectionState<Customer>,
 }
 
+#[derive(Default)]
+struct Consumer;
+
 fn customers_state(page: &mut TestPage) -> &mut CollectionState<Customer> {
     &mut page.customers
+}
+
+fn host_safe_js_value() -> JsValue {
+    // `JsValue::UNDEFINED` touches imported JS statics and panics in native
+    // tests. The generated observer test never inspects this dummy value.
+    JsValue::from_str("")
+}
+
+impl ComponentState for TestPage {
+    fn get(&self, _key: &str) -> JsValue {
+        host_safe_js_value()
+    }
+
+    fn set(&mut self, _key: &str, _value: JsValue) {}
+
+    fn invoke(&mut self, _name: &str, _args: &js_sys::Array) -> JsValue {
+        host_safe_js_value()
+    }
+
+    fn keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+impl ComponentState for Consumer {
+    fn get(&self, _key: &str) -> JsValue {
+        host_safe_js_value()
+    }
+
+    fn set(&mut self, _key: &str, _value: JsValue) {}
+
+    fn invoke(&mut self, _name: &str, _args: &js_sys::Array) -> JsValue {
+        host_safe_js_value()
+    }
+
+    fn keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+fn customer_row(id: &str, version: &str) -> SyncRow<Customer> {
+    SyncRow::new(id, Customer { id: id.to_string() })
+        .unwrap()
+        .version(version)
+        .unwrap()
 }
 
 #[pocopine_sync_crud::resource(name = "customers")]
@@ -108,6 +157,9 @@ fn resource_attribute_generates_module_contract() {
     let _builder = customers::resource(Customers).unwrap();
     let _resource: Option<customers::Resource<()>> = None;
     let _resource_new = customers::Resource::<()>::new;
+    let _observe_view = customers::Resource::<()>::observe_view::<
+        fn(&customers::ViewState, Option<&customers::ViewState>),
+    >;
     let _use_resource = customers::use_resource::<()>;
     let _collection = customers::collection::<()>;
     let _use_server = customers::Resource::<()>::use_server;
@@ -123,6 +175,8 @@ fn resource_attribute_generates_module_contract() {
         let _runtime_outcome: Option<CrudOutcome<customers::Id, customers::Row>> = None;
         let _runtime_queued: Option<Queued<customers::Id>> = None;
         let _runtime_client: Option<CrudClientResource<C, customers::Id, customers::Row>> = None;
+        let _view: Option<customers::View> = None;
+        let _view_state: Option<customers::ViewState> = None;
 
         customers::client(collection, state)
     }
@@ -183,6 +237,57 @@ async fn generated_resource_create_queues_to_local_store() {
         .await
         .unwrap();
     assert_eq!(pending.len(), 1);
+}
+
+#[test]
+fn generated_resource_observe_view_tracks_state() {
+    pocopine_core::set_auto_flush(false);
+
+    let sync = sync_plugin().into_client();
+    let page = Rc::new(RefCell::new(TestPage::default()));
+    let page_scope = Scope::new(page.clone());
+    let handle = Handle::new(page, page_scope.id);
+    let resource = customers::use_resource(&sync, handle.clone(), customers_state);
+    let consumer_scope = Scope::new(Rc::new(RefCell::new(Consumer)));
+    let observed: Rc<RefCell<Vec<customers::ViewState>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_for_callback = observed.clone();
+
+    pocopine_core::scope::with_current_scope_id(consumer_scope.id, || {
+        resource
+            .observe_view(move |state, _previous| {
+                observed_for_callback.borrow_mut().push(state.clone());
+            })
+            .unwrap();
+    });
+
+    assert_eq!(observed.borrow().len(), 1);
+    assert_eq!(observed.borrow()[0].view().unwrap().rows.len(), 0);
+
+    {
+        let mut page = handle.borrow_mut();
+        let request = page.customers.begin_initial();
+        page.customers.apply_pull(
+            request,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new(customers::NAME).unwrap(),
+                SyncCollectionName::new(customers::NAME).unwrap(),
+                vec![customer_row("customer_1", "row_1")],
+                Some(SyncCursor::new("cursor_1").unwrap()),
+            ),
+        );
+    }
+    pocopine_core::trigger_scope(page_scope.id);
+    pocopine_core::flush_sync();
+
+    assert_eq!(observed.borrow().len(), 2);
+    assert_eq!(
+        observed.borrow()[1].view().unwrap().rows[0].id,
+        "customer_1"
+    );
+
+    Scope::remove(consumer_scope.id);
+    Scope::remove(page_scope.id);
+    pocopine_core::set_auto_flush(true);
 }
 
 #[test]

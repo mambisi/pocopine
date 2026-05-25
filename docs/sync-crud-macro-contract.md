@@ -254,6 +254,8 @@ pub mod customers {
     pub type CreateOptions = pocopine_sync_crud::CreateOptions<Row>;
     pub type SaveOptions = pocopine_sync_crud::SaveOptions<Row>;
     pub type RemoveOptions = pocopine_sync_crud::RemoveOptions;
+    pub type View = pocopine_sync_crud::LocalResourceView<Id, Row>;
+    pub type ViewState = pocopine_sync_crud::LocalResourceViewState<Id, Row>;
     pub type Outcome = pocopine_sync_crud::CrudOutcome<Id, Row>;
     pub type Queued = pocopine_sync_crud::Queued<Id>;
     pub type Client<C> = pocopine_sync_crud::CrudClientResource<C, Id, Row>;
@@ -301,6 +303,11 @@ pub mod customers {
             options: RemoveOptions,
         ) -> pocopine_sync::SyncResult<Outcome>;
         pub async fn use_server(&self, id: Id) -> pocopine_sync::SyncResult<bool>;
+        pub fn observe_view<F>(&self, callback: F) -> pocopine_sync::SyncResult<()>
+        where
+            Id: pocopine_sync_crud::ResourceId,
+            Row: Clone,
+            F: Fn(&ViewState, Option<&ViewState>) + 'static;
         pub async fn retry_local(
             &self,
             id: Id,

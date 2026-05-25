@@ -1,6 +1,15 @@
-use pocopine_sync::{CollectionSelector, Handle, SyncError, SyncResult};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use crate::{LocalResourceViewState, ResourceId};
+use pocopine_core::EffectId;
+use pocopine_sync::{
+    CollectionSelector, Handle, MutationId, RowVersion, SyncError, SyncOp, SyncResult,
+};
+
+use crate::{
+    LocalResourcePendingMutation, LocalResourceRow, LocalResourceRowStatus, LocalResourceViewState,
+    ResourceId,
+};
 
 const RESOURCE_VIEW_OBSERVE_KEY: &str = "__pp_sync_crud_resource_view";
 
@@ -21,7 +30,7 @@ pub fn observe_local_resource_view<C, Id, Row, F>(
 where
     C: 'static,
     Id: ResourceId + 'static,
-    Row: Clone + PartialEq + 'static,
+    Row: Clone + 'static,
     F: Fn(&LocalResourceViewState<Id, Row>, Option<&LocalResourceViewState<Id, Row>>) + 'static,
 {
     let consumer_scope = pocopine_core::current_scope_id().ok_or_else(|| {
@@ -29,27 +38,64 @@ where
             "sync CRUD resource observer used outside a component handler/lifecycle hook",
         )
     })?;
-    let owner_scope = handle.scope_id();
-    let source = move || {
-        pocopine_core::track(owner_scope, RESOURCE_VIEW_OBSERVE_KEY);
-        read_resource_view_state(&handle, selector)
-    };
-
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = consumer_scope;
-        pocopine_core::watch_scoped(source, callback);
+        let pending: Rc<std::cell::Cell<Option<EffectId>>> = Rc::new(std::cell::Cell::new(None));
+        let pending_for_install = pending.clone();
+        pocopine_core::tick::next(move || {
+            let effect = install_resource_view_observer(handle, selector, callback);
+            pending_for_install.set(Some(effect));
+        });
+        pocopine_core::on_scope_unmount_for(consumer_scope, move || {
+            if let Some(effect) = pending.take() {
+                pocopine_core::release(effect);
+            }
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let effect = pocopine_core::watch(source, callback);
+        let effect = install_resource_view_observer(handle, selector, callback);
         pocopine_core::on_scope_unmount_for(consumer_scope, move || {
             pocopine_core::release(effect);
         });
     }
 
     Ok(())
+}
+
+fn install_resource_view_observer<C, Id, Row, F>(
+    handle: Handle<C>,
+    selector: CollectionSelector<C, Row>,
+    callback: F,
+) -> EffectId
+where
+    C: 'static,
+    Id: ResourceId + 'static,
+    Row: Clone + 'static,
+    F: Fn(&LocalResourceViewState<Id, Row>, Option<&LocalResourceViewState<Id, Row>>) + 'static,
+{
+    let owner_scope = handle.scope_id();
+    let previous: Rc<RefCell<Option<LocalResourceViewState<Id, Row>>>> =
+        Rc::new(RefCell::new(None));
+    let previous_fingerprint: Rc<RefCell<Option<ResourceViewFingerprint<Id>>>> =
+        Rc::new(RefCell::new(None));
+
+    pocopine_core::effect(move || {
+        pocopine_core::track(owner_scope, RESOURCE_VIEW_OBSERVE_KEY);
+
+        let next = read_resource_view_state(&handle, selector);
+        let next_fingerprint = ResourceViewFingerprint::from_state(&next);
+        let last_fingerprint = previous_fingerprint.borrow().clone();
+        if last_fingerprint.as_ref() == Some(&next_fingerprint) {
+            return;
+        }
+
+        let last = previous.borrow().clone();
+        callback(&next, last.as_ref());
+        *previous.borrow_mut() = Some(next);
+        *previous_fingerprint.borrow_mut() = Some(next_fingerprint);
+    })
 }
 
 fn read_resource_view_state<C, Id, Row>(
@@ -65,6 +111,109 @@ where
         Ok(mut state) => LocalResourceViewState::from_collection_state(selector(&mut state)),
         Err(_) => {
             LocalResourceViewState::from_error("sync CRUD resource state is already borrowed")
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResourceViewFingerprint<Id> {
+    rows: Vec<ResourceRowFingerprint<Id>>,
+    pending_mutations: Vec<ResourcePendingFingerprint<Id>>,
+    loading: bool,
+    syncing: bool,
+    stale: bool,
+    error: String,
+    version: u64,
+    pending_count: u64,
+    conflict_count: u64,
+    rejected_count: u64,
+    state_error: Option<String>,
+}
+
+impl<Id> ResourceViewFingerprint<Id>
+where
+    Id: Clone,
+{
+    fn from_state<Row>(state: &LocalResourceViewState<Id, Row>) -> Self {
+        match state {
+            LocalResourceViewState::Ready(view) => Self {
+                rows: view
+                    .rows
+                    .iter()
+                    .map(ResourceRowFingerprint::from_row)
+                    .collect(),
+                pending_mutations: view
+                    .pending_mutations
+                    .iter()
+                    .map(ResourcePendingFingerprint::from_pending)
+                    .collect(),
+                loading: view.loading,
+                syncing: view.syncing,
+                stale: view.stale,
+                error: view.error.clone(),
+                version: view.version,
+                pending_count: view.pending_count,
+                conflict_count: view.conflict_count,
+                rejected_count: view.rejected_count,
+                state_error: None,
+            },
+            LocalResourceViewState::Error(error) => Self {
+                rows: Vec::new(),
+                pending_mutations: Vec::new(),
+                loading: false,
+                syncing: false,
+                stale: false,
+                error: String::new(),
+                version: 0,
+                pending_count: 0,
+                conflict_count: 0,
+                rejected_count: 0,
+                state_error: Some(error.clone()),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResourceRowFingerprint<Id> {
+    id: Id,
+    row_version: Option<RowVersion>,
+    base_version: Option<RowVersion>,
+    status: LocalResourceRowStatus,
+}
+
+impl<Id> ResourceRowFingerprint<Id>
+where
+    Id: Clone,
+{
+    fn from_row<Row>(row: &LocalResourceRow<Id, Row>) -> Self {
+        Self {
+            id: row.id.clone(),
+            row_version: row.row_version.clone(),
+            base_version: row.base_version.clone(),
+            status: row.status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResourcePendingFingerprint<Id> {
+    mutation_id: MutationId,
+    id: Option<Id>,
+    op: SyncOp,
+    base_version: Option<RowVersion>,
+}
+
+impl<Id> ResourcePendingFingerprint<Id>
+where
+    Id: Clone,
+{
+    fn from_pending(pending: &LocalResourcePendingMutation<Id>) -> Self {
+        Self {
+            mutation_id: pending.mutation_id.clone(),
+            id: pending.id.clone(),
+            op: pending.op,
+            base_version: pending.base_version.clone(),
         }
     }
 }

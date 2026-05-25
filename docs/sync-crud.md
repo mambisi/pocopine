@@ -86,6 +86,7 @@ pieces:
 - `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids are explicit and replayed writes do not silently run twice,
 - exact replay validation so a reused mutation id with a different operation, row id, or payload is rejected,
 - `local_resource_view(...)` and `LocalResourceView<Id, Row>` for typed read-side state over `CollectionState<Row>`,
+- `LocalResourceViewState<Id, Row>` and `observe_local_resource_view(...)` for comparable resource-view subscriptions,
 - `LocalResourceView::conflicts()` and `LocalResourceView::conflict_for(...)` for conflict UI lookup without raw sync rows,
 - `client_resource(collection, view)` and `CrudClientResource` for non-macro client CRUD methods,
 - `CrudClientResource::use_server`, `retry_local`, and `merge_with` as the first conservative conflict-resolution helpers,
@@ -93,15 +94,14 @@ pieces:
 - online-confirmed generated-id push for `WritePolicy::RequireOnline`,
 - low-level `pocopine-sync` online-only push helpers,
 - `#[pocopine_sync_crud::resource(name = "...")]` for generating a typed resource module from a `CrudSource` impl,
-- generated resource aliases: `Id`, `Row`, `Draft`, `CreateOptions`, `SaveOptions`, `RemoveOptions`, `Queued`, `Outcome`, and `Client<C>`,
+- generated resource aliases: `Id`, `Row`, `Draft`, `CreateOptions`, `SaveOptions`, `RemoveOptions`, `View`, `ViewState`, `Queued`, `Outcome`, and `Client<C>`,
 - generated server registration: `customers::resource(source)`,
 - generated client helpers: `customers::new_id()`, `view(...)`, `collection(...)`, `client(...)`, and `use_resource(...)`,
-- generated `Resource<C>` methods: `open`, `pull`, `view`, `client`, `create`, `create_with_options`, `save`, `save_with_options`, `remove`, `remove_with_options`, `use_server`, `retry_local`, `retry_local_with_options`, `merge_with`, and `merge_with_options`,
+- generated `Resource<C>` methods: `open`, `pull`, `view`, `observe_view`, `client`, `create`, `create_with_options`, `save`, `save_with_options`, `remove`, `remove_with_options`, `use_server`, `retry_local`, `retry_local_with_options`, `merge_with`, and `merge_with_options`,
 - route-level integration coverage proving a CRUD resource registered with `SyncServer` serves `/pull` and `/push` through the normal sync plugin.
 
 The remaining higher-level layer is deliberately smaller now:
 
-- scoped generated `observe_view(...)` hooks for framework-native resource subscriptions,
 - fluent options builders such as `customers.create_options().optimistic(row).send(...)`,
 - transaction convenience helpers such as `customers.transaction_options().require_online().run(...)`,
 - macro tests that exercise more complete generated browser-style call sites,
@@ -452,7 +452,7 @@ need a subscription instead: run once with the current typed view, then
 run again whenever the collection's owning scope is updated by open,
 pull, push, conflict clearing, or any other `Handle::update` path.
 
-Generated resources will expose that path as a scoped observer:
+Generated resources expose that path as a scoped observer:
 
 ```rust
 let page = pocopine::this::<CustomersPage>();
@@ -493,8 +493,8 @@ still call `Handle::update` inside the callback without re-entering the
 lifecycle borrow. Native host tests install synchronously so they can
 assert observer state without a browser microtask queue.
 
-`LocalResourceViewState` will be a small comparable wrapper around either
-a ready view or a local view-construction error such as an
+`LocalResourceViewState` is a small comparable wrapper around either a
+ready view or a local view-construction error such as an
 already-borrowed component/store handle:
 
 ```rust
@@ -511,12 +511,12 @@ impl<Id, Row> LocalResourceViewState<Id, Row> {
 }
 ```
 
-The error variant stores a displayable string instead of `SyncError`, so
-the observer state can be compared. The generated `observe_view(...)`
-method will require `Id: PartialEq` and `Row: PartialEq` because it
-compares the typed view to avoid invoking the callback for repeated
-framework updates that do not change the resource view. Those bounds are
-local to the observer path; create/save/remove do not need row equality.
+The error variant stores a displayable string instead of `SyncError`.
+The generated `observe_view(...)` method avoids repeated callbacks by
+comparing sync metadata such as row ids, versions, row status, pending
+mutation ids, counters, and errors. It does not require row payload
+equality, so create/save/remove and observe paths can share the same row
+types.
 
 This is still a component subscription, not a database query planner. It
 does not read arbitrary SQLite tables, push filters into SQL, or replace
@@ -537,6 +537,16 @@ let customers = customers::use_resource(
 customers.open()?;
 customers.pull()?;
 let view = customers.view()?;
+
+let page = pocopine::this::<CustomersPage>();
+customers.observe_view(move |state, _previous| {
+    page.update(|page| {
+        if let Some(view) = state.view() {
+            page.syncing = view.syncing;
+            page.conflict_count = view.conflict_count;
+        }
+    });
+})?;
 
 customers
     .create(customer_id, CustomerDraft { name, email })

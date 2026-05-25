@@ -227,12 +227,12 @@ Generated CRUD methods use this view instead of directly poking at
 `SyncRow` flags. That keeps protocol structs as an implementation detail
 and gives future query/resource layers one place to improve.
 
-The generated subscription layer should observe that same typed view.
-Once `observe_view(...)` lands, components should subscribe to
-`LocalResourceViewState<Id, Row>` through the generated resource instead
-of watching `CollectionState<Row>` directly. Conflict banners, pending
-badges, and row-level conflict UIs will then all read the same canonical
-`base_version` and row status data that generated saves/removes use.
+The generated subscription layer observes that same typed view. Components
+should subscribe to `LocalResourceViewState<Id, Row>` through the
+generated resource instead of watching `CollectionState<Row>` directly.
+Conflict banners, pending badges, and row-level conflict UIs then all read
+the same canonical `base_version` and row status data that generated
+saves/removes use.
 
 ## Conflict Resolution Shape
 
