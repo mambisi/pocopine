@@ -574,6 +574,9 @@ impl StorageServerBuilder {
     }
 
     /// Whether the anonymous storage binding cookie should include `Secure`.
+    ///
+    /// Keep this enabled for HTTPS production deployments; it is configurable
+    /// because local HTTP development cannot persist `Secure` cookies.
     pub fn secure_anonymous_cookies(mut self, secure: bool) -> Self {
         self.secure_anonymous_cookies = secure;
         self
@@ -757,6 +760,10 @@ async fn bytes_handler(
                     let upload = storage
                         .inspect_upload(request.ctx.clone(), session.clone())
                         .await?;
+                    let expected_offset = upload.next_offset.unwrap_or(0);
+                    if expected_offset != offset {
+                        return Err(StorageError::offset_mismatch(expected_offset, offset));
+                    }
                     storage
                         .scope(&upload.scope)?
                         .authorize_write(request.ctx.clone())
@@ -868,13 +875,13 @@ where
         parts.extensions.clone(),
         storage,
     );
+    require_json_content_type(&parts.headers)?;
     let bytes = to_bytes(body, MAX_JSON_CONTROL_BYTES)
         .await
         .map_err(|err| StorageError::client(format!("read json body: {err}")))?;
     if bytes.is_empty() {
         return Err(StorageError::invalid_value("json", "<empty>"));
     }
-    require_json_content_type(&parts.headers)?;
     let payload = serde_json::from_slice(&bytes)
         .map_err(|err| StorageError::invalid_value("json", err.to_string()))?;
     Ok(ParsedStorageRequest {

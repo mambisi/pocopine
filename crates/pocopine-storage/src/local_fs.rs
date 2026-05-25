@@ -30,6 +30,8 @@ struct StoredUploadSession {
 ///
 /// Completed objects are stored under `root` by [`SafeObjectKey`]. Upload
 /// metadata and temporary bytes live under `root/.pocopine-storage/sessions`.
+/// Session metadata includes the storage actor, so multi-tenant hosts should
+/// use separate backend roots for separate tenant trust boundaries.
 #[derive(Clone, Debug)]
 pub struct LocalFsStorageBackend {
     name: &'static str,
