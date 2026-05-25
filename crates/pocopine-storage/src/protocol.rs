@@ -878,19 +878,6 @@ pub enum UploadTarget {
     },
 }
 
-/// Provider-neutral backend kind descriptor.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum StorageBackendKind {
-    Memory,
-    LocalFs,
-    S3Compatible,
-    Gcs,
-    AzureBlob,
-    Custom(String),
-}
-
 pub(crate) fn file_extension(file_name: &str) -> Option<&str> {
     file_name
         .rsplit_once('.')
