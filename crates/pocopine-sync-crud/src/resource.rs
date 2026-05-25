@@ -10,7 +10,10 @@ use pocopine_sync::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{CrudMutationPayload, CrudRemoveResult, CrudSource, CrudWriteResult, ResourceId};
+use crate::{
+    CrudMutationPayload, CrudRemoveResult, CrudSource, CrudTransactionRunner, CrudWriteResult,
+    ResourceId, TransactionalCrudSource,
+};
 
 /// Default maximum rows returned by one CRUD snapshot pull.
 pub const DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT: usize = 1_000;
@@ -141,6 +144,48 @@ where
     ) -> CrudResource<S, IdOf, VersionOf, MemoryCrudMutationLog<S::Row>> {
         self.mutation_log(MemoryCrudMutationLog::new())
     }
+
+    /// Attach a transaction runner and mutation log for atomic server writes.
+    ///
+    /// This path runs each accepted CRUD mutation in one app/database
+    /// transaction: check the accepted-mutation log, apply the source write,
+    /// record the accepted mutation id, then commit. Use this for production
+    /// resources where the source write and idempotency insert must not split
+    /// across separate commits.
+    pub fn transactional<Runner, Log>(
+        self,
+        transaction_runner: Runner,
+        mutation_log: Log,
+    ) -> TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner>
+    where
+        Runner: CrudTransactionRunner,
+        S: TransactionalCrudSource<Runner::Tx>,
+        Log: TransactionalCrudMutationLog<Runner::Tx, S::Row>,
+    {
+        TransactionalCrudResource {
+            stream: self.stream,
+            collection: self.collection,
+            source: self.source,
+            max_snapshot_rows: self.max_snapshot_rows,
+            id_of: self.id_of,
+            version_of: self.version_of,
+            mutation_log,
+            transaction_runner,
+        }
+    }
+}
+
+/// CRUD resource adapter that applies writes and idempotency log inserts in one
+/// app/database transaction.
+pub struct TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner> {
+    stream: SyncStreamName,
+    collection: SyncCollectionName,
+    source: S,
+    max_snapshot_rows: usize,
+    id_of: IdOf,
+    version_of: VersionOf,
+    mutation_log: Log,
+    transaction_runner: Runner,
 }
 
 /// Marker used before a resource has an idempotency backend.
@@ -293,6 +338,34 @@ where
 
     async fn record_accepted_mutation(
         &self,
+        ctx: &RequestContext,
+        accepted: CrudAcceptedMutation,
+    ) -> SyncResult<()>;
+}
+
+/// Transaction-aware idempotency log for CRUD mutations.
+///
+/// Production implementations should use the same transaction handle and
+/// authorization scope as the corresponding [`TransactionalCrudSource`].
+/// The accepted-mutation table should also enforce uniqueness for that scope
+/// and mutation id so concurrent retries cannot both observe "missing" and
+/// apply the same write.
+#[async_trait::async_trait]
+pub trait TransactionalCrudMutationLog<Tx, Row>: Send + Sync + 'static
+where
+    Tx: Send,
+    Row: Clone + Send + Sync + 'static,
+{
+    async fn accepted_mutation_in_tx(
+        &self,
+        tx: &mut Tx,
+        ctx: &RequestContext,
+        mutation_id: &MutationId,
+    ) -> SyncResult<Option<CrudAcceptedMutation>>;
+
+    async fn record_accepted_mutation_in_tx(
+        &self,
+        tx: &mut Tx,
         ctx: &RequestContext,
         accepted: CrudAcceptedMutation,
     ) -> SyncResult<()>;
@@ -627,6 +700,324 @@ where
     }
 }
 
+impl<S, IdOf, VersionOf, Log, Runner> SyncStreamSource
+    for TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner>
+where
+    S: TransactionalCrudSource<Runner::Tx>,
+    IdOf: Fn(&S::Row) -> S::Id + Send + Sync + 'static,
+    VersionOf: RowVersionOf<S::Row>,
+    Log: TransactionalCrudMutationLog<Runner::Tx, S::Row>,
+    Runner: CrudTransactionRunner,
+{
+    fn stream(&self) -> &SyncStreamName {
+        &self.stream
+    }
+
+    fn collection(&self) -> &SyncCollectionName {
+        &self.collection
+    }
+
+    fn pull<'a>(
+        &'a self,
+        ctx: RequestContext,
+        request: SyncPullRequest,
+    ) -> SyncBoxFuture<'a, SyncPullResponse<Value>> {
+        Box::pin(async move { self.pull_snapshot(ctx, request).await })
+    }
+
+    fn push<'a>(
+        &'a self,
+        ctx: RequestContext,
+        request: SyncPushRequest<Value>,
+    ) -> SyncBoxFuture<'a, SyncPushResponse<Value>> {
+        Box::pin(async move { self.push_mutations(ctx, request).await })
+    }
+}
+
+impl<S, IdOf, VersionOf, Log, Runner> TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner>
+where
+    S: TransactionalCrudSource<Runner::Tx>,
+    IdOf: Fn(&S::Row) -> S::Id + Send + Sync + 'static,
+    VersionOf: RowVersionOf<S::Row>,
+    Log: TransactionalCrudMutationLog<Runner::Tx, S::Row>,
+    Runner: CrudTransactionRunner,
+{
+    async fn pull_snapshot(
+        &self,
+        ctx: RequestContext,
+        request: SyncPullRequest,
+    ) -> SyncResult<SyncPullResponse<Value>> {
+        if request.stream != self.stream {
+            return Err(SyncError::UnknownStream(request.stream.to_string()));
+        }
+
+        let rows = self.source.list(ctx, self.max_snapshot_rows).await?;
+        if rows.len() > self.max_snapshot_rows {
+            return Err(SyncError::backend(format!(
+                "CRUD source returned {} rows, exceeding max snapshot row limit {}",
+                rows.len(),
+                self.max_snapshot_rows
+            )));
+        }
+        let rows = rows
+            .into_iter()
+            .map(|row| self.row_to_value(row))
+            .collect::<SyncResult<Vec<_>>>()?;
+
+        Ok(SyncPullResponse::snapshot(
+            self.stream.clone(),
+            self.collection.clone(),
+            rows,
+            None,
+        ))
+    }
+
+    async fn push_mutations(
+        &self,
+        ctx: RequestContext,
+        request: SyncPushRequest<Value>,
+    ) -> SyncResult<SyncPushResponse<Value>> {
+        if request.stream != self.stream {
+            return Err(SyncError::UnknownStream(request.stream.to_string()));
+        }
+
+        let mut response = SyncPushResponse::new(self.stream.clone());
+        response.collection = Some(self.collection.clone());
+
+        for mutation in request.mutations {
+            let mutation_id = mutation.id.clone();
+            let key = mutation.key.clone();
+            let op = mutation.op;
+            let base_version = mutation.base_version;
+            let payload_value = mutation.payload;
+
+            let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
+                payload_value.clone(),
+            ) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    response.rejected.push(SyncRejectedMutation {
+                        mutation_id,
+                        key,
+                        reason: format!("invalid CRUD mutation payload: {err}"),
+                    });
+                    continue;
+                }
+            };
+
+            if payload.sync_op() != op {
+                response.rejected.push(SyncRejectedMutation {
+                    mutation_id,
+                    key,
+                    reason: "CRUD payload does not match sync operation".to_string(),
+                });
+                continue;
+            }
+
+            let expected_key = payload.id().to_row_key()?;
+            if key.as_ref() != Some(&expected_key) {
+                response.rejected.push(SyncRejectedMutation {
+                    mutation_id,
+                    key,
+                    reason: "CRUD mutation row key does not match payload id".to_string(),
+                });
+                continue;
+            }
+
+            match self
+                .apply_transactional_payload(
+                    &ctx,
+                    mutation_id,
+                    expected_key,
+                    op,
+                    base_version,
+                    payload_value,
+                    payload,
+                )
+                .await?
+            {
+                CrudApplyOutcome::Accepted { mutation_id, row } => {
+                    response.accepted.push(mutation_id);
+                    if let Some(row) = row {
+                        response.rows.push(row_to_value(row)?);
+                    }
+                }
+                CrudApplyOutcome::Rejected(rejected) => response.rejected.push(rejected),
+                CrudApplyOutcome::Conflict(conflict) => {
+                    response.conflicts.push(conflict_to_value(conflict)?);
+                }
+            }
+        }
+
+        Ok(response)
+    }
+
+    async fn apply_transactional_payload(
+        &self,
+        ctx: &RequestContext,
+        mutation_id: MutationId,
+        key: RowKey,
+        op: SyncOp,
+        base_version: Option<RowVersion>,
+        payload_value: Value,
+        payload: CrudMutationPayload<S::Id, S::Draft>,
+    ) -> SyncResult<CrudApplyOutcome<S::Row>> {
+        let mut tx = self.transaction_runner.begin().await?;
+        let result = async {
+            if let Some(accepted) = self
+                .mutation_log
+                .accepted_mutation_in_tx(&mut tx, ctx, &mutation_id)
+                .await?
+            {
+                if accepted.matches(op, Some(&key), &payload_value) {
+                    return Ok(CrudApplyOutcome::Accepted {
+                        mutation_id,
+                        row: None,
+                    });
+                }
+
+                return Ok(CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                    mutation_id,
+                    key: Some(key),
+                    reason: "mutation id was already accepted with different contents".to_string(),
+                }));
+            }
+
+            let accepted = CrudAcceptedMutation::new(
+                mutation_id.clone(),
+                op,
+                Some(key.clone()),
+                payload_value,
+            );
+            let outcome = self
+                .apply_payload_in_tx(&mut tx, ctx, mutation_id, key, base_version, payload)
+                .await?;
+
+            if matches!(outcome, CrudApplyOutcome::Accepted { .. }) {
+                self.mutation_log
+                    .record_accepted_mutation_in_tx(&mut tx, ctx, accepted)
+                    .await?;
+            }
+
+            Ok(outcome)
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                self.transaction_runner.commit(tx).await?;
+                Ok(outcome)
+            }
+            Err(err) => {
+                if let Err(rollback_err) = self.transaction_runner.rollback(tx).await {
+                    return Err(SyncError::backend(format!(
+                        "CRUD transaction rollback failed after {err}: {rollback_err}"
+                    )));
+                }
+                Err(err)
+            }
+        }
+    }
+
+    async fn apply_payload_in_tx(
+        &self,
+        tx: &mut Runner::Tx,
+        ctx: &RequestContext,
+        mutation_id: MutationId,
+        key: RowKey,
+        base_version: Option<RowVersion>,
+        payload: CrudMutationPayload<S::Id, S::Draft>,
+    ) -> SyncResult<CrudApplyOutcome<S::Row>> {
+        match payload {
+            CrudMutationPayload::Create(payload) => {
+                if base_version.is_some() {
+                    return Ok(CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                        mutation_id,
+                        key: Some(key),
+                        reason: "create does not accept a base row version".to_string(),
+                    }));
+                }
+
+                let row = self
+                    .source
+                    .create_in_tx(tx, ctx, payload.id, payload.draft)
+                    .await?;
+                let row = self.row_to_sync(row)?;
+                Ok(CrudApplyOutcome::Accepted {
+                    mutation_id,
+                    row: Some(row),
+                })
+            }
+            CrudMutationPayload::Save(payload) => {
+                let outcome = self
+                    .source
+                    .save_in_tx(tx, ctx, payload.id, payload.draft, base_version)
+                    .await?;
+                match outcome {
+                    CrudWriteResult::Applied(row) => {
+                        let row = self.row_to_sync(row)?;
+                        Ok(CrudApplyOutcome::Accepted {
+                            mutation_id,
+                            row: Some(row),
+                        })
+                    }
+                    CrudWriteResult::Conflict(conflict) => Ok(CrudApplyOutcome::Conflict(
+                        self.source_conflict(mutation_id, Some(key), conflict)?,
+                    )),
+                }
+            }
+            CrudMutationPayload::Remove(payload) => {
+                let outcome = self
+                    .source
+                    .remove_in_tx(tx, ctx, payload.id, base_version)
+                    .await?;
+                match outcome {
+                    CrudRemoveResult::Applied => Ok(CrudApplyOutcome::Accepted {
+                        mutation_id,
+                        row: None,
+                    }),
+                    CrudRemoveResult::Conflict(conflict) => Ok(CrudApplyOutcome::Conflict(
+                        self.source_conflict(mutation_id, Some(key), conflict)?,
+                    )),
+                }
+            }
+        }
+    }
+
+    fn source_conflict(
+        &self,
+        mutation_id: MutationId,
+        key: Option<RowKey>,
+        conflict: crate::CrudConflict<S::Row>,
+    ) -> SyncResult<SyncConflict<S::Row>> {
+        Ok(SyncConflict {
+            mutation_id,
+            key,
+            server_row: conflict
+                .server_row
+                .map(|row| self.row_to_sync(row))
+                .transpose()?,
+            reason: conflict.reason,
+        })
+    }
+
+    fn row_to_sync(&self, row: S::Row) -> SyncResult<SyncRow<S::Row>> {
+        let key = (self.id_of)(&row).to_row_key()?;
+        let version = self.version_of.row_version(&row)?;
+        Ok(SyncRow {
+            key,
+            version,
+            value: row,
+            pending: false,
+            conflict: false,
+        })
+    }
+
+    fn row_to_value(&self, row: S::Row) -> SyncResult<SyncRow<Value>> {
+        row_to_value(self.row_to_sync(row)?)
+    }
+}
+
 enum CrudApplyOutcome<Row> {
     Accepted {
         mutation_id: MutationId,
@@ -668,6 +1059,8 @@ mod tests {
     use http::{HeaderMap, Method, Uri};
     use pocopine_sync::{ClientMutation, SyncPullMode};
     use serde::{Deserialize, Serialize};
+
+    use crate::TransactionFuture;
 
     use super::*;
 
@@ -813,6 +1206,286 @@ mod tests {
             .memory_mutation_log()
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct TxState {
+        rows: BTreeMap<String, Post>,
+        accepted: BTreeMap<String, CrudAcceptedMutation>,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct TxFailures {
+        source_write: bool,
+        log_record: bool,
+        rollback: bool,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct TxHarness {
+        state: Arc<Mutex<TxState>>,
+        events: Arc<Mutex<Vec<String>>>,
+        failures: Arc<Mutex<TxFailures>>,
+    }
+
+    #[derive(Debug)]
+    struct FakeTx {
+        state: TxState,
+    }
+
+    impl TxHarness {
+        fn insert(&self, post: Post) {
+            self.state
+                .lock()
+                .unwrap()
+                .rows
+                .insert(post.id.clone(), post);
+        }
+
+        fn state(&self) -> TxState {
+            self.state.lock().unwrap().clone()
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+
+        fn clear_events(&self) {
+            self.events.lock().unwrap().clear();
+        }
+
+        fn fail_source_write(&self) {
+            self.failures.lock().unwrap().source_write = true;
+        }
+
+        fn fail_log_record(&self) {
+            self.failures.lock().unwrap().log_record = true;
+        }
+
+        fn fail_rollback(&self) {
+            self.failures.lock().unwrap().rollback = true;
+        }
+
+        fn record(&self, event: impl Into<String>) {
+            self.events.lock().unwrap().push(event.into());
+        }
+    }
+
+    impl CrudTransactionRunner for TxHarness {
+        type Tx = FakeTx;
+
+        fn begin<'runner>(&'runner self) -> TransactionFuture<'runner, Self::Tx> {
+            Box::pin(async move {
+                self.record("begin");
+                Ok(FakeTx {
+                    state: self.state(),
+                })
+            })
+        }
+
+        fn commit<'runner>(&'runner self, tx: Self::Tx) -> TransactionFuture<'runner, ()> {
+            Box::pin(async move {
+                self.record("commit");
+                *self.state.lock().unwrap() = tx.state;
+                Ok(())
+            })
+        }
+
+        fn rollback<'runner>(&'runner self, tx: Self::Tx) -> TransactionFuture<'runner, ()> {
+            Box::pin(async move {
+                let _ = tx;
+                self.record("rollback");
+                if self.failures.lock().unwrap().rollback {
+                    return Err(SyncError::backend("rollback failed"));
+                }
+                Ok(())
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CrudSource for TxHarness {
+        type Id = String;
+        type Row = Post;
+        type Draft = PostDraft;
+
+        async fn list(&self, ctx: RequestContext, limit: usize) -> SyncResult<Vec<Self::Row>> {
+            let _ = ctx;
+            Ok(self
+                .state
+                .lock()
+                .unwrap()
+                .rows
+                .values()
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+
+        async fn get(&self, ctx: RequestContext, id: Self::Id) -> SyncResult<Option<Self::Row>> {
+            let _ = ctx;
+            Ok(self.state.lock().unwrap().rows.get(&id).cloned())
+        }
+
+        async fn create(
+            &self,
+            ctx: RequestContext,
+            id: Self::Id,
+            draft: Self::Draft,
+        ) -> SyncResult<Self::Row> {
+            let _ = (ctx, id, draft);
+            Err(SyncError::backend(
+                "transactional resource called non-transactional create",
+            ))
+        }
+
+        async fn save(
+            &self,
+            ctx: RequestContext,
+            id: Self::Id,
+            draft: Self::Draft,
+            base_version: Option<RowVersion>,
+        ) -> SyncResult<CrudWriteResult<Self::Row>> {
+            let _ = (ctx, id, draft, base_version);
+            Err(SyncError::backend(
+                "transactional resource called non-transactional save",
+            ))
+        }
+
+        async fn remove(
+            &self,
+            ctx: RequestContext,
+            id: Self::Id,
+            base_version: Option<RowVersion>,
+        ) -> SyncResult<CrudRemoveResult<Self::Row>> {
+            let _ = (ctx, id, base_version);
+            Err(SyncError::backend(
+                "transactional resource called non-transactional remove",
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TransactionalCrudSource<FakeTx> for TxHarness {
+        async fn create_in_tx(
+            &self,
+            tx: &mut FakeTx,
+            ctx: &RequestContext,
+            id: Self::Id,
+            draft: Self::Draft,
+        ) -> SyncResult<Self::Row> {
+            let _ = ctx;
+            self.record(format!("source:create:{id}"));
+            let post = Post {
+                id: id.clone(),
+                title: draft.title,
+                version: 1,
+            };
+            tx.state.rows.insert(id, post.clone());
+            if self.failures.lock().unwrap().source_write {
+                return Err(SyncError::backend("source write failed"));
+            }
+            Ok(post)
+        }
+
+        async fn save_in_tx(
+            &self,
+            tx: &mut FakeTx,
+            ctx: &RequestContext,
+            id: Self::Id,
+            draft: Self::Draft,
+            base_version: Option<RowVersion>,
+        ) -> SyncResult<CrudWriteResult<Self::Row>> {
+            let _ = ctx;
+            self.record(format!("source:save:{id}"));
+            let row = tx
+                .state
+                .rows
+                .get_mut(&id)
+                .ok_or_else(|| SyncError::backend("missing post"))?;
+            if let Some(base_version) = &base_version {
+                if base_version.as_str() != row.version.to_string() {
+                    return Ok(CrudWriteResult::stale(Some(row.clone())));
+                }
+            }
+            row.title = draft.title;
+            row.version += 1;
+            if self.failures.lock().unwrap().source_write {
+                return Err(SyncError::backend("source write failed"));
+            }
+            Ok(CrudWriteResult::applied(row.clone()))
+        }
+
+        async fn remove_in_tx(
+            &self,
+            tx: &mut FakeTx,
+            ctx: &RequestContext,
+            id: Self::Id,
+            base_version: Option<RowVersion>,
+        ) -> SyncResult<CrudRemoveResult<Self::Row>> {
+            let _ = ctx;
+            self.record(format!("source:remove:{id}"));
+            if let Some(base_version) = base_version {
+                let Some(row) = tx.state.rows.get(&id) else {
+                    return Ok(CrudRemoveResult::stale(None));
+                };
+                if base_version.as_str() != row.version.to_string() {
+                    return Ok(CrudRemoveResult::stale(Some(row.clone())));
+                }
+            }
+            tx.state.rows.remove(&id);
+            if self.failures.lock().unwrap().source_write {
+                return Err(SyncError::backend("source write failed"));
+            }
+            Ok(CrudRemoveResult::applied())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TransactionalCrudMutationLog<FakeTx, Post> for TxHarness {
+        async fn accepted_mutation_in_tx(
+            &self,
+            tx: &mut FakeTx,
+            ctx: &RequestContext,
+            mutation_id: &MutationId,
+        ) -> SyncResult<Option<CrudAcceptedMutation>> {
+            let _ = ctx;
+            self.record(format!("log:lookup:{mutation_id}"));
+            Ok(tx.state.accepted.get(mutation_id.as_str()).cloned())
+        }
+
+        async fn record_accepted_mutation_in_tx(
+            &self,
+            tx: &mut FakeTx,
+            ctx: &RequestContext,
+            accepted: CrudAcceptedMutation,
+        ) -> SyncResult<()> {
+            let _ = ctx;
+            self.record(format!("log:record:{}", accepted.mutation_id));
+            tx.state
+                .accepted
+                .insert(accepted.mutation_id.as_str().to_string(), accepted);
+            if self.failures.lock().unwrap().log_record {
+                return Err(SyncError::backend("mutation log failed"));
+            }
+            Ok(())
+        }
+    }
+
+    fn transactional_posts_resource(
+        harness: TxHarness,
+    ) -> TransactionalCrudResource<
+        TxHarness,
+        impl Fn(&Post) -> String + Send + Sync + 'static,
+        impl Fn(&Post) -> u64 + Send + Sync + 'static,
+        TxHarness,
+        TxHarness,
+    > {
+        resource("posts", harness.clone())
+            .unwrap()
+            .id(|post: &Post| post.id.clone())
+            .version(|post: &Post| post.version)
+            .transactional(harness.clone(), harness)
+    }
+
     fn value_mutation(
         mutation: pocopine_sync::ClientMutation<CrudMutationPayload<String, PostDraft>>,
     ) -> pocopine_sync::ClientMutation<Value> {
@@ -940,6 +1613,231 @@ mod tests {
         assert_eq!(
             posts.calls(),
             vec!["create:post_2", "save:post_1", "remove:post_2"]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_push_commits_source_write_and_mutation_log() {
+        let harness = TxHarness::default();
+        let resource = transactional_posts_resource(harness.clone());
+        let payload = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "created".to_string(),
+            },
+        );
+        let mutation = payload
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device_1:1").unwrap());
+
+        let response = resource
+            .push(ctx(), push_request([mutation]))
+            .await
+            .unwrap();
+        let state = harness.state();
+
+        assert_eq!(response.accepted.len(), 1);
+        assert_eq!(response.rows.len(), 1);
+        assert_eq!(state.rows["post_1"].title, "created");
+        assert!(state.accepted.contains_key("device_1:1"));
+        assert_eq!(
+            harness.events(),
+            vec![
+                "begin",
+                "log:lookup:device_1:1",
+                "source:create:post_1",
+                "log:record:device_1:1",
+                "commit"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_duplicate_replay_dedupes_inside_transaction() {
+        let harness = TxHarness::default();
+        let resource = transactional_posts_resource(harness.clone());
+        let payload = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "created".to_string(),
+            },
+        );
+        let mutation = payload
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device_1:1").unwrap());
+        resource
+            .push(ctx(), push_request([mutation.clone()]))
+            .await
+            .unwrap();
+        harness.clear_events();
+
+        let response = resource
+            .push(ctx(), push_request([mutation]))
+            .await
+            .unwrap();
+
+        assert_eq!(response.accepted.len(), 1);
+        assert!(
+            response.rows.is_empty(),
+            "dedupe hits acknowledge exact replay without returning cached rows"
+        );
+        assert_eq!(
+            harness.events(),
+            vec!["begin", "log:lookup:device_1:1", "commit"]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_conflict_commits_without_recording_mutation_log() {
+        let harness = TxHarness::default();
+        harness.insert(Post {
+            id: "post_1".to_string(),
+            title: "server".to_string(),
+            version: 2,
+        });
+        let resource = transactional_posts_resource(harness.clone());
+        let payload = CrudMutationPayload::save(
+            "post_1".to_string(),
+            PostDraft {
+                title: "client".to_string(),
+            },
+        );
+        let mutation = payload
+            .into_sync_draft_with_base_version(Some(RowVersion::new("1").unwrap()))
+            .unwrap()
+            .with_id(MutationId::new("device_1:stale").unwrap());
+
+        let response = resource
+            .push(ctx(), push_request([mutation]))
+            .await
+            .unwrap();
+        let state = harness.state();
+
+        assert!(response.accepted.is_empty());
+        assert_eq!(response.conflicts.len(), 1);
+        assert_eq!(state.rows["post_1"].title, "server");
+        assert!(state.accepted.is_empty());
+        assert_eq!(
+            harness.events(),
+            vec![
+                "begin",
+                "log:lookup:device_1:stale",
+                "source:save:post_1",
+                "commit"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_source_error_rolls_back_without_recording_mutation_log() {
+        let harness = TxHarness::default();
+        harness.fail_source_write();
+        let resource = transactional_posts_resource(harness.clone());
+        let payload = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "created".to_string(),
+            },
+        );
+        let mutation = payload
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device_1:1").unwrap());
+
+        let err = resource
+            .push(ctx(), push_request([mutation]))
+            .await
+            .unwrap_err();
+        let state = harness.state();
+
+        assert!(err.to_string().contains("source write failed"));
+        assert!(state.rows.is_empty());
+        assert!(state.accepted.is_empty());
+        assert_eq!(
+            harness.events(),
+            vec![
+                "begin",
+                "log:lookup:device_1:1",
+                "source:create:post_1",
+                "rollback"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_log_record_error_rolls_back_source_write() {
+        let harness = TxHarness::default();
+        harness.fail_log_record();
+        let resource = transactional_posts_resource(harness.clone());
+        let payload = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "created".to_string(),
+            },
+        );
+        let mutation = payload
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device_1:1").unwrap());
+
+        let err = resource
+            .push(ctx(), push_request([mutation]))
+            .await
+            .unwrap_err();
+        let state = harness.state();
+
+        assert!(err.to_string().contains("mutation log failed"));
+        assert!(state.rows.is_empty());
+        assert!(state.accepted.is_empty());
+        assert_eq!(
+            harness.events(),
+            vec![
+                "begin",
+                "log:lookup:device_1:1",
+                "source:create:post_1",
+                "log:record:device_1:1",
+                "rollback"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn transactional_rollback_error_preserves_original_failure_context() {
+        let harness = TxHarness::default();
+        harness.fail_source_write();
+        harness.fail_rollback();
+        let resource = transactional_posts_resource(harness.clone());
+        let payload = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "created".to_string(),
+            },
+        );
+        let mutation = payload
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device_1:1").unwrap());
+
+        let err = resource
+            .push(ctx(), push_request([mutation]))
+            .await
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("CRUD transaction rollback failed after"));
+        assert!(err.to_string().contains("source write failed"));
+        assert!(err.to_string().contains("rollback failed"));
+        assert_eq!(
+            harness.events(),
+            vec![
+                "begin",
+                "log:lookup:device_1:1",
+                "source:create:post_1",
+                "rollback"
+            ]
         );
     }
 

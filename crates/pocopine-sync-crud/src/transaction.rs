@@ -56,6 +56,22 @@ pub trait TransactionRunner: Send + Sync + 'static {
             + 'runner;
 }
 
+/// App/database owned transaction lifecycle for server-side CRUD sync writes.
+///
+/// This runner returns an owned transaction handle so the sync adapter can
+/// apply one mutation, record the accepted mutation id, and commit or roll back
+/// as one unit. It is separate from [`TransactionRunner`], whose callback shape
+/// is intended for author-facing `tx.with(resource)` helpers.
+pub trait CrudTransactionRunner: Send + Sync + 'static {
+    type Tx: Send + 'static;
+
+    fn begin<'runner>(&'runner self) -> TransactionFuture<'runner, Self::Tx>;
+
+    fn commit<'runner>(&'runner self, tx: Self::Tx) -> TransactionFuture<'runner, ()>;
+
+    fn rollback<'runner>(&'runner self, tx: Self::Tx) -> TransactionFuture<'runner, ()>;
+}
+
 impl TransactionOptions {
     /// Run work inside an app-provided transaction lifecycle.
     ///
