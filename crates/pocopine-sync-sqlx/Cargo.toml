@@ -1,0 +1,23 @@
+[package]
+name = "pocopine-sync-sqlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SQLx helpers for Pocopine sync CRUD transactions."
+
+[features]
+default = []
+postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql"]
+sqlite = ["sqlx/sqlite"]
+runtime-tokio = ["sqlx/runtime-tokio"]
+tls-rustls = ["sqlx/tls-rustls-ring-webpki"]
+
+[dependencies]
+pocopine-sync = { workspace = true }
+pocopine-sync-crud = { workspace = true }
+sqlx = { version = "0.8", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
