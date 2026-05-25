@@ -516,7 +516,11 @@ The generated `observe_view(...)` method avoids repeated callbacks by
 comparing sync metadata such as row ids, versions, row status, pending
 mutation ids, counters, and errors. It does not require row payload
 equality, so create/save/remove and observe paths can share the same row
-types.
+types. Payload changes that come from normal sync operations still update
+observable metadata such as row versions or pending mutation ids. The
+fingerprint intentionally does not treat `last_reason` by itself as a
+render trigger; it is diagnostic context attached to the state that
+already changed.
 
 This is still a component subscription, not a database query planner. It
 does not read arbitrary SQLite tables, push filters into SQL, or replace
