@@ -210,6 +210,13 @@ pub trait StorageBackend: Send + Sync + 'static {
         session: UploadSessionId,
     ) -> StorageBoxFuture<'a, UploadSession>;
 
+    fn set_upload_length<'a>(
+        &'a self,
+        ctx: &'a StorageContext,
+        session: UploadSessionId,
+        size: u64,
+    ) -> StorageBoxFuture<'a, UploadSession>;
+
     fn append_upload_bytes<'a>(
         &'a self,
         ctx: &'a StorageContext,
@@ -437,6 +444,22 @@ impl StorageServer {
             .await
             .map_err(storage_auth_error)?;
         Ok(upload)
+    }
+
+    pub async fn set_upload_length(
+        &self,
+        ctx: StorageContext,
+        session: UploadSessionId,
+        size: u64,
+    ) -> StorageResult<UploadSession> {
+        require_bound_actor(&ctx)?;
+        let (backend, upload) = self.backend_for_session(&ctx, session.clone()).await?;
+        let scope = self.scope(&upload.scope)?;
+        scope
+            .authorize_write(ctx.clone())
+            .await
+            .map_err(storage_auth_error)?;
+        backend.set_upload_length(&ctx, session, size).await
     }
 
     pub async fn append_upload_bytes(
@@ -746,6 +769,7 @@ impl ServerPlugin for StorageTusServerPlugin {
                 TUS_UPLOAD_ROUTE,
                 head(tus_head_handler)
                     .patch(tus_patch_handler)
+                    .post(tus_method_override_handler)
                     .delete(tus_delete_handler)
                     .with_state(storage),
             )
@@ -981,16 +1005,7 @@ async fn tus_create_handler(
             )?;
             set_response_header(&mut response, "upload-offset", offset.to_string())?;
             set_tus_upload_length_headers(&mut response, size)?;
-            set_response_header(
-                &mut response,
-                "upload-expires",
-                upload
-                    .expires_at
-                    .format(&time::format_description::well_known::Rfc2822)
-                    .map_err(|err| {
-                        StorageError::backend(format!("format tus expiration: {err}"))
-                    })?,
-            )?;
+            set_tus_upload_expires_header(&mut response, &upload)?;
             apply_set_cookie(&mut response, request.set_cookie);
             Ok(response)
         }
@@ -1000,7 +1015,7 @@ async fn tus_create_handler(
 
 async fn tus_head_handler(
     State(storage): State<StorageServer>,
-    Path((_scope, session)): Path<(String, String)>,
+    Path((scope, session)): Path<(String, String)>,
     request: Request<Body>,
 ) -> Response {
     tus_route_response(
@@ -1009,6 +1024,7 @@ async fn tus_head_handler(
             require_tus_version(request.ctx.request.as_ref().unwrap().headers())?;
             let session = UploadSessionId::new(session)?;
             let upload = storage.inspect_upload(request.ctx, session).await?;
+            require_tus_scope(&scope, &upload)?;
             let mut response = tus_empty_response(StatusCode::NO_CONTENT);
             set_response_header(
                 &mut response,
@@ -1016,19 +1032,9 @@ async fn tus_head_handler(
                 upload.next_offset.unwrap_or(0).to_string(),
             )?;
             set_tus_upload_length_headers(&mut response, upload.size)?;
-            set_response_header(
-                &mut response,
-                "upload-expires",
-                upload
-                    .expires_at
-                    .format(&time::format_description::well_known::Rfc2822)
-                    .map_err(|err| {
-                        StorageError::backend(format!("format tus expiration: {err}"))
-                    })?,
-            )?;
-            response
-                .headers_mut()
-                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            set_tus_upload_metadata_header(&mut response, &upload.metadata)?;
+            set_tus_upload_expires_header(&mut response, &upload)?;
+            let mut response = no_store_response(response);
             apply_set_cookie(&mut response, request.set_cookie);
             Ok(response)
         }
@@ -1038,68 +1044,118 @@ async fn tus_head_handler(
 
 async fn tus_patch_handler(
     State(storage): State<StorageServer>,
-    Path((_scope, session)): Path<(String, String)>,
+    Path((scope, session)): Path<(String, String)>,
     request: Request<Body>,
 ) -> Response {
-    tus_route_response(
-        async {
-            let request = bytes_request(request, &storage).await?;
-            require_tus_version(&request.headers)?;
-            require_tus_octet_stream(&request.headers)?;
-            let offset = upload_offset(&request.headers)?;
-            let session = UploadSessionId::new(session)?;
-            let upload = storage
-                .inspect_upload(request.ctx.clone(), session.clone())
-                .await?;
-            let expected_offset = upload.next_offset.unwrap_or(0);
-            if expected_offset != offset {
-                return Err(StorageError::offset_mismatch(expected_offset, offset).into());
-            }
-            storage
-                .scope(&upload.scope)?
-                .authorize_write(request.ctx.clone())
-                .await
-                .map_err(storage_auth_error)?;
-            let max_body_bytes = max_patch_body_bytes(&upload, offset);
-            reject_oversized_content_length(&request.headers, max_body_bytes)?;
-            let bytes = to_bytes(request.body, max_body_bytes as usize)
-                .await
-                .map_err(|_err| StorageError::payload_too_large(max_body_bytes))?;
-            let updated = storage
-                .append_upload_bytes(request.ctx.clone(), session, offset, bytes)
-                .await?;
-            maybe_tus_complete(&storage, request.ctx, &updated).await?;
-
-            let mut response = tus_empty_response(StatusCode::NO_CONTENT);
-            set_response_header(
-                &mut response,
-                "upload-offset",
-                updated.next_offset.unwrap_or(offset).to_string(),
-            )?;
-            apply_set_cookie(&mut response, request.set_cookie);
-            Ok(response)
-        }
-        .await,
-    )
+    tus_route_response(tus_patch_request(storage, scope, session, request).await)
 }
 
 async fn tus_delete_handler(
     State(storage): State<StorageServer>,
-    Path((_scope, session)): Path<(String, String)>,
+    Path((scope, session)): Path<(String, String)>,
     request: Request<Body>,
 ) -> Response {
-    tus_route_response(
-        async {
-            let request = mutation_context_from_request(request, &storage)?;
-            require_tus_version(request.ctx.request.as_ref().unwrap().headers())?;
-            let session = UploadSessionId::new(session)?;
-            storage.abort_upload(request.ctx, session).await?;
-            let mut response = tus_empty_response(StatusCode::NO_CONTENT);
-            apply_set_cookie(&mut response, request.set_cookie);
-            Ok(response)
+    tus_route_response(tus_delete_request(storage, scope, session, request).await)
+}
+
+async fn tus_method_override_handler(
+    State(storage): State<StorageServer>,
+    Path((scope, session)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    let override_method = request
+        .headers()
+        .get("x-http-method-override")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_uppercase());
+    match override_method.as_deref() {
+        Some("PATCH") => {
+            tus_route_response(tus_patch_request(storage, scope, session, request).await)
         }
-        .await,
-    )
+        Some("DELETE") => {
+            tus_route_response(tus_delete_request(storage, scope, session, request).await)
+        }
+        Some(value) => tus_route_response(Err(StorageError::invalid_value(
+            "X-HTTP-Method-Override",
+            value,
+        )
+        .into())),
+        None => tus_route_response(Err(StorageError::invalid_value(
+            "X-HTTP-Method-Override",
+            "<missing>",
+        )
+        .into())),
+    }
+}
+
+async fn tus_patch_request(
+    storage: StorageServer,
+    scope: String,
+    session: String,
+    request: Request<Body>,
+) -> Result<Response, TusError> {
+    let request = bytes_request(request, &storage).await?;
+    require_tus_version(&request.headers)?;
+    require_tus_octet_stream(&request.headers)?;
+    let offset = upload_offset(&request.headers)?;
+    let upload_length = tus_patch_upload_length(&request.headers)?;
+    let session = UploadSessionId::new(session)?;
+    let mut upload = storage
+        .inspect_upload(request.ctx.clone(), session.clone())
+        .await?;
+    require_tus_scope(&scope, &upload)?;
+    if let Some(size) = upload_length {
+        upload = storage
+            .set_upload_length(request.ctx.clone(), session.clone(), size)
+            .await?;
+    }
+    let expected_offset = upload.next_offset.unwrap_or(0);
+    if expected_offset != offset {
+        return Err(StorageError::offset_mismatch(expected_offset, offset).into());
+    }
+    storage
+        .scope(&upload.scope)?
+        .authorize_write(request.ctx.clone())
+        .await
+        .map_err(storage_auth_error)?;
+    let max_body_bytes = max_patch_body_bytes(&upload, offset);
+    reject_oversized_content_length(&request.headers, max_body_bytes)?;
+    let bytes = to_bytes(request.body, max_body_bytes as usize)
+        .await
+        .map_err(|_err| StorageError::payload_too_large(max_body_bytes))?;
+    let updated = storage
+        .append_upload_bytes(request.ctx.clone(), session, offset, bytes)
+        .await?;
+    maybe_tus_complete(&storage, request.ctx, &updated).await?;
+
+    let mut response = tus_empty_response(StatusCode::NO_CONTENT);
+    set_response_header(
+        &mut response,
+        "upload-offset",
+        updated.next_offset.unwrap_or(offset).to_string(),
+    )?;
+    set_tus_upload_expires_header(&mut response, &updated)?;
+    apply_set_cookie(&mut response, request.set_cookie);
+    Ok(response)
+}
+
+async fn tus_delete_request(
+    storage: StorageServer,
+    scope: String,
+    session: String,
+    request: Request<Body>,
+) -> Result<Response, TusError> {
+    let request = mutation_context_from_request(request, &storage)?;
+    require_tus_version(request.ctx.request.as_ref().unwrap().headers())?;
+    let session = UploadSessionId::new(session)?;
+    let upload = storage
+        .inspect_upload(request.ctx.clone(), session.clone())
+        .await?;
+    require_tus_scope(&scope, &upload)?;
+    storage.abort_upload(request.ctx, session).await?;
+    let mut response = tus_empty_response(StatusCode::NO_CONTENT);
+    apply_set_cookie(&mut response, request.set_cookie);
+    Ok(response)
 }
 
 struct StorageRequest {
@@ -1307,6 +1363,14 @@ async fn maybe_tus_complete(
     Ok(())
 }
 
+fn require_tus_scope(scope: &str, upload: &UploadSession) -> StorageResult<()> {
+    if upload.scope == scope {
+        Ok(())
+    } else {
+        Err(StorageError::unknown_upload_session(upload.id.to_string()))
+    }
+}
+
 fn require_tus_version(headers: &HeaderMap) -> Result<(), TusError> {
     match headers
         .get("tus-resumable")
@@ -1348,6 +1412,27 @@ fn tus_upload_length(headers: &HeaderMap) -> StorageResult<Option<u64>> {
     }
 }
 
+fn tus_patch_upload_length(headers: &HeaderMap) -> StorageResult<Option<u64>> {
+    if let Some(value) = headers
+        .get("upload-defer-length")
+        .and_then(|value| value.to_str().ok())
+    {
+        return Err(StorageError::invalid_value(
+            "Upload-Defer-Length",
+            value.to_string(),
+        ));
+    }
+    headers
+        .get("upload-length")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| StorageError::invalid_value("Upload-Length", value.to_string()))
+        })
+        .transpose()
+}
+
 fn upload_offset(headers: &HeaderMap) -> StorageResult<u64> {
     headers
         .get("upload-offset")
@@ -1359,20 +1444,31 @@ fn upload_offset(headers: &HeaderMap) -> StorageResult<u64> {
 
 fn tus_metadata(headers: &HeaderMap) -> StorageResult<TusMetadata> {
     let mut values = BTreeMap::new();
-    if let Some(header) = headers
-        .get("upload-metadata")
-        .and_then(|value| value.to_str().ok())
-    {
+    if let Some(header) = headers.get("upload-metadata") {
+        let header = header
+            .to_str()
+            .map_err(|_| StorageError::invalid_value("Upload-Metadata", "<non-ascii>"))?;
         for pair in header.split(',') {
             let pair = pair.trim();
             if pair.is_empty() {
                 continue;
             }
-            let (key, encoded) = pair
-                .split_once(' ')
-                .ok_or_else(|| StorageError::invalid_value("Upload-Metadata", pair.to_string()))?;
-            if key.is_empty() {
-                return Err(StorageError::invalid_value("Upload-Metadata", pair));
+            let (key, encoded) = pair.split_once(' ').unwrap_or((pair, ""));
+            if key.is_empty()
+                || key
+                    .bytes()
+                    .any(|byte| byte == b',' || byte.is_ascii_whitespace())
+            {
+                return Err(StorageError::invalid_value(
+                    "Upload-Metadata",
+                    pair.to_string(),
+                ));
+            }
+            if values.contains_key(key) {
+                return Err(StorageError::invalid_value(
+                    "Upload-Metadata",
+                    format!("duplicate key {key}"),
+                ));
             }
             let bytes = BASE64_STANDARD
                 .decode(encoded)
@@ -1387,6 +1483,49 @@ fn tus_metadata(headers: &HeaderMap) -> StorageResult<TusMetadata> {
         content_type: values.get("filetype").cloned(),
         values,
     })
+}
+
+fn set_tus_upload_metadata_header(
+    response: &mut Response,
+    metadata: &BTreeMap<String, String>,
+) -> StorageResult<()> {
+    if metadata.is_empty() {
+        return Ok(());
+    }
+    let mut values = Vec::with_capacity(metadata.len());
+    for (key, value) in metadata {
+        if key.is_empty()
+            || key
+                .bytes()
+                .any(|byte| byte == b',' || byte.is_ascii_whitespace())
+        {
+            return Err(StorageError::invalid_value("Upload-Metadata", key));
+        }
+        if value.is_empty() {
+            values.push(key.clone());
+        } else {
+            values.push(format!(
+                "{} {}",
+                key,
+                BASE64_STANDARD.encode(value.as_bytes())
+            ));
+        }
+    }
+    set_response_header(response, "upload-metadata", values.join(","))
+}
+
+fn set_tus_upload_expires_header(
+    response: &mut Response,
+    upload: &UploadSession,
+) -> StorageResult<()> {
+    set_response_header(
+        response,
+        "upload-expires",
+        upload
+            .expires_at
+            .format(&time::format_description::well_known::Rfc2822)
+            .map_err(|err| StorageError::backend(format!("format tus expiration: {err}")))?,
+    )
 }
 
 fn content_length(headers: &HeaderMap) -> Option<u64> {

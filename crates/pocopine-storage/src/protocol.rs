@@ -26,6 +26,8 @@ pub const STORAGE_SCOPES_PREFIX: &str = storage_path!("/scopes");
 pub const STORAGE_UPLOADS_PREFIX: &str = storage_path!("/uploads");
 /// Upload creation route.
 pub const STORAGE_UPLOADS_PATH: &str = storage_path!("/uploads");
+/// Default tus 1.0 endpoint prefix mounted by the tus server plugin.
+pub const STORAGE_TUS_ENDPOINT_PREFIX: &str = "/__pocopine/storage/tus/v1";
 /// Anonymous upload binding cookie read by the storage server.
 pub const STORAGE_ANON_COOKIE: &str = "pocopine_storage_anon";
 
@@ -733,6 +735,8 @@ pub struct UploadSession {
     pub file_name: String,
     pub size: Option<u64>,
     pub content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
     pub strategy: UploadStrategy,
     pub status: UploadSessionStatus,
     pub next_offset: Option<u64>,

@@ -340,7 +340,12 @@ async fn tus_create_head_patch_and_delete_use_tus_wire_contract() -> StorageResu
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(response.headers().get("upload-offset").unwrap(), "0");
     assert_eq!(response.headers().get("upload-length").unwrap(), "5");
+    assert_eq!(
+        response.headers().get("upload-metadata").unwrap(),
+        "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg=="
+    );
     assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    assert_eq!(response.headers().get("vary").unwrap(), "Cookie");
 
     let response = router
         .clone()
@@ -360,6 +365,7 @@ async fn tus_create_head_patch_and_delete_use_tus_wire_contract() -> StorageResu
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(response.headers().get("upload-offset").unwrap(), "5");
+    assert!(response.headers().contains_key("upload-expires"));
 
     let session = UploadSessionId::new(location.rsplit('/').next().unwrap())?;
     let inspected = storage.inspect_upload(anon_ctx(), session.clone()).await?;
@@ -603,8 +609,10 @@ async fn tus_error_paths_use_tus_status_codes() -> StorageResult<()> {
 
 #[tokio::test]
 async fn tus_accepts_deferred_upload_length() -> StorageResult<()> {
-    let router = finalize_tus(memory_storage()?);
+    let storage = memory_storage()?;
+    let router = finalize_tus(storage.clone());
     let response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -625,6 +633,176 @@ async fn tus_accepts_deferred_upload_length() -> StorageResult<()> {
 
     assert_eq!(response.status(), StatusCode::CREATED);
     assert_eq!(response.headers().get("upload-defer-length").unwrap(), "1");
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "0")
+                .header("upload-length", "5")
+                .header("content-type", "application/offset+octet-stream")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.headers().get("upload-offset").unwrap(), "5");
+    assert!(response.headers().contains_key("upload-expires"));
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("cookie", anon_cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.headers().get("upload-length").unwrap(), "5");
+    assert!(response.headers().get("upload-defer-length").is_none());
+
+    let session = UploadSessionId::new(location.rsplit('/').next().unwrap())?;
+    let inspected = storage.inspect_upload(anon_ctx(), session).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Complete);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tus_accepts_key_only_metadata_and_rejects_duplicate_keys() -> StorageResult<()> {
+    let router = finalize_tus(memory_storage()?);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "5")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==,is_confidential",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(&location)
+                .header("tus-resumable", "1.0.0")
+                .header("cookie", anon_cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        response.headers().get("upload-metadata").unwrap(),
+        "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==,is_confidential"
+    );
+
+    let duplicate = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "5")
+                .header("upload-metadata", "filename cGhvdG8=,filename b3RoZXI=")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tus_post_method_override_can_patch_upload_bytes() -> StorageResult<()> {
+    let storage = memory_storage()?;
+    let router = finalize_tus(storage.clone());
+    let create = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "5")
+                .header(
+                    "upload-metadata",
+                    "filename cGhvdG8udHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = create
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&location)
+                .header("x-http-method-override", "PATCH")
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", "0")
+                .header("content-type", "application/offset+octet-stream")
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.headers().get("upload-offset").unwrap(), "5");
+
+    let session = UploadSessionId::new(location.rsplit('/').next().unwrap())?;
+    let inspected = storage.inspect_upload(anon_ctx(), session).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Complete);
     Ok(())
 }
 

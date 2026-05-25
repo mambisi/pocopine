@@ -93,6 +93,33 @@ pub(crate) fn ensure_size_limit(
     Ok(())
 }
 
+pub(crate) fn ensure_upload_length_can_be_set(
+    max_bytes: u64,
+    session: &UploadSession,
+    committed_offset: u64,
+    size: u64,
+) -> StorageResult<()> {
+    ensure_open(session)?;
+    if let Some(existing) = session.size {
+        if existing == size {
+            return Ok(());
+        }
+        return Err(StorageError::invalid_value(
+            "Upload-Length",
+            "cannot change upload length after it is set",
+        ));
+    }
+    if size > max_bytes {
+        return Err(StorageError::payload_too_large(max_bytes));
+    }
+    if committed_offset > size {
+        return Err(StorageError::policy_rejected(format!(
+            "upload length {size} is smaller than the committed offset {committed_offset}"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn object_ref(
     backend: &str,
     session: &UploadSession,

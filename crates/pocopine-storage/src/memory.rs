@@ -5,8 +5,8 @@ use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::backend_common::{
-    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit, expires_at, object_ref,
-    refresh_expired, selected_strategy,
+    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
+    ensure_upload_length_can_be_set, expires_at, object_ref, refresh_expired, selected_strategy,
 };
 use crate::checksum::validate_complete_checksum;
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
@@ -104,6 +104,7 @@ impl StorageBackend for MemoryStorageBackend {
                 file_name: request.file_name.clone(),
                 size: request.size,
                 content_type: request.content_type.clone(),
+                metadata: request.metadata.clone(),
                 strategy,
                 status: UploadSessionStatus::Open,
                 next_offset: Some(0),
@@ -153,6 +154,33 @@ impl StorageBackend for MemoryStorageBackend {
                 public.next_offset = Some(stored.bytes.len() as u64);
             }
             Ok(public)
+        })
+    }
+
+    fn set_upload_length<'a>(
+        &'a self,
+        ctx: &'a StorageContext,
+        session: UploadSessionId,
+        size: u64,
+    ) -> StorageBoxFuture<'a, UploadSession> {
+        Box::pin(async move {
+            let mut inner = self.lock()?;
+            let stored = inner
+                .sessions
+                .get_mut(session.as_str())
+                .ok_or_else(|| StorageError::unknown_upload_session(session.to_string()))?;
+            ensure_owner(&ctx.actor, &stored.owner)?;
+            refresh_expired_public(stored);
+            let committed_offset = stored.bytes.len() as u64;
+            ensure_upload_length_can_be_set(
+                stored.max_bytes,
+                &stored.public,
+                committed_offset,
+                size,
+            )?;
+            stored.public.size = Some(size);
+            stored.public.next_offset = Some(committed_offset);
+            Ok(stored.public.clone())
         })
     }
 
