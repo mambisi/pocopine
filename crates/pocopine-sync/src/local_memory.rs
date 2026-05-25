@@ -250,6 +250,29 @@ impl SyncLocalStore for MemoryLocalStore {
                 .unwrap_or_default())
         }))
     }
+
+    fn purge_pending_for_row(
+        &self,
+        stream: &SyncStreamName,
+        key: &RowKey,
+    ) -> SyncLocalFuture<'_, usize> {
+        let stream = stream.clone();
+        let key = key.clone();
+        Self::ready(self.with_inner(|inner| {
+            let Some(state) = inner.streams.get_mut(&stream) else {
+                return Ok(0);
+            };
+            let before = state.pending.len();
+            // Retain pendings that do NOT target `key`. Mutations with
+            // `key = None` (no row anchor) and mutations for any
+            // OTHER row are left alone — the contract is scoped to
+            // this one row.
+            state
+                .pending
+                .retain(|pending| pending.mutation.key.as_ref() != Some(&key));
+            Ok(before - state.pending.len())
+        }))
+    }
 }
 
 struct LocalChanges {
@@ -1026,5 +1049,105 @@ mod tests {
             store.pending_mutations(&comments).await.unwrap(),
             vec![comment_mutation]
         );
+    }
+
+    #[tokio::test]
+    async fn purge_pending_for_row_drops_only_target_row_mutations() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let post_a = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_a").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({ "title": "A first edit" }),
+        };
+        let post_a_again = ClientMutation {
+            id: MutationId::new("device_abc:2").unwrap(),
+            key: Some(RowKey::new("post_a").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({ "title": "A second edit" }),
+        };
+        let post_b = ClientMutation {
+            id: MutationId::new("device_abc:3").unwrap(),
+            key: Some(RowKey::new("post_b").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({ "title": "B" }),
+        };
+        for m in [&post_a, &post_a_again, &post_b] {
+            store.enqueue_mutation(&stream, m.clone()).await.unwrap();
+        }
+
+        let purged = store
+            .purge_pending_for_row(&stream, &RowKey::new("post_a").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(purged, 2, "both pending mutations for post_a removed");
+        assert_eq!(
+            store.pending_mutations(&stream).await.unwrap(),
+            vec![post_b],
+            "post_b mutation must survive",
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_pending_for_row_leaves_unkeyed_and_other_streams_alone() {
+        let store = MemoryLocalStore::new();
+        let posts = SyncStreamName::new("posts").unwrap();
+        let comments = SyncStreamName::new("comments").unwrap();
+        let unkeyed = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: None,
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"global": true}),
+        };
+        let keyed_in_other_stream = ClientMutation {
+            id: MutationId::new("device_abc:2").unwrap(),
+            key: Some(RowKey::new("post_a").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({}),
+        };
+        store
+            .enqueue_mutation(&posts, unkeyed.clone())
+            .await
+            .unwrap();
+        store
+            .enqueue_mutation(&comments, keyed_in_other_stream.clone())
+            .await
+            .unwrap();
+
+        let purged = store
+            .purge_pending_for_row(&posts, &RowKey::new("post_a").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(purged, 0, "no mutation in posts targets post_a");
+        // The unkeyed mutation in the same stream stays — its key is
+        // None, so it doesn't match the target row.
+        assert_eq!(
+            store.pending_mutations(&posts).await.unwrap(),
+            vec![unkeyed]
+        );
+        // The other stream's row-keyed mutation is fully untouched.
+        assert_eq!(
+            store.pending_mutations(&comments).await.unwrap(),
+            vec![keyed_in_other_stream]
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_pending_for_row_empty_stream_returns_zero() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let purged = store
+            .purge_pending_for_row(&stream, &RowKey::new("post_x").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(purged, 0);
     }
 }

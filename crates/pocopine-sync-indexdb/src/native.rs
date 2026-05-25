@@ -96,6 +96,14 @@ impl SyncLocalStore for IndexedDbLocalStore {
     ) -> SyncLocalFuture<'_, Vec<ClientMutation<serde_json::Value>>> {
         Self::unsupported()
     }
+
+    fn purge_pending_for_row(
+        &self,
+        _stream: &SyncStreamName,
+        _key: &RowKey,
+    ) -> SyncLocalFuture<'_, usize> {
+        Self::unsupported()
+    }
 }
 
 fn validate_database_name(database_name: String) -> SyncResult<String> {
