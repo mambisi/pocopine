@@ -82,11 +82,46 @@ async fn route_mints_anonymous_binding_cookie_for_public_uploads() -> StorageRes
     assert!(set_cookie.contains("Path=/__pocopine/storage"));
     assert!(set_cookie.contains("HttpOnly"));
     assert!(set_cookie.contains("SameSite=Strict"));
+    assert!(set_cookie.contains("Secure"));
 
     let outer: StorageResponse<UploadSession> =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let session = outer.into_result()?;
     assert_eq!(session.status, UploadSessionStatus::Open);
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_can_disable_secure_anonymous_cookie_for_local_http_dev() -> StorageResult<()> {
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .public_scope("avatars", policy("memory")?)?
+        .secure_anonymous_cookies(false)
+        .build();
+    let router = finalize(storage);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(STORAGE_UPLOADS_PATH)
+                .header("content-type", "application/json")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(
+                    serde_json::to_string(&initiate_request("avatars", UploadStrategy::Auto))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("storage response should bind anonymous uploads");
+    assert!(!set_cookie.contains("Secure"));
     Ok(())
 }
 
@@ -370,6 +405,65 @@ async fn tus_create_head_patch_and_delete_use_tus_wire_contract() -> StorageResu
 }
 
 #[tokio::test]
+async fn tus_zero_byte_creation_with_upload_completes() -> StorageResult<()> {
+    let storage = memory_storage()?;
+    let router = finalize_tus(storage.clone());
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "0")
+                .header("content-type", "application/offset+octet-stream")
+                .header(
+                    "upload-metadata",
+                    "filename ZW1wdHkudHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers().get("upload-offset").unwrap(), "0");
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    let session = UploadSessionId::new(location.rsplit('/').next().unwrap())?;
+    let inspected = storage.inspect_upload(anon_ctx(), session).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Complete);
+
+    let rejected = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(tus_uploads_uri("avatars"))
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", "0")
+                .header("content-type", "application/offset+octet-stream")
+                .header(
+                    "upload-metadata",
+                    "filename ZW1wdHkudHh0,filetype dGV4dC9wbGFpbg==",
+                )
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("x"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    Ok(())
+}
+
+#[tokio::test]
 async fn tus_error_paths_use_tus_status_codes() -> StorageResult<()> {
     let router = finalize_tus(memory_storage()?);
     let create = router
@@ -612,9 +706,18 @@ async fn server_returns_forbidden_for_other_actor_sessions() -> StorageResult<()
         .await?;
 
     let denied = storage
-        .inspect_upload(principal_ctx("user-2", "initial"), session.id)
+        .inspect_upload(principal_ctx("user-2", "initial"), session.id.clone())
         .await;
     assert!(matches!(denied, Err(StorageError::Forbidden { .. })));
+
+    let denied = storage
+        .abort_upload(principal_ctx("user-2", "initial"), session.id.clone())
+        .await;
+    assert!(matches!(denied, Err(StorageError::Forbidden { .. })));
+    let inspected = storage
+        .inspect_upload(principal_ctx("user-1", "initial"), session.id)
+        .await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Open);
     Ok(())
 }
 
@@ -865,6 +968,25 @@ async fn zero_byte_upload_can_complete_without_patch() -> StorageResult<()> {
 
     assert_eq!(object.size, 0);
     assert_eq!(object.key, "avatars/user-1/photo.txt");
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_fs_backend_errors_do_not_expose_absolute_paths() -> StorageResult<()> {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().join("storage-root");
+    std::fs::File::create(&root).unwrap();
+    let backend = LocalFsStorageBackend::new(&root);
+    let err = initiate_direct_with(&backend, Some(5), policy(backend.name())?)
+        .await
+        .unwrap_err();
+    let StorageError::Backend { message } = err else {
+        panic!("expected backend error");
+    };
+
+    assert!(message.contains("create storage root"));
+    assert!(!message.contains(root.to_str().unwrap()));
+    assert!(!message.contains(tmp.path().to_str().unwrap()));
     Ok(())
 }
 
