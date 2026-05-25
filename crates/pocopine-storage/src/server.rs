@@ -7,9 +7,9 @@ use bytes::Bytes;
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_server::auth::{Decision, Predicate, RequestContext};
 use pocopine_server::axum::body::{to_bytes, Body};
-use pocopine_server::axum::extract::{FromRequest, Path, State};
-use pocopine_server::axum::http::{HeaderMap, Request};
-use pocopine_server::axum::response::Json;
+use pocopine_server::axum::extract::{Path, State};
+use pocopine_server::axum::http::{HeaderMap, Request, StatusCode};
+use pocopine_server::axum::response::{IntoResponse, Json, Response};
 use pocopine_server::axum::routing::{get, patch, post};
 use pocopine_server::{Server, ServerPlugin};
 use uuid::Uuid;
@@ -17,12 +17,13 @@ use uuid::Uuid;
 use crate::{
     AnonymousUploadBinding, CompleteUpload, CompleteUploadRequest, InitiateUpload,
     InitiateUploadRequest, ObjectMetadata, PrincipalRef, SafeObjectKey, StorageBackendName,
-    StorageError, StorageKey, StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor,
-    UploadSession, UploadSessionId, UploadStrategy, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1,
-    STORAGE_UPLOADS_PATH,
+    StorageError, StorageKey, StorageResponse, StorageResult, UploadIntent, UploadPolicy,
+    UploadPolicyDescriptor, UploadSession, UploadSessionId, UploadStrategy, STORAGE_ANON_COOKIE,
+    STORAGE_PROTOCOL_V1, STORAGE_UPLOADS_PATH,
 };
 
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_JSON_CONTROL_BYTES: usize = 64 * 1024;
 
 /// Future returned by storage backend methods.
 pub type StorageBoxFuture<'a, T> = Pin<Box<dyn Future<Output = StorageResult<T>> + Send + 'a>>;
@@ -121,7 +122,7 @@ where
     fn check(&self, ctx: StorageContext) -> StorageGuardFuture<'_> {
         let result: ServerResult<()> = match &ctx.request {
             Some(request) => self.0.check(&request.user).into(),
-            None => Decision::Allow.into(),
+            None => Decision::Deny("unauthorized").into(),
         };
         Box::pin(async move { result })
     }
@@ -568,6 +569,7 @@ impl StorageServerBuilder {
 
     fn insert_scope(&mut self, name: String, scope: StorageScope) -> StorageResult<()> {
         let name = StorageBackendName::new(name)?;
+        scope.inner.policy.validate_configuration()?;
         self.scopes
             .insert(name.as_str().to_string(), Arc::new(scope.inner));
         Ok(())
@@ -623,8 +625,8 @@ async fn scope_handler(
     State(storage): State<StorageServer>,
     Path(scope): Path<String>,
     request: Request<Body>,
-) -> Json<StorageResult<UploadPolicyDescriptor>> {
-    Json(
+) -> Response {
+    storage_response(
         async {
             let ctx = context_from_request(request);
             storage.descriptor(ctx, &scope).await
@@ -636,8 +638,8 @@ async fn scope_handler(
 async fn initiate_handler(
     State(storage): State<StorageServer>,
     request: Request<Body>,
-) -> Json<StorageResult<UploadSession>> {
-    Json(
+) -> Response {
+    storage_response(
         async {
             let (ctx, request) = parse_json_request::<InitiateUploadRequest>(request).await?;
             storage.initiate_upload(ctx, request).await
@@ -650,8 +652,8 @@ async fn inspect_handler(
     State(storage): State<StorageServer>,
     Path(session): Path<String>,
     request: Request<Body>,
-) -> Json<StorageResult<UploadSession>> {
-    Json(
+) -> Response {
+    storage_response(
         async {
             let ctx = context_from_request(request);
             let session = UploadSessionId::new(session)?;
@@ -665,10 +667,11 @@ async fn bytes_handler(
     State(storage): State<StorageServer>,
     Path(session): Path<String>,
     request: Request<Body>,
-) -> Json<StorageResult<UploadSession>> {
-    Json(
+) -> Response {
+    storage_response(
         async {
             let (parts, body) = request.into_parts();
+            reject_cross_site_mutation(&parts.headers)?;
             let ctx = StorageContext::from_request(RequestContext::from_parts(
                 parts.method.clone(),
                 parts.uri.clone(),
@@ -708,8 +711,8 @@ async fn complete_handler(
     State(storage): State<StorageServer>,
     Path(session): Path<String>,
     request: Request<Body>,
-) -> Json<StorageResult<crate::ObjectRef>> {
-    Json(
+) -> Response {
+    storage_response(
         async {
             let (ctx, request) =
                 parse_optional_json_request::<CompleteUploadRequest>(request).await?;
@@ -732,10 +735,17 @@ async fn abort_handler(
     State(storage): State<StorageServer>,
     Path(session): Path<String>,
     request: Request<Body>,
-) -> Json<StorageResult<()>> {
-    Json(
+) -> Response {
+    storage_response(
         async {
-            let ctx = context_from_request(request);
+            let (parts, _body) = request.into_parts();
+            reject_cross_site_mutation(&parts.headers)?;
+            let ctx = StorageContext::from_request(RequestContext::from_parts(
+                parts.method,
+                parts.uri,
+                parts.headers,
+                parts.extensions,
+            ));
             let session = UploadSessionId::new(session)?;
             storage.abort_upload(ctx, session).await
         }
@@ -748,15 +758,21 @@ where
     T: serde::de::DeserializeOwned + Send + 'static,
 {
     let (parts, body) = request.into_parts();
+    reject_cross_site_mutation(&parts.headers)?;
     let ctx = StorageContext::from_request(RequestContext::from_parts(
         parts.method.clone(),
         parts.uri.clone(),
         parts.headers.clone(),
         parts.extensions.clone(),
     ));
-    let request = Request::from_parts(parts, body);
-    let Json(payload) = Json::<T>::from_request(request, &())
+    let bytes = to_bytes(body, MAX_JSON_CONTROL_BYTES)
         .await
+        .map_err(|err| StorageError::client(format!("read json body: {err}")))?;
+    if bytes.is_empty() {
+        return Err(StorageError::invalid_value("json", "<empty>"));
+    }
+    require_json_content_type(&parts.headers)?;
+    let payload = serde_json::from_slice(&bytes)
         .map_err(|err| StorageError::invalid_value("json", err.to_string()))?;
     Ok((ctx, payload))
 }
@@ -768,18 +784,20 @@ where
     T: serde::de::DeserializeOwned + Default + Send + 'static,
 {
     let (parts, body) = request.into_parts();
+    reject_cross_site_mutation(&parts.headers)?;
     let ctx = StorageContext::from_request(RequestContext::from_parts(
         parts.method.clone(),
         parts.uri.clone(),
         parts.headers.clone(),
         parts.extensions.clone(),
     ));
-    let bytes = to_bytes(body, 1024 * 1024)
+    let bytes = to_bytes(body, MAX_JSON_CONTROL_BYTES)
         .await
         .map_err(|err| StorageError::client(format!("read json body: {err}")))?;
     if bytes.is_empty() {
         return Ok((ctx, T::default()));
     }
+    require_json_content_type(&parts.headers)?;
     let payload = serde_json::from_slice(&bytes)
         .map_err(|err| StorageError::invalid_value("json", err.to_string()))?;
     Ok((ctx, payload))
@@ -833,6 +851,93 @@ fn reject_oversized_content_length(headers: &HeaderMap, limit: u64) -> StorageRe
         )));
     }
     Ok(())
+}
+
+fn reject_cross_site_mutation(headers: &HeaderMap) -> StorageResult<()> {
+    if headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("cross-site") || value.eq_ignore_ascii_case("none")
+        })
+    {
+        return Err(StorageError::forbidden(
+            "cross-site storage mutation rejected",
+        ));
+    }
+
+    let Some(origin) = headers.get("origin").and_then(|value| value.to_str().ok()) else {
+        return Ok(());
+    };
+    let Some(host) = headers.get("host").and_then(|value| value.to_str().ok()) else {
+        return Err(StorageError::forbidden(
+            "storage mutation origin could not be validated",
+        ));
+    };
+    if origin_authority(origin).is_some_and(|authority| authority.eq_ignore_ascii_case(host)) {
+        Ok(())
+    } else {
+        Err(StorageError::forbidden(
+            "cross-origin storage mutation rejected",
+        ))
+    }
+}
+
+fn origin_authority(origin: &str) -> Option<&str> {
+    let (_, rest) = origin.split_once("://")?;
+    rest.split('/')
+        .next()
+        .filter(|authority| !authority.is_empty())
+}
+
+fn require_json_content_type(headers: &HeaderMap) -> StorageResult<()> {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if content_type
+        .split(';')
+        .next()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+    {
+        Ok(())
+    } else {
+        Err(StorageError::invalid_value(
+            "Content-Type",
+            content_type.to_string(),
+        ))
+    }
+}
+
+fn storage_response<T>(result: StorageResult<T>) -> Response
+where
+    T: serde::Serialize,
+{
+    let status = result
+        .as_ref()
+        .err()
+        .map(storage_error_status)
+        .unwrap_or(StatusCode::OK);
+    (status, Json(StorageResponse::from_result(result))).into_response()
+}
+
+fn storage_error_status(error: &StorageError) -> StatusCode {
+    match error {
+        StorageError::InvalidValue { .. } => StatusCode::BAD_REQUEST,
+        StorageError::UnknownScope { .. }
+        | StorageError::UnknownBackend { .. }
+        | StorageError::UnknownUploadSession { .. } => StatusCode::NOT_FOUND,
+        StorageError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
+        StorageError::Forbidden { .. } => StatusCode::FORBIDDEN,
+        StorageError::PolicyRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        StorageError::Unsupported { .. } => StatusCode::NOT_IMPLEMENTED,
+        StorageError::OffsetMismatch { .. } => StatusCode::CONFLICT,
+        StorageError::UploadComplete { .. } | StorageError::UploadClosed { .. } => {
+            StatusCode::CONFLICT
+        }
+        StorageError::Client { .. } => StatusCode::BAD_REQUEST,
+        StorageError::Backend { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 fn storage_auth_error(error: ServerError) -> StorageError {

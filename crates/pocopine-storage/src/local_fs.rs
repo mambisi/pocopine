@@ -52,6 +52,40 @@ impl LocalFsStorageBackend {
         self.root.as_path()
     }
 
+    /// Remove expired upload-session directories from disk.
+    pub fn sweep_expired_uploads(&self) -> StorageResult<usize> {
+        let root = self.sessions_root();
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(err) => {
+                return Err(StorageError::backend(format!(
+                    "read upload sessions dir: {err}"
+                )))
+            }
+        };
+
+        let mut removed = 0;
+        for entry in entries {
+            let entry =
+                entry.map_err(|err| StorageError::backend(format!("read session dir: {err}")))?;
+            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                continue;
+            };
+            let Ok(session) = UploadSessionId::new(name) else {
+                continue;
+            };
+            let stored = self.read_session(&session)?;
+            if stored.public.status == UploadSessionStatus::Expired {
+                fs::remove_dir_all(self.session_dir(&session)).map_err(|err| {
+                    StorageError::backend(format!("remove expired upload: {err}"))
+                })?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     fn sessions_root(&self) -> PathBuf {
         self.root.join(".pocopine-storage").join("sessions")
     }
@@ -87,7 +121,10 @@ impl LocalFsStorageBackend {
         let mut stored: StoredUploadSession = serde_json::from_slice(&bytes)
             .map_err(|err| StorageError::backend(format!("read local upload metadata: {err}")))?;
         if stored.public.status == UploadSessionStatus::Open {
-            stored.public.next_offset = Some(self.temp_len(session)?);
+            if OffsetDateTime::now_utc() >= stored.public.expires_at {
+                stored.public.status = UploadSessionStatus::Expired;
+                self.write_session(session, &stored)?;
+            }
         }
         Ok(stored)
     }
@@ -207,12 +244,20 @@ impl StorageBackend for LocalFsStorageBackend {
                     "local filesystem backend only supports sequential proxy upload",
                 ));
             }
-            let expected = self.temp_len(&session)?;
+            let expected = stored.public.next_offset.unwrap_or(0);
             if expected != offset {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    event_name = "pocopine.storage.offset_mismatch",
+                    session = %session,
+                    expected,
+                    provided = offset,
+                );
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
             let new_offset = checked_new_offset(offset, bytes.len())?;
             ensure_size_limit(&stored, new_offset)?;
+            self.reconcile_temp_len(&session, expected)?;
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -240,7 +285,22 @@ impl StorageBackend for LocalFsStorageBackend {
                 return Ok(object.clone());
             }
             ensure_open(&stored)?;
-            let actual = self.temp_len(&request.session)?;
+            let final_path = self.object_path(&stored.storage_key.key);
+            if !self.session_tmp_path(&request.session).exists() && final_path.exists() {
+                let actual = fs::metadata(&final_path)
+                    .map_err(|err| StorageError::backend(format!("read completed object: {err}")))?
+                    .len();
+                return self.finish_existing_completed_object(
+                    &request.session,
+                    &mut stored,
+                    &final_path,
+                    actual,
+                    request.checksum,
+                );
+            }
+
+            let actual = stored.public.next_offset.unwrap_or(0);
+            self.reconcile_temp_len(&request.session, actual)?;
             if let Some(expected) = stored.public.size {
                 if actual != expected {
                     return Err(StorageError::policy_rejected(format!(
@@ -257,13 +317,12 @@ impl StorageBackend for LocalFsStorageBackend {
                 request.checksum,
             )?;
 
-            let final_path = self.object_path(&stored.storage_key.key);
             if let Some(parent) = final_path.parent() {
                 fs::create_dir_all(parent).map_err(|err| {
                     StorageError::backend(format!("create object parent directory: {err}"))
                 })?;
             }
-            move_or_copy(self.session_tmp_path(&request.session), &final_path)?;
+            commit_completed_object(self.session_tmp_path(&request.session), &final_path)?;
 
             let mut metadata = stored.storage_key.metadata.0.clone();
             metadata.extend(stored.request_metadata.clone());
@@ -309,6 +368,86 @@ impl StorageBackend for LocalFsStorageBackend {
     }
 }
 
+impl LocalFsStorageBackend {
+    fn reconcile_temp_len(&self, session: &UploadSessionId, trusted_len: u64) -> StorageResult<()> {
+        let path = self.session_tmp_path(session);
+        let actual = self.temp_len(session)?;
+        if actual == trusted_len {
+            return Ok(());
+        }
+        if actual > trusted_len {
+            tracing::warn!(
+                target: "pocopine.log",
+                event_name = "pocopine.storage.truncate_uncommitted_bytes",
+                session = %session,
+                actual,
+                trusted = trusted_len,
+            );
+            let file = OpenOptions::new()
+                .write(true)
+                .open(path)
+                .map_err(|err| StorageError::backend(format!("open upload temp file: {err}")))?;
+            file.set_len(trusted_len).map_err(|err| {
+                StorageError::backend(format!("truncate upload temp file: {err}"))
+            })?;
+            return Ok(());
+        }
+        Err(StorageError::backend(format!(
+            "upload temp file is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
+        )))
+    }
+
+    fn finish_existing_completed_object(
+        &self,
+        session: &UploadSessionId,
+        stored: &mut StoredUploadSession,
+        final_path: &Path,
+        actual: u64,
+        checksum: Option<crate::ObjectChecksum>,
+    ) -> StorageResult<ObjectRef> {
+        if let Some(expected) = stored.public.size {
+            if actual != expected {
+                return Err(StorageError::policy_rejected(format!(
+                    "completed object size mismatch: expected {expected} bytes, got {actual}"
+                )));
+            }
+        }
+        ensure_size_limit(stored, actual)?;
+        let object_bytes = fs::read(final_path)
+            .map_err(|err| StorageError::backend(format!("read completed object: {err}")))?;
+        let checksum =
+            validate_complete_checksum(&stored.checksum_policy, &object_bytes, checksum)?;
+        let object = self.object_ref(stored, actual, checksum);
+        stored.public.status = UploadSessionStatus::Complete;
+        stored.public.next_offset = Some(actual);
+        stored.object = Some(object.clone());
+        self.write_session(session, stored)?;
+        Ok(object)
+    }
+
+    fn object_ref(
+        &self,
+        stored: &StoredUploadSession,
+        size: u64,
+        checksum: Option<crate::ObjectChecksum>,
+    ) -> ObjectRef {
+        let mut metadata = stored.storage_key.metadata.0.clone();
+        metadata.extend(stored.request_metadata.clone());
+        ObjectRef {
+            backend: self.name.to_string(),
+            scope: stored.public.scope.clone(),
+            key: stored.storage_key.key.to_string(),
+            version: None,
+            etag: None,
+            checksum,
+            content_type: stored.public.content_type.clone(),
+            size,
+            visibility: stored.visibility,
+            metadata,
+        }
+    }
+}
+
 fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
     match strategy {
         UploadStrategy::Auto | UploadStrategy::Sequential => Ok(UploadStrategy::Sequential),
@@ -343,9 +482,17 @@ fn ensure_open(stored: &StoredUploadSession) -> StorageResult<()> {
         }),
         UploadSessionStatus::Aborted
         | UploadSessionStatus::Expired
-        | UploadSessionStatus::Completing => Err(StorageError::UploadClosed {
-            session: stored.public.id.to_string(),
-        }),
+        | UploadSessionStatus::Completing => {
+            tracing::warn!(
+                target: "pocopine.log",
+                event_name = "pocopine.storage.upload_closed",
+                session = %stored.public.id,
+                status = ?stored.public.status,
+            );
+            Err(StorageError::UploadClosed {
+                session: stored.public.id.to_string(),
+            })
+        }
     }
 }
 
@@ -372,19 +519,58 @@ fn ensure_size_limit(stored: &StoredUploadSession, new_offset: u64) -> StorageRe
     Ok(())
 }
 
-fn move_or_copy(from: PathBuf, to: &Path) -> StorageResult<()> {
+fn commit_completed_object(from: PathBuf, to: &Path) -> StorageResult<()> {
     match fs::rename(&from, to) {
-        Ok(()) => Ok(()),
-        Err(rename_err) => {
-            fs::copy(&from, to)
-                .map_err(|err| StorageError::backend(format!("copy completed object: {err}")))?;
-            fs::remove_file(&from).map_err(|err| {
-                StorageError::backend(format!(
-                    "remove upload temp after copy failed rename ({rename_err}): {err}"
-                ))
-            })?;
+        Ok(()) => {
+            if let Some(parent) = to.parent() {
+                sync_dir(parent);
+            }
             Ok(())
         }
+        Err(rename_err) => {
+            tracing::warn!(
+                target: "pocopine.log",
+                event_name = "pocopine.storage.rename_completed_object_fallback",
+                error = %rename_err,
+            );
+            let partial = partial_object_path(to);
+            fs::copy(&from, &partial)
+                .map_err(|err| StorageError::backend(format!("copy completed object: {err}")))?;
+            sync_file(&partial)?;
+            fs::rename(&partial, to)
+                .map_err(|err| StorageError::backend(format!("commit completed object: {err}")))?;
+            if let Some(parent) = to.parent() {
+                sync_dir(parent);
+            }
+            if let Err(err) = fs::remove_file(&from) {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    event_name = "pocopine.storage.remove_completed_temp_failed",
+                    error = %err,
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn partial_object_path(to: &Path) -> PathBuf {
+    let file_name = to
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("object");
+    to.with_file_name(format!(".{file_name}.{}.part", Uuid::new_v4()))
+}
+
+fn sync_file(path: &Path) -> StorageResult<()> {
+    File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| StorageError::backend(format!("sync completed object: {err}")))
+}
+
+fn sync_dir(path: &Path) {
+    if let Ok(dir) = File::open(path) {
+        let _ = dir.sync_all();
     }
 }
 
