@@ -19,8 +19,9 @@ mod memory;
 mod server;
 
 pub use client::{
-    storage_plugin, tus_plugin, StorageClient, StorageClientPlugin, StorageScopeClient, TusClient,
-    TusClientPlugin, TusScopeClient, TusUploadBuilder, TusUploadResult, UploadBuilder,
+    storage_plugin, upload_plugin, ResumableUpload, ResumableUploadBuilder, StorageClient,
+    StorageClientPlugin, StorageScopeClient, UploadBuilder, UploadClient, UploadClientPlugin,
+    UploadScopeClient,
 };
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
