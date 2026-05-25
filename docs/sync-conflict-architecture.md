@@ -296,6 +296,15 @@ write. Production logs must be scoped to the same authorization domain as
 the source rows, for example `(tenant_id, mutation_id)`, not only
 `mutation_id`.
 
+Production CRUD resources should use the transaction-backed path:
+`.transactional(runner, log)`. The runner owns begin/commit/rollback, the
+transactional source applies the row write and base-version check with
+the active transaction handle, and the transactional mutation log records
+the accepted mutation id before commit. The accepted-log table still
+needs a unique key over the same authorization scope and mutation id; a
+lookup without a database-level uniqueness rule is not enough for
+concurrent retries.
+
 A mutation id dedupes sync replay. It is not a universal business
 idempotency key. Payments, external side effects, uniqueness-sensitive
 workflows, and inventory reservations still need app-level idempotency

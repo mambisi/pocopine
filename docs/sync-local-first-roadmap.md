@@ -129,17 +129,25 @@ commit
 publish live wake-up after commit
 ```
 
-The current non-macro adapter exposes the needed pieces but cannot force
-the source write and mutation-log insert to share one transaction. That is
-acceptable for the contract slice, but not enough as the recommended
-production path.
+The first transaction-backed server slice is now in place. Resources can
+opt into `.transactional(runner, log)`, where `CrudTransactionRunner`
+owns begin/commit/rollback, `TransactionalCrudSource<Tx>` applies the
+CRUD write with the active transaction handle, and
+`TransactionalCrudMutationLog<Tx, Row>` checks and records accepted
+mutation ids with the same handle.
 
-Deliverables:
+The older `.mutation_log(...)` terminator remains available for simple
+adapters and tests, but it cannot force the source write and
+accepted-mutation insert to share one transaction. Production resources
+should use the transaction-backed path and enforce a unique accepted-log
+key over the same authorization scope as the source query.
 
-- transaction-backed CRUD adapter helpers,
-- durable mutation log examples,
-- tests for crash/retry boundaries where possible,
-- docs that make app-level idempotency keys explicit for payments,
+What is still left is backend-specific packaging, not the core contract:
+
+- SQLx or other database-specific convenience adapters,
+- complete durable mutation log examples against real databases,
+- integration tests for backend-specific crash/retry boundaries where possible,
+- more docs for app-level idempotency keys in payments,
   inventory, uniqueness-sensitive, or other side-effecting domains.
 
 ### 4. Backend-Agnostic Change Sources
