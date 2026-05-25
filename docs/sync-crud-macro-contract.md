@@ -429,10 +429,12 @@ What the server handles at runtime:
 1. `/open` discovers the guarded stream and checks the guard.
 2. `/pull` calls `CrudSource::list` and returns canonical rows.
 3. `/push` deserializes the CRUD payload envelope.
-4. Replayed mutation ids are deduped by the mutation log in the same
-   transaction boundary used for writes.
-5. `save` and `remove` compare the client `base_version` to the latest canonical version before calling app write code.
-6. Accepted writes record the mutation id before commit, and live invalidation is published after commit.
+4. On the transactional path, replayed mutation ids are deduped by the
+   mutation log in the same transaction boundary used for writes.
+5. `save` and `remove` pass the client `base_version` into the source so
+   the source can compare and write atomically inside the same transaction.
+6. Accepted writes record the mutation id before commit, and live
+   invalidation is published after commit.
 7. Stale writes return `Conflict` with the server row when available.
 8. Invalid payloads, auth failures, and domain validation failures return `Rejected`.
 
