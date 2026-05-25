@@ -20,6 +20,14 @@ pub enum SyncError {
     Client(String),
     /// Host-side source or lock failure.
     Backend(String),
+    /// The request lacks the authorization scope the source requires.
+    ///
+    /// Built by app-side `CrudSource` / `SyncStreamSource` impls when the
+    /// per-request context is missing the credentials the source needs
+    /// (for example a tenant header, a JWT subject, or a session role).
+    /// Surfaces as `ServerError::Unauthorized` so the wire response and
+    /// the existing framework-level guard responses share one shape.
+    Unauthorized(String),
 }
 
 impl SyncError {
@@ -44,6 +52,12 @@ impl SyncError {
     pub fn backend(msg: impl Into<String>) -> Self {
         Self::Backend(msg.into())
     }
+
+    /// Build a per-request authorization failure (missing tenant, missing
+    /// session, etc.). Maps to `ServerError::Unauthorized` on the wire.
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::Unauthorized(msg.into())
+    }
 }
 
 impl fmt::Display for SyncError {
@@ -58,6 +72,7 @@ impl fmt::Display for SyncError {
             Self::Json(err) => write!(f, "sync json error: {err}"),
             Self::Client(msg) => write!(f, "sync client error: {msg}"),
             Self::Backend(msg) => write!(f, "sync backend error: {msg}"),
+            Self::Unauthorized(msg) => write!(f, "sync unauthorized: {msg}"),
         }
     }
 }

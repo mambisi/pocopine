@@ -94,7 +94,7 @@ impl TenantCustomers {
     fn tenant_of(ctx: &RequestContext) -> pocopine_sync::SyncResult<String> {
         ctx.header("x-tenant-id")
             .map(str::to_string)
-            .ok_or_else(|| SyncError::client("missing tenant"))
+            .ok_or_else(|| SyncError::unauthorized("missing tenant"))
     }
 
     fn tenant_rows(
@@ -323,13 +323,21 @@ async fn requests_missing_tenant_header_are_rejected_at_source() {
         &SyncPullRequest::new(SyncStreamName::new(STREAM).unwrap()),
     )
     .await;
-    // The source-side guard returns `SyncError::client("missing tenant")`,
-    // which surfaces as a `ServerResult::Err` inside the response envelope.
-    // Treating "no tenant" the same as "wrong tenant" keeps anonymous
-    // reads from ever touching tenant rows.
+    // The source-side guard returns `SyncError::unauthorized("missing
+    // tenant")`, which the server mapper turns into
+    // `ServerError::Unauthorized` — the same shape framework-level
+    // stream guards use. The envelope error is a string-tagged variant;
+    // we accept either Unauthorized or the legacy server error shapes
+    // by matching on the rendered Debug. The point is that the body
+    // does NOT carry a successful pull response.
     assert!(
         envelope.is_err(),
         "anonymous /pull leaked a successful response: {envelope:?}"
+    );
+    let err_text = format!("{:?}", envelope.unwrap_err());
+    assert!(
+        err_text.contains("Unauthorized") || err_text.contains("unauthorized"),
+        "expected an unauthorized error, got: {err_text}"
     );
 }
 

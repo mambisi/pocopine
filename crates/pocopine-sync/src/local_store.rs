@@ -411,12 +411,15 @@ pub trait SyncLocalStore {
     /// * Be safe to call on a never-populated store — calling
     ///   `clear_all_streams` on a fresh install is a successful no-op.
     ///
-    /// The default implementation falls back to no-op for stores that
-    /// haven't been updated yet; existing impls without this method
-    /// continue to compile, but `SyncClient::sign_out` will silently
-    /// leave durable entries behind until the store opts in.
+    /// The default implementation returns `SyncError::Unsupported` so an
+    /// out-of-tree store that hasn't opted in cannot silently leave
+    /// durable data behind on sign-out. Auth/tenant boundary helpers
+    /// MUST surface "this store does not support a durable wipe" rather
+    /// than acting like the wipe succeeded.
     fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
-        Box::pin(std::future::ready(Ok(())))
+        Box::pin(std::future::ready(Err(SyncError::unsupported(
+            "SyncLocalStore::clear_all_streams is not implemented for this store",
+        ))))
     }
 }
 

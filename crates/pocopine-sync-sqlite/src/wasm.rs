@@ -526,14 +526,21 @@ async fn pending_mutations(
 }
 
 async fn clear_all_streams() -> SyncResult<()> {
-    // SQLite WASM exposes no transaction-block primitive. The three
-    // table wipes run sequentially on the single-threaded event loop;
-    // the gate at the SqliteLocalStore layer keeps other adapter calls
-    // from interleaving.
-    for sql in CLEAR_ALL_STREAMS_SQL {
-        exec(sql, Vec::new()).await?;
+    // Wrap the three table deletes in one SQLite transaction so a mid-
+    // wipe failure can't leave a partial state visible to another tab
+    // observing the OPFS file. The per-tab gate prevents same-tab
+    // adapter interleaving but is not a cross-tab transaction boundary,
+    // so the SQLite transaction is what guarantees atomicity across
+    // browsing contexts.
+    exec("BEGIN IMMEDIATE TRANSACTION", Vec::new()).await?;
+    let result = async {
+        for sql in CLEAR_ALL_STREAMS_SQL {
+            exec(sql, Vec::new()).await?;
+        }
+        Ok::<(), SyncError>(())
     }
-    Ok(())
+    .await;
+    finish_transaction(result).await
 }
 
 async fn purge_pending_for_row(stream: SyncStreamName, key: RowKey) -> SyncResult<usize> {

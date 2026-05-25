@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, rc::Rc};
+use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
 use pocopine_core::{App, AppPlugin, Handle};
 use serde_json::Value;
@@ -9,6 +9,57 @@ use crate::{
     MutationId, RowKey, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason,
     SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
 };
+
+/// In-tab sign-out generation counter shared between [`SyncClient`] and every
+/// [`SyncCollection`] it builds. `sign_out` bumps the inner cell before
+/// touching the durable store, so any spawned pull/push task that completes
+/// after the bump can observe staleness and drop its persist + state update
+/// instead of repopulating the just-wiped cache.
+///
+/// On host targets the `started` snapshot and `is_stale` check are unused
+/// because the host-side sync methods don't spawn background tasks — they
+/// are sync stubs. The struct compiles on both targets so the field can be
+/// stored uniformly on `SyncCollection` without `#[cfg]` plumbing.
+#[derive(Clone)]
+pub(crate) struct SyncEpoch {
+    current: Rc<Cell<u64>>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    started: u64,
+}
+
+impl SyncEpoch {
+    fn new() -> Self {
+        Self {
+            current: Rc::new(Cell::new(0)),
+            started: 0,
+        }
+    }
+
+    /// Capture the current generation as the snapshot value for a new
+    /// collection or spawned task.
+    pub(crate) fn snapshot(&self) -> Self {
+        Self {
+            current: self.current.clone(),
+            started: self.current.get(),
+        }
+    }
+
+    /// `true` when a sign-out has happened since this snapshot was captured.
+    /// Spawned tasks check this before any post-fetch persist or state
+    /// update. Reachable from host code only via tests; host runtime
+    /// methods are sync stubs that don't spawn.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn is_stale(&self) -> bool {
+        self.current.get() != self.started
+    }
+
+    /// Advance the shared generation. Called by `SyncClient::sign_out` before
+    /// touching the durable store so a concurrent task that's about to check
+    /// the gate sees the new value.
+    fn bump(&self) {
+        self.current.set(self.current.get().wrapping_add(1));
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
@@ -30,6 +81,7 @@ pub struct SyncClientPlugin {
     live_wakeup: bool,
     with_credentials: bool,
     local_store: SyncLocalStoreHandle,
+    epoch: SyncEpoch,
 }
 
 impl Default for SyncClientPlugin {
@@ -40,6 +92,7 @@ impl Default for SyncClientPlugin {
             live_wakeup: false,
             with_credentials: false,
             local_store: Rc::new(MemoryLocalStore::new()),
+            epoch: SyncEpoch::new(),
         }
     }
 }
@@ -104,6 +157,7 @@ impl SyncClientPlugin {
             live_wakeup: self.live_wakeup,
             with_credentials: self.with_credentials,
             local_store: self.local_store,
+            epoch: self.epoch,
         }
     }
 }
@@ -126,6 +180,7 @@ pub struct SyncClient {
     live_wakeup: bool,
     with_credentials: bool,
     local_store: SyncLocalStoreHandle,
+    epoch: SyncEpoch,
 }
 
 impl SyncClient {
@@ -149,6 +204,7 @@ impl SyncClient {
             local_store: self.local_store.clone(),
             stream: None,
             cursor: None,
+            epoch: self.epoch.snapshot(),
             _marker: PhantomData,
         }
     }
@@ -168,6 +224,12 @@ impl SyncClient {
     /// [`watch_sign_outs`](Self::watch_sign_outs) receive a notification so
     /// they can do the same.
     pub async fn sign_out(&self) -> SyncResult<()> {
+        // Bump the epoch BEFORE awaiting the durable wipe. Any spawned
+        // pull/push task that yields here and resumes later will compare
+        // the new shared value against its captured snapshot and abort its
+        // persist + state update — so a slow in-flight server response
+        // cannot repopulate the cache after the sign-out wipe runs.
+        self.epoch.bump();
         self.local_store.clear_all_streams().await?;
         broadcast_sign_out();
         Ok(())
@@ -208,6 +270,8 @@ pub struct SyncCollection<C: 'static, T> {
     local_store: SyncLocalStoreHandle,
     stream: Option<SyncStreamName>,
     cursor: Option<SyncCursor>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    epoch: SyncEpoch,
     _marker: PhantomData<fn(C) -> T>,
 }
 
@@ -517,6 +581,7 @@ where
             self.cursor.clone(),
             SyncReason::Initial,
             live_wakeup,
+            self.epoch.clone(),
         );
         Ok(())
     }
@@ -538,6 +603,7 @@ where
             self.cursor,
             reason,
             live_event,
+            self.epoch,
         );
         Ok(())
     }
@@ -568,6 +634,7 @@ where
             optimistic,
             !self.live_wakeup,
             true,
+            self.epoch,
         );
         Ok(())
     }
@@ -598,6 +665,7 @@ where
             optimistic,
             !self.live_wakeup,
             false,
+            self.epoch,
         );
         Ok(())
     }
@@ -628,6 +696,7 @@ where
             optimistic,
             !self.live_wakeup,
             true,
+            self.epoch,
         );
         Ok(())
     }
@@ -658,6 +727,7 @@ where
             optimistic,
             !self.live_wakeup,
             false,
+            self.epoch,
         );
         Ok(())
     }
@@ -682,6 +752,7 @@ where
             .await?;
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
 
+        let epoch = self.epoch.clone();
         pocopine_core::spawn_for_scope(scope_id, async move {
             let _ = send_push_and_reconcile(
                 scope_id,
@@ -694,6 +765,7 @@ where
                 mutation,
                 pull_after_accept,
                 true,
+                epoch,
             )
             .await;
         });
@@ -729,6 +801,7 @@ where
             mutation,
             pull_after_accept,
             false,
+            self.epoch,
         )
         .await?;
         Ok((mutation_id, response))
@@ -870,6 +943,7 @@ fn start_open_then_pull<C, T>(
     cursor: Option<SyncCursor>,
     reason: SyncReason,
     live_wakeup: Option<LiveWakeupOptions>,
+    epoch: SyncEpoch,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -948,6 +1022,7 @@ fn start_open_then_pull<C, T>(
                 local_store.clone(),
                 stream.clone(),
                 live_wakeup,
+                epoch.clone(),
             );
         }
 
@@ -961,6 +1036,9 @@ fn start_open_then_pull<C, T>(
             .await
             {
                 Ok(response) => {
+                    if epoch.is_stale() {
+                        return;
+                    }
                     handle.update(|state| {
                         selector(state).apply_push(response);
                     });
@@ -975,6 +1053,9 @@ fn start_open_then_pull<C, T>(
         let result =
             pocopine_core::fetch::call::<SyncPullRequest, SyncPullResponse<T>>(&pull_url, &request)
                 .await;
+        if epoch.is_stale() {
+            return;
+        }
         let result = match result {
             Ok(response) => {
                 if let Err(err) = persist_pull_response(&local_store, &response).await {
@@ -984,6 +1065,9 @@ fn start_open_then_pull<C, T>(
             }
             Err(err) => Err(err),
         };
+        if epoch.is_stale() {
+            return;
+        }
         handle.update(|state| {
             let collection = selector(state);
             match result {
@@ -1002,6 +1086,7 @@ fn start_open_then_pull<C, T>(
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 fn open_live_wakeup<C, T>(
     scope_id: pocopine_core::ScopeId,
     handle: Handle<C>,
@@ -1010,6 +1095,7 @@ fn open_live_wakeup<C, T>(
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
     options: LiveWakeupOptions,
+    epoch: SyncEpoch,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1020,7 +1106,11 @@ fn open_live_wakeup<C, T>(
             let handle = handle.clone();
             let endpoint = endpoint.clone();
             let stream = stream.clone();
+            let epoch = epoch.clone();
             move |event| {
+                if epoch.is_stale() {
+                    return;
+                }
                 let reason = if matches!(event.live_event, pocopine_live::LiveEvent::Gap { .. }) {
                     SyncReason::Gap
                 } else {
@@ -1036,6 +1126,7 @@ fn open_live_wakeup<C, T>(
                     None,
                     reason,
                     true,
+                    epoch.clone(),
                 );
             }
         })
@@ -1102,6 +1193,7 @@ fn start_pull<C, T>(
     cursor: Option<SyncCursor>,
     reason: SyncReason,
     live_event: bool,
+    epoch: SyncEpoch,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1126,6 +1218,9 @@ fn start_pull<C, T>(
         let result =
             pocopine_core::fetch::call::<SyncPullRequest, SyncPullResponse<T>>(&pull_url, &request)
                 .await;
+        if epoch.is_stale() {
+            return;
+        }
         let mut local_error = None;
         let result = match result {
             Ok(response) => {
@@ -1136,6 +1231,9 @@ fn start_pull<C, T>(
             }
             Err(err) => Err(err),
         };
+        if epoch.is_stale() {
+            return;
+        }
         handle.update(|state| {
             let collection = selector(state);
             match result {
@@ -1166,6 +1264,7 @@ fn start_push<C, T, M>(
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
     queue_offline: bool,
+    epoch: SyncEpoch,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1187,6 +1286,7 @@ fn start_push<C, T, M>(
             optimistic,
             pull_after_accept,
             queue_offline,
+            epoch,
         )
         .await;
     });
@@ -1205,6 +1305,7 @@ fn start_push_with_generated_id<C, T, M>(
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
     queue_offline: bool,
+    epoch: SyncEpoch,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1217,12 +1318,18 @@ fn start_push_with_generated_id<C, T, M>(
         let mutation_id = match local_store.reserve_mutation_id().await {
             Ok(id) => id,
             Err(err) => {
+                if epoch.is_stale() {
+                    return;
+                }
                 handle.update(|state| {
                     selector(state).set_error(format!("sync mutation id allocation failed: {err}"));
                 });
                 return;
             }
         };
+        if epoch.is_stale() {
+            return;
+        }
         run_push(
             scope_id,
             handle,
@@ -1235,6 +1342,7 @@ fn start_push_with_generated_id<C, T, M>(
             optimistic,
             pull_after_accept,
             queue_offline,
+            epoch,
         )
         .await;
     });
@@ -1254,6 +1362,7 @@ async fn run_push<C, T, M>(
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
     queue_offline: bool,
+    epoch: SyncEpoch,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1267,6 +1376,9 @@ async fn run_push<C, T, M>(
         if let Err(err) =
             enqueue_pending_mutation(&local_store, &stream, &mutation, optimistic.as_ref()).await
         {
+            if epoch.is_stale() {
+                return;
+            }
             handle.update(|state| {
                 selector(state).set_error(err.to_string());
             });
@@ -1274,6 +1386,9 @@ async fn run_push<C, T, M>(
         }
     }
 
+    if epoch.is_stale() {
+        return;
+    }
     handle.update(|state| {
         selector(state).apply_optimistic_mutation(
             mutation_id,
@@ -1294,6 +1409,7 @@ async fn run_push<C, T, M>(
         mutation,
         pull_after_accept,
         queue_offline,
+        epoch,
     )
     .await;
 }
@@ -1352,6 +1468,7 @@ async fn send_push_and_reconcile<C, T, M>(
     mutation: ClientMutation<M>,
     pull_after_accept: bool,
     reconcile_queued_mutation: bool,
+    epoch: SyncEpoch,
 ) -> SyncResult<SyncPushResponse<T>>
 where
     C: 'static,
@@ -1368,6 +1485,9 @@ where
     let result =
         pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(&push_url, &request)
             .await;
+    if epoch.is_stale() {
+        return result.map_err(|err| SyncError::client(err.to_string()));
+    }
     let mut local_error = None;
     let result: Result<SyncPushResponse<T>, String> = match result {
         Ok(response) => {
@@ -1392,6 +1512,9 @@ where
         Ok(response) => Ok(response.clone()),
         Err(err) => Err(SyncError::client(err.clone())),
     };
+    if epoch.is_stale() {
+        return return_result;
+    }
     let should_pull = handle.update(|state| {
         let collection = selector(state);
         match result {
@@ -1424,6 +1547,7 @@ where
             None,
             SyncReason::Push,
             false,
+            epoch,
         );
     }
 
@@ -1714,6 +1838,7 @@ mod tests {
             local_store: store,
             stream: Some(stream),
             cursor: None,
+            epoch: SyncEpoch::new(),
             _marker: PhantomData,
         };
         (state, collection)
@@ -1850,6 +1975,30 @@ mod tests {
         let identity = store.load_identity().await.unwrap().unwrap();
         assert_eq!(identity.device_id.as_str(), "device_local");
         assert_eq!(identity.next_mutation_counter, 7);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn sign_out_bumps_epoch_so_collections_built_before_become_stale() {
+        let store = Rc::new(MemoryLocalStore::new());
+        let client = sync_plugin().shared_local_store(store).into_client();
+        let state = Rc::new(RefCell::new(TestState::default()));
+        let handle = Handle::new(state, ScopeId(42));
+        // Build a collection BEFORE sign_out — captures the current epoch.
+        let collection = client.collection(handle, posts);
+        // Snapshot of the collection's captured epoch — must look fresh.
+        assert!(!collection.epoch.is_stale());
+        // sign_out bumps the shared cell. The collection's captured
+        // snapshot is now older than current → is_stale() flips true.
+        client.sign_out().await.unwrap();
+        assert!(collection.epoch.is_stale());
+        // A NEW collection built after sign_out captures the new epoch
+        // and is fresh again — only the in-flight pre-signout collection
+        // sees staleness.
+        let state2 = Rc::new(RefCell::new(TestState::default()));
+        let handle2 = Handle::new(state2, ScopeId(43));
+        let fresh = client.collection(handle2, posts);
+        assert!(!fresh.epoch.is_stale());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
