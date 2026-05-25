@@ -143,6 +143,35 @@ async fn route_errors_use_explicit_response_envelope() -> StorageResult<()> {
 }
 
 #[tokio::test]
+async fn route_rejects_upload_json_without_content_type_before_body_parse() -> StorageResult<()> {
+    let router = finalize(memory_storage()?);
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(STORAGE_UPLOADS_PATH)
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(
+                    serde_json::to_string(&initiate_request("avatars", UploadStrategy::Auto))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let outer: StorageResponse<UploadSession> = serde_json::from_slice(&bytes).unwrap();
+    assert!(matches!(
+        outer.into_result(),
+        Err(StorageError::InvalidValue { field, .. }) if field == "Content-Type"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn route_rejects_cross_origin_mutations() -> StorageResult<()> {
     let router = finalize(memory_storage()?);
     let (status, rejected): (StatusCode, StorageResult<UploadSession>) = post_json_with_headers(
@@ -173,6 +202,28 @@ async fn route_rejects_scheme_mismatched_origins() -> StorageResult<()> {
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(matches!(rejected, Err(StorageError::Forbidden { .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn route_accepts_configured_trusted_origin() -> StorageResult<()> {
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .trusted_origin("http://app.example")?
+        .public_scope("avatars", policy("memory")?)?
+        .build();
+    let router = finalize(storage);
+    let (status, session): (StatusCode, StorageResult<UploadSession>) = post_json_with_headers(
+        router,
+        STORAGE_UPLOADS_PATH,
+        &initiate_request("avatars", UploadStrategy::Auto),
+        true,
+        [("host", "app.example"), ("origin", "http://app.example")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session?.status, UploadSessionStatus::Open);
     Ok(())
 }
 
@@ -467,7 +518,7 @@ async fn sequential_route_appends_bytes_and_reports_offset_mismatch() -> Storage
     assert_eq!(updated.next_offset, Some(5));
 
     let mismatch: StorageResult<UploadSession> =
-        patch_bytes_outer(router, &session.id, 0, "again".as_bytes()).await;
+        patch_bytes_outer(router.clone(), &session.id, 0, "again".as_bytes()).await;
     assert!(matches!(
         mismatch,
         Err(StorageError::OffsetMismatch {
@@ -475,6 +526,35 @@ async fn sequential_route_appends_bytes_and_reports_offset_mismatch() -> Storage
             provided: 0
         })
     ));
+
+    let over_end: StorageResult<UploadSession> =
+        patch_bytes_outer(router, &session.id, 6, "!".as_bytes()).await;
+    assert!(matches!(
+        over_end,
+        Err(StorageError::OffsetMismatch {
+            expected: 5,
+            provided: 6
+        })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn zero_byte_upload_can_complete_without_patch() -> StorageResult<()> {
+    let backend = MemoryStorageBackend::new();
+    let session = initiate_direct_with(&backend, Some(0), policy(backend.name())?).await?;
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(object.size, 0);
+    assert_eq!(object.key, "avatars/user-1/photo.txt");
     Ok(())
 }
 

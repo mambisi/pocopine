@@ -26,7 +26,6 @@ pub use client::{
     __reset_browser_transport_for_test, __set_browser_transport_for_test,
 };
 pub use error::{StorageError, StorageResult};
-pub use pocopine_core::Handle;
 pub use protocol::{
     AnonymousUploadBinding, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload,
     CompleteUploadRequest, InitiateUpload, InitiateUploadRequest, MetadataSchema, ObjectChecksum,
