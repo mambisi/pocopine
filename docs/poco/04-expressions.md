@@ -164,5 +164,10 @@ expression.
 * `docs/components/02-state.md` — state management conventions; the
   anti-pattern on manually-mirrored derived fields ties directly to
   this page.
+* `docs/components/03-composition.md` — **typed slot props** (RFC
+  084) apply the same Rust-side-computation pattern to the
+  parent↔child slot edge: declare the slot's exposed shape as a
+  `Props` struct so the same compile-time validation applies to
+  slot publications.
 * `docs/poco/01-format.md` — the broader `.poco` format.
 * `crates/pocopine-expr/src/lib.rs` — grammar reference.

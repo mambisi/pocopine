@@ -2517,7 +2517,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // every existing `#[slot]` site.
     let (slot_props_validation_tokens, slot_template_edits) = match &template_ast {
         Some(ast) => {
-            let emit = slot::emit_slot_props_validation(ast, &slot_decls);
+            let emit = slot::emit_slot_props_validation(ast, &slot_decls, &struct_ident);
             (emit.tokens, emit.template_edits)
         }
         None => (proc_macro2::TokenStream::new(), Vec::new()),

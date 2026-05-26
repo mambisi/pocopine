@@ -479,6 +479,7 @@ struct SlotMatch<'a> {
 pub(crate) fn emit_slot_props_validation(
     ast: &crate::template_parser::TemplateAst,
     slots: &[SlotDecl],
+    struct_ident: &Ident,
 ) -> SlotValidationEmit {
     let mut out = TokenStream::new();
     let mut template_edits = Vec::new();
@@ -539,6 +540,7 @@ pub(crate) fn emit_slot_props_validation(
                     &props_ty_str,
                     el,
                     for_ctx.as_ref().unwrap(),
+                    struct_ident,
                     &mut out,
                     &mut template_edits,
                 );
@@ -601,6 +603,7 @@ fn emit_iterated_mode(
     props_ty_str: &str,
     el: &crate::template_parser::Element,
     for_ctx: &ForContext,
+    struct_ident: &Ident,
     out: &mut TokenStream,
     template_edits: &mut Vec<TemplateEdit>,
 ) {
@@ -638,8 +641,11 @@ fn emit_iterated_mode(
     let mismatch_note = format!(
         "the iteration source `{iter_field}` for slot `{target_name}` must yield items of type `{props_ty_str}` (matching `#[slot(name = \"{target_name}\", props = {props_ty_str})]`)"
     );
+    // Type assertion lives at module-item position (alongside
+    // the emitted struct), so `Self` isn't in scope — name the
+    // struct explicitly via `#struct_ident`.
     out.extend(quote! {
-        const _: fn(&Self) = |__poco_this: &Self| {
+        const _: fn(&#struct_ident) = |__poco_this: &#struct_ident| {
             // Force-resolve the iter item's type via a `match`
             // on `IntoIterator`. The `unreachable!()` branch is
             // never executed (the assertion is in const-fn
@@ -1104,7 +1110,11 @@ mod tests {
 </ul>
 </root>"#;
         let slots = vec![iter_decl("row", "UploadFile")];
-        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
         assert_eq!(
             emit.template_edits.len(),
             1,
@@ -1137,7 +1147,11 @@ mod tests {
 </li>
 </root>"#;
         let slots = vec![iter_decl("row", "UploadFile")];
-        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
         let s = emit.tokens.to_string();
         assert!(
             !s.contains("str_slice_set_eq_const"),
@@ -1155,7 +1169,11 @@ mod tests {
 </div>
 </root>"#;
         let slots = vec![iter_decl("header", "HeaderProps")];
-        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
         assert!(
             emit.template_edits.is_empty(),
             "static slot should yield no template edits: {:?}",
@@ -1175,7 +1193,11 @@ mod tests {
 </li>
 </root>"#;
         let slots = vec![iter_decl("row", "UploadFile")];
-        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
         assert!(
             emit.template_edits.is_empty(),
             "static-mode (has :LHS=) must not emit an auto-publish edit"
@@ -1198,7 +1220,11 @@ mod tests {
 <slot name="row"></slot>
 </root>"#;
         let slots = vec![iter_decl("row", "UploadFile")];
-        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
         assert!(
             emit.template_edits.is_empty(),
             "no pp-for ancestor → no auto-publish edit"
@@ -1216,7 +1242,11 @@ mod tests {
 </li>
 </root>"#;
         let slots = vec![iter_decl("row", "UploadFile")];
-        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
         let s = emit.tokens.to_string();
         assert!(
             s.contains("compile_error") && s.contains("bare field path"),

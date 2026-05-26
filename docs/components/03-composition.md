@@ -211,6 +211,127 @@ options in a `<select>`): the child exposes the collection on its
 `<slot>` and the caller writes a normal `pp-for` over the
 `pp-let`-named binding.
 
+### Typed slot props (RFC 084)
+
+The untyped form above ships and works, but **typed slot props
+are the recommended form going forward.** Authors opt in by
+adding one keyword to `#[slot]` and declaring the publication
+shape as a `Props` struct:
+
+```rust
+// UploadItem.rs
+#[derive(Default, Props, Serialize, Deserialize)]
+pub struct UploadItemSlotProps {
+    #[prop] pub name: String,
+    #[prop] pub status: String,
+    #[prop] pub progress: f64,
+}
+
+#[component(template = "UploadItem.poco", role = "panel")]
+#[slot(default, props = UploadItemSlotProps)]
+pub struct UploadItem {
+    pub name: String,
+    pub status: String,
+    pub progress: f64,
+}
+```
+
+```html
+<!-- UploadItem.poco — same shape as the untyped form -->
+<div class="row">
+  <slot :name="name" :status="status" :progress="progress"></slot>
+</div>
+```
+
+What the macro now checks at `cargo check` time:
+
+* `UploadItemSlotProps` derives `Props`. If you forget the
+  derive, the slot decl errors with the missing trait bound.
+* The `<slot :LHS=...>` publication covers every `#[prop]` field
+  on `UploadItemSlotProps`. A missing `:status="status"` errors
+  at the slot element. An extra `:notes="..."` not on the
+  Props struct errors with the offending key quoted.
+* (Future Phase 3) The caller's `row.X` reads will be checked
+  against `UploadItemSlotProps`'s prop set.
+
+**Iterated slots** — the same `#[slot(props = T)]` decl + a
+`<slot>` element sitting inside a `pp-for` automatically
+publishes the iteration variable. No `:LHS=` attributes
+needed:
+
+```rust
+#[component(template = "UploadRoot.poco", role = "scope")]
+#[slot(name = "row", props = UploadFile)]      // UploadFile must derive Props
+pub struct UploadRoot {
+    pub files: Vec<UploadFile>,
+}
+```
+
+```html
+<!-- UploadRoot.poco — macro auto-publishes `file` as the slot binding -->
+<ul>
+  <li pp-for="file in files">
+    <slot name="row"></slot>
+  </li>
+</ul>
+```
+
+```html
+<!-- Caller -->
+<upload-root>
+  <template pp-slot="row" pp-let="file">
+    <span pp-text="file.name"></span>
+  </template>
+</upload-root>
+```
+
+Rules for iterated mode:
+
+* The `<slot>` sits inside a `pp-for`, has zero `:LHS=` attrs,
+  and the `pp-for`'s iteration source is a bare field path
+  (e.g. `pp-for="X in files"`). All three together → iterated
+  mode.
+* The macro emits a Rust type assertion that the iteration
+  item's type matches the declared `props = T`. Mismatch is a
+  `cargo check` error.
+* `pp-for` over a more complex expression (method calls, dotted
+  paths beyond a single field) errors with "use static mode";
+  write the publications explicitly.
+
+**Iteration with metadata** (`$index`, `$last`, derived
+labels): drop back to static mode. Define a Props struct
+flattening the item fields plus the metadata, and publish
+explicitly:
+
+```rust
+#[derive(Default, Props, Serialize, Deserialize)]
+pub struct UploadRow {
+    #[prop] pub name: String,
+    #[prop] pub progress: f64,
+    #[prop] pub index: u32,
+    #[prop] pub is_last: bool,
+}
+
+#[slot(name = "row", props = UploadRow)]
+```
+
+```html
+<li pp-for="file in files">
+  <slot name="row"
+    :name="file.name" :progress="file.progress"
+    :index="$index" :is_last="$last"></slot>
+</li>
+```
+
+Any presence of `:LHS=` on the slot element forces static
+mode — there's no "iterated + extras" middle case to learn,
+just one rule.
+
+See RFC 084 for the full design rationale and the seven
+alternatives that were considered and rejected (Ctx wrapper
+types, `$host`/`#[expose]` magics, slot-name-as-binding,
+inline template type annotations, etc.).
+
 ## Iteration (`pp-for`, deferred)
 
 Planned syntax for the array-reactivity milestone:
