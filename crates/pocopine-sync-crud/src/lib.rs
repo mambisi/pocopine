@@ -13,6 +13,7 @@ mod mutation;
 mod options;
 mod outcome;
 pub mod params;
+pub mod query;
 mod row;
 mod subscription;
 mod transaction;
