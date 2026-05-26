@@ -72,6 +72,7 @@ pub mod toggle_group;
 pub mod toolbar;
 pub mod tooltip;
 pub mod tree;
+pub mod upload;
 
 pub use accordion::{
     PineAccordionContent, PineAccordionItem, PineAccordionRoot, PineAccordionTrigger,
@@ -171,6 +172,7 @@ pub use tooltip::{
     PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot, PineTooltipTrigger,
 };
 pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
+pub use upload::PineUpload;
 
 /// Register every Pine custom-element tag. Call once at app startup
 /// before mounting.
@@ -341,4 +343,5 @@ pub fn register_all() {
     PineTagsInputInput::register();
     PineTagsInputClear::register();
     PineText::register();
+    PineUpload::register();
 }

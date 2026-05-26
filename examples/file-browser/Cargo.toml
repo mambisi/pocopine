@@ -1,0 +1,32 @@
+[package]
+name = "file-browser-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+bin = "server"
+port = 3024
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+required-features = []
+
+[dependencies]
+pine = { path = "../../crates/pine" }
+pine-icons = { path = "../../crates/pine-icons" }
+pocopine = { path = "../../crates/pocopine" }
+pocopine-storage = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-logging = { workspace = true }
+pocopine-server = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs"] }

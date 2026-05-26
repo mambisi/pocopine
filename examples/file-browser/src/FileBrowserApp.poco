@@ -1,0 +1,95 @@
+<root class="file-browser-shell">
+  <aside class="file-browser-sidebar">
+    <div class="file-browser-brand">
+      <span class="brand-mark" aria-hidden="true"><pine-icon name="folder" size="22"></pine-icon></span>
+      <span>Pocopine Files</span>
+    </div>
+    <nav class="file-browser-nav" aria-label="Sections">
+      <button class="nav-item active" type="button">
+        <pine-icon name="cloud" size="18"></pine-icon>
+        <span>Files</span>
+      </button>
+      <button class="nav-item" type="button" disabled>
+        <pine-icon name="database" size="18"></pine-icon>
+        <span>Local FS</span>
+      </button>
+    </nav>
+  </aside>
+
+  <main class="file-browser-main">
+    <header class="file-browser-toolbar">
+      <div>
+        <h1>Files</h1>
+        <p><span pp-text="file_count_label"></span> · <span pp-text="total_size_label"></span></p>
+      </div>
+      <button class="icon-button" type="button" aria-label="Refresh" @click="refresh" :disabled="loading">
+        <pine-icon name="refresh" size="18"></pine-icon>
+      </button>
+    </header>
+
+    <section class="upload-section">
+      <pine-upload scope="files"
+                   auto-resume="true"
+                   chunk-size="1048576"
+                   @pp:upload:complete="upload_complete"
+                   @pp:upload:error="upload_failed">
+        <span class="upload-copy">
+          <span class="upload-icon" aria-hidden="true"><pine-icon name="file-upload" size="28"></pine-icon></span>
+          <span class="upload-title">Upload file</span>
+          <span class="upload-subtitle">Local filesystem storage</span>
+        </span>
+      </pine-upload>
+    </section>
+
+    <section class="browser-panel">
+      <div class="browser-panel-header">
+        <div class="search-shell">
+          <pine-icon name="search" size="17"></pine-icon>
+          <span>All files</span>
+        </div>
+        <span class="sync-state" pp-show="loading">Refreshing</span>
+      </div>
+
+      <p class="error-banner" pp-show="error" pp-text="error"></p>
+
+      <div class="file-list" pp-show="!files_empty">
+        <div class="file-row file-row-head">
+          <span>Name</span>
+          <span>Modified</span>
+          <span>Size</span>
+          <span></span>
+        </div>
+        <template pp-for="file in files" pp-key="file.id">
+          <div class="file-row">
+            <div class="file-name-cell">
+              <span class="file-icon" aria-hidden="true"><pine-icon :name="file.icon" size="22"></pine-icon></span>
+              <div>
+                <a class="file-name" :href="file.download_url" pp-text="file.name"></a>
+                <span class="file-extension" pp-show="file.extension" pp-text="file.extension"></span>
+              </div>
+            </div>
+            <span class="file-muted" pp-text="file.modified_label"></span>
+            <span class="file-muted" pp-text="file.size_label"></span>
+            <div class="file-actions">
+              <a class="icon-button" :href="file.download_url" :aria-label="'Download ' + file.name">
+                <pine-icon name="download" size="17"></pine-icon>
+              </a>
+              <button class="icon-button danger"
+                      type="button"
+                      :aria-label="'Delete ' + file.name"
+                      :disabled="deleting_id == file.id"
+                      @click="remove_file(file.id)">
+                <pine-icon name="trash" size="17"></pine-icon>
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div class="empty-state" pp-show="!loading && files_empty">
+        <pine-icon name="upload" size="42"></pine-icon>
+        <h2>No files yet</h2>
+      </div>
+    </section>
+  </main>
+</root>

@@ -21,6 +21,7 @@ target/
 # Playwright screenshot output — regenerated on every e2e run.
 examples/*/e2e/screenshots/
 examples/*/e2e/*.png
+examples/file-browser/.data/
 
 # `pocopine deploy` artefacts (RFC 080 §4.2 / §7). Mirrors Rust's
 # `target/` convention: the Dockerfile, dockerignore, host-specific
