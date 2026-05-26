@@ -8,7 +8,9 @@ use crate::{
     UploadSession, UploadSessionStatus, UploadStrategy,
 };
 
-pub(crate) fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
+const MAX_UPLOAD_EXPIRES_AFTER_SECS: u64 = 100 * 365 * 24 * 60 * 60;
+
+pub fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
     match strategy {
         UploadStrategy::Auto | UploadStrategy::Sequential => Ok(UploadStrategy::Sequential),
         UploadStrategy::SingleRequest | UploadStrategy::Multipart => {
@@ -19,12 +21,14 @@ pub(crate) fn selected_strategy(strategy: UploadStrategy) -> StorageResult<Uploa
     }
 }
 
-pub(crate) fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
-    OffsetDateTime::now_utc()
-        + time::Duration::seconds(duration.as_secs().min(i64::MAX as u64) as i64)
+pub fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
+    let capped = duration.as_secs().min(MAX_UPLOAD_EXPIRES_AFTER_SECS);
+    let now = OffsetDateTime::now_utc();
+    now.checked_add(time::Duration::seconds(capped as i64))
+        .unwrap_or(now)
 }
 
-pub(crate) fn ensure_owner(actor: &StorageActor, owner: &StorageActor) -> StorageResult<()> {
+pub fn ensure_owner(actor: &StorageActor, owner: &StorageActor) -> StorageResult<()> {
     if actor.same_owner(owner) {
         Ok(())
     } else {
@@ -34,7 +38,7 @@ pub(crate) fn ensure_owner(actor: &StorageActor, owner: &StorageActor) -> Storag
     }
 }
 
-pub(crate) fn ensure_open(session: &UploadSession) -> StorageResult<()> {
+pub fn ensure_open(session: &UploadSession) -> StorageResult<()> {
     match session.status {
         UploadSessionStatus::Open => Ok(()),
         UploadSessionStatus::Complete => Err(StorageError::UploadComplete {
@@ -56,7 +60,7 @@ pub(crate) fn ensure_open(session: &UploadSession) -> StorageResult<()> {
     }
 }
 
-pub(crate) fn refresh_expired(session: &mut UploadSession) -> bool {
+pub fn refresh_expired(session: &mut UploadSession) -> bool {
     if session.status == UploadSessionStatus::Open
         && OffsetDateTime::now_utc() >= session.expires_at
     {
@@ -67,13 +71,13 @@ pub(crate) fn refresh_expired(session: &mut UploadSession) -> bool {
     }
 }
 
-pub(crate) fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
+pub fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
     offset
         .checked_add(byte_count as u64)
         .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))
 }
 
-pub(crate) fn ensure_size_limit(
+pub fn ensure_size_limit(
     max_bytes: u64,
     declared_size: Option<u64>,
     new_offset: u64,
@@ -93,7 +97,7 @@ pub(crate) fn ensure_size_limit(
     Ok(())
 }
 
-pub(crate) fn ensure_upload_length_can_be_set(
+pub fn ensure_upload_length_can_be_set(
     max_bytes: u64,
     session: &UploadSession,
     committed_offset: u64,
