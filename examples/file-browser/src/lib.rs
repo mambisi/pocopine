@@ -28,7 +28,6 @@ pub async fn delete_stored_file(file_id: String) -> ServerResult<Vec<FileEntry>>
 #[derive(Serialize, Deserialize)]
 #[component(
     template = "FileBrowserApp.poco",
-    style = "file_browser.css",
     role = "panel",
     uses = [PineIcon, PineUpload]
 )]

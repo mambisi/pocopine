@@ -9,6 +9,10 @@ publish = false
 bin = "server"
 port = 3024
 
+[package.metadata.pocopine.tailwind]
+input = "app.css"
+output = "pkg/tailwind.css"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

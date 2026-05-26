@@ -43,7 +43,7 @@ pub struct PineUploadError {
 
 /// Resumable file upload primitive backed by [`UploadClient`].
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineUpload.poco", role = "interactive")]
+#[component(template = "PineUpload.poco", role = "panel")]
 pub struct PineUpload {
     /// Server-registered upload scope.
     #[prop]
