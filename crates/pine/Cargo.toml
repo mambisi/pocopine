@@ -13,6 +13,7 @@ doctest = false
 [dependencies]
 pocopine = { path = "../pocopine" }
 pocopine-core = { workspace = true }
+pocopine-storage = { workspace = true }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
@@ -26,6 +27,11 @@ features = [
     "Event",
     "EventInit",
     "EventTarget",
+    "AbortController",
+    "AbortSignal",
+    "Blob",
+    "File",
+    "FileList",
     "FocusEvent",
     "FocusEventInit",
     "CssStyleDeclaration",

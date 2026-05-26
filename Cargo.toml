@@ -41,6 +41,7 @@ members = [
     "examples/blog",
     "examples/charts",
     "examples/counter",
+    "examples/file-browser",
     "examples/hn",
     "examples/keep",
     "examples/live",
