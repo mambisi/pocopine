@@ -41,6 +41,11 @@ where
         // `SyncError::SchemaMigration` so stale-schema pushes get a
         // per-mutation rejection.
         migrate_payload: None,
+        // No registered params validator by default — the trait
+        // default impl of `SyncStreamSource::validate_params` accepts
+        // anything. The `#[resource(params(...))]` macro auto-wires
+        // this to call `StreamParams::extract`.
+        validate_params: None,
     })
 }
 
@@ -70,6 +75,19 @@ where
 ///   `std::panic::catch_unwind`; a panicking migrator surfaces as a
 ///   per-mutation rejection instead of crashing the request task.
 pub type CrudMigrateFn = dyn Fn(u32, u32, Value) -> SyncResult<Value> + Send + Sync + 'static;
+
+/// User-supplied function that validates the wire subscription
+/// parameters before any `pull` / `push` runs. Registered via
+/// [`CrudResourceBuilder::with_validate_params`] (or auto-emitted by
+/// the `#[resource(params(...))]` macro, which generates a typed
+/// extractor that decodes the wire map into the resource's
+/// `StreamParams` struct and surfaces structural mismatches as
+/// `SyncError::InvalidValue`).
+///
+/// Returns `Ok(())` to accept the subscription's params; `Err` lands
+/// as `ServerError::BadRequest` over the wire.
+pub type CrudValidateParamsFn =
+    dyn Fn(&pocopine_sync::StreamParams) -> SyncResult<()> + Send + Sync + 'static;
 
 /// Invoke a registered migrator under an unwind guard. A panic in the
 /// user closure becomes a typed `SyncError::Backend` instead of
@@ -107,6 +125,7 @@ pub struct CrudResourceBuilder<S> {
     max_snapshot_rows: usize,
     schema_version: u32,
     migrate_payload: Option<Arc<CrudMigrateFn>>,
+    validate_params: Option<Arc<CrudValidateParamsFn>>,
 }
 
 impl<S> CrudResourceBuilder<S>
@@ -167,6 +186,24 @@ where
         self
     }
 
+    /// Register a function that validates the wire subscription
+    /// parameters before any `pull` / `push` runs.
+    ///
+    /// The `#[resource(params(...))]` macro auto-wires this with a
+    /// typed `StreamParams::extract` call, so resources declaring
+    /// params get structural validation (unknown keys, missing
+    /// required fields, wrong-shape values → `InvalidValue` →
+    /// `BadRequest`) for free. Bare `SyncStreamSource` impls or
+    /// resources without declared params can register their own
+    /// validator here.
+    pub fn with_validate_params<F>(mut self, validate: F) -> Self
+    where
+        F: Fn(&pocopine_sync::StreamParams) -> SyncResult<()> + Send + Sync + 'static,
+    {
+        self.validate_params = Some(Arc::new(validate));
+        self
+    }
+
     /// Attach the row id extractor for this resource.
     pub fn id<IdOf>(self, id_of: IdOf) -> CrudResource<S, IdOf>
     where
@@ -179,6 +216,7 @@ where
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
             migrate_payload: self.migrate_payload,
+            validate_params: self.validate_params,
             id_of,
             version_of: NoRowVersion,
             mutation_log: MissingMutationLog,
@@ -194,6 +232,7 @@ pub struct CrudResource<S, IdOf, VersionOf = NoRowVersion, Log = MissingMutation
     max_snapshot_rows: usize,
     schema_version: u32,
     migrate_payload: Option<Arc<CrudMigrateFn>>,
+    validate_params: Option<Arc<CrudValidateParamsFn>>,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -219,6 +258,7 @@ where
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
             migrate_payload: self.migrate_payload.clone(),
+            validate_params: self.validate_params.clone(),
             id_of: self.id_of,
             version_of,
             mutation_log: self.mutation_log,
@@ -247,6 +287,7 @@ where
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
             migrate_payload: self.migrate_payload.clone(),
+            validate_params: self.validate_params.clone(),
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -286,6 +327,7 @@ where
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
             migrate_payload: self.migrate_payload.clone(),
+            validate_params: self.validate_params.clone(),
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -303,6 +345,7 @@ pub struct TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner> {
     max_snapshot_rows: usize,
     schema_version: u32,
     migrate_payload: Option<Arc<CrudMigrateFn>>,
+    validate_params: Option<Arc<CrudValidateParamsFn>>,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -614,6 +657,14 @@ where
 
     fn schema_version(&self) -> u32 {
         self.schema_version
+    }
+
+    fn validate_params(&self, params: &pocopine_sync::StreamParams) -> SyncResult<()> {
+        if let Some(validate) = self.validate_params.as_ref() {
+            validate(params)
+        } else {
+            Ok(())
+        }
     }
 
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
@@ -932,6 +983,14 @@ where
 
     fn schema_version(&self) -> u32 {
         self.schema_version
+    }
+
+    fn validate_params(&self, params: &pocopine_sync::StreamParams) -> SyncResult<()> {
+        if let Some(validate) = self.validate_params.as_ref() {
+            validate(params)
+        } else {
+            Ok(())
+        }
     }
 
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {

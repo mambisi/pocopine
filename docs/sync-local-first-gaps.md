@@ -26,17 +26,19 @@
 
 ## Axis 2: Partial sync / shape subscriptions
 
-- **Status in pocopine:** Partial (server-defined opaque streams; no client-driven shape).
-- **Field evidence:**
+- **Status in pocopine:** ✅ Done — RFC 085 + four batches landed.
+  - **Batch 1** ([#141](https://github.com/mambisi/pocopine/pull/141)): wire envelope — `SyncStreamSubscription` wrapper with bare-string-compat deserializer, `params` field on `SyncOpenStream` / `SyncPullRequest` / `SyncPushRequest`, `SyncStreamSource::validate_params` default-impl method, `SyncCollection.params(...)` builder threaded through every spawned task.
+  - **Batch 2** ([#142](https://github.com/mambisi/pocopine/pull/142)): macro `params(field: Type, ...)` DSL with full comparator vocabulary (`T` / `Option<T>` / `InSet<T>` / `Range<T>` / `Contains`), typed `XxxStreamParams` struct, `serialize_params` + `extract`, fluent `Resource::stream()` builder, `pocopine_sync_crud::params` module.
+  - **Batch 3** ([#143](https://github.com/mambisi/pocopine/pull/143)): type-safe query DSL with sealed-trait `field::*` markers; `Resource::query().where_eq` / `where_in` / `where_range` / `where_contains` enforce comparator/field compatibility at compile time.
+  - **Batch 4** (this PR): auto-wired `SyncStreamSource::validate_params` via the CRUD builder; cookbook page at `docs/sync-shape-subscriptions.md`; RFC 085 flipped to Final.
+- **Field evidence (resolved):**
   - ElectricSQL ([electric.ax/docs/guides/shapes](https://electric.ax/docs/guides/shapes)): "Shapes consist of … Table, Where Clause (optional): filters rows using PostgreSQL expressions, Columns (optional): specifies which fields to include in sync." Shapes are explicitly the unit of subscription.
   - PowerSync's [Sync Rules](https://docs.powersync.com/usage/sync-rules) parameterise buckets by JWT claims, client params, or DB values: `SELECT * FROM lists WHERE owner_id = bucket.user_id`. Buckets exist per user.
   - Triplit (now defunct, domain parked at [sedo.com](https://sedo.com/search/details/?domain=triplit.dev)) used query subscriptions; InstantDB ([instantdb.com/docs/instaql](https://instantdb.com/docs/instaql)) does the same with `where`, `$gt`, `$in` etc.
-- **Gap:** `SyncStreamName` is opaque and a stream's filter is hard-coded server-side via `Source::filter`. To express "issues assigned to me" or "messages in channel X" you must mint a `SyncStreamName` per tenant/filter combination, blowing up the stream registry and making fanout-by-broadcast inefficient.
-- **Minimum surface:**
-  - `SyncStreamName` becomes `{ name, params: Map<String, Value> }`. The server-registered `Source` gets `(ctx, params)` so it can compose its filter.
-  - Define a small whitelist of comparators on registered fields (eq/in/range/contains) — no arbitrary SQL surface (opinionated-by-default).
-  - Live invalidation cross-checks `params` so server-pushed changes only wake subscribed clients.
-- **Priority:** **P1.** Without this, every multi-tenant app uses per-user stream registries — a scaling cliff Linear documents explicitly.
+- **Deferred (not blocking)**:
+  - `SyncClient` subscription registry for `(stream_name, params_hash)` dedup + Arc refcount + grace-window cleanup. Wire contract is correct without it; this is a client-side performance optimization for the case where two `observe_view` calls with equivalent params should share one underlying task.
+  - Auto-emission of tombstone-on-filter-departure deletes from CRUD sources. The wire contract supports it; today source authors implement the predicate evaluator manually.
+  - Per-`(name, params_hash)` topics for live wake-up routing. v1 uses per-collection topics + client-side filter (bandwidth-suboptimal but functionally correct).
 
 ## Axis 3: Streaming pulls / chunked snapshots
 

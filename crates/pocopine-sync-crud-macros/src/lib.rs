@@ -352,6 +352,21 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
         Some(path) => quote! { .map(|b| b.migrate_with(#path)) },
         None => quote! {},
     };
+    // When `params(...)` is declared, auto-wire the resource's
+    // `validate_params` hook to call the macro-generated
+    // `StreamParams::extract`. Resources without declared params get
+    // no validator chain (the default trait impl accepts anything).
+    let validate_params_chain = if args.params.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            .map(|b| {
+                b.with_validate_params(|params: &::pocopine_sync::StreamParams| {
+                    StreamParams::extract(params).map(|_| ())
+                })
+            })
+        }
+    };
     let params_codegen = generate_params_codegen(&args.params);
 
     Ok(quote! {
@@ -637,6 +652,7 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
                 ::pocopine_sync_crud::resource(NAME, source)?
                     .schema_version(SCHEMA_VERSION)
                     #migrate_with_chain
+                    #validate_params_chain
             }
 
             pub fn new_id() -> ::pocopine_sync::SyncResult<Id> {

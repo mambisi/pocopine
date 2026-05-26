@@ -352,8 +352,14 @@ simple and hard to misuse.
    `docs/sync-local-first-gaps.md`).~~ Done across PRs #128, #130, and
    the schema-migrator PR. Cookbook page at
    `docs/sync-schema-versioning.md`.
-7. Add broader browser CI around SQLite local-first flows.
-8. Only then consider database-specific changefeed adapters.
+7. ~~Shape subscriptions + typed query DSL (Axis 2 of
+   `docs/sync-local-first-gaps.md`).~~ Done via RFC 085 + four PRs
+   (#141, #142, #143, #144). `#[resource(params(...))]` declares
+   typed filter parameters; `Resource::stream()` and
+   `Resource::query()` produce the same wire shape. Cookbook page at
+   `docs/sync-shape-subscriptions.md`.
+8. Add broader browser CI around SQLite local-first flows.
+9. Only then consider database-specific changefeed adapters.
 
 This order uses the SQLite sync store we already have while preserving the
 database-agnostic engine boundary.
