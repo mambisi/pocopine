@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,28 @@ pub fn spawn_bin(
     role: BinRole,
     default_redis_url: bool,
 ) -> Result<BinChild> {
+    spawn_bin_with_env(
+        path,
+        bin,
+        release,
+        role,
+        default_redis_url,
+        &BTreeMap::new(),
+    )
+}
+
+/// Like [`spawn_bin`] but lets the caller inject extra `KEY=VALUE` pairs
+/// onto the child process. Vars in `extra_env` win over the parent
+/// environment but lose to anything the caller explicitly sets on `cmd`
+/// after this returns. Dev-mode `.env` loading flows through here.
+pub fn spawn_bin_with_env(
+    path: &Path,
+    bin: &str,
+    release: bool,
+    role: BinRole,
+    default_redis_url: bool,
+    extra_env: &BTreeMap<String, String>,
+) -> Result<BinChild> {
     let project = path
         .canonicalize()
         .with_context(|| format!("resolve {}", path.display()))?;
@@ -56,6 +79,9 @@ pub fn spawn_bin(
     cmd.current_dir(&project);
     if default_redis_url {
         ensure_redis_env(&mut cmd);
+    }
+    for (key, value) in extra_env {
+        cmd.env(key, value);
     }
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     println!("▶ spawning `{bin}` ({})", profile_name(release));
