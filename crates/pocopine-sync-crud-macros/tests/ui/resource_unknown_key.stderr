@@ -1,4 +1,4 @@
-error: expected `name = "..."`, `module = ident`, `schema_version = N`, or `migrate_with = path` in CRUD resource attribute
+error: expected `name = "..."`, `module = ident`, `schema_version = N`, `migrate_with = path`, or `params(field: Type, ...)` in CRUD resource attribute
  --> tests/ui/resource_unknown_key.rs:3:32
   |
 3 | #[pocopine_sync_crud::resource(stream = "customers")]

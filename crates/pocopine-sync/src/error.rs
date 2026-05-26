@@ -45,7 +45,12 @@ pub enum SyncError {
 }
 
 impl SyncError {
-    pub(crate) fn invalid_value(field: &'static str, value: impl Into<String>) -> Self {
+    /// Build a typed `InvalidValue` error. Surfaces as
+    /// `ServerError::BadRequest` over the wire via `server_error`.
+    /// Macro-generated `validate_params` impls use this for unknown
+    /// param keys, missing required params, and wrong-shape values
+    /// — anything the client could have sent better.
+    pub fn invalid_value(field: &'static str, value: impl Into<String>) -> Self {
         Self::InvalidValue {
             field,
             value: value.into(),

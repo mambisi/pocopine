@@ -12,6 +12,7 @@ mod id;
 mod mutation;
 mod options;
 mod outcome;
+pub mod params;
 mod row;
 mod subscription;
 mod transaction;

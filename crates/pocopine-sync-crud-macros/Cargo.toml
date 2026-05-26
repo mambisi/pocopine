@@ -12,7 +12,11 @@ proc-macro = true
 [dependencies]
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-syn = { workspace = true }
+# `extra-traits` enables `Debug`/`PartialEq` on syn types so the
+# macro's internal data structures (which embed `syn::Type` /
+# `syn::LitStr`) can derive `Debug` for the unit-test
+# `unwrap_err` calls. Proc-macro-only dep; no runtime impact.
+syn = { workspace = true, features = ["extra-traits"] }
 
 [dev-dependencies]
 js-sys = { workspace = true }
