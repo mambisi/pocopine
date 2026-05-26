@@ -1149,20 +1149,36 @@ fn start_open_then_pull<C, T>(
         //   rebuild via the upcoming pull.
         // * `cached > advertised` — server ROLLED BACK; the local
         //   cache is "newer than the server" but locally consistent.
-        //   Do NOT wipe; let the client hold its queue while waiting
-        //   for the server to catch back up.
+        //   Do NOT wipe; hold the queue AND skip replay/persist
+        //   entirely so a transient older-shard read doesn't
+        //   downgrade the durable fence or replay v2 mutations
+        //   tagged as v1.
         // * `cached == advertised` — match; no work needed.
-        // * `cached == None && pending non-empty` — store has never
-        //   observed an advertised version (fresh install OR pre-v4
-        //   row whose `app_schema_version` column is NULL). The
-        //   pending mutations may have been queued under any prior
-        //   shape — safest action is to DROP the queue (lossy but
-        //   bounded; this only fires once on the upgrade boundary).
+        // * `cached == None` + any durable state (cursor, cached
+        //   rows, pending mutations, OR an in-memory decode error
+        //   from hydrate) — store has never observed an advertised
+        //   version (fresh install OR pre-v4 row whose
+        //   `app_schema_version` column is NULL) AND has non-empty
+        //   state of unknown shape. Safest action is to drop it all
+        //   (lossy but bounded; fires once on the upgrade boundary).
+        // * `cached == None` + truly empty — fresh install; adopt
+        //   the advertised value silently on the next snapshot save.
         let mut cursor = cursor;
         let mut token = token;
+        let rolled_back = matches!(
+            cached_schema_version,
+            Some(cached) if cached > advertised_schema_version
+        );
+        // NOTE: `local_cursor` was moved into the `request_token`
+        // closure above; consult `cursor` (the materialized version
+        // for this open) and `pending_mutations` to detect durable
+        // state that survived a `cached_schema_version == None`
+        // hydrate.
+        let cached_none_has_durable_state = cached_schema_version.is_none()
+            && (cursor.is_some() || !pending_mutations.is_empty() || local_error.is_some());
         let must_wipe = match cached_schema_version {
             Some(cached) if cached < advertised_schema_version => true,
-            None if !pending_mutations.is_empty() => true,
+            None if cached_none_has_durable_state => true,
             _ => false,
         };
         if must_wipe {
@@ -1231,7 +1247,13 @@ fn start_open_then_pull<C, T>(
             );
         }
 
-        if !pending_mutations.is_empty() {
+        // Rolled-back servers: skip replay AND the upcoming pull's
+        // durable persist. The client holds its queue + cache as-is;
+        // the in-memory state is still derived from the existing
+        // snapshot. A pull may still run to refresh the in-memory
+        // view, but its response must NOT downgrade the durable
+        // `app_schema_version` fence.
+        if !pending_mutations.is_empty() && !rolled_back {
             if epoch.is_stale() {
                 return;
             }
@@ -1257,9 +1279,18 @@ fn start_open_then_pull<C, T>(
                     local_error = Some(format!("pending sync mutation replay failed: {err}"));
                 }
             }
+        } else if rolled_back {
+            tracing::info!(
+                target: "pocopine.log",
+                stream = stream.as_str(),
+                cached_schema_version = ?cached_schema_version,
+                advertised_schema_version,
+                pending_mutations = pending_mutations.len(),
+                "sync stream server appears to have rolled back; holding queue + cache"
+            );
         }
 
-        let request = SyncPullRequest::new(stream).cursor(cursor);
+        let request = SyncPullRequest::new(stream.clone()).cursor(cursor);
         let result =
             pocopine_core::fetch::call::<SyncPullRequest, SyncPullResponse<T>>(&pull_url, &request)
                 .await;
@@ -1268,11 +1299,35 @@ fn start_open_then_pull<C, T>(
         }
         let result = match result {
             Ok(response) => {
-                if let Err(err) =
-                    persist_pull_response(&local_store, &response, Some(advertised_schema_version))
-                        .await
-                {
-                    local_error = Some(format!("local sync cache persist failed: {err}"));
+                // Persist-time invalidation guard: if the in-memory
+                // generation moved on (e.g. a concurrent
+                // `start_open_then_pull` detected a schema mismatch
+                // and durably wiped the stream while our pull was
+                // in-flight), skip the persist so we don't
+                // resurrect wiped state. The in-memory apply at the
+                // bottom of this fn is already token-guarded.
+                let still_current = handle.update(|state| selector(state).is_current(token));
+                if still_current {
+                    // Persist with the cached version under rollback so
+                    // the durable fence stays at the higher value. When
+                    // server catches back up, the next open will detect
+                    // cached==advertised and resume normal flow.
+                    let persist_version = if rolled_back {
+                        cached_schema_version
+                    } else {
+                        Some(advertised_schema_version)
+                    };
+                    if let Err(err) =
+                        persist_pull_response(&local_store, &response, persist_version).await
+                    {
+                        local_error = Some(format!("local sync cache persist failed: {err}"));
+                    }
+                } else {
+                    tracing::info!(
+                        target: "pocopine.log",
+                        stream = stream.as_str(),
+                        "sync stream pull response discarded: in-flight wipe invalidated this request"
+                    );
                 }
                 Ok(response)
             }
@@ -1483,18 +1538,33 @@ fn start_pull<C, T>(
         let mut local_error = None;
         let result = match result {
             Ok(response) => {
-                // Callers that ran AFTER a successful /open pass
-                // `Some(advertised)` so the durable
-                // `app_schema_version` gets stamped even if the
-                // post-/open pull never runs. Callers without an
-                // advertised version (explicit refresh without
-                // re-opening) pass None and rely on the UPSERT's
-                // coalesce to preserve whatever value
-                // `start_open_then_pull` already persisted.
-                if let Err(err) =
-                    persist_pull_response(&local_store, &response, application_schema_version).await
-                {
-                    local_error = Some(format!("local sync cache persist failed: {err}"));
+                // Persist-time invalidation guard: if the in-memory
+                // generation moved on (concurrent wipe by
+                // `start_open_then_pull`), skip the persist so we
+                // don't resurrect wiped state. The in-memory apply
+                // below is already token-guarded.
+                let still_current = handle.update(|state| selector(state).is_current(token));
+                if still_current {
+                    // Callers that ran AFTER a successful /open pass
+                    // `Some(advertised)` so the durable
+                    // `app_schema_version` gets stamped even if the
+                    // post-/open pull never runs. Callers without an
+                    // advertised version (explicit refresh without
+                    // re-opening) pass None and rely on the UPSERT's
+                    // coalesce to preserve whatever value
+                    // `start_open_then_pull` already persisted.
+                    if let Err(err) =
+                        persist_pull_response(&local_store, &response, application_schema_version)
+                            .await
+                    {
+                        local_error = Some(format!("local sync cache persist failed: {err}"));
+                    }
+                } else {
+                    tracing::info!(
+                        target: "pocopine.log",
+                        stream = stream.as_str(),
+                        "sync stream pull response discarded: in-flight wipe invalidated this request"
+                    );
                 }
                 Ok(response)
             }
@@ -2035,7 +2105,7 @@ where
         op: mutation.op,
         base_version: mutation.base_version.clone(),
         payload: serde_json::to_value(&mutation.payload)?,
-        migrated_payload: None,
+        migration_outcome: None,
     })
 }
 

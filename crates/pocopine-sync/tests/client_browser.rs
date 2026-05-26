@@ -407,7 +407,7 @@ async fn open_replays_pending_mutations_before_pull() {
         base_version: None,
         payload: serde_json::json!({"id": "post_2", "title": "Pending"}),
 
-        migrated_payload: None,
+        migration_outcome: None,
     };
     store.enqueue_mutation(&stream, pending).await.unwrap();
 
@@ -565,7 +565,7 @@ async fn open_keeps_hydrated_pending_overlay_when_replay_fails() {
                     "payload": {"id": "post_2", "draft": {"title": "Envelope only"}}
                 }),
 
-                migrated_payload: None,
+                migration_outcome: None,
             })
             .with_optimistic_row(Some(
                 SyncRow::new(

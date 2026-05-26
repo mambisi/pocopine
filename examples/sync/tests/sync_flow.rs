@@ -92,6 +92,8 @@ async fn push_post(app: &pocopine_server::axum::Router, post: Post) -> SyncPushR
             op: SyncOp::Upsert,
             base_version: None,
             payload: post,
+
+            migration_outcome: None,
         }],
     );
     let response = app

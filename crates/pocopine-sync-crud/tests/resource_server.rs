@@ -225,7 +225,7 @@ fn to_value(
         op: mutation.op,
         base_version: mutation.base_version,
         payload: serde_json::to_value(mutation.payload).unwrap(),
-        migrated_payload: None,
+        migration_outcome: None,
     }
 }
 

@@ -301,17 +301,17 @@ async fn all_stale_no_migrator_still_surfaces_rejections() {
     assert!(customers.rows.lock().unwrap().is_empty());
 }
 
-/// Repro for code-review finding #5: a NEWER client pushing to an
-/// OLDER server (rolling deploy direction) should NOT route through
-/// `migrate_payload`. The source receives the wire payload as-is and
-/// rejects it via its own deserialization path — NOT via a
-/// SchemaMigration reason.
+/// Repro for Codex finding #4: a NEWER client pushing to an OLDER
+/// server (rolling deploy direction) is rejected wholesale at the
+/// wire layer with `BadRequest`. The framework MUST NOT pass the
+/// newer-shape payload through to `source.push`, because serde's
+/// default deserializer silently drops unknown fields — which could
+/// cause field loss when the v1 source happily accepts a v2 payload.
 #[tokio::test]
-async fn newer_client_push_skips_migration_entirely() {
+async fn newer_client_push_rejected_at_wire() {
     let _lock = registry_lock();
     pocopine_server::__reset_for_test();
-    // Server at v1 (NO `.schema_version(...)` call so it stays at default 1)
-    // with NO migrator. A "v2 client" sends `request.schema_version = 2`.
+    // Server at v1 (NO `.schema_version(...)` call) with no migrator.
     let customers = Customers::default();
     let resource = resource(STREAM, customers.clone())
         .unwrap()
@@ -326,10 +326,6 @@ async fn newer_client_push_skips_migration_entirely() {
         .try_finalize()
         .unwrap();
 
-    // The v2-shaped payload happens to be valid for v1 (v1 source
-    // accepts CustomerDraftV2). We don't care what `source.push`
-    // does with it — only that the framework didn't invoke
-    // `migrate_payload(2, 1)`.
     let create = CrudMutationPayload::create(
         "c1".to_string(),
         serde_json::json!({ "name": "Alice", "email": "alice@example.com" }),
@@ -339,18 +335,122 @@ async fn newer_client_push_skips_migration_entirely() {
     .with_id(MutationId::new("device:1").unwrap());
     let req = SyncPushRequest::new(SyncStreamName::new(STREAM).unwrap(), [to_value(create)])
         .with_schema_version(2);
-    let pushed = post_json::<_, SyncPushResponse<Value>>(app, SYNC_PUSH_PATH, &req).await;
 
-    // No SchemaMigration rejection — the source either accepts or
-    // rejects via its own path. The key invariant: ZERO mutations
-    // are rejected with a `schema migration` reason.
-    for r in &pushed.rejected {
-        assert!(
-            !r.reason.contains("schema migration"),
-            "newer-client push must not invoke migrate_payload, got reason: {}",
-            r.reason
-        );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(SYNC_PUSH_PATH)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let outer: pocopine_core::ServerResult<SyncPushResponse<Value>> =
+        serde_json::from_slice(&bytes).unwrap();
+    match outer {
+        Err(pocopine_core::ServerError::BadRequest(msg)) => {
+            assert!(
+                msg.contains("schema migration") && msg.contains("v2") && msg.contains("v1"),
+                "expected newer-client-rejection, got: {msg}"
+            );
+        }
+        other => panic!("expected BadRequest, got: {other:?}"),
     }
+    assert!(
+        customers.rows.lock().unwrap().is_empty(),
+        "v1 source must not have processed the v2 payload"
+    );
+}
+
+/// Repro for Codex finding #5: a retry of a previously-accepted
+/// mutation succeeds even when the framework's migrator now fails
+/// on the same inputs. Achieved by: first push accepts via migrator,
+/// second push (same mutation_id, same wire payload) hits a router
+/// whose migrator now ALWAYS errors. The CRUD source's idempotency
+/// log consults the original `mutation.payload` BEFORE consuming the
+/// migration outcome, so the retry is accepted.
+#[tokio::test]
+async fn idempotent_retry_survives_migrator_change() {
+    let _lock = registry_lock();
+    pocopine_server::__reset_for_test();
+    // Shared in-process state across two routers so the idempotency
+    // log persists between attempts.
+    let customers = Customers::default();
+    let log = pocopine_sync_crud::MemoryCrudMutationLog::<CustomerV2>::new();
+
+    // First push: v2 server with a working migrator.
+    let router_a = {
+        let customers = resource(STREAM, customers.clone())
+            .unwrap()
+            .schema_version(2)
+            .unwrap()
+            .migrate_with(migrate_v1_to_v2)
+            .id(|row: &CustomerV2| row.id.clone())
+            .version(|row: &CustomerV2| row.version)
+            .mutation_log(log.clone());
+        let sync = pocopine_sync::SyncServer::builder()
+            .public_stream(customers)
+            .build();
+        Server::new(Router::new())
+            .plugin(sync_server_plugin(sync))
+            .try_finalize()
+            .unwrap()
+    };
+
+    let create =
+        CrudMutationPayload::create("c1".to_string(), serde_json::json!({ "name": "Alice" }))
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device:1").unwrap());
+    let wire = to_value(create);
+    let req = SyncPushRequest::new(SyncStreamName::new(STREAM).unwrap(), [wire.clone()])
+        .with_schema_version(1);
+    let pushed = post_json::<_, SyncPushResponse<Value>>(router_a, SYNC_PUSH_PATH, &req).await;
+    assert_eq!(pushed.accepted.len(), 1, "first push must accept");
+
+    // Second push (retry from same client) against a router whose
+    // migrator ALWAYS rejects. Same mutation_id, same wire payload.
+    pocopine_server::__reset_for_test();
+    let router_b = {
+        let customers = resource(STREAM, customers.clone())
+            .unwrap()
+            .schema_version(2)
+            .unwrap()
+            .migrate_with(|from, to, _value| {
+                Err(pocopine_sync::SyncError::backend(format!(
+                    "migrator removed (from v{from} to v{to})"
+                )))
+            })
+            .id(|row: &CustomerV2| row.id.clone())
+            .version(|row: &CustomerV2| row.version)
+            .mutation_log(log);
+        let sync = pocopine_sync::SyncServer::builder()
+            .public_stream(customers)
+            .build();
+        Server::new(Router::new())
+            .plugin(sync_server_plugin(sync))
+            .try_finalize()
+            .unwrap()
+    };
+    let req_retry =
+        SyncPushRequest::new(SyncStreamName::new(STREAM).unwrap(), [wire]).with_schema_version(1);
+    let pushed =
+        post_json::<_, SyncPushResponse<Value>>(router_b, SYNC_PUSH_PATH, &req_retry).await;
+
+    assert_eq!(
+        pushed.accepted.len(),
+        1,
+        "retry of already-accepted mutation must succeed despite failing migrator"
+    );
+    assert!(
+        pushed.rejected.is_empty(),
+        "retry must NOT surface the migrator failure, got: {:?}",
+        pushed.rejected
+    );
 }
 
 /// Repro for code-review finding #7: a push with explicit
@@ -440,7 +540,7 @@ fn to_value(mutation: ClientMutation<CrudMutationPayload<String, Value>>) -> Cli
         op: mutation.op,
         base_version: mutation.base_version,
         payload: serde_json::to_value(mutation.payload).unwrap(),
-        migrated_payload: None,
+        migration_outcome: None,
     }
 }
 

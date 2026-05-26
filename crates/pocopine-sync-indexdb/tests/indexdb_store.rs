@@ -39,7 +39,7 @@ async fn indexeddb_store_persists_identity_snapshot_and_pending_mutations() {
             "payload": {"id": "post_2", "draft": {"title": "Pending"}}
         }),
 
-        migrated_payload: None,
+        migration_outcome: None,
     };
     let optimistic = SyncRow::new("post_2", serde_json::json!({"title": "Pending"})).unwrap();
 
@@ -135,7 +135,7 @@ async fn indexeddb_store_applies_changes_and_push_results() {
         base_version: Some(RowVersion::new("row_1").unwrap()),
         payload: serde_json::json!({"title": "Updated"}),
 
-        migrated_payload: None,
+        migration_outcome: None,
     };
 
     store

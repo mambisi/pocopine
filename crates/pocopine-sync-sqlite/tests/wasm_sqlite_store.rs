@@ -64,7 +64,7 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
             "payload": {"id": "post_1", "draft": {"title": "Updated"}}
         }),
 
-        migrated_payload: None,
+        migration_outcome: None,
     };
     let optimistic = SyncRow::new("post_1", serde_json::json!({"title": "Updated"})).unwrap();
     store

@@ -512,7 +512,7 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: None,
                 payload: Value::String("hello".to_string()),
-                migrated_payload: None,
+                migration_outcome: None,
             }],
         );
 
@@ -545,7 +545,7 @@ mod tests {
                 base_version: None,
                 payload: serde_json::json!({"not": "a string"}),
 
-                migrated_payload: None,
+                migration_outcome: None,
             }],
         );
 
@@ -575,7 +575,7 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: Some(RowVersion::new("v0").unwrap()),
                 payload: Value::String("client".to_string()),
-                migrated_payload: None,
+                migration_outcome: None,
             }],
         );
 
@@ -598,7 +598,7 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: Value::String("hello".to_string()),
-            migrated_payload: None,
+            migration_outcome: None,
         };
 
         stream
