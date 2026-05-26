@@ -260,6 +260,23 @@ pub struct SyncOpenStream {
     pub stream: SyncStreamName,
     pub collection: SyncCollectionName,
     pub cursor: Option<SyncCursor>,
+    /// Application-level schema version the server is serving for this
+    /// stream. Authors declare it via `#[resource(schema_version = N)]`
+    /// (or directly on `SyncStreamSource::schema_version`); the client
+    /// compares against its cached value to decide whether the local cache
+    /// is still valid. The `#[serde(default)]` makes the wire field
+    /// backwards-compatible: an old server response without the field
+    /// deserializes as `1`, and an old client reading a field-bearing
+    /// response just ignores it (serde drops unknown fields).
+    #[serde(default = "default_schema_version_one")]
+    pub schema_version: u32,
+}
+
+/// Default schema version when the wire field is missing or the source
+/// doesn't override the trait default. `1` means "first version of the
+/// schema" — apps that have never bumped never observe this field.
+pub fn default_schema_version_one() -> u32 {
+    1
 }
 
 /// Open response.

@@ -73,6 +73,23 @@ pub trait SyncStreamSource: Send + Sync + 'static {
         None
     }
 
+    /// Application-level schema version for this stream's row/draft shape.
+    ///
+    /// Bump this whenever the row, draft, or payload shape changes in a way
+    /// that older cached data or queued mutations cannot deserialize into.
+    /// The version is advertised on every `/open` response so the client
+    /// can detect mismatches and either drop its cache + queue (default
+    /// from `SyncLocalStore::clear_stream`) or migrate via the opt-in
+    /// `migrate_payload` path on this trait (shipping in a follow-up).
+    ///
+    /// Defaults to `1` — apps that never bump never need to think about
+    /// this. Authors using `#[resource]` set this through the
+    /// `schema_version = N` attribute; bare `SyncStreamSource` impls
+    /// override this method directly.
+    fn schema_version(&self) -> u32 {
+        crate::protocol::default_schema_version_one()
+    }
+
     /// Pull changes or a snapshot for this stream.
     fn pull<'a>(
         &'a self,
@@ -298,6 +315,7 @@ async fn open(
             stream: stream.source.stream().clone(),
             collection: stream.source.collection().clone(),
             cursor: stream.source.current_cursor(&ctx),
+            schema_version: stream.source.schema_version(),
         });
     }
     Ok(SyncOpenResponse::new(streams))
@@ -373,6 +391,7 @@ fn server_error(error: SyncError) -> ServerError {
         SyncError::UnknownStream(_) => ServerError::Forbidden(error.to_string()),
         SyncError::Unsupported(_) => ServerError::BadRequest(error.to_string()),
         SyncError::Gap(_) => ServerError::BadRequest(error.to_string()),
+        SyncError::SchemaMigration { .. } => ServerError::BadRequest(error.to_string()),
         SyncError::Unauthorized(msg) => ServerError::Unauthorized(msg),
         SyncError::Json(err) => {
             tracing::error!(target: "pocopine.log", error = %err, "sync json error");
@@ -547,6 +566,48 @@ mod tests {
             server_error(SyncError::Json(json_err)),
             ServerError::App(message) if message == "sync internal error"
         ));
+    }
+
+    #[test]
+    fn schema_migration_error_maps_to_bad_request() {
+        let err = server_error(SyncError::schema_migration("posts", 1, 2));
+        match err {
+            ServerError::BadRequest(msg) => {
+                assert!(msg.contains("posts"), "unexpected message: {msg}");
+                assert!(msg.contains("v1"), "missing from-version: {msg}");
+                assert!(msg.contains("v2"), "missing to-version: {msg}");
+            }
+            other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_response_includes_schema_version_from_source() {
+        // Default MemorySyncStream returns schema_version = 1 via the
+        // trait default. The wire response should carry that explicitly.
+        let router = router_with_posts_stream();
+        let open = SyncOpenRequest::new([SyncStreamName::new("posts_for_tenant").unwrap()]);
+        let opened: SyncOpenResponse = post_json(router, SYNC_OPEN_PATH, &open, None)
+            .await
+            .unwrap();
+        assert_eq!(opened.streams.len(), 1);
+        assert_eq!(opened.streams[0].schema_version, 1);
+    }
+
+    #[test]
+    fn open_response_without_schema_version_field_deserializes_as_one() {
+        // Backwards-compat: an old server response that omits the field
+        // must round-trip through serde with schema_version = 1.
+        let payload = serde_json::json!({
+            "protocol": SYNC_PROTOCOL_V1,
+            "streams": [{
+                "stream": "posts_for_tenant",
+                "collection": "posts",
+                "cursor": null,
+            }],
+        });
+        let response: SyncOpenResponse = serde_json::from_value(payload).unwrap();
+        assert_eq!(response.streams[0].schema_version, 1);
     }
 
     fn router_with_posts_stream() -> pocopine_server::axum::Router {

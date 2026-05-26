@@ -1,4 +1,4 @@
-error: expected `name = "..."` or `module = ident` in CRUD resource attribute
+error: expected `name = "..."`, `module = ident`, or `schema_version = N` in CRUD resource attribute
  --> tests/ui/resource_unknown_key.rs:3:32
   |
 3 | #[pocopine_sync_crud::resource(stream = "customers")]

@@ -190,6 +190,7 @@ async fn open_validates_stream_then_pull_renders_snapshot() {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
+                            schema_version: 1,
                         }]);
                         Ok(json_response(response))
                     }
@@ -298,6 +299,7 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
+                            schema_version: 1,
                         }]);
                         Ok(json_response(response))
                     }
@@ -426,6 +428,7 @@ async fn open_replays_pending_mutations_before_pull() {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
+                            schema_version: 1,
                         }])))
                     }
                     SYNC_PUSH_PATH => {
@@ -587,6 +590,7 @@ async fn open_keeps_hydrated_pending_overlay_when_replay_fails() {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
+                            schema_version: 1,
                         }])))
                     }
                     SYNC_PUSH_PATH => {

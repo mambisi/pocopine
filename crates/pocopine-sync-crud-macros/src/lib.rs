@@ -8,7 +8,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Ident, ImplItem, ItemImpl, LitStr, Token, Type};
+use syn::{parse_macro_input, Ident, ImplItem, ItemImpl, LitInt, LitStr, Token, Type};
 
 // Matches the sync protocol's stream and row-key token budget.
 const MAX_SYNC_TOKEN_LEN: usize = 1024;
@@ -17,12 +17,14 @@ const MAX_SYNC_TOKEN_LEN: usize = 1024;
 struct ResourceArgs {
     name: LitStr,
     module: Ident,
+    schema_version: u32,
 }
 
 impl Parse for ResourceArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut name = None;
         let mut module = None;
+        let mut schema_version: Option<u32> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -45,10 +47,37 @@ impl Parse for ResourceArgs {
                 }
                 input.parse::<Token![=]>()?;
                 module = Some(input.parse()?);
+            } else if key == "schema_version" {
+                if schema_version.is_some() {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "duplicate `schema_version` in CRUD resource attribute",
+                    ));
+                }
+                input.parse::<Token![=]>()?;
+                let lit: LitInt = input.parse().map_err(|err| {
+                    syn::Error::new(
+                        err.span(),
+                        "`schema_version` must be a u32 integer literal (e.g. `schema_version = 2`)",
+                    )
+                })?;
+                let value: u32 = lit.base10_parse().map_err(|err| {
+                    syn::Error::new(
+                        lit.span(),
+                        format!("`schema_version` must fit in u32 (got: {}): {err}", lit),
+                    )
+                })?;
+                if value == 0 {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        "`schema_version` must be >= 1 (schema versions start at 1)",
+                    ));
+                }
+                schema_version = Some(value);
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name = \"...\"` or `module = ident` in CRUD resource attribute",
+                    "expected `name = \"...\"`, `module = ident`, or `schema_version = N` in CRUD resource attribute",
                 ));
             }
 
@@ -66,7 +95,12 @@ impl Parse for ResourceArgs {
             Some(module) => module,
             None => module_ident_from_name(&name)?,
         };
-        Ok(Self { name, module })
+        let schema_version = schema_version.unwrap_or(1);
+        Ok(Self {
+            name,
+            module,
+            schema_version,
+        })
     }
 }
 
@@ -109,6 +143,7 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
     let types = extract_resource_types(&item)?;
     let module = args.module;
     let name = args.name;
+    let schema_version = args.schema_version;
     let source = &item.self_ty;
     let id = types.id;
     let row = types.row;
@@ -123,6 +158,11 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
             use super::*;
 
             pub const NAME: &str = #name;
+            /// Application-level schema version this resource serves.
+            /// Bumped via `#[resource(schema_version = N)]` whenever the
+            /// row, draft, or payload shape changes in a way that older
+            /// cached data or queued mutations cannot deserialize into.
+            pub const SCHEMA_VERSION: u32 = #schema_version;
 
             pub type Id = #id;
             pub type Row = #row;
@@ -386,7 +426,8 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
             pub fn resource(
                 source: #source,
             ) -> ::pocopine_sync::SyncResult<::pocopine_sync_crud::CrudResourceBuilder<#source>> {
-                ::pocopine_sync_crud::resource(NAME, source)
+                ::pocopine_sync_crud::resource(NAME, source)?
+                    .schema_version(SCHEMA_VERSION)
             }
 
             pub fn new_id() -> ::pocopine_sync::SyncResult<Id> {
@@ -498,6 +539,37 @@ mod tests {
 
         assert_eq!(args.name.value(), "customers");
         assert_eq!(args.module.to_string(), "customers");
+        assert_eq!(args.schema_version, 1);
+    }
+
+    #[test]
+    fn parses_schema_version_attribute() {
+        let args = parse_args(r#"name = "customers", schema_version = 3"#).unwrap();
+
+        assert_eq!(args.name.value(), "customers");
+        assert_eq!(args.schema_version, 3);
+    }
+
+    #[test]
+    fn rejects_zero_schema_version() {
+        let err = parse_args(r#"name = "customers", schema_version = 0"#).unwrap_err();
+
+        assert!(err.to_string().contains("must be >= 1"));
+    }
+
+    #[test]
+    fn rejects_non_integer_schema_version() {
+        let err = parse_args(r#"name = "customers", schema_version = "two""#).unwrap_err();
+
+        assert!(err.to_string().contains("must be a u32 integer literal"));
+    }
+
+    #[test]
+    fn rejects_duplicate_schema_version() {
+        let err = parse_args(r#"name = "customers", schema_version = 1, schema_version = 2"#)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("duplicate `schema_version`"));
     }
 
     #[test]
