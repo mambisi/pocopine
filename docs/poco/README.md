@@ -20,3 +20,7 @@ Docs in this folder:
    three files together at compile time.
 3. [`03-scoped-styles.md`](./03-scoped-styles.md) — the
    `data-pp-<hash>` + selector-rewrite strategy for CSS scoping.
+4. [`04-expressions.md`](./04-expressions.md) — the pine-expr
+   surface inside `pp-*="..."` attributes, what doesn't belong
+   there, and the `#[computed]` / `#[watch]` patterns for
+   derived state.

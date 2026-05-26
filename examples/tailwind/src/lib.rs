@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component]
+#[component(display = "contents")]
 pub struct AppDemo {
     pub count: i32,
     pub show_details: bool,

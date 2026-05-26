@@ -10,7 +10,10 @@
 
 use js_sys::Array;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{CustomEvent, Event, FocusEvent, InputEvent, KeyboardEvent, MouseEvent, UiEvent};
+use web_sys::{
+    ClipboardEvent, CustomEvent, DragEvent, Event, FocusEvent, InputEvent, KeyboardEvent,
+    MouseEvent, PointerEvent, SubmitEvent, TouchEvent, UiEvent, WheelEvent,
+};
 
 pub trait HandlerDispatch {
     fn invoke_handler(&mut self, key: &str, args: &Array) -> JsValue;
@@ -224,5 +227,13 @@ impl_event_handler_arg!(
     KeyboardEvent,
     InputEvent,
     FocusEvent,
-    CustomEvent
+    CustomEvent,
+    // Pointer / drag / wheel / touch — direct manipulation flows.
+    PointerEvent,
+    DragEvent,
+    WheelEvent,
+    TouchEvent,
+    // Form + clipboard — common UI plumbing.
+    SubmitEvent,
+    ClipboardEvent
 );

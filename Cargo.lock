@@ -4525,6 +4525,7 @@ dependencies = [
 name = "pocopine-core"
 version = "0.1.0"
 dependencies = [
+ "console_error_panic_hook",
  "js-sys",
  "once_cell",
  "phf 0.13.1",

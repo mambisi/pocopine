@@ -1145,12 +1145,32 @@ fn emit_ref(r: &RefLite) -> TokenStream {
 }
 
 fn emit_compiled_expr_option(src: &str) -> TokenStream {
-    match pocopine_expr::parse(src)
-        .ok()
-        .and_then(|expr| emit_compiled_expr(&expr))
-    {
-        Some(expr) => quote! { ::core::option::Option::Some(#expr) },
-        None => quote! { ::core::option::Option::None },
+    // Parse failures are surfaced as compile errors so the directive
+    // messages from `pocopine-expr` (e.g. "`===` is not supported")
+    // fail the build instead of silently emitting `compiled: None`
+    // and panicking at runtime via `templates_plan::fail()`. Valid
+    // expressions that simply aren't compile-time-representable
+    // (multi-segment paths, ternaries, calls, …) still fall through
+    // to runtime evaluation by emitting `Option::None`.
+    match pocopine_expr::parse(src) {
+        Ok(expr) => match emit_compiled_expr(&expr) {
+            Some(compiled) => quote! { ::core::option::Option::Some(#compiled) },
+            None => quote! { ::core::option::Option::None },
+        },
+        Err(err) => {
+            let hint = err
+                .hint
+                .as_deref()
+                .map(|h| format!("\n  hint: {h}"))
+                .unwrap_or_default();
+            let msg = format!(
+                "pocopine: pine-expr parse error in `{src}`: {message} (at {start}..{end}){hint}",
+                message = err.message,
+                start = err.span.start,
+                end = err.span.end,
+            );
+            quote! { ::core::compile_error!(#msg) }
+        }
     }
 }
 
@@ -3025,7 +3045,71 @@ fn escape_attr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_lift_eligible_opaque, is_supported_modifier, parse_pp_directive_name};
+    use super::{
+        emit_compiled_expr_option, is_lift_eligible_opaque, is_supported_modifier,
+        parse_pp_directive_name,
+    };
+
+    #[test]
+    fn parse_failure_emits_compile_error_with_directive_hint() {
+        // The Group 1 teaching errors from `pocopine-expr` must reach
+        // the user at `cargo check` time — not silently fall through
+        // to a runtime panic via `templates_plan::fail()`. Pin the
+        // emitted token shape.
+        let out = emit_compiled_expr_option("status === 'queued'").to_string();
+        assert!(
+            out.contains("compile_error"),
+            "parse failure should emit a `compile_error!` token, got: {out}"
+        );
+        assert!(
+            out.contains("===") && out.contains("=="),
+            "compile_error message should quote the offending operator and suggest `==`: {out}"
+        );
+    }
+
+    #[test]
+    fn parse_failure_emits_arithmetic_directive() {
+        let out = emit_compiled_expr_option("progress * 100").to_string();
+        assert!(
+            out.contains("compile_error"),
+            "arithmetic should emit compile_error, got: {out}"
+        );
+        assert!(
+            out.contains("computed"),
+            "arithmetic hint should point at `#[computed]`: {out}"
+        );
+    }
+
+    #[test]
+    fn valid_but_not_compile_time_representable_falls_through() {
+        // `a + b` parses fine but `emit_compiled_expr` can't lower a
+        // non-literal `+` to a `StaticExpr`. The fallthrough path
+        // must still emit `Option::None` (runtime evaluation), NOT a
+        // compile error.
+        let out = emit_compiled_expr_option("a + b").to_string();
+        assert!(
+            !out.contains("compile_error"),
+            "valid expression must not emit compile_error, got: {out}"
+        );
+        assert!(
+            out.contains("None"),
+            "non-representable expression must fall through to Option::None: {out}"
+        );
+    }
+
+    #[test]
+    fn literal_expression_compiles_to_static() {
+        // Sanity: simple literal stays on the compile-time fast path.
+        let out = emit_compiled_expr_option("true").to_string();
+        assert!(
+            !out.contains("compile_error"),
+            "literal must not emit compile_error: {out}"
+        );
+        assert!(
+            out.contains("Some") && out.contains("StaticExpr"),
+            "literal must compile to a `Some(StaticExpr::...)`: {out}"
+        );
+    }
 
     #[test]
     fn supported_listener_modifiers_include_runtime_named_keys() {

@@ -792,6 +792,21 @@ fn role_to_tag(role: &str) -> Option<&'static str> {
     }
 }
 
+/// Default `display` value for a role when the author didn't set
+/// `display = "..."` explicitly. Layout-bearing roles (`panel`,
+/// `scope`) default to `contents` so the custom-element wrapper
+/// elides its own layout box — without this, the inner `<root>`'s
+/// flex / grid / sticky positioning binds to a `display: inline`
+/// custom element and silently breaks. Other roles keep the
+/// browser's custom-element default (`inline`) until the author
+/// overrides.
+fn role_default_display(role: &str) -> Option<&'static str> {
+    match role {
+        "panel" | "scope" => Some("contents"),
+        _ => None,
+    }
+}
+
 fn compile_template_static(raw: &str, name: &str, role: Option<(&str, &str)>) -> String {
     let Some((tag, role_name)) = role else {
         return inject_pp_data_static(raw, name);
@@ -1348,6 +1363,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
     let mut input = parse_macro_input!(item as ItemStruct);
+
+    // Bake a host-side `allow(dead_code)` onto the component struct.
+    // Fields that only feed `#[cfg(target_arch = "wasm32")]` code
+    // paths look unread on host; CI's `-D warnings` then fails for
+    // patterns the framework actively encourages (Pine primitives
+    // wrap `web_sys`). Pair this with the inner attribute baked into
+    // `#[handlers]` blocks — together they cover the struct and the
+    // helper fns in its impl.
+    input.attrs.push(syn::parse_quote!(
+        #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    ));
 
     let struct_ident = input.ident.clone();
     let ident_str = struct_ident.to_string();
@@ -2693,9 +2719,63 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // custom tag's layout display without authors repeating
     // `pine-foo { display: contents; }` across every demo
     // stylesheet. Any valid CSS display value works.
-    let register_display_stmt: proc_macro2::TokenStream = match args.display.as_ref() {
-        Some(lit) => {
-            let value = lit.value();
+    //
+    // When `display` is unset, layout-bearing roles (`panel`,
+    // `scope`) default to `contents` so the wrapper elides its
+    // layout box — see `role_default_display`. Other roles keep
+    // the browser's custom-element default (`inline`).
+    let effective_display: Option<String> =
+        args.display.as_ref().map(|lit| lit.value()).or_else(|| {
+            args.role
+                .as_ref()
+                .and_then(|lit| role_default_display(&lit.value()).map(|s| s.to_string()))
+        });
+    // Layout-class lint — if the root element carries a layout-
+    // bearing utility class (`sticky`, `h-screen`, `min-h-*`,
+    // `inset-*`) and the component didn't set `display` explicitly
+    // *and* the role didn't default one, fail compilation with a
+    // directive message. The custom element defaults to
+    // `display: inline`, which silently breaks the offending
+    // utility — see RFC docs/poco/04-expressions.md companion.
+    let layout_lint_tokens: proc_macro2::TokenStream = if effective_display.is_none() {
+        template_ast
+            .as_ref()
+            .and_then(|ast| ast.element_roots().next())
+            .and_then(|root| {
+                root.attrs
+                    .iter()
+                    .find(|(k, _)| k == "class")
+                    .map(|(_, v)| v.clone())
+            })
+            .and_then(|classes| {
+                classes
+                    .split_whitespace()
+                    .find(|cls| {
+                        *cls == "sticky"
+                            || *cls == "h-screen"
+                            || cls.starts_with("min-h-")
+                            || cls.starts_with("inset-")
+                    })
+                    .map(|cls| cls.to_string())
+            })
+            .map(|trigger| {
+                let msg = format!(
+                    "pocopine: component `{name_str}` has root class `{trigger}` but no \
+                         `display` set. A bare custom element defaults to `display: inline`, \
+                         which silently breaks `{trigger}` (the containing block becomes a \
+                         tiny inline box). Set `display = \"contents\"` to elide the \
+                         custom-element layout box, or pick a role that defaults it \
+                         (role = \"panel\" / \"scope\")."
+                );
+                quote! { ::core::compile_error!(#msg); }
+            })
+            .unwrap_or_default()
+    } else {
+        proc_macro2::TokenStream::new()
+    };
+
+    let register_display_stmt: proc_macro2::TokenStream = match effective_display {
+        Some(value) => {
             let css = format!("{name_str} {{ display: {value}; }}");
             let sentinel = format!("{name_str}-display");
             quote! {
@@ -2962,6 +3042,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // rows whose direct element child is another `<template>`.
         #pp_for_template_child_diagnostics_tokens
 
+        // Layout-class lint — hard `compile_error!` when the root
+        // carries `sticky` / `h-screen` / `min-h-*` / `inset-*` but
+        // the component doesn't declare a `display` (and the role
+        // didn't default one). The custom element's default
+        // `display: inline` silently breaks those utilities.
+        #layout_lint_tokens
+
         #observe_impl
 
         impl ::pocopine::__private::ComponentState for #struct_ident {
@@ -3193,6 +3280,17 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemImpl);
     let ty = input.self_ty.clone();
 
+    // Bake a host-side `allow(dead_code)` into the user's impl block.
+    // Pine primitives that wrap `web_sys` routinely keep helper fns
+    // (validate, mint_id, accept_allows, …) that are only reached
+    // from `#[cfg(target_arch = "wasm32")]` handlers; on the host
+    // build those helpers look unreferenced and trip CI's
+    // `-D warnings`. The inner attribute applied here covers every
+    // item the user puts in the same `#[handlers] impl` block.
+    input.attrs.push(syn::parse_quote!(
+        #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    ));
+
     let mut arms = Vec::new();
     let mut has_on_setup = false;
     let mut has_on_mount = false;
@@ -3404,7 +3502,20 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         });
         let bindings = typed_args.iter().map(|(bind, _)| quote!(#bind));
+        // Forward conditional-compilation attributes from the method
+        // onto the emitted dispatch arm. Without this, a method
+        // annotated `#[cfg(target_arch = "wasm32")]` would compile
+        // away on host while the arm — which still references the
+        // method and its arg types — would not, breaking the host
+        // build. Restricted to `cfg`/`cfg_attr` so unrelated attrs
+        // (e.g. `#[doc]`, `#[allow]`) don't leak onto the arm.
+        let cfg_attrs: Vec<&syn::Attribute> = method
+            .attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+            .collect();
         arms.push(quote! {
+            #(#cfg_attrs)*
             #name => {
                 #(#conversions)*
                 Self::#ident(self #(, #bindings)*);

@@ -576,6 +576,72 @@ mod route_config_tests {
         assert!(config.guards.is_empty());
     }
 
+    // ── Store-reference scanner (RFC: missing-store boot-error) ──
+
+    #[test]
+    fn collect_store_names_extracts_single_ref() {
+        let mut into = Vec::new();
+        super::collect_store_names("$store.preferences.theme", &mut into);
+        assert_eq!(into, vec!["preferences".to_string()]);
+    }
+
+    #[test]
+    fn collect_store_names_handles_multiple_and_dedupes() {
+        let mut into = Vec::new();
+        // Walks every path in the AST — both ternary branches and
+        // the condition. The repeated `$store.a` is deduped.
+        super::collect_store_names("$store.a == $store.b ? $store.a : $store.b", &mut into);
+        assert_eq!(into, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn collect_store_names_ignores_bare_store_token() {
+        // `$store` without a `.` is the container object, not a
+        // specific store. Don't claim it as a missing reference.
+        let mut into = Vec::new();
+        super::collect_store_names("$store", &mut into);
+        assert!(into.is_empty());
+    }
+
+    #[test]
+    fn collect_store_names_ignores_string_literal_lookalike() {
+        // The whole point of the AST-based scanner: text that looks
+        // like `$store.X` inside a string literal must NOT be picked
+        // up as a missing-store reference. A substring scanner would
+        // false-positive here.
+        let mut into = Vec::new();
+        super::collect_store_names("'$store.example was renamed'", &mut into);
+        assert!(into.is_empty());
+    }
+
+    #[test]
+    fn collect_store_names_finds_refs_in_call_arguments() {
+        // Refs nested inside call arguments / binops must still be
+        // discovered.
+        let mut into = Vec::new();
+        super::collect_store_names("debug($store.flags.verbose)", &mut into);
+        assert_eq!(into, vec!["flags".to_string()]);
+    }
+
+    #[test]
+    fn collect_store_names_silent_on_parse_failure() {
+        // Macro-time parse failures are surfaced by the template
+        // pipeline as `compile_error!`. This scanner runs at boot
+        // on `&'static str` plan sources that already survived the
+        // macro, but stays defensive: a parse failure here just
+        // means "no refs to add", never a panic.
+        let mut into = Vec::new();
+        super::collect_store_names("status === 'queued'", &mut into);
+        assert!(into.is_empty());
+    }
+
+    #[test]
+    fn check_store_registrations_passes_when_complete() {
+        // No vtables → no scanned refs → no missing.
+        let result = super::check_store_registrations(&[], &["preferences"]);
+        assert!(result.is_ok());
+    }
+
     #[test]
     fn route_config_stores_sync_guards() {
         let config = RouteConfig::<TestRoute>::new()
@@ -1161,9 +1227,17 @@ impl App {
     /// when collisions exist the boot error surface is rendered and
     /// no further mount work runs.
     pub fn run(self) {
+        // Install the panic-to-`console.error` hook before anything
+        // else. The framework authors directive `.expect(...)`
+        // messages throughout (`#[store]` "not registered — call
+        // App::store::<_>() first" being the canonical example),
+        // and without this hook a wasm panic surfaces as
+        // "RuntimeError: unreachable executed" with no message.
+        // `set_once()` is safe to call from every App::run().
+        console_error_panic_hook::set_once();
         let Self {
             components,
-            stores: _,
+            stores,
             routes,
             before_mount,
             after_mount,
@@ -1218,6 +1292,19 @@ impl App {
                 reason: "component_registry",
             });
             crate::registry::render_boot_error(&errors);
+            return;
+        }
+        // Cross-check $store.X references in compiled component
+        // templates against `App::store::<T>()` registrations.
+        // Without this, a missing `.store::<T>()` call deferred-
+        // panics at first $store access with a stack trace that
+        // looks like a framework bug. Fail loud at boot with the
+        // exact missing names instead.
+        if let Err(missing) = check_store_registrations(&components, &stores) {
+            crate::plugin::emit(crate::plugin::AppBootFailed {
+                reason: "missing_store_registration",
+            });
+            render_missing_store_boot_error(&missing);
             return;
         }
         // Inject the animate-preset atom stylesheet before any
@@ -1320,6 +1407,151 @@ impl App {
             host: host.clone(),
             active: true,
         }
+    }
+}
+
+/// Parse a compile-time expression source with `pocopine_expr` and
+/// collect every `$store.<name>` path reference into `into`.
+///
+/// AST-based (not substring-based) so the same literal text inside
+/// a string literal (e.g. `pp-text="'$store.example missing'"`)
+/// can't trip the boot check — the parser sees that occurrence as
+/// a `Literal::String`, not an `Expr::Path`. A parse failure means
+/// the macro-time pipeline already surfaced a compile error for
+/// that expression, so silently skipping it here is fine.
+fn collect_store_names(src: &str, into: &mut Vec<String>) {
+    let Ok(ast) = pocopine_expr::parse(src) else {
+        return;
+    };
+    visit_paths(&ast.value, &mut |segments| {
+        if segments.len() >= 2 && segments[0] == "$store" {
+            let name = segments[1].clone();
+            if !into.contains(&name) {
+                into.push(name);
+            }
+        }
+    });
+}
+
+/// Walk every `Expr::Path` (including the LHS of `Expr::Assign`)
+/// in the AST, including paths inside nested binops / ternaries /
+/// call arguments / statement sequences. Used by
+/// [`collect_store_names`] to find every `$store.X` reference
+/// regardless of where it sits in the expression tree.
+fn visit_paths(expr: &pocopine_expr::Expr, sink: &mut impl FnMut(&[String])) {
+    use pocopine_expr::Expr;
+    match expr {
+        Expr::Literal(_) => {}
+        Expr::Path(segs) => sink(segs),
+        Expr::Not(inner) => visit_paths(&inner.value, sink),
+        Expr::BinOp(_, lhs, rhs) => {
+            visit_paths(&lhs.value, sink);
+            visit_paths(&rhs.value, sink);
+        }
+        Expr::Ternary(cond, then_branch, else_branch) => {
+            visit_paths(&cond.value, sink);
+            visit_paths(&then_branch.value, sink);
+            visit_paths(&else_branch.value, sink);
+        }
+        Expr::Call(_, args) => {
+            for arg in args {
+                visit_paths(&arg.value, sink);
+            }
+        }
+        Expr::Assign(lhs_segs, rhs) => {
+            sink(lhs_segs);
+            visit_paths(&rhs.value, sink);
+        }
+        Expr::Seq(stmts) => {
+            for stmt in stmts {
+                visit_paths(&stmt.value, sink);
+            }
+        }
+    }
+}
+
+/// Scan a compiled template plan's expression sources for
+/// `$store.<name>` references, accumulating into `into`. Covers
+/// the plan slices that carry plain `expr_src` strings —
+/// bindings, listeners, `pp-if`, native models — which is where
+/// store references appear in practice.
+fn collect_plan_store_names(
+    plan: &'static crate::templates_plan::StaticTemplatePlan,
+    into: &mut Vec<String>,
+) {
+    for b in plan.bindings {
+        collect_store_names(b.expr_src, into);
+    }
+    for l in plan.listeners {
+        collect_store_names(l.expr_src, into);
+    }
+    for p in plan.if_plans {
+        collect_store_names(p.expr_src, into);
+    }
+    for m in plan.native_models {
+        collect_store_names(m.expr_src, into);
+    }
+}
+
+/// Cross-check `$store.X` references across registered components'
+/// plans against the stores actually registered with
+/// `App::store::<T>()`. Returns the sorted, deduplicated list of
+/// missing store names; an empty `Ok(())` means every reference
+/// has a matching registration.
+///
+/// Plan lookup goes through
+/// [`crate::templates_plan::template_plan_for`], which tries the
+/// active PHF registry first (only set by
+/// [`App::run_with_registry`]) and falls back to the
+/// `TEMPLATE_PLANS` thread-local that every component's macro-
+/// emitted `register()` populates. Without the fallback this
+/// check is silently no-op for the canonical
+/// `App::new()…run()` flow — that path never installs a PHF
+/// registry, so every per-component vtable lookup returns `None`.
+fn check_store_registrations(
+    components: &[&'static str],
+    stores: &[&'static str],
+) -> Result<(), Vec<String>> {
+    let mut needed: Vec<String> = Vec::new();
+    for &name in components {
+        if let Some(plan) = crate::templates_plan::template_plan_for(name) {
+            collect_plan_store_names(plan, &mut needed);
+        }
+    }
+    let mut missing: Vec<String> = needed
+        .into_iter()
+        .filter(|name| !stores.contains(&name.as_str()))
+        .collect();
+    missing.sort_unstable();
+    missing.dedup();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing)
+    }
+}
+
+fn render_missing_store_boot_error(missing: &[String]) {
+    let list = missing.join(", ");
+    let msg = format!(
+        "pocopine: components reference store(s) not registered with \
+         `App::store::<T>()`: {list}. Add the missing `.store::<T>()` calls \
+         to your `App::new()…run()` chain before mount."
+    );
+    web_sys::console::error_1(&JsValue::from_str(&msg));
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let Some(body) = doc.body() else { return };
+    if let Ok(banner) = doc.create_element("div") {
+        let _ = banner.set_attribute("data-pocopine-boot-error", "missing-store");
+        let _ = banner.set_attribute(
+            "style",
+            "all: initial; display: block; background: #b00020; color: #fff; \
+             font-family: system-ui, sans-serif; padding: 12px 16px; \
+             font-size: 14px; line-height: 1.4;",
+        );
+        banner.set_text_content(Some(&msg));
+        let _ = body.insert_before(banner.as_ref(), body.first_child().as_ref());
     }
 }
 
