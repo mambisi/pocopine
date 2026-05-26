@@ -746,10 +746,23 @@ where
         let push_url = endpoint_path(&self.endpoint, "push");
         let pull_endpoint = self.endpoint.clone();
         let pull_after_accept = !self.live_wakeup;
+        // Gate each user-initiated `.await` so a concurrent sign-out
+        // (e.g. triggered by a BroadcastChannel listener that fires
+        // between yields) cannot leave a stale pending mutation in the
+        // just-wiped store.
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         let mutation_id = self.local_store.reserve_mutation_id().await?;
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         let mutation = mutation.with_id(mutation_id.clone());
         enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
             .await?;
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
 
         let epoch = self.epoch.clone();
@@ -787,7 +800,13 @@ where
         let push_url = endpoint_path(&self.endpoint, "push");
         let pull_endpoint = self.endpoint.clone();
         let pull_after_accept = !self.live_wakeup;
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         let mutation_id = self.local_store.reserve_mutation_id().await?;
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         let mutation = mutation.with_id(mutation_id.clone());
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
         let response = send_push_and_reconcile(
@@ -897,7 +916,13 @@ where
     {
         self.touch_host_fields();
         let stream = self.stream_value()?;
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         let mutation_id = self.local_store.reserve_mutation_id().await?;
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
         let mutation = mutation.with_id(mutation_id.clone());
         enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
             .await?;
@@ -1027,11 +1052,15 @@ fn start_open_then_pull<C, T>(
         }
 
         if !pending_mutations.is_empty() {
+            if epoch.is_stale() {
+                return;
+            }
             match replay_pending_mutations::<T>(
                 &local_store,
                 &push_url,
                 stream.clone(),
                 pending_mutations,
+                &epoch,
             )
             .await
             {
@@ -1373,6 +1402,12 @@ async fn run_push<C, T, M>(
     let mutation_key = mutation.key.clone();
 
     if queue_offline {
+        // The task may have been spawned before sign-out and only polled
+        // afterward. Check BEFORE writing to the durable queue so a stale
+        // task can't leave tenant A's pending mutation in the empty store.
+        if epoch.is_stale() {
+            return;
+        }
         if let Err(err) =
             enqueue_pending_mutation(&local_store, &stream, &mutation, optimistic.as_ref()).await
         {
@@ -1589,6 +1624,7 @@ async fn replay_pending_mutations<T>(
     push_url: &str,
     stream: SyncStreamName,
     pending_mutations: Vec<ClientMutation<Value>>,
+    epoch: &SyncEpoch,
 ) -> SyncResult<SyncPushResponse<T>>
 where
     T: serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1599,6 +1635,12 @@ where
     )
     .await
     .map_err(|err| SyncError::client(err.to_string()))?;
+    // Gate the durable `mark_push_result` write — otherwise a sign-out
+    // between the /push and the durable persist could write tenant A's
+    // accepted/rejected outcomes into the now-wiped store.
+    if epoch.is_stale() {
+        return Ok(response);
+    }
     let result = local_push_result_from_response(&response)?;
     local_store.mark_push_result(result).await?;
     Ok(response)
