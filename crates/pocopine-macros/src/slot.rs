@@ -408,6 +408,7 @@ pub(crate) struct SlotValidationEmit {
 /// Byte-level insert into the template source. Mirrors the
 /// shape of [`crate::for_plan::TemplateStamp`] so the application
 /// strategy stays consistent across macro passes.
+#[derive(Clone)]
 pub(crate) struct TemplateEdit {
     pub insert_at: usize,
     pub text: String,
@@ -442,12 +443,21 @@ fn extract_for_context(el: &crate::template_parser::Element) -> Option<ForContex
     // type inference. `pp-for="row in self.rows.iter()"`-style
     // expressions get `iter_field = None` and the slot is
     // forced into static mode (with an actionable error).
-    let iter_field =
-        if !expr.is_empty() && expr.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            Some(expr.to_string())
-        } else {
-            None
-        };
+    //
+    // First-char check enforces the Rust-ident shape — leading
+    // digits like `"2ndItems"` are alphanumeric but not valid
+    // idents. Without the first-char gate, those would survive
+    // here and later fail `syn::parse_str::<Ident>` silently.
+    let is_bare_ident = expr
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && expr.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let iter_field = if is_bare_ident {
+        Some(expr.to_string())
+    } else {
+        None
+    };
     Some(ForContext {
         iter_var,
         iter_field,
@@ -541,6 +551,7 @@ pub(crate) fn emit_slot_props_validation(
                     el,
                     for_ctx.as_ref().unwrap(),
                     struct_ident,
+                    &ast.source,
                     &mut out,
                     &mut template_edits,
                 );
@@ -597,6 +608,7 @@ fn collect_slot_matches<'a>(
 /// the Rust type assertion that the iter item matches `T`, plus
 /// a template edit that injects `:VAR="VAR"` into the slot's
 /// opening tag so the runtime sees the auto-publication.
+#[allow(clippy::too_many_arguments)]
 fn emit_iterated_mode(
     target_name: &str,
     props_ty: &Path,
@@ -604,6 +616,7 @@ fn emit_iterated_mode(
     el: &crate::template_parser::Element,
     for_ctx: &ForContext,
     struct_ident: &Ident,
+    source: &str,
     out: &mut TokenStream,
     template_edits: &mut Vec<TemplateEdit>,
 ) {
@@ -623,15 +636,34 @@ fn emit_iterated_mode(
     let iter_var_ident = match syn::parse_str::<syn::Ident>(iter_var) {
         Ok(i) => i,
         Err(_) => {
-            // Defensive: pp-for parsed an iter var that isn't a
-            // Rust ident. Skip — the directive registry should
-            // already have flagged this elsewhere.
+            // pp-for parsed an iter var that isn't a valid Rust
+            // identifier. Surface a directive error here rather
+            // than returning silently — without this, the slot
+            // gets neither a template edit nor a type assertion
+            // and the user sees no diagnostic pointing at the
+            // bad `pp-for`.
+            let msg = format!(
+                "pocopine: slot `{target_name}` sits inside `pp-for=\"{iter_var} in {iter_field}\"` but the iteration variable `{iter_var}` isn't a valid Rust identifier. Rename it to a bare ascii identifier (e.g. `file`, `row`, `_item`)."
+            );
+            out.extend(quote! { ::core::compile_error!(#msg); });
             return;
         }
     };
     let iter_field_ident = match syn::parse_str::<syn::Ident>(iter_field) {
         Ok(i) => i,
-        Err(_) => return,
+        Err(_) => {
+            // Same shape as above — surface a directive error
+            // instead of returning silently. With the tightened
+            // `extract_for_context` first-char check, this branch
+            // is rarely reachable (the iter_field would've been
+            // set to `None` upstream), but keeping a real
+            // diagnostic here is the safer end-state.
+            let msg = format!(
+                "pocopine: slot `{target_name}` sits inside `pp-for=\"{iter_var} in {iter_field}\"` but `{iter_field}` isn't a valid Rust identifier referring to a struct field. Iterated-mode auto-publish needs `pp-for=\"X in field_name\"`; either rename the source, or write `<slot :LHS=…>` publications explicitly (static mode)."
+            );
+            out.extend(quote! { ::core::compile_error!(#msg); });
+            return;
+        }
     };
 
     // Rust type assertion: walking `this.<iter_field>` must
@@ -669,17 +701,69 @@ fn emit_iterated_mode(
     // picks it up identically to an explicit static-mode
     // publication.
     //
-    // `opening_tag_range.end` points just past `>`; insert at
-    // `end - 1` so we land before the angle bracket. Skip if
-    // the range is the placeholder `0..0` (foster-parented
-    // element with no real source position).
-    if el.opening_tag_range.end > el.opening_tag_range.start {
-        let insert_at = el.opening_tag_range.end.saturating_sub(1);
+    // `opening_tag_range.end` points just past `>`. The naive
+    // `end - 1` lands on `>` for paired tags (`<slot>`) but on
+    // `/` for self-closing (`<slot/>`), which would yield the
+    // malformed `<slot/ :file="file">`. Scan backwards from
+    // `end` for the actual `>` byte, then back up past any `/`
+    // and trailing whitespace so the injection sits inside the
+    // tag attribute span.
+    if let Some(insert_at) = find_slot_attr_insert_position(source, &el.opening_tag_range) {
         template_edits.push(TemplateEdit {
             insert_at,
             text: format!(" :{iter_var}=\"{iter_var}\""),
         });
     }
+}
+
+/// Find the byte offset within `source` at which to insert a new
+/// attribute on `<slot>`'s opening tag. Handles three shapes:
+///
+/// * `<slot>` — insert at the `>` position (paired tag).
+/// * `<slot />` — insert before the `/` (and any whitespace),
+///   not between `/` and `>`.
+/// * `<slot/>` — insert before the `/`, producing
+///   `<slot :foo="foo"/>` rather than the malformed
+///   `<slot/ :foo="foo">`.
+///
+/// Returns `None` when the range is the foster-parented
+/// placeholder `0..0` or when no `>` is found in the expected
+/// position (defensive — should never happen on well-formed
+/// AST input).
+fn find_slot_attr_insert_position(
+    source: &str,
+    opening_tag_range: &std::ops::Range<usize>,
+) -> Option<usize> {
+    if opening_tag_range.end <= opening_tag_range.start {
+        return None;
+    }
+    let bytes = source.as_bytes();
+    if opening_tag_range.end > bytes.len() {
+        return None;
+    }
+    // Scan backwards from `end - 1` to find `>`.
+    let mut pos = opening_tag_range.end;
+    while pos > opening_tag_range.start {
+        pos -= 1;
+        if bytes[pos] == b'>' {
+            break;
+        }
+    }
+    if pos == opening_tag_range.start || bytes[pos] != b'>' {
+        return None;
+    }
+    // Walk back past whitespace and the optional `/` so the
+    // insertion lands before any self-closing marker.
+    let mut insert_at = pos;
+    while insert_at > opening_tag_range.start {
+        let prev = bytes[insert_at - 1];
+        if prev == b'/' || prev.is_ascii_whitespace() {
+            insert_at -= 1;
+        } else {
+            break;
+        }
+    }
+    Some(insert_at)
 }
 
 /// Emit per-publication-key existence checks plus a coverage
@@ -1276,4 +1360,136 @@ mod tests {
         let out = apply_template_edits(src, &edits);
         assert_eq!(out, r#"<slot :a="a"></slot><slot :b="b"></slot>"#);
     }
+
+    // ── Code-review fixups (post PR #131 review) ───────────────
+
+    #[test]
+    fn invalid_pp_for_iter_var_surfaces_compile_error() {
+        // Review-2: emit_iterated_mode must NOT return silently
+        // when the iter var fails Ident parsing. Use a variable
+        // name that is alphanumeric (so the bare-ident gate
+        // passes) but starts with a digit so `syn::parse_str`
+        // rejects it.
+        let src = r#"<root>
+<li pp-for="2bad in files">
+  <slot name="row"></slot>
+</li>
+</root>"#;
+        let slots = vec![iter_decl("row", "UploadFile")];
+        let emit = emit_slot_props_validation(
+            &ast(src),
+            &slots,
+            &syn::Ident::new("TestHost", proc_macro2::Span::call_site()),
+        );
+        // With Review-5 (tightened iter_field check) it's the
+        // iter-FIELD path that's hit when the FIELD is invalid;
+        // here the iter-VAR is the offender. Either way, the
+        // user must see a compile_error explaining the bad ident.
+        let s = emit.tokens.to_string();
+        assert!(
+            s.contains("compile_error"),
+            "invalid pp-for ident should surface a compile_error: {s}"
+        );
+        assert!(
+            !s.contains("__poco_this"),
+            "type assertion shouldn't fire when ident parse fails: {s}"
+        );
+        assert!(
+            emit.template_edits.is_empty(),
+            "no template edit when ident parse fails"
+        );
+    }
+
+    #[test]
+    fn iter_field_first_char_must_be_alpha_or_underscore() {
+        // Review-5: `extract_for_context` must classify
+        // "2ndItems" as a non-bare-ident, routing the slot to
+        // the "use static mode" error path rather than the
+        // silent ident-parse return.
+        use crate::template_parser::Element;
+        let el = Element {
+            tag: "li".to_string(),
+            attrs: vec![("pp-for".to_string(), "x in 2ndItems".to_string())],
+            children: Vec::new(),
+            byte_range: 0..0,
+            opening_tag_range: 0..0,
+            synthetic: false,
+        };
+        let ctx = extract_for_context(&el).expect("pp-for parses");
+        assert_eq!(ctx.iter_var, "x");
+        assert!(
+            ctx.iter_field.is_none(),
+            "leading-digit `2ndItems` must be classified as non-bare-ident, got {:?}",
+            ctx.iter_field
+        );
+    }
+
+    #[test]
+    fn self_closing_slot_insertion_lands_inside_tag() {
+        // Review-6: `<slot/>` must yield `<slot :file="file"/>`,
+        // not `<slot/ :file="file">`.
+        let src = "<slot/>";
+        let range = 0..src.len();
+        let pos = find_slot_attr_insert_position(src, &range)
+            .expect("paired-or-self-closing slot must have an insert position");
+        // pos should be 5 (the `/` byte), so insertion lands as
+        // `<slot` + ` :file="file"` + `/>`.
+        assert_eq!(pos, 5, "expected insertion before `/`, got {pos}");
+        // End-to-end via apply_template_edits.
+        let out = apply_template_edits(
+            src,
+            &[TemplateEdit {
+                insert_at: pos,
+                text: " :file=\"file\"".to_string(),
+            }],
+        );
+        assert_eq!(out, r#"<slot :file="file"/>"#);
+    }
+
+    #[test]
+    fn self_closing_slot_with_space_insertion_lands_inside_tag() {
+        // Variant: `<slot />` (with trailing space). Insertion
+        // must come before both the `/` AND any whitespace
+        // between attrs and `/`.
+        let src = "<slot />";
+        let range = 0..src.len();
+        let pos =
+            find_slot_attr_insert_position(src, &range).expect("range yields insert position");
+        let out = apply_template_edits(
+            src,
+            &[TemplateEdit {
+                insert_at: pos,
+                text: " :file=\"file\"".to_string(),
+            }],
+        );
+        // Acceptable shapes: `<slot :file="file" />` or
+        // `<slot :file="file"/>` — both keep the attr inside the
+        // tag. The current impl produces the former by walking
+        // back through whitespace.
+        assert!(
+            out == r#"<slot :file="file" />"# || out == r#"<slot :file="file"/>"#,
+            "self-closing slot insertion landed wrong: {out:?}"
+        );
+    }
+
+    #[test]
+    fn paired_slot_insertion_lands_before_close_angle() {
+        // Sanity: the paired-tag case (`<slot>`) still works.
+        let src = "<slot></slot>";
+        let range = 0..6; // covers `<slot>`
+        let pos = find_slot_attr_insert_position(src, &range).expect("paired tag insert position");
+        let out = apply_template_edits(
+            src,
+            &[TemplateEdit {
+                insert_at: pos,
+                text: " :file=\"file\"".to_string(),
+            }],
+        );
+        assert_eq!(out, r#"<slot :file="file"></slot>"#);
+    }
+
+    // Note: the `str_slice_set_eq_const` duplicate-bypass test
+    // (Review-3) lives in `pocopine-core::props::tests` — the
+    // macros crate doesn't depend on pocopine-core at compile
+    // time, so it can't reach the const fn directly.
 }

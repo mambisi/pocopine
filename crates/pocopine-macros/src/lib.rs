@@ -807,6 +807,36 @@ fn role_default_display(role: &str) -> Option<&'static str> {
     }
 }
 
+/// Apply RFC 054 row-plan stamps AND RFC 084 slot template edits
+/// to the original template source **in a single sorted pass**.
+///
+/// Both edit sources record `insert_at` byte offsets relative to
+/// the un-mutated `ast.source`. Applying them sequentially (stamps
+/// first, then slot edits) would let stamps shift the byte positions
+/// the slot edits assume, breaking the slot's auto-publish
+/// injection silently when the template contains both
+/// `<template pp-for>` row plans AND iterated-mode typed slots.
+/// Combining the edits and sorting by descending `insert_at` keeps
+/// every offset valid throughout the pass.
+fn apply_combined_template_edits(
+    source: &str,
+    stamps: &[for_plan::TemplateStamp],
+    slot_edits: &[slot::TemplateEdit],
+) -> String {
+    if stamps.is_empty() && slot_edits.is_empty() {
+        return source.to_string();
+    }
+    let mut all: Vec<slot::TemplateEdit> = stamps
+        .iter()
+        .map(|stamp| slot::TemplateEdit {
+            insert_at: stamp.insert_at,
+            text: format!(" data-pp-row-plan=\"{}\"", stamp.plan_id),
+        })
+        .collect();
+    all.extend(slot_edits.iter().cloned());
+    slot::apply_template_edits(source, &all)
+}
+
 fn compile_template_static(raw: &str, name: &str, role: Option<(&str, &str)>) -> String {
     let Some((tag, role_name)) = role else {
         return inject_pp_data_static(raw, name);
@@ -2586,34 +2616,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|ast| ast.source.as_str())
             .unwrap_or("");
         if !source.is_empty() {
-            source.to_string()
+            apply_combined_template_edits(source, &row_plans.stamps, &slot_template_edits)
         } else {
+            // No AST source — fall back to the raw inline. Row-plan
+            // stamps and slot edits are AST-derived, so they can't
+            // be applied to a string we never parsed.
             inline.value()
         }
-    } else if row_plans.stamps.is_empty() {
-        template_ast
-            .as_ref()
-            .map(|ast| ast.source.as_str().to_string())
-            .unwrap_or_default()
     } else {
         let source = template_ast
             .as_ref()
             .map(|ast| ast.source.as_str())
             .unwrap_or("");
-        for_plan::apply_stamps(source, &row_plans.stamps)
-    };
-
-    // RFC 084 Phase 2 — apply iterated-slot auto-publish edits.
-    // Each `<slot>` element that sits inside a `pp-for` AND
-    // has no explicit `:LHS=` attrs gets a `:VAR="VAR"`
-    // injection (where VAR is the pp-for iter var) just before
-    // the closing `>` of its opening tag. The runtime's
-    // existing `materialize_slot` path then sees a normal
-    // publication; no runtime-side change required.
-    let template_source_for_compile = if slot_template_edits.is_empty() {
-        template_source_for_compile
-    } else {
-        slot::apply_template_edits(&template_source_for_compile, &slot_template_edits)
+        apply_combined_template_edits(source, &row_plans.stamps, &slot_template_edits)
     };
 
     let compiled_template_html = compile_template_static(
