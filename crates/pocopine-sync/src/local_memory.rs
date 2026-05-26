@@ -32,6 +32,7 @@ struct MemoryStreamState {
     cursor: Option<crate::SyncCursor>,
     rows: BTreeMap<RowKey, SyncRow<serde_json::Value>>,
     pending: Vec<LocalPendingMutation>,
+    application_schema_version: Option<u32>,
 }
 
 impl MemoryLocalStore {
@@ -92,6 +93,7 @@ impl SyncLocalStore for MemoryLocalStore {
                 cursor: state.cursor.clone(),
                 rows: state.rows.values().cloned().collect(),
                 pending_mutations: state.pending.clone(),
+                application_schema_version: state.application_schema_version,
             })
         }))
     }
@@ -106,6 +108,13 @@ impl SyncLocalStore for MemoryLocalStore {
                 .into_iter()
                 .map(|row| (row.key.clone(), row))
                 .collect();
+            // Only overwrite when the caller carries a value; passing
+            // `None` from a code path that hasn't observed the
+            // advertised version yet must not clobber a previously
+            // recorded value.
+            if let Some(version) = snapshot.application_schema_version {
+                state.application_schema_version = Some(version);
+            }
             Ok(())
         }))
     }
@@ -277,6 +286,19 @@ impl SyncLocalStore for MemoryLocalStore {
     fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
         Self::ready(self.with_inner(|inner| {
             inner.streams.clear();
+            Ok(())
+        }))
+    }
+
+    fn clear_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, ()> {
+        let stream = stream.clone();
+        Self::ready(self.with_inner(|inner| {
+            // Removing the entry drops every cached row, pending
+            // mutation, conflict marker, cursor, and the cached
+            // schema_version in one step. Other streams + the device
+            // identity are untouched. Safe to call on a never-seen
+            // stream: BTreeMap::remove returns None and we ignore it.
+            inner.streams.remove(&stream);
             Ok(())
         }))
     }
@@ -1234,5 +1256,114 @@ mod tests {
         let stream = SyncStreamName::new("posts").unwrap();
         let snapshot = store.hydrate_stream(&stream).await.unwrap();
         assert!(snapshot.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_stream_wipes_one_stream_and_leaves_others_intact() {
+        let store = MemoryLocalStore::new();
+        let posts = SyncStreamName::new("posts").unwrap();
+        let comments = SyncStreamName::new("comments").unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                posts.clone(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", serde_json::json!({"title": "p1"})).unwrap()],
+                Some(SyncCursor::new("c_posts").unwrap()),
+            ))
+            .await
+            .unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                comments.clone(),
+                SyncCollectionName::new("comments").unwrap(),
+                vec![SyncRow::new("c_1", serde_json::json!({"body": "hi"})).unwrap()],
+                Some(SyncCursor::new("c_comments").unwrap()),
+            ))
+            .await
+            .unwrap();
+        store
+            .enqueue_mutation(
+                &posts,
+                ClientMutation {
+                    id: MutationId::new("device_a:1").unwrap(),
+                    key: Some(RowKey::new("post_1").unwrap()),
+                    op: SyncOp::Upsert,
+                    base_version: None,
+                    payload: serde_json::json!({"title": "edit"}),
+                },
+            )
+            .await
+            .unwrap();
+
+        store.clear_stream(&posts).await.unwrap();
+
+        let posts_after = store.hydrate_stream(&posts).await.unwrap();
+        let comments_after = store.hydrate_stream(&comments).await.unwrap();
+        assert!(posts_after.rows.is_empty());
+        assert!(posts_after.pending_mutations.is_empty());
+        assert!(posts_after.cursor.is_none());
+        assert!(posts_after.application_schema_version.is_none());
+        // The other stream is untouched.
+        assert_eq!(comments_after.rows.len(), 1);
+        assert_eq!(comments_after.rows[0].key.as_str(), "c_1");
+    }
+
+    #[tokio::test]
+    async fn clear_stream_is_safe_on_never_observed_stream() {
+        let store = MemoryLocalStore::new();
+        let unknown = SyncStreamName::new("unknown").unwrap();
+        store.clear_stream(&unknown).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_snapshot_records_application_schema_version() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        store
+            .save_snapshot(
+                LocalSnapshotBatch::new(
+                    stream.clone(),
+                    SyncCollectionName::new("posts").unwrap(),
+                    vec![],
+                    None,
+                )
+                .with_application_schema_version(Some(7)),
+            )
+            .await
+            .unwrap();
+        let s = store.hydrate_stream(&stream).await.unwrap();
+        assert_eq!(s.application_schema_version, Some(7));
+    }
+
+    #[tokio::test]
+    async fn save_snapshot_with_none_preserves_existing_application_schema_version() {
+        // `save_snapshot` with `application_schema_version = None` must
+        // NOT clobber a previously-recorded value — only an explicit
+        // `Some` overwrites. Mirrors the SQLite UPSERT's coalesce.
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        store
+            .save_snapshot(
+                LocalSnapshotBatch::new(
+                    stream.clone(),
+                    SyncCollectionName::new("posts").unwrap(),
+                    vec![],
+                    None,
+                )
+                .with_application_schema_version(Some(3)),
+            )
+            .await
+            .unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![],
+                None,
+            ))
+            .await
+            .unwrap();
+        let s = store.hydrate_stream(&stream).await.unwrap();
+        assert_eq!(s.application_schema_version, Some(3));
     }
 }

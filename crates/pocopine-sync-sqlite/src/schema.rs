@@ -1,5 +1,17 @@
 /// Current Pocopine sync SQLite schema version.
-pub const SCHEMA_VERSION: u32 = 3;
+///
+/// History:
+/// * v3: added `__pocopine_mutations.optimistic_row` for optimistic row
+///   reconstruction after reload.
+/// * v4: added `__pocopine_streams.app_schema_version` for client-side
+///   cache invalidation on application-level schema bumps. The new
+///   column lives alongside the storage-level `schema_version` (which
+///   only records this constant for historical reasons); the two are
+///   distinct concepts. Existing v3 stores migrate in place via
+///   `ALTER TABLE … ADD COLUMN`; existing rows observe `NULL` and the
+///   client treats `NULL` as "never observed, adopt server value
+///   silently on next save" rather than as a forced wipe.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Metadata table for device identity and internal settings.
 pub const META_TABLE: &str = "__pocopine_meta";
@@ -28,6 +40,7 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
         collection text not null,
         cursor text,
         schema_version integer not null,
+        app_schema_version integer,
         updated_at_ms integer not null
     )",
     "create table if not exists __pocopine_rows (
@@ -60,14 +73,19 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
         on __pocopine_mutations (stream, status, enqueue_seq)",
 ];
 
-/// SQL upsert used for stream cursor metadata.
+/// SQL upsert used for stream cursor metadata. `app_schema_version`
+/// (?6) is the APPLICATION-level schema version the server most
+/// recently advertised for this stream; `NULL` means "not yet
+/// observed". On conflict we use `coalesce(excluded, existing)` so a
+/// caller passing `NULL` doesn't clobber a previously-recorded value.
 pub const UPSERT_STREAM_SQL: &str = "insert into __pocopine_streams
-    (stream, collection, cursor, schema_version, updated_at_ms)
-    values (?1, ?2, ?3, ?4, ?5)
+    (stream, collection, cursor, schema_version, app_schema_version, updated_at_ms)
+    values (?1, ?2, ?3, ?4, ?6, ?5)
     on conflict(stream) do update set
         collection = excluded.collection,
         cursor = excluded.cursor,
         schema_version = excluded.schema_version,
+        app_schema_version = coalesce(excluded.app_schema_version, __pocopine_streams.app_schema_version),
         updated_at_ms = excluded.updated_at_ms";
 
 /// SQL statements used to clear one stream before saving a replacement snapshot.
@@ -146,9 +164,29 @@ pub const SELECT_ROWS_SQL: &str = "select row_key, version, payload, pending, co
     where stream = ?1
     order by row_key asc";
 
-/// SQL query used to hydrate stream metadata.
+/// SQL query used to hydrate stream metadata. Returns `NULL` for
+/// `app_schema_version` on rows that pre-date the v3→v4 migration —
+/// the client treats `NULL` as "never observed; adopt server value
+/// silently on next save" rather than as a forced wipe.
 pub const SELECT_STREAM_SQL: &str =
-    "select collection, cursor from __pocopine_streams where stream = ?1";
+    "select collection, cursor, app_schema_version from __pocopine_streams where stream = ?1";
+
+/// SQL statements used by `SyncLocalStore::clear_stream`. Drops every
+/// row, mutation queue entry, and the stream metadata row for ONE
+/// stream — leaving every other stream untouched. The order matters
+/// only for foreign-key-free correctness (none exists), but mirroring
+/// `CLEAR_ALL_STREAMS_SQL` (children before parent) keeps the
+/// behaviour reviewable.
+pub const CLEAR_STREAM_SQL: &[&str] = &[
+    "delete from __pocopine_mutations where stream = ?1",
+    "delete from __pocopine_rows where stream = ?1",
+    "delete from __pocopine_streams where stream = ?1",
+];
+
+/// SQL used by the v3 -> v4 migration to add the
+/// `app_schema_version` column. Existing rows observe `NULL`.
+pub const MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION: &str =
+    "alter table __pocopine_streams add column app_schema_version integer";
 
 #[cfg(test)]
 mod tests {
