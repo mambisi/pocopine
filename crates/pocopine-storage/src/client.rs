@@ -1304,7 +1304,7 @@ mod wasm {
         let text = response
             .text()
             .map_err(|err| StorageError::client(format!("read response: {err:?}")))?;
-        let body_js = JsFuture::from(Promise::from(text))
+        let body_js = JsFuture::from(text)
             .await
             .map_err(|err| StorageError::client(format!("read response: {err:?}")))?;
         let body = body_js
