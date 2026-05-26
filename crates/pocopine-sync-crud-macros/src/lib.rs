@@ -124,6 +124,20 @@ impl Parse for ResourceArgs {
             Some(module) => module,
             None => module_ident_from_name(&name)?,
         };
+        // `migrate_with = path` registers a migrator that only fires
+        // when the client's wire `schema_version` is strictly LESS
+        // than the server's declared `schema_version`. With
+        // `schema_version = 1` (the default), they always match and
+        // the migrator is dead code. Force the author to either bump
+        // `schema_version` or drop `migrate_with`.
+        if let Some(path) = migrate_with.as_ref() {
+            if schema_version.unwrap_or(1) < 2 {
+                return Err(syn::Error::new(
+                    path.span(),
+                    "`migrate_with` requires `schema_version = N` with N >= 2; a v1 migrator is never invoked because clients also default to v1",
+                ));
+            }
+        }
         let schema_version = schema_version.unwrap_or(1);
         Ok(Self {
             name,
@@ -250,7 +264,10 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
                 pub fn collection(
                     &self,
                 ) -> ::pocopine_sync::SyncResult<::pocopine_sync::SyncCollection<C, Row>> {
-                    self.sync.collection(self.handle.clone(), self.selector).stream(NAME)
+                    self.sync
+                        .collection(self.handle.clone(), self.selector)
+                        .stream(NAME)?
+                        .schema_version(SCHEMA_VERSION)
                 }
 
                 pub fn open(&self) -> ::pocopine_sync::SyncResult<()>
@@ -495,7 +512,9 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
             where
                 Row: 'static,
             {
-                sync.collection(handle, selector).stream(NAME)
+                sync.collection(handle, selector)
+                    .stream(NAME)?
+                    .schema_version(SCHEMA_VERSION)
             }
         }
     })

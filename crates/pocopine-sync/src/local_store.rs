@@ -614,6 +614,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"op": "create"}),
+
+            migrated_payload: None,
         };
         let optimistic = SyncRow::new("post_1", serde_json::json!({"title": "Visible"})).unwrap();
 

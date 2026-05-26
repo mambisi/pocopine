@@ -1140,68 +1140,82 @@ fn start_open_then_pull<C, T>(
                 }
             };
 
-        // If the cached schema_version differs from what the server is
-        // now advertising, the local cache (rows + pending mutations)
-        // is encoded against a shape the server no longer accepts.
-        // Drop it durably AND in memory so the upcoming pull rebuilds
-        // canonical state against the new shape. `cached_schema_version
-        // == None` means the store has never observed an advertised
-        // version (fresh install, or pre-v4 row) — adopt the
-        // advertised value silently on the next snapshot save.
+        // Decide whether the local cache (rows + pending mutations)
+        // is still valid for the server's currently-advertised schema
+        // version:
+        //
+        // * `cached < advertised` — server upgraded; the cache and
+        //   queue are stale shape. Drop them durably + in memory and
+        //   rebuild via the upcoming pull.
+        // * `cached > advertised` — server ROLLED BACK; the local
+        //   cache is "newer than the server" but locally consistent.
+        //   Do NOT wipe; let the client hold its queue while waiting
+        //   for the server to catch back up.
+        // * `cached == advertised` — match; no work needed.
+        // * `cached == None && pending non-empty` — store has never
+        //   observed an advertised version (fresh install OR pre-v4
+        //   row whose `app_schema_version` column is NULL). The
+        //   pending mutations may have been queued under any prior
+        //   shape — safest action is to DROP the queue (lossy but
+        //   bounded; this only fires once on the upgrade boundary).
         let mut cursor = cursor;
         let mut token = token;
-        if let Some(cached) = cached_schema_version {
-            if cached != advertised_schema_version {
-                tracing::info!(
-                    target: "pocopine.log",
-                    stream = stream.as_str(),
-                    cached_schema_version = cached,
-                    advertised_schema_version,
-                    "sync stream schema_version changed; clearing local cache + pending mutations",
-                );
-                if let Err(err) = local_store.clear_stream(&stream).await {
-                    // Fail loud: if the durable wipe failed, do NOT
-                    // proceed to pull + persist. A successful pull
-                    // would stamp the NEW app_schema_version via the
-                    // UPSERT coalesce, silently masking the wipe
-                    // failure forever. Surfacing the error keeps
-                    // cached at the OLD value so the next open
-                    // re-detects the mismatch and retries.
-                    handle.update(|state| {
-                        selector(state).apply_error(
-                            token,
-                            format!("local sync cache wipe-on-schema-bump failed: {err}"),
-                        );
-                    });
-                    return;
-                }
-                if epoch.is_stale() {
-                    return;
-                }
-                // In-memory side: hard reset via
-                // `reset_for_schema_invalidation`. Unlike
-                // `apply_local_snapshot_with_pending(empty, None, empty)`
-                // (which short-circuits in `apply_local_snapshot_inner`
-                // because all inputs are empty), this unconditionally
-                // drops canonical_rows, rows, pending_mutations, cursor,
-                // and bumps request_generation — so any in-flight token
-                // becomes a no-op via `is_current`.
-                pending_mutations.clear();
-                let new_token = handle.update(|state| {
-                    let collection = selector(state);
-                    collection.reset_for_schema_invalidation();
-                    // Re-issue a token; the prior `request_token` was
-                    // invalidated by the reset's generation bump.
-                    collection.begin_initial()
+        let must_wipe = match cached_schema_version {
+            Some(cached) if cached < advertised_schema_version => true,
+            None if !pending_mutations.is_empty() => true,
+            _ => false,
+        };
+        if must_wipe {
+            tracing::info!(
+                target: "pocopine.log",
+                stream = stream.as_str(),
+                cached_schema_version = ?cached_schema_version,
+                advertised_schema_version,
+                pending_mutations = pending_mutations.len(),
+                "sync stream schema_version drift detected; clearing local cache + pending mutations",
+            );
+            if let Err(err) = local_store.clear_stream(&stream).await {
+                // Fail loud: if the durable wipe failed, do NOT
+                // proceed to pull + persist. A successful pull
+                // would stamp the NEW app_schema_version via the
+                // UPSERT coalesce, silently masking the wipe
+                // failure forever. Surfacing the error keeps
+                // cached at the OLD value so the next open
+                // re-detects the mismatch and retries.
+                handle.update(|state| {
+                    selector(state).apply_error(
+                        token,
+                        format!("local sync cache wipe-on-schema-bump failed: {err}"),
+                    );
                 });
-                token = new_token;
-                // Force a Snapshot pull by nulling the cursor — the
-                // OLD-schema cursor was wiped durably; sending it to
-                // the server would yield an Incremental response that
-                // merges new-schema deltas onto an empty canonical
-                // set, leaving most rows missing until the next pull.
-                cursor = None;
+                return;
             }
+            if epoch.is_stale() {
+                return;
+            }
+            // In-memory side: hard reset via
+            // `reset_for_schema_invalidation`. Unlike
+            // `apply_local_snapshot_with_pending(empty, None, empty)`
+            // (which short-circuits in `apply_local_snapshot_inner`
+            // because all inputs are empty), this unconditionally
+            // drops canonical_rows, rows, pending_mutations, cursor,
+            // and bumps request_generation — so any in-flight token
+            // becomes a no-op via `is_current`.
+            pending_mutations.clear();
+            let new_token = handle.update(|state| {
+                let collection = selector(state);
+                collection.reset_for_schema_invalidation();
+                // Re-issue a token; the prior `request_token` was
+                // invalidated by the reset's generation bump.
+                collection.begin_initial()
+            });
+            token = new_token;
+            // Force a Snapshot pull by nulling the cursor — the
+            // OLD-schema cursor was wiped durably; sending it to
+            // the server would yield an Incremental response that
+            // merges new-schema deltas onto an empty canonical
+            // set, leaving most rows missing until the next pull.
+            cursor = None;
         }
         if let Some(live_wakeup) = live_wakeup {
             open_live_wakeup(
@@ -2021,6 +2035,7 @@ where
         op: mutation.op,
         base_version: mutation.base_version.clone(),
         payload: serde_json::to_value(&mutation.payload)?,
+        migrated_payload: None,
     })
 }
 

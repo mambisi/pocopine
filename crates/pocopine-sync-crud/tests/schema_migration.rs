@@ -1,4 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
+// `registry_lock` deliberately holds a `MutexGuard` across `.await`
+// to serialize tests that share the process-global plugin registry
+// (`pocopine_server::__reset_for_test`). Tests are linearized; the
+// async `tokio::sync::Mutex` would change behaviour for no benefit.
+#![allow(clippy::await_holding_lock)]
 
 //! End-to-end test for the Batch 3 schema-migration adapter.
 //!
@@ -15,8 +20,18 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
+
+/// Process-global plugin registry serialization. See the matching
+/// helpers in `pocopine-server/tests/server_plugin.rs` and
+/// `server_request_events.rs` for the reasoning.
+fn registry_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
 
 use http_body_util::BodyExt;
 use pocopine_auth::RequestContext;
@@ -171,6 +186,7 @@ fn migrate_v1_to_v2(from: u32, to: u32, mut value: Value) -> pocopine_sync::Sync
 
 #[tokio::test]
 async fn stale_schema_push_without_migrator_rejects_per_mutation() {
+    let _lock = registry_lock();
     let customers = Customers::default();
     let app = router_without_migrator(customers.clone());
 
@@ -204,6 +220,7 @@ async fn stale_schema_push_without_migrator_rejects_per_mutation() {
 
 #[tokio::test]
 async fn stale_schema_push_with_migrator_passes_through() {
+    let _lock = registry_lock();
     let customers = Customers::default();
     let app = router_with_migrator(customers.clone());
 
@@ -231,6 +248,7 @@ async fn stale_schema_push_with_migrator_passes_through() {
 
 #[tokio::test]
 async fn matching_schema_push_skips_migrator_entirely() {
+    let _lock = registry_lock();
     let customers = Customers::default();
     let app = router_with_migrator(customers.clone());
 
@@ -249,6 +267,133 @@ async fn matching_schema_push_skips_migrator_entirely() {
 
     assert_eq!(pushed.accepted.len(), 1);
     assert_eq!(pushed.rows[0].value["email"], "alice@example.com");
+}
+
+/// Repro for code-review finding #3: pre-rejected mutations must
+/// reach the client even when `source.push` returns an error for the
+/// surviving mutations. We don't have a transient-error-injecting
+/// source on hand, so we test the simpler invariant: with NO
+/// survivors (all mutations pre-rejected and source.push receives an
+/// empty batch), the response carries the pre-rejected entries.
+#[tokio::test]
+async fn all_stale_no_migrator_still_surfaces_rejections() {
+    let _lock = registry_lock();
+    let customers = Customers::default();
+    let app = router_without_migrator(customers.clone());
+
+    let m1 = CrudMutationPayload::create("c1".to_string(), serde_json::json!({ "name": "Alice" }))
+        .into_sync_draft()
+        .unwrap()
+        .with_id(MutationId::new("device:1").unwrap());
+    let m2 = CrudMutationPayload::create("c2".to_string(), serde_json::json!({ "name": "Bob" }))
+        .into_sync_draft()
+        .unwrap()
+        .with_id(MutationId::new("device:2").unwrap());
+    let req = SyncPushRequest::new(
+        SyncStreamName::new(STREAM).unwrap(),
+        [to_value(m1), to_value(m2)],
+    )
+    .with_schema_version(1);
+    let pushed = post_json::<_, SyncPushResponse<Value>>(app, SYNC_PUSH_PATH, &req).await;
+
+    assert!(pushed.accepted.is_empty());
+    assert_eq!(pushed.rejected.len(), 2);
+    assert!(customers.rows.lock().unwrap().is_empty());
+}
+
+/// Repro for code-review finding #5: a NEWER client pushing to an
+/// OLDER server (rolling deploy direction) should NOT route through
+/// `migrate_payload`. The source receives the wire payload as-is and
+/// rejects it via its own deserialization path — NOT via a
+/// SchemaMigration reason.
+#[tokio::test]
+async fn newer_client_push_skips_migration_entirely() {
+    let _lock = registry_lock();
+    pocopine_server::__reset_for_test();
+    // Server at v1 (NO `.schema_version(...)` call so it stays at default 1)
+    // with NO migrator. A "v2 client" sends `request.schema_version = 2`.
+    let customers = Customers::default();
+    let resource = resource(STREAM, customers.clone())
+        .unwrap()
+        .id(|row: &CustomerV2| row.id.clone())
+        .version(|row: &CustomerV2| row.version)
+        .memory_mutation_log();
+    let sync = pocopine_sync::SyncServer::builder()
+        .public_stream(resource)
+        .build();
+    let app = Server::new(Router::new())
+        .plugin(sync_server_plugin(sync))
+        .try_finalize()
+        .unwrap();
+
+    // The v2-shaped payload happens to be valid for v1 (v1 source
+    // accepts CustomerDraftV2). We don't care what `source.push`
+    // does with it — only that the framework didn't invoke
+    // `migrate_payload(2, 1)`.
+    let create = CrudMutationPayload::create(
+        "c1".to_string(),
+        serde_json::json!({ "name": "Alice", "email": "alice@example.com" }),
+    )
+    .into_sync_draft()
+    .unwrap()
+    .with_id(MutationId::new("device:1").unwrap());
+    let req = SyncPushRequest::new(SyncStreamName::new(STREAM).unwrap(), [to_value(create)])
+        .with_schema_version(2);
+    let pushed = post_json::<_, SyncPushResponse<Value>>(app, SYNC_PUSH_PATH, &req).await;
+
+    // No SchemaMigration rejection — the source either accepts or
+    // rejects via its own path. The key invariant: ZERO mutations
+    // are rejected with a `schema migration` reason.
+    for r in &pushed.rejected {
+        assert!(
+            !r.reason.contains("schema migration"),
+            "newer-client push must not invoke migrate_payload, got reason: {}",
+            r.reason
+        );
+    }
+}
+
+/// Repro for code-review finding #7: a push with explicit
+/// `schema_version: 0` is rejected with `BadRequest` at the server
+/// before reaching `migrate_payload`.
+#[tokio::test]
+async fn schema_version_zero_is_rejected_at_wire() {
+    let _lock = registry_lock();
+    let customers = Customers::default();
+    let app = router_without_migrator(customers);
+    let body = serde_json::json!({
+        "protocol": pocopine_sync::SYNC_PROTOCOL_V1,
+        "stream": STREAM,
+        "mutations": [],
+        "schema_version": 0,
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(SYNC_PUSH_PATH)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Server returns 200 OK with a `ServerResult::Err` payload because
+    // sync handlers wrap their result in `Json(ServerResult<T>)`. The
+    // BadRequest is inside the JSON body, not the HTTP status.
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let outer: pocopine_core::ServerResult<SyncPushResponse<Value>> =
+        serde_json::from_slice(&bytes).unwrap();
+    match outer {
+        Err(pocopine_core::ServerError::BadRequest(msg)) => {
+            assert!(
+                msg.contains("schema_version"),
+                "expected BadRequest about schema_version, got: {msg}"
+            );
+        }
+        other => panic!("expected BadRequest, got: {other:?}"),
+    }
 }
 
 fn router_without_migrator(customers: Customers) -> Router {
@@ -295,6 +440,7 @@ fn to_value(mutation: ClientMutation<CrudMutationPayload<String, Value>>) -> Cli
         op: mutation.op,
         base_version: mutation.base_version,
         payload: serde_json::to_value(mutation.payload).unwrap(),
+        migrated_payload: None,
     }
 }
 

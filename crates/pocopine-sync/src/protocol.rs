@@ -267,8 +267,13 @@ pub struct SyncOpenStream {
     /// is still valid. The `#[serde(default)]` makes the wire field
     /// backwards-compatible: an old server response without the field
     /// deserializes as `1`, and an old client reading a field-bearing
-    /// response just ignores it (serde drops unknown fields).
-    #[serde(default = "default_schema_version_one")]
+    /// response just ignores it (serde drops unknown fields). Explicit
+    /// JSON `null` is also coerced to the default for clients (TS,
+    /// Python) that emit `null` for unset fields.
+    #[serde(
+        default = "default_schema_version_one",
+        deserialize_with = "deserialize_schema_version_default_one"
+    )]
     pub schema_version: u32,
 }
 
@@ -277,6 +282,29 @@ pub struct SyncOpenStream {
 /// schema" — apps that have never bumped never observe this field.
 pub fn default_schema_version_one() -> u32 {
     1
+}
+
+/// Custom deserializer for the wire `schema_version` field. Accepts:
+///
+/// * the field being absent (handled by `#[serde(default = ...)]` —
+///   this deserializer isn't called),
+/// * the field being explicit `null` (TypeScript / Python clients
+///   that emit `null` for unset fields), AND
+/// * a normal `u32` value.
+///
+/// Both `missing` and `null` collapse to
+/// [`default_schema_version_one`]. Without this, an explicit
+/// `"schema_version": null` would fail deserialization with `invalid
+/// type: null, expected u32`, which a non-Rust client cannot
+/// distinguish from a network error.
+pub(crate) fn deserialize_schema_version_default_one<'de, D>(
+    deserializer: D,
+) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<u32>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_else(default_schema_version_one))
 }
 
 /// Open response.
@@ -384,6 +412,15 @@ pub struct ClientMutation<M> {
     pub op: SyncOp,
     pub base_version: Option<RowVersion>,
     pub payload: M,
+    /// Server-side sidecar set by the framework's `push_handler` when a
+    /// stale-schema request is migrated via
+    /// `SyncStreamSource::migrate_payload`. Stays `None` on the wire
+    /// (via `#[serde(skip)]`) and `None` for client-built mutations.
+    /// Stream sources MUST process `migrated_payload.as_ref().unwrap_or(&payload)`
+    /// but store the original `payload` for idempotency tracking — see
+    /// `processing_payload` / `original_payload` helpers.
+    #[serde(skip)]
+    pub migrated_payload: Option<M>,
 }
 
 impl<M> ClientMutation<M> {
@@ -395,6 +432,31 @@ impl<M> ClientMutation<M> {
             op,
             base_version: None,
             payload,
+            migrated_payload: None,
+        }
+    }
+
+    /// Returns a reference to the payload the source should DESERIALIZE
+    /// and APPLY: the migrated payload if `push_handler` ran a schema
+    /// migration, otherwise the original wire payload. Use this for the
+    /// actual write path.
+    pub fn processing_payload(&self) -> &M {
+        self.migrated_payload.as_ref().unwrap_or(&self.payload)
+    }
+
+    /// Take the payload the source should apply (migrated if present,
+    /// else original), consuming the sidecar. Stream-source `push`
+    /// implementations call this when they need an owned payload to
+    /// feed into deserialization. The mutation's `payload` field still
+    /// holds the original wire shape, so idempotency comparisons /
+    /// mutation-log writes can key on `payload` (NOT this return).
+    pub fn take_processing_payload(&mut self) -> M
+    where
+        M: Clone,
+    {
+        match self.migrated_payload.take() {
+            Some(migrated) => migrated,
+            None => self.payload.clone(),
         }
     }
 
@@ -553,6 +615,7 @@ impl<M> ClientMutationDraft<M> {
             op: self.op,
             base_version: self.base_version,
             payload: self.payload,
+            migrated_payload: None,
         }
     }
 }
@@ -567,13 +630,17 @@ pub struct SyncPushRequest<M> {
     pub mutations: Vec<ClientMutation<M>>,
     /// Application-level schema version the CLIENT encoded these
     /// mutations against. The server compares against
-    /// `SyncStreamSource::schema_version()`; on mismatch the source's
-    /// `migrate_payload` is invoked per mutation. A source that hasn't
-    /// registered a migrator rejects each mutation with
-    /// `SyncError::SchemaMigration`. Defaults to `1` so an old client
-    /// that doesn't send the field is treated as v1, matching Batch 1's
-    /// default for `SyncStreamSource::schema_version`.
-    #[serde(default = "default_schema_version_one")]
+    /// `SyncStreamSource::schema_version()`; when the client is on an
+    /// OLDER version, the source's `migrate_payload` is invoked per
+    /// mutation. A source that hasn't registered a migrator rejects
+    /// each mutation with `SyncError::SchemaMigration`. Defaults to
+    /// `1` so an old client that doesn't send the field is treated
+    /// as v1; explicit JSON `null` is coerced to the default too,
+    /// for clients (TS, Python) that emit `null` for unset fields.
+    #[serde(
+        default = "default_schema_version_one",
+        deserialize_with = "deserialize_schema_version_default_one"
+    )]
     pub schema_version: u32,
 }
 
@@ -592,9 +659,18 @@ impl<M> SyncPushRequest<M> {
 
     /// Set the application-level schema version the mutations are
     /// encoded under. Generated client helpers fill this from the
-    /// resource's compile-time `SCHEMA_VERSION` constant.
+    /// resource's compile-time `SCHEMA_VERSION` constant. `0` is
+    /// coerced to `1` (the framework's canonical default) so the
+    /// builder cannot accidentally smuggle an out-of-range value
+    /// onto the wire — the server's push handler also rejects `0`
+    /// defensively in case a raw `SyncPushRequest` is constructed
+    /// via struct literal.
     pub fn with_schema_version(mut self, schema_version: u32) -> Self {
-        self.schema_version = schema_version;
+        self.schema_version = if schema_version == 0 {
+            default_schema_version_one()
+        } else {
+            schema_version
+        };
         self
     }
 }
@@ -610,6 +686,12 @@ pub struct SyncConflict<T> {
 }
 
 /// Rejected mutation returned by a push.
+///
+/// **Ordering:** `SyncPushResponse::rejected` is NOT guaranteed to
+/// match the request's mutation order. The server may surface
+/// schema-migration rejections after source-side rejections (or
+/// vice versa). Consumers should correlate by `mutation_id`, not by
+/// index.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncRejectedMutation {
     pub mutation_id: MutationId,
@@ -703,6 +785,74 @@ mod tests {
             sync_stream_tag("posts_for_tenant"),
             "sync:stream:posts_for_tenant"
         );
+    }
+
+    #[test]
+    fn open_stream_schema_version_accepts_missing_and_explicit_null() {
+        // Missing field — the existing `#[serde(default)]` already
+        // handled this; lock the behaviour against future changes.
+        let json = serde_json::json!({
+            "stream": "posts",
+            "collection": "posts",
+            "cursor": null,
+        });
+        let stream: SyncOpenStream = serde_json::from_value(json).unwrap();
+        assert_eq!(stream.schema_version, 1);
+
+        // Explicit JSON null — the new `deserialize_with` coerces it
+        // to the default. Without this, non-Rust clients emitting
+        // `{"schema_version": null}` would fail with `invalid type:
+        // null, expected u32`.
+        let json = serde_json::json!({
+            "stream": "posts",
+            "collection": "posts",
+            "cursor": null,
+            "schema_version": null,
+        });
+        let stream: SyncOpenStream = serde_json::from_value(json).unwrap();
+        assert_eq!(stream.schema_version, 1);
+
+        // A concrete value still round-trips.
+        let json = serde_json::json!({
+            "stream": "posts",
+            "collection": "posts",
+            "cursor": null,
+            "schema_version": 7,
+        });
+        let stream: SyncOpenStream = serde_json::from_value(json).unwrap();
+        assert_eq!(stream.schema_version, 7);
+    }
+
+    #[test]
+    fn push_request_schema_version_accepts_missing_and_explicit_null() {
+        let stream = SyncStreamName::new("posts").unwrap();
+        // Missing → default 1.
+        let json = serde_json::json!({
+            "protocol": SYNC_PROTOCOL_V1,
+            "stream": "posts",
+            "mutations": [],
+        });
+        let req: SyncPushRequest<serde_json::Value> = serde_json::from_value(json).unwrap();
+        assert_eq!(req.schema_version, 1);
+        let _ = stream;
+        // Explicit null → coerced to default 1.
+        let json = serde_json::json!({
+            "protocol": SYNC_PROTOCOL_V1,
+            "stream": "posts",
+            "mutations": [],
+            "schema_version": null,
+        });
+        let req: SyncPushRequest<serde_json::Value> = serde_json::from_value(json).unwrap();
+        assert_eq!(req.schema_version, 1);
+    }
+
+    #[test]
+    fn with_schema_version_coerces_zero_to_default() {
+        let stream = SyncStreamName::new("posts").unwrap();
+        let req: SyncPushRequest<serde_json::Value> = SyncPushRequest::new(stream, []);
+        let req = req.with_schema_version(0);
+        // Builder coerces 0 → 1 so a stray default never lands on the wire.
+        assert_eq!(req.schema_version, 1);
     }
 
     #[test]
