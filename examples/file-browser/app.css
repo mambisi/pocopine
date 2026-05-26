@@ -1,3 +1,73 @@
 @import "tailwindcss";
 
 @source "./src/**/*.poco";
+
+/* Design tokens — warm-neutral surface, single muted-blue accent,
+ * green success / red danger / amber warn. Exposed as Tailwind
+ * theme colors (`bg-bg`, `text-ink-100`, `border-accent`, …) AND
+ * as raw `--color-*` custom properties so `bg-[var(--…)]` works
+ * for opacity / shadow / box-shadow rgba()-style mixing. Lifted
+ * from the Claude Design Upload Component spec.
+ */
+@theme {
+  --color-bg: #f6f5f2;
+  --color-surface: #ffffff;
+  --color-surface-2: #fafaf7;
+
+  --color-ink-100: #18171a;
+  --color-ink-80: #2c2a2e;
+  --color-ink-70: #4a4750;
+  --color-ink-60: #6b6873;
+  --color-ink-50: #8a8794;
+  --color-ink-40: #b1aeb8;
+  --color-ink-30: #d4d1d8;
+  --color-ink-20: #e7e4ea;
+  --color-ink-10: #efedf1;
+
+  --color-line: #e5e2e8;
+  --color-line-strong: #d4d1d8;
+
+  --color-accent: oklch(0.54 0.13 252);
+  --color-accent-soft: oklch(0.95 0.03 252);
+  --color-accent-strong: oklch(0.42 0.14 252);
+
+  --color-success: oklch(0.58 0.13 155);
+  --color-success-soft: oklch(0.95 0.04 155);
+  --color-success-strong: oklch(0.42 0.13 155);
+
+  --color-danger: oklch(0.55 0.18 25);
+  --color-danger-soft: oklch(0.95 0.04 25);
+  --color-danger-line: oklch(0.88 0.07 25);
+  --color-danger-strong: oklch(0.42 0.18 25);
+
+  --color-warn: oklch(0.7 0.13 70);
+  --color-warn-soft: oklch(0.95 0.05 70);
+  --color-warn-strong: oklch(0.5 0.13 70);
+
+  --color-thumb-pdf: oklch(0.5 0.16 25);
+  --color-thumb-img: oklch(0.55 0.13 200);
+  --color-thumb-archive: oklch(0.55 0.14 30);
+  --color-thumb-doc: oklch(0.5 0.13 250);
+  --color-thumb-default: var(--color-ink-70);
+
+  --shadow-card: 0 1px 2px rgba(20, 18, 28, 0.05);
+  --shadow-ring-accent: 0 0 0 4px oklch(0.95 0.03 252 / 0.6);
+}
+
+/* Custom-element display defaults — Pine compounds otherwise
+ * inherit the default `display: inline`, which breaks block-flow
+ * layout when the Tailwind utilities expect a block element.
+ */
+pine-upload-root,
+pine-upload-dropzone,
+pine-upload-trigger,
+pine-upload-item,
+pine-upload-clear {
+  display: block;
+}
+
+pine-upload-item-cancel,
+pine-upload-item-retry,
+pine-upload-item-remove {
+  display: inline-flex;
+}
