@@ -4,9 +4,11 @@
 //! app plugin and the host server plugin.
 
 #[cfg(not(target_arch = "wasm32"))]
-mod backend_common;
+#[doc(hidden)]
+pub mod backend_common;
 #[cfg(not(target_arch = "wasm32"))]
-mod checksum;
+#[doc(hidden)]
+pub mod checksum;
 mod client;
 mod error;
 mod protocol;

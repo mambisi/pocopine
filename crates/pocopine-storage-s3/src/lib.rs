@@ -8,26 +8,39 @@
 //! For S3-compatible services such as MinIO, build an `aws_sdk_s3::Client`
 //! with the provider-specific endpoint/path-style settings and pass it to
 //! [`S3StorageBackend::new`].
+//!
+//! This first adapter is deliberately a bounded sequential proxy backend. It
+//! keeps staging bytes in memory while appending/completing and relies on
+//! in-process per-session locks, so route a given upload session to one server
+//! replica or wait for the future provider-side multipart backend before using
+//! it for large or horizontally written uploads.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex};
 
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::get_object::GetObjectError;
+use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
+use pocopine_storage::backend_common::{
+    checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
+    ensure_upload_length_can_be_set, expires_at, refresh_expired, selected_strategy,
+};
+use pocopine_storage::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
 use pocopine_storage::{
-    ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef,
-    ObjectVisibility, StorageActor, StorageBackend, StorageBoxFuture, StorageContext, StorageError,
-    StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
+    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef, ObjectVisibility,
+    StorageActor, StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageKey,
+    StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
     UploadStrategy,
 };
-use sha2::{Digest, Sha256};
-use time::OffsetDateTime;
 use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
 const DEFAULT_BACKEND_NAME: &str = "s3";
 const DEFAULT_INTERNAL_PREFIX: &str = "__pocopine/storage/sessions";
+const DEFAULT_MAX_PROXY_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct StoredUploadSession {
@@ -39,21 +52,24 @@ struct StoredUploadSession {
     checksum_policy: ChecksumPolicy,
     request_metadata: BTreeMap<String, String>,
     object: Option<ObjectRef>,
+    #[serde(default)]
+    cleanup_pending: bool,
 }
 
 /// Storage backend backed by an S3-compatible object store.
 ///
 /// The adapter stores temporary upload bytes as an internal object and rewrites
 /// that object on each sequential `PATCH`. That keeps the first S3 backend
-/// compatible with Pocopine's existing resumable upload protocol, but it is
-/// not the high-throughput/direct multipart path. A later direct/multipart
-/// backend can add provider-side multipart uploads without changing the public
-/// `StorageBackend` contract.
+/// compatible with Pocopine's existing resumable upload protocol for bounded
+/// uploads, but it is not the high-throughput/direct multipart path. A later
+/// direct/multipart backend can add provider-side multipart uploads without
+/// changing the public `StorageBackend` contract.
 #[derive(Clone)]
 pub struct S3StorageBackend {
     name: &'static str,
     client: Client,
     layout: S3KeyLayout,
+    max_proxy_upload_bytes: u64,
     session_locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
 }
 
@@ -64,6 +80,7 @@ impl std::fmt::Debug for S3StorageBackend {
             .field("bucket", &self.layout.bucket)
             .field("object_prefix", &self.layout.object_prefix)
             .field("internal_prefix", &self.layout.internal_prefix)
+            .field("max_proxy_upload_bytes", &self.max_proxy_upload_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -84,6 +101,7 @@ impl S3StorageBackend {
             name,
             client,
             layout: S3KeyLayout::new(bucket.into(), None, DEFAULT_INTERNAL_PREFIX.to_string())?,
+            max_proxy_upload_bytes: DEFAULT_MAX_PROXY_UPLOAD_BYTES,
             session_locks: Arc::new(StdMutex::new(HashMap::new())),
         })
     }
@@ -103,6 +121,22 @@ impl S3StorageBackend {
         Ok(self)
     }
 
+    /// Override the maximum size accepted by this sequential proxy backend.
+    ///
+    /// The default is 64 MiB because each append rewrites the staged object and
+    /// completion loads the staged bytes before the final S3 write. Larger
+    /// values are possible, but applications should prefer the future multipart
+    /// backend for large uploads.
+    pub fn with_max_proxy_upload_bytes(mut self, max_bytes: u64) -> StorageResult<Self> {
+        if max_bytes == 0 {
+            return Err(StorageError::policy_rejected(
+                "S3 max proxy upload bytes must be greater than zero",
+            ));
+        }
+        self.max_proxy_upload_bytes = max_bytes;
+        Ok(self)
+    }
+
     pub fn bucket(&self) -> &str {
         &self.layout.bucket
     }
@@ -113,6 +147,10 @@ impl S3StorageBackend {
 
     pub fn internal_prefix(&self) -> &str {
         &self.layout.internal_prefix
+    }
+
+    pub fn max_proxy_upload_bytes(&self) -> u64 {
+        self.max_proxy_upload_bytes
     }
 
     fn session_lock(&self, session: &UploadSessionId) -> Arc<TokioMutex<()>> {
@@ -180,21 +218,19 @@ impl S3StorageBackend {
         session: &UploadSessionId,
         trusted_len: u64,
     ) -> StorageResult<Vec<u8>> {
-        let mut staged = self.get_staged_bytes(session).await?;
+        let staged = self.get_staged_bytes(session).await?;
         let actual = staged.len() as u64;
-        if actual == trusted_len {
-            return Ok(staged);
-        }
         if actual > trusted_len {
             tracing::warn!(
                 target: "pocopine.log",
-                event_name = "pocopine.storage.truncate_uncommitted_s3_bytes",
+                event_name = "pocopine.storage.s3_staged_bytes_ahead",
                 session = %session,
                 actual,
                 trusted = trusted_len,
             );
-            staged.truncate(trusted_len as usize);
-            self.put_staged_bytes(session, staged.clone()).await?;
+            return Ok(staged);
+        }
+        if actual == trusted_len {
             return Ok(staged);
         }
         Err(StorageError::backend(format!(
@@ -214,6 +250,15 @@ impl S3StorageBackend {
     }
 
     async fn get_object_bytes(&self, key: &str) -> StorageResult<Vec<u8>> {
+        self.get_object_bytes_with_etag(key)
+            .await
+            .map(|(bytes, _etag)| bytes)
+    }
+
+    async fn get_object_bytes_with_etag(
+        &self,
+        key: &str,
+    ) -> StorageResult<(Vec<u8>, Option<String>)> {
         let output = self
             .client
             .get_object()
@@ -222,7 +267,7 @@ impl S3StorageBackend {
             .send()
             .await
             .map_err(|err| {
-                if is_s3_not_found(&err) {
+                if is_get_object_not_found(&err) {
                     StorageError::unknown_upload_session(key.to_string())
                 } else {
                     s3_error("get object", err)
@@ -234,7 +279,7 @@ impl S3StorageBackend {
             .await
             .map_err(|err| s3_error("read object body", err))?
             .into_bytes();
-        Ok(bytes.to_vec())
+        Ok((bytes.to_vec(), output.e_tag.map(normalize_etag)))
     }
 
     async fn put_object_bytes(
@@ -259,6 +304,50 @@ impl S3StorageBackend {
         Ok(output.e_tag.map(normalize_etag))
     }
 
+    async fn put_completed_object(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: Option<&str>,
+    ) -> StorageResult<Option<String>> {
+        match self.get_object_bytes_with_etag(key).await {
+            Ok((existing, etag)) => {
+                if existing == bytes {
+                    return Ok(etag);
+                }
+                return Err(StorageError::policy_rejected(format!(
+                    "S3 object key already exists with different bytes: {key}"
+                )));
+            }
+            Err(StorageError::UnknownUploadSession { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.layout.bucket)
+            .key(key)
+            .if_none_match("*")
+            .body(ByteStream::from(bytes.to_vec()));
+        if let Some(content_type) = content_type {
+            request = request.content_type(content_type);
+        }
+        match request.send().await {
+            Ok(output) => Ok(output.e_tag.map(normalize_etag)),
+            Err(err) if is_put_precondition_failed(&err) => {
+                let (existing, etag) = self.get_object_bytes_with_etag(key).await?;
+                if existing == bytes {
+                    Ok(etag)
+                } else {
+                    Err(StorageError::policy_rejected(format!(
+                        "S3 object key already exists with different bytes: {key}"
+                    )))
+                }
+            }
+            Err(err) => Err(s3_error("put completed object", err)),
+        }
+    }
+
     async fn delete_object(&self, key: &str) -> StorageResult<()> {
         self.client
             .delete_object()
@@ -277,6 +366,29 @@ impl S3StorageBackend {
     ) -> StorageResult<()> {
         if stored.public.status == UploadSessionStatus::Expired {
             self.write_session(session, stored).await?;
+        }
+        Ok(())
+    }
+
+    async fn cleanup_staged_bytes(
+        &self,
+        session: &UploadSessionId,
+        stored: &mut StoredUploadSession,
+    ) -> StorageResult<()> {
+        if !stored.cleanup_pending {
+            return Ok(());
+        }
+        self.delete_object(&self.layout.session_bytes_key(session))
+            .await?;
+        stored.cleanup_pending = false;
+        self.write_session(session, stored).await
+    }
+
+    fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
+        if let Some(size) = size {
+            if size > self.max_proxy_upload_bytes {
+                return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
+            }
         }
         Ok(())
     }
@@ -305,6 +417,26 @@ impl S3StorageBackend {
     }
 }
 
+struct SessionLockCleanup<'a> {
+    backend: &'a S3StorageBackend,
+    session: UploadSessionId,
+}
+
+impl<'a> SessionLockCleanup<'a> {
+    fn new(backend: &'a S3StorageBackend, session: &UploadSessionId) -> Self {
+        Self {
+            backend,
+            session: session.clone(),
+        }
+    }
+}
+
+impl Drop for SessionLockCleanup<'_> {
+    fn drop(&mut self) {
+        self.backend.drop_session_lock(&self.session);
+    }
+}
+
 impl StorageBackend for S3StorageBackend {
     fn name(&self) -> &'static str {
         self.name
@@ -317,6 +449,8 @@ impl StorageBackend for S3StorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             let strategy = selected_strategy(request.requested_strategy)?;
+            ensure_supported_checksum_policy(&request.policy.checksum)?;
+            self.ensure_requested_size_is_supported(request.size)?;
             let id = UploadSessionId::new(Uuid::new_v4().to_string())?;
             let session = UploadSession {
                 id: id.clone(),
@@ -345,13 +479,17 @@ impl StorageBackend for S3StorageBackend {
                 owner: ctx.actor.clone(),
                 storage_key: request.storage_key,
                 visibility: request.policy.visibility,
-                max_bytes: request.policy.max_bytes,
+                max_bytes: request.policy.max_bytes.min(self.max_proxy_upload_bytes),
                 checksum_policy: request.policy.checksum,
                 request_metadata: request.metadata,
                 object: None,
+                cleanup_pending: false,
             };
-            self.put_staged_bytes(&id, Vec::new()).await?;
             self.write_session(&id, &stored).await?;
+            if let Err(err) = self.put_staged_bytes(&id, Vec::new()).await {
+                let _ = self.delete_object(&self.layout.session_meta_key(&id)).await;
+                return Err(err);
+            }
             Ok(session)
         })
     }
@@ -363,9 +501,20 @@ impl StorageBackend for S3StorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             let lock = self.session_lock(&session);
+            let _cleanup = SessionLockCleanup::new(self, &session);
             let _guard = lock.lock().await;
-            let stored = self.read_session(&session).await?;
+            let mut stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
+            if stored.public.status == UploadSessionStatus::Open {
+                let staged = self
+                    .reconcile_staged_bytes(&session, stored.public.next_offset.unwrap_or(0))
+                    .await?;
+                let staged_len = staged.len() as u64;
+                if stored.public.next_offset != Some(staged_len) {
+                    stored.public.next_offset = Some(staged_len);
+                    self.write_session(&session, &stored).await?;
+                }
+            }
             Ok(stored.public)
         })
     }
@@ -378,7 +527,9 @@ impl StorageBackend for S3StorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             let lock = self.session_lock(&session);
+            let _cleanup = SessionLockCleanup::new(self, &session);
             let _guard = lock.lock().await;
+            self.ensure_requested_size_is_supported(Some(size))?;
             let mut stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
             self.persist_expired_if_needed(&session, &stored).await?;
@@ -404,6 +555,7 @@ impl StorageBackend for S3StorageBackend {
     ) -> StorageBoxFuture<'a, UploadSession> {
         Box::pin(async move {
             let lock = self.session_lock(&session);
+            let _cleanup = SessionLockCleanup::new(self, &session);
             let _guard = lock.lock().await;
             let mut stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
@@ -414,7 +566,14 @@ impl StorageBackend for S3StorageBackend {
                     "S3 backend currently supports sequential proxy uploads only",
                 ));
             }
-            let expected = stored.public.next_offset.unwrap_or(0);
+            let mut expected = stored.public.next_offset.unwrap_or(0);
+            let mut staged = self.reconcile_staged_bytes(&session, expected).await?;
+            let staged_len = staged.len() as u64;
+            if staged_len > expected {
+                expected = staged_len;
+                stored.public.next_offset = Some(staged_len);
+                self.write_session(&session, &stored).await?;
+            }
             if expected != offset {
                 tracing::debug!(
                     target: "pocopine.log",
@@ -425,7 +584,6 @@ impl StorageBackend for S3StorageBackend {
                 );
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
-            let mut staged = self.reconcile_staged_bytes(&session, expected).await?;
             let new_offset = checked_new_offset(offset, bytes.len())?;
             ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
             staged.extend_from_slice(&bytes);
@@ -443,19 +601,24 @@ impl StorageBackend for S3StorageBackend {
     ) -> StorageBoxFuture<'a, ObjectRef> {
         Box::pin(async move {
             let lock = self.session_lock(&request.session);
+            let _cleanup = SessionLockCleanup::new(self, &request.session);
             let _guard = lock.lock().await;
             let mut stored = self.read_session(&request.session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
             if let Some(object) = &stored.object {
-                return Ok(object.clone());
+                let object = object.clone();
+                self.cleanup_staged_bytes(&request.session, &mut stored)
+                    .await?;
+                return Ok(object);
             }
             self.persist_expired_if_needed(&request.session, &stored)
                 .await?;
-            ensure_open(&stored.public)?;
-            let actual = stored.public.next_offset.unwrap_or(0);
+            ensure_completable(&stored.public)?;
+            let trusted = stored.public.next_offset.unwrap_or(0);
             let staged = self
-                .reconcile_staged_bytes(&request.session, actual)
+                .reconcile_staged_bytes(&request.session, trusted)
                 .await?;
+            let actual = staged.len() as u64;
             if let Some(expected) = stored.public.size {
                 if actual != expected {
                     return Err(StorageError::policy_rejected(format!(
@@ -467,17 +630,24 @@ impl StorageBackend for S3StorageBackend {
             let checksum =
                 validate_complete_checksum(&stored.checksum_policy, &staged, request.checksum)?;
             let object_key = self.layout.object_key(stored.storage_key.key.as_str());
+            if stored.public.status == UploadSessionStatus::Open
+                || stored.public.next_offset != Some(actual)
+            {
+                stored.public.status = UploadSessionStatus::Completing;
+                stored.public.next_offset = Some(actual);
+                self.write_session(&request.session, &stored).await?;
+            }
             let etag = self
-                .put_object_bytes(&object_key, staged, stored.public.content_type.as_deref())
+                .put_completed_object(&object_key, &staged, stored.public.content_type.as_deref())
                 .await?;
             let object = self.object_ref(&stored, actual, etag, checksum);
             stored.public.status = UploadSessionStatus::Complete;
             stored.public.next_offset = Some(actual);
             stored.object = Some(object.clone());
+            stored.cleanup_pending = true;
             self.write_session(&request.session, &stored).await?;
-            let _ = self
-                .delete_object(&self.layout.session_bytes_key(&request.session))
-                .await;
+            self.cleanup_staged_bytes(&request.session, &mut stored)
+                .await?;
             Ok(object)
         })
     }
@@ -489,18 +659,22 @@ impl StorageBackend for S3StorageBackend {
     ) -> StorageBoxFuture<'a, ()> {
         Box::pin(async move {
             let lock = self.session_lock(&session);
-            let guard = lock.lock().await;
-            match self.read_session(&session).await {
-                Ok(stored) => ensure_owner(&ctx.actor, &stored.owner)?,
-                Err(StorageError::UnknownUploadSession { .. }) => return Ok(()),
+            let _cleanup = SessionLockCleanup::new(self, &session);
+            let _guard = lock.lock().await;
+            let known_session = match self.read_session(&session).await {
+                Ok(stored) => {
+                    ensure_owner(&ctx.actor, &stored.owner)?;
+                    true
+                }
+                Err(StorageError::UnknownUploadSession { .. }) => false,
                 Err(err) => return Err(err),
-            }
+            };
             let meta_key = self.layout.session_meta_key(&session);
             let bytes_key = self.layout.session_bytes_key(&session);
-            self.delete_object(&meta_key).await?;
             self.delete_object(&bytes_key).await?;
-            drop(guard);
-            self.drop_session_lock(&session);
+            if known_session {
+                self.delete_object(&meta_key).await?;
+            }
             Ok(())
         })
     }
@@ -510,6 +684,7 @@ impl StorageBackend for S3StorageBackend {
 struct S3KeyLayout {
     bucket: String,
     object_prefix: Option<String>,
+    internal_prefix_base: String,
     internal_prefix: String,
 }
 
@@ -526,22 +701,25 @@ impl S3KeyLayout {
             ));
         }
         let object_prefix = object_prefix.and_then(normalize_prefix);
-        let internal_prefix = normalize_prefix(internal_prefix)
+        let internal_prefix_base = normalize_prefix(internal_prefix)
             .ok_or_else(|| StorageError::policy_rejected("S3 internal prefix must not be empty"))?;
+        let internal_prefix =
+            join_optional_prefix(object_prefix.as_deref(), internal_prefix_base.as_str());
         Ok(Self {
             bucket,
             object_prefix,
+            internal_prefix_base,
             internal_prefix,
         })
     }
 
     fn with_prefix(&self, prefix: String) -> StorageResult<Self> {
         let object_prefix = normalize_prefix(prefix);
-        let internal_prefix = match &object_prefix {
-            Some(prefix) => format!("{prefix}/{DEFAULT_INTERNAL_PREFIX}"),
-            None => DEFAULT_INTERNAL_PREFIX.to_string(),
-        };
-        Self::new(self.bucket.clone(), object_prefix, internal_prefix)
+        Self::new(
+            self.bucket.clone(),
+            object_prefix,
+            self.internal_prefix_base.clone(),
+        )
     }
 
     fn with_internal_prefix(&self, prefix: String) -> StorageResult<Self> {
@@ -565,180 +743,11 @@ impl S3KeyLayout {
     }
 }
 
-fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
-    match strategy {
-        UploadStrategy::Auto | UploadStrategy::Sequential => Ok(UploadStrategy::Sequential),
-        UploadStrategy::SingleRequest | UploadStrategy::Multipart => {
-            Err(StorageError::unsupported(
-                "S3 backend currently supports sequential proxy uploads only",
-            ))
-        }
-        _ => Err(StorageError::unsupported(
-            "S3 backend currently supports sequential proxy uploads only",
-        )),
-    }
-}
-
-fn expires_at(duration: std::time::Duration) -> OffsetDateTime {
-    OffsetDateTime::now_utc()
-        + time::Duration::seconds(duration.as_secs().min(i64::MAX as u64) as i64)
-}
-
-fn ensure_owner(actor: &StorageActor, owner: &StorageActor) -> StorageResult<()> {
-    if actor.same_owner(owner) {
+fn ensure_completable(session: &UploadSession) -> StorageResult<()> {
+    if session.status == UploadSessionStatus::Completing {
         Ok(())
     } else {
-        Err(StorageError::forbidden(
-            "upload session belongs to a different storage actor",
-        ))
-    }
-}
-
-fn ensure_open(session: &UploadSession) -> StorageResult<()> {
-    match session.status {
-        UploadSessionStatus::Open => Ok(()),
-        UploadSessionStatus::Complete => Err(StorageError::UploadComplete {
-            session: session.id.to_string(),
-        }),
-        UploadSessionStatus::Aborted
-        | UploadSessionStatus::Expired
-        | UploadSessionStatus::Completing => Err(StorageError::UploadClosed {
-            session: session.id.to_string(),
-        }),
-        _ => Err(StorageError::UploadClosed {
-            session: session.id.to_string(),
-        }),
-    }
-}
-
-fn refresh_expired(session: &mut UploadSession) -> bool {
-    if session.status == UploadSessionStatus::Open
-        && OffsetDateTime::now_utc() >= session.expires_at
-    {
-        session.status = UploadSessionStatus::Expired;
-        true
-    } else {
-        false
-    }
-}
-
-fn checked_new_offset(offset: u64, byte_count: usize) -> StorageResult<u64> {
-    offset
-        .checked_add(byte_count as u64)
-        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))
-}
-
-fn ensure_size_limit(
-    max_bytes: u64,
-    declared_size: Option<u64>,
-    new_offset: u64,
-) -> StorageResult<()> {
-    if new_offset > max_bytes {
-        return Err(StorageError::policy_rejected(format!(
-            "upload exceeds scope max of {max_bytes} bytes"
-        )));
-    }
-    if let Some(size) = declared_size {
-        if new_offset > size {
-            return Err(StorageError::policy_rejected(format!(
-                "upload exceeds declared size of {size} bytes"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn ensure_upload_length_can_be_set(
-    max_bytes: u64,
-    session: &UploadSession,
-    committed_offset: u64,
-    size: u64,
-) -> StorageResult<()> {
-    ensure_open(session)?;
-    if let Some(existing) = session.size {
-        if existing == size {
-            return Ok(());
-        }
-        return Err(StorageError::policy_rejected(
-            "cannot change upload length after it is set",
-        ));
-    }
-    if size > max_bytes {
-        return Err(StorageError::payload_too_large(max_bytes));
-    }
-    if committed_offset > size {
-        return Err(StorageError::policy_rejected(format!(
-            "upload length {size} is smaller than the committed offset {committed_offset}"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_complete_checksum(
-    policy: &ChecksumPolicy,
-    bytes: &[u8],
-    provided: Option<ObjectChecksum>,
-) -> StorageResult<Option<ObjectChecksum>> {
-    match policy {
-        ChecksumPolicy::None => Ok(None),
-        ChecksumPolicy::Optional(allowed) => {
-            if let Some(checksum) = &provided {
-                if !allowed.contains(&checksum.algorithm) {
-                    return Err(StorageError::policy_rejected(
-                        "checksum algorithm is not allowed",
-                    ));
-                }
-                let computed = compute_checksum(checksum.algorithm, bytes)?;
-                if !checksum.value.eq_ignore_ascii_case(&computed.value) {
-                    return Err(StorageError::policy_rejected(
-                        "upload checksum does not match uploaded bytes",
-                    ));
-                }
-                return Ok(Some(computed));
-            }
-            Ok(None)
-        }
-        ChecksumPolicy::Required(algorithm) => {
-            let provided = provided.ok_or_else(|| {
-                StorageError::policy_rejected("required upload checksum is missing")
-            })?;
-            if provided.algorithm != *algorithm {
-                return Err(StorageError::policy_rejected(
-                    "required upload checksum algorithm does not match policy",
-                ));
-            }
-            let computed = compute_checksum(*algorithm, bytes)?;
-            if !provided.value.eq_ignore_ascii_case(&computed.value) {
-                return Err(StorageError::policy_rejected(
-                    "required upload checksum does not match uploaded bytes",
-                ));
-            }
-            Ok(Some(computed))
-        }
-        _ => Err(StorageError::unsupported(
-            "unsupported checksum policy for S3 backend",
-        )),
-    }
-}
-
-fn compute_checksum(algorithm: ChecksumAlgorithm, bytes: &[u8]) -> StorageResult<ObjectChecksum> {
-    match algorithm {
-        ChecksumAlgorithm::Sha256 => {
-            let digest = Sha256::digest(bytes);
-            let mut value = String::with_capacity(digest.len() * 2);
-            for byte in digest {
-                use std::fmt::Write as _;
-                write!(&mut value, "{byte:02x}")
-                    .map_err(|err| StorageError::backend(format!("format checksum: {err}")))?;
-            }
-            Ok(ObjectChecksum { algorithm, value })
-        }
-        ChecksumAlgorithm::Crc32c | ChecksumAlgorithm::Md5 => Err(StorageError::unsupported(
-            "only sha256 checksum verification is implemented for S3 backend checksums",
-        )),
-        _ => Err(StorageError::unsupported(
-            "only sha256 checksum verification is implemented for S3 backend checksums",
-        )),
+        ensure_open(session)
     }
 }
 
@@ -762,12 +771,15 @@ fn normalize_etag(etag: String) -> String {
     etag.trim_matches('"').to_string()
 }
 
-fn is_s3_not_found(err: &impl std::fmt::Display) -> bool {
-    let message = err.to_string();
-    message.contains("NoSuchKey")
-        || message.contains("NotFound")
-        || message.contains("404")
-        || message.contains("status code: 404")
+fn is_get_object_not_found(err: &SdkError<GetObjectError>) -> bool {
+    err.as_service_error()
+        .is_some_and(GetObjectError::is_no_such_key)
+}
+
+fn is_put_precondition_failed(err: &SdkError<PutObjectError>) -> bool {
+    err.as_service_error()
+        .and_then(|err| err.meta().code())
+        .is_some_and(|code| code == "PreconditionFailed")
 }
 
 fn s3_error(operation: &'static str, err: impl std::fmt::Display) -> StorageError {
@@ -789,7 +801,7 @@ mod tests {
         let layout = S3KeyLayout::new(
             "bucket".to_string(),
             Some("tenant-a/".to_string()),
-            "tenant-a/__pocopine/storage/sessions".to_string(),
+            DEFAULT_INTERNAL_PREFIX.to_string(),
         )
         .unwrap();
         let session = UploadSessionId::new("session-1").unwrap();
@@ -806,6 +818,33 @@ mod tests {
             layout.session_bytes_key(&session),
             "tenant-a/__pocopine/storage/sessions/session-1/bytes.tmp"
         );
+    }
+
+    #[test]
+    fn prefix_and_internal_prefix_are_order_independent() {
+        let first = S3KeyLayout::new(
+            "bucket".to_string(),
+            None,
+            DEFAULT_INTERNAL_PREFIX.to_string(),
+        )
+        .unwrap()
+        .with_internal_prefix("custom/sessions".to_string())
+        .unwrap()
+        .with_prefix("tenant-a".to_string())
+        .unwrap();
+        let second = S3KeyLayout::new(
+            "bucket".to_string(),
+            None,
+            DEFAULT_INTERNAL_PREFIX.to_string(),
+        )
+        .unwrap()
+        .with_prefix("tenant-a".to_string())
+        .unwrap()
+        .with_internal_prefix("custom/sessions".to_string())
+        .unwrap();
+
+        assert_eq!(first.internal_prefix, "tenant-a/custom/sessions");
+        assert_eq!(second.internal_prefix, first.internal_prefix);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
 use pocopine_storage::{
@@ -208,5 +209,77 @@ async fn wrong_offset_returns_typed_mismatch_against_minio() -> StorageResult<()
             provided: 1
         })
     ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_session_and_repeated_abort_are_typed_against_minio() -> StorageResult<()> {
+    let client = minio_client().await;
+    let bucket = create_bucket(&client, "unknown").await;
+    let backend = S3StorageBackend::new(client, bucket)?;
+    let missing = pocopine_storage::UploadSessionId::new("missing-session")?;
+
+    let inspected = backend.inspect_upload(&ctx(), missing.clone()).await;
+    assert!(matches!(
+        inspected,
+        Err(StorageError::UnknownUploadSession { .. })
+    ));
+
+    backend.abort_upload(&ctx(), missing.clone()).await?;
+    backend.abort_upload(&ctx(), missing).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_upload_length_uses_shared_invalid_value_error() -> StorageResult<()> {
+    let client = minio_client().await;
+    let bucket = create_bucket(&client, "length").await;
+    let backend = S3StorageBackend::new(client, bucket)?;
+    let session = initiate(&backend, None).await?;
+
+    backend
+        .set_upload_length(&ctx(), session.id.clone(), 5)
+        .await?;
+    let rejected = backend.set_upload_length(&ctx(), session.id, 6).await;
+    assert!(matches!(
+        rejected,
+        Err(StorageError::InvalidValue { field, .. }) if field == "Upload-Length"
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn complete_does_not_overwrite_existing_object_key() -> StorageResult<()> {
+    let client = minio_client().await;
+    let bucket = create_bucket(&client, "collision").await;
+    client
+        .put_object()
+        .bucket(&bucket)
+        .key("files/hello.txt")
+        .body(ByteStream::from_static(b"existing"))
+        .send()
+        .await
+        .expect("seed existing object");
+
+    let backend = S3StorageBackend::new(client.clone(), bucket.clone())?;
+    let session = initiate(&backend, Some(5)).await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"hello"))
+        .await?;
+
+    let rejected = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await;
+    assert!(matches!(rejected, Err(StorageError::PolicyRejected { .. })));
+    assert_eq!(
+        object_bytes(&client, &bucket, "files/hello.txt").await,
+        b"existing"
+    );
     Ok(())
 }
