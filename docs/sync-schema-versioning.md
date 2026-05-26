@@ -69,6 +69,10 @@ inventory writes, anything with side effects), register a
 
 ```rust
 fn migrate_v1_to_v2(from: u32, to: u32, mut value: Value) -> SyncResult<Value> {
+    // The framework only invokes this when `from < to`, so we only
+    // need to handle the strict-forward direction. Bail on any
+    // unexpected version pair so a future v3 doesn't silently
+    // double-migrate through this fn.
     if from != 1 || to != 2 {
         return Err(SyncError::schema_migration("customers", from, to));
     }
@@ -114,12 +118,45 @@ shape is documented above; mutate it in place and return.
 | Field rename only, no semantic change | **`migrate_with`** that just renames |
 | Backward-incompatible deletion of a field | **`migrate_with` that returns `Err`** for those drafts and use the drop-default for the rest. The errors lose the drafts; that's correct. |
 
+## Migrator caveats
+
+A registered `migrate_with` function runs with these constraints:
+
+* **Synchronous and blocking.** The closure executes on the tokio
+  runtime worker handling the push. Keep it fast — pure JSON
+  manipulation. Any I/O blocks every other concurrent task on that
+  worker thread until the migrator returns. A future iteration of
+  the API may accept an async migrator; today, it does not.
+
+* **Out-of-transaction (for `TransactionalCrudResource`).** The
+  framework calls `migrate_payload` BEFORE the per-mutation
+  transaction opens, so any side effects the migrator performs (e.g.
+  writing to an audit table on the same database) are NOT rolled
+  back if the subsequent transactional write fails. Keep migrators
+  side-effect-free.
+
+* **Panic-safe.** A panic inside your migrator is caught by
+  `std::panic::catch_unwind`; the framework converts it into a
+  per-mutation `SyncRejectedMutation` with a `migrate_with panicked`
+  reason. The push request itself is not crashed — adjacent
+  well-formed mutations continue through `source.push` normally.
+
+* **Forward-only.** The migrator only fires when the client's wire
+  `schema_version` is STRICTLY LESS than the server's
+  `schema_version()`. A newer client pushing to an older server (a
+  rolling-deploy edge case) is NOT routed through `migrate_payload`;
+  the source receives the newer-shape payload and either accepts it
+  (if forward-compatible) or rejects it with a typed deserialization
+  error.
+
 ## Common pitfalls
 
 - **Forgetting to bump `schema_version`** after a row/draft change.
   Older clients then push stale data and the server silently
-  mis-deserializes. The compiler doesn't help — bumping the macro
-  attribute is your responsibility.
+  mis-deserializes. The macro guards one related case for you: a
+  `migrate_with = ...` declaration without `schema_version >= 2`
+  fails to compile, because such a migrator would be dead code
+  (clients and servers both default to v1).
 
 - **Migrator that loses required fields.** A migrator that drops a
   field the v2 source needs (e.g. removes `version` from a save
@@ -135,9 +172,25 @@ shape is documented above; mutate it in place and return.
   the server accepts both shapes (via `migrate_with`) until you're
   confident every client deployment has updated.
 
-- **`0` is not a valid schema_version.** The macro, the builder, and
-  the wire-level validator all reject `schema_version = 0`. Start at
-  `1`.
+- **Non-deterministic migrators break idempotency.** If your migrator
+  injects server-side timestamps, UUIDs, or other non-deterministic
+  defaults, the same wire payload will migrate to different values on
+  retries. The framework stores the ORIGINAL wire payload (not the
+  migrated value) in its idempotency log to keep replays correct, but
+  if you also write your own bookkeeping keyed on the migrated
+  payload, you'll diverge.
+
+- **`0` is not a valid schema_version.** The macro, the
+  `SyncCollection::schema_version()` builder, the
+  `SyncPushRequest::with_schema_version()` builder (which silently
+  coerces `0` → `1`), AND the server's push handler (which rejects
+  inbound `schema_version: 0` with `BadRequest`) all enforce this.
+  Versions start at `1`.
+
+- **`rejected[]` ordering is not preserved.** Correlate rejections
+  with request mutations by `mutation_id`, not by index. The server
+  may interleave migration-time rejections with source-side
+  rejections in any order.
 
 ## Wire & error reference
 

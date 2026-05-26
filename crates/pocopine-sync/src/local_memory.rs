@@ -490,6 +490,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: Some(RowVersion::new("row_1").unwrap()),
             payload: serde_json::json!({"title": "Saved"}),
+
+            migrated_payload: None,
         };
 
         store
@@ -539,6 +541,8 @@ mod tests {
                         op: SyncOp::Upsert,
                         base_version: None,
                         payload: serde_json::json!({ "id": id }),
+
+                        migrated_payload: None,
                     },
                 )
                 .await
@@ -564,6 +568,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: Some(RowVersion::new("row_1").unwrap()),
             payload: serde_json::json!({"title": "First"}),
+
+            migrated_payload: None,
         };
         let second = ClientMutation {
             id: MutationId::new("device_abc:2").unwrap(),
@@ -571,6 +577,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "Second"}),
+
+            migrated_payload: None,
         };
         let replacement = ClientMutation {
             id: first.id.clone(),
@@ -578,6 +586,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: Some(RowVersion::new("row_2").unwrap()),
             payload: serde_json::json!({"title": "Replacement"}),
+
+            migrated_payload: None,
         };
 
         store.enqueue_mutation(&stream, first).await.unwrap();
@@ -706,6 +716,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "Local"}),
+
+            migrated_payload: None,
         };
         store
             .enqueue_mutation(&stream, mutation.clone())
@@ -743,6 +755,8 @@ mod tests {
                 "op": "create",
                 "payload": {"id": "post_1", "draft": {"title": "Envelope only"}}
             }),
+
+            migrated_payload: None,
         };
         let optimistic = SyncRow::new(
             "post_1",
@@ -811,6 +825,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "Accepted"}),
+
+            migrated_payload: None,
         };
         let rejected = ClientMutation {
             id: MutationId::new("device_abc:2").unwrap(),
@@ -818,6 +834,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "Rejected"}),
+
+            migrated_payload: None,
         };
         let still_pending = ClientMutation {
             id: MutationId::new("device_abc:3").unwrap(),
@@ -825,6 +843,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "Pending"}),
+
+            migrated_payload: None,
         };
         for mutation in [accepted.clone(), rejected.clone(), still_pending.clone()] {
             store.enqueue_mutation(&stream, mutation).await.unwrap();
@@ -1053,6 +1073,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "Post"}),
+
+            migrated_payload: None,
         };
         let comment_mutation = ClientMutation {
             id: MutationId::new("device_abc:2").unwrap(),
@@ -1060,6 +1082,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"body": "Comment"}),
+
+            migrated_payload: None,
         };
         store
             .enqueue_mutation(&posts, post_mutation.clone())
@@ -1090,6 +1114,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({ "title": "A first edit" }),
+
+            migrated_payload: None,
         };
         let post_a_again = ClientMutation {
             id: MutationId::new("device_abc:2").unwrap(),
@@ -1097,6 +1123,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({ "title": "A second edit" }),
+
+            migrated_payload: None,
         };
         let post_b = ClientMutation {
             id: MutationId::new("device_abc:3").unwrap(),
@@ -1104,6 +1132,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({ "title": "B" }),
+
+            migrated_payload: None,
         };
         for m in [&post_a, &post_a_again, &post_b] {
             store.enqueue_mutation(&stream, m.clone()).await.unwrap();
@@ -1133,6 +1163,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"global": true}),
+
+            migrated_payload: None,
         };
         let keyed_in_other_stream = ClientMutation {
             id: MutationId::new("device_abc:2").unwrap(),
@@ -1140,6 +1172,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({}),
+
+            migrated_payload: None,
         };
         store
             .enqueue_mutation(&posts, unkeyed.clone())
@@ -1215,6 +1249,8 @@ mod tests {
                     op: SyncOp::Upsert,
                     base_version: None,
                     payload: serde_json::json!({"title": "edit"}),
+
+                    migrated_payload: None,
                 },
             )
             .await
@@ -1290,6 +1326,8 @@ mod tests {
                     op: SyncOp::Upsert,
                     base_version: None,
                     payload: serde_json::json!({"title": "edit"}),
+
+                    migrated_payload: None,
                 },
             )
             .await

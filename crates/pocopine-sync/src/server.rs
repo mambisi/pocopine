@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::{
     sync_stream_tag, ClientMutation, SyncError, SyncOpenRequest, SyncOpenResponse, SyncOpenStream,
     SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation,
-    SyncResult, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    SyncResult, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 
 /// Future returned by a stream source.
@@ -116,21 +116,26 @@ pub trait SyncStreamSource: Send + Sync + 'static {
     /// the source's currently-advertised schema version `to`.
     ///
     /// The framework's `push_handler` invokes this once per mutation
-    /// when the request's `schema_version` differs from
-    /// `self.schema_version()`. The default implementation returns
-    /// `SyncError::SchemaMigration` so any out-of-tree source that
-    /// hasn't opted in surfaces a clean per-mutation rejection rather
-    /// than silently mis-deserializing stale payloads into the new
-    /// shape. Apps that want to accept stale pushes (e.g. to preserve
-    /// side-effecting writes like payments across a schema bump)
-    /// override this method directly or use the
-    /// `#[resource(schema_version = N, migrate_with = path)]` macro
-    /// attribute which generates the impl.
+    /// when the request's `schema_version` is **strictly less than**
+    /// `self.schema_version()`. A newer client pushing to an older
+    /// server (rolling-deploy edge case) is NOT routed through
+    /// migration — the source receives the newer-shape payload as-is.
     ///
-    /// On `Ok`, the framework substitutes the migrated payload into
-    /// the mutation before delegating to `push`. On `Err`, the
-    /// mutation is added to the response's `rejected` array with the
-    /// error's `reason`; the rest of the batch continues.
+    /// The default implementation returns `SyncError::SchemaMigration`
+    /// so any out-of-tree source that hasn't opted in surfaces a clean
+    /// per-mutation rejection rather than silently mis-deserializing
+    /// stale payloads into the new shape. Apps that want to accept
+    /// stale pushes (e.g. to preserve side-effecting writes like
+    /// payments across a schema bump) override this method directly or
+    /// use the `#[resource(schema_version = N, migrate_with = path)]`
+    /// macro attribute which generates the impl.
+    ///
+    /// On `Ok`, the framework stores the migrated payload alongside
+    /// the original (via `ClientMutation::migrated_payload`) so the
+    /// source can deserialize the migrated value while still keying
+    /// its idempotency log on the original wire payload. On `Err`,
+    /// the mutation is added to the response's `rejected` array with
+    /// the error's `reason`; the rest of the batch continues.
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
         let _ = value;
         let stream = self.stream().as_str().to_string();
@@ -366,24 +371,48 @@ async fn push_handler(
 ) -> Json<ServerResult<SyncPushResponse<Value>>> {
     let result = async {
         let (ctx, mut request) = parse_json_request::<SyncPushRequest<Value>>(request).await?;
+        // Reject malformed wire payloads up-front: `schema_version == 0`
+        // is not a valid version (versions start at 1) and the macro,
+        // builder, and `/open` response validators all reject it. Match
+        // here so a malicious or buggy client can't tunnel through
+        // `migrate_payload` with `from = 0`.
+        if request.schema_version == 0 {
+            return Err(server_error(SyncError::invalid_value(
+                "schema_version",
+                "must be >= 1 (schema versions start at 1)",
+            )));
+        }
         let stream = sync.stream(request.stream.as_str()).map_err(server_error)?;
         stream.authorize(ctx.clone()).await?;
-        // If the client and server disagree on the application-level
-        // schema version, run each mutation's payload through the
-        // source's `migrate_payload`. Mutations that can't be migrated
-        // (default impl returns Err(SchemaMigration)) get a typed
-        // rejection in `pre_rejected`; the survivors continue into
-        // `source.push` carrying their migrated payloads. The
-        // request's schema_version is then updated so the source
-        // sees a self-consistent batch.
+        // If the client is on an OLDER schema version than the server,
+        // run each mutation's payload through the source's
+        // `migrate_payload`. Mutations that can't be migrated (default
+        // impl returns Err(SchemaMigration)) get a typed rejection in
+        // `pre_rejected`; the survivors continue into `source.push`
+        // carrying their migrated payload via `ClientMutation::migrated_payload`
+        // so the source still sees the original wire payload for
+        // idempotency-log purposes.
+        //
+        // The comparison is `<` (not `!=`) deliberately: a NEWER client
+        // pushing to an OLDER server (mid-rolling-deploy) shouldn't try
+        // to "migrate down" — the source either accepts the newer
+        // shape as-is (often forward-compatible) or rejects with a
+        // typed deserialization error. Migrating backwards is an
+        // unwinnable game for the framework.
         let mut pre_rejected: Vec<SyncRejectedMutation> = Vec::new();
         let server_schema_version = stream.source.schema_version();
-        if request.schema_version != server_schema_version {
+        if request.schema_version < server_schema_version {
             let from = request.schema_version;
             let to = server_schema_version;
             let mut survivors: Vec<ClientMutation<Value>> =
                 Vec::with_capacity(request.mutations.len());
             for mutation in request.mutations.drain(..) {
+                // Stream sources are responsible for catching panics
+                // inside their own migrator closures (CrudResource
+                // wraps user-supplied `migrate_with` fns in
+                // `catch_unwind` already). The framework just routes
+                // the typed `Err(SyncError::Backend("…panicked…"))`
+                // into a per-mutation rejection.
                 match stream
                     .source
                     .migrate_payload(from, to, mutation.payload.clone())
@@ -391,10 +420,19 @@ async fn push_handler(
                 {
                     Ok(migrated) => {
                         let mut next = mutation;
-                        next.payload = migrated;
+                        next.migrated_payload = Some(migrated);
                         survivors.push(next);
                     }
                     Err(err) => {
+                        tracing::info!(
+                            target: "pocopine.log",
+                            stream = stream.source.stream().as_str(),
+                            from,
+                            to,
+                            mutation_id = mutation.id.as_str(),
+                            reason = %err,
+                            "sync push pre-rejected by migrate_payload"
+                        );
                         pre_rejected.push(SyncRejectedMutation {
                             mutation_id: mutation.id,
                             key: mutation.key,
@@ -404,18 +442,50 @@ async fn push_handler(
                 }
             }
             request.mutations = survivors;
-            request.schema_version = server_schema_version;
+            // NOTE: we deliberately leave `request.schema_version` as
+            // the client's wire value. Custom `SyncStreamSource::push`
+            // impls may consult it for logging/audit/version-aware
+            // routing; rewriting it would silently lie about what the
+            // client claimed. The migrated payload travels inside each
+            // mutation via `ClientMutation::migrated_payload`.
         }
-        let mut response = stream
-            .source
-            .push(ctx, request)
-            .await
-            .map_err(server_error)?;
+        // Build the response shell ahead of `source.push` so that even
+        // a transient `source.push` failure still surfaces the
+        // pre-migration rejections to the client. Without this the `?`
+        // propagation would drop `pre_rejected` on the floor and the
+        // client would replay the stale-schema mutations forever.
+        let stream_name = stream.source.stream().clone();
+        let collection_name = stream.source.collection().clone();
+        let mut response = match stream.source.push(ctx, request).await {
+            Ok(response) => response,
+            Err(err) => {
+                if pre_rejected.is_empty() {
+                    return Err(server_error(err));
+                }
+                tracing::warn!(
+                    target: "pocopine.log",
+                    error = %err,
+                    stream = stream_name.as_str(),
+                    pre_rejected = pre_rejected.len(),
+                    "sync push source returned error; surfacing pre-migration rejections only"
+                );
+                SyncPushResponse {
+                    protocol: SYNC_PROTOCOL_V1.to_string(),
+                    stream: stream_name.clone(),
+                    collection: Some(collection_name.clone()),
+                    accepted: Vec::new(),
+                    rejected: Vec::new(),
+                    rows: Vec::new(),
+                    conflicts: Vec::new(),
+                    cursor: None,
+                }
+            }
+        };
         if !pre_rejected.is_empty() {
             response.rejected.extend(pre_rejected);
         }
         if response.collection.is_none() {
-            response.collection = Some(stream.source.collection().clone());
+            response.collection = Some(collection_name);
         }
         if !response.accepted.is_empty() {
             if let Err(err) = sync.invalidate_stream(response.stream.as_str()).await {
@@ -533,6 +603,7 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: None,
                 payload: "from push".to_string(),
+                migrated_payload: None,
             }],
         );
         let outer: ServerResult<SyncPushResponse<String>> =

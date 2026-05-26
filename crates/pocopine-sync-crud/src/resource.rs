@@ -55,7 +55,49 @@ where
 /// On `Err(SyncError::SchemaMigration { .. })`, the framework adds
 /// the mutation to the response's `rejected` array with the error's
 /// `reason`; the rest of the batch continues.
+///
+/// # Caveats
+/// * **Synchronous and blocking.** The migrator runs on the tokio
+///   runtime worker that's serving the push request — keep it fast
+///   (pure JSON manipulation, no I/O). A future iteration of this
+///   API may accept an async migrator.
+/// * **Out-of-transaction.** When attached to a
+///   [`TransactionalCrudResource`], the migrator runs BEFORE the
+///   per-mutation transaction begins, so any side effects it
+///   performs (e.g. audit log writes) are NOT rolled back if the
+///   subsequent transactional `push` fails.
+/// * **Panic-safe.** The framework wraps each call in
+///   `std::panic::catch_unwind`; a panicking migrator surfaces as a
+///   per-mutation rejection instead of crashing the request task.
 pub type CrudMigrateFn = dyn Fn(u32, u32, Value) -> SyncResult<Value> + Send + Sync + 'static;
+
+/// Invoke a registered migrator under an unwind guard. A panic in the
+/// user closure becomes a typed `SyncError::Backend` instead of
+/// crashing the request task; the framework's `push_handler` then
+/// turns it into a per-mutation `SyncRejectedMutation`.
+fn invoke_migrator_with_panic_guard(
+    migrate: &CrudMigrateFn,
+    stream: &str,
+    from: u32,
+    to: u32,
+    value: Value,
+) -> SyncResult<Value> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| migrate(from, to, value))) {
+        Ok(result) => result,
+        Err(panic) => {
+            let reason = if let Some(msg) = panic.downcast_ref::<&'static str>() {
+                (*msg).to_string()
+            } else if let Some(msg) = panic.downcast_ref::<String>() {
+                msg.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            Err(SyncError::backend(format!(
+                "migrate_with panicked while migrating {stream} from v{from} to v{to}: {reason}"
+            )))
+        }
+    }
+}
 
 /// Builder returned by [`resource`].
 pub struct CrudResourceBuilder<S> {
@@ -575,10 +617,12 @@ where
     }
 
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
+        let stream = self.stream.as_str().to_string();
         if let Some(migrate) = self.migrate_payload.clone() {
-            Box::pin(async move { migrate(from, to, value) })
+            Box::pin(async move {
+                invoke_migrator_with_panic_guard(migrate.as_ref(), &stream, from, to, value)
+            })
         } else {
-            let stream = self.stream.as_str().to_string();
             Box::pin(async move { Err(SyncError::schema_migration(stream, from, to)) })
         }
     }
@@ -649,10 +693,18 @@ where
         let mut response = SyncPushResponse::new(self.stream.clone());
         response.collection = Some(self.collection.clone());
 
-        for mutation in request.mutations {
+        for mut mutation in request.mutations {
             let mutation_id = mutation.id.clone();
             let key = mutation.key.clone();
             let op = mutation.op;
+            // `payload_value` is the CLIENT'S WIRE PAYLOAD — used as the
+            // idempotency-log key so retries of the same wire payload
+            // hit `accepted.matches` regardless of whether (or how)
+            // `push_handler` migrated the payload server-side.
+            // `processing_payload` is what we actually deserialize and
+            // hand to the source — the migrated value if `push_handler`
+            // ran a schema migration, else identical to `payload_value`.
+            let processing_payload = mutation.take_processing_payload();
             let base_version = mutation.base_version;
             let payload_value = mutation.payload;
 
@@ -675,7 +727,7 @@ where
             }
 
             let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
-                payload_value.clone(),
+                processing_payload,
             ) {
                 Ok(payload) => payload,
                 Err(err) => {
@@ -864,10 +916,12 @@ where
     }
 
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
+        let stream = self.stream.as_str().to_string();
         if let Some(migrate) = self.migrate_payload.clone() {
-            Box::pin(async move { migrate(from, to, value) })
+            Box::pin(async move {
+                invoke_migrator_with_panic_guard(migrate.as_ref(), &stream, from, to, value)
+            })
         } else {
-            let stream = self.stream.as_str().to_string();
             Box::pin(async move { Err(SyncError::schema_migration(stream, from, to)) })
         }
     }
@@ -939,15 +993,19 @@ where
         let mut response = SyncPushResponse::new(self.stream.clone());
         response.collection = Some(self.collection.clone());
 
-        for mutation in request.mutations {
+        for mut mutation in request.mutations {
             let mutation_id = mutation.id.clone();
             let key = mutation.key.clone();
             let op = mutation.op;
+            // `payload_value` = original wire payload (idempotency key).
+            // `processing_payload` = migrated value if `push_handler`
+            // ran a schema migration, else identical to wire payload.
+            let processing_payload = mutation.take_processing_payload();
             let base_version = mutation.base_version;
             let payload_value = mutation.payload;
 
             let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
-                payload_value.clone(),
+                processing_payload,
             ) {
                 Ok(payload) => payload,
                 Err(err) => {
@@ -1679,6 +1737,7 @@ mod tests {
             op: mutation.op,
             base_version: mutation.base_version,
             payload: serde_json::to_value(mutation.payload).unwrap(),
+            migrated_payload: None,
         }
     }
 

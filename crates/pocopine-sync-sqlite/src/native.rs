@@ -614,6 +614,7 @@ fn pending_mutation_records(
                     .map(|payload| serde_json::from_str(&payload))
                     .transpose()?
                     .unwrap_or(serde_json::Value::Null),
+                migrated_payload: None,
             },
             optimistic_row: optimistic_row
                 .map(|row| serde_json::from_str(&row))
@@ -935,6 +936,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: Some(RowVersion::new("row_1").unwrap()),
             payload: serde_json::json!({"title": "Saved"}),
+
+            migrated_payload: None,
         };
 
         block(store.enqueue_mutation(&stream, mutation.clone())).unwrap();
@@ -971,6 +974,8 @@ mod tests {
                 "op": "create",
                 "payload": {"id": "post_1", "draft": {"title": "Envelope only"}}
             }),
+
+            migrated_payload: None,
         };
         let optimistic = SyncRow::new(
             "post_1",
@@ -1036,6 +1041,8 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: None,
                 payload: serde_json::json!({"title": "Draft"}),
+
+                migrated_payload: None,
             },
         ))
         .unwrap();
@@ -1047,6 +1054,8 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: None,
                 payload: serde_json::json!({"title": "Draft"}),
+
+                migrated_payload: None,
             },
         ))
         .unwrap();
@@ -1181,6 +1190,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"op": "create"}),
+
+            migrated_payload: None,
         };
         let optimistic = SyncRow::new("post_1", serde_json::json!({"title": "Visible"})).unwrap();
 
@@ -1331,6 +1342,8 @@ mod tests {
                     op: SyncOp::Upsert,
                     base_version: None,
                     payload: serde_json::json!({"id": id}),
+
+                    migrated_payload: None,
                 },
             ))
             .unwrap();
@@ -1411,6 +1424,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "A1"}),
+
+            migrated_payload: None,
         };
         let post_a_second = ClientMutation {
             id: MutationId::new("device_abc:2").unwrap(),
@@ -1418,6 +1433,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "A2"}),
+
+            migrated_payload: None,
         };
         let post_b = ClientMutation {
             id: MutationId::new("device_abc:3").unwrap(),
@@ -1425,6 +1442,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::json!({"title": "B"}),
+
+            migrated_payload: None,
         };
         for m in [&post_a_first, &post_a_second, &post_b] {
             block(store.enqueue_mutation(&stream, m.clone())).unwrap();
@@ -1493,6 +1512,8 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: None,
                 payload: serde_json::json!({"title": "edit"}),
+
+                migrated_payload: None,
             },
         ))
         .unwrap();
@@ -1552,6 +1573,8 @@ mod tests {
                 op: SyncOp::Upsert,
                 base_version: None,
                 payload: serde_json::json!({"t": "edit"}),
+
+                migrated_payload: None,
             },
         ))
         .unwrap();
@@ -1671,6 +1694,8 @@ mod tests {
                     op: SyncOp::Upsert,
                     base_version: None,
                     payload: serde_json::json!({"op": "create"}),
+
+                    migrated_payload: None,
                 })
                 .with_optimistic_row(Some(
                     SyncRow::new("p1", serde_json::json!({"title": "p1"})).unwrap(),
