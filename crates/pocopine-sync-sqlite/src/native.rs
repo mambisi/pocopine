@@ -11,7 +11,7 @@ use pocopine_sync::{
     SyncCollectionName, SyncCursor, SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity,
     SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::schema::{
     BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, CLEAR_STREAM_SQL,
@@ -202,6 +202,21 @@ fn migrate_schema(tx: &Transaction<'_>) -> SyncResult<()> {
             "invalid sync sqlite schema version in local store: {existing}"
         ))
     })?;
+    // Allow forward migration only from versions whose alter steps are
+    // explicitly implemented below. A v1 store predates the
+    // mutations-PK rewrite (v2's enqueue_seq autoincrement + mutation_id
+    // unique) which is not implemented here, so it must fall through
+    // to `validate_schema_version`'s reject path rather than being
+    // silently stamped as v4 (which would compile but explode at first
+    // `UPSERT_MUTATION_SQL`).
+    match version {
+        2 | 3 => {}
+        v if v == SCHEMA_VERSION => return Ok(()),
+        // Any other version (e.g. v1 or a future v5+) falls through to
+        // validate_schema_version which returns
+        // `incompatible sync sqlite schema version`.
+        _ => return Ok(()),
+    }
     // v2 -> v3: optimistic_row column on the mutations table.
     if version == 2 && !column_exists(tx, "__pocopine_mutations", "optimistic_row")? {
         tx.execute(
@@ -210,20 +225,17 @@ fn migrate_schema(tx: &Transaction<'_>) -> SyncResult<()> {
         )
         .map_err(sqlite_error)?;
     }
-    // v3 -> v4: app_schema_version column on the streams table.
+    // v3 -> v4 (also runs for v2 stores after the v2 -> v3 alter
+    // above): app_schema_version column on the streams table.
     // Existing rows observe `NULL`, which the client treats as "never
     // observed; adopt server value silently on next save" rather than
     // as a forced wipe — so this migration is non-destructive.
-    if version <= 3 && !column_exists(tx, "__pocopine_streams", "app_schema_version")? {
+    if !column_exists(tx, "__pocopine_streams", "app_schema_version")? {
         tx.execute(MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, [])
             .map_err(sqlite_error)?;
     }
     // Only stamp the new version when we actually migrated forward.
-    // A higher-than-current version (e.g. opened by a future build)
-    // must fall through to `validate_schema_version`'s reject path.
-    if version < SCHEMA_VERSION {
-        upsert_meta(tx, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
-    }
+    upsert_meta(tx, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
     Ok(())
 }
 
@@ -525,7 +537,13 @@ fn purge_pending_for_row(
 }
 
 fn clear_all_streams(conn: &mut Connection) -> SyncResult<()> {
-    let tx = conn.transaction().map_err(sqlite_error)?;
+    // BEGIN IMMEDIATE so we acquire the write lock up-front rather
+    // than upgrading mid-transaction. Matches the wasm path's
+    // `BEGIN IMMEDIATE TRANSACTION` so the documented atomicity story
+    // is the same on both targets.
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_error)?;
     for sql in CLEAR_ALL_STREAMS_SQL {
         tx.execute(sql, []).map_err(sqlite_error)?;
     }
@@ -536,7 +554,9 @@ fn clear_stream(conn: &mut Connection, stream: &SyncStreamName) -> SyncResult<()
     // BEGIN IMMEDIATE TRANSACTION mirrors `clear_all_streams` — a
     // mid-wipe failure must either revert entirely or complete
     // entirely so other tabs observing OPFS never see a partial wipe.
-    let tx = conn.transaction().map_err(sqlite_error)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_error)?;
     for sql in CLEAR_STREAM_SQL {
         tx.execute(sql, params![stream.as_str()])
             .map_err(sqlite_error)?;
@@ -1554,6 +1574,115 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_store_rejects_v1_store_rather_than_silently_bumping_to_v4() {
+        // A v1 store predates the v1->v2 mutations-PK rewrite. The
+        // migrate_schema gate must NOT silently stamp it as v4 (which
+        // would compile but explode at first UPSERT_MUTATION_SQL
+        // because the v1 mutations table lacks `enqueue_seq` /
+        // `mutation_id UNIQUE`). Open must fail with an
+        // incompatible-schema-version error.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table __pocopine_meta (key text primary key, value text not null);
+             insert into __pocopine_meta (key, value) values ('schema_version', '1');",
+        )
+        .unwrap();
+
+        let err = match SqliteLocalStore::from_connection(conn) {
+            Ok(_) => panic!("v1 store should be rejected, not silently upgraded"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("incompatible sync sqlite schema version"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sqlite_store_migrates_v2_to_v4_chained() {
+        // v2 -> v3 (optimistic_row alter) AND v3 -> v4
+        // (app_schema_version alter) must both run for a v2 store. The
+        // single open call should produce a fully v4-shaped DB.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table __pocopine_meta (key text primary key, value text not null);
+             create table __pocopine_streams (
+                stream text primary key,
+                collection text not null,
+                cursor text,
+                schema_version integer not null,
+                updated_at_ms integer not null
+             );
+             create table __pocopine_rows (
+                stream text not null,
+                row_key text not null,
+                version text,
+                payload text not null,
+                pending integer not null default 0,
+                conflict integer not null default 0,
+                updated_at_ms integer not null,
+                primary key (stream, row_key)
+             );
+             create table __pocopine_mutations (
+                enqueue_seq integer primary key autoincrement,
+                stream text not null,
+                mutation_id text not null unique,
+                row_key text,
+                base_version text,
+                op text not null,
+                payload text,
+                status text not null,
+                error text,
+                created_at_ms integer not null,
+                updated_at_ms integer not null
+             );
+             insert into __pocopine_meta (key, value) values ('schema_version', '2');",
+        )
+        .unwrap();
+
+        let store = SqliteLocalStore::from_connection(conn).unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        // Round-trip: write a snapshot with a non-default schema_version,
+        // hydrate, and confirm both v2->v3 (optimistic_row works) and
+        // v3->v4 (app_schema_version recorded) are live.
+        block(
+            store.save_snapshot(
+                LocalSnapshotBatch::new(
+                    stream.clone(),
+                    SyncCollectionName::new("posts").unwrap(),
+                    vec![],
+                    None,
+                )
+                .with_application_schema_version(Some(9)),
+            ),
+        )
+        .unwrap();
+        let s = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(s.application_schema_version, Some(9));
+        // Enqueue a mutation carrying optimistic_row — exercises the
+        // v2->v3 alter.
+        block(
+            store.enqueue_pending_mutation(
+                &stream,
+                LocalPendingMutation::new(ClientMutation {
+                    id: MutationId::new("device_abc:1").unwrap(),
+                    key: Some(RowKey::new("p1").unwrap()),
+                    op: SyncOp::Upsert,
+                    base_version: None,
+                    payload: serde_json::json!({"op": "create"}),
+                })
+                .with_optimistic_row(Some(
+                    SyncRow::new("p1", serde_json::json!({"title": "p1"})).unwrap(),
+                )),
+            ),
+        )
+        .unwrap();
+        let s = block(store.hydrate_stream(&stream)).unwrap();
+        assert!(s.pending_mutations[0].optimistic_row.is_some());
+    }
+
+    #[test]
     fn sqlite_store_migrates_v3_to_v4_app_schema_version_column() {
         // Simulate a v3 store: explicitly create the tables with the
         // pre-v4 streams shape (no app_schema_version column), seed
@@ -1609,15 +1738,17 @@ mod tests {
         assert_eq!(s.application_schema_version, None);
 
         // Writing a snapshot with an explicit version stamps it.
-        block(store.save_snapshot(
-            LocalSnapshotBatch::new(
-                stream.clone(),
-                SyncCollectionName::new("posts").unwrap(),
-                vec![],
-                None,
-            )
-            .with_application_schema_version(Some(7)),
-        ))
+        block(
+            store.save_snapshot(
+                LocalSnapshotBatch::new(
+                    stream.clone(),
+                    SyncCollectionName::new("posts").unwrap(),
+                    vec![],
+                    None,
+                )
+                .with_application_schema_version(Some(7)),
+            ),
+        )
         .unwrap();
         let s = block(store.hydrate_stream(&stream)).unwrap();
         assert_eq!(s.application_schema_version, Some(7));

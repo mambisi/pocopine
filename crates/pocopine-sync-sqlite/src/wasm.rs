@@ -257,6 +257,14 @@ async fn migrate_schema() -> SyncResult<()> {
             "invalid sync sqlite schema version in local store: {existing}"
         ))
     })?;
+    // Allow forward migration only from explicitly handled versions —
+    // see native.rs::migrate_schema for the full rationale. A v1 store
+    // must fall through to the reject path in validate_schema_version.
+    match version {
+        2 | 3 => {}
+        v if v == SCHEMA_VERSION => return Ok(()),
+        _ => return Ok(()),
+    }
     // v2 -> v3: optimistic_row column on the mutations table.
     if version == 2 && !column_exists("__pocopine_mutations", "optimistic_row").await? {
         exec(
@@ -265,16 +273,13 @@ async fn migrate_schema() -> SyncResult<()> {
         )
         .await?;
     }
-    // v3 -> v4: app_schema_version column on the streams table.
-    // Existing rows observe `NULL`, which the client treats as "never
-    // observed; adopt server value silently on next save".
-    if version <= 3 && !column_exists("__pocopine_streams", "app_schema_version").await? {
+    // v3 -> v4 (also runs for v2 stores after the v2 -> v3 alter
+    // above): app_schema_version column on the streams table.
+    if !column_exists("__pocopine_streams", "app_schema_version").await? {
         exec(MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, Vec::new()).await?;
     }
-    // Only stamp the new version when we actually migrated forward.
-    if version < SCHEMA_VERSION {
-        upsert_meta(META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string()).await?;
-    }
+    // Stamp the current version — we only reach here from v2 or v3.
+    upsert_meta(META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string()).await?;
     Ok(())
 }
 
