@@ -1,13 +1,15 @@
-use std::{cell::Cell, marker::PhantomData, rc::Rc};
+use std::{cell::Cell, collections::BTreeMap, marker::PhantomData, rc::Rc};
 
 use pocopine_core::{App, AppPlugin, Handle};
 use serde_json::Value;
 
+#[cfg(target_arch = "wasm32")]
+use crate::SyncStreamSubscription;
 use crate::{
     sign_out::{broadcast_sign_out, SignOutSubscription},
     ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation, MemoryLocalStore,
-    MutationId, RowKey, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason,
-    SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+    MutationId, RowKey, StreamParams, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse,
+    SyncReason, SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
 };
 
 /// In-tab sign-out generation counter shared between [`SyncClient`] and every
@@ -206,6 +208,7 @@ impl SyncClient {
             cursor: None,
             epoch: self.epoch.snapshot(),
             schema_version: crate::default_schema_version_one(),
+            params: BTreeMap::new(),
             _marker: PhantomData,
         }
     }
@@ -304,6 +307,13 @@ pub struct SyncCollection<C: 'static, T> {
     /// mutations through `migrate_payload`. Defaults to `1` for raw
     /// `SyncCollection` callers that don't go through the macro.
     schema_version: u32,
+    /// Filter params for this subscription (RFC 085). Empty for the
+    /// unparameterized base stream; populated by macro-generated
+    /// `Resource::stream().workspace_id(...).status_in([...])` builders
+    /// or by direct callers via `.params(...)`. The same map is sent
+    /// on `/open`, `/pull`, and `/push` so the server can route the
+    /// subscription's cursor + filter view consistently.
+    params: StreamParams,
     _marker: PhantomData<fn(C) -> T>,
 }
 
@@ -330,6 +340,17 @@ where
         }
         self.schema_version = version;
         Ok(self)
+    }
+
+    /// Attach filter params for this subscription (RFC 085 shape
+    /// subscriptions). The same map travels through `/open`, `/pull`,
+    /// and `/push`. Macro-generated `Resource::stream()` fluent
+    /// builders call this with a typed `StreamParams` serialized into
+    /// the wire-shaped map; direct callers can build the map
+    /// themselves but should prefer the macro DSL for type safety.
+    pub fn params(mut self, params: StreamParams) -> Self {
+        self.params = params;
+        self
     }
 
     /// Resume from a previously stored sync cursor.
@@ -624,6 +645,7 @@ where
             self.endpoint.clone(),
             self.local_store.clone(),
             stream.clone(),
+            self.params.clone(),
             self.cursor.clone(),
             SyncReason::Initial,
             live_wakeup,
@@ -646,6 +668,7 @@ where
             self.endpoint,
             self.local_store,
             stream,
+            self.params,
             self.cursor,
             reason,
             live_event,
@@ -681,6 +704,7 @@ where
             self.endpoint,
             self.local_store,
             stream,
+            self.params,
             mutation,
             optimistic,
             !self.live_wakeup,
@@ -714,6 +738,7 @@ where
             self.endpoint,
             self.local_store,
             stream,
+            self.params,
             mutation,
             optimistic,
             !self.live_wakeup,
@@ -747,6 +772,7 @@ where
             self.endpoint,
             self.local_store,
             stream,
+            self.params,
             mutation,
             optimistic,
             !self.live_wakeup,
@@ -780,6 +806,7 @@ where
             self.endpoint,
             self.local_store,
             stream,
+            self.params,
             mutation,
             optimistic,
             !self.live_wakeup,
@@ -832,6 +859,7 @@ where
 
         let epoch = self.epoch.clone();
         let schema_version = self.schema_version;
+        let params = self.params.clone();
         pocopine_core::spawn_for_scope(scope_id, async move {
             let _ = send_push_and_reconcile(
                 scope_id,
@@ -841,6 +869,7 @@ where
                 pull_endpoint,
                 self.local_store,
                 stream,
+                params,
                 mutation,
                 pull_after_accept,
                 true,
@@ -878,6 +907,7 @@ where
         let mutation = mutation.with_id(mutation_id.clone());
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
         let schema_version = self.schema_version;
+        let params = self.params;
         let response = send_push_and_reconcile(
             scope_id,
             self.handle,
@@ -886,6 +916,7 @@ where
             pull_endpoint,
             self.local_store,
             stream,
+            params,
             mutation,
             pull_after_accept,
             false,
@@ -1048,6 +1079,7 @@ fn start_open_then_pull<C, T>(
     endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     cursor: Option<SyncCursor>,
     reason: SyncReason,
     live_wakeup: Option<LiveWakeupOptions>,
@@ -1117,7 +1149,10 @@ fn start_open_then_pull<C, T>(
         });
         let (cursor, token) = request_token;
 
-        let open_request = SyncOpenRequest::new([stream.clone()]);
+        let open_request = SyncOpenRequest::new([SyncStreamSubscription {
+            stream: stream.clone(),
+            params: params.clone(),
+        }]);
         let open_result = pocopine_core::fetch::call::<SyncOpenRequest, SyncOpenResponse>(
             &open_url,
             &open_request,
@@ -1241,6 +1276,7 @@ fn start_open_then_pull<C, T>(
                 endpoint.clone(),
                 local_store.clone(),
                 stream.clone(),
+                params.clone(),
                 live_wakeup,
                 epoch.clone(),
                 advertised_schema_version,
@@ -1261,6 +1297,7 @@ fn start_open_then_pull<C, T>(
                 &local_store,
                 &push_url,
                 stream.clone(),
+                params.clone(),
                 pending_mutations,
                 &epoch,
                 advertised_schema_version,
@@ -1362,6 +1399,7 @@ fn open_live_wakeup<C, T>(
     endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     options: LiveWakeupOptions,
     epoch: SyncEpoch,
     advertised_schema_version: u32,
@@ -1401,6 +1439,7 @@ fn open_live_wakeup<C, T>(
                     endpoint.clone(),
                     local_store.clone(),
                     stream.clone(),
+                    params.clone(),
                     None,
                     reason,
                     true,
@@ -1503,6 +1542,7 @@ fn start_pull<C, T>(
     endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     cursor: Option<SyncCursor>,
     reason: SyncReason,
     live_event: bool,
@@ -1518,7 +1558,9 @@ fn start_pull<C, T>(
         let request_token = handle.update(|state| {
             let collection = selector(state);
             let cursor = cursor.or_else(|| collection.cursor.clone());
-            let request = SyncPullRequest::new(stream.clone()).cursor(cursor);
+            let request = SyncPullRequest::new(stream.clone())
+                .params(params.clone())
+                .cursor(cursor);
             let token = if live_event {
                 collection.begin_live_pull(reason)
             } else if collection.version == 0 {
@@ -1599,6 +1641,7 @@ fn start_push<C, T, M>(
     endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     mutation: ClientMutation<M>,
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
@@ -1622,6 +1665,7 @@ fn start_push<C, T, M>(
             pull_endpoint,
             local_store,
             stream,
+            params,
             mutation,
             optimistic,
             pull_after_accept,
@@ -1642,6 +1686,7 @@ fn start_push_with_generated_id<C, T, M>(
     endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     mutation: ClientMutationDraft<M>,
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
@@ -1680,6 +1725,7 @@ fn start_push_with_generated_id<C, T, M>(
             pull_endpoint,
             local_store,
             stream,
+            params,
             mutation.with_id(mutation_id),
             optimistic,
             pull_after_accept,
@@ -1701,6 +1747,7 @@ async fn run_push<C, T, M>(
     pull_endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     mutation: ClientMutation<M>,
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
@@ -1760,6 +1807,7 @@ async fn run_push<C, T, M>(
         pull_endpoint,
         local_store,
         stream,
+        params,
         mutation,
         pull_after_accept,
         queue_offline,
@@ -1820,6 +1868,7 @@ async fn send_push_and_reconcile<C, T, M>(
     pull_endpoint: String,
     local_store: SyncLocalStoreHandle,
     stream: SyncStreamName,
+    params: StreamParams,
     mutation: ClientMutation<M>,
     pull_after_accept: bool,
     reconcile_queued_mutation: bool,
@@ -1840,8 +1889,9 @@ where
     // `schema_version` tags the wire envelope so the server's
     // `push_handler` can route stale-schema mutations through
     // `migrate_payload` before delegating to the source's `push`.
-    let request =
-        SyncPushRequest::new(stream.clone(), [mutation]).with_schema_version(schema_version);
+    let request = SyncPushRequest::new(stream.clone(), [mutation])
+        .params(params.clone())
+        .with_schema_version(schema_version);
     let result =
         pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(&push_url, &request)
             .await;
@@ -1904,6 +1954,7 @@ where
             pull_endpoint,
             local_store,
             stream,
+            params,
             None,
             SyncReason::Push,
             false,
@@ -1947,10 +1998,12 @@ where
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 async fn replay_pending_mutations<T>(
     local_store: &SyncLocalStoreHandle,
     push_url: &str,
     stream: SyncStreamName,
+    params: StreamParams,
     pending_mutations: Vec<ClientMutation<Value>>,
     epoch: &SyncEpoch,
     schema_version: u32,
@@ -1958,8 +2011,9 @@ async fn replay_pending_mutations<T>(
 where
     T: serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
-    let request =
-        SyncPushRequest::new(stream, pending_mutations).with_schema_version(schema_version);
+    let request = SyncPushRequest::new(stream, pending_mutations)
+        .params(params)
+        .with_schema_version(schema_version);
     let response = pocopine_core::fetch::call::<SyncPushRequest<Value>, SyncPushResponse<T>>(
         push_url, &request,
     )
@@ -2222,6 +2276,7 @@ mod tests {
             cursor: None,
             epoch: SyncEpoch::new(),
             schema_version: 1,
+            params: BTreeMap::new(),
             _marker: PhantomData,
         };
         (state, collection)
@@ -2406,6 +2461,8 @@ mod tests {
             collection: SyncCollectionName::new("posts").unwrap(),
             cursor: None,
             schema_version: 0,
+
+            params: ::std::collections::BTreeMap::new(),
         }]);
         // Sanity: protocol field is already set by `new`.
         response.protocol = crate::SYNC_PROTOCOL_V1.to_string();
@@ -2430,12 +2487,16 @@ mod tests {
                 collection: SyncCollectionName::new("posts").unwrap(),
                 cursor: None,
                 schema_version: 2,
+
+                params: ::std::collections::BTreeMap::new(),
             },
             SyncOpenStream {
                 stream: stream.clone(),
                 collection: SyncCollectionName::new("posts").unwrap(),
                 cursor: None,
                 schema_version: 1,
+
+                params: ::std::collections::BTreeMap::new(),
             },
         ]);
         let err = validate_open_response(response, &stream).unwrap_err();
@@ -2455,6 +2516,8 @@ mod tests {
             collection: SyncCollectionName::new("posts").unwrap(),
             cursor: None,
             schema_version: 3,
+
+            params: ::std::collections::BTreeMap::new(),
         }]);
         let v = validate_open_response(response, &stream).unwrap();
         assert_eq!(v, 3);

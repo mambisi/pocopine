@@ -1,8 +1,15 @@
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
 use crate::{SyncError, SyncResult};
+
+/// Type alias for the wire-level stream parameter map used by shape
+/// subscriptions. Sorted by key so the canonical JSON encoding (and
+/// derived cache hash) are deterministic across builds and clients.
+pub type StreamParams = BTreeMap<String, Value>;
 
 /// Current sync protocol identifier.
 pub const SYNC_PROTOCOL_V1: &str = "pocopine.sync.v1";
@@ -230,21 +237,85 @@ pub struct SyncChange<T> {
     pub cursor: SyncCursor,
 }
 
+/// Subscription to one stream, optionally narrowed by typed params.
+///
+/// Wire backwards-compat: this struct accepts both
+/// `{ "stream": "name", "params": {...} }` AND a bare `"name"` string,
+/// so a pre-RFC-085 client whose `SyncOpenRequest.streams` carried
+/// `Vec<SyncStreamName>` continues to deserialize cleanly into
+/// `SyncStreamSubscription { stream: "name", params: {} }`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SyncStreamSubscription {
+    pub stream: SyncStreamName,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: StreamParams,
+}
+
+impl SyncStreamSubscription {
+    pub fn new(stream: SyncStreamName) -> Self {
+        Self {
+            stream,
+            params: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_params(mut self, params: StreamParams) -> Self {
+        self.params = params;
+        self
+    }
+}
+
+impl From<SyncStreamName> for SyncStreamSubscription {
+    fn from(stream: SyncStreamName) -> Self {
+        Self::new(stream)
+    }
+}
+
+impl<'de> Deserialize<'de> for SyncStreamSubscription {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Accept either a bare string (legacy `Vec<SyncStreamName>` form)
+        // or the new `{ stream, params }` object. Going through serde_json::Value
+        // is the simplest way to do this without a custom Visitor; the
+        // open path is not hot.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Bare(SyncStreamName),
+            Object {
+                stream: SyncStreamName,
+                #[serde(default)]
+                params: StreamParams,
+            },
+        }
+        match Repr::deserialize(deserializer)? {
+            Repr::Bare(stream) => Ok(Self::new(stream)),
+            Repr::Object { stream, params } => Ok(Self { stream, params }),
+        }
+    }
+}
+
 /// Open one or more streams.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncOpenRequest {
     pub protocol: String,
     #[serde(default)]
     pub client_id: Option<SyncDeviceId>,
-    pub streams: Vec<SyncStreamName>,
+    pub streams: Vec<SyncStreamSubscription>,
 }
 
 impl SyncOpenRequest {
-    pub fn new(streams: impl IntoIterator<Item = SyncStreamName>) -> Self {
+    pub fn new<I, S>(streams: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<SyncStreamSubscription>,
+    {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             client_id: None,
-            streams: streams.into_iter().collect(),
+            streams: streams.into_iter().map(Into::into).collect(),
         }
     }
 
@@ -275,6 +346,12 @@ pub struct SyncOpenStream {
         deserialize_with = "deserialize_schema_version_default_one"
     )]
     pub schema_version: u32,
+    /// Params the server accepted for this subscription, echoed back
+    /// so the client can confirm what the server is actually serving.
+    /// Empty when the subscription is not parameterized; the field is
+    /// `#[serde(default)]` for backwards-compat with pre-RFC-085 servers.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: StreamParams,
 }
 
 /// Default schema version when the wire field is missing or the source
@@ -328,6 +405,12 @@ impl SyncOpenResponse {
 pub struct SyncPullRequest {
     pub protocol: String,
     pub stream: SyncStreamName,
+    /// Filter params for the subscription, must match what was sent
+    /// on `/open` so the server's cursor + filter view stays
+    /// consistent. Empty for unparameterized subscriptions;
+    /// `#[serde(default)]` keeps old-client compat.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: StreamParams,
     pub cursor: Option<SyncCursor>,
     pub limit: u32,
 }
@@ -337,6 +420,7 @@ impl SyncPullRequest {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             stream,
+            params: BTreeMap::new(),
             cursor: None,
             limit: 500,
         }
@@ -344,6 +428,13 @@ impl SyncPullRequest {
 
     pub fn cursor(mut self, cursor: Option<SyncCursor>) -> Self {
         self.cursor = cursor;
+        self
+    }
+
+    /// Attach the subscription's filter params. Must match what was
+    /// sent on `/open` for the same `(stream, params)` pair.
+    pub fn params(mut self, params: StreamParams) -> Self {
+        self.params = params;
         self
     }
 }
@@ -649,6 +740,13 @@ impl<M> ClientMutationDraft<M> {
 pub struct SyncPushRequest<M> {
     pub protocol: String,
     pub stream: SyncStreamName,
+    /// Filter params for the subscription this push belongs to. Must
+    /// match what was sent on `/open` so the server can authorize +
+    /// route mutations to the right filtered view. Empty for
+    /// unparameterized subscriptions; `#[serde(default)]` keeps
+    /// old-client compat.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: StreamParams,
     #[serde(default)]
     pub mutations: Vec<ClientMutation<M>>,
     /// Application-level schema version the CLIENT encoded these
@@ -675,9 +773,17 @@ impl<M> SyncPushRequest<M> {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             stream,
+            params: BTreeMap::new(),
             mutations: mutations.into_iter().collect(),
             schema_version: default_schema_version_one(),
         }
+    }
+
+    /// Attach the subscription's filter params. Must match what was
+    /// sent on `/open` for the same `(stream, params)` pair.
+    pub fn params(mut self, params: StreamParams) -> Self {
+        self.params = params;
+        self
     }
 
     /// Set the application-level schema version the mutations are
@@ -808,6 +914,94 @@ mod tests {
             sync_stream_tag("posts_for_tenant"),
             "sync:stream:posts_for_tenant"
         );
+    }
+
+    #[test]
+    fn open_request_accepts_bare_stream_names_for_backwards_compat() {
+        // Pre-RFC-085 clients serialized `streams` as `Vec<SyncStreamName>`,
+        // which JSON-encodes as an array of strings. The new wire envelope
+        // is `Vec<SyncStreamSubscription>`, but the custom deserializer
+        // accepts bare strings too so old clients keep working against new
+        // servers without coordination. See `SyncStreamSubscription`'s
+        // `Deserialize` impl.
+        let json = serde_json::json!({
+            "protocol": SYNC_PROTOCOL_V1,
+            "streams": ["posts", "comments"],
+        });
+        let request: SyncOpenRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(request.streams.len(), 2);
+        assert_eq!(request.streams[0].stream.as_str(), "posts");
+        assert!(request.streams[0].params.is_empty());
+        assert_eq!(request.streams[1].stream.as_str(), "comments");
+        assert!(request.streams[1].params.is_empty());
+    }
+
+    #[test]
+    fn open_request_round_trips_subscription_with_params() {
+        // New client encodes params as part of each `SyncStreamSubscription`.
+        // The deserializer accepts both the wrapped object form AND the
+        // bare-string form, but the wrapped form is the canonical wire shape
+        // for parametric subscriptions.
+        let mut params = BTreeMap::new();
+        params.insert("workspace_id".to_string(), Value::String("W".to_string()));
+        let request = SyncOpenRequest::new([SyncStreamSubscription {
+            stream: SyncStreamName::new("issues").unwrap(),
+            params: params.clone(),
+        }]);
+        let json = serde_json::to_value(&request).unwrap();
+        // Serialization keeps the object form when params are non-empty.
+        assert_eq!(json["streams"][0]["stream"], "issues");
+        assert_eq!(json["streams"][0]["params"]["workspace_id"], "W");
+
+        // And deserialization recovers the same shape.
+        let decoded: SyncOpenRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.streams[0].stream.as_str(), "issues");
+        assert_eq!(decoded.streams[0].params, params);
+    }
+
+    #[test]
+    fn open_request_skips_empty_params_on_serialize() {
+        // Backwards-compat with old servers: serialization must omit
+        // `params` when empty, so old servers parsing the new wire shape
+        // don't see an unexpected field they need to ignore. The wire is
+        // identical to the legacy `Vec<SyncStreamName>` form for
+        // unparameterized subscriptions.
+        let request = SyncOpenRequest::new([SyncStreamSubscription {
+            stream: SyncStreamName::new("posts").unwrap(),
+            params: BTreeMap::new(),
+        }]);
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json["streams"][0].get("params").is_none());
+    }
+
+    #[test]
+    fn pull_request_params_default_empty() {
+        // Old servers respond to `/pull` with the legacy envelope shape.
+        // A new client deserializing a server response with no `params`
+        // field must succeed with an empty map.
+        let json = serde_json::json!({
+            "protocol": SYNC_PROTOCOL_V1,
+            "stream": "posts",
+            "cursor": null,
+            "limit": 500,
+        });
+        let request: SyncPullRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(request.stream.as_str(), "posts");
+        assert!(request.params.is_empty());
+    }
+
+    #[test]
+    fn push_request_params_default_empty() {
+        // Old client envelope (no params field) deserializes cleanly into
+        // the new struct with `params: {}`.
+        let json = serde_json::json!({
+            "protocol": SYNC_PROTOCOL_V1,
+            "stream": "posts",
+            "mutations": [],
+        });
+        let request: SyncPushRequest<Value> = serde_json::from_value(json).unwrap();
+        assert_eq!(request.stream.as_str(), "posts");
+        assert!(request.params.is_empty());
     }
 
     #[test]

@@ -185,12 +185,14 @@ async fn open_validates_stream_then_pull_renders_snapshot() {
                 match req.url.as_str() {
                     SYNC_OPEN_PATH => {
                         let request: SyncOpenRequest = serde_json::from_str(&req.body).unwrap();
-                        assert_eq!(request.streams[0].as_str(), STREAM);
+                        assert_eq!(request.streams[0].stream.as_str(), STREAM);
                         let response = SyncOpenResponse::new(vec![SyncOpenStream {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+
+                            params: ::std::collections::BTreeMap::new(),
                         }]);
                         Ok(json_response(response))
                     }
@@ -294,12 +296,14 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
                 match req.url.as_str() {
                     SYNC_OPEN_PATH => {
                         let request: SyncOpenRequest = serde_json::from_str(&req.body).unwrap();
-                        assert_eq!(request.streams[0].as_str(), STREAM);
+                        assert_eq!(request.streams[0].stream.as_str(), STREAM);
                         let response = SyncOpenResponse::new(vec![SyncOpenStream {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+
+                            params: ::std::collections::BTreeMap::new(),
                         }]);
                         Ok(json_response(response))
                     }
@@ -431,6 +435,8 @@ async fn open_replays_pending_mutations_before_pull() {
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+
+                            params: ::std::collections::BTreeMap::new(),
                         }])))
                     }
                     SYNC_PUSH_PATH => {
@@ -595,6 +601,8 @@ async fn open_keeps_hydrated_pending_overlay_when_replay_fails() {
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+
+                            params: ::std::collections::BTreeMap::new(),
                         }])))
                     }
                     SYNC_PUSH_PATH => {
