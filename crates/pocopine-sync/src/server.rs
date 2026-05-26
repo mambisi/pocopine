@@ -597,16 +597,13 @@ mod tests {
     #[test]
     fn open_response_without_schema_version_field_deserializes_as_one() {
         // Backwards-compat: an old server response that omits the field
-        // must round-trip through serde with schema_version = 1.
-        let payload = serde_json::json!({
-            "protocol": SYNC_PROTOCOL_V1,
-            "streams": [{
-                "stream": "posts_for_tenant",
-                "collection": "posts",
-                "cursor": null,
-            }],
-        });
-        let response: SyncOpenResponse = serde_json::from_value(payload).unwrap();
+        // must round-trip through serde with schema_version = 1. Use a
+        // literal JSON string (not the `json!{}` macro) so the test
+        // exercises the actual wire-deserialization path.
+        let payload = format!(
+            r#"{{"protocol":"{SYNC_PROTOCOL_V1}","streams":[{{"stream":"posts_for_tenant","collection":"posts","cursor":null}}]}}"#
+        );
+        let response: SyncOpenResponse = serde_json::from_str(&payload).unwrap();
         assert_eq!(response.streams[0].schema_version, 1);
     }
 

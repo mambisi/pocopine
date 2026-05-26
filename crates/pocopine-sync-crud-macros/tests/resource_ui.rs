@@ -11,4 +11,7 @@ fn resource_attribute_compile_failures() {
     cases.compile_fail("tests/ui/resource_name_requires_module.rs");
     cases.compile_fail("tests/ui/resource_missing_draft.rs");
     cases.compile_fail("tests/ui/resource_generic_impl.rs");
+    cases.compile_fail("tests/ui/resource_schema_version_zero.rs");
+    cases.compile_fail("tests/ui/resource_schema_version_non_integer.rs");
+    cases.compile_fail("tests/ui/resource_schema_version_suffixed.rs");
 }

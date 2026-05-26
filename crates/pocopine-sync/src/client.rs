@@ -1256,9 +1256,15 @@ fn open_live_wakeup<C, T>(
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+// The function body is pure (no fetch / no DOM); we compile it on
+// host targets too so the test module below can exercise the new
+// domain checks. Production callers live in the wasm-only
+// `start_open_then_pull`, so on host outside tests this is dead-code
+// and warned-as-error by `-D warnings`; the cfg below mirrors the
+// trybuild pattern of "wasm prod OR host test".
+#[cfg(any(target_arch = "wasm32", test))]
 fn validate_open_response(
-    response: SyncOpenResponse,
+    response: crate::SyncOpenResponse,
     stream: &SyncStreamName,
 ) -> Result<u32, pocopine_core::ServerError> {
     if response.protocol != crate::SYNC_PROTOCOL_V1 {
@@ -1268,17 +1274,38 @@ fn validate_open_response(
         )));
     }
 
-    if let Some(accepted) = response
+    // Reject a server that lists the same stream twice. The match is
+    // load-bearing for cache invalidation in Batch 2 — picking the
+    // first arbitrarily on duplicates would let a buggy server pin the
+    // client to a stale schema_version.
+    let matches: Vec<&crate::SyncOpenStream> = response
         .streams
         .iter()
-        .find(|accepted| accepted.stream == *stream)
-    {
-        Ok(accepted.schema_version)
-    } else {
-        Err(pocopine_core::ServerError::Forbidden(format!(
-            "sync stream was not opened: {stream}"
-        )))
+        .filter(|accepted| accepted.stream == *stream)
+        .collect();
+    let accepted = match matches.as_slice() {
+        [] => {
+            return Err(pocopine_core::ServerError::Forbidden(format!(
+                "sync stream was not opened: {stream}"
+            )));
+        }
+        [one] => *one,
+        _ => {
+            return Err(pocopine_core::ServerError::BadRequest(format!(
+                "server returned duplicate open entries for stream: {stream}"
+            )));
+        }
+    };
+    // Enforce the same `>= 1` invariant the macro + builder enforce on
+    // the producing side. A buggy/malicious server advertising 0 would
+    // otherwise collide with the planned `Option<u32>::None ==
+    // 'never observed'` sentinel in Batch 2's cache-version compare.
+    if accepted.schema_version == 0 {
+        return Err(pocopine_core::ServerError::BadRequest(format!(
+            "server advertised schema_version=0 for stream {stream}: versions start at 1"
+        )));
     }
+    Ok(accepted.schema_version)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1926,7 +1953,8 @@ mod tests {
     use super::*;
     use crate::{
         ClientMutationDraft, CollectionState, LocalSnapshotBatch, MemoryLocalStore, RowKey,
-        SyncCollectionName, SyncDeviceId, SyncLocalIdentity, SyncOp, SyncRow,
+        SyncCollectionName, SyncDeviceId, SyncLocalIdentity, SyncOp, SyncOpenResponse,
+        SyncOpenStream, SyncRow,
     };
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2130,6 +2158,72 @@ mod tests {
         // Host stub: should not panic, returns a guard, dropping is fine.
         let guard = client.watch_sign_outs(|| {});
         drop(guard);
+    }
+
+    #[test]
+    fn validate_open_response_rejects_zero_schema_version() {
+        // Wire defense — symmetric with macro + builder which both
+        // reject 0. A buggy server advertising 0 would otherwise pin
+        // the client to an invalid version that collides with future
+        // sentinel encodings.
+        let stream = SyncStreamName::new("posts").unwrap();
+        let mut response = SyncOpenResponse::new(vec![SyncOpenStream {
+            stream: stream.clone(),
+            collection: SyncCollectionName::new("posts").unwrap(),
+            cursor: None,
+            schema_version: 0,
+        }]);
+        // Sanity: protocol field is already set by `new`.
+        response.protocol = crate::SYNC_PROTOCOL_V1.to_string();
+        let err = validate_open_response(response, &stream).unwrap_err();
+        match err {
+            pocopine_core::ServerError::BadRequest(msg) => {
+                assert!(msg.contains("schema_version=0"), "unexpected error: {msg}");
+            }
+            other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_open_response_rejects_duplicate_stream_entries() {
+        // Wire defense — a duplicate stream entry would make the
+        // version-pick ambiguous; reject rather than silently pick the
+        // first.
+        let stream = SyncStreamName::new("posts").unwrap();
+        let response = SyncOpenResponse::new(vec![
+            SyncOpenStream {
+                stream: stream.clone(),
+                collection: SyncCollectionName::new("posts").unwrap(),
+                cursor: None,
+                schema_version: 2,
+            },
+            SyncOpenStream {
+                stream: stream.clone(),
+                collection: SyncCollectionName::new("posts").unwrap(),
+                cursor: None,
+                schema_version: 1,
+            },
+        ]);
+        let err = validate_open_response(response, &stream).unwrap_err();
+        match err {
+            pocopine_core::ServerError::BadRequest(msg) => {
+                assert!(msg.contains("duplicate"), "unexpected error: {msg}");
+            }
+            other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_open_response_accepts_advertised_schema_version() {
+        let stream = SyncStreamName::new("posts").unwrap();
+        let response = SyncOpenResponse::new(vec![SyncOpenStream {
+            stream: stream.clone(),
+            collection: SyncCollectionName::new("posts").unwrap(),
+            cursor: None,
+            schema_version: 3,
+        }]);
+        let v = validate_open_response(response, &stream).unwrap();
+        assert_eq!(v, 3);
     }
 }
 

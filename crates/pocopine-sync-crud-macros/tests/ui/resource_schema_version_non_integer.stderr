@@ -1,0 +1,5 @@
+error: `schema_version` must be a u32 integer literal (e.g. `schema_version = 2`)
+ --> tests/ui/resource_schema_version_non_integer.rs:3:69
+  |
+3 | #[pocopine_sync_crud::resource(name = "customers", schema_version = "two")]
+  |                                                                     ^^^^^

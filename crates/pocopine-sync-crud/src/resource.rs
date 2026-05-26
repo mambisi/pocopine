@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use pocopine_auth::RequestContext;
 use pocopine_sync::{
-    MutationId, RowKey, RowVersion, SyncBoxFuture, SyncCollectionName, SyncConflict, SyncError,
-    SyncOp, SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse,
-    SyncRejectedMutation, SyncResult, SyncRow, SyncStreamName, SyncStreamSource,
+    default_schema_version_one, MutationId, RowKey, RowVersion, SyncBoxFuture, SyncCollectionName,
+    SyncConflict, SyncError, SyncOp, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, SyncRejectedMutation, SyncResult, SyncRow, SyncStreamName, SyncStreamSource,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -32,7 +32,10 @@ where
         collection: SyncCollectionName::new(name)?,
         source,
         max_snapshot_rows: DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
-        schema_version: 1,
+        // Pull the default from one source-of-truth: future changes to
+        // the wire/trait default (e.g. switching to an `Option<u32>`
+        // 'unspecified' sentinel) propagate here without a separate edit.
+        schema_version: default_schema_version_one(),
     })
 }
 
@@ -71,7 +74,7 @@ where
     pub fn schema_version(mut self, version: u32) -> SyncResult<Self> {
         if version == 0 {
             return Err(SyncError::client(
-                "CRUD schema_version must be >= 1 (schema versions start at 1)",
+                "schema_version must be >= 1 (schema versions start at 1)",
             ));
         }
         self.schema_version = version;
@@ -1620,6 +1623,75 @@ mod tests {
             SyncStreamName::new("posts").unwrap(),
             mutations.into_iter().map(value_mutation),
         )
+    }
+
+    #[test]
+    fn resource_defaults_schema_version_to_one() {
+        let r = posts_resource(Posts::default());
+        // SyncStreamSource::schema_version flows through every wrapping
+        // layer (builder -> .id -> .version -> .memory_mutation_log).
+        assert_eq!(
+            <CrudResource<_, _, _, _> as SyncStreamSource>::schema_version(&r),
+            1
+        );
+    }
+
+    #[test]
+    fn resource_builder_propagates_explicit_schema_version() {
+        // Set a non-default version, then walk the full wrapping chain
+        // (.id -> .version -> .memory_mutation_log) and assert the
+        // SyncStreamSource impl returns it. A regression that drops the
+        // `schema_version: self.schema_version` propagation from any
+        // single constructor would silently revert this to 1 — this
+        // test pins the contract.
+        let r = resource("posts", Posts::default())
+            .unwrap()
+            .schema_version(7)
+            .unwrap()
+            .id(|post: &Post| post.id.clone())
+            .version(|post: &Post| post.version)
+            .memory_mutation_log();
+        assert_eq!(
+            <CrudResource<_, _, _, _> as SyncStreamSource>::schema_version(&r),
+            7
+        );
+    }
+
+    #[test]
+    fn transactional_resource_propagates_explicit_schema_version() {
+        // Same end-to-end propagation test, but through the
+        // transactional path (.transactional consumes a CrudResource).
+        let harness = TxHarness::default();
+        let r = resource("posts", harness.clone())
+            .unwrap()
+            .schema_version(11)
+            .unwrap()
+            .id(|post: &Post| post.id.clone())
+            .version(|post: &Post| post.version)
+            .transactional(harness.clone(), harness);
+        assert_eq!(
+            <TransactionalCrudResource<_, _, _, _, _> as SyncStreamSource>::schema_version(&r),
+            11
+        );
+    }
+
+    #[test]
+    fn resource_builder_rejects_zero_schema_version() {
+        let result = resource("posts", Posts::default())
+            .unwrap()
+            .schema_version(0);
+        match result {
+            Ok(_) => panic!("expected error for schema_version=0"),
+            Err(err) => {
+                // Matches the macro's parser-time error message exactly
+                // so grep / docs / error-catalog tooling sees one
+                // canonical wording for the same logical failure.
+                assert!(
+                    err.to_string().contains("schema_version must be >= 1"),
+                    "unexpected error: {err}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
