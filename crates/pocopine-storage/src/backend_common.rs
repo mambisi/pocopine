@@ -1,14 +1,78 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use time::OffsetDateTime;
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::server::StorageActor;
 use crate::{
     ObjectChecksum, ObjectRef, ObjectVisibility, StorageError, StorageKey, StorageResult,
-    UploadSession, UploadSessionStatus, UploadStrategy,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 
 const MAX_UPLOAD_EXPIRES_AFTER_SECS: u64 = 100 * 365 * 24 * 60 * 60;
+
+#[derive(Clone, Default)]
+pub struct UploadSessionLockRegistry {
+    locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
+}
+
+impl std::fmt::Debug for UploadSessionLockRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadSessionLockRegistry")
+            .finish_non_exhaustive()
+    }
+}
+
+impl UploadSessionLockRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn lock(&self, session: &UploadSessionId) -> Arc<TokioMutex<()>> {
+        let mut locks = self
+            .locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        locks
+            .entry(session.as_str().to_string())
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone()
+    }
+
+    pub fn drop_if_unused(&self, session: &UploadSessionId) {
+        let mut locks = self
+            .locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = locks.get(session.as_str()) {
+            if Arc::strong_count(existing) <= 2 {
+                locks.remove(session.as_str());
+            }
+        }
+    }
+}
+
+pub struct UploadSessionLockCleanup<'a> {
+    registry: &'a UploadSessionLockRegistry,
+    session: UploadSessionId,
+}
+
+impl<'a> UploadSessionLockCleanup<'a> {
+    pub fn new(registry: &'a UploadSessionLockRegistry, session: &UploadSessionId) -> Self {
+        Self {
+            registry,
+            session: session.clone(),
+        }
+    }
+}
+
+impl Drop for UploadSessionLockCleanup<'_> {
+    fn drop(&mut self) {
+        self.registry.drop_if_unused(&self.session);
+    }
+}
 
 pub fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
     match strategy {
