@@ -30,6 +30,7 @@ members = [
     "crates/pocopine-observe",
     "crates/pocopine-server",
     "crates/pocopine-storage",
+    "crates/pocopine-storage-gcs",
     "crates/pocopine-storage-s3",
     "crates/pocopine-sync",
     "crates/pocopine-sync-crud",
@@ -98,6 +99,7 @@ pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
 pocopine-observe = { path = "crates/pocopine-observe", version = "0.1.0" }
 pocopine-server = { path = "crates/pocopine-server", version = "0.1.0" }
 pocopine-storage = { path = "crates/pocopine-storage", version = "0.1.0" }
+pocopine-storage-gcs = { path = "crates/pocopine-storage-gcs", version = "0.1.0" }
 pocopine-storage-s3 = { path = "crates/pocopine-storage-s3", version = "0.1.0" }
 pocopine-sync = { path = "crates/pocopine-sync", version = "0.1.0" }
 pocopine-sync-crud = { path = "crates/pocopine-sync-crud", version = "0.1.0" }
