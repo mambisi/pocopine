@@ -229,6 +229,29 @@ impl SyncClient {
         // the new shared value against its captured snapshot and abort its
         // persist + state update — so a slow in-flight server response
         // cannot repopulate the cache after the sign-out wipe runs.
+        //
+        // **Failure semantics:** if `clear_all_streams` errors, the
+        // epoch stays bumped and the broadcast never fires. Every
+        // subsequent operation on the existing `SyncCollection`s in
+        // this tab will return `SyncError::Unauthorized("sync session
+        // ended")` even though the durable store may still hold
+        // pre-sign-out data. We do NOT roll the bump back, because a
+        // partial wipe would leave the store in an unknown state that
+        // is more dangerous to keep using than the conservative
+        // "session ended" posture. Apps observing the Err should
+        // treat the session as permanently invalidated and require a
+        // page reload (which re-mounts collections against a fresh
+        // empty store, or against whatever durable state survived).
+        //
+        // **Error variant overload:** spawned tasks that race a
+        // successful sign-out return `SyncError::unauthorized("sync
+        // session ended")` to signal "the local session you queued
+        // this against is gone." This shares the
+        // `SyncError::Unauthorized` variant with credential-failure
+        // errors from `CrudSource` impls; apps that want to
+        // distinguish "show re-auth UI" from "navigate to sign-in
+        // screen" should match on the message text or wrap this layer
+        // with their own error mapping.
         self.epoch.bump();
         self.local_store.clear_all_streams().await?;
         broadcast_sign_out();
@@ -749,20 +772,27 @@ where
         // Gate each user-initiated `.await` so a concurrent sign-out
         // (e.g. triggered by a BroadcastChannel listener that fires
         // between yields) cannot leave a stale pending mutation in the
-        // just-wiped store.
+        // just-wiped store. The post-await checks consult the epoch
+        // BEFORE the `?` propagates any inner error — a backend error
+        // that fired because the wipe rolled the transaction back
+        // should surface as `Unauthorized` ("sync session ended"), not
+        // as a generic `Backend` error the app can't recognize.
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
-        let mutation_id = self.local_store.reserve_mutation_id().await?;
+        let reserve_result = self.local_store.reserve_mutation_id().await;
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
+        let mutation_id = reserve_result?;
         let mutation = mutation.with_id(mutation_id.clone());
-        enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
-            .await?;
+        let enqueue_result =
+            enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
+                .await;
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
+        enqueue_result?;
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
 
         let epoch = self.epoch.clone();
@@ -803,10 +833,11 @@ where
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
-        let mutation_id = self.local_store.reserve_mutation_id().await?;
+        let reserve_result = self.local_store.reserve_mutation_id().await;
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
+        let mutation_id = reserve_result?;
         let mutation = mutation.with_id(mutation_id.clone());
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
         let response = send_push_and_reconcile(
@@ -916,16 +947,29 @@ where
     {
         self.touch_host_fields();
         let stream = self.stream_value()?;
+        // Each post-await stale check consults the epoch BEFORE the `?`
+        // propagates any inner error so a backend error caused by the
+        // wipe surfaces as `Unauthorized` rather than `Backend` —
+        // matching the wasm path's contract.
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
-        let mutation_id = self.local_store.reserve_mutation_id().await?;
+        let reserve_result = self.local_store.reserve_mutation_id().await;
         if self.epoch.is_stale() {
             return Err(SyncError::unauthorized("sync session ended"));
         }
+        let mutation_id = reserve_result?;
         let mutation = mutation.with_id(mutation_id.clone());
-        enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
-            .await?;
+        let enqueue_result =
+            enqueue_pending_mutation(&self.local_store, &stream, &mutation, optimistic.as_ref())
+                .await;
+        // Third stale check mirrors the wasm path — even though the host
+        // stub does no in-memory apply, returning Ok here would lie about
+        // the queue state when sign-out raced the enqueue await.
+        if self.epoch.is_stale() {
+            return Err(SyncError::unauthorized("sync session ended"));
+        }
+        enqueue_result?;
         // Host-side collection calls are no-op stubs; the browser path applies
         // the optimistic row before starting the background push.
         let _ = optimistic;
@@ -982,7 +1026,15 @@ fn start_open_then_pull<C, T>(
         let mut pending_mutations = Vec::new();
         let mut local_error = None;
 
-        match local_store.hydrate_stream(&stream).await {
+        let hydrate_result = local_store.hydrate_stream(&stream).await;
+        // Sign-out can fire while we're awaiting hydrate; if so, drop
+        // the result on the floor — the wipe is in progress and our
+        // pre-wipe snapshot would write tenant A's rows into the
+        // orphaned collection.
+        if epoch.is_stale() {
+            return;
+        }
+        match hydrate_result {
             Ok(snapshot) => {
                 local_cursor = snapshot.cursor.clone();
                 pending_mutations = snapshot
@@ -1030,6 +1082,12 @@ fn start_open_then_pull<C, T>(
             &open_request,
         )
         .await;
+        // Symmetric with the pull/push error paths below: if sign-out
+        // raced the /open fetch, neither the error state nor the live
+        // subscription belong on this collection any more.
+        if epoch.is_stale() {
+            return;
+        }
         if let Err(err) = open_result.and_then(|response| validate_open_response(response, &stream))
         {
             handle.update(|state| {
@@ -1161,7 +1219,11 @@ fn open_live_wakeup<C, T>(
         })
         .on_error({
             let handle = handle.clone();
+            let epoch = epoch.clone();
             move |event| {
+                if epoch.is_stale() {
+                    return;
+                }
                 handle.update(|state| {
                     selector(state).set_error(format!("live wake-up failed: {:?}", event.target));
                 });
@@ -1178,6 +1240,9 @@ fn open_live_wakeup<C, T>(
             pocopine_core::on_scope_unmount_for(scope_id, move || drop(subscription));
         }
         Err(err) => {
+            if epoch.is_stale() {
+                return;
+            }
             handle.update(|state| {
                 selector(state).set_error(format!("live wake-up failed: {err}"));
             });
@@ -1402,18 +1467,22 @@ async fn run_push<C, T, M>(
     let mutation_key = mutation.key.clone();
 
     if queue_offline {
-        // The task may have been spawned before sign-out and only polled
-        // afterward. Check BEFORE writing to the durable queue so a stale
-        // task can't leave tenant A's pending mutation in the empty store.
+        // Pre-await: if the task was spawned before sign-out and only
+        // polled afterward, drop it before touching the store at all.
         if epoch.is_stale() {
             return;
         }
-        if let Err(err) =
-            enqueue_pending_mutation(&local_store, &stream, &mutation, optimistic.as_ref()).await
-        {
-            if epoch.is_stale() {
-                return;
-            }
+        let enqueue_result =
+            enqueue_pending_mutation(&local_store, &stream, &mutation, optimistic.as_ref()).await;
+        // Post-await: the durable write may have landed during the await
+        // window between the bump and `clear_all_streams` completing —
+        // that row will be cleared by the wipe. The post-await check
+        // ensures we never compound the durable transient by also
+        // writing the in-memory optimistic state for an orphaned tenant.
+        if epoch.is_stale() {
+            return;
+        }
+        if let Err(err) = enqueue_result {
             handle.update(|state| {
                 selector(state).set_error(err.to_string());
             });
@@ -1637,9 +1706,13 @@ where
     .map_err(|err| SyncError::client(err.to_string()))?;
     // Gate the durable `mark_push_result` write — otherwise a sign-out
     // between the /push and the durable persist could write tenant A's
-    // accepted/rejected outcomes into the now-wiped store.
+    // accepted/rejected outcomes into the now-wiped store. Surface this
+    // as an explicit `Unauthorized` error so the caller cannot
+    // accidentally treat a stale-skipped replay as a successful one and
+    // apply the server response to the (orphaned) in-memory collection
+    // state.
     if epoch.is_stale() {
-        return Ok(response);
+        return Err(SyncError::unauthorized("sync session ended"));
     }
     let result = local_push_result_from_response(&response)?;
     local_store.mark_push_result(result).await?;

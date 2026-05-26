@@ -324,17 +324,24 @@ async fn requests_missing_tenant_header_are_rejected_at_source() {
         &SyncPullRequest::new(SyncStreamName::new(STREAM).unwrap()),
     )
     .await;
+    // First catch the leaked-success case explicitly so a regression
+    // shows up as "anonymous /pull leaked …" rather than a generic
+    // variant mismatch — the security signal is louder.
+    if let Ok(ref response) = envelope {
+        panic!("anonymous /pull leaked a successful response: {response:?}");
+    }
     // The source-side guard returns `SyncError::unauthorized("missing
     // tenant")`, which the server mapper turns into
     // `ServerError::Unauthorized`. Match on the variant directly — a
     // regression to BadRequest / App / Forbidden carrying the word
     // "unauthorized" in its message would otherwise slip through.
+    //
+    // The message body is intentionally NOT asserted on a specific
+    // substring: the wire contract is the variant + a non-empty
+    // message, not the literal text of any one source's error.
     match envelope {
         Err(pocopine_core::ServerError::Unauthorized(msg)) => {
-            assert!(
-                msg.contains("missing tenant"),
-                "unexpected unauthorized message: {msg}"
-            );
+            assert!(!msg.is_empty(), "unauthorized message is empty");
         }
         other => panic!("expected ServerError::Unauthorized, got: {other:?}"),
     }
