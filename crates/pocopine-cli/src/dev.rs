@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use notify::{Config, ErrorKind, Event, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::args::ServeArgs;
-use crate::{build, client_modules, config, server, tailwind};
+use crate::{build, client_modules, config, env, server, tailwind};
 
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CHANGE_QUIET_WINDOW: Duration = Duration::from_millis(350);
@@ -20,6 +20,22 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
+
+    // Dev-mode `.env` injection: load every KEY=VALUE pair into a map and
+    // hand it to spawn_bin so the server / worker children see them.
+    // `pocopine run` (in main.rs::run_project) intentionally does NOT do
+    // this — production-shape runs must source their environment from the
+    // shell / host secrets store, never from a tracked dev convenience
+    // file.
+    let dev_env = env::load(&project)?;
+    if !dev_env.is_empty() {
+        let preview: Vec<String> = dev_env.keys().cloned().collect();
+        println!(
+            "⚙ loading .env: {} key(s) [{}]",
+            preview.len(),
+            preview.join(", ")
+        );
+    }
 
     let (tx, rx) = channel::<Change>();
     let src_dir = project.join("src");
@@ -37,12 +53,13 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     // In static mode the CLI owns the socket and runs on a background thread.
     server::check_configured_port_available(&cfg)?;
     match cfg.bin.as_deref() {
-        Some(bin) => children.bins.push(server::spawn_bin(
+        Some(bin) => children.bins.push(server::spawn_bin_with_env(
             &project,
             bin,
             args.release,
             server::BinRole::Server,
             true,
+            &dev_env,
         )?),
         None => {
             let serve_path = project.clone();
@@ -56,12 +73,13 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
     if let Some(worker) = cfg.worker_bin.as_deref() {
         server::validate_worker_backend_for_separate_process(true)?;
-        children.bins.push(server::spawn_bin(
+        children.bins.push(server::spawn_bin_with_env(
             &project,
             worker,
             args.release,
             server::BinRole::Worker,
             true,
+            &dev_env,
         )?);
     }
     println!(

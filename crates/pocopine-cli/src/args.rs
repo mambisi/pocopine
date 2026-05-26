@@ -25,6 +25,13 @@ pub enum Cmd {
     Deploy(DeployArgs),
     /// Managed JavaScript toolkit commands for typed `.client.ts` modules.
     Js(JsArgs),
+    /// Manage the project's `.env` file (dev-only environment variables).
+    ///
+    /// `pocopine dev` loads `.env` into the spawned server + worker bins.
+    /// `pocopine run` does NOT — production-shape runs inherit the parent
+    /// environment unchanged, so values you set here never leak into
+    /// real prod from a Pocopine-managed code path.
+    Env(EnvArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -180,6 +187,40 @@ pub struct AuthArgs {
     /// Remove the stored token for the given host.
     #[arg(long, value_name = "HOST")]
     pub revoke: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct EnvArgs {
+    /// Path to the project crate (defaults to current dir).
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+    #[command(subcommand)]
+    pub cmd: EnvCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum EnvCmd {
+    /// Set or overwrite a key in `.env`. Adds `.env` to `.gitignore` on
+    /// first use. If `<value>` is omitted, the value is read from stdin
+    /// (no trailing newline) so secrets stay out of shell history.
+    Set {
+        /// Variable name (e.g. `DATABASE_URL`). Must match
+        /// `[A-Za-z_][A-Za-z0-9_]*`.
+        key: String,
+        /// Value. Omit to read from stdin.
+        value: Option<String>,
+    },
+    /// Print the value of a single key, or exit non-zero if it is unset.
+    Get { key: String },
+    /// List every key currently set in `.env`. Values are masked unless
+    /// `--show-values` is passed.
+    List {
+        /// Print full values instead of the masked preview.
+        #[arg(long)]
+        show_values: bool,
+    },
+    /// Remove a key. Idempotent.
+    Unset { key: String },
 }
 
 #[derive(Subcommand, Debug, Clone)]
