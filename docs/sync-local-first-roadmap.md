@@ -348,8 +348,12 @@ simple and hard to misuse.
    Done — `SyncLocalStore::clear_all_streams`,
    `SyncClient::sign_out` / `watch_sign_outs`, and the §7 deliverables
    above.
-6. Add broader browser CI around SQLite local-first flows.
-7. Only then consider database-specific changefeed adapters.
+6. ~~Schema versioning + migration adapter (Axis 1 of
+   `docs/sync-local-first-gaps.md`).~~ Done across PRs #128, #130, and
+   the schema-migrator PR. Cookbook page at
+   `docs/sync-schema-versioning.md`.
+7. Add broader browser CI around SQLite local-first flows.
+8. Only then consider database-specific changefeed adapters.
 
 This order uses the SQLite sync store we already have while preserving the
 database-agnostic engine boundary.

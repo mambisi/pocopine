@@ -8,7 +8,11 @@
 
 ## Axis 1: Schema migrations (versioned payloads, queued-mutation drift)
 
-- **Status in pocopine:** Missing.
+- **Status in pocopine:** ✅ Done — three batches landed.
+  - **Batch 1** (#128): protocol surface — `SyncStreamSource::schema_version()` + `#[resource(schema_version = N)]` macro attribute + `SyncError::SchemaMigration` variant + `SyncOpenStream.schema_version` wire field with `#[serde(default)]` for backwards-compat.
+  - **Batch 2** (#130): local cache invalidation — `SyncLocalStore::clear_stream`, durable v3→v4 storage migration adding `app_schema_version` column, `CollectionState::reset_for_schema_invalidation`, post-/open mismatch detection + wipe in `start_open_then_pull`.
+  - **Batch 3** (this PR): author-facing migration adapter — `SyncStreamSource::migrate_payload` default-reject implementation, `SyncPushRequest.schema_version` wire field, push-handler routing, `CrudResourceBuilder::migrate_with(fn)`, `#[resource(..., migrate_with = path)]` macro attribute. Cookbook page at `docs/sync-schema-versioning.md`.
+- **Field evidence (resolved by the implementation):**
 - **Field evidence:**
   - Linear's reverse-engineering notes ([wzhudev/reverse-linear-sync-engine](https://github.com/wzhudev/reverse-linear-sync-engine)) explicitly call this out: "Migrations trigger via schema hash comparisons stored in metadata. When model definitions change, the hash updates, prompting `IndexedDB.open()` with an incremented version number."
   - CR-SQLite has a first-class API ([vlcn.io migrations](https://vlcn.io/docs/cr-sqlite/migrations)): "tables that have been upgraded to crrs need some extra handling … start that modification with a call to `crsql_begin_alter`, and complete with `crsql_commit_alter`. Bookkeeping metadata needs to be migrated as well."

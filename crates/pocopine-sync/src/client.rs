@@ -205,6 +205,7 @@ impl SyncClient {
             stream: None,
             cursor: None,
             epoch: self.epoch.snapshot(),
+            schema_version: crate::default_schema_version_one(),
             _marker: PhantomData,
         }
     }
@@ -295,6 +296,14 @@ pub struct SyncCollection<C: 'static, T> {
     cursor: Option<SyncCursor>,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     epoch: SyncEpoch,
+    /// Application-level schema version this collection's resource is
+    /// encoded under. Generated `Resource::collection()` chains
+    /// `.schema_version(SCHEMA_VERSION)` so push requests carry the
+    /// resource's declared version. The server compares against its
+    /// own `SyncStreamSource::schema_version()` and routes stale
+    /// mutations through `migrate_payload`. Defaults to `1` for raw
+    /// `SyncCollection` callers that don't go through the macro.
+    schema_version: u32,
     _marker: PhantomData<fn(C) -> T>,
 }
 
@@ -306,6 +315,20 @@ where
     /// Set the server-registered stream to pull.
     pub fn stream(mut self, stream: impl Into<String>) -> SyncResult<Self> {
         self.stream = Some(SyncStreamName::new(stream.into())?);
+        Ok(self)
+    }
+
+    /// Tag this collection's push requests with the resource's
+    /// application-level schema version. Generated `Resource::collection()`
+    /// calls this with the macro-emitted `SCHEMA_VERSION`; bare
+    /// `SyncCollection` callers can leave the default (`1`).
+    pub fn schema_version(mut self, version: u32) -> SyncResult<Self> {
+        if version == 0 {
+            return Err(SyncError::client(
+                "schema_version must be >= 1 (schema versions start at 1)",
+            ));
+        }
+        self.schema_version = version;
         Ok(self)
     }
 
@@ -650,6 +673,7 @@ where
                 "SyncCollection::push used outside a component handler/lifecycle hook",
             )
         })?;
+        let schema_version = self.schema_version;
         start_push(
             scope_id,
             self.handle,
@@ -662,6 +686,7 @@ where
             !self.live_wakeup,
             true,
             self.epoch,
+            schema_version,
         );
         Ok(())
     }
@@ -681,6 +706,7 @@ where
                 "SyncCollection::push_online used outside a component handler/lifecycle hook",
             )
         })?;
+        let schema_version = self.schema_version;
         start_push(
             scope_id,
             self.handle,
@@ -693,6 +719,7 @@ where
             !self.live_wakeup,
             false,
             self.epoch,
+            schema_version,
         );
         Ok(())
     }
@@ -712,6 +739,7 @@ where
                 "SyncCollection::push_with_generated_id used outside a component handler/lifecycle hook",
             )
         })?;
+        let schema_version = self.schema_version;
         start_push_with_generated_id(
             scope_id,
             self.handle,
@@ -724,6 +752,7 @@ where
             !self.live_wakeup,
             true,
             self.epoch,
+            schema_version,
         );
         Ok(())
     }
@@ -743,6 +772,7 @@ where
                 "SyncCollection::push_with_generated_id_online used outside a component handler/lifecycle hook",
             )
         })?;
+        let schema_version = self.schema_version;
         start_push_with_generated_id(
             scope_id,
             self.handle,
@@ -755,6 +785,7 @@ where
             !self.live_wakeup,
             false,
             self.epoch,
+            schema_version,
         );
         Ok(())
     }
@@ -800,6 +831,7 @@ where
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
 
         let epoch = self.epoch.clone();
+        let schema_version = self.schema_version;
         pocopine_core::spawn_for_scope(scope_id, async move {
             let _ = send_push_and_reconcile(
                 scope_id,
@@ -813,6 +845,7 @@ where
                 pull_after_accept,
                 true,
                 epoch,
+                schema_version,
             )
             .await;
         });
@@ -844,6 +877,7 @@ where
         let mutation_id = reserve_result?;
         let mutation = mutation.with_id(mutation_id.clone());
         apply_optimistic_mutation(&self.handle, self.selector, &mutation, optimistic);
+        let schema_version = self.schema_version;
         let response = send_push_and_reconcile(
             scope_id,
             self.handle,
@@ -856,6 +890,7 @@ where
             pull_after_accept,
             false,
             self.epoch,
+            schema_version,
         )
         .await?;
         Ok((mutation_id, response))
@@ -1192,6 +1227,7 @@ fn start_open_then_pull<C, T>(
                 stream.clone(),
                 pending_mutations,
                 &epoch,
+                advertised_schema_version,
             )
             .await
             {
@@ -1484,6 +1520,7 @@ fn start_push<C, T, M>(
     pull_after_accept: bool,
     queue_offline: bool,
     epoch: SyncEpoch,
+    schema_version: u32,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1506,6 +1543,7 @@ fn start_push<C, T, M>(
             pull_after_accept,
             queue_offline,
             epoch,
+            schema_version,
         )
         .await;
     });
@@ -1525,6 +1563,7 @@ fn start_push_with_generated_id<C, T, M>(
     pull_after_accept: bool,
     queue_offline: bool,
     epoch: SyncEpoch,
+    schema_version: u32,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1562,6 +1601,7 @@ fn start_push_with_generated_id<C, T, M>(
             pull_after_accept,
             queue_offline,
             epoch,
+            schema_version,
         )
         .await;
     });
@@ -1582,6 +1622,7 @@ async fn run_push<C, T, M>(
     pull_after_accept: bool,
     queue_offline: bool,
     epoch: SyncEpoch,
+    schema_version: u32,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1639,6 +1680,7 @@ async fn run_push<C, T, M>(
         pull_after_accept,
         queue_offline,
         epoch,
+        schema_version,
     )
     .await;
 }
@@ -1698,6 +1740,7 @@ async fn send_push_and_reconcile<C, T, M>(
     pull_after_accept: bool,
     reconcile_queued_mutation: bool,
     epoch: SyncEpoch,
+    schema_version: u32,
 ) -> SyncResult<SyncPushResponse<T>>
 where
     C: 'static,
@@ -1710,7 +1753,11 @@ where
     // durable local queue. A server response should therefore be persisted as
     // the local push result so the queue can clear accepted/rejected/conflict
     // outcomes. Online-only pushes skip this local queue reconciliation.
-    let request = SyncPushRequest::new(stream.clone(), [mutation]);
+    // `schema_version` tags the wire envelope so the server's
+    // `push_handler` can route stale-schema mutations through
+    // `migrate_payload` before delegating to the source's `push`.
+    let request =
+        SyncPushRequest::new(stream.clone(), [mutation]).with_schema_version(schema_version);
     let result =
         pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(&push_url, &request)
             .await;
@@ -1822,11 +1869,13 @@ async fn replay_pending_mutations<T>(
     stream: SyncStreamName,
     pending_mutations: Vec<ClientMutation<Value>>,
     epoch: &SyncEpoch,
+    schema_version: u32,
 ) -> SyncResult<SyncPushResponse<T>>
 where
     T: serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
-    let request = SyncPushRequest::new(stream, pending_mutations);
+    let request =
+        SyncPushRequest::new(stream, pending_mutations).with_schema_version(schema_version);
     let response = pocopine_core::fetch::call::<SyncPushRequest<Value>, SyncPushResponse<T>>(
         push_url, &request,
     )
@@ -2087,6 +2136,7 @@ mod tests {
             stream: Some(stream),
             cursor: None,
             epoch: SyncEpoch::new(),
+            schema_version: 1,
             _marker: PhantomData,
         };
         (state, collection)

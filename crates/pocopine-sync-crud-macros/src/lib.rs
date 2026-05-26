@@ -8,7 +8,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Ident, ImplItem, ItemImpl, LitInt, LitStr, Token, Type};
+use syn::{parse_macro_input, ExprPath, Ident, ImplItem, ItemImpl, LitInt, LitStr, Token, Type};
 
 // Matches the sync protocol's stream and row-key token budget.
 const MAX_SYNC_TOKEN_LEN: usize = 1024;
@@ -18,6 +18,7 @@ struct ResourceArgs {
     name: LitStr,
     module: Ident,
     schema_version: u32,
+    migrate_with: Option<ExprPath>,
 }
 
 impl Parse for ResourceArgs {
@@ -25,6 +26,7 @@ impl Parse for ResourceArgs {
         let mut name = None;
         let mut module = None;
         let mut schema_version: Option<u32> = None;
+        let mut migrate_with: Option<ExprPath> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -86,10 +88,25 @@ impl Parse for ResourceArgs {
                     ));
                 }
                 schema_version = Some(value);
+            } else if key == "migrate_with" {
+                if migrate_with.is_some() {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "duplicate `migrate_with` in CRUD resource attribute",
+                    ));
+                }
+                input.parse::<Token![=]>()?;
+                let path: ExprPath = input.parse().map_err(|err| {
+                    syn::Error::new(
+                        err.span(),
+                        "`migrate_with` must be a function path (e.g. `migrate_with = my_app::migrate_post`)",
+                    )
+                })?;
+                migrate_with = Some(path);
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name = \"...\"`, `module = ident`, or `schema_version = N` in CRUD resource attribute",
+                    "expected `name = \"...\"`, `module = ident`, `schema_version = N`, or `migrate_with = path` in CRUD resource attribute",
                 ));
             }
 
@@ -112,6 +129,7 @@ impl Parse for ResourceArgs {
             name,
             module,
             schema_version,
+            migrate_with,
         })
     }
 }
@@ -160,6 +178,14 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
     let id = types.id;
     let row = types.row;
     let draft = types.draft;
+    // `migrate_with = path` -> tokens to chain `.migrate_with(path)` on
+    // the builder. When omitted, expand to nothing so the existing
+    // `resource(NAME, source)? .schema_version(SCHEMA_VERSION)` chain is
+    // unchanged.
+    let migrate_with_chain = match args.migrate_with {
+        Some(path) => quote! { .map(|b| b.migrate_with(#path)) },
+        None => quote! {},
+    };
 
     Ok(quote! {
         #[cfg(not(target_arch = "wasm32"))]
@@ -440,6 +466,7 @@ fn expand_resource(args: ResourceArgs, item: ItemImpl) -> syn::Result<TokenStrea
             ) -> ::pocopine_sync::SyncResult<::pocopine_sync_crud::CrudResourceBuilder<#source>> {
                 ::pocopine_sync_crud::resource(NAME, source)?
                     .schema_version(SCHEMA_VERSION)
+                    #migrate_with_chain
             }
 
             pub fn new_id() -> ::pocopine_sync::SyncResult<Id> {

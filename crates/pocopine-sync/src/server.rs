@@ -16,9 +16,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    sync_stream_tag, SyncError, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullRequest,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncResult, SYNC_OPEN_PATH,
-    SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    sync_stream_tag, ClientMutation, SyncError, SyncOpenRequest, SyncOpenResponse, SyncOpenStream,
+    SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation,
+    SyncResult, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 
 /// Future returned by a stream source.
@@ -110,6 +110,31 @@ pub trait SyncStreamSource: Send + Sync + 'static {
                 "push is not implemented for this stream",
             ))
         })
+    }
+
+    /// Migrate a client-side mutation payload encoded under `from` to
+    /// the source's currently-advertised schema version `to`.
+    ///
+    /// The framework's `push_handler` invokes this once per mutation
+    /// when the request's `schema_version` differs from
+    /// `self.schema_version()`. The default implementation returns
+    /// `SyncError::SchemaMigration` so any out-of-tree source that
+    /// hasn't opted in surfaces a clean per-mutation rejection rather
+    /// than silently mis-deserializing stale payloads into the new
+    /// shape. Apps that want to accept stale pushes (e.g. to preserve
+    /// side-effecting writes like payments across a schema bump)
+    /// override this method directly or use the
+    /// `#[resource(schema_version = N, migrate_with = path)]` macro
+    /// attribute which generates the impl.
+    ///
+    /// On `Ok`, the framework substitutes the migrated payload into
+    /// the mutation before delegating to `push`. On `Err`, the
+    /// mutation is added to the response's `rejected` array with the
+    /// error's `reason`; the rest of the batch continues.
+    fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
+        let _ = value;
+        let stream = self.stream().as_str().to_string();
+        Box::pin(async move { Err(SyncError::schema_migration(stream, from, to)) })
     }
 }
 
@@ -340,14 +365,55 @@ async fn push_handler(
     request: Request<Body>,
 ) -> Json<ServerResult<SyncPushResponse<Value>>> {
     let result = async {
-        let (ctx, request) = parse_json_request::<SyncPushRequest<Value>>(request).await?;
+        let (ctx, mut request) = parse_json_request::<SyncPushRequest<Value>>(request).await?;
         let stream = sync.stream(request.stream.as_str()).map_err(server_error)?;
         stream.authorize(ctx.clone()).await?;
+        // If the client and server disagree on the application-level
+        // schema version, run each mutation's payload through the
+        // source's `migrate_payload`. Mutations that can't be migrated
+        // (default impl returns Err(SchemaMigration)) get a typed
+        // rejection in `pre_rejected`; the survivors continue into
+        // `source.push` carrying their migrated payloads. The
+        // request's schema_version is then updated so the source
+        // sees a self-consistent batch.
+        let mut pre_rejected: Vec<SyncRejectedMutation> = Vec::new();
+        let server_schema_version = stream.source.schema_version();
+        if request.schema_version != server_schema_version {
+            let from = request.schema_version;
+            let to = server_schema_version;
+            let mut survivors: Vec<ClientMutation<Value>> =
+                Vec::with_capacity(request.mutations.len());
+            for mutation in request.mutations.drain(..) {
+                match stream
+                    .source
+                    .migrate_payload(from, to, mutation.payload.clone())
+                    .await
+                {
+                    Ok(migrated) => {
+                        let mut next = mutation;
+                        next.payload = migrated;
+                        survivors.push(next);
+                    }
+                    Err(err) => {
+                        pre_rejected.push(SyncRejectedMutation {
+                            mutation_id: mutation.id,
+                            key: mutation.key,
+                            reason: err.to_string(),
+                        });
+                    }
+                }
+            }
+            request.mutations = survivors;
+            request.schema_version = server_schema_version;
+        }
         let mut response = stream
             .source
             .push(ctx, request)
             .await
             .map_err(server_error)?;
+        if !pre_rejected.is_empty() {
+            response.rejected.extend(pre_rejected);
+        }
         if response.collection.is_none() {
             response.collection = Some(stream.source.collection().clone());
         }
@@ -545,6 +611,7 @@ mod tests {
         let request = SyncPushRequest::<String> {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             stream: SyncStreamName::new("posts_for_tenant").unwrap(),
+            schema_version: crate::default_schema_version_one(),
             mutations: Vec::new(),
         };
 
