@@ -1,0 +1,17 @@
+<root class="pine-upload-dropzone"
+      role="button"
+      tabindex="0"
+      :data-state="state"
+      :data-dragover="dragover"
+      :data-disabled="disabled"
+      :data-busy="busy"
+      :data-files-empty="files_empty"
+      :data-clickable="clickable"
+      :aria-disabled="disabled"
+      @click="on_click"
+      @dragenter.prevent="on_dragenter"
+      @dragover.prevent="on_dragover_event"
+      @dragleave="on_dragleave"
+      @drop.prevent="on_drop">
+  <slot></slot>
+</root>

@@ -1,0 +1,7 @@
+<root class="pine-upload-item-retry"
+      type="button"
+      :data-disabled="disabled"
+      :aria-disabled="disabled"
+      @click.stop="click">
+  <slot></slot>
+</root>

@@ -1,4 +1,5 @@
 <root class="pine-progress-indicator"
       :data-state="value < 0 ? 'indeterminate' : (value >= max ? 'complete' : 'loading')"
       :data-value="value < 0 ? false : value"
-      :data-max="max"></root>
+      :data-max="max"
+      :style="'width:' + percent + '%'"></root>

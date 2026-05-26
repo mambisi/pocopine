@@ -1,0 +1,8 @@
+<root class="pine-upload-clear"
+      type="button"
+      :data-disabled="disabled || files_empty"
+      :aria-disabled="disabled || files_empty"
+      :disabled="disabled || files_empty"
+      @click.stop="click">
+  <slot></slot>
+</root>

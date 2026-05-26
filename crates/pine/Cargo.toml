@@ -23,6 +23,8 @@ time = { version = "0.3", default-features = false, features = ["wasm-bindgen", 
 version = "0.3"
 features = [
     "CustomEvent",
+    "DataTransfer",
+    "DragEvent",
     "Element",
     "Event",
     "EventInit",

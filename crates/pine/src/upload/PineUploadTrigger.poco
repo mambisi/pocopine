@@ -1,0 +1,9 @@
+<root class="pine-upload-trigger"
+      type="button"
+      :data-disabled="disabled"
+      :data-busy="busy"
+      :aria-disabled="disabled"
+      :disabled="disabled"
+      @click.stop="click">
+  <slot></slot>
+</root>

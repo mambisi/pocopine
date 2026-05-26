@@ -172,7 +172,10 @@ pub use tooltip::{
     PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot, PineTooltipTrigger,
 };
 pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
-pub use upload::PineUpload;
+pub use upload::{
+    PineUploadClear, PineUploadDropzone, PineUploadItem, PineUploadItemCancel,
+    PineUploadItemRemove, PineUploadItemRetry, PineUploadRoot, PineUploadTrigger,
+};
 
 /// Register every Pine custom-element tag. Call once at app startup
 /// before mounting.
@@ -343,5 +346,12 @@ pub fn register_all() {
     PineTagsInputInput::register();
     PineTagsInputClear::register();
     PineText::register();
-    PineUpload::register();
+    PineUploadRoot::register();
+    PineUploadTrigger::register();
+    PineUploadDropzone::register();
+    PineUploadItem::register();
+    PineUploadItemCancel::register();
+    PineUploadItemRetry::register();
+    PineUploadItemRemove::register();
+    PineUploadClear::register();
 }
