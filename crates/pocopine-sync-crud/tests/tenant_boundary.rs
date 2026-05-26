@@ -30,8 +30,9 @@
 //!   each under its tenant scope and the accepted-row maps to the writer.
 //! * **Anonymous requests are rejected at the framework boundary.** The
 //!   source's per-request guard turns "no `x-tenant-id` header" into
-//!   `SyncError::client("missing tenant")`, which surfaces as an error
-//!   response.
+//!   `SyncError::unauthorized("missing tenant")`, which the server mapper
+//!   surfaces as `ServerError::Unauthorized` — the same wire shape
+//!   framework-level stream guards already use.
 
 use std::{
     collections::BTreeMap,
@@ -325,20 +326,18 @@ async fn requests_missing_tenant_header_are_rejected_at_source() {
     .await;
     // The source-side guard returns `SyncError::unauthorized("missing
     // tenant")`, which the server mapper turns into
-    // `ServerError::Unauthorized` — the same shape framework-level
-    // stream guards use. The envelope error is a string-tagged variant;
-    // we accept either Unauthorized or the legacy server error shapes
-    // by matching on the rendered Debug. The point is that the body
-    // does NOT carry a successful pull response.
-    assert!(
-        envelope.is_err(),
-        "anonymous /pull leaked a successful response: {envelope:?}"
-    );
-    let err_text = format!("{:?}", envelope.unwrap_err());
-    assert!(
-        err_text.contains("Unauthorized") || err_text.contains("unauthorized"),
-        "expected an unauthorized error, got: {err_text}"
-    );
+    // `ServerError::Unauthorized`. Match on the variant directly — a
+    // regression to BadRequest / App / Forbidden carrying the word
+    // "unauthorized" in its message would otherwise slip through.
+    match envelope {
+        Err(pocopine_core::ServerError::Unauthorized(msg)) => {
+            assert!(
+                msg.contains("missing tenant"),
+                "unexpected unauthorized message: {msg}"
+            );
+        }
+        other => panic!("expected ServerError::Unauthorized, got: {other:?}"),
+    }
 }
 
 fn router(customers: TenantCustomers) -> Router {
