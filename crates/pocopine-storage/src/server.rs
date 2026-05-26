@@ -1869,7 +1869,7 @@ fn storage_error_status(error: &StorageError) -> StatusCode {
         StorageError::PayloadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         StorageError::PolicyRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         StorageError::Unsupported { .. } => StatusCode::NOT_IMPLEMENTED,
-        StorageError::OffsetMismatch { .. } => StatusCode::CONFLICT,
+        StorageError::OffsetMismatch { .. } | StorageError::Conflict { .. } => StatusCode::CONFLICT,
         StorageError::UploadComplete { .. } | StorageError::UploadClosed { .. } => {
             StatusCode::CONFLICT
         }

@@ -28,6 +28,8 @@ pub enum StorageError {
     Unsupported { message: String },
     /// Sequential upload offset did not match the backend's committed offset.
     OffsetMismatch { expected: u64, provided: u64 },
+    /// Provider-side state changed concurrently with this operation.
+    Conflict { message: String },
     /// The upload is already complete.
     UploadComplete { session: String },
     /// The upload was aborted or expired.
@@ -108,6 +110,12 @@ impl StorageError {
         Self::OffsetMismatch { expected, provided }
     }
 
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::Conflict {
+            message: message.into(),
+        }
+    }
+
     pub fn is_retryable_client_error(&self) -> bool {
         matches!(self, Self::Client { .. })
     }
@@ -137,6 +145,7 @@ impl fmt::Display for StorageError {
                 f,
                 "storage upload offset mismatch: expected {expected}, got {provided}"
             ),
+            Self::Conflict { message } => write!(f, "storage conflict: {message}"),
             Self::UploadComplete { session } => write!(f, "upload session is complete: {session}"),
             Self::UploadClosed { session } => write!(f, "upload session is closed: {session}"),
             Self::Client { message } => write!(f, "storage client error: {message}"),

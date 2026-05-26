@@ -576,7 +576,7 @@ fn object_ref(size: u64) -> ObjectRef {
 fn json_response<T: Serialize>(result: StorageResult<T>) -> BrowserStorageResponse {
     let status = match &result {
         Ok(_) => 200,
-        Err(StorageError::OffsetMismatch { .. }) => 409,
+        Err(StorageError::OffsetMismatch { .. } | StorageError::Conflict { .. }) => 409,
         Err(StorageError::Unauthorized { .. }) => 401,
         Err(StorageError::Forbidden { .. }) => 403,
         Err(StorageError::UnknownUploadSession { .. }) => 404,
