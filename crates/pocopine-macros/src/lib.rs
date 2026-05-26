@@ -2509,12 +2509,18 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // RFC 084 — typed slot props validation. Emits `const _: ()`
     // blocks that compare each `<slot :LHS=...>` publication
     // against the declared `props = T`'s `#[prop]` field set at
-    // `cargo check` time. Untyped slots (no `props = T`) emit
-    // nothing — backwards-compatible with every existing
-    // `#[slot]` site.
-    let slot_props_validation_tokens = match &template_ast {
-        Some(ast) => slot::emit_slot_props_validation(ast, &slot_decls),
-        None => proc_macro2::TokenStream::new(),
+    // `cargo check` time. Returns both validation tokens AND
+    // byte-level template edits (Phase 2 iterated-mode
+    // auto-publishes the pp-for iter var by inserting
+    // `:VAR="VAR"` into the slot's opening tag). Untyped slots
+    // (no `props = T`) emit nothing — backwards-compatible with
+    // every existing `#[slot]` site.
+    let (slot_props_validation_tokens, slot_template_edits) = match &template_ast {
+        Some(ast) => {
+            let emit = slot::emit_slot_props_validation(ast, &slot_decls);
+            (emit.tokens, emit.template_edits)
+        }
+        None => (proc_macro2::TokenStream::new(), Vec::new()),
     };
 
     // RFC 054 — compile row plans for eligible keyed `pp-for`
@@ -2595,6 +2601,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|ast| ast.source.as_str())
             .unwrap_or("");
         for_plan::apply_stamps(source, &row_plans.stamps)
+    };
+
+    // RFC 084 Phase 2 — apply iterated-slot auto-publish edits.
+    // Each `<slot>` element that sits inside a `pp-for` AND
+    // has no explicit `:LHS=` attrs gets a `:VAR="VAR"`
+    // injection (where VAR is the pp-for iter var) just before
+    // the closing `>` of its opening tag. The runtime's
+    // existing `materialize_slot` path then sees a normal
+    // publication; no runtime-side change required.
+    let template_source_for_compile = if slot_template_edits.is_empty() {
+        template_source_for_compile
+    } else {
+        slot::apply_template_edits(&template_source_for_compile, &slot_template_edits)
     };
 
     let compiled_template_html = compile_template_static(
