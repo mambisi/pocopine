@@ -137,3 +137,56 @@ pub trait Props {
     fn prop_set(&mut self, leaf: &str, value: JsValue);
     fn prop_static_kind(leaf: &str) -> StaticPropKind;
 }
+
+// ── RFC 084 — const-eval helpers for typed-slot validation ────────
+//
+// The slot macro emits `const _: () = { ... }` blocks that compare a
+// publication's `:LHS=` keys against a props type's leaf set. Const
+// fns over string slices let those checks run at `cargo check` time
+// without changing the `Props` trait surface.
+
+/// Const-fn byte-wise string equality. Stable replacement for
+/// `str::eq` until that becomes const.
+pub const fn str_eq_const(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Const-fn "haystack contains needle" over a `&[&str]`.
+pub const fn str_slice_contains_const(haystack: &[&str], needle: &str) -> bool {
+    let mut i = 0;
+    while i < haystack.len() {
+        if str_eq_const(haystack[i], needle) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Const-fn set-equality of two `&[&str]`. Order-independent;
+/// caller is responsible for deduplicating inputs if needed.
+pub const fn str_slice_set_eq_const(a: &[&str], b: &[&str]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if !str_slice_contains_const(b, a[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}

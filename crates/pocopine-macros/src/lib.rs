@@ -2506,6 +2506,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => proc_macro2::TokenStream::new(),
     };
 
+    // RFC 084 — typed slot props validation. Emits `const _: ()`
+    // blocks that compare each `<slot :LHS=...>` publication
+    // against the declared `props = T`'s `#[prop]` field set at
+    // `cargo check` time. Untyped slots (no `props = T`) emit
+    // nothing — backwards-compatible with every existing
+    // `#[slot]` site.
+    let slot_props_validation_tokens = match &template_ast {
+        Some(ast) => slot::emit_slot_props_validation(ast, &slot_decls),
+        None => proc_macro2::TokenStream::new(),
+    };
+
     // RFC 054 — compile row plans for eligible keyed `pp-for`
     // templates and stamp the source with `data-pp-row-plan`
     // anchors so the runtime can match the directive call back
@@ -3041,6 +3052,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // Issue #76 — hard `compile_error!` for `<template pp-for>`
         // rows whose direct element child is another `<template>`.
         #pp_for_template_child_diagnostics_tokens
+
+        // RFC 084 — typed slot props validation. `const _: ()`
+        // blocks enforce that `#[slot(name = "...", props = T)]`'s
+        // publication keys match `T`'s `#[prop]` field set.
+        #slot_props_validation_tokens
 
         // Layout-class lint — hard `compile_error!` when the root
         // carries `sticky` / `h-screen` / `min-h-*` / `inset-*` but
@@ -5480,6 +5496,18 @@ pub fn derive_props(input: TokenStream) -> TokenStream {
                     _ => ::pocopine::__private::StaticPropKind::Auto,
                 }
             }
+        }
+
+        // RFC 084 — inherent `const` mirror of `prop_leaves()` for
+        // const-eval consumers (typed-slot validation in particular).
+        // The trait fn `prop_leaves()` returns the same slice but
+        // isn't const, so const blocks can't call it. Exposing the
+        // leaves as an inherent const lets `#[slot(props = T)]`
+        // validation compare publication keys against this slice at
+        // `cargo check` time.
+        impl #impl_generics #struct_ident #ty_generics #where_clause {
+            #[doc(hidden)]
+            pub const __POC_PROP_LEAVES: &'static [&'static str] = &[#(#leaf_names),*];
         }
     };
     out.into()

@@ -43,6 +43,12 @@ pub(crate) struct SlotDecl {
     pub mode: SlotMode,
     /// Accepted child component types.
     pub accepts: Vec<Path>,
+    /// RFC 084 — typed slot props. When `Some(T)`, the macro
+    /// validates the compound's `<slot :LHS=...>` publications
+    /// against `T`'s `#[prop]` field set, and the caller's
+    /// `pp-let` binding is typed as `T`. `T` must
+    /// `#[derive(Props)]`.
+    pub props: Option<Path>,
     /// Span of the `#[slot(...)]` attribute for diagnostics.
     /// Currently unused at emit time; kept so future diagnostic
     /// paths can anchor errors at the declaration.
@@ -124,6 +130,7 @@ fn parse_slot_attr(attr: &Attribute) -> syn::Result<SlotDecl> {
     let mut name: Option<SlotName> = None;
     let mut mode: Option<SlotMode> = None;
     let mut accepts: Vec<Path> = Vec::new();
+    let mut props: Option<Path> = None;
 
     // Parse the parenthesised body. `Meta`-list parsing is
     // comma-separated; first entry is the selector.
@@ -175,6 +182,15 @@ fn parse_slot_attr(attr: &Attribute) -> syn::Result<SlotDecl> {
                 mode = Some(SlotMode::Only);
                 accepts = paths;
             }
+            SlotArg::Props(path) => {
+                if props.is_some() {
+                    return Err(syn::Error::new(
+                        span,
+                        "#[slot]: `props = T` may appear at most once per slot declaration",
+                    ));
+                }
+                props = Some(path);
+            }
         }
     }
 
@@ -193,17 +209,20 @@ fn parse_slot_attr(attr: &Attribute) -> syn::Result<SlotDecl> {
         // consumer-side scan does nothing.
         mode: mode.unwrap_or(SlotMode::Accepts),
         accepts,
+        props,
         span,
     })
 }
 
 /// One argument inside `#[slot(...)]` — `default`,
-/// `name = "..."`, `accepts = [...]`, or `only = [...]`.
+/// `name = "..."`, `accepts = [...]`, `only = [...]`, or
+/// `props = TypeName` (RFC 084).
 enum SlotArg {
     Default,
     Name(LitStr),
     Accepts(Vec<Path>),
     Only(Vec<Path>),
+    Props(Path),
 }
 
 impl Parse for SlotArg {
@@ -229,11 +248,17 @@ impl Parse for SlotArg {
                     Ok(SlotArg::Only(paths))
                 }
             }
+            "props" => {
+                input.parse::<Token![=]>()?;
+                let path: Path = input.parse()?;
+                Ok(SlotArg::Props(path))
+            }
             other => Err(syn::Error::new(
                 ident.span(),
                 format!(
                     "#[slot]: unknown argument `{other}` — expected \
-                     `default`, `name = \"...\"`, `accepts = [...]`, or `only = [...]`"
+                     `default`, `name = \"...\"`, `accepts = [...]`, \
+                     `only = [...]`, or `props = TypeName`"
                 ),
             )),
         }
@@ -362,6 +387,174 @@ pub(crate) fn emit_slot_traits(
         });
     }
     out
+}
+
+// ── RFC 084 — typed slot props validation ────────────────────────
+
+/// Emit `const _: () = { ... }` blocks that validate every typed
+/// slot's publication keys against the declared `props = T`'s
+/// `#[prop]` field set.
+///
+/// For each `#[slot(name = "X", props = T)]` declared on the
+/// component, the AST is scanned for matching `<slot name="X">`
+/// elements (default slots match a bare `<slot>`). The element's
+/// `:LHS=...` publications become a `&[&str]` const that
+/// [`pocopine_core::props::str_slice_set_eq_const`] compares
+/// against `<T>::__POC_PROP_LEAVES`. Each individual `:LHS=`
+/// also gets a per-key existence check so the error message can
+/// quote the offending key verbatim.
+///
+/// **v1 scope (Phase 1 of RFC 084):** static-mode only. A
+/// `<slot>` sitting inside a `pp-for` (the iterated-mode case)
+/// is still validated as static here; Phase 2 layers the
+/// auto-publish + iteration-type assertion on top. Both modes
+/// share the same `T: Props` boundary so Phase 2 doesn't have
+/// to revisit it.
+pub(crate) fn emit_slot_props_validation(
+    ast: &crate::template_parser::TemplateAst,
+    slots: &[SlotDecl],
+) -> TokenStream {
+    let mut out = TokenStream::new();
+    for decl in slots {
+        let Some(props_ty) = decl.props.as_ref() else {
+            continue;
+        };
+        // T: Props boundary — fires a clear "the type is not
+        // Props" error at the slot's props arg if the user passes
+        // a non-Props type.
+        let props_ty_str = quote!(#props_ty).to_string();
+        out.extend(quote! {
+            const _: fn() = || {
+                fn __pocopine_assert_props<__T: ::pocopine::__private::Props>() {}
+                __pocopine_assert_props::<#props_ty>();
+            };
+        });
+
+        let target_name: String = match &decl.name {
+            SlotName::Default => "default".into(),
+            SlotName::Named(s) => s.clone(),
+        };
+
+        // Scan every element in the template AST for matching
+        // `<slot>` elements. A `<slot>` with no `name` attribute
+        // is the default slot.
+        let mut found: Vec<&crate::template_parser::Element> = Vec::new();
+        for root in &ast.roots {
+            collect_slot_elements(root, &target_name, &mut found);
+        }
+
+        if found.is_empty() {
+            // The decl mentions a slot the template never
+            // exposes — fail fast with a clear directive
+            // message. This isn't strictly typed-props-specific
+            // but it's the right place to surface it: the
+            // author opted into a typed slot, so they should
+            // also have a matching `<slot>` in the template.
+            let msg = format!(
+                "pocopine: `#[slot(name = \"{target_name}\", props = {props_ty_str})]` declared on this component but no matching `<slot{name_attr}>` element appears in the template",
+                name_attr = match &decl.name {
+                    SlotName::Default => "".to_string(),
+                    SlotName::Named(s) => format!(" name=\"{s}\""),
+                },
+            );
+            out.extend(quote! { ::core::compile_error!(#msg); });
+            continue;
+        }
+
+        // Phase 1: every found `<slot>` element is treated as
+        // static-mode. Phase 2 layers iterated-mode dispatch
+        // (mode resolved per element by `:LHS=` presence and
+        // `pp-for` ancestry).
+        for el in &found {
+            emit_static_publication_validation(&target_name, props_ty, &props_ty_str, el, &mut out);
+        }
+    }
+    out
+}
+
+/// Recursive walk: collect every `<slot>` element whose `name`
+/// matches `target_name` (or has no `name` attribute when
+/// `target_name == "default"`).
+fn collect_slot_elements<'a>(
+    node: &'a crate::template_parser::Node,
+    target_name: &str,
+    out: &mut Vec<&'a crate::template_parser::Element>,
+) {
+    let crate::template_parser::Node::Element(el) = node else {
+        return;
+    };
+    if el.tag == "slot" {
+        let name_attr = el.attrs.iter().find(|(k, _)| k == "name");
+        let this_name = name_attr.map(|(_, v)| v.as_str()).unwrap_or("default");
+        if this_name == target_name {
+            out.push(el);
+        }
+        // A `<slot>` is a leaf in the rendered DOM but
+        // syntactically may have children (fallback content);
+        // we still walk to be safe — nested `<slot>` inside
+        // fallback isn't a real pattern but the recursion is
+        // cheap.
+    }
+    for child in &el.children {
+        collect_slot_elements(child, target_name, out);
+    }
+}
+
+/// Emit per-publication-key existence checks plus a coverage
+/// (set-equality) check for one `<slot>` element in static mode.
+fn emit_static_publication_validation(
+    target_name: &str,
+    props_ty: &Path,
+    props_ty_str: &str,
+    el: &crate::template_parser::Element,
+    out: &mut TokenStream,
+) {
+    let publications: Vec<(String, String)> = el
+        .attrs
+        .iter()
+        .filter_map(|(k, _v)| k.strip_prefix(':').map(|lhs| (lhs.to_string(), _v.clone())))
+        .collect();
+
+    // Per-publication existence: each LHS must be a `#[prop]`
+    // field on the props type. Quotes the offending key so the
+    // error message is actionable.
+    for (lhs, _rhs) in &publications {
+        let msg = format!(
+            "pocopine: slot `{target_name}` publishes `{lhs}` which isn't a `#[prop]` field on `{props_ty_str}`. Add `#[prop] pub {lhs}: …` to the props struct or remove the `:{lhs}=…` publication from the `<slot>` element."
+        );
+        let lhs_lit = lhs.as_str();
+        out.extend(quote! {
+            const _: () = {
+                if !::pocopine::__private::str_slice_contains_const(
+                    <#props_ty>::__POC_PROP_LEAVES,
+                    #lhs_lit,
+                ) {
+                    ::core::panic!(#msg);
+                }
+            };
+        });
+    }
+
+    // Coverage: every `#[prop]` field on T must be published.
+    // Const-fn set-equality (both directions) gives one diagnostic
+    // if anything is missing; combined with the per-key checks
+    // above, the author sees per-extra-key errors AND a generic
+    // "missing fields" error pointing at the props struct.
+    let lhs_lits: Vec<&str> = publications.iter().map(|(k, _)| k.as_str()).collect();
+    let coverage_msg = format!(
+        "pocopine: slot `{target_name}` publication doesn't cover every `#[prop]` field declared on `{props_ty_str}`. Inspect the struct's `#[prop]` fields and add a `:field=…` publication on the `<slot>` element for each."
+    );
+    out.extend(quote! {
+        const _: () = {
+            const __POCO_PUB: &[&str] = &[#(#lhs_lits),*];
+            if !::pocopine::__private::str_slice_set_eq_const(
+                <#props_ty>::__POC_PROP_LEAVES,
+                __POCO_PUB,
+            ) {
+                ::core::panic!(#coverage_msg);
+            }
+        };
+    });
 }
 
 fn pascal_case(s: &str) -> String {
@@ -537,6 +730,7 @@ mod tests {
                 syn::parse_str::<Path>("PineItem").unwrap(),
                 syn::parse_str::<Path>("PineSeparator").unwrap(),
             ],
+            props: None,
             span: proc_macro2::Span::call_site(),
         }];
         let out = emit_slot_traits(
@@ -565,6 +759,7 @@ mod tests {
                 syn::parse_str::<Path>("PineDialogTitle").unwrap(),
                 syn::parse_str::<Path>("PineDialogDescription").unwrap(),
             ],
+            props: None,
             span: proc_macro2::Span::call_site(),
         }];
         let out = emit_slot_traits(
@@ -589,6 +784,7 @@ mod tests {
             name: SlotName::Named("footer".to_string()),
             mode: SlotMode::Only,
             accepts: vec![syn::parse_str::<Path>("PineTitle").unwrap()],
+            props: None,
             span: proc_macro2::Span::call_site(),
         }];
         let out = emit_slot_traits(
@@ -604,5 +800,74 @@ mod tests {
         assert_eq!(pascal_case("footer"), "Footer");
         assert_eq!(pascal_case("my-named-slot"), "MyNamedSlot");
         assert_eq!(pascal_case("other_name"), "OtherName");
+    }
+
+    // ── RFC 084 — typed slot props parser tests ─────────────────
+
+    #[test]
+    fn slot_props_parses_as_path() {
+        let mut st = parse_struct_with_attr(quote! {
+            #[slot(name = "header", props = UploadHeaderProps)]
+            struct Foo;
+        });
+        let slots = parse_and_strip_slots(&mut st.attrs).unwrap();
+        assert_eq!(slots.len(), 1);
+        let props = slots[0].props.as_ref().expect("props should be Some");
+        let rendered = quote::quote!(#props).to_string();
+        assert_eq!(rendered.replace(' ', ""), "UploadHeaderProps");
+    }
+
+    #[test]
+    fn slot_props_accepts_module_qualified_path() {
+        // `props = some::module::Type` should round-trip.
+        let mut st = parse_struct_with_attr(quote! {
+            #[slot(default, props = crate::upload::UploadItemProps)]
+            struct Foo;
+        });
+        let slots = parse_and_strip_slots(&mut st.attrs).unwrap();
+        let props = slots[0].props.as_ref().expect("props should be Some");
+        let rendered = quote::quote!(#props).to_string();
+        assert!(
+            rendered.contains("UploadItemProps") && rendered.contains("crate"),
+            "props path should preserve qualifier: {rendered}"
+        );
+    }
+
+    #[test]
+    fn slot_props_default_is_none() {
+        let mut st = parse_struct_with_attr(quote! {
+            #[slot(default)]
+            struct Foo;
+        });
+        let slots = parse_and_strip_slots(&mut st.attrs).unwrap();
+        assert!(slots[0].props.is_none());
+    }
+
+    #[test]
+    fn slot_props_coexists_with_accepts_or_only() {
+        // RFC 084 doesn't change the accepts/only contract; both
+        // can sit alongside `props = T`.
+        let mut st = parse_struct_with_attr(quote! {
+            #[slot(name = "row", only = [UploadFile], props = UploadItemProps)]
+            struct Foo;
+        });
+        let slots = parse_and_strip_slots(&mut st.attrs).unwrap();
+        assert_eq!(slots[0].mode, SlotMode::Only);
+        assert_eq!(slots[0].accepts.len(), 1);
+        assert!(slots[0].props.is_some());
+    }
+
+    #[test]
+    fn slot_props_duplicate_rejected() {
+        let attr_tokens: syn::ItemStruct = parse_struct_with_attr(quote! {
+            #[slot(name = "row", props = A, props = B)]
+            struct Foo;
+        });
+        let err = parse_slot_for_test(&attr_tokens.attrs[0]).unwrap_err();
+        assert!(
+            err.to_string().contains("at most once"),
+            "duplicate `props =` should error: {}",
+            err
+        );
     }
 }

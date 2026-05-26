@@ -128,6 +128,12 @@ pub mod __private {
         LifecycleContext, PropValue, Props, Scope, StaticBinOp, StaticBinding, StaticExpr,
         StaticListener, StaticLiteral, StaticPropKind, StaticRowPlan, Store, WriteOrigin,
     };
+    // RFC 084 — const-eval helpers the `#[slot(props = T)]`
+    // validation tokens call to compare publication keys against
+    // a props type's `#[prop]` field set at `cargo check` time.
+    pub use pocopine_core::props::{
+        str_eq_const, str_slice_contains_const, str_slice_set_eq_const,
+    };
     // RFC 081 — typed ref accessor used by the macro-generated
     // `<ComponentName>Refs` struct.
     pub use pocopine_core::reactive::ScopeId;
