@@ -1,0 +1,110 @@
+<root class="block">
+
+  <!-- Toolbar: filter pills + view toggles -->
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <pine-toggle-group-root type="single"
+                            pp-model:value="view"
+                            class="flex flex-wrap items-center gap-1.5"
+                            aria-label="Filter files">
+      <pine-toggle-group-item value="all"
+                              class="inline-flex h-8 cursor-pointer items-center rounded-full border border-line bg-surface px-3 text-[12.5px] font-medium text-ink-70 transition hover:bg-ink-10 data-[state=on]:border-ink-100 data-[state=on]:bg-ink-100 data-[state=on]:text-surface">All</pine-toggle-group-item>
+      <pine-toggle-group-item value="documents"
+                              class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12.5px] font-medium text-ink-70 transition hover:bg-ink-10 data-[state=on]:border-ink-100 data-[state=on]:bg-ink-100 data-[state=on]:text-surface">
+        <pine-icon name="file" size="13"></pine-icon><span>Documents</span>
+      </pine-toggle-group-item>
+      <pine-toggle-group-item value="images"
+                              class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12.5px] font-medium text-ink-70 transition hover:bg-ink-10 data-[state=on]:border-ink-100 data-[state=on]:bg-ink-100 data-[state=on]:text-surface">
+        <pine-icon name="photo" size="13"></pine-icon><span>Images</span>
+      </pine-toggle-group-item>
+      <pine-toggle-group-item value="archives"
+                              class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12.5px] font-medium text-ink-70 transition hover:bg-ink-10 data-[state=on]:border-ink-100 data-[state=on]:bg-ink-100 data-[state=on]:text-surface">
+        <pine-icon name="archive" size="13"></pine-icon><span>Archives</span>
+      </pine-toggle-group-item>
+    </pine-toggle-group-root>
+
+    <div class="flex items-center gap-1">
+      <button class="inline-flex h-8 cursor-not-allowed items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 text-[12px] font-medium text-ink-50" type="button" disabled>
+        <pine-icon name="arrows-sort" size="14"></pine-icon><span>Sort</span>
+      </button>
+      <span class="mx-0.5 hidden h-5 w-px bg-line sm:inline-block"></span>
+      <button class="inline-flex size-8 items-center justify-center rounded-md bg-ink-10 text-ink-100" type="button" aria-label="List view" aria-pressed="true">
+        <pine-icon name="list" size="15"></pine-icon>
+      </button>
+      <button class="inline-flex size-8 cursor-not-allowed items-center justify-center rounded-md text-ink-50" type="button" aria-label="Grid view" disabled>
+        <pine-icon name="layout-grid" size="15"></pine-icon>
+      </button>
+    </div>
+  </div>
+
+  <!-- File list table -->
+  <section class="mt-4 overflow-hidden rounded-[12px] border border-line bg-surface shadow-card">
+
+    <p class="m-4 rounded-md border border-danger-line bg-danger-soft px-3 py-2 text-[13px] text-danger-strong" pp-show="$store.files.error" pp-text="$store.files.error"></p>
+
+    <div pp-show="!$store.files.files_empty">
+      <div class="grid grid-cols-[minmax(0,1fr)_80px] gap-3 border-b border-line px-5 py-2 font-mono text-[10.5px] font-semibold uppercase tracking-[0.04em] text-ink-50 sm:grid-cols-[minmax(0,1fr)_148px_96px_120px_80px]">
+        <span>Name</span>
+        <span class="hidden sm:block">Modified</span>
+        <span class="hidden sm:block">Size</span>
+        <span class="hidden sm:block">Members</span>
+        <span class="text-right">Actions</span>
+      </div>
+
+      <template pp-for="file in $store.files.files" pp-key="file.id">
+        <div class="grid grid-cols-[minmax(0,1fr)_80px] items-center gap-3 border-b border-line px-5 py-2.5 transition-colors last:border-b-0 hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_148px_96px_120px_80px]"
+             :data-category="file.category"
+             pp-show="view == 'all' || view == file.category">
+
+          <div class="flex min-w-0 items-center gap-3">
+            <span class="inline-flex size-9 shrink-0 items-center justify-center rounded-md bg-ink-10 text-ink-70 data-[category=images]:bg-accent-soft data-[category=images]:text-accent-strong data-[category=archives]:bg-warn-soft data-[category=archives]:text-warn-strong data-[category=documents]:bg-success-soft data-[category=documents]:text-success-strong"
+                  :data-category="file.category"
+                  aria-hidden="true">
+              <pine-icon :name="file.icon" size="19"></pine-icon>
+            </span>
+            <div class="min-w-0">
+              <a class="block truncate text-[14px] font-medium text-ink-100 underline-offset-4 hover:underline" :href="file.download_url" pp-text="file.name"></a>
+              <span class="mt-0.5 block font-mono text-[10.5px] uppercase tracking-[0.04em] text-ink-50" pp-show="file.extension" pp-text="file.extension"></span>
+            </div>
+          </div>
+
+          <span class="hidden text-[13px] text-ink-60 sm:block" pp-text="file.modified_label"></span>
+          <span class="hidden font-mono text-[12px] text-ink-60 sm:block" pp-text="file.size_label"></span>
+
+          <div class="hidden items-center gap-1.5 sm:flex">
+            <span class="inline-flex size-6 items-center justify-center rounded-full bg-accent text-[10px] font-semibold text-surface ring-2 ring-surface" aria-hidden="true">ZM</span>
+            <span class="text-[12px] text-ink-60">Only you</span>
+          </div>
+
+          <div class="flex justify-end gap-1">
+            <a class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100" :href="file.download_url" :aria-label="'Download ' + file.name">
+              <pine-icon name="download" size="15"></pine-icon>
+            </a>
+            <button class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-danger disabled:cursor-wait disabled:opacity-60"
+                    type="button"
+                    :aria-label="'Delete ' + file.name"
+                    :disabled="$store.files.deleting_id == file.id"
+                    @click="remove_file(file.id)">
+              <pine-icon name="trash" size="15"></pine-icon>
+            </button>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Empty state -->
+    <div class="flex flex-col items-center justify-center gap-3 px-5 py-16 text-center text-ink-50" pp-show="!$store.files.loading && $store.files.files_empty">
+      <span class="inline-flex size-14 items-center justify-center rounded-2xl bg-ink-10 text-ink-60">
+        <pine-icon name="cloud" size="26"></pine-icon>
+      </span>
+      <div>
+        <h2 class="text-[15px] font-semibold text-ink-100">No files yet</h2>
+        <p class="mt-1 max-w-xs text-[13px] text-ink-60">Drop files anywhere on the page, or use the Upload button up top.</p>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-center gap-2 border-t border-line px-5 py-3 text-[12px] text-ink-50" pp-show="$store.files.loading">
+      <pine-icon name="refresh" size="14"></pine-icon>
+      <span>Refreshing files…</span>
+    </div>
+  </section>
+</root>

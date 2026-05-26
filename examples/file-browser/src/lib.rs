@@ -1,4 +1,26 @@
-use pine::PineUpload;
+//! File-browser demo — Dropbox-lite using the Pine upload compound
+//! and `pocopine-storage` resumable uploads.
+//!
+//! Layout follows the Keep example's convention:
+//!
+//! - [`FileBrowserApp`] is the only component the browser actually
+//!   mounts; everything else hangs off it.
+//! - [`FileBrowserStore`] owns shared state and the cross-component
+//!   actions (`refresh`, `set_view`, `remove_file`). Templates read
+//!   via `$store.files.<field>`; components dispatch through
+//!   `pocopine::store::<FileBrowserStore>().update(|s| …)`.
+//! - [`components`] holds the layout shell, top bar, sidebar, upload
+//!   panel, and file list. Each is its own module + `.poco`.
+
+pub mod components;
+pub mod store;
+
+pub use components::{
+    FileBrowserApp, FileBrowserFileList, FileBrowserSidebar, FileBrowserTopBar,
+    FileBrowserUploadPanel,
+};
+pub use store::FileBrowserStore;
+
 use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -13,6 +35,10 @@ pub struct FileEntry {
     pub modified_label: String,
     pub download_url: String,
     pub icon: String,
+    /// `"images" | "documents" | "archives" | "other"`. Drives the
+    /// filter pills in the demo so the bucket lookup is server-
+    /// authored, not duplicated in `.poco` expressions.
+    pub category: String,
 }
 
 #[pocopine::server(public)]
@@ -25,94 +51,7 @@ pub async fn delete_stored_file(file_id: String) -> ServerResult<Vec<FileEntry>>
     server_side::delete_file(&file_id)
 }
 
-#[derive(Serialize, Deserialize)]
-#[component(
-    template = "FileBrowserApp.poco",
-    role = "panel",
-    uses = [PineIcon, PineUpload]
-)]
-pub struct FileBrowserApp {
-    pub files: Vec<FileEntry>,
-    pub loading: bool,
-    pub files_empty: bool,
-    pub error: String,
-    pub deleting_id: String,
-    pub file_count_label: String,
-    pub total_size_label: String,
-}
-
-impl Default for FileBrowserApp {
-    fn default() -> Self {
-        Self {
-            files: Vec::new(),
-            loading: false,
-            files_empty: true,
-            error: String::new(),
-            deleting_id: String::new(),
-            file_count_label: "0 files".to_string(),
-            total_size_label: "0 B".to_string(),
-        }
-    }
-}
-
-#[handlers]
-impl FileBrowserApp {
-    pub fn on_mount(&mut self) {
-        self.refresh();
-    }
-
-    pub fn refresh(&mut self) {
-        self.loading = true;
-        self.error.clear();
-        dispatch!(list_files().await, |s, result| {
-            s.loading = false;
-            match result {
-                Ok(files) => s.apply_files(files),
-                Err(err) => s.error = err.to_string(),
-            }
-        },);
-    }
-
-    pub fn upload_complete(&mut self) {
-        self.refresh();
-    }
-
-    pub fn upload_failed(&mut self) {
-        self.refresh();
-    }
-
-    pub fn remove_file(&mut self, file_id: String) {
-        if file_id.is_empty() || self.deleting_id == file_id {
-            return;
-        }
-        self.deleting_id = file_id.clone();
-        self.error.clear();
-        dispatch!(delete_stored_file(file_id).await, |s, result| {
-            s.deleting_id.clear();
-            match result {
-                Ok(files) => s.apply_files(files),
-                Err(err) => s.error = err.to_string(),
-            }
-        },);
-    }
-}
-
-impl FileBrowserApp {
-    fn apply_files(&mut self, files: Vec<FileEntry>) {
-        let total_size = files.iter().map(|file| file.size_bytes).sum();
-        self.file_count_label = match files.len() {
-            0 => "0 files".to_string(),
-            1 => "1 file".to_string(),
-            len => format!("{len} files"),
-        };
-        self.total_size_label = format_size(total_size);
-        self.files_empty = files.is_empty();
-        self.files = files;
-        self.error.clear();
-    }
-}
-
-fn format_size(bytes: u64) -> String {
+pub(crate) fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if bytes < 1024 {
         return format!("{bytes} B");
@@ -242,6 +181,7 @@ mod server_side {
                     modified_label: format_modified(modified),
                     download_url: format!("/api/files/download/{id}"),
                     icon: icon_for_extension(&extension).to_string(),
+                    category: category_for_extension(&extension).to_string(),
                 },
             ));
         }
@@ -413,6 +353,15 @@ mod server_side {
         }
     }
 
+    fn category_for_extension(extension: &str) -> &'static str {
+        match extension {
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "svg" => "images",
+            "zip" | "gz" | "tar" | "7z" => "archives",
+            "pdf" | "doc" | "docx" | "txt" | "md" | "csv" | "rtf" => "documents",
+            _ => "other",
+        }
+    }
+
     fn format_modified(modified: SystemTime) -> String {
         let Ok(age) = SystemTime::now().duration_since(modified) else {
             return "just now".to_string();
@@ -471,27 +420,46 @@ mod server_side {
 #[wasm_bindgen(start)]
 pub fn main() {
     pine_icons::register_icons![
+        "alert-circle",
         "archive",
+        "arrows-sort",
         "check",
+        "chevron-right",
+        "clock",
         "cloud",
         "database",
+        "dots-vertical",
         "download",
         "file",
         "file-type-pdf",
         "file-upload",
+        "filter",
         "folder",
+        "home",
+        "layout-grid",
+        "list",
         "photo",
+        "plus",
         "refresh",
         "search",
+        "share",
+        "star",
         "trash",
         "upload",
+        "user-circle",
+        "users",
         "x",
     ];
     pine::register_all();
     App::new()
         .plugin(pocopine_storage::upload_plugin())
+        .store::<FileBrowserStore>()
         .register::<PineIcon>()
         .register::<FileBrowserApp>()
+        .register::<FileBrowserTopBar>()
+        .register::<FileBrowserSidebar>()
+        .register::<FileBrowserUploadPanel>()
+        .register::<FileBrowserFileList>()
         .run();
 }
 
