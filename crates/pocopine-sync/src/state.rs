@@ -216,6 +216,44 @@ impl<T> CollectionState<T> {
         true
     }
 
+    /// Hard reset of the in-memory state for a schema-version invalidation.
+    ///
+    /// Used by `start_open_then_pull` when the server's advertised
+    /// `schema_version` differs from the cached value: after the durable
+    /// `clear_stream` succeeds, the in-memory `CollectionState` must
+    /// observe the same wipe so the upcoming pull rebuilds canonical
+    /// state under the new shape. Unlike `apply_local_snapshot_*`, this
+    /// method unconditionally drops every field — rows, canonical_rows,
+    /// pending_mutations, cursor, counters, errors — and bumps
+    /// `request_generation` so any in-flight pull/push token issued
+    /// before the reset is invalidated and its `apply_*` calls become
+    /// no-ops via `is_current`.
+    ///
+    /// Note: this is intentionally NOT `*self = CollectionState::default()`
+    /// because `version` is preserved at its current value — the
+    /// collection has "loaded once", just with a now-empty canonical
+    /// set. The next pull will write fresh rows via `apply_pull`.
+    pub fn reset_for_schema_invalidation(&mut self) {
+        self.canonical_rows.clear();
+        self.rows.clear();
+        self.pending_mutations.clear();
+        self.cursor = None;
+        self.pending_count = 0;
+        self.conflict_count = 0;
+        self.rejected_count = 0;
+        self.error.clear();
+        self.stale = false;
+        self.loading = false;
+        self.syncing = false;
+        self.last_reason = SyncReason::Initial;
+        // Invalidate any token issued before the reset so a stale
+        // `apply_pull` (e.g. a pull that was already in flight when the
+        // schema mismatch was detected) becomes a no-op via
+        // `is_current`. Spawned tasks must call `begin_initial` /
+        // `begin_pull` again after the reset to get a fresh token.
+        self.request_generation = self.request_generation.saturating_add(1);
+    }
+
     pub fn set_error(&mut self, error: impl Into<String>) {
         self.loading = false;
         self.syncing = false;
@@ -1674,6 +1712,115 @@ mod tests {
         assert!(!state.rows[0].conflict);
         assert_eq!(state.pending_count, 1);
         assert_eq!(state.conflict_count, 0);
+    }
+
+    #[test]
+    fn reset_for_schema_invalidation_drops_state_and_invalidates_in_flight_tokens() {
+        // Seed a populated state: canonical rows, rendered rows,
+        // pending mutations, cursor, counters, last error, and an
+        // outstanding pull token. The wipe must drop them all AND
+        // invalidate the token so a late `apply_pull` becomes a no-op.
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "v1".to_string()).unwrap()],
+                Some(SyncCursor::new("cursor_v1").unwrap()),
+            ),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local".to_string()).unwrap()),
+        );
+        let stale_token = state.begin_pull(SyncReason::Manual);
+        state.set_error("transient");
+
+        assert!(!state.rows.is_empty());
+        assert!(!state.pending_mutations.is_empty());
+        assert!(state.cursor.is_some());
+        assert!(state.pending_count > 0);
+
+        state.reset_for_schema_invalidation();
+
+        // Hard reset observed everywhere.
+        assert!(state.rows.is_empty(), "rows not cleared");
+        assert!(
+            state.canonical_rows.is_empty(),
+            "canonical_rows not cleared"
+        );
+        assert!(
+            state.pending_mutations.is_empty(),
+            "pending_mutations not cleared"
+        );
+        assert!(state.cursor.is_none(), "cursor not cleared");
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(state.conflict_count, 0);
+        assert_eq!(state.rejected_count, 0);
+        assert!(state.error.is_empty(), "error not cleared");
+        assert!(!state.stale);
+        assert!(!state.loading);
+        assert!(!state.syncing);
+        // The stale token from before the reset must NOT apply.
+        let response = SyncPullResponse::snapshot(
+            SyncStreamName::new("posts").unwrap(),
+            SyncCollectionName::new("posts").unwrap(),
+            vec![SyncRow::new("ghost", "from_stale_token".to_string()).unwrap()],
+            Some(SyncCursor::new("ghost").unwrap()),
+        );
+        let applied = state.apply_pull(stale_token, response);
+        assert!(
+            !applied,
+            "stale token should no-op via is_current after reset"
+        );
+        assert!(
+            state.rows.is_empty(),
+            "stale apply_pull must not write rows after reset"
+        );
+    }
+
+    #[test]
+    fn reset_for_schema_invalidation_preserves_version_for_post_reset_pulls() {
+        // After the reset, `version` stays at its pre-reset value so
+        // `start_open_then_pull` can re-issue `begin_initial` (which
+        // requires version == 0 to take the Initial path) OR
+        // `begin_pull` if it's incrementing on an already-loaded
+        // collection. The reset bumps `request_generation`, not
+        // `version`.
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "v1".to_string()).unwrap()],
+                Some(SyncCursor::new("cursor_v1").unwrap()),
+            ),
+        );
+        let version_before_reset = state.version;
+        assert!(version_before_reset > 0);
+
+        state.reset_for_schema_invalidation();
+
+        assert_eq!(state.version, version_before_reset);
+        // begin_pull post-reset issues a fresh request_generation token.
+        let post_reset = state.begin_pull(SyncReason::Manual);
+        // Confirm the token is fresh: apply_pull with it works.
+        let response = SyncPullResponse::snapshot(
+            SyncStreamName::new("posts").unwrap(),
+            SyncCollectionName::new("posts").unwrap(),
+            vec![SyncRow::new("post_1", "v2".to_string()).unwrap()],
+            Some(SyncCursor::new("cursor_v2").unwrap()),
+        );
+        let applied = state.apply_pull(post_reset, response);
+        assert!(applied);
+        assert_eq!(state.rows.len(), 1);
+        assert_eq!(state.rows[0].value, "v2");
     }
 
     #[test]

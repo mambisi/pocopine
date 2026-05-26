@@ -627,6 +627,10 @@ where
             reason,
             live_event,
             self.epoch,
+            // Explicit refresh path: no fresh /open, so we don't have
+            // an advertised version to stamp. The UPSERT's coalesce
+            // preserves whatever `start_open_then_pull` already wrote.
+            None,
         );
         Ok(())
     }
@@ -1109,6 +1113,8 @@ fn start_open_then_pull<C, T>(
         // == None` means the store has never observed an advertised
         // version (fresh install, or pre-v4 row) — adopt the
         // advertised value silently on the next snapshot save.
+        let mut cursor = cursor;
+        let mut token = token;
         if let Some(cached) = cached_schema_version {
             if cached != advertised_schema_version {
                 tracing::info!(
@@ -1119,34 +1125,49 @@ fn start_open_then_pull<C, T>(
                     "sync stream schema_version changed; clearing local cache + pending mutations",
                 );
                 if let Err(err) = local_store.clear_stream(&stream).await {
-                    // Best-effort: the durable wipe failed. Log it
-                    // and still drop the in-memory state, because
-                    // leaving stale rows around is worse than the
-                    // user re-pulling.
-                    local_error = Some(format!(
-                        "local sync cache wipe-on-schema-bump failed: {err}"
-                    ));
+                    // Fail loud: if the durable wipe failed, do NOT
+                    // proceed to pull + persist. A successful pull
+                    // would stamp the NEW app_schema_version via the
+                    // UPSERT coalesce, silently masking the wipe
+                    // failure forever. Surfacing the error keeps
+                    // cached at the OLD value so the next open
+                    // re-detects the mismatch and retries.
+                    handle.update(|state| {
+                        selector(state).apply_error(
+                            token,
+                            format!("local sync cache wipe-on-schema-bump failed: {err}"),
+                        );
+                    });
+                    return;
                 }
                 if epoch.is_stale() {
                     return;
                 }
-                // In-memory side: clear the rows we hydrated and the
-                // pending replay queue so the upcoming pull starts
-                // from canonical fresh state.
+                // In-memory side: hard reset via
+                // `reset_for_schema_invalidation`. Unlike
+                // `apply_local_snapshot_with_pending(empty, None, empty)`
+                // (which short-circuits in `apply_local_snapshot_inner`
+                // because all inputs are empty), this unconditionally
+                // drops canonical_rows, rows, pending_mutations, cursor,
+                // and bumps request_generation — so any in-flight token
+                // becomes a no-op via `is_current`.
                 pending_mutations.clear();
-                handle.update(|state| {
-                    selector(state).apply_local_snapshot_with_pending(Vec::new(), None, Vec::new());
+                let new_token = handle.update(|state| {
+                    let collection = selector(state);
+                    collection.reset_for_schema_invalidation();
+                    // Re-issue a token; the prior `request_token` was
+                    // invalidated by the reset's generation bump.
+                    collection.begin_initial()
                 });
+                token = new_token;
+                // Force a Snapshot pull by nulling the cursor — the
+                // OLD-schema cursor was wiped durably; sending it to
+                // the server would yield an Incremental response that
+                // merges new-schema deltas onto an empty canonical
+                // set, leaving most rows missing until the next pull.
+                cursor = None;
             }
         }
-        // Stamp the advertised version onto the next snapshot save so
-        // future opens observe it. The hop happens via thread_local
-        // overlay because save_snapshot is invoked deep inside the
-        // server-driven pull/push path; instead we use the
-        // LocalSnapshotBatch's `application_schema_version` field
-        // directly on each save site that runs after this point.
-        let advertised_schema_version_for_persist = advertised_schema_version;
-
         if let Some(live_wakeup) = live_wakeup {
             open_live_wakeup(
                 scope_id,
@@ -1157,6 +1178,7 @@ fn start_open_then_pull<C, T>(
                 stream.clone(),
                 live_wakeup,
                 epoch.clone(),
+                advertised_schema_version,
             );
         }
 
@@ -1196,12 +1218,9 @@ fn start_open_then_pull<C, T>(
         }
         let result = match result {
             Ok(response) => {
-                if let Err(err) = persist_pull_response(
-                    &local_store,
-                    &response,
-                    Some(advertised_schema_version_for_persist),
-                )
-                .await
+                if let Err(err) =
+                    persist_pull_response(&local_store, &response, Some(advertised_schema_version))
+                        .await
                 {
                     local_error = Some(format!("local sync cache persist failed: {err}"));
                 }
@@ -1240,6 +1259,7 @@ fn open_live_wakeup<C, T>(
     stream: SyncStreamName,
     options: LiveWakeupOptions,
     epoch: SyncEpoch,
+    advertised_schema_version: u32,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1260,6 +1280,15 @@ fn open_live_wakeup<C, T>(
                 } else {
                     SyncReason::Live
                 };
+                // Pass the captured-at-open advertised schema_version
+                // through so the live-pull's `persist_pull_response`
+                // stamps the durable `app_schema_version` if the
+                // post-/open pull hasn't done so yet. Without this,
+                // a live event firing before `start_open_then_pull`'s
+                // persist completes would write rows + cursor without
+                // the schema_version, leaving the durable column NULL
+                // — and the next session would skip the mismatch
+                // check because cached == None.
                 start_pull(
                     scope_id,
                     handle.clone(),
@@ -1271,6 +1300,7 @@ fn open_live_wakeup<C, T>(
                     reason,
                     true,
                     epoch.clone(),
+                    Some(advertised_schema_version),
                 );
             }
         })
@@ -1372,6 +1402,7 @@ fn start_pull<C, T>(
     reason: SyncReason,
     live_event: bool,
     epoch: SyncEpoch,
+    application_schema_version: Option<u32>,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -1402,12 +1433,17 @@ fn start_pull<C, T>(
         let mut local_error = None;
         let result = match result {
             Ok(response) => {
-                // `start_pull` is invoked by live-wakeup / explicit
-                // refresh after the initial open has already recorded
-                // the advertised schema_version, so we pass None here.
-                // The UPSERT's coalesce preserves the value
+                // Callers that ran AFTER a successful /open pass
+                // `Some(advertised)` so the durable
+                // `app_schema_version` gets stamped even if the
+                // post-/open pull never runs. Callers without an
+                // advertised version (explicit refresh without
+                // re-opening) pass None and rely on the UPSERT's
+                // coalesce to preserve whatever value
                 // `start_open_then_pull` already persisted.
-                if let Err(err) = persist_pull_response(&local_store, &response, None).await {
+                if let Err(err) =
+                    persist_pull_response(&local_store, &response, application_schema_version).await
+                {
                     local_error = Some(format!("local sync cache persist failed: {err}"));
                 }
                 Ok(response)
@@ -1741,6 +1777,9 @@ where
             SyncReason::Push,
             false,
             epoch,
+            // Post-push pull: no advertised version known here; rely
+            // on UPSERT coalesce to preserve the existing value.
+            None,
         );
     }
 
