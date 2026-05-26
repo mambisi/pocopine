@@ -83,12 +83,20 @@ fn none<T>() -> Option<T> {
 
 fn validate_token(field: &'static str, value: String) -> StorageResult<String> {
     let trimmed = value.trim();
+    let bytes = value.as_bytes();
+    let all_allowed = bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    // Require at least one alphanumeric byte so "." and ".." (and any
+    // all-punctuation value) cannot be accepted. Without this, the value
+    // can be used as a filesystem path component and traverse out of
+    // backend session roots.
+    let has_alphanumeric = bytes.iter().any(u8::is_ascii_alphanumeric);
     if value.len() > MAX_STORAGE_TOKEN_LEN
         || trimmed.is_empty()
         || trimmed != value
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || !all_allowed
+        || !has_alphanumeric
     {
         return Err(StorageError::invalid_value(field, value));
     }

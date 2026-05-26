@@ -25,10 +25,11 @@ pub use client::{
 };
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
-pub use client::{
-    BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport,
-    __reset_browser_transport_for_test, __set_browser_transport_for_test,
-};
+pub use client::{BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport};
+
+#[cfg(all(target_arch = "wasm32", any(test, feature = "test-utils")))]
+#[doc(hidden)]
+pub use client::{__reset_browser_transport_for_test, __set_browser_transport_for_test};
 pub use error::{StorageError, StorageResult};
 pub use protocol::{
     AnonymousUploadBinding, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload,

@@ -874,7 +874,10 @@ async fn principal_owner_binding_ignores_mutable_claims() -> StorageResult<()> {
 }
 
 #[tokio::test]
-async fn server_returns_forbidden_for_other_actor_sessions() -> StorageResult<()> {
+async fn server_hides_other_actor_sessions_as_not_found() -> StorageResult<()> {
+    // Cross-actor probes must be indistinguishable from probes for a session
+    // that never existed; returning Forbidden would let an attacker enumerate
+    // session IDs belonging to other users by comparing 403 vs 404 responses.
     let storage = memory_storage()?;
     let session = storage
         .initiate_upload(
@@ -886,12 +889,16 @@ async fn server_returns_forbidden_for_other_actor_sessions() -> StorageResult<()
     let denied = storage
         .inspect_upload(principal_ctx("user-2", "initial"), session.id.clone())
         .await;
-    assert!(matches!(denied, Err(StorageError::Forbidden { .. })));
+    assert!(matches!(
+        denied,
+        Err(StorageError::UnknownUploadSession { .. })
+    ));
 
-    let denied = storage
+    // abort follows the same no-leak contract: a non-owner sees the same
+    // Ok(()) response a missing-session caller would see.
+    storage
         .abort_upload(principal_ctx("user-2", "initial"), session.id.clone())
-        .await;
-    assert!(matches!(denied, Err(StorageError::Forbidden { .. })));
+        .await?;
     let inspected = storage
         .inspect_upload(principal_ctx("user-1", "initial"), session.id)
         .await?;
@@ -1289,7 +1296,15 @@ async fn local_fs_complete_is_stable_and_moves_temp_file_to_final_key() -> Stora
 }
 
 #[tokio::test]
-async fn local_fs_complete_recovers_when_final_exists_before_metadata() -> StorageResult<()> {
+async fn local_fs_complete_does_not_adopt_pre_existing_object_for_unfinalized_session(
+) -> StorageResult<()> {
+    // The "tmp is missing, final_path exists" recovery branch used to claim
+    // the on-disk object as this session's result. That let a fresh session
+    // whose key happened to resolve to an already-occupied object path adopt
+    // another upload's bytes. Recovery from a half-committed complete now
+    // requires the session metadata itself to record the ObjectRef (the
+    // early-return at the top of complete_upload) — losing the temp file
+    // without a finalized metadata commit is a genuine failure.
     let tmp = tempdir().unwrap();
     let backend = LocalFsStorageBackend::new(tmp.path());
     let session = initiate_direct(&backend).await?;
@@ -1307,7 +1322,7 @@ async fn local_fs_complete_recovers_when_final_exists_before_metadata() -> Stora
     std::fs::rename(session_tmp, &final_path).unwrap();
 
     let reloaded = LocalFsStorageBackend::new(tmp.path());
-    let object = reloaded
+    let result = reloaded
         .complete_upload(
             &ctx(),
             CompleteUpload {
@@ -1315,18 +1330,11 @@ async fn local_fs_complete_recovers_when_final_exists_before_metadata() -> Stora
                 checksum: None,
             },
         )
-        .await?;
-    assert_eq!(object.size, 5);
-    let repeated = reloaded
-        .complete_upload(
-            &ctx(),
-            CompleteUpload {
-                session: session.id,
-                checksum: None,
-            },
-        )
-        .await?;
-    assert_eq!(repeated, object);
+        .await;
+    assert!(
+        result.is_err(),
+        "missing temp file must not silently adopt an existing on-disk object"
+    );
     Ok(())
 }
 
@@ -1345,6 +1353,105 @@ async fn local_fs_abort_removes_session_files_and_is_idempotent() -> StorageResu
     backend.abort_upload(&ctx(), session.id.clone()).await?;
     assert!(!session_dir.exists());
     backend.abort_upload(&ctx(), session.id).await?;
+    Ok(())
+}
+
+#[test]
+fn upload_session_id_rejects_dotted_traversal() {
+    // "." and ".." would otherwise pass the original allow-list (alphanumeric
+    // + '-_.') and become a filesystem path component in LocalFs.
+    for value in [".", "..", "...", "..-..", "_-.-_"] {
+        assert!(
+            UploadSessionId::new(value).is_err(),
+            "all-punctuation session id should be rejected: {value:?}"
+        );
+    }
+    // Sanity-check that normal IDs still work.
+    assert!(UploadSessionId::new("session-1.foo_bar").is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_fs_serializes_concurrent_appends_on_the_same_session() -> StorageResult<()> {
+    // Without the per-session lock, two concurrent PATCHes that both observe
+    // `next_offset = 0` would both pass the equality check and both O_APPEND
+    // their payload, scrambling bytes on disk and corrupting next_offset.
+    let tmp = tempdir().unwrap();
+    let backend = Arc::new(LocalFsStorageBackend::new(tmp.path()));
+    // Deferred length so a winning 16-byte append does not trip the
+    // declared-size check baked into the default `initiate_direct` helper.
+    let session = initiate_direct_with(backend.as_ref(), None, policy("local_fs")?).await?;
+
+    let mut handles = Vec::new();
+    for shard in 0..8u8 {
+        let backend = backend.clone();
+        let session_id = session.id.clone();
+        handles.push(tokio::spawn(async move {
+            backend
+                .append_upload_bytes(
+                    &ctx(),
+                    session_id,
+                    // Each task offers offset 0; only one can win per round.
+                    0,
+                    Bytes::from(vec![shard; 16]),
+                )
+                .await
+        }));
+    }
+
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for handle in handles {
+        match handle.await.expect("spawn") {
+            Ok(_) => accepted += 1,
+            Err(StorageError::OffsetMismatch { .. }) => rejected += 1,
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
+    }
+    assert_eq!(accepted, 1, "exactly one append at offset 0 should win");
+    assert_eq!(
+        rejected, 7,
+        "all other appends should see an offset mismatch"
+    );
+
+    let inspected = backend.inspect_upload(&ctx(), session.id).await?;
+    assert_eq!(
+        inspected.next_offset,
+        Some(16),
+        "committed offset must match exactly one accepted chunk"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_hides_session_existence_when_cookie_does_not_match() -> StorageResult<()> {
+    // A second anonymous binding probing the same session id must not be able
+    // to tell the difference between "exists but owned by someone else" and
+    // "never existed".
+    let storage = memory_storage()?;
+    let owner = anon_ctx();
+    let session = storage
+        .initiate_upload(
+            owner.clone(),
+            initiate_request("avatars", UploadStrategy::Auto),
+        )
+        .await?;
+
+    let mut other_headers = HeaderMap::new();
+    other_headers.insert(
+        "cookie",
+        HeaderValue::from_static("pocopine_storage_anon=different-anon"),
+    );
+    let other = StorageContext::from_request(RequestContext::new(
+        Method::GET,
+        Uri::from_static("/storage-test"),
+        other_headers,
+    ));
+
+    let probe = storage.inspect_upload(other, session.id).await;
+    assert!(
+        matches!(probe, Err(StorageError::UnknownUploadSession { .. })),
+        "cross-actor probe should be indistinguishable from missing session"
+    );
     Ok(())
 }
 

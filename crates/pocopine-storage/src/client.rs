@@ -246,6 +246,7 @@ pub struct ResumableUploadBuilder;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    #[cfg(any(test, feature = "test-utils"))]
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::future::Future;
@@ -311,11 +312,17 @@ mod wasm {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     thread_local! {
         static TEST_TRANSPORT: RefCell<Option<Rc<dyn BrowserStorageTransport>>> =
             RefCell::new(None);
     }
 
+    /// Install a fake transport for browser test harnesses. Gated behind the
+    /// `test-utils` feature so it cannot be reached from production bundles —
+    /// otherwise any in-bundle JS holding the wasm exports could MITM every
+    /// storage HTTP call (including upload payloads).
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn __set_browser_transport_for_test<T>(transport: T)
     where
@@ -326,6 +333,8 @@ mod wasm {
         });
     }
 
+    /// Clear any installed fake transport. See `__set_browser_transport_for_test`.
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn __reset_browser_transport_for_test() {
         TEST_TRANSPORT.with(|slot| {
@@ -843,11 +852,34 @@ mod wasm {
             });
             let (upload_url, mut offset) = if let Some(upload_url) = resume_url {
                 match self.head_upload(&upload_url).await {
+                    Ok(head)
+                        if self.auto_resume
+                            && !explicit_resume
+                            && head.offset >= self.source.size =>
+                    {
+                        // Auto-resume key matched a session that is already
+                        // complete on the server. The cache key only covers
+                        // (name, size, last_modified), so identical metadata
+                        // with different content (e.g. an in-place overwrite
+                        // that preserves mtime) would otherwise silently
+                        // return the stale ObjectRef. Start fresh.
+                        self.validate_head_length(&head)?;
+                        remove_upload_resume_url(&self.resume_key());
+                        let created = self.create_upload().await?;
+                        write_upload_resume_url(&self.resume_key(), &created.0);
+                        created
+                    }
                     Ok(head) => {
                         self.validate_head_length(&head)?;
                         (upload_url, head.offset)
                     }
-                    Err(err) if self.auto_resume && !explicit_resume => {
+                    Err(StorageError::UnknownUploadSession { .. })
+                        if self.auto_resume && !explicit_resume =>
+                    {
+                        // Server confirmed the cached session is gone (404 /
+                        // 410). Transient failures (5xx, network) propagate
+                        // instead so we do not wipe a still-valid resume URL
+                        // and force a full re-upload.
                         remove_upload_resume_url(&self.resume_key());
                         let created = self.create_upload().await?;
                         write_upload_resume_url(&self.resume_key(), &created.0);
@@ -923,7 +955,7 @@ mod wasm {
             let location = response
                 .header("location")
                 .ok_or_else(|| StorageError::client("create upload omitted Location"))?;
-            let upload_url = resolve_tus_location(&create_url, location);
+            let upload_url = resolve_tus_location(&create_url, location)?;
             let offset = response
                 .header("upload-offset")
                 .map(parse_upload_offset_header)
@@ -1202,18 +1234,24 @@ mod wasm {
         expected: &[u16],
     ) -> StorageResult<()> {
         if expected.contains(&response.status) {
-            Ok(())
-        } else {
-            Err(StorageError::client(format!(
-                "{operation} failed with HTTP {}{}",
-                response.status,
-                if response.body.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", response.body)
-                }
-            )))
+            return Ok(());
         }
+        // Surface "session is gone" via the structured variant so resume code
+        // can distinguish a definitively-missing session from a transient
+        // failure and avoid wiping a still-valid cached resume URL on a 5xx
+        // blip.
+        if response.status == 404 || response.status == 410 {
+            return Err(StorageError::unknown_upload_session(operation.to_string()));
+        }
+        Err(StorageError::client(format!(
+            "{operation} failed with HTTP {}{}",
+            response.status,
+            if response.body.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", response.body)
+            }
+        )))
     }
 
     fn parse_upload_offset_header(value: &str) -> StorageResult<u64> {
@@ -1257,9 +1295,12 @@ mod wasm {
     }
 
     async fn send_request(request: BrowserStorageRequest) -> StorageResult<BrowserStorageResponse> {
-        let test_transport = TEST_TRANSPORT.with(|slot| slot.borrow().clone());
-        if let Some(transport) = test_transport {
-            return transport.request(request).await;
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            let test_transport = TEST_TRANSPORT.with(|slot| slot.borrow().clone());
+            if let Some(transport) = test_transport {
+                return transport.request(request).await;
+            }
         }
         real_fetch(request).await
     }
@@ -1431,19 +1472,47 @@ mod wasm {
         )
     }
 
-    fn resolve_tus_location(create_url: &str, location: &str) -> String {
-        if location.starts_with('/')
-            || location.starts_with("http://")
-            || location.starts_with("https://")
-        {
-            location.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                create_url.trim_end_matches('/'),
-                location.trim_start_matches('/')
-            )
+    fn resolve_tus_location(create_url: &str, location: &str) -> StorageResult<String> {
+        if location.starts_with('/') {
+            // Origin-relative — implicitly same origin as `create_url`.
+            return Ok(location.to_string());
         }
+        if location.starts_with("http://") || location.starts_with("https://") {
+            // Absolute URL: insist on same scheme + authority. A misconfigured
+            // proxy or malicious server that returns
+            // `Location: https://attacker.example.com/sess` here would
+            // otherwise steer every subsequent PATCH (carrying file bytes)
+            // and the cached resume URL to the foreign host.
+            let location_origin = url_origin(location).ok_or_else(|| {
+                StorageError::client(format!("malformed tus Location URL: {location}"))
+            })?;
+            let create_origin = url_origin(create_url).ok_or_else(|| {
+                StorageError::client(format!("malformed tus create URL: {create_url}"))
+            })?;
+            if !location_origin.0.eq_ignore_ascii_case(create_origin.0)
+                || !location_origin.1.eq_ignore_ascii_case(create_origin.1)
+            {
+                return Err(StorageError::client(format!(
+                    "tus Location refers to a different origin: {location}"
+                )));
+            }
+            return Ok(location.to_string());
+        }
+        // Path-relative against the create URL's directory.
+        Ok(format!(
+            "{}/{}",
+            create_url.trim_end_matches('/'),
+            location.trim_start_matches('/')
+        ))
+    }
+
+    fn url_origin(url: &str) -> Option<(&str, &str)> {
+        let (scheme, rest) = url.split_once("://")?;
+        let authority = rest.split(['/', '?', '#']).next()?;
+        if authority.is_empty() {
+            return None;
+        }
+        Some((scheme, authority))
     }
 
     fn scope_url(endpoint: &str, scope: &str) -> String {
@@ -1490,5 +1559,8 @@ mod wasm {
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{
     BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, ResumableUploadBuilder,
-    UploadBuilder, __reset_browser_transport_for_test, __set_browser_transport_for_test,
+    UploadBuilder,
 };
+
+#[cfg(all(target_arch = "wasm32", any(test, feature = "test-utils")))]
+pub use wasm::{__reset_browser_transport_for_test, __set_browser_transport_for_test};

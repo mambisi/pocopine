@@ -6,6 +6,14 @@ license.workspace = true
 repository.workspace = true
 description = "Storage protocol, browser client, and server plugin extension for Pocopine apps."
 
+[features]
+# Exposes the browser transport override hook used by `tests/client_browser.rs`
+# (and any downstream tus client harness). Gated to keep the MITM-capable
+# `__set_browser_transport_for_test` setter out of production wasm bundles —
+# without the feature, the slot is dead code and the setter does not exist
+# in the public API.
+test-utils = []
+
 [dependencies]
 base64 = "0.22"
 bytes = "1"
@@ -18,6 +26,9 @@ uuid = { version = "1", features = ["v4", "js"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-server = { workspace = true }
 sha2 = "0.10"
+# Per-session async mutex (tokio::sync::Mutex) for the local-fs backend, plus
+# spawn_blocking to keep the std::fs I/O off the tokio worker threads.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
@@ -47,3 +58,12 @@ web-sys = { version = "0.3", features = [
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 pocopine = { path = "../pocopine" }
 wasm-bindgen-test = "0.3"
+
+# Browser smoke tests for the storage client install a fake transport via the
+# `test-utils` hook, so the test target must be built with that feature enabled.
+# Invoke with: `wasm-pack test --firefox --headless crates/pocopine-storage \
+#   --features test-utils --test client_browser`.
+[[test]]
+name = "client_browser"
+path = "tests/client_browser.rs"
+required-features = ["test-utils"]

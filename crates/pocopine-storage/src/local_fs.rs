@@ -1,8 +1,11 @@
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use bytes::Bytes;
+use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
 use crate::backend_common::{
@@ -35,10 +38,18 @@ struct StoredUploadSession {
 /// metadata and temporary bytes live under `root/.pocopine-storage/sessions`.
 /// Session metadata includes the storage actor, so multi-tenant hosts should
 /// use separate backend roots for separate tenant trust boundaries.
+///
+/// Mutating operations on the same session id are serialized through a
+/// per-session async mutex, and the underlying `std::fs` I/O runs on
+/// `spawn_blocking` workers so the tokio runtime stays responsive even when
+/// the disk is slow.
 #[derive(Clone, Debug)]
 pub struct LocalFsStorageBackend {
     name: &'static str,
     root: PathBuf,
+    // Per-session async locks. Cloned cheaply via Arc; the inner StdMutex
+    // protects only the map and is held briefly.
+    session_locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
 }
 
 impl LocalFsStorageBackend {
@@ -50,11 +61,38 @@ impl LocalFsStorageBackend {
         Self {
             name,
             root: root.into(),
+            session_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
     pub fn root(&self) -> &Path {
         self.root.as_path()
+    }
+
+    fn session_lock(&self, session: &UploadSessionId) -> Arc<TokioMutex<()>> {
+        let mut locks = self
+            .session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        locks
+            .entry(session.as_str().to_string())
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone()
+    }
+
+    fn drop_session_lock(&self, session: &UploadSessionId) {
+        let mut locks = self
+            .session_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Only remove if the entry is no longer in use (strong_count == 2:
+        // one in the map, one on our local Arc). Other in-flight callers
+        // would otherwise lose their serialization guarantee.
+        if let Some(existing) = locks.get(session.as_str()) {
+            if Arc::strong_count(existing) <= 2 {
+                locks.remove(session.as_str());
+            }
+        }
     }
 
     /// Remove expired upload-session directories from disk.
@@ -158,50 +196,10 @@ impl StorageBackend for LocalFsStorageBackend {
         ctx: &'a StorageContext,
         request: InitiateUpload,
     ) -> StorageBoxFuture<'a, UploadSession> {
+        let backend = self.clone();
+        let actor = ctx.actor.clone();
         Box::pin(async move {
-            fs::create_dir_all(&self.root)
-                .map_err(|err| local_io_error("create storage root", err))?;
-            let strategy = selected_strategy(request.requested_strategy)?;
-            let id = UploadSessionId::new(Uuid::new_v4().to_string())?;
-            let session = UploadSession {
-                id: id.clone(),
-                scope: request.scope.clone(),
-                file_name: request.file_name.clone(),
-                size: request.size,
-                content_type: request.content_type.clone(),
-                metadata: request.metadata.clone(),
-                strategy,
-                status: UploadSessionStatus::Open,
-                next_offset: Some(0),
-                part_size: request.policy.preferred_chunk_size,
-                plan: TransferPlan {
-                    min_part_size: request.policy.min_part_size,
-                    preferred_part_size: request.policy.preferred_chunk_size,
-                    max_part_size: request.policy.max_part_size,
-                    max_parts: request.policy.max_parts,
-                    max_concurrent_parts: 1,
-                    resumable: true,
-                },
-                uploaded_parts: Vec::new(),
-                expires_at: expires_at(request.policy.expires_after),
-            };
-            let dir = self.session_dir(&id);
-            fs::create_dir_all(&dir)
-                .map_err(|err| local_io_error("create upload session dir", err))?;
-            File::create(self.session_tmp_path(&id))
-                .map_err(|err| local_io_error("create upload temp file", err))?;
-            let stored = StoredUploadSession {
-                public: session.clone(),
-                owner: ctx.actor.clone(),
-                storage_key: request.storage_key,
-                visibility: request.policy.visibility,
-                max_bytes: request.policy.max_bytes,
-                checksum_policy: request.policy.checksum,
-                request_metadata: request.metadata,
-                object: None,
-            };
-            self.write_session(&id, &stored)?;
-            Ok(session)
+            run_blocking(move || backend.initiate_upload_blocking(actor, request)).await
         })
     }
 
@@ -210,10 +208,12 @@ impl StorageBackend for LocalFsStorageBackend {
         ctx: &'a StorageContext,
         session: UploadSessionId,
     ) -> StorageBoxFuture<'a, UploadSession> {
+        let backend = self.clone();
+        let actor = ctx.actor.clone();
         Box::pin(async move {
-            let stored = self.read_session(&session)?;
-            ensure_owner(&ctx.actor, &stored.owner)?;
-            Ok(stored.public)
+            let lock = backend.session_lock(&session);
+            let _guard = lock.lock().await;
+            run_blocking(move || backend.inspect_upload_blocking(&actor, &session)).await
         })
     }
 
@@ -223,21 +223,12 @@ impl StorageBackend for LocalFsStorageBackend {
         session: UploadSessionId,
         size: u64,
     ) -> StorageBoxFuture<'a, UploadSession> {
+        let backend = self.clone();
+        let actor = ctx.actor.clone();
         Box::pin(async move {
-            let mut stored = self.read_session(&session)?;
-            ensure_owner(&ctx.actor, &stored.owner)?;
-            self.persist_expired_if_needed(&session, &stored)?;
-            let committed_offset = stored.public.next_offset.unwrap_or(0);
-            self.reconcile_temp_len(&session, committed_offset)?;
-            ensure_upload_length_can_be_set(
-                stored.max_bytes,
-                &stored.public,
-                committed_offset,
-                size,
-            )?;
-            stored.public.size = Some(size);
-            self.write_session(&session, &stored)?;
-            Ok(stored.public)
+            let lock = backend.session_lock(&session);
+            let _guard = lock.lock().await;
+            run_blocking(move || backend.set_upload_length_blocking(&actor, &session, size)).await
         })
     }
 
@@ -248,42 +239,15 @@ impl StorageBackend for LocalFsStorageBackend {
         offset: u64,
         bytes: Bytes,
     ) -> StorageBoxFuture<'a, UploadSession> {
+        let backend = self.clone();
+        let actor = ctx.actor.clone();
         Box::pin(async move {
-            let mut stored = self.read_session(&session)?;
-            ensure_owner(&ctx.actor, &stored.owner)?;
-            self.persist_expired_if_needed(&session, &stored)?;
-            ensure_open(&stored.public)?;
-            if stored.public.strategy != UploadStrategy::Sequential {
-                return Err(StorageError::unsupported(
-                    "local filesystem backend only supports sequential proxy upload",
-                ));
-            }
-            let expected = stored.public.next_offset.unwrap_or(0);
-            if expected != offset {
-                tracing::debug!(
-                    target: "pocopine.log",
-                    event_name = "pocopine.storage.offset_mismatch",
-                    session = %session,
-                    expected,
-                    provided = offset,
-                );
-                return Err(StorageError::offset_mismatch(expected, offset));
-            }
-            let new_offset = checked_new_offset(offset, bytes.len())?;
-            ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
-            self.reconcile_temp_len(&session, expected)?;
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(self.session_tmp_path(&session))
-                .map_err(|err| local_io_error("open upload temp file", err))?;
-            file.write_all(&bytes)
-                .map_err(|err| local_io_error("append upload temp file", err))?;
-            file.flush()
-                .map_err(|err| local_io_error("flush upload temp file", err))?;
-            stored.public.next_offset = Some(new_offset);
-            self.write_session(&session, &stored)?;
-            Ok(stored.public)
+            let lock = backend.session_lock(&session);
+            let _guard = lock.lock().await;
+            run_blocking(move || {
+                backend.append_upload_bytes_blocking(&actor, &session, offset, bytes)
+            })
+            .await
         })
     }
 
@@ -292,58 +256,12 @@ impl StorageBackend for LocalFsStorageBackend {
         ctx: &'a StorageContext,
         request: CompleteUpload,
     ) -> StorageBoxFuture<'a, ObjectRef> {
+        let backend = self.clone();
+        let actor = ctx.actor.clone();
         Box::pin(async move {
-            let mut stored = self.read_session(&request.session)?;
-            ensure_owner(&ctx.actor, &stored.owner)?;
-            if let Some(object) = &stored.object {
-                return Ok(object.clone());
-            }
-            self.persist_expired_if_needed(&request.session, &stored)?;
-            ensure_open(&stored.public)?;
-            let final_path = self.object_path(&stored.storage_key.key);
-            if !self.session_tmp_path(&request.session).exists() && final_path.exists() {
-                let actual = fs::metadata(&final_path)
-                    .map_err(|err| local_io_error("read completed object", err))?
-                    .len();
-                return self.finish_existing_completed_object(
-                    &request.session,
-                    &mut stored,
-                    &final_path,
-                    actual,
-                    request.checksum,
-                );
-            }
-
-            let actual = stored.public.next_offset.unwrap_or(0);
-            self.reconcile_temp_len(&request.session, actual)?;
-            if let Some(expected) = stored.public.size {
-                if actual != expected {
-                    return Err(StorageError::policy_rejected(format!(
-                        "upload is incomplete: expected {expected} bytes, got {actual}"
-                    )));
-                }
-            }
-            ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
-            let uploaded_bytes = fs::read(self.session_tmp_path(&request.session))
-                .map_err(|err| local_io_error("read upload temp file", err))?;
-            let checksum = validate_complete_checksum(
-                &stored.checksum_policy,
-                &uploaded_bytes,
-                request.checksum,
-            )?;
-
-            if let Some(parent) = final_path.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|err| local_io_error("create object parent directory", err))?;
-            }
-            commit_completed_object(self.session_tmp_path(&request.session), &final_path)?;
-
-            let object = self.object_ref(&stored, actual, checksum);
-            stored.public.status = UploadSessionStatus::Complete;
-            stored.public.next_offset = Some(actual);
-            stored.object = Some(object.clone());
-            self.write_session(&request.session, &stored)?;
-            Ok(object)
+            let lock = backend.session_lock(&request.session);
+            let _guard = lock.lock().await;
+            run_blocking(move || backend.complete_upload_blocking(&actor, request)).await
         })
     }
 
@@ -352,19 +270,216 @@ impl StorageBackend for LocalFsStorageBackend {
         ctx: &'a StorageContext,
         session: UploadSessionId,
     ) -> StorageBoxFuture<'a, ()> {
+        let backend = self.clone();
+        let actor = ctx.actor.clone();
         Box::pin(async move {
-            match self.read_session(&session) {
-                Ok(stored) => ensure_owner(&ctx.actor, &stored.owner)?,
-                Err(StorageError::UnknownUploadSession { .. }) => return Ok(()),
-                Err(err) => return Err(err),
-            }
-            match fs::remove_dir_all(self.session_dir(&session)) {
-                Ok(()) => Ok(()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(err) => Err(local_io_error("remove upload session", err)),
-            }
+            let lock = backend.session_lock(&session);
+            let guard = lock.lock().await;
+            let outcome = run_blocking({
+                let backend = backend.clone();
+                let session = session.clone();
+                move || backend.abort_upload_blocking(&actor, &session)
+            })
+            .await;
+            // Drop the lock before pruning the map entry so the inner
+            // `Arc<TokioMutex>` strong count drops to (map=1, our copy=1)
+            // and `drop_session_lock` can reclaim it.
+            drop(guard);
+            backend.drop_session_lock(&session);
+            outcome
         })
     }
+}
+
+impl LocalFsStorageBackend {
+    fn initiate_upload_blocking(
+        &self,
+        actor: StorageActor,
+        request: InitiateUpload,
+    ) -> StorageResult<UploadSession> {
+        fs::create_dir_all(&self.root).map_err(|err| local_io_error("create storage root", err))?;
+        let strategy = selected_strategy(request.requested_strategy)?;
+        let id = UploadSessionId::new(Uuid::new_v4().to_string())?;
+        let session = UploadSession {
+            id: id.clone(),
+            scope: request.scope.clone(),
+            file_name: request.file_name.clone(),
+            size: request.size,
+            content_type: request.content_type.clone(),
+            metadata: request.metadata.clone(),
+            strategy,
+            status: UploadSessionStatus::Open,
+            next_offset: Some(0),
+            part_size: request.policy.preferred_chunk_size,
+            plan: TransferPlan {
+                min_part_size: request.policy.min_part_size,
+                preferred_part_size: request.policy.preferred_chunk_size,
+                max_part_size: request.policy.max_part_size,
+                max_parts: request.policy.max_parts,
+                max_concurrent_parts: 1,
+                resumable: true,
+            },
+            uploaded_parts: Vec::new(),
+            expires_at: expires_at(request.policy.expires_after),
+        };
+        let dir = self.session_dir(&id);
+        fs::create_dir_all(&dir).map_err(|err| local_io_error("create upload session dir", err))?;
+        File::create(self.session_tmp_path(&id))
+            .map_err(|err| local_io_error("create upload temp file", err))?;
+        let stored = StoredUploadSession {
+            public: session.clone(),
+            owner: actor,
+            storage_key: request.storage_key,
+            visibility: request.policy.visibility,
+            max_bytes: request.policy.max_bytes,
+            checksum_policy: request.policy.checksum,
+            request_metadata: request.metadata,
+            object: None,
+        };
+        self.write_session(&id, &stored)?;
+        Ok(session)
+    }
+
+    fn inspect_upload_blocking(
+        &self,
+        actor: &StorageActor,
+        session: &UploadSessionId,
+    ) -> StorageResult<UploadSession> {
+        let stored = self.read_session(session)?;
+        ensure_owner(actor, &stored.owner)?;
+        Ok(stored.public)
+    }
+
+    fn set_upload_length_blocking(
+        &self,
+        actor: &StorageActor,
+        session: &UploadSessionId,
+        size: u64,
+    ) -> StorageResult<UploadSession> {
+        let mut stored = self.read_session(session)?;
+        ensure_owner(actor, &stored.owner)?;
+        self.persist_expired_if_needed(session, &stored)?;
+        let committed_offset = stored.public.next_offset.unwrap_or(0);
+        self.reconcile_temp_len(session, committed_offset)?;
+        ensure_upload_length_can_be_set(stored.max_bytes, &stored.public, committed_offset, size)?;
+        stored.public.size = Some(size);
+        self.write_session(session, &stored)?;
+        Ok(stored.public)
+    }
+
+    fn append_upload_bytes_blocking(
+        &self,
+        actor: &StorageActor,
+        session: &UploadSessionId,
+        offset: u64,
+        bytes: Bytes,
+    ) -> StorageResult<UploadSession> {
+        let mut stored = self.read_session(session)?;
+        ensure_owner(actor, &stored.owner)?;
+        self.persist_expired_if_needed(session, &stored)?;
+        ensure_open(&stored.public)?;
+        if stored.public.strategy != UploadStrategy::Sequential {
+            return Err(StorageError::unsupported(
+                "local filesystem backend only supports sequential proxy upload",
+            ));
+        }
+        let expected = stored.public.next_offset.unwrap_or(0);
+        if expected != offset {
+            tracing::debug!(
+                target: "pocopine.log",
+                event_name = "pocopine.storage.offset_mismatch",
+                session = %session,
+                expected,
+                provided = offset,
+            );
+            return Err(StorageError::offset_mismatch(expected, offset));
+        }
+        let new_offset = checked_new_offset(offset, bytes.len())?;
+        ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
+        self.reconcile_temp_len(session, expected)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.session_tmp_path(session))
+            .map_err(|err| local_io_error("open upload temp file", err))?;
+        file.write_all(&bytes)
+            .map_err(|err| local_io_error("append upload temp file", err))?;
+        file.flush()
+            .map_err(|err| local_io_error("flush upload temp file", err))?;
+        stored.public.next_offset = Some(new_offset);
+        self.write_session(session, &stored)?;
+        Ok(stored.public)
+    }
+
+    fn complete_upload_blocking(
+        &self,
+        actor: &StorageActor,
+        request: CompleteUpload,
+    ) -> StorageResult<ObjectRef> {
+        let mut stored = self.read_session(&request.session)?;
+        ensure_owner(actor, &stored.owner)?;
+        if let Some(object) = &stored.object {
+            return Ok(object.clone());
+        }
+        self.persist_expired_if_needed(&request.session, &stored)?;
+        ensure_open(&stored.public)?;
+        let final_path = self.object_path(&stored.storage_key.key);
+
+        let actual = stored.public.next_offset.unwrap_or(0);
+        self.reconcile_temp_len(&request.session, actual)?;
+        if let Some(expected) = stored.public.size {
+            if actual != expected {
+                return Err(StorageError::policy_rejected(format!(
+                    "upload is incomplete: expected {expected} bytes, got {actual}"
+                )));
+            }
+        }
+        ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
+        let uploaded_bytes = fs::read(self.session_tmp_path(&request.session))
+            .map_err(|err| local_io_error("read upload temp file", err))?;
+        let checksum =
+            validate_complete_checksum(&stored.checksum_policy, &uploaded_bytes, request.checksum)?;
+
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| local_io_error("create object parent directory", err))?;
+        }
+        commit_completed_object(self.session_tmp_path(&request.session), &final_path)?;
+
+        let object = self.object_ref(&stored, actual, checksum);
+        stored.public.status = UploadSessionStatus::Complete;
+        stored.public.next_offset = Some(actual);
+        stored.object = Some(object.clone());
+        self.write_session(&request.session, &stored)?;
+        Ok(object)
+    }
+
+    fn abort_upload_blocking(
+        &self,
+        actor: &StorageActor,
+        session: &UploadSessionId,
+    ) -> StorageResult<()> {
+        match self.read_session(session) {
+            Ok(stored) => ensure_owner(actor, &stored.owner)?,
+            Err(StorageError::UnknownUploadSession { .. }) => return Ok(()),
+            Err(err) => return Err(err),
+        }
+        match fs::remove_dir_all(self.session_dir(session)) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(local_io_error("remove upload session", err)),
+        }
+    }
+}
+
+async fn run_blocking<F, T>(f: F) -> StorageResult<T>
+where
+    F: FnOnce() -> StorageResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|err| StorageError::backend(format!("blocking task join failed: {err}")))?
 }
 
 impl LocalFsStorageBackend {
@@ -404,34 +519,6 @@ impl LocalFsStorageBackend {
         Err(StorageError::backend(format!(
             "upload temp file is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
         )))
-    }
-
-    fn finish_existing_completed_object(
-        &self,
-        session: &UploadSessionId,
-        stored: &mut StoredUploadSession,
-        final_path: &Path,
-        actual: u64,
-        checksum: Option<crate::ObjectChecksum>,
-    ) -> StorageResult<ObjectRef> {
-        if let Some(expected) = stored.public.size {
-            if actual != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "completed object size mismatch: expected {expected} bytes, got {actual}"
-                )));
-            }
-        }
-        ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
-        let object_bytes =
-            fs::read(final_path).map_err(|err| local_io_error("read completed object", err))?;
-        let checksum =
-            validate_complete_checksum(&stored.checksum_policy, &object_bytes, checksum)?;
-        let object = self.object_ref(stored, actual, checksum);
-        stored.public.status = UploadSessionStatus::Complete;
-        stored.public.next_offset = Some(actual);
-        stored.object = Some(object.clone());
-        self.write_session(session, stored)?;
-        Ok(object)
     }
 
     fn object_ref(
