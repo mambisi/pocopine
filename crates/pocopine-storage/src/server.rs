@@ -16,6 +16,7 @@ use pocopine_server::axum::http::{
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
 use pocopine_server::axum::routing::{get, head, options, patch, post};
 use pocopine_server::{Server, ServerPlugin};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -54,13 +55,21 @@ pub enum StorageActor {
 
 impl StorageActor {
     /// Compare stable owner identity while ignoring mutable principal attributes.
+    ///
+    /// Always fails closed on empty identifiers: an actor with a missing
+    /// `subject` / `id` / system name never matches another actor with the
+    /// same (empty) identifier. Upstream auth providers that drop a subject
+    /// claim then surface as Principal { subject: "" } — without this guard
+    /// every such request would share an owner identity.
     pub fn same_owner(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Principal(left), Self::Principal(right)) => left.subject == right.subject,
+            (Self::Principal(left), Self::Principal(right)) => {
+                !left.subject.is_empty() && left.subject == right.subject
+            }
             (Self::Anonymous(left), Self::Anonymous(right)) => {
                 !left.id.is_empty() && left.id == right.id
             }
-            (Self::System(left), Self::System(right)) => left == right,
+            (Self::System(left), Self::System(right)) => !left.is_empty() && left == right,
             _ => false,
         }
     }
@@ -98,13 +107,17 @@ impl StorageContext {
                 })
             })
             .unwrap_or_else(|| {
+                let raw = request
+                    .session_id()
+                    .or_else(|| request.cookie(STORAGE_ANON_COOKIE))
+                    .or(anonymous_binding.as_deref())
+                    .unwrap_or_default();
                 StorageActor::Anonymous(AnonymousUploadBinding {
-                    id: request
-                        .session_id()
-                        .or_else(|| request.cookie(STORAGE_ANON_COOKIE))
-                        .or(anonymous_binding.as_deref())
-                        .unwrap_or_default()
-                        .to_string(),
+                    id: if raw.is_empty() {
+                        String::new()
+                    } else {
+                        hash_anonymous_binding(raw)
+                    },
                 })
             });
         Self {
@@ -541,7 +554,11 @@ impl StorageServer {
         for backend in self.inner.backends.values() {
             match backend.inspect_upload(ctx, session.clone()).await {
                 Ok(upload) => return Ok((backend.clone(), upload)),
-                Err(StorageError::UnknownUploadSession { .. }) => {}
+                // Map "exists but wrong owner" to "not found" so a probe
+                // cannot distinguish a session belonging to another actor
+                // from one that does not exist at all.
+                Err(StorageError::UnknownUploadSession { .. })
+                | Err(StorageError::Forbidden { .. }) => {}
                 Err(err) => return Err(err),
             }
         }
@@ -641,13 +658,14 @@ impl StorageServerBuilder {
     where
         P: Predicate,
     {
-        let guard = PredicateScopeGuard(predicate);
-        let scope = StorageScope::builder(policy)
-            .write_guard(guard)
-            .read_guard(PredicateScopeGuard(pocopine_server::auth::require_auth()))
-            .delete_guard(PredicateScopeGuard(pocopine_server::auth::require_auth()))
-            .build();
-        self.insert_scope(name.into(), scope)?;
+        // Share a single guard across read/write/delete so the caller's
+        // predicate gates every mutation surface, not just writes.
+        let guard: Arc<dyn StorageScopeGuard> = Arc::new(PredicateScopeGuard(predicate));
+        let mut builder = StorageScope::builder(policy);
+        builder.write_guard = Some(guard.clone());
+        builder.read_guard = Some(guard.clone());
+        builder.delete_guard = Some(guard);
+        self.insert_scope(name.into(), builder.build())?;
         Ok(self)
     }
 
@@ -810,15 +828,14 @@ async fn inspect_handler(
     request: Request<Body>,
 ) -> Response {
     let request = context_from_request(request, &storage);
-    let response = storage_response(
+    storage_response(
         async {
             let session = UploadSessionId::new(session)?;
             storage.inspect_upload(request.ctx, session).await
         }
         .await,
         request.set_cookie,
-    );
-    no_store_response(response)
+    )
 }
 
 async fn bytes_handler(
@@ -1642,9 +1659,35 @@ fn set_response_header(
 fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
     if let Some(set_cookie) = set_cookie {
         if let Ok(value) = HeaderValue::from_str(&set_cookie) {
-            response.headers_mut().insert(SET_COOKIE, value);
+            let headers = response.headers_mut();
+            headers.insert(SET_COOKIE, value);
+            // Lock the cookie-bearing response out of shared caches: a CDN
+            // that stored this would replay the binding cookie to every
+            // subsequent anonymous visitor of the same URL.
+            headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            headers.insert(VARY, HeaderValue::from_static("Cookie"));
         }
     }
+}
+
+/// Derive an opaque, stable anonymous binding id from a cookie value.
+///
+/// The raw value is often the upstream auth `SESSION_COOKIE` string, so the
+/// `id` field ends up on disk in `session.json`. Storing the cookie verbatim
+/// would let anyone with read access to the storage root harvest live session
+/// cookies and replay them via the `Cookie` header. We hash with a domain
+/// separator so a leaked digest is not usable as a "blind hash" elsewhere.
+fn hash_anonymous_binding(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"pocopine.storage.anon.v1\0");
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
 }
 
 fn require_bound_actor(ctx: &StorageContext) -> StorageResult<()> {
@@ -1690,12 +1733,12 @@ fn reject_cross_site_mutation(storage: &StorageServer, headers: &HeaderMap) -> S
         .get("sec-fetch-site")
         .and_then(|value| value.to_str().ok())
     {
-        if fetch_site.eq_ignore_ascii_case("same-origin")
-            || fetch_site.eq_ignore_ascii_case("same-site")
-        {
+        if fetch_site.eq_ignore_ascii_case("same-origin") {
             return Ok(());
         }
-        if fetch_site.eq_ignore_ascii_case("cross-site") || fetch_site.eq_ignore_ascii_case("none")
+        if fetch_site.eq_ignore_ascii_case("cross-site")
+            || fetch_site.eq_ignore_ascii_case("same-site")
+            || fetch_site.eq_ignore_ascii_case("none")
         {
             return Err(StorageError::forbidden(
                 "cross-site storage mutation rejected",
@@ -1791,7 +1834,12 @@ where
         .err()
         .map(storage_error_status)
         .unwrap_or(StatusCode::OK);
-    let mut response = (status, Json(StorageResponse::from_result(result))).into_response();
+    let response = (status, Json(StorageResponse::from_result(result))).into_response();
+    // Every storage JSON response is per-actor (descriptor varies with scope
+    // guards, sessions are owner-bound, anonymous bindings ride in Set-Cookie)
+    // so wrap unconditionally — a shared cache that stored an anonymous-binding
+    // Set-Cookie would otherwise replay it to a different visitor.
+    let mut response = no_store_response(response);
     if let Some(set_cookie) = set_cookie {
         if let Ok(value) = HeaderValue::from_str(&set_cookie) {
             response.headers_mut().insert(SET_COOKIE, value);
