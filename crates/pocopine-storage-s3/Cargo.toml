@@ -1,0 +1,19 @@
+[package]
+name = "pocopine-storage-s3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "S3-compatible backend adapter for pocopine-storage."
+
+[dependencies]
+aws-sdk-s3 = "1"
+bytes = "1"
+pocopine-storage = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+time = { version = "0.3", features = ["serde"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
+tracing = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
