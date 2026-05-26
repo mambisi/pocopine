@@ -12,11 +12,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
 use bytes::Bytes;
+use google_cloud_gax::error::rpc::Code;
 use google_cloud_gax::options::RequestOptionsBuilder;
 use google_cloud_storage::client::{Storage, StorageControl};
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use pocopine_storage::backend_common::{
     checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
     ensure_upload_length_can_be_set, expires_at, refresh_expired, selected_strategy,
@@ -34,6 +36,27 @@ use uuid::Uuid;
 const DEFAULT_BACKEND_NAME: &str = "gcs";
 const DEFAULT_INTERNAL_PREFIX: &str = "__pocopine/storage/sessions";
 const DEFAULT_MAX_PROXY_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SESSION_METADATA_BYTES: u64 = 256 * 1024;
+const JSON_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+const GCS_JSON_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b'!')
+    .add(b'#')
+    .add(b'$')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'=')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b']');
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct StoredUploadSession {
@@ -46,7 +69,11 @@ struct StoredUploadSession {
     request_metadata: BTreeMap<String, String>,
     object: Option<ObjectRef>,
     #[serde(default)]
+    completion_object_key: Option<String>,
+    #[serde(default)]
     cleanup_pending: bool,
+    #[serde(skip)]
+    meta_generation: Option<i64>,
 }
 
 /// Storage backend backed by Google Cloud Storage.
@@ -211,38 +238,99 @@ impl GcsStorageBackend {
     }
 
     async fn read_session(&self, session: &UploadSessionId) -> StorageResult<StoredUploadSession> {
-        let key = self.layout.session_meta_key(session);
-        let bytes = match self.get_object_bytes(&key).await {
-            Ok(bytes) => bytes,
+        match self.read_session_object(session).await {
+            Ok(object) => decode_session_object(object)
+                .map_err(|err| StorageError::backend(format!("read gcs upload metadata: {err}"))),
             Err(StorageError::UnknownUploadSession { .. }) => {
-                return Err(StorageError::unknown_upload_session(session.to_string()));
+                Err(StorageError::unknown_upload_session(session.to_string()))
             }
-            Err(err) => return Err(err),
-        };
-        let mut stored: StoredUploadSession = serde_json::from_slice(&bytes)
-            .map_err(|err| StorageError::backend(format!("read gcs upload metadata: {err}")))?;
-        refresh_expired(&mut stored.public);
-        Ok(stored)
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn read_session_for_abort(
+        &self,
+        session: &UploadSessionId,
+    ) -> StorageResult<AbortSessionRead> {
+        match self.read_session_object(session).await {
+            Ok(object) => match decode_session_object(object) {
+                Ok(stored) => Ok(AbortSessionRead::Known(stored)),
+                Err(err) => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        event_name = "pocopine.storage.gcs_corrupt_upload_metadata",
+                        session = %session,
+                        error = %err,
+                    );
+                    Ok(AbortSessionRead::Corrupt)
+                }
+            },
+            Err(StorageError::UnknownUploadSession { .. }) => Ok(AbortSessionRead::Missing),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn read_session_object(
+        &self,
+        session: &UploadSessionId,
+    ) -> StorageResult<GcsObjectBytes> {
+        let key = self.layout.session_meta_key(session);
+        self.get_object_bytes_with_limit(&key, MAX_SESSION_METADATA_BYTES)
+            .await
+    }
+
+    async fn create_session(
+        &self,
+        session: &UploadSessionId,
+        stored: &mut StoredUploadSession,
+    ) -> StorageResult<()> {
+        self.write_session_with_precondition(session, stored, Some(0))
+            .await
     }
 
     async fn write_session(
         &self,
         session: &UploadSessionId,
-        stored: &StoredUploadSession,
+        stored: &mut StoredUploadSession,
+    ) -> StorageResult<()> {
+        let generation = stored.meta_generation.ok_or_else(|| {
+            StorageError::conflict("GCS upload metadata generation is unavailable")
+        })?;
+        self.write_session_with_precondition(session, stored, Some(generation))
+            .await
+    }
+
+    async fn write_session_with_precondition(
+        &self,
+        session: &UploadSessionId,
+        stored: &mut StoredUploadSession,
+        if_generation_match: Option<i64>,
     ) -> StorageResult<()> {
         let key = self.layout.session_meta_key(session);
         let bytes = serde_json::to_vec_pretty(stored)
             .map_err(|err| StorageError::backend(format!("encode gcs upload metadata: {err}")))?;
-        self.put_object_bytes(&key, Bytes::from(bytes), Some("application/json"), None)
+        let written = self
+            .put_object_bytes(
+                &key,
+                Bytes::from(bytes),
+                Some("application/json"),
+                if_generation_match,
+            )
             .await
-            .map(|_| ())
+            .map_err(map_session_write_error)?;
+        stored.meta_generation = written.generation_match;
+        Ok(())
     }
 
-    async fn get_staged_bytes(&self, session: &UploadSessionId) -> StorageResult<Vec<u8>> {
+    async fn get_staged_bytes(
+        &self,
+        session: &UploadSessionId,
+        read_limit: u64,
+    ) -> StorageResult<GcsObjectBytes> {
         let key = self.layout.session_bytes_key(session);
-        match self.get_object_bytes(&key).await {
+        match self.get_object_bytes_with_limit(&key, read_limit).await {
             Ok(bytes) => Ok(bytes),
-            Err(StorageError::UnknownUploadSession { .. }) => Ok(Vec::new()),
+            Err(StorageError::UnknownUploadSession { .. }) => Ok(GcsObjectBytes::empty()),
             Err(err) => Err(err),
         }
     }
@@ -252,40 +340,59 @@ impl GcsStorageBackend {
         session: &UploadSessionId,
         trusted_len: u64,
     ) -> StorageResult<Vec<u8>> {
-        let staged = self.get_staged_bytes(session).await?;
-        let actual = staged.len() as u64;
+        let read_limit = trusted_len
+            .checked_add(1)
+            .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
+        let mut staged = self.get_staged_bytes(session, read_limit).await?;
+        let actual = staged.bytes.len() as u64;
         if actual > trusted_len {
             tracing::warn!(
                 target: "pocopine.log",
-                event_name = "pocopine.storage.gcs_staged_bytes_ahead",
+                event_name = "pocopine.storage.gcs_staged_bytes_truncated",
                 session = %session,
                 actual,
                 trusted = trusted_len,
             );
-            return Ok(staged);
+            staged.bytes.truncate(usize_from_u64(trusted_len)?);
+            self.put_staged_bytes(
+                session,
+                Bytes::from(staged.bytes.clone()),
+                staged.generation_match,
+            )
+            .await?;
+            return Ok(staged.bytes);
         }
         if actual == trusted_len {
-            return Ok(staged);
+            return Ok(staged.bytes);
         }
         Err(StorageError::backend(format!(
             "GCS staged upload object is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
         )))
     }
 
-    async fn put_staged_bytes(&self, session: &UploadSessionId, bytes: Bytes) -> StorageResult<()> {
+    async fn put_staged_bytes(
+        &self,
+        session: &UploadSessionId,
+        bytes: Bytes,
+        if_generation_match: Option<i64>,
+    ) -> StorageResult<()> {
         let key = self.layout.session_bytes_key(session);
-        self.put_object_bytes(&key, bytes, Some("application/octet-stream"), None)
-            .await
-            .map(|_| ())
+        self.put_object_bytes(
+            &key,
+            bytes,
+            Some("application/octet-stream"),
+            if_generation_match,
+        )
+        .await
+        .map_err(map_session_write_error)
+        .map(|_| ())
     }
 
-    async fn get_object_bytes(&self, key: &str) -> StorageResult<Vec<u8>> {
-        self.get_object_bytes_with_metadata(key)
-            .await
-            .map(|metadata| metadata.bytes)
-    }
-
-    async fn get_object_bytes_with_metadata(&self, key: &str) -> StorageResult<GcsObjectBytes> {
+    async fn get_object_bytes_with_limit(
+        &self,
+        key: &str,
+        max_bytes: u64,
+    ) -> StorageResult<GcsObjectBytes> {
         let mut response = self
             .storage
             .read_object(self.layout.bucket_resource(), key)
@@ -305,19 +412,68 @@ impl GcsStorageBackend {
         } else {
             None
         };
+        let generation_match = positive_generation(object.generation);
         let mut bytes = Vec::new();
+        let max_len = usize_from_u64(max_bytes)?;
         while let Some(chunk) = response
             .next()
             .await
             .transpose()
             .map_err(|err| gcs_error("read object body", err))?
         {
+            let exceeds_limit = match bytes.len().checked_add(chunk.len()) {
+                Some(len) => len > max_len,
+                None => true,
+            };
+            if exceeds_limit {
+                let remaining = max_len.saturating_sub(bytes.len());
+                bytes.extend_from_slice(&chunk[..remaining]);
+                return Ok(GcsObjectBytes {
+                    bytes,
+                    etag,
+                    generation,
+                    generation_match,
+                    truncated: true,
+                });
+            }
             bytes.extend_from_slice(&chunk);
         }
         Ok(GcsObjectBytes {
             bytes,
             etag,
             generation,
+            generation_match,
+            truncated: false,
+        })
+    }
+
+    async fn get_object_metadata(&self, key: &str) -> StorageResult<GcsObjectMetadata> {
+        let response = self
+            .storage
+            .read_object(self.layout.bucket_resource(), key)
+            .send()
+            .await
+            .map_err(|err| {
+                if is_gcs_not_found(&err) {
+                    StorageError::unknown_upload_session(key.to_string())
+                } else {
+                    gcs_error("read object metadata", err)
+                }
+            })?;
+        let object = response.object();
+        Ok(GcsObjectMetadata {
+            size: if object.size >= 0 {
+                Some(object.size as u64)
+            } else {
+                None
+            },
+            etag: non_empty(object.etag.clone()),
+            generation: if object.generation > 0 {
+                Some(object.generation.to_string())
+            } else {
+                None
+            },
+            generation_match: positive_generation(object.generation),
         })
     }
 
@@ -351,6 +507,7 @@ impl GcsStorageBackend {
             } else {
                 None
             },
+            generation_match: positive_generation(object.generation),
         })
     }
 
@@ -360,14 +517,9 @@ impl GcsStorageBackend {
         bytes: Bytes,
         content_type: Option<&str>,
     ) -> StorageResult<GcsObjectWrite> {
-        match self.get_object_bytes_with_metadata(key).await {
-            Ok(existing) => {
-                if existing.bytes.as_slice() == bytes.as_ref() {
-                    return Ok(GcsObjectWrite {
-                        etag: existing.etag,
-                        generation: existing.generation,
-                    });
-                }
+        match self.compare_existing_completed_object(key, &bytes).await {
+            Ok(Some(existing)) => return Ok(existing),
+            Ok(None) => {
                 return Err(StorageError::policy_rejected(format!(
                     "GCS object key already exists with different bytes: {key}"
                 )));
@@ -376,15 +528,47 @@ impl GcsStorageBackend {
             Err(err) => return Err(err),
         }
         match self
-            .put_object_bytes(key, bytes, content_type, Some(0))
+            .put_object_bytes(key, bytes.clone(), content_type, Some(0))
             .await
         {
             Ok(written) => Ok(written),
-            Err(StorageError::PolicyRejected { .. }) => Err(StorageError::policy_rejected(
-                format!("GCS object key already exists: {key}"),
-            )),
+            Err(StorageError::PolicyRejected { .. }) => {
+                match self.compare_existing_completed_object(key, &bytes).await {
+                    Ok(Some(existing)) => Ok(existing),
+                    Ok(None) | Err(StorageError::UnknownUploadSession { .. }) => {
+                        Err(StorageError::policy_rejected(format!(
+                            "GCS object key already exists: {key}"
+                        )))
+                    }
+                    Err(err) => Err(err),
+                }
+            }
             Err(err) => Err(err),
         }
+    }
+
+    async fn compare_existing_completed_object(
+        &self,
+        key: &str,
+        bytes: &Bytes,
+    ) -> StorageResult<Option<GcsObjectWrite>> {
+        let metadata = self.get_object_metadata(key).await?;
+        if let Some(size) = metadata.size {
+            if size != bytes.len() as u64 && (size != 0 || bytes.is_empty()) {
+                return Ok(None);
+            }
+        }
+        let existing = self
+            .get_object_bytes_with_limit(key, bytes.len() as u64)
+            .await?;
+        if existing.truncated || existing.bytes.as_slice() != bytes.as_ref() {
+            return Ok(None);
+        }
+        Ok(Some(GcsObjectWrite {
+            etag: existing.etag.or(metadata.etag),
+            generation: existing.generation.or(metadata.generation),
+            generation_match: existing.generation_match.or(metadata.generation_match),
+        }))
     }
 
     async fn delete_object(&self, key: &str) -> StorageResult<()> {
@@ -401,7 +585,7 @@ impl GcsStorageBackend {
     async fn persist_expired_if_needed(
         &self,
         session: &UploadSessionId,
-        stored: &StoredUploadSession,
+        stored: &mut StoredUploadSession,
     ) -> StorageResult<()> {
         if stored.public.status == UploadSessionStatus::Expired {
             self.write_session(session, stored).await?;
@@ -428,6 +612,13 @@ impl GcsStorageBackend {
             if size > self.max_proxy_upload_bytes {
                 return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
             }
+        }
+        Ok(())
+    }
+
+    fn ensure_policy_is_supported(&self, max_bytes: u64) -> StorageResult<()> {
+        if max_bytes > self.max_proxy_upload_bytes {
+            return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
         }
         Ok(())
     }
@@ -460,11 +651,39 @@ struct GcsObjectBytes {
     bytes: Vec<u8>,
     etag: Option<String>,
     generation: Option<String>,
+    generation_match: Option<i64>,
+    truncated: bool,
+}
+
+impl GcsObjectBytes {
+    fn empty() -> Self {
+        Self {
+            bytes: Vec::new(),
+            etag: None,
+            generation: None,
+            generation_match: None,
+            truncated: false,
+        }
+    }
+}
+
+struct GcsObjectMetadata {
+    size: Option<u64>,
+    etag: Option<String>,
+    generation: Option<String>,
+    generation_match: Option<i64>,
 }
 
 struct GcsObjectWrite {
     etag: Option<String>,
     generation: Option<String>,
+    generation_match: Option<i64>,
+}
+
+enum AbortSessionRead {
+    Known(StoredUploadSession),
+    Missing,
+    Corrupt,
 }
 
 #[derive(Clone)]
@@ -496,10 +715,13 @@ impl GcsJsonControl {
                 "GCS emulator endpoint must not be empty",
             ));
         }
-        Ok(Self {
-            endpoint,
-            http: reqwest::Client::new(),
-        })
+        let http = reqwest::Client::builder()
+            .timeout(JSON_CONTROL_TIMEOUT)
+            .build()
+            .map_err(|err| {
+                StorageError::backend(format!("build GCS JSON control client: {err}"))
+            })?;
+        Ok(Self { endpoint, http })
     }
 
     async fn delete_object(&self, layout: &GcsKeyLayout, key: &str) -> StorageResult<()> {
@@ -583,6 +805,7 @@ impl StorageBackend for GcsStorageBackend {
         Box::pin(async move {
             let strategy = selected_strategy(request.requested_strategy)?;
             ensure_supported_checksum_policy(&request.policy.checksum)?;
+            self.ensure_policy_is_supported(request.policy.max_bytes)?;
             self.ensure_requested_size_is_supported(request.size)?;
             let id = UploadSessionId::new(Uuid::new_v4().to_string())?;
             let session = UploadSession {
@@ -607,7 +830,7 @@ impl StorageBackend for GcsStorageBackend {
                 uploaded_parts: Vec::new(),
                 expires_at: expires_at(request.policy.expires_after),
             };
-            let stored = StoredUploadSession {
+            let mut stored = StoredUploadSession {
                 public: session.clone(),
                 owner: ctx.actor.clone(),
                 storage_key: request.storage_key,
@@ -616,10 +839,12 @@ impl StorageBackend for GcsStorageBackend {
                 checksum_policy: request.policy.checksum,
                 request_metadata: request.metadata,
                 object: None,
+                completion_object_key: None,
                 cleanup_pending: false,
+                meta_generation: None,
             };
-            self.write_session(&id, &stored).await?;
-            if let Err(err) = self.put_staged_bytes(&id, Bytes::new()).await {
+            self.create_session(&id, &mut stored).await?;
+            if let Err(err) = self.put_staged_bytes(&id, Bytes::new(), Some(0)).await {
                 let _ = self
                     .delete_object_if_exists(&self.layout.session_meta_key(&id))
                     .await;
@@ -647,7 +872,7 @@ impl StorageBackend for GcsStorageBackend {
                 let staged_len = staged.len() as u64;
                 if stored.public.next_offset != Some(staged_len) {
                     stored.public.next_offset = Some(staged_len);
-                    self.write_session(&session, &stored).await?;
+                    self.write_session(&session, &mut stored).await?;
                 }
             }
             Ok(stored.public)
@@ -667,16 +892,20 @@ impl StorageBackend for GcsStorageBackend {
             self.ensure_requested_size_is_supported(Some(size))?;
             let mut stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
-            self.persist_expired_if_needed(&session, &stored).await?;
+            self.persist_expired_if_needed(&session, &mut stored)
+                .await?;
             let committed_offset = stored.public.next_offset.unwrap_or(0);
-            let staged_len = self
+            let _staged = self
                 .reconcile_staged_bytes(&session, committed_offset)
-                .await?
-                .len() as u64;
-            ensure_upload_length_can_be_set(stored.max_bytes, &stored.public, staged_len, size)?;
+                .await?;
+            ensure_upload_length_can_be_set(
+                stored.max_bytes,
+                &stored.public,
+                committed_offset,
+                size,
+            )?;
             stored.public.size = Some(size);
-            stored.public.next_offset = Some(staged_len);
-            self.write_session(&session, &stored).await?;
+            self.write_session(&session, &mut stored).await?;
             Ok(stored.public)
         })
     }
@@ -694,22 +923,28 @@ impl StorageBackend for GcsStorageBackend {
             let _guard = lock.lock().await;
             let mut stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
-            self.persist_expired_if_needed(&session, &stored).await?;
+            self.persist_expired_if_needed(&session, &mut stored)
+                .await?;
             ensure_open(&stored.public)?;
             if stored.public.strategy != UploadStrategy::Sequential {
                 return Err(StorageError::unsupported(
                     "GCS backend currently supports sequential proxy uploads only",
                 ));
             }
-            let mut expected = stored.public.next_offset.unwrap_or(0);
-            let mut staged = self.reconcile_staged_bytes(&session, expected).await?;
-            let staged_len = staged.len() as u64;
-            if staged_len > expected {
-                expected = staged_len;
-                stored.public.next_offset = Some(staged_len);
-                self.write_session(&session, &stored).await?;
-            }
+            let expected = stored.public.next_offset.unwrap_or(0);
+            let new_offset = checked_new_offset(offset, bytes.len())?;
+            let read_limit = expected
+                .max(new_offset)
+                .checked_add(1)
+                .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
+            let mut staged_object = self.get_staged_bytes(&session, read_limit).await?;
+            let staged_len = staged_object.bytes.len() as u64;
             if expected != offset {
+                if new_offset == expected
+                    && bytes_match_at(&staged_object.bytes, offset, bytes.as_ref())?
+                {
+                    return Ok(stored.public);
+                }
                 tracing::debug!(
                     target: "pocopine.log",
                     event_name = "pocopine.storage.offset_mismatch",
@@ -719,12 +954,43 @@ impl StorageBackend for GcsStorageBackend {
                 );
                 return Err(StorageError::offset_mismatch(expected, offset));
             }
-            let new_offset = checked_new_offset(offset, bytes.len())?;
+            if staged_len > expected {
+                if staged_len == new_offset
+                    && bytes_match_at(&staged_object.bytes, expected, bytes.as_ref())?
+                {
+                    stored.public.next_offset = Some(new_offset);
+                    self.write_session(&session, &mut stored).await?;
+                    return Ok(stored.public);
+                }
+                tracing::warn!(
+                    target: "pocopine.log",
+                    event_name = "pocopine.storage.gcs_staged_bytes_truncated",
+                    session = %session,
+                    actual = staged_len,
+                    trusted = expected,
+                );
+                staged_object.bytes.truncate(usize_from_u64(expected)?);
+                self.put_staged_bytes(
+                    &session,
+                    Bytes::from(staged_object.bytes.clone()),
+                    staged_object.generation_match,
+                )
+                .await?;
+            } else if staged_len < expected {
+                return Err(StorageError::backend(format!(
+                    "GCS staged upload object is shorter than committed metadata: expected {expected} bytes, got {staged_len}"
+                )));
+            }
             ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
-            staged.extend_from_slice(&bytes);
-            self.put_staged_bytes(&session, Bytes::from(staged)).await?;
+            staged_object.bytes.extend_from_slice(&bytes);
+            self.put_staged_bytes(
+                &session,
+                Bytes::from(staged_object.bytes),
+                staged_object.generation_match,
+            )
+            .await?;
             stored.public.next_offset = Some(new_offset);
-            self.write_session(&session, &stored).await?;
+            self.write_session(&session, &mut stored).await?;
             Ok(stored.public)
         })
     }
@@ -746,7 +1012,7 @@ impl StorageBackend for GcsStorageBackend {
                     .await?;
                 return Ok(object);
             }
-            self.persist_expired_if_needed(&request.session, &stored)
+            self.persist_expired_if_needed(&request.session, &mut stored)
                 .await?;
             ensure_completable(&stored.public)?;
             let trusted = stored.public.next_offset.unwrap_or(0);
@@ -767,24 +1033,33 @@ impl StorageBackend for GcsStorageBackend {
             let object_key = self.layout.object_key(stored.storage_key.key.as_str());
             if stored.public.status == UploadSessionStatus::Open
                 || stored.public.next_offset != Some(actual)
+                || stored.completion_object_key.as_deref() != Some(object_key.as_str())
             {
                 stored.public.status = UploadSessionStatus::Completing;
                 stored.public.next_offset = Some(actual);
-                self.write_session(&request.session, &stored).await?;
+                stored.completion_object_key = Some(object_key.clone());
+                self.write_session(&request.session, &mut stored).await?;
             }
-            let written = self
-                .put_completed_object(
-                    &object_key,
-                    Bytes::from(staged),
-                    stored.public.content_type.as_deref(),
-                )
-                .await?;
+            let staged = Bytes::from(staged);
+            let written = match self
+                .put_completed_object(&object_key, staged, stored.public.content_type.as_deref())
+                .await
+            {
+                Ok(written) => written,
+                Err(err @ StorageError::PolicyRejected { .. }) => {
+                    stored.public.status = UploadSessionStatus::Open;
+                    stored.completion_object_key = None;
+                    let _ = self.write_session(&request.session, &mut stored).await;
+                    return Err(err);
+                }
+                Err(err) => return Err(err),
+            };
             let object = self.object_ref(&stored, actual, written, checksum);
             stored.public.status = UploadSessionStatus::Complete;
             stored.public.next_offset = Some(actual);
             stored.object = Some(object.clone());
             stored.cleanup_pending = true;
-            self.write_session(&request.session, &stored).await?;
+            self.write_session(&request.session, &mut stored).await?;
             self.cleanup_staged_bytes(&request.session, &mut stored)
                 .await?;
             Ok(object)
@@ -800,20 +1075,29 @@ impl StorageBackend for GcsStorageBackend {
             let lock = self.session_lock(&session);
             let _cleanup = SessionLockCleanup::new(self, &session);
             let _guard = lock.lock().await;
-            let known_session = match self.read_session(&session).await {
-                Ok(stored) => {
+            let read_session = self.read_session_for_abort(&session).await?;
+            match &read_session {
+                AbortSessionRead::Known(stored) => {
                     ensure_owner(&ctx.actor, &stored.owner)?;
-                    true
+                    if stored.public.status == UploadSessionStatus::Completing {
+                        return Err(StorageError::UploadClosed {
+                            session: session.to_string(),
+                        });
+                    }
                 }
-                Err(StorageError::UnknownUploadSession { .. }) => false,
-                Err(err) => return Err(err),
-            };
+                AbortSessionRead::Missing | AbortSessionRead::Corrupt => {}
+            }
             let meta_key = self.layout.session_meta_key(&session);
             let bytes_key = self.layout.session_bytes_key(&session);
-            self.delete_object_if_exists(&bytes_key).await?;
-            if known_session {
-                self.delete_object_if_exists(&meta_key).await?;
-            }
+            let bytes_deleted = self.delete_object_if_exists(&bytes_key).await;
+            let meta_deleted = match read_session {
+                AbortSessionRead::Known(_) | AbortSessionRead::Corrupt => {
+                    self.delete_object_if_exists(&meta_key).await
+                }
+                AbortSessionRead::Missing => Ok(()),
+            };
+            bytes_deleted?;
+            meta_deleted?;
             Ok(())
         })
     }
@@ -935,16 +1219,62 @@ fn non_empty(value: String) -> Option<String> {
     }
 }
 
+fn positive_generation(generation: i64) -> Option<i64> {
+    if generation > 0 {
+        Some(generation)
+    } else {
+        None
+    }
+}
+
+fn decode_session_object(object: GcsObjectBytes) -> Result<StoredUploadSession, serde_json::Error> {
+    let generation_match = object.generation_match;
+    let mut stored: StoredUploadSession = serde_json::from_slice(&object.bytes)?;
+    stored.meta_generation = generation_match;
+    refresh_expired(&mut stored.public);
+    Ok(stored)
+}
+
+fn usize_from_u64(value: u64) -> StorageResult<usize> {
+    usize::try_from(value)
+        .map_err(|_| StorageError::policy_rejected("upload byte count exceeds host capacity"))
+}
+
+fn bytes_match_at(staged: &[u8], offset: u64, bytes: &[u8]) -> StorageResult<bool> {
+    let start = usize_from_u64(offset)?;
+    let end = start
+        .checked_add(bytes.len())
+        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
+    Ok(staged
+        .get(start..end)
+        .is_some_and(|existing| existing == bytes))
+}
+
 fn encode_uri_component(value: &str) -> String {
-    utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
+    utf8_percent_encode(value, GCS_JSON_PATH_ENCODE_SET).to_string()
+}
+
+fn map_session_write_error(error: StorageError) -> StorageError {
+    match error {
+        StorageError::PolicyRejected { .. } => {
+            StorageError::conflict("GCS upload session changed concurrently")
+        }
+        other => other,
+    }
 }
 
 fn is_gcs_precondition_failed(err: &google_cloud_storage::Error) -> bool {
     err.http_status_code().is_some_and(|status| status == 412)
+        || err
+            .status()
+            .is_some_and(|status| status.code == Code::FailedPrecondition)
 }
 
 fn is_gcs_not_found(err: &google_cloud_storage::Error) -> bool {
     err.http_status_code().is_some_and(|status| status == 404)
+        || err
+            .status()
+            .is_some_and(|status| status.code == Code::NotFound)
 }
 
 fn gcs_error(operation: &'static str, err: impl std::fmt::Display) -> StorageError {
@@ -960,6 +1290,14 @@ fn gcs_error(operation: &'static str, err: impl std::fmt::Display) -> StorageErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_control_uri_encoding_preserves_unreserved_chars() {
+        assert_eq!(
+            encode_uri_component("tenant-a/file.name_~"),
+            "tenant-a%2Ffile.name_~"
+        );
+    }
 
     #[test]
     fn prefix_layout_keeps_internal_objects_out_of_app_keyspace() {

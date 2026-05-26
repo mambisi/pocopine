@@ -15,10 +15,10 @@ use google_cloud_auth::credentials::anonymous::Builder as Anonymous;
 use google_cloud_storage::client::Storage;
 use pocopine_storage::{
     CompleteUpload, InitiateUpload, SafeObjectKey, StorageBackend, StorageContext, StorageError,
-    StorageKey, StorageResult, UploadPolicy, UploadSession, UploadStrategy,
+    StorageKey, StorageResult, UploadPolicy, UploadSession, UploadSessionStatus, UploadStrategy,
 };
 use pocopine_storage_gcs::GcsStorageBackend;
-use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::core::{wait::HttpWaitStrategy, ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::sync::OnceCell;
@@ -42,7 +42,11 @@ async fn fake_gcs_endpoint() -> String {
         .get_or_init(|| async {
             GenericImage::new(FAKE_GCS_IMAGE, FAKE_GCS_TAG)
                 .with_exposed_port(ContainerPort::Tcp(FAKE_GCS_PORT))
-                .with_wait_for(WaitFor::seconds(1))
+                .with_wait_for(WaitFor::http(
+                    HttpWaitStrategy::new("/storage/v1/b")
+                        .with_port(ContainerPort::Tcp(FAKE_GCS_PORT))
+                        .with_response_matcher(|response| response.status().as_u16() < 500),
+                ))
                 .with_cmd(["-scheme", "http", "-port", "4443", "-backend", "memory"])
                 .start()
                 .await
@@ -100,6 +104,15 @@ fn unique_bucket(prefix: &str) -> String {
 
 fn bucket_resource(bucket: &str) -> String {
     format!("projects/_/buckets/{bucket}")
+}
+
+fn session_object_key(backend: &GcsStorageBackend, session: &UploadSession, name: &str) -> String {
+    format!(
+        "{}/{}/{}",
+        backend.internal_prefix(),
+        session.id.as_str(),
+        name
+    )
 }
 
 fn ctx() -> StorageContext {
@@ -380,15 +393,201 @@ async fn complete_does_not_overwrite_existing_object_key() -> StorageResult<()> 
         .complete_upload(
             &ctx(),
             CompleteUpload {
-                session: session.id,
+                session: session.id.clone(),
                 checksum: None,
             },
         )
         .await;
     assert!(matches!(rejected, Err(StorageError::PolicyRejected { .. })));
+    let inspected = backend.inspect_upload(&ctx(), session.id.clone()).await?;
+    assert_eq!(inspected.status, UploadSessionStatus::Open);
+
+    let repeated = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await;
+    assert!(matches!(repeated, Err(StorageError::PolicyRejected { .. })));
     assert_eq!(
         object_bytes(&clients.storage, backend.bucket(), "files/hello.txt").await,
         b"existing"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duplicate_append_retry_after_staged_write_advances_metadata() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "retry").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate(&backend, Some(5)).await?;
+    let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
+    clients
+        .storage
+        .write_object(
+            backend.bucket_resource(),
+            bytes_key,
+            Bytes::from_static(b"hello"),
+        )
+        .send_unbuffered()
+        .await
+        .expect("seed staged retry bytes");
+
+    let updated = backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"hello"))
+        .await?;
+    assert_eq!(updated.next_offset, Some(5));
+    let inspected = backend.inspect_upload(&ctx(), session.id).await?;
+    assert_eq!(inspected.next_offset, Some(5));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inspect_truncates_rogue_staged_bytes_back_to_committed_offset() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "truncate").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate(&backend, Some(5)).await?;
+    let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
+    clients
+        .storage
+        .write_object(
+            backend.bucket_resource(),
+            bytes_key.clone(),
+            Bytes::from_static(b"hello"),
+        )
+        .send_unbuffered()
+        .await
+        .expect("seed rogue staged bytes");
+
+    let inspected = backend.inspect_upload(&ctx(), session.id).await?;
+    assert_eq!(inspected.next_offset, Some(0));
+    assert_eq!(
+        object_bytes(&clients.storage, backend.bucket(), &bytes_key).await,
+        b""
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_upload_length_does_not_promote_staged_bytes() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "set-length").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate(&backend, None).await?;
+    let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
+    clients
+        .storage
+        .write_object(
+            backend.bucket_resource(),
+            bytes_key,
+            Bytes::from_static(b"hello"),
+        )
+        .send_unbuffered()
+        .await
+        .expect("seed rogue staged bytes");
+
+    let updated = backend
+        .set_upload_length(&ctx(), session.id.clone(), 5)
+        .await?;
+    assert_eq!(updated.size, Some(5));
+    assert_eq!(updated.next_offset, Some(0));
+    let inspected = backend.inspect_upload(&ctx(), session.id).await?;
+    assert_eq!(inspected.next_offset, Some(0));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_removes_corrupt_upload_metadata_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "corrupt").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate(&backend, Some(5)).await?;
+    let meta_key = session_object_key(&backend, &session, "session.json");
+    clients
+        .storage
+        .write_object(
+            backend.bucket_resource(),
+            meta_key,
+            Bytes::from_static(b"{not-json"),
+        )
+        .send_unbuffered()
+        .await
+        .expect("corrupt session metadata");
+
+    backend.abort_upload(&ctx(), session.id.clone()).await?;
+    let inspected = backend.inspect_upload(&ctx(), session.id).await;
+    assert!(matches!(
+        inspected,
+        Err(StorageError::UnknownUploadSession { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_refuses_in_flight_completion_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "completing").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate(&backend, Some(5)).await?;
+    let meta_key = session_object_key(&backend, &session, "session.json");
+    let mut session_json: serde_json::Value =
+        serde_json::from_slice(&object_bytes(&clients.storage, backend.bucket(), &meta_key).await)
+            .expect("decode session json");
+    session_json["public"]["status"] = serde_json::json!("completing");
+    session_json["completion_object_key"] = serde_json::json!("files/hello.txt");
+    clients
+        .storage
+        .write_object(
+            backend.bucket_resource(),
+            meta_key,
+            Bytes::from(serde_json::to_vec(&session_json).expect("encode completing session json")),
+        )
+        .send_unbuffered()
+        .await
+        .expect("write completing session metadata");
+
+    let rejected = backend.abort_upload(&ctx(), session.id).await;
+    assert!(matches!(rejected, Err(StorageError::UploadClosed { .. })));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initiate_rejects_policy_above_proxy_cap_for_streaming_upload() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "policy-cap").await;
+    let backend = GcsStorageBackend::emulator(clients.storage, clients.endpoint, bucket)?
+        .with_max_proxy_upload_bytes(8)?;
+    let mut policy = policy()?.max_bytes(9);
+    policy.preferred_chunk_size = Some(4);
+
+    let rejected = backend
+        .initiate_upload(
+            &ctx(),
+            InitiateUpload {
+                scope: "files".to_string(),
+                storage_key: StorageKey::new(SafeObjectKey::parse("files/hello.txt")?),
+                file_name: "hello.txt".to_string(),
+                size: None,
+                content_type: Some("text/plain".to_string()),
+                metadata: BTreeMap::new(),
+                requested_strategy: UploadStrategy::Auto,
+                policy,
+            },
+        )
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(StorageError::PayloadTooLarge { limit: 8 })
+    ));
     Ok(())
 }

@@ -22,5 +22,5 @@ uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 google-cloud-auth = "1"
-testcontainers = "0.23"
+testcontainers = { version = "0.23", features = ["http_wait"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
