@@ -10,71 +10,43 @@
 //! replica or wait for a future provider-side multipart backend before using it
 //! for large or horizontally written uploads.
 
-use std::collections::{BTreeMap, HashMap};
+mod control;
+mod layout;
+mod state;
+mod util;
+
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
 
 use bytes::Bytes;
-use google_cloud_gax::error::rpc::Code;
-use google_cloud_gax::options::RequestOptionsBuilder;
 use google_cloud_storage::client::{Storage, StorageControl};
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use pocopine_storage::backend_common::{
     checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
-    ensure_upload_length_can_be_set, expires_at, refresh_expired, selected_strategy,
+    ensure_upload_length_can_be_set, expires_at, selected_strategy,
 };
 use pocopine_storage::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
 use pocopine_storage::{
-    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef, ObjectVisibility,
-    StorageActor, StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageKey,
-    StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy,
+    CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef, StorageBackend, StorageBoxFuture,
+    StorageContext, StorageError, StorageResult, TransferPlan, UploadSession, UploadSessionId,
+    UploadSessionStatus, UploadStrategy,
 };
 use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
+use crate::control::{GcsControl, GcsJsonControl};
+use crate::layout::{GcsKeyLayout, DEFAULT_INTERNAL_PREFIX};
+use crate::state::{
+    decode_session_object, AbortSessionRead, GcsObjectBytes, GcsObjectMetadata, GcsObjectWrite,
+    StoredUploadSession,
+};
+use crate::util::{
+    bytes_match_at, ensure_completable, gcs_error, is_gcs_not_found, is_gcs_precondition_failed,
+    map_session_write_error, non_empty, positive_generation, usize_from_u64,
+};
+
 const DEFAULT_BACKEND_NAME: &str = "gcs";
-const DEFAULT_INTERNAL_PREFIX: &str = "__pocopine/storage/sessions";
 const DEFAULT_MAX_PROXY_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SESSION_METADATA_BYTES: u64 = 256 * 1024;
-const JSON_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
-const GCS_JSON_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b'!')
-    .add(b'#')
-    .add(b'$')
-    .add(b'&')
-    .add(b'\'')
-    .add(b'(')
-    .add(b')')
-    .add(b'*')
-    .add(b'+')
-    .add(b',')
-    .add(b'/')
-    .add(b':')
-    .add(b';')
-    .add(b'=')
-    .add(b'?')
-    .add(b'@')
-    .add(b'[')
-    .add(b']');
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct StoredUploadSession {
-    public: UploadSession,
-    owner: StorageActor,
-    storage_key: StorageKey,
-    visibility: ObjectVisibility,
-    max_bytes: u64,
-    checksum_policy: ChecksumPolicy,
-    request_metadata: BTreeMap<String, String>,
-    object: Option<ObjectRef>,
-    #[serde(default)]
-    completion_object_key: Option<String>,
-    #[serde(default)]
-    cleanup_pending: bool,
-    #[serde(skip)]
-    meta_generation: Option<i64>,
-}
 
 /// Storage backend backed by Google Cloud Storage.
 ///
@@ -254,7 +226,7 @@ impl GcsStorageBackend {
     ) -> StorageResult<AbortSessionRead> {
         match self.read_session_object(session).await {
             Ok(object) => match decode_session_object(object) {
-                Ok(stored) => Ok(AbortSessionRead::Known(stored)),
+                Ok(stored) => Ok(AbortSessionRead::Known(Box::new(stored))),
                 Err(err) => {
                     tracing::warn!(
                         target: "pocopine.log",
@@ -647,131 +619,6 @@ impl GcsStorageBackend {
     }
 }
 
-struct GcsObjectBytes {
-    bytes: Vec<u8>,
-    etag: Option<String>,
-    generation: Option<String>,
-    generation_match: Option<i64>,
-    truncated: bool,
-}
-
-impl GcsObjectBytes {
-    fn empty() -> Self {
-        Self {
-            bytes: Vec::new(),
-            etag: None,
-            generation: None,
-            generation_match: None,
-            truncated: false,
-        }
-    }
-}
-
-struct GcsObjectMetadata {
-    size: Option<u64>,
-    etag: Option<String>,
-    generation: Option<String>,
-    generation_match: Option<i64>,
-}
-
-struct GcsObjectWrite {
-    etag: Option<String>,
-    generation: Option<String>,
-    generation_match: Option<i64>,
-}
-
-enum AbortSessionRead {
-    Known(StoredUploadSession),
-    Missing,
-    Corrupt,
-}
-
-#[derive(Clone)]
-enum GcsControl {
-    Google(StorageControl),
-    Json(GcsJsonControl),
-}
-
-impl GcsControl {
-    async fn delete_object(&self, layout: &GcsKeyLayout, key: &str) -> StorageResult<()> {
-        match self {
-            Self::Google(control) => delete_object_with_google_control(control, layout, key).await,
-            Self::Json(control) => control.delete_object(layout, key).await,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct GcsJsonControl {
-    endpoint: String,
-    http: reqwest::Client,
-}
-
-impl GcsJsonControl {
-    fn new(endpoint: String) -> StorageResult<Self> {
-        let endpoint = endpoint.trim().trim_end_matches('/').to_string();
-        if endpoint.is_empty() {
-            return Err(StorageError::policy_rejected(
-                "GCS emulator endpoint must not be empty",
-            ));
-        }
-        let http = reqwest::Client::builder()
-            .timeout(JSON_CONTROL_TIMEOUT)
-            .build()
-            .map_err(|err| {
-                StorageError::backend(format!("build GCS JSON control client: {err}"))
-            })?;
-        Ok(Self { endpoint, http })
-    }
-
-    async fn delete_object(&self, layout: &GcsKeyLayout, key: &str) -> StorageResult<()> {
-        let url = format!(
-            "{}/storage/v1/b/{}/o/{}",
-            self.endpoint,
-            encode_uri_component(layout.bucket()),
-            encode_uri_component(key)
-        );
-        let response = self
-            .http
-            .delete(url)
-            .send()
-            .await
-            .map_err(|err| gcs_error("delete object", err))?;
-        if response.status().as_u16() == 404 {
-            return Err(StorageError::unknown_upload_session(key.to_string()));
-        }
-        if !response.status().is_success() {
-            return Err(StorageError::backend(format!(
-                "GCS delete object: HTTP {}",
-                response.status()
-            )));
-        }
-        Ok(())
-    }
-}
-
-async fn delete_object_with_google_control(
-    control: &StorageControl,
-    layout: &GcsKeyLayout,
-    key: &str,
-) -> StorageResult<()> {
-    control
-        .delete_object()
-        .set_bucket(layout.bucket_resource())
-        .set_object(key)
-        .with_idempotency(true)
-        .send()
-        .await
-        .map_err(|err| {
-            if is_gcs_not_found(&err) {
-                StorageError::unknown_upload_session(key.to_string())
-            } else {
-                gcs_error("delete object", err)
-            }
-        })?;
-    Ok(())
-}
-
 struct SessionLockCleanup<'a> {
     backend: &'a GcsStorageBackend,
     session: UploadSessionId,
@@ -1100,273 +947,5 @@ impl StorageBackend for GcsStorageBackend {
             meta_deleted?;
             Ok(())
         })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct GcsKeyLayout {
-    bucket: String,
-    bucket_resource: String,
-    object_prefix: Option<String>,
-    internal_prefix_base: String,
-    internal_prefix: String,
-}
-
-impl GcsKeyLayout {
-    fn new(
-        bucket: String,
-        object_prefix: Option<String>,
-        internal_prefix: String,
-    ) -> StorageResult<Self> {
-        let bucket = bucket.trim().to_string();
-        if bucket.is_empty() {
-            return Err(StorageError::policy_rejected(
-                "GCS bucket name must not be empty",
-            ));
-        }
-        let bucket = bucket
-            .strip_prefix("projects/_/buckets/")
-            .unwrap_or(bucket.as_str())
-            .to_string();
-        if bucket.contains('/') {
-            return Err(StorageError::policy_rejected(
-                "GCS bucket name must be a bucket id or projects/_/buckets/{bucket}",
-            ));
-        }
-        let bucket_resource = format!("projects/_/buckets/{bucket}");
-        let object_prefix = object_prefix.and_then(normalize_prefix);
-        let internal_prefix_base = normalize_prefix(internal_prefix).ok_or_else(|| {
-            StorageError::policy_rejected("GCS internal prefix must not be empty")
-        })?;
-        let internal_prefix =
-            join_optional_prefix(object_prefix.as_deref(), internal_prefix_base.as_str());
-        Ok(Self {
-            bucket,
-            bucket_resource,
-            object_prefix,
-            internal_prefix_base,
-            internal_prefix,
-        })
-    }
-
-    fn with_prefix(&self, prefix: String) -> StorageResult<Self> {
-        let object_prefix = normalize_prefix(prefix);
-        Self::new(
-            self.bucket.clone(),
-            object_prefix,
-            self.internal_prefix_base.clone(),
-        )
-    }
-
-    fn with_internal_prefix(&self, prefix: String) -> StorageResult<Self> {
-        Self::new(
-            self.bucket.clone(),
-            self.object_prefix.clone(),
-            prefix.trim_matches('/').to_string(),
-        )
-    }
-
-    fn bucket_resource(&self) -> &str {
-        &self.bucket_resource
-    }
-
-    fn bucket(&self) -> &str {
-        &self.bucket
-    }
-
-    fn object_key(&self, key: &str) -> String {
-        join_optional_prefix(self.object_prefix.as_deref(), key)
-    }
-
-    fn session_meta_key(&self, session: &UploadSessionId) -> String {
-        format!("{}/{}/session.json", self.internal_prefix, session.as_str())
-    }
-
-    fn session_bytes_key(&self, session: &UploadSessionId) -> String {
-        format!("{}/{}/bytes.tmp", self.internal_prefix, session.as_str())
-    }
-}
-
-fn ensure_completable(session: &UploadSession) -> StorageResult<()> {
-    if session.status == UploadSessionStatus::Completing {
-        Ok(())
-    } else {
-        ensure_open(session)
-    }
-}
-
-fn normalize_prefix(prefix: String) -> Option<String> {
-    let prefix = prefix.trim().trim_matches('/');
-    if prefix.is_empty() {
-        None
-    } else {
-        Some(prefix.to_string())
-    }
-}
-
-fn join_optional_prefix(prefix: Option<&str>, key: &str) -> String {
-    match prefix {
-        Some(prefix) => format!("{prefix}/{}", key.trim_start_matches('/')),
-        None => key.trim_start_matches('/').to_string(),
-    }
-}
-
-fn non_empty(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-fn positive_generation(generation: i64) -> Option<i64> {
-    if generation > 0 {
-        Some(generation)
-    } else {
-        None
-    }
-}
-
-fn decode_session_object(object: GcsObjectBytes) -> Result<StoredUploadSession, serde_json::Error> {
-    let generation_match = object.generation_match;
-    let mut stored: StoredUploadSession = serde_json::from_slice(&object.bytes)?;
-    stored.meta_generation = generation_match;
-    refresh_expired(&mut stored.public);
-    Ok(stored)
-}
-
-fn usize_from_u64(value: u64) -> StorageResult<usize> {
-    usize::try_from(value)
-        .map_err(|_| StorageError::policy_rejected("upload byte count exceeds host capacity"))
-}
-
-fn bytes_match_at(staged: &[u8], offset: u64, bytes: &[u8]) -> StorageResult<bool> {
-    let start = usize_from_u64(offset)?;
-    let end = start
-        .checked_add(bytes.len())
-        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-    Ok(staged
-        .get(start..end)
-        .is_some_and(|existing| existing == bytes))
-}
-
-fn encode_uri_component(value: &str) -> String {
-    utf8_percent_encode(value, GCS_JSON_PATH_ENCODE_SET).to_string()
-}
-
-fn map_session_write_error(error: StorageError) -> StorageError {
-    match error {
-        StorageError::PolicyRejected { .. } => {
-            StorageError::conflict("GCS upload session changed concurrently")
-        }
-        other => other,
-    }
-}
-
-fn is_gcs_precondition_failed(err: &google_cloud_storage::Error) -> bool {
-    err.http_status_code().is_some_and(|status| status == 412)
-        || err
-            .status()
-            .is_some_and(|status| status.code == Code::FailedPrecondition)
-}
-
-fn is_gcs_not_found(err: &google_cloud_storage::Error) -> bool {
-    err.http_status_code().is_some_and(|status| status == 404)
-        || err
-            .status()
-            .is_some_and(|status| status.code == Code::NotFound)
-}
-
-fn gcs_error(operation: &'static str, err: impl std::fmt::Display) -> StorageError {
-    tracing::error!(
-        target: "pocopine.log",
-        event_name = "pocopine.storage.gcs_error",
-        operation,
-        error = %err,
-    );
-    StorageError::backend(format!("GCS {operation}: {err}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn json_control_uri_encoding_preserves_unreserved_chars() {
-        assert_eq!(
-            encode_uri_component("tenant-a/file.name_~"),
-            "tenant-a%2Ffile.name_~"
-        );
-    }
-
-    #[test]
-    fn prefix_layout_keeps_internal_objects_out_of_app_keyspace() {
-        let layout = GcsKeyLayout::new(
-            "bucket".to_string(),
-            Some("tenant-a/".to_string()),
-            DEFAULT_INTERNAL_PREFIX.to_string(),
-        )
-        .unwrap();
-        let session = UploadSessionId::new("session-1").unwrap();
-
-        assert_eq!(
-            layout.object_key("files/avatar.png"),
-            "tenant-a/files/avatar.png"
-        );
-        assert_eq!(
-            layout.session_meta_key(&session),
-            "tenant-a/__pocopine/storage/sessions/session-1/session.json"
-        );
-        assert_eq!(
-            layout.session_bytes_key(&session),
-            "tenant-a/__pocopine/storage/sessions/session-1/bytes.tmp"
-        );
-        assert_eq!(layout.bucket_resource(), "projects/_/buckets/bucket");
-    }
-
-    #[test]
-    fn prefix_and_internal_prefix_are_order_independent() {
-        let first = GcsKeyLayout::new(
-            "bucket".to_string(),
-            None,
-            DEFAULT_INTERNAL_PREFIX.to_string(),
-        )
-        .unwrap()
-        .with_internal_prefix("custom/sessions".to_string())
-        .unwrap()
-        .with_prefix("tenant-a".to_string())
-        .unwrap();
-        let second = GcsKeyLayout::new(
-            "bucket".to_string(),
-            None,
-            DEFAULT_INTERNAL_PREFIX.to_string(),
-        )
-        .unwrap()
-        .with_prefix("tenant-a".to_string())
-        .unwrap()
-        .with_internal_prefix("custom/sessions".to_string())
-        .unwrap();
-
-        assert_eq!(first.internal_prefix, "tenant-a/custom/sessions");
-        assert_eq!(second.internal_prefix, first.internal_prefix);
-    }
-
-    #[test]
-    fn accepts_bucket_resource_name() {
-        let layout = GcsKeyLayout::new(
-            "projects/_/buckets/my-bucket".to_string(),
-            None,
-            DEFAULT_INTERNAL_PREFIX.to_string(),
-        )
-        .unwrap();
-        assert_eq!(layout.bucket, "my-bucket");
-        assert_eq!(layout.bucket_resource, "projects/_/buckets/my-bucket");
-    }
-
-    #[test]
-    fn empty_bucket_is_rejected() {
-        assert!(
-            GcsKeyLayout::new("  ".to_string(), None, DEFAULT_INTERNAL_PREFIX.to_string()).is_err()
-        );
     }
 }
