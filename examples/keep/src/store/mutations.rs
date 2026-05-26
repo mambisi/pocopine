@@ -172,6 +172,8 @@ impl KeepStore {
             op: pocopine_sync::SyncOp::Upsert,
             base_version,
             payload: note.clone(),
+
+            migration_outcome: None,
         };
         let optimistic = pocopine_sync::SyncRow::new(note.id.clone(), note)?;
 
@@ -204,6 +206,8 @@ impl KeepStore {
             op: pocopine_sync::SyncOp::Delete,
             base_version,
             payload: (),
+
+            migration_outcome: None,
         };
 
         client
@@ -235,6 +239,8 @@ impl KeepStore {
             op: pocopine_sync::SyncOp::Upsert,
             base_version: None,
             payload: tag.clone(),
+
+            migration_outcome: None,
         };
         let optimistic = pocopine_sync::SyncRow::new(tag.id.clone(), tag)?;
 

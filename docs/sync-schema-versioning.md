@@ -118,6 +118,53 @@ shape is documented above; mutate it in place and return.
 | Field rename only, no semantic change | **`migrate_with`** that just renames |
 | Backward-incompatible deletion of a field | **`migrate_with` that returns `Err`** for those drafts and use the drop-default for the rest. The errors lose the drafts; that's correct. |
 
+## Out-of-tree sources
+
+If you implement `SyncStreamSource` directly (not through
+`CrudResource`), you become responsible for two contract points:
+
+1. **Use the migration sidecar.** The framework's `push_handler`
+   attaches the migration result to each `ClientMutation` as
+   `migration_outcome: Option<MigrationOutcome<Value>>`. Call
+   `mutation.take_processing_payload()` to get the payload to apply
+   — it returns `Ok(value)` (migrated or original) or `Err(reason)`
+   for a migrator-rejected mutation. The mutation's `payload` field
+   stays the ORIGINAL wire value; use it for your idempotency log
+   key. NEVER read `mutation.payload` for the actual write — that
+   would silently bypass any registered migrator.
+
+2. **Check the idempotency log BEFORE consuming the migration
+   result.** A retry of a previously-accepted mutation should
+   succeed even when the current migrator now rejects (or panics)
+   on the same inputs. The accepted-log lookup uses
+   `mutation.payload` (original); only mutations not in the log
+   need their `take_processing_payload()` outcome inspected.
+
+The CRUD `push_mutations` (and its transactional sibling) implement
+both points; copy the pattern if you write a custom source.
+
+## Migration cannot change the envelope
+
+`migrate_payload` migrates the `serde_json::Value` payload only —
+it cannot change `ClientMutation.key`, `op`, or `base_version`.
+This matters when a schema bump renames row IDs (e.g. moving from
+`"42"` to `"tenant:42"`):
+
+* The migrator can update the embedded `id` inside the payload, but
+  the outer `key` (set by the client at queue-time) stays at the v1
+  form.
+* CRUD validates `payload.id().to_row_key() == mutation.key` and
+  rejects the mismatch with a typed `row key does not match payload
+  id` reason.
+
+The recommended approach for ID-shape changes: bump
+`schema_version` and rely on the **default drop-the-cache** path.
+Local rows are rebuilt from canonical via a fresh `/pull`; pending
+mutations queued under the old ID shape are dropped. If you must
+preserve queued mutations across an ID rename, you'd need a custom
+`SyncStreamSource::push` that re-derives the key from the migrated
+payload before delegating to your store.
+
 ## Migrator caveats
 
 A registered `migrate_with` function runs with these constraints:

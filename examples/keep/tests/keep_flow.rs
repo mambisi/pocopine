@@ -148,6 +148,8 @@ async fn push_note(
             op: SyncOp::Upsert,
             base_version: None,
             payload: note,
+
+            migration_outcome: None,
         }],
     );
     let response = app
@@ -179,6 +181,8 @@ async fn push_tag(app: &pocopine_server::axum::Router, tag: KeepTag) -> SyncPush
             op: SyncOp::Upsert,
             base_version: None,
             payload: tag,
+
+            migration_outcome: None,
         }],
     );
     let response = app

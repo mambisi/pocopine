@@ -700,10 +700,14 @@ where
             // `payload_value` is the CLIENT'S WIRE PAYLOAD — used as the
             // idempotency-log key so retries of the same wire payload
             // hit `accepted.matches` regardless of whether (or how)
-            // `push_handler` migrated the payload server-side.
+            // the framework's `push_handler` migrated the payload.
             // `processing_payload` is what we actually deserialize and
-            // hand to the source — the migrated value if `push_handler`
-            // ran a schema migration, else identical to `payload_value`.
+            // hand to the source — the migrated value if migration
+            // ran successfully, else identical to `payload_value`.
+            // The migration outcome (`Result`) is consumed AFTER the
+            // idempotency-log lookup so a retry of a previously-
+            // accepted mutation succeeds even when the current
+            // migrator now rejects (or panics) on the same inputs.
             let processing_payload = mutation.take_processing_payload();
             let base_version = mutation.base_version;
             let payload_value = mutation.payload;
@@ -725,6 +729,21 @@ where
                 }
                 continue;
             }
+
+            // Not in the idempotency log — now consult the migration
+            // outcome. A migration failure on a non-idempotent mutation
+            // surfaces as a per-mutation rejection here.
+            let processing_payload = match processing_payload {
+                Ok(value) => value,
+                Err(reason) => {
+                    response.rejected.push(SyncRejectedMutation {
+                        mutation_id,
+                        key,
+                        reason,
+                    });
+                    continue;
+                }
+            };
 
             let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
                 processing_payload,
@@ -994,59 +1013,30 @@ where
         response.collection = Some(self.collection.clone());
 
         for mut mutation in request.mutations {
+            // Defer migration consumption + deserialization + envelope
+            // validation INSIDE the transaction so the idempotency-log
+            // check can accept a previously-accepted mutation even
+            // when the current migrator now rejects (or panics) on
+            // the same inputs — same invariant the non-transactional
+            // path enforces above.
             let mutation_id = mutation.id.clone();
             let key = mutation.key.clone();
             let op = mutation.op;
-            // `payload_value` = original wire payload (idempotency key).
-            // `processing_payload` = migrated value if `push_handler`
-            // ran a schema migration, else identical to wire payload.
-            let processing_payload = mutation.take_processing_payload();
+            let processing_payload_result = mutation.take_processing_payload();
             let base_version = mutation.base_version;
             let payload_value = mutation.payload;
-
-            let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
-                processing_payload,
-            ) {
-                Ok(payload) => payload,
-                Err(err) => {
-                    response.rejected.push(SyncRejectedMutation {
-                        mutation_id,
-                        key,
-                        reason: format!("invalid CRUD mutation payload: {err}"),
-                    });
-                    continue;
-                }
-            };
-
-            if payload.sync_op() != op {
-                response.rejected.push(SyncRejectedMutation {
-                    mutation_id,
-                    key,
-                    reason: "CRUD payload does not match sync operation".to_string(),
-                });
-                continue;
-            }
-
-            let expected_key = payload.id().to_row_key()?;
-            if key.as_ref() != Some(&expected_key) {
-                response.rejected.push(SyncRejectedMutation {
-                    mutation_id,
-                    key,
-                    reason: "CRUD mutation row key does not match payload id".to_string(),
-                });
-                continue;
-            }
 
             match self
                 .apply_transactional_payload(
                     &ctx,
                     TransactionalCrudMutation {
                         mutation_id,
-                        key: expected_key,
+                        wire_key: key,
                         op,
                         base_version,
                         payload_value,
-                        payload,
+                        processing_payload_result,
+                        _marker: std::marker::PhantomData,
                     },
                 )
                 .await?
@@ -1074,28 +1064,32 @@ where
     ) -> SyncResult<CrudApplyOutcome<S::Row>> {
         let TransactionalCrudMutation {
             mutation_id,
-            key,
+            wire_key,
             op,
             base_version,
             payload_value,
-            payload,
+            processing_payload_result,
+            _marker,
         } = mutation;
         let mut tx = self.transaction_runner.begin().await?;
         let result = async {
             let accepted = CrudAcceptedMutation::new(
                 mutation_id.clone(),
                 op,
-                Some(key.clone()),
+                wire_key.clone(),
                 payload_value.clone(),
             );
 
+            // Idempotency check FIRST — before consuming the migration
+            // outcome. A retry of an already-accepted mutation must
+            // succeed even when the current migrator now rejects.
             match self
                 .mutation_log
                 .reserve_accepted_mutation_in_tx(&mut tx, ctx, accepted)
                 .await?
             {
                 CrudMutationReservation::AlreadyAccepted(accepted) => {
-                    if accepted.matches(op, Some(&key), &payload_value) {
+                    if accepted.matches(op, wire_key.as_ref(), &payload_value) {
                         return Ok(CrudTransactionDecision::Commit(
                             CrudApplyOutcome::Accepted {
                                 mutation_id,
@@ -1107,7 +1101,7 @@ where
                     return Ok(CrudTransactionDecision::Commit(CrudApplyOutcome::Rejected(
                         SyncRejectedMutation {
                             mutation_id,
-                            key: Some(key),
+                            key: wire_key,
                             reason: "mutation id was already accepted with different contents"
                                 .to_string(),
                         },
@@ -1116,8 +1110,78 @@ where
                 CrudMutationReservation::Reserved => {}
             }
 
+            // Fresh reservation — now consume the migration outcome.
+            // A failure here rolls back the reservation so a retry
+            // doesn't see a phantom log entry.
+            let processing_payload = match processing_payload_result {
+                Ok(value) => value,
+                Err(reason) => {
+                    return Ok(CrudTransactionDecision::Rollback(
+                        CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                            mutation_id,
+                            key: wire_key,
+                            reason,
+                        }),
+                    ));
+                }
+            };
+
+            let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
+                processing_payload,
+            ) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    return Ok(CrudTransactionDecision::Rollback(
+                        CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                            mutation_id,
+                            key: wire_key,
+                            reason: format!("invalid CRUD mutation payload: {err}"),
+                        }),
+                    ));
+                }
+            };
+
+            if payload.sync_op() != op {
+                return Ok(CrudTransactionDecision::Rollback(
+                    CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                        mutation_id,
+                        key: wire_key,
+                        reason: "CRUD payload does not match sync operation".to_string(),
+                    }),
+                ));
+            }
+
+            let expected_key = match payload.id().to_row_key() {
+                Ok(key) => key,
+                Err(err) => {
+                    return Ok(CrudTransactionDecision::Rollback(
+                        CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                            mutation_id,
+                            key: wire_key,
+                            reason: format!("CRUD mutation payload id is invalid: {err}"),
+                        }),
+                    ));
+                }
+            };
+            if wire_key.as_ref() != Some(&expected_key) {
+                return Ok(CrudTransactionDecision::Rollback(
+                    CrudApplyOutcome::Rejected(SyncRejectedMutation {
+                        mutation_id,
+                        key: wire_key,
+                        reason: "CRUD mutation row key does not match payload id".to_string(),
+                    }),
+                ));
+            }
+
             let outcome = self
-                .apply_payload_in_tx(&mut tx, ctx, mutation_id, key, base_version, payload)
+                .apply_payload_in_tx(
+                    &mut tx,
+                    ctx,
+                    mutation_id,
+                    expected_key,
+                    base_version,
+                    payload,
+                )
                 .await?;
 
             if matches!(outcome, CrudApplyOutcome::Accepted { .. }) {
@@ -1263,11 +1327,24 @@ enum CrudTransactionDecision<Row> {
 
 struct TransactionalCrudMutation<Id, Draft> {
     mutation_id: MutationId,
-    key: RowKey,
+    /// Wire-supplied key (may be `None` for unkeyed mutations); the
+    /// transactional applier validates this against the payload's
+    /// id-derived key only AFTER the idempotency-log check, so a
+    /// previously-accepted mutation isn't re-rejected on a
+    /// post-migration key mismatch.
+    wire_key: Option<RowKey>,
     op: SyncOp,
     base_version: Option<RowVersion>,
+    /// Original wire payload — keyed against the idempotency log.
     payload_value: Value,
-    payload: CrudMutationPayload<Id, Draft>,
+    /// Migration outcome: `Ok(value)` to deserialize and apply (the
+    /// migrated value, or the original if no migration ran),
+    /// `Err(reason)` if the migrator rejected. Consumed INSIDE the
+    /// tx only after the idempotency-log check, so a retry of an
+    /// already-accepted mutation succeeds regardless of migrator
+    /// state at retry time.
+    processing_payload_result: Result<Value, String>,
+    _marker: std::marker::PhantomData<fn() -> (Id, Draft)>,
 }
 
 fn row_to_value<Row>(row: SyncRow<Row>) -> SyncResult<SyncRow<Value>>
@@ -1737,7 +1814,7 @@ mod tests {
             op: mutation.op,
             base_version: mutation.base_version,
             payload: serde_json::to_value(mutation.payload).unwrap(),
-            migrated_payload: None,
+            migration_outcome: None,
         }
     }
 

@@ -404,6 +404,16 @@ impl<T> SyncPullResponse<T> {
 
 /// Client mutation envelope. The first slice defines the wire format;
 /// concrete mutation application belongs to stream sources.
+///
+/// The two server-side sidecars (`migrated_payload`, `migration_error`)
+/// are set by the framework's `push_handler` when a stale-schema
+/// request runs through `SyncStreamSource::migrate_payload`. They are
+/// `#[serde(skip)]`, never on the wire, and always `None` for
+/// client-built mutations. Sources consume them via
+/// `take_processing_payload` AFTER consulting their idempotency log
+/// against the ORIGINAL `payload` — so a retry of an
+/// already-accepted mutation succeeds even when the registered
+/// migrator now rejects (or panics) on the same inputs.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]
 pub struct ClientMutation<M> {
@@ -412,15 +422,29 @@ pub struct ClientMutation<M> {
     pub op: SyncOp,
     pub base_version: Option<RowVersion>,
     pub payload: M,
-    /// Server-side sidecar set by the framework's `push_handler` when a
-    /// stale-schema request is migrated via
-    /// `SyncStreamSource::migrate_payload`. Stays `None` on the wire
-    /// (via `#[serde(skip)]`) and `None` for client-built mutations.
-    /// Stream sources MUST process `migrated_payload.as_ref().unwrap_or(&payload)`
-    /// but store the original `payload` for idempotency tracking — see
-    /// `processing_payload` / `original_payload` helpers.
+    /// Server-side sidecar: the result of `migrate_payload` on this
+    /// mutation. `Some(Ok(value))` is the migrated payload to apply;
+    /// `Some(Err(reason))` is a migration failure to surface IF the
+    /// mutation isn't already idempotent-accepted; `None` means no
+    /// migration was needed (request schema matches server schema).
     #[serde(skip)]
-    pub migrated_payload: Option<M>,
+    pub migration_outcome: Option<MigrationOutcome<M>>,
+}
+
+/// Outcome of `migrate_payload` for one mutation, carried as a
+/// server-only sidecar inside `ClientMutation`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MigrationOutcome<M> {
+    /// Successful migration: this is the payload to deserialize and
+    /// apply (the original wire payload is preserved in `payload`
+    /// for idempotency-log comparison).
+    Migrated(M),
+    /// Migration failed. The reason should surface as a per-mutation
+    /// rejection — but ONLY if the source's idempotency log doesn't
+    /// already have this mutation_id+payload as accepted. A retry of
+    /// a previously-accepted mutation should always succeed
+    /// regardless of whether the current migrator would accept it.
+    Failed { reason: String },
 }
 
 impl<M> ClientMutation<M> {
@@ -432,31 +456,30 @@ impl<M> ClientMutation<M> {
             op,
             base_version: None,
             payload,
-            migrated_payload: None,
+            migration_outcome: None,
         }
     }
 
-    /// Returns a reference to the payload the source should DESERIALIZE
-    /// and APPLY: the migrated payload if `push_handler` ran a schema
-    /// migration, otherwise the original wire payload. Use this for the
-    /// actual write path.
-    pub fn processing_payload(&self) -> &M {
-        self.migrated_payload.as_ref().unwrap_or(&self.payload)
-    }
-
-    /// Take the payload the source should apply (migrated if present,
-    /// else original), consuming the sidecar. Stream-source `push`
-    /// implementations call this when they need an owned payload to
-    /// feed into deserialization. The mutation's `payload` field still
-    /// holds the original wire shape, so idempotency comparisons /
-    /// mutation-log writes can key on `payload` (NOT this return).
-    pub fn take_processing_payload(&mut self) -> M
+    /// Take the payload the source should apply, consuming the
+    /// migration sidecar. Returns:
+    ///
+    /// * `Ok(value)` — the value to deserialize and apply (migrated
+    ///   if migration ran successfully, otherwise the original wire
+    ///   payload).
+    /// * `Err(reason)` — the migrator rejected this mutation. The
+    ///   caller must already have checked its idempotency log
+    ///   against `mutation.payload` — only mutations NOT in the log
+    ///   should surface this error.
+    ///
+    /// `mutation.payload` is left intact for idempotency comparisons.
+    pub fn take_processing_payload(&mut self) -> Result<M, String>
     where
         M: Clone,
     {
-        match self.migrated_payload.take() {
-            Some(migrated) => migrated,
-            None => self.payload.clone(),
+        match self.migration_outcome.take() {
+            Some(MigrationOutcome::Migrated(value)) => Ok(value),
+            Some(MigrationOutcome::Failed { reason }) => Err(reason),
+            None => Ok(self.payload.clone()),
         }
     }
 
@@ -615,7 +638,7 @@ impl<M> ClientMutationDraft<M> {
             op: self.op,
             base_version: self.base_version,
             payload: self.payload,
-            migrated_payload: None,
+            migration_outcome: None,
         }
     }
 }

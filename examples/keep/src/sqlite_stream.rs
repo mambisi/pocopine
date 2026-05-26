@@ -864,6 +864,8 @@ mod tests {
             op: SyncOp::Upsert,
             base_version: None,
             payload: serde_json::to_value(test_note("note_1", "First")).unwrap(),
+
+            migration_outcome: None,
         };
 
         stream

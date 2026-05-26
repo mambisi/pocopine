@@ -653,7 +653,7 @@ async fn pending_mutation_records(stream: SyncStreamName) -> SyncResult<Vec<Loca
                 op: op_from_str(&required_string(&row, "op")?)?,
                 payload,
 
-                migrated_payload: None,
+                migration_outcome: None,
             },
             optimistic_row,
         });
