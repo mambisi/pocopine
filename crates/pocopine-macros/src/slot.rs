@@ -391,30 +391,98 @@ pub(crate) fn emit_slot_traits(
 
 // ── RFC 084 — typed slot props validation ────────────────────────
 
-/// Emit `const _: () = { ... }` blocks that validate every typed
-/// slot's publication keys against the declared `props = T`'s
-/// `#[prop]` field set.
+/// Output of [`emit_slot_props_validation`].
 ///
-/// For each `#[slot(name = "X", props = T)]` declared on the
-/// component, the AST is scanned for matching `<slot name="X">`
-/// elements (default slots match a bare `<slot>`). The element's
-/// `:LHS=...` publications become a `&[&str]` const that
-/// [`pocopine_core::props::str_slice_set_eq_const`] compares
-/// against `<T>::__POC_PROP_LEAVES`. Each individual `:LHS=`
-/// also gets a per-key existence check so the error message can
-/// quote the offending key verbatim.
+/// `tokens` are spliced into the `#[component]` macro's output
+/// as `const _: () = { … }` blocks. `template_edits` are
+/// byte-level inserts applied to the template source BEFORE
+/// `compile_template_static` runs — used by iterated mode to
+/// inject `:VAR="VAR"` publications onto `<slot>` elements that
+/// sit inside a `pp-for`, so the runtime's existing publication
+/// path picks them up without a runtime-side change.
+pub(crate) struct SlotValidationEmit {
+    pub tokens: TokenStream,
+    pub template_edits: Vec<TemplateEdit>,
+}
+
+/// Byte-level insert into the template source. Mirrors the
+/// shape of [`crate::for_plan::TemplateStamp`] so the application
+/// strategy stays consistent across macro passes.
+pub(crate) struct TemplateEdit {
+    pub insert_at: usize,
+    pub text: String,
+}
+
+/// `pp-for` context flowing down through the AST walk. Captured
+/// when a `pp-for="X in EXPR"` is parsed; consulted at each
+/// `<slot>` to decide iterated-mode dispatch.
+#[derive(Clone)]
+struct ForContext {
+    iter_var: String,
+    /// Bare field-path RHS of `pp-for="X in <RHS>"`. v1 only
+    /// supports a single identifier (a struct field). Anything
+    /// else stays `None` and forces iterated-mode-needing slots
+    /// to emit a "use static mode" compile error.
+    iter_field: Option<String>,
+}
+
+fn extract_for_context(el: &crate::template_parser::Element) -> Option<ForContext> {
+    let raw = el.attrs.iter().find_map(|(k, v)| {
+        if k == "pp-for" {
+            Some(v.as_str())
+        } else {
+            None
+        }
+    })?;
+    // Shape: `X in EXPR`. Match the literal ` in ` separator.
+    let (var, expr) = raw.split_once(" in ")?;
+    let iter_var = var.trim().to_string();
+    let expr = expr.trim();
+    // v1 — only bare-ident RHS qualifies for iterated-mode
+    // type inference. `pp-for="row in self.rows.iter()"`-style
+    // expressions get `iter_field = None` and the slot is
+    // forced into static mode (with an actionable error).
+    let iter_field =
+        if !expr.is_empty() && expr.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            Some(expr.to_string())
+        } else {
+            None
+        };
+    Some(ForContext {
+        iter_var,
+        iter_field,
+    })
+}
+
+/// Per-slot resolution: which mode, and the enclosing `pp-for`
+/// context (if any). Populated by the AST walk.
+struct SlotMatch<'a> {
+    el: &'a crate::template_parser::Element,
+    for_ctx: Option<ForContext>,
+}
+
+/// Emit `const _: () = { … }` blocks that validate every typed
+/// slot's publication shape AND collect byte-level template
+/// edits for iterated-mode auto-publication. Per RFC 084.
 ///
-/// **v1 scope (Phase 1 of RFC 084):** static-mode only. A
-/// `<slot>` sitting inside a `pp-for` (the iterated-mode case)
-/// is still validated as static here; Phase 2 layers the
-/// auto-publish + iteration-type assertion on top. Both modes
-/// share the same `T: Props` boundary so Phase 2 doesn't have
-/// to revisit it.
+/// Mode resolution per `<slot>` element:
+///
+/// * Any `:LHS=…` attr → **static mode** (publications must
+///   cover every `#[prop]` field on `T`).
+/// * No `:LHS=…` AND a `pp-for` ancestor with a bare-ident RHS
+///   → **iterated mode** (auto-publish the iteration variable;
+///   emit a Rust type assertion verifying the iter item
+///   matches `T`).
+/// * No `:LHS=…` AND no usable `pp-for` ancestor → **static
+///   mode with empty publication** (errors if `T` has any
+///   `#[prop]` fields).
 pub(crate) fn emit_slot_props_validation(
     ast: &crate::template_parser::TemplateAst,
     slots: &[SlotDecl],
-) -> TokenStream {
+) -> SlotValidationEmit {
     let mut out = TokenStream::new();
+    let mut template_edits = Vec::new();
+
     for decl in slots {
         let Some(props_ty) = decl.props.as_ref() else {
             continue;
@@ -436,11 +504,12 @@ pub(crate) fn emit_slot_props_validation(
         };
 
         // Scan every element in the template AST for matching
-        // `<slot>` elements. A `<slot>` with no `name` attribute
-        // is the default slot.
-        let mut found: Vec<&crate::template_parser::Element> = Vec::new();
+        // `<slot>` elements, threading the nearest enclosing
+        // `pp-for` context as we descend. A `<slot>` with no
+        // `name` attribute is the default slot.
+        let mut found: Vec<SlotMatch<'_>> = Vec::new();
         for root in &ast.roots {
-            collect_slot_elements(root, &target_name, &mut found);
+            collect_slot_matches(root, &target_name, None, &mut found);
         }
 
         if found.is_empty() {
@@ -461,42 +530,149 @@ pub(crate) fn emit_slot_props_validation(
             continue;
         }
 
-        // Phase 1: every found `<slot>` element is treated as
-        // static-mode. Phase 2 layers iterated-mode dispatch
-        // (mode resolved per element by `:LHS=` presence and
-        // `pp-for` ancestry).
-        for el in &found {
-            emit_static_publication_validation(&target_name, props_ty, &props_ty_str, el, &mut out);
+        for SlotMatch { el, for_ctx } in &found {
+            let has_publications = el.attrs.iter().any(|(k, _)| k.starts_with(':'));
+            if !has_publications && for_ctx.is_some() {
+                emit_iterated_mode(
+                    &target_name,
+                    props_ty,
+                    &props_ty_str,
+                    el,
+                    for_ctx.as_ref().unwrap(),
+                    &mut out,
+                    &mut template_edits,
+                );
+            } else {
+                emit_static_publication_validation(
+                    &target_name,
+                    props_ty,
+                    &props_ty_str,
+                    el,
+                    &mut out,
+                );
+            }
         }
     }
-    out
+
+    SlotValidationEmit {
+        tokens: out,
+        template_edits,
+    }
 }
 
-/// Recursive walk: collect every `<slot>` element whose `name`
-/// matches `target_name` (or has no `name` attribute when
-/// `target_name == "default"`).
-fn collect_slot_elements<'a>(
+/// Recursive walk with `pp-for` ancestor tracking. Records every
+/// matching `<slot>` paired with the nearest enclosing
+/// `pp-for`'s context (or `None` if none).
+fn collect_slot_matches<'a>(
     node: &'a crate::template_parser::Node,
     target_name: &str,
-    out: &mut Vec<&'a crate::template_parser::Element>,
+    enclosing_for: Option<ForContext>,
+    out: &mut Vec<SlotMatch<'a>>,
 ) {
     let crate::template_parser::Node::Element(el) = node else {
         return;
     };
+    // If THIS element has pp-for, its context applies to its
+    // descendants (replacing the enclosing one, if any).
+    let descend_ctx = extract_for_context(el).or_else(|| enclosing_for.clone());
+
     if el.tag == "slot" {
         let name_attr = el.attrs.iter().find(|(k, _)| k == "name");
         let this_name = name_attr.map(|(_, v)| v.as_str()).unwrap_or("default");
         if this_name == target_name {
-            out.push(el);
+            out.push(SlotMatch {
+                el,
+                for_ctx: enclosing_for.clone(),
+            });
         }
-        // A `<slot>` is a leaf in the rendered DOM but
-        // syntactically may have children (fallback content);
-        // we still walk to be safe — nested `<slot>` inside
-        // fallback isn't a real pattern but the recursion is
-        // cheap.
     }
     for child in &el.children {
-        collect_slot_elements(child, target_name, out);
+        collect_slot_matches(child, target_name, descend_ctx.clone(), out);
+    }
+}
+
+/// Emit the iterated-mode artifacts for one `<slot>` element:
+/// the Rust type assertion that the iter item matches `T`, plus
+/// a template edit that injects `:VAR="VAR"` into the slot's
+/// opening tag so the runtime sees the auto-publication.
+fn emit_iterated_mode(
+    target_name: &str,
+    props_ty: &Path,
+    props_ty_str: &str,
+    el: &crate::template_parser::Element,
+    for_ctx: &ForContext,
+    out: &mut TokenStream,
+    template_edits: &mut Vec<TemplateEdit>,
+) {
+    // No usable iteration source → emit a directive error and
+    // skip the type assertion / edit. The author should either
+    // simplify the `pp-for` expression or write `<slot :LHS=…>`
+    // attributes explicitly (static mode).
+    let Some(iter_field) = for_ctx.iter_field.as_deref() else {
+        let msg = format!(
+            "pocopine: slot `{target_name}` sits inside a `pp-for` whose iteration source isn't a bare field path — iterated-mode auto-publish needs `pp-for=\"X in field_name\"`. Either simplify the pp-for expression, or write the publications explicitly on the `<slot>` element (static mode)."
+        );
+        out.extend(quote! { ::core::compile_error!(#msg); });
+        return;
+    };
+
+    let iter_var = &for_ctx.iter_var;
+    let iter_var_ident = match syn::parse_str::<syn::Ident>(iter_var) {
+        Ok(i) => i,
+        Err(_) => {
+            // Defensive: pp-for parsed an iter var that isn't a
+            // Rust ident. Skip — the directive registry should
+            // already have flagged this elsewhere.
+            return;
+        }
+    };
+    let iter_field_ident = match syn::parse_str::<syn::Ident>(iter_field) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+
+    // Rust type assertion: walking `this.<iter_field>` must
+    // yield items of type `&T`. Lives in a `const _: fn(&Self)`
+    // closure so the typechecker sees it at `cargo check` time
+    // without running anything at runtime.
+    let mismatch_note = format!(
+        "the iteration source `{iter_field}` for slot `{target_name}` must yield items of type `{props_ty_str}` (matching `#[slot(name = \"{target_name}\", props = {props_ty_str})]`)"
+    );
+    out.extend(quote! {
+        const _: fn(&Self) = |__poco_this: &Self| {
+            // Force-resolve the iter item's type via a `match`
+            // on `IntoIterator`. The `unreachable!()` branch is
+            // never executed (the assertion is in const-fn
+            // closure position, never called) — Rust still
+            // typechecks the branch and reports the mismatch
+            // with this `let` binding's `&#props_ty` annotation.
+            let _: &#props_ty = match (&__poco_this.#iter_field_ident).into_iter().next() {
+                ::core::option::Option::Some(__poco_item) => __poco_item,
+                ::core::option::Option::None => {
+                    let _ = #mismatch_note;
+                    ::core::unreachable!();
+                }
+            };
+            let _ = stringify!(#iter_var_ident);
+        };
+    });
+
+    // Template edit: inject ` :VAR="VAR"` just before the
+    // closing `>` of the slot's opening tag. The runtime's
+    // existing `materialize_slot` path (mount.rs:920-928)
+    // picks it up identically to an explicit static-mode
+    // publication.
+    //
+    // `opening_tag_range.end` points just past `>`; insert at
+    // `end - 1` so we land before the angle bracket. Skip if
+    // the range is the placeholder `0..0` (foster-parented
+    // element with no real source position).
+    if el.opening_tag_range.end > el.opening_tag_range.start {
+        let insert_at = el.opening_tag_range.end.saturating_sub(1);
+        template_edits.push(TemplateEdit {
+            insert_at,
+            text: format!(" :{iter_var}=\"{iter_var}\""),
+        });
     }
 }
 
@@ -555,6 +731,32 @@ fn emit_static_publication_validation(
             }
         };
     });
+}
+
+/// Apply byte-level inserts to a template source. Same shape as
+/// [`crate::for_plan::apply_stamps`] — sort by descending
+/// `insert_at` then splice each text in, so earlier byte offsets
+/// stay valid as edits accumulate.
+pub(crate) fn apply_template_edits(source: &str, edits: &[TemplateEdit]) -> String {
+    if edits.is_empty() {
+        return source.to_string();
+    }
+    let mut sorted: Vec<&TemplateEdit> = edits.iter().collect();
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.insert_at));
+    let mut out = source.to_string();
+    for edit in sorted {
+        if edit.insert_at > out.len() {
+            continue;
+        }
+        // Defensive: only insert at a char boundary. Templates
+        // are typically ASCII at HTML-syntax positions, but
+        // safer to skip than to panic.
+        if !out.is_char_boundary(edit.insert_at) {
+            continue;
+        }
+        out.insert_str(edit.insert_at, &edit.text);
+    }
+    out
 }
 
 fn pascal_case(s: &str) -> String {
@@ -869,5 +1071,179 @@ mod tests {
             "duplicate `props =` should error: {}",
             err
         );
+    }
+
+    // ── RFC 084 Phase 2 — iterated-mode tests ──────────────────
+
+    fn ast(src: &str) -> crate::template_parser::TemplateAst {
+        crate::template_parser::parse_strict(src, "test.poco")
+            .expect("template should parse cleanly")
+    }
+
+    fn props_path(s: &str) -> Path {
+        syn::parse_str(s).expect("path parses")
+    }
+
+    fn iter_decl(name: &str, props: &str) -> SlotDecl {
+        SlotDecl {
+            name: SlotName::Named(name.to_string()),
+            mode: SlotMode::Accepts,
+            accepts: Vec::new(),
+            props: Some(props_path(props)),
+            span: proc_macro2::Span::call_site(),
+        }
+    }
+
+    #[test]
+    fn iterated_slot_emits_template_edit() {
+        let src = r#"<root>
+<ul>
+  <li pp-for="file in files">
+    <slot name="row"></slot>
+  </li>
+</ul>
+</root>"#;
+        let slots = vec![iter_decl("row", "UploadFile")];
+        let emit = emit_slot_props_validation(&ast(src), &slots);
+        assert_eq!(
+            emit.template_edits.len(),
+            1,
+            "expected one auto-publish edit, got {:?}",
+            emit.template_edits.len()
+        );
+        let edit = &emit.template_edits[0];
+        assert!(
+            edit.text.contains(":file=\"file\""),
+            "edit should inject :file=\"file\": {:?}",
+            edit.text
+        );
+        // The type-assertion closure should also appear in tokens.
+        let s = emit.tokens.to_string();
+        assert!(
+            s.contains("__poco_this"),
+            "type assertion missing from tokens: {s}"
+        );
+    }
+
+    #[test]
+    fn iterated_slot_skips_static_set_equality_check() {
+        // Iterated mode auto-publishes a single key (the iter
+        // var). Static-mode's set-equality check would error
+        // ("publication doesn't cover every #[prop] field"); the
+        // iterated path must NOT emit that check.
+        let src = r#"<root>
+<li pp-for="file in files">
+  <slot name="row"></slot>
+</li>
+</root>"#;
+        let slots = vec![iter_decl("row", "UploadFile")];
+        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let s = emit.tokens.to_string();
+        assert!(
+            !s.contains("str_slice_set_eq_const"),
+            "iterated slot must not emit static-mode set-equality check: {s}"
+        );
+    }
+
+    #[test]
+    fn static_slot_emits_no_template_edit() {
+        // Static mode (any `:LHS=` present) must NOT trigger an
+        // auto-publish template edit.
+        let src = r#"<root>
+<div>
+  <slot name="header" :queue_size="queue_size"></slot>
+</div>
+</root>"#;
+        let slots = vec![iter_decl("header", "HeaderProps")];
+        let emit = emit_slot_props_validation(&ast(src), &slots);
+        assert!(
+            emit.template_edits.is_empty(),
+            "static slot should yield no template edits: {:?}",
+            emit.template_edits.len()
+        );
+    }
+
+    #[test]
+    fn slot_with_publications_inside_pp_for_is_static() {
+        // §5.4 rule: presence of any `:LHS=` forces static mode
+        // even when inside a `pp-for`. The macro must NOT
+        // auto-publish (no template edit), AND must validate
+        // the explicit publication against the props type.
+        let src = r#"<root>
+<li pp-for="file in files">
+  <slot name="row" :file="file"></slot>
+</li>
+</root>"#;
+        let slots = vec![iter_decl("row", "UploadFile")];
+        let emit = emit_slot_props_validation(&ast(src), &slots);
+        assert!(
+            emit.template_edits.is_empty(),
+            "static-mode (has :LHS=) must not emit an auto-publish edit"
+        );
+        let s = emit.tokens.to_string();
+        assert!(
+            s.contains("str_slice_set_eq_const"),
+            "static-mode should emit set-equality coverage check: {s}"
+        );
+    }
+
+    #[test]
+    fn iterated_slot_outside_pp_for_falls_back_to_static() {
+        // No pp-for ancestor AND no `:LHS=` → static-empty.
+        // The coverage check fires because UploadFile has props.
+        // (We can't run the const-eval check at test time but we
+        // can confirm the tokens take the static path — no
+        // template edit.)
+        let src = r#"<root>
+<slot name="row"></slot>
+</root>"#;
+        let slots = vec![iter_decl("row", "UploadFile")];
+        let emit = emit_slot_props_validation(&ast(src), &slots);
+        assert!(
+            emit.template_edits.is_empty(),
+            "no pp-for ancestor → no auto-publish edit"
+        );
+    }
+
+    #[test]
+    fn pp_for_complex_expression_errors_with_directive_message() {
+        // §5.6 / §7 — `pp-for` over anything other than a bare
+        // ident falls back to "use static mode" with an
+        // actionable error.
+        let src = r#"<root>
+<li pp-for="file in user.files">
+  <slot name="row"></slot>
+</li>
+</root>"#;
+        let slots = vec![iter_decl("row", "UploadFile")];
+        let emit = emit_slot_props_validation(&ast(src), &slots);
+        let s = emit.tokens.to_string();
+        assert!(
+            s.contains("compile_error") && s.contains("bare field path"),
+            "complex pp-for expression should emit a directive compile_error: {s}"
+        );
+        assert!(
+            emit.template_edits.is_empty(),
+            "no edit when iterated-mode bails"
+        );
+    }
+
+    #[test]
+    fn apply_template_edits_inserts_in_reverse_order() {
+        // Two edits at different positions should both land
+        // intact without shifting each other.
+        let src = "<slot></slot><slot></slot>";
+        let edits = vec![
+            TemplateEdit {
+                insert_at: 5, // before first `>`
+                text: " :a=\"a\"".to_string(),
+            },
+            TemplateEdit {
+                insert_at: 18, // before second `>`
+                text: " :b=\"b\"".to_string(),
+            },
+        ];
+        let out = apply_template_edits(src, &edits);
+        assert_eq!(out, r#"<slot :a="a"></slot><slot :b="b"></slot>"#);
     }
 }
