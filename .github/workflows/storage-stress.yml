@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'crates/pocopine-storage/**'
+      - 'crates/pocopine-storage-azure/**'
       - 'crates/pocopine-storage-s3/**'
       - 'crates/pocopine-storage-gcs/**'
       - 'Cargo.toml'
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - 'crates/pocopine-storage/**'
+      - 'crates/pocopine-storage-azure/**'
       - 'crates/pocopine-storage-s3/**'
       - 'crates/pocopine-storage-gcs/**'
       - 'Cargo.toml'
