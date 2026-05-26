@@ -145,9 +145,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy-wasm
-      # Most workspace crates target wasm32; pocopine-cli is host-only so it
-      # gets its own clippy run below.
-      - run: cargo clippy --workspace --exclude pocopine-cli --target wasm32-unknown-unknown --all-targets -- -D warnings
+      # Most workspace crates target wasm32. Host-only crates and examples pull
+      # in provider SDKs, axum, sqlx, redis, or tokio[net], which intentionally
+      # do not compile for wasm32 and are covered by host checks.
+      - run: >
+          cargo clippy --workspace
+          --exclude pocopine-cli
+          --exclude pocopine-auth-credentials
+          --exclude pocopine-auth-jwt
+          --exclude pocopine-deploy
+          --exclude pocopine-deploy-fly
+          --exclude pocopine-deploy-railway
+          --exclude pocopine-deploy-render
+          --exclude pocopine-jobs
+          --exclude pocopine-launcher
+          --exclude pocopine-server
+          --exclude pocopine-storage-gcs
+          --exclude pocopine-storage-s3
+          --exclude pocopine-sync
+          --exclude pocopine-sync-crud
+          --exclude pocopine-sync-sqlx
+          --exclude pocopine-sync-sqlite
+          --exclude blog
+          --exclude file-browser-example
+          --exclude hn
+          --exclude keep-example
+          --exclude live-example
+          --exclude observability-smoke
+          --exclude site
+          --exclude sync-example
+          --exclude website
+          --target wasm32-unknown-unknown
+          --all-targets
+          -- -D warnings
 
   clippy-host:
     name: clippy (host — pocopine-cli)
