@@ -32,6 +32,7 @@ where
         collection: SyncCollectionName::new(name)?,
         source,
         max_snapshot_rows: DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
+        schema_version: 1,
     })
 }
 
@@ -41,6 +42,7 @@ pub struct CrudResourceBuilder<S> {
     collection: SyncCollectionName,
     source: S,
     max_snapshot_rows: usize,
+    schema_version: u32,
 }
 
 impl<S> CrudResourceBuilder<S>
@@ -58,6 +60,24 @@ where
         Ok(self)
     }
 
+    /// Set the application-level schema version this resource serves.
+    ///
+    /// Bump this whenever the row, draft, or payload shape changes in a
+    /// way that older cached data or queued mutations cannot deserialize
+    /// into. Defaults to `1`. The server advertises this on every `/open`
+    /// response; clients compare against their cached value and clear
+    /// the stream when they differ. `0` is rejected — versions start at
+    /// `1`.
+    pub fn schema_version(mut self, version: u32) -> SyncResult<Self> {
+        if version == 0 {
+            return Err(SyncError::client(
+                "CRUD schema_version must be >= 1 (schema versions start at 1)",
+            ));
+        }
+        self.schema_version = version;
+        Ok(self)
+    }
+
     /// Attach the row id extractor for this resource.
     pub fn id<IdOf>(self, id_of: IdOf) -> CrudResource<S, IdOf>
     where
@@ -68,6 +88,7 @@ where
             collection: self.collection,
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
+            schema_version: self.schema_version,
             id_of,
             version_of: NoRowVersion,
             mutation_log: MissingMutationLog,
@@ -81,6 +102,7 @@ pub struct CrudResource<S, IdOf, VersionOf = NoRowVersion, Log = MissingMutation
     collection: SyncCollectionName,
     source: S,
     max_snapshot_rows: usize,
+    schema_version: u32,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -104,6 +126,7 @@ where
             collection: self.collection,
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
+            schema_version: self.schema_version,
             id_of: self.id_of,
             version_of,
             mutation_log: self.mutation_log,
@@ -130,6 +153,7 @@ where
             collection: self.collection,
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
+            schema_version: self.schema_version,
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -167,6 +191,7 @@ where
             collection: self.collection,
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
+            schema_version: self.schema_version,
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -182,6 +207,7 @@ pub struct TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner> {
     collection: SyncCollectionName,
     source: S,
     max_snapshot_rows: usize,
+    schema_version: u32,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -491,6 +517,10 @@ where
         &self.collection
     }
 
+    fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
     fn pull<'a>(
         &'a self,
         ctx: RequestContext,
@@ -765,6 +795,10 @@ where
 
     fn collection(&self) -> &SyncCollectionName {
         &self.collection
+    }
+
+    fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 
     fn pull<'a>(

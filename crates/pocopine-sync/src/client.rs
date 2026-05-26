@@ -1088,12 +1088,18 @@ fn start_open_then_pull<C, T>(
         if epoch.is_stale() {
             return;
         }
-        if let Err(err) = open_result.and_then(|response| validate_open_response(response, &stream))
-        {
-            handle.update(|state| {
-                selector(state).apply_error(token, err);
-            });
-            return;
+        // Capture the advertised schema_version. Batch 2 will compare this
+        // against the cached value and clear the stream on mismatch; for
+        // Batch 1 we just receive it (and the `_` silences the unused-var
+        // lint until the next batch wires it up).
+        match open_result.and_then(|response| validate_open_response(response, &stream)) {
+            Ok(_advertised_schema_version) => {}
+            Err(err) => {
+                handle.update(|state| {
+                    selector(state).apply_error(token, err);
+                });
+                return;
+            }
         }
 
         if let Some(live_wakeup) = live_wakeup {
@@ -1254,7 +1260,7 @@ fn open_live_wakeup<C, T>(
 fn validate_open_response(
     response: SyncOpenResponse,
     stream: &SyncStreamName,
-) -> Result<(), pocopine_core::ServerError> {
+) -> Result<u32, pocopine_core::ServerError> {
     if response.protocol != crate::SYNC_PROTOCOL_V1 {
         return Err(pocopine_core::ServerError::BadRequest(format!(
             "unsupported sync protocol: {}",
@@ -1262,12 +1268,12 @@ fn validate_open_response(
         )));
     }
 
-    if response
+    if let Some(accepted) = response
         .streams
         .iter()
-        .any(|accepted| accepted.stream == *stream)
+        .find(|accepted| accepted.stream == *stream)
     {
-        Ok(())
+        Ok(accepted.schema_version)
     } else {
         Err(pocopine_core::ServerError::Forbidden(format!(
             "sync stream was not opened: {stream}"

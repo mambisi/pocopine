@@ -28,6 +28,18 @@ pub enum SyncError {
     /// Surfaces as `ServerError::Unauthorized` so the wire response and
     /// the existing framework-level guard responses share one shape.
     Unauthorized(String),
+    /// The client and server disagree on the application-level schema
+    /// version for a stream, and the source has not registered a migrator
+    /// that can bridge the two.
+    ///
+    /// Returned by `SyncStreamSource::migrate_payload` (default impl) when a
+    /// push arrives carrying an older `schema_version` than the source
+    /// advertises; the framework can also surface this on the client when
+    /// cached rows can't be rehydrated against the new schema. Surfaces as
+    /// `ServerError::BadRequest` on the wire so the client knows the
+    /// mutation will never accept and should be dropped (or retried after
+    /// re-encoding against the new shape).
+    SchemaMigration { stream: String, from: u32, to: u32 },
 }
 
 impl SyncError {
@@ -58,6 +70,16 @@ impl SyncError {
     pub fn unauthorized(msg: impl Into<String>) -> Self {
         Self::Unauthorized(msg.into())
     }
+
+    /// Build a schema-version mismatch error for a stream. Maps to
+    /// `ServerError::BadRequest` on the wire.
+    pub fn schema_migration(stream: impl Into<String>, from: u32, to: u32) -> Self {
+        Self::SchemaMigration {
+            stream: stream.into(),
+            from,
+            to,
+        }
+    }
 }
 
 impl fmt::Display for SyncError {
@@ -73,6 +95,10 @@ impl fmt::Display for SyncError {
             Self::Client(msg) => write!(f, "sync client error: {msg}"),
             Self::Backend(msg) => write!(f, "sync backend error: {msg}"),
             Self::Unauthorized(msg) => write!(f, "sync unauthorized: {msg}"),
+            Self::SchemaMigration { stream, from, to } => write!(
+                f,
+                "sync schema migration required for stream {stream}: client at v{from}, server at v{to}"
+            ),
         }
     }
 }
