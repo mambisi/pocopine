@@ -212,3 +212,26 @@ pub(crate) fn object_ref(
         metadata,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_lock_registry_recovers_from_poisoned_map_mutex() {
+        let registry = UploadSessionLockRegistry::new();
+        let locks = registry.locks.clone();
+        let poisoner = std::thread::spawn(move || {
+            let _guard = locks.lock().expect("lock registry map");
+            panic!("intentional registry map poison");
+        });
+        assert!(poisoner.join().is_err());
+
+        let session = UploadSessionId::new("poisoned-map").expect("valid session id");
+        let lock = registry.lock(&session);
+        {
+            let _guard = lock.try_lock().expect("session lock remains usable");
+        }
+        registry.drop_if_unused(&session);
+    }
+}

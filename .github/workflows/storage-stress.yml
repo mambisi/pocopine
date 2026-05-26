@@ -1,0 +1,51 @@
+name: storage stress
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/pocopine-storage/**'
+      - 'crates/pocopine-storage-s3/**'
+      - 'crates/pocopine-storage-gcs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/storage-stress.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/pocopine-storage/**'
+      - 'crates/pocopine-storage-s3/**'
+      - 'crates/pocopine-storage-gcs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/storage-stress.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storage-stress-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lock-stress:
+    name: storage lock stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: storage-stress
+      - name: run storage session lock stress tests
+        run: cargo test -p pocopine-storage session_lock_registry -- --include-ignored --test-threads=1
