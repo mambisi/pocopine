@@ -307,12 +307,12 @@ impl S3StorageBackend {
     async fn put_completed_object(
         &self,
         key: &str,
-        bytes: &[u8],
+        bytes: Bytes,
         content_type: Option<&str>,
     ) -> StorageResult<Option<String>> {
         match self.get_object_bytes_with_etag(key).await {
             Ok((existing, etag)) => {
-                if existing == bytes {
+                if existing.as_slice() == bytes.as_ref() {
                     return Ok(etag);
                 }
                 return Err(StorageError::policy_rejected(format!(
@@ -328,22 +328,15 @@ impl S3StorageBackend {
             .bucket(&self.layout.bucket)
             .key(key)
             .if_none_match("*")
-            .body(ByteStream::from(bytes.to_vec()));
+            .body(ByteStream::from(bytes));
         if let Some(content_type) = content_type {
             request = request.content_type(content_type);
         }
         match request.send().await {
             Ok(output) => Ok(output.e_tag.map(normalize_etag)),
-            Err(err) if is_put_precondition_failed(&err) => {
-                let (existing, etag) = self.get_object_bytes_with_etag(key).await?;
-                if existing == bytes {
-                    Ok(etag)
-                } else {
-                    Err(StorageError::policy_rejected(format!(
-                        "S3 object key already exists with different bytes: {key}"
-                    )))
-                }
-            }
+            Err(err) if is_put_precondition_failed(&err) => Err(StorageError::policy_rejected(
+                format!("S3 object key already exists: {key}"),
+            )),
             Err(err) => Err(s3_error("put completed object", err)),
         }
     }
@@ -637,8 +630,9 @@ impl StorageBackend for S3StorageBackend {
                 stored.public.next_offset = Some(actual);
                 self.write_session(&request.session, &stored).await?;
             }
+            let staged = Bytes::from(staged);
             let etag = self
-                .put_completed_object(&object_key, &staged, stored.public.content_type.as_deref())
+                .put_completed_object(&object_key, staged, stored.public.content_type.as_deref())
                 .await?;
             let object = self.object_ref(&stored, actual, etag, checksum);
             stored.public.status = UploadSessionStatus::Complete;
