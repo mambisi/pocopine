@@ -565,6 +565,16 @@ pub struct SyncPushRequest<M> {
     pub stream: SyncStreamName,
     #[serde(default)]
     pub mutations: Vec<ClientMutation<M>>,
+    /// Application-level schema version the CLIENT encoded these
+    /// mutations against. The server compares against
+    /// `SyncStreamSource::schema_version()`; on mismatch the source's
+    /// `migrate_payload` is invoked per mutation. A source that hasn't
+    /// registered a migrator rejects each mutation with
+    /// `SyncError::SchemaMigration`. Defaults to `1` so an old client
+    /// that doesn't send the field is treated as v1, matching Batch 1's
+    /// default for `SyncStreamSource::schema_version`.
+    #[serde(default = "default_schema_version_one")]
+    pub schema_version: u32,
 }
 
 impl<M> SyncPushRequest<M> {
@@ -576,7 +586,16 @@ impl<M> SyncPushRequest<M> {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             stream,
             mutations: mutations.into_iter().collect(),
+            schema_version: default_schema_version_one(),
         }
+    }
+
+    /// Set the application-level schema version the mutations are
+    /// encoded under. Generated client helpers fill this from the
+    /// resource's compile-time `SCHEMA_VERSION` constant.
+    pub fn with_schema_version(mut self, schema_version: u32) -> Self {
+        self.schema_version = schema_version;
+        self
     }
 }
 

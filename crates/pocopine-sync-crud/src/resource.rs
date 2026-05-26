@@ -36,8 +36,26 @@ where
         // the wire/trait default (e.g. switching to an `Option<u32>`
         // 'unspecified' sentinel) propagate here without a separate edit.
         schema_version: default_schema_version_one(),
+        // No registered migrator by default — the trait default impl
+        // of `SyncStreamSource::migrate_payload` returns
+        // `SyncError::SchemaMigration` so stale-schema pushes get a
+        // per-mutation rejection.
+        migrate_payload: None,
     })
 }
+
+/// User-supplied function that migrates a stale-schema mutation
+/// payload up to the source's current schema version. Registered via
+/// [`CrudResourceBuilder::migrate_with`] (or the `#[resource(...,
+/// migrate_with = path)]` macro attribute) and called by
+/// [`SyncStreamSource::migrate_payload`] inside the server's
+/// `push_handler` before delegating to the source's `push`.
+///
+/// On `Ok(value)`, the migrated payload replaces the original.
+/// On `Err(SyncError::SchemaMigration { .. })`, the framework adds
+/// the mutation to the response's `rejected` array with the error's
+/// `reason`; the rest of the batch continues.
+pub type CrudMigrateFn = dyn Fn(u32, u32, Value) -> SyncResult<Value> + Send + Sync + 'static;
 
 /// Builder returned by [`resource`].
 pub struct CrudResourceBuilder<S> {
@@ -46,6 +64,7 @@ pub struct CrudResourceBuilder<S> {
     source: S,
     max_snapshot_rows: usize,
     schema_version: u32,
+    migrate_payload: Option<Arc<CrudMigrateFn>>,
 }
 
 impl<S> CrudResourceBuilder<S>
@@ -81,6 +100,31 @@ where
         Ok(self)
     }
 
+    /// Register a function that migrates a stale-schema mutation
+    /// payload to the resource's current schema version.
+    ///
+    /// The opt-in escape hatch for apps that must preserve queued
+    /// mutations across a `schema_version` bump (e.g. payments,
+    /// inventory writes — places where dropping queued local edits
+    /// is unacceptable). The function is called by the server's
+    /// `push_handler` once per mutation when the request's
+    /// `schema_version` differs from the resource's current version;
+    /// migrated payloads continue into `source.push`, errors land in
+    /// the response's `rejected` array.
+    ///
+    /// The default behaviour (no `migrate_with` registered) returns
+    /// `SyncError::SchemaMigration`, which the framework surfaces as
+    /// a per-mutation rejection. This matches Replicache's default
+    /// drop-the-queue posture; `migrate_with` is the opt-in
+    /// "transform instead of reject" path.
+    pub fn migrate_with<F>(mut self, migrate: F) -> Self
+    where
+        F: Fn(u32, u32, Value) -> SyncResult<Value> + Send + Sync + 'static,
+    {
+        self.migrate_payload = Some(Arc::new(migrate));
+        self
+    }
+
     /// Attach the row id extractor for this resource.
     pub fn id<IdOf>(self, id_of: IdOf) -> CrudResource<S, IdOf>
     where
@@ -92,6 +136,7 @@ where
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
+            migrate_payload: self.migrate_payload,
             id_of,
             version_of: NoRowVersion,
             mutation_log: MissingMutationLog,
@@ -106,6 +151,7 @@ pub struct CrudResource<S, IdOf, VersionOf = NoRowVersion, Log = MissingMutation
     source: S,
     max_snapshot_rows: usize,
     schema_version: u32,
+    migrate_payload: Option<Arc<CrudMigrateFn>>,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -130,6 +176,7 @@ where
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
+            migrate_payload: self.migrate_payload.clone(),
             id_of: self.id_of,
             version_of,
             mutation_log: self.mutation_log,
@@ -157,6 +204,7 @@ where
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
+            migrate_payload: self.migrate_payload.clone(),
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -195,6 +243,7 @@ where
             source: self.source,
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
+            migrate_payload: self.migrate_payload.clone(),
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -211,6 +260,7 @@ pub struct TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner> {
     source: S,
     max_snapshot_rows: usize,
     schema_version: u32,
+    migrate_payload: Option<Arc<CrudMigrateFn>>,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -524,6 +574,15 @@ where
         self.schema_version
     }
 
+    fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
+        if let Some(migrate) = self.migrate_payload.clone() {
+            Box::pin(async move { migrate(from, to, value) })
+        } else {
+            let stream = self.stream.as_str().to_string();
+            Box::pin(async move { Err(SyncError::schema_migration(stream, from, to)) })
+        }
+    }
+
     fn pull<'a>(
         &'a self,
         ctx: RequestContext,
@@ -802,6 +861,15 @@ where
 
     fn schema_version(&self) -> u32 {
         self.schema_version
+    }
+
+    fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
+        if let Some(migrate) = self.migrate_payload.clone() {
+            Box::pin(async move { migrate(from, to, value) })
+        } else {
+            let stream = self.stream.as_str().to_string();
+            Box::pin(async move { Err(SyncError::schema_migration(stream, from, to)) })
+        }
     }
 
     fn pull<'a>(
