@@ -23,6 +23,13 @@ runtime-expr-fallback = []
 [dependencies]
 pocopine-expr = { workspace = true }
 wasm-bindgen = { workspace = true }
+# Hooks `std::panic` so wasm panics surface their message via
+# `console.error` instead of the browser-default
+# "RuntimeError: unreachable executed" with no message. Installed
+# once at `App::run()` so users get the directive `.expect()`
+# strings authored throughout the framework without having to
+# remember `console_error_panic_hook::set_once()` themselves.
+console_error_panic_hook = "0.1"
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
@@ -56,19 +63,27 @@ features = [
     "DomRect",
     "DomRectReadOnly",
     "DomTokenList",
+    "DataTransfer",
     "DragEvent",
     "Element",
     "ErrorEvent",
     "Event",
     "EventTarget",
+    "Blob",
+    "File",
+    "FileList",
     "FocusEvent",
+    "FormData",
     "HashChangeEvent",
     "Headers",
     "History",
     "HtmlAnchorElement",
+    "HtmlButtonElement",
     "HtmlCollection",
     "HtmlElement",
+    "HtmlFormElement",
     "HtmlHeadElement",
+    "HtmlImageElement",
     "HtmlInputElement",
     "HtmlSelectElement",
     "HtmlTemplateElement",
@@ -108,6 +123,7 @@ features = [
     "TouchEvent",
     "TransitionEvent",
     "UiEvent",
+    "Url",
     "WheelEvent",
     "Window",
 ]

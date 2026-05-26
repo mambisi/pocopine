@@ -133,6 +133,84 @@ marker. Same tag name, same mental model, no Shadow DOM cost.
 * **Shadow DOM is not used.** Slots are a flat DOM move; CSS scoping
   still works because scoping is attribute-based, not shadow-based.
 
+### Why doesn't my `pp-text` work inside a compound's slot?
+
+The single most common gotcha for authors coming from Vue or Svelte.
+This **does not work**:
+
+```html
+<!-- UploadItem.poco -->
+<div class="row">
+  <slot></slot>
+</div>
+```
+
+```html
+<!-- Caller.poco -->
+<upload-item :name="file.name" :status="file.status">
+  <span pp-text="name"></span>           <!-- ❌ resolves to caller's `name` -->
+  <span pp-show="status == 'uploading'">…</span>  <!-- ❌ same -->
+</upload-item>
+```
+
+Inside the slot, `name` and `status` resolve in **the caller's
+scope**, not the `UploadItem`'s scope. The child's props are
+invisible to the slot content. (Search the runtime for the comment
+in `crates/pocopine-core/src/slot_scope.rs` if you want to see why —
+slot handlers are deliberately delegated to the caller so a
+`@click="parent_handler"` inside the slot reaches the right scope.)
+
+The fix is **scoped slots**: the child's template `<slot>` exposes
+the fields it wants to share, and the caller's `<template pp-slot>`
+names them with `pp-let`:
+
+```html
+<!-- UploadItem.poco — expose child state on the slot -->
+<div class="row">
+  <slot :name="name" :status="status" :progress="progress"></slot>
+</div>
+```
+
+```html
+<!-- Caller.poco — bind the exposed fields with pp-let -->
+<upload-item :name="file.name" :status="file.status" :progress="file.progress">
+  <template pp-slot="default" pp-let="row">
+    <span pp-text="row.name"></span>
+    <span pp-show="row.status == 'uploading'">
+      <span pp-text="row.progress"></span>
+    </span>
+  </template>
+</upload-item>
+```
+
+Inside the `<template pp-slot>`, `row` is a lexical binding to the
+object the child exposed on its `<slot>`. The caller's own scope
+(e.g. `file` from a `pp-for`) is still in reach as before — scoped
+slots add a name, they don't replace the caller's scope.
+
+**Rules:**
+
+* The child template's `<slot :foo="…" :bar="…">` decides what
+  goes on the exposed object. The fields are named by attribute, so
+  `:name="name"` exposes a `name` field whose value is the child's
+  `name`.
+* The caller's `<template pp-slot="default" pp-let="X">` names the
+  exposed object as `X`. Pick any identifier — `row`, `item`,
+  `state`, `slot_scope`.
+* Without `pp-let`, the slot content stays in the caller's scope
+  with no exposed object. That's the right shape when the slot
+  doesn't need anything from the child.
+* Don't enumerate the child's fields one by one with `:name=name
+  :id=id :progress=progress …`. Expose one object (`:row="{…}"`-style
+  — wrap on the child side if you want) or just expose each field —
+  but choose, don't mix.
+
+This pattern also unblocks rendering the child's primary collection
+from slot content (the upload queue, the tabs in a `<tabs>`, the
+options in a `<select>`): the child exposes the collection on its
+`<slot>` and the caller writes a normal `pp-for` over the
+`pp-let`-named binding.
+
 ## Iteration (`pp-for`, deferred)
 
 Planned syntax for the array-reactivity milestone:

@@ -326,6 +326,10 @@ need a long one:
    addressed by `ScopeId` through the walker; user code doesn't get
    scope ids. If you're tempted, promote to a store.
 4. **Derived state stored as a field you manually keep in sync.**
-   Today: compute it inside the handler that changed the inputs, or in
-   the directive. After signals land: `computed()`. Never two fields
-   with an "update both" invariant.
+   Don't write `progress_label` updates into every handler that
+   touches `progress`. Use `#[computed]` for pure derivations and
+   `#[watch(field)]` for derivations that need `self`. The framework
+   keeps the derived value up to date for you. Templates bind by
+   name (`pp-text="progress_label"`). See
+   [`docs/poco/04-expressions.md`](../poco/04-expressions.md) for
+   the full pattern and the canonical examples.

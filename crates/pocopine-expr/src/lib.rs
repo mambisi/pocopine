@@ -196,8 +196,53 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 Tok::Plus
             }
+            // Arithmetic beyond `+` is not supported. Compute Rust-side
+            // as a `#[computed]` field and bind by name. See
+            // docs/poco/04-expressions.md.
+            b'*' | b'/' | b'%' => {
+                return Err(self.err(
+                    start..start + 1,
+                    &format!(
+                        "arithmetic operator `{}` is not supported in pine-expr",
+                        c as char
+                    ),
+                    Some(
+                        "compute Rust-side as a `#[computed]` field and bind by name — see docs/poco/04-expressions.md",
+                    ),
+                ));
+            }
+            // Bare `-` (not part of a number literal) is unsupported
+            // arithmetic. The number-literal case is the guarded arm
+            // below this one; the match-first-wins rule means we
+            // need the same guard inverted here so `-42` still
+            // lexes as a number.
+            b'-' if !matches!(self.peek(1), Some(b'0'..=b'9')) => {
+                return Err(self.err(
+                    start..start + 1,
+                    "arithmetic subtraction is not supported in pine-expr",
+                    Some(
+                        "compute Rust-side as a `#[computed]` field and bind by name — see docs/poco/04-expressions.md",
+                    ),
+                ));
+            }
             b'?' => {
                 self.pos += 1;
+                if self.peek(0) == Some(b'?') {
+                    return Err(self.err(
+                        start..self.pos + 1,
+                        "nullish coalescing `??` is not supported in pine-expr",
+                        Some("use a ternary (`x == null ? fallback : x`) or compute Rust-side"),
+                    ));
+                }
+                if self.peek(0) == Some(b'.') {
+                    return Err(self.err(
+                        start..self.pos + 1,
+                        "optional chaining `?.` is not supported in pine-expr",
+                        Some(
+                            "compute Rust-side as a `#[computed]` field that handles the null case",
+                        ),
+                    ));
+                }
                 Tok::Question
             }
             b':' => {
@@ -206,12 +251,26 @@ impl<'a> Lexer<'a> {
             }
             b'.' => {
                 self.pos += 1;
+                if self.peek(0) == Some(b'.') {
+                    return Err(self.err(
+                        start..self.pos + 1,
+                        "spread `...` is not supported in pine-expr",
+                        Some("pass arguments explicitly or compute Rust-side"),
+                    ));
+                }
                 Tok::Dot
             }
             b'!' => {
                 self.pos += 1;
                 if self.peek(0) == Some(b'=') {
                     self.pos += 1;
+                    if self.peek(0) == Some(b'=') {
+                        return Err(self.err(
+                            start..self.pos + 1,
+                            "`!==` is not supported in pine-expr",
+                            Some("use `!=` (pine-expr uses Rust-style equality)"),
+                        ));
+                    }
                     Tok::BangEq
                 } else {
                     Tok::Bang
@@ -220,10 +279,27 @@ impl<'a> Lexer<'a> {
             b'=' => {
                 // `==` wins over `=` — peek the next byte before
                 // committing. Single `=` is assignment (RFC-024);
-                // `==` is equality (RFC-012).
+                // `==` is equality (RFC-012). `===`, `!==`, and `=>`
+                // are rejected with directive messages so JS muscle
+                // memory fails loud at compile time.
                 if self.peek(1) == Some(b'=') {
+                    if self.peek(2) == Some(b'=') {
+                        return Err(self.err(
+                            start..self.pos + 3,
+                            "`===` is not supported in pine-expr",
+                            Some("use `==` (pine-expr uses Rust-style equality)"),
+                        ));
+                    }
                     self.pos += 2;
                     Tok::EqEq
+                } else if self.peek(1) == Some(b'>') {
+                    return Err(self.err(
+                        start..self.pos + 2,
+                        "arrow functions are not supported in pine-expr",
+                        Some(
+                            "define a handler method on the component — see docs/poco/04-expressions.md",
+                        ),
+                    ));
                 } else {
                     self.pos += 1;
                     Tok::Eq
@@ -659,6 +735,22 @@ impl Parser {
                         }
                     }
                 }
+                // `obj.method(…)` — only plain identifiers can be
+                // called. A path followed by `(` is the JS muscle
+                // memory we want to teach against: define a plain
+                // identifier handler that takes the object as an
+                // argument instead.
+                if matches!(self.peek().0, Tok::LParen) && segments.len() > 1 {
+                    return Err(ParseError {
+                        message: "method calls on objects are not supported in pine-expr"
+                            .to_string(),
+                        span: self.peek().1.clone(),
+                        hint: Some(
+                            "define a plain identifier handler, or a `#[computed]` field, that takes the object as an argument — see docs/poco/04-expressions.md"
+                                .to_string(),
+                        ),
+                    });
+                }
                 Ok(Spanned {
                     value: Expr::Path(segments),
                     span: start..end,
@@ -1043,5 +1135,102 @@ mod tests {
     fn plus_with_string_literal_parses() {
         let e = parse_ok("$id + '-title'");
         assert!(matches!(e.value, Expr::BinOp(BinOp::Plus, _, _)));
+    }
+
+    // ── Teaching errors: JS muscle memory rejected at compile time ──
+    //
+    // Every case below was already a parse error with a less helpful
+    // message. These tests pin the directive wording so future edits
+    // don't regress the diagnostic.
+
+    fn assert_err_says(src: &str, needle: &str) {
+        let err = parse(src).expect_err(&format!("expected parse error for {src:?}"));
+        assert!(
+            err.message.contains(needle) || err.hint.as_deref().unwrap_or("").contains(needle),
+            "error for {src:?} should mention {needle:?}; got message={:?} hint={:?}",
+            err.message,
+            err.hint,
+        );
+    }
+
+    #[test]
+    fn reject_arithmetic_star() {
+        assert_err_says("progress * 100", "arithmetic operator");
+        assert_err_says("progress * 100", "#[computed]");
+    }
+
+    #[test]
+    fn reject_arithmetic_slash() {
+        assert_err_says("total / count", "arithmetic operator");
+    }
+
+    #[test]
+    fn reject_arithmetic_percent() {
+        assert_err_says("idx % 2", "arithmetic operator");
+    }
+
+    #[test]
+    fn reject_arithmetic_minus() {
+        assert_err_says("count - 1", "subtraction");
+        assert_err_says("count - 1", "#[computed]");
+    }
+
+    #[test]
+    fn reject_triple_equals() {
+        assert_err_says("status === 'queued'", "`===`");
+        assert_err_says("status === 'queued'", "use `==`");
+    }
+
+    #[test]
+    fn reject_strict_inequality() {
+        assert_err_says("status !== 'queued'", "`!==`");
+        assert_err_says("status !== 'queued'", "use `!=`");
+    }
+
+    #[test]
+    fn reject_arrow_function() {
+        assert_err_says("x => x", "arrow functions");
+        assert_err_says("x => x", "handler method");
+    }
+
+    #[test]
+    fn reject_nullish_coalescing() {
+        assert_err_says("a ?? b", "nullish coalescing");
+    }
+
+    #[test]
+    fn reject_optional_chaining() {
+        assert_err_says("user?.name", "optional chaining");
+    }
+
+    #[test]
+    fn reject_spread() {
+        assert_err_says("...rest", "spread");
+    }
+
+    #[test]
+    fn reject_method_call_on_path() {
+        // `files.filter(...)` — a path of length >= 2 followed by `(`
+        // is the JS muscle-memory case we want to flag.
+        assert_err_says("files.filter(f)", "method calls on objects");
+        assert_err_says("files.filter(f)", "#[computed]");
+    }
+
+    #[test]
+    fn negative_number_literal_still_parses() {
+        // The `-` rejection must not break `-42` as a number literal.
+        let e = parse_ok("-42");
+        assert!(matches!(
+            e.value,
+            Expr::Literal(Literal::Number(n)) if n == -42.0
+        ));
+    }
+
+    #[test]
+    fn plain_identifier_call_still_parses() {
+        // `obj.method(...)` is rejected, but `method(obj)` is the
+        // canonical replacement and must still parse.
+        let e = parse_ok("filter_done(files)");
+        assert!(matches!(e.value, Expr::Call(_, _)));
     }
 }

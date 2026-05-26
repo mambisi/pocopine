@@ -57,6 +57,7 @@ pub mod text;
 pub mod tick;
 pub mod timers;
 pub mod watch;
+pub mod web;
 
 pub use app::{
     App, AppPlugin, Component, Loader, LoaderContext, LoaderError, RouteComponent, RouteConfig,
