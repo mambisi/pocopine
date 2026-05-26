@@ -175,12 +175,20 @@ pub const fn str_slice_contains_const(haystack: &[&str], needle: &str) -> bool {
     false
 }
 
-/// Const-fn set-equality of two `&[&str]`. Order-independent;
-/// caller is responsible for deduplicating inputs if needed.
+/// Const-fn set-equality of two `&[&str]`. Order-independent.
+///
+/// Checks bidirectional containment — `a ⊆ b` **and** `b ⊆ a`.
+/// The reverse check is what catches the duplicate-bypass case:
+/// without it, `a = ["x", "x"]` vs `b = ["x", "y"]` (same length,
+/// every element of `a` in `b`) would pass even though `y` is
+/// uncovered. Treating both inputs as multisets-coerced-to-sets
+/// via mutual containment lets callers pass duplicate-bearing
+/// publications without the function silently approving them.
 pub const fn str_slice_set_eq_const(a: &[&str], b: &[&str]) -> bool {
     if a.len() != b.len() {
         return false;
     }
+    // Every element of `a` must appear in `b`.
     let mut i = 0;
     while i < a.len() {
         if !str_slice_contains_const(b, a[i]) {
@@ -188,5 +196,66 @@ pub const fn str_slice_set_eq_const(a: &[&str], b: &[&str]) -> bool {
         }
         i += 1;
     }
+    // Every element of `b` must appear in `a` — this is what
+    // catches duplicates in `a`. Without this loop,
+    // `a = ["x", "x"]` and `b = ["x", "y"]` would compare equal
+    // because both `a` elements are in `b` and the lengths
+    // matched, even though `y` isn't covered.
+    let mut i = 0;
+    while i < b.len() {
+        if !str_slice_contains_const(a, b[i]) {
+            return false;
+        }
+        i += 1;
+    }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{str_eq_const, str_slice_contains_const, str_slice_set_eq_const};
+
+    #[test]
+    fn str_eq_const_handles_basic_cases() {
+        assert!(str_eq_const("foo", "foo"));
+        assert!(!str_eq_const("foo", "bar"));
+        assert!(!str_eq_const("foo", "fooo"));
+        assert!(str_eq_const("", ""));
+    }
+
+    #[test]
+    fn str_slice_contains_const_finds_present_and_rejects_absent() {
+        assert!(str_slice_contains_const(&["a", "b", "c"], "b"));
+        assert!(!str_slice_contains_const(&["a", "b", "c"], "z"));
+        assert!(!str_slice_contains_const(&[], "anything"));
+    }
+
+    #[test]
+    fn str_slice_set_eq_const_rejects_duplicate_bypass() {
+        // The headline finding from PR #131's code review:
+        // `a = ["x", "x"]` and `b = ["x", "y"]` have the same
+        // length, and every element of `a` is in `b`. Before
+        // the reverse-direction check landed, this returned
+        // `true` even though `y` isn't covered by `a`. The
+        // assertion below pins the fix.
+        assert!(
+            !str_slice_set_eq_const(&["x", "x"], &["x", "y"]),
+            "duplicate bypass: ['x','x'] vs ['x','y'] must NOT compare equal"
+        );
+        // Symmetric case (duplicates in `b`) must also fail.
+        assert!(!str_slice_set_eq_const(&["x", "y"], &["x", "x"]));
+    }
+
+    #[test]
+    fn str_slice_set_eq_const_passes_genuine_equality() {
+        assert!(str_slice_set_eq_const(&["x", "y"], &["y", "x"]));
+        assert!(str_slice_set_eq_const(&["a", "b", "c"], &["c", "a", "b"]));
+        assert!(str_slice_set_eq_const(&[], &[]));
+    }
+
+    #[test]
+    fn str_slice_set_eq_const_fails_on_length_mismatch() {
+        assert!(!str_slice_set_eq_const(&["x"], &["x", "y"]));
+        assert!(!str_slice_set_eq_const(&["x", "y"], &["x"]));
+    }
 }

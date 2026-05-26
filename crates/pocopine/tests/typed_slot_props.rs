@@ -7,21 +7,26 @@
 //! `cargo check` step without the macro emitting a
 //! `compile_error!` or a const-block panic.
 //!
+//! Macro expansion happens at host compile time, so this file
+//! deliberately is **not** gated on `target_arch = "wasm32"` —
+//! `cargo check --tests -p pocopine` on a host runs the macro,
+//! exercising every validation path. Only the runtime sentinel
+//! `#[wasm_bindgen_test]` itself needs the wasm gate.
+//!
 //! Run with:
 //!   `cargo check --tests -p pocopine`
 //!   `wasm-pack test --firefox --headless crates/pocopine --test typed_slot_props`
-//!   (the wasm target is the canonical one; host also compiles
-//!   since the macro expansion happens at host compile time)
 
-#![cfg(target_arch = "wasm32")]
 // Compilation IS the test — the structs below are exercised by
 // the macro expansion path, not by runtime construction.
 #![allow(dead_code)]
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
+#[cfg(target_arch = "wasm32")]
 wasm_bindgen_test_configure!(run_in_browser);
 
 // ── Static-mode fixture ────────────────────────────────────────
@@ -158,6 +163,7 @@ impl UntypedSlotHost {}
 // invocation above expanded without emitting `compile_error!`
 // or a const-block panic. That IS the end-to-end assertion.
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test]
 fn typed_slot_fixtures_compile() {
     // No-op — compilation success is the test.
