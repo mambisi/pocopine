@@ -1,0 +1,29 @@
+[package]
+name = "pocopine-storage-azure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Azure Blob Storage backend adapter for pocopine-storage."
+
+[dependencies]
+azure_core = "1"
+azure_storage_blob = "1"
+bytes = "1"
+futures-util = "0.3"
+pocopine-storage = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { version = "0.3", features = ["serde"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
+tracing = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+base64 = "0.22"
+hmac = "0.12"
+percent-encoding = "2"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
+testcontainers = { version = "0.23", features = ["http_wait"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

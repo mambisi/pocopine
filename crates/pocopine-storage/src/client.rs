@@ -594,7 +594,9 @@ mod wasm {
                             self.emit(UploadPhase::Uploading, offset);
                             break;
                         }
-                        Err(StorageError::OffsetMismatch { .. }) => {
+                        Err(
+                            StorageError::OffsetMismatch { .. } | StorageError::Conflict { .. },
+                        ) => {
                             session = self.inspect_session(&session).await?;
                             self.store_resume_session(&session);
                             offset = session.next_offset.unwrap_or(0);
