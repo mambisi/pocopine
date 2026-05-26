@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pocopine_storage::backend_common::{UploadSessionLockCleanup, UploadSessionLockRegistry};
 use pocopine_storage::{StorageResult, UploadSessionId};
@@ -12,7 +12,8 @@ use pocopine_storage::{StorageResult, UploadSessionId};
 async fn session_lock_registry_serializes_under_stress_and_panic() -> StorageResult<()> {
     const SESSIONS: usize = 32;
     const WORKERS: usize = 96;
-    const ROUNDS: usize = 96;
+    const ROUNDS: usize = 4_096;
+    const OPERATIONS: usize = WORKERS * ROUNDS;
 
     let registry = Arc::new(UploadSessionLockRegistry::new());
     let active = Arc::new(
@@ -22,6 +23,7 @@ async fn session_lock_registry_serializes_under_stress_and_panic() -> StorageRes
     );
     let violations = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
+    let started = Instant::now();
 
     for worker in 0..WORKERS {
         let registry = Arc::clone(&registry);
@@ -52,6 +54,12 @@ async fn session_lock_registry_serializes_under_stress_and_panic() -> StorageRes
         violations.load(Ordering::SeqCst),
         0,
         "session locks allowed concurrent holders for the same session"
+    );
+    let elapsed = started.elapsed();
+    println!(
+        "storage lock stress: {OPERATIONS} lock acquisitions across {SESSIONS} sessions in {:.3}s ({:.0} ops/s)",
+        elapsed.as_secs_f64(),
+        OPERATIONS as f64 / elapsed.as_secs_f64()
     );
 
     let panic_session = UploadSessionId::new("panic-holder")?;
