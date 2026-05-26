@@ -61,16 +61,28 @@ impl Parse for ResourceArgs {
                         "`schema_version` must be a u32 integer literal (e.g. `schema_version = 2`)",
                     )
                 })?;
+                // `base10_parse::<u32>` silently strips type suffixes —
+                // `schema_version = 3u64` would otherwise parse as `3`.
+                // Reject anything that's not bare or explicitly `u32`.
+                let suffix = lit.suffix();
+                if !suffix.is_empty() && suffix != "u32" {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        format!(
+                            "`schema_version` must be a bare integer literal or `u32`-suffixed (got: {lit})"
+                        ),
+                    ));
+                }
                 let value: u32 = lit.base10_parse().map_err(|err| {
                     syn::Error::new(
                         lit.span(),
-                        format!("`schema_version` must fit in u32 (got: {}): {err}", lit),
+                        format!("`schema_version` must fit in u32 (got: {lit}): {err}"),
                     )
                 })?;
                 if value == 0 {
                     return Err(syn::Error::new(
                         lit.span(),
-                        "`schema_version` must be >= 1 (schema versions start at 1)",
+                        "schema_version must be >= 1 (schema versions start at 1)",
                     ));
                 }
                 schema_version = Some(value);
@@ -554,7 +566,8 @@ mod tests {
     fn rejects_zero_schema_version() {
         let err = parse_args(r#"name = "customers", schema_version = 0"#).unwrap_err();
 
-        assert!(err.to_string().contains("must be >= 1"));
+        // Matches the message used by the runtime builder error too.
+        assert!(err.to_string().contains("schema_version must be >= 1"));
     }
 
     #[test]
@@ -570,6 +583,27 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("duplicate `schema_version`"));
+    }
+
+    #[test]
+    fn rejects_suffixed_non_u32_schema_version() {
+        // `base10_parse::<u32>` strips suffixes silently, so a user
+        // writing `3u64` would otherwise parse as `3`. Flag explicitly.
+        let err = parse_args(r#"name = "customers", schema_version = 3u64"#).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must be a bare integer literal or `u32`-suffixed"));
+
+        let err = parse_args(r#"name = "customers", schema_version = 3i32"#).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must be a bare integer literal or `u32`-suffixed"));
+    }
+
+    #[test]
+    fn accepts_u32_suffixed_schema_version() {
+        let args = parse_args(r#"name = "customers", schema_version = 5u32"#).unwrap();
+        assert_eq!(args.schema_version, 5);
     }
 
     #[test]

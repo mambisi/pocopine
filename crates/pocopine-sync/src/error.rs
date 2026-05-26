@@ -32,13 +32,15 @@ pub enum SyncError {
     /// version for a stream, and the source has not registered a migrator
     /// that can bridge the two.
     ///
-    /// Returned by `SyncStreamSource::migrate_payload` (default impl) when a
-    /// push arrives carrying an older `schema_version` than the source
-    /// advertises; the framework can also surface this on the client when
-    /// cached rows can't be rehydrated against the new schema. Surfaces as
-    /// `ServerError::BadRequest` on the wire so the client knows the
-    /// mutation will never accept and should be dropped (or retried after
-    /// re-encoding against the new shape).
+    /// Surfaces as `ServerError::BadRequest` on the wire so the client
+    /// knows the mutation will never accept and should be dropped (or
+    /// retried after re-encoding against the new shape). The follow-up
+    /// batches will return this from a `SyncStreamSource::migrate_payload`
+    /// default impl on the server side when a push arrives carrying an
+    /// older `schema_version` than the source advertises, and from the
+    /// client when cached rows can't be rehydrated against the new
+    /// schema. The variant is introduced here so downstream callers can
+    /// already typecheck against it.
     SchemaMigration { stream: String, from: u32, to: u32 },
 }
 

@@ -145,6 +145,10 @@ fn resource_attribute_preserves_crud_source_impl() {
 #[test]
 fn resource_attribute_generates_module_contract() {
     assert_eq!(customers::NAME, "customers");
+    // The default schema_version when `#[resource(...)]` omits the
+    // attribute is 1; the macro emits a `pub const SCHEMA_VERSION` in
+    // the generated module so apps can read it for migration logic.
+    assert_eq!(customers::SCHEMA_VERSION, 1);
 
     let state = CollectionState::<Customer>::default();
     let view = customers::view(&state).unwrap();
