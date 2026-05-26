@@ -1025,6 +1025,7 @@ fn start_open_then_pull<C, T>(
         let mut local_cursor = None;
         let mut pending_mutations = Vec::new();
         let mut local_error = None;
+        let mut cached_schema_version: Option<u32> = None;
 
         let hydrate_result = local_store.hydrate_stream(&stream).await;
         // Sign-out can fire while we're awaiting hydrate; if so, drop
@@ -1037,6 +1038,7 @@ fn start_open_then_pull<C, T>(
         match hydrate_result {
             Ok(snapshot) => {
                 local_cursor = snapshot.cursor.clone();
+                cached_schema_version = snapshot.application_schema_version;
                 pending_mutations = snapshot
                     .pending_mutations
                     .iter()
@@ -1088,19 +1090,62 @@ fn start_open_then_pull<C, T>(
         if epoch.is_stale() {
             return;
         }
-        // Capture the advertised schema_version. Batch 2 will compare this
-        // against the cached value and clear the stream on mismatch; for
-        // Batch 1 we just receive it (and the `_` silences the unused-var
-        // lint until the next batch wires it up).
-        match open_result.and_then(|response| validate_open_response(response, &stream)) {
-            Ok(_advertised_schema_version) => {}
-            Err(err) => {
+        let advertised_schema_version =
+            match open_result.and_then(|response| validate_open_response(response, &stream)) {
+                Ok(v) => v,
+                Err(err) => {
+                    handle.update(|state| {
+                        selector(state).apply_error(token, err);
+                    });
+                    return;
+                }
+            };
+
+        // If the cached schema_version differs from what the server is
+        // now advertising, the local cache (rows + pending mutations)
+        // is encoded against a shape the server no longer accepts.
+        // Drop it durably AND in memory so the upcoming pull rebuilds
+        // canonical state against the new shape. `cached_schema_version
+        // == None` means the store has never observed an advertised
+        // version (fresh install, or pre-v4 row) — adopt the
+        // advertised value silently on the next snapshot save.
+        if let Some(cached) = cached_schema_version {
+            if cached != advertised_schema_version {
+                tracing::info!(
+                    target: "pocopine.log",
+                    stream = stream.as_str(),
+                    cached_schema_version = cached,
+                    advertised_schema_version,
+                    "sync stream schema_version changed; clearing local cache + pending mutations",
+                );
+                if let Err(err) = local_store.clear_stream(&stream).await {
+                    // Best-effort: the durable wipe failed. Log it
+                    // and still drop the in-memory state, because
+                    // leaving stale rows around is worse than the
+                    // user re-pulling.
+                    local_error = Some(format!(
+                        "local sync cache wipe-on-schema-bump failed: {err}"
+                    ));
+                }
+                if epoch.is_stale() {
+                    return;
+                }
+                // In-memory side: clear the rows we hydrated and the
+                // pending replay queue so the upcoming pull starts
+                // from canonical fresh state.
+                pending_mutations.clear();
                 handle.update(|state| {
-                    selector(state).apply_error(token, err);
+                    selector(state).apply_local_snapshot_with_pending(Vec::new(), None, Vec::new());
                 });
-                return;
             }
         }
+        // Stamp the advertised version onto the next snapshot save so
+        // future opens observe it. The hop happens via thread_local
+        // overlay because save_snapshot is invoked deep inside the
+        // server-driven pull/push path; instead we use the
+        // LocalSnapshotBatch's `application_schema_version` field
+        // directly on each save site that runs after this point.
+        let advertised_schema_version_for_persist = advertised_schema_version;
 
         if let Some(live_wakeup) = live_wakeup {
             open_live_wakeup(
@@ -1151,7 +1196,13 @@ fn start_open_then_pull<C, T>(
         }
         let result = match result {
             Ok(response) => {
-                if let Err(err) = persist_pull_response(&local_store, &response).await {
+                if let Err(err) = persist_pull_response(
+                    &local_store,
+                    &response,
+                    Some(advertised_schema_version_for_persist),
+                )
+                .await
+                {
                     local_error = Some(format!("local sync cache persist failed: {err}"));
                 }
                 Ok(response)
@@ -1351,7 +1402,12 @@ fn start_pull<C, T>(
         let mut local_error = None;
         let result = match result {
             Ok(response) => {
-                if let Err(err) = persist_pull_response(&local_store, &response).await {
+                // `start_pull` is invoked by live-wakeup / explicit
+                // refresh after the initial open has already recorded
+                // the advertised schema_version, so we pass None here.
+                // The UPSERT's coalesce preserves the value
+                // `start_open_then_pull` already persisted.
+                if let Err(err) = persist_pull_response(&local_store, &response, None).await {
                     local_error = Some(format!("local sync cache persist failed: {err}"));
                 }
                 Ok(response)
@@ -1801,6 +1857,7 @@ where
 async fn persist_pull_response<T>(
     local_store: &SyncLocalStoreHandle,
     response: &SyncPullResponse<T>,
+    application_schema_version: Option<u32>,
 ) -> SyncResult<()>
 where
     T: serde::Serialize,
@@ -1813,12 +1870,15 @@ where
                 .map(row_to_value)
                 .collect::<SyncResult<Vec<_>>>()?;
             local_store
-                .save_snapshot(LocalSnapshotBatch::new(
-                    response.stream.clone(),
-                    response.collection.clone(),
-                    rows,
-                    response.cursor.clone(),
-                ))
+                .save_snapshot(
+                    LocalSnapshotBatch::new(
+                        response.stream.clone(),
+                        response.collection.clone(),
+                        rows,
+                        response.cursor.clone(),
+                    )
+                    .with_application_schema_version(application_schema_version),
+                )
                 .await
         }
         SyncPullMode::Incremental => {

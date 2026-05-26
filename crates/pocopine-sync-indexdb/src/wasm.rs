@@ -178,6 +178,12 @@ impl SyncLocalStore for IndexedDbLocalStore {
         let database_name = self.database_name.clone();
         self.run(clear_all_streams(database_name))
     }
+
+    fn clear_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, ()> {
+        let database_name = self.database_name.clone();
+        let stream = stream.clone();
+        self.run(clear_stream(database_name, stream))
+    }
 }
 
 async fn load_identity(database_name: String) -> SyncResult<Option<SyncLocalIdentity>> {
@@ -245,6 +251,13 @@ async fn save_snapshot(database_name: String, snapshot: LocalSnapshotBatch) -> S
     state.collection = Some(snapshot.collection);
     state.cursor = snapshot.cursor;
     state.rows = sorted_rows(snapshot.rows);
+    // Only overwrite when the caller carries a value; passing `None`
+    // from a code path that hasn't observed the advertised version yet
+    // must not clobber a previously recorded value. Mirrors the
+    // `coalesce(...)` in the SQLite UPSERT.
+    if let Some(version) = snapshot.application_schema_version {
+        state.application_schema_version = Some(version);
+    }
     put_stream_state(&store, &state).await?;
     await_transaction(done).await?;
     database.close();
@@ -400,6 +413,27 @@ async fn clear_all_streams(database_name: String) -> SyncResult<()> {
     let done = transaction_done(&transaction);
     let store = transaction.object_store(STREAMS_STORE).map_err(js_error)?;
     store.clear().map_err(js_error)?;
+    await_transaction(done).await?;
+    database.close();
+    Ok(())
+}
+
+/// Drop the per-stream record from the IndexedDB streams object
+/// store. The serialized `LocalStreamSnapshot` carries the stream's
+/// rows, cursor, pending mutations, and `application_schema_version`
+/// in one IDB row, so deleting that row wipes everything for the
+/// stream in one atomic IDB transaction. Other streams + the meta
+/// store (device identity) are untouched. Safe to call on a
+/// never-persisted stream — `IdbObjectStore::delete` on a missing key
+/// is a successful no-op.
+async fn clear_stream(database_name: String, stream: SyncStreamName) -> SyncResult<()> {
+    let database = open_database(&database_name).await?;
+    let transaction = transaction(&database, STREAMS_STORE, IdbTransactionMode::Readwrite)?;
+    let done = transaction_done(&transaction);
+    let store = transaction.object_store(STREAMS_STORE).map_err(js_error)?;
+    store
+        .delete(&JsValue::from_str(stream.as_str()))
+        .map_err(js_error)?;
     await_transaction(done).await?;
     database.close();
     Ok(())

@@ -189,6 +189,17 @@ pub struct LocalStreamSnapshot {
     pub rows: Vec<SyncRow<serde_json::Value>>,
     #[serde(default)]
     pub pending_mutations: Vec<LocalPendingMutation>,
+    /// Application-level schema version this snapshot was cached under,
+    /// captured from the server's most recent `/open` response. `None`
+    /// means "the store has never observed an advertised version for
+    /// this stream" — typically a fresh install or a `__pocopine_streams`
+    /// row that existed before the v3→v4 storage migration added the
+    /// column. The client compares this against the freshly-advertised
+    /// version on every open: if they differ (and cached is `Some`),
+    /// the stream is wiped via `clear_stream`; if cached is `None`, the
+    /// advertised value is adopted silently on the next snapshot save.
+    #[serde(default)]
+    pub application_schema_version: Option<u32>,
 }
 
 impl LocalStreamSnapshot {
@@ -200,6 +211,7 @@ impl LocalStreamSnapshot {
             cursor: None,
             rows: Vec::new(),
             pending_mutations: Vec::new(),
+            application_schema_version: None,
         }
     }
 }
@@ -212,6 +224,12 @@ pub struct LocalSnapshotBatch {
     pub cursor: Option<SyncCursor>,
     #[serde(default)]
     pub rows: Vec<SyncRow<serde_json::Value>>,
+    /// Application-level schema version to record alongside this
+    /// snapshot. `None` means the caller hasn't observed an advertised
+    /// version yet and the store should leave the column NULL; the next
+    /// open with a known advertised version will set it.
+    #[serde(default)]
+    pub application_schema_version: Option<u32>,
 }
 
 impl LocalSnapshotBatch {
@@ -226,7 +244,16 @@ impl LocalSnapshotBatch {
             collection,
             cursor,
             rows,
+            application_schema_version: None,
         }
+    }
+
+    /// Fluent setter for the application schema version. Use this when
+    /// the snapshot is being saved in response to a successful `/open`
+    /// that advertised the version.
+    pub fn with_application_schema_version(mut self, version: Option<u32>) -> Self {
+        self.application_schema_version = version;
+        self
     }
 }
 
@@ -419,6 +446,40 @@ pub trait SyncLocalStore {
     fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
         Box::pin(std::future::ready(Err(SyncError::unsupported(
             "SyncLocalStore::clear_all_streams is not implemented for this store",
+        ))))
+    }
+
+    /// Durably drop every persisted row, pending mutation, conflict
+    /// marker, and stream-metadata row for ONE stream — leaving every
+    /// other stream and the device identity row intact.
+    ///
+    /// This is the storage primitive behind the client-side schema-bump
+    /// cache invalidation: when `/open` advertises a `schema_version`
+    /// different from the cached `application_schema_version` for the
+    /// stream, the client awaits `clear_stream` before hydrating so
+    /// stale rows + queued mutations encoded against the old shape
+    /// don't reach the in-memory `CollectionState`. Authors that opt
+    /// into the per-stream wipe also use it for tenant-switcher UIs
+    /// that re-scope a stream without a full sign-out.
+    ///
+    /// Implementations MUST:
+    ///
+    /// * Persist the wipe before returning. Reload must observe an empty
+    ///   cache for this stream, not the pre-wipe state.
+    /// * Leave other streams' rows + pending mutations untouched.
+    /// * Leave the device identity row untouched.
+    /// * Be safe to call on a stream that's never been persisted — a
+    ///   per-stream wipe on a fresh install is a successful no-op.
+    /// * Wipe atomically: a mid-wipe failure must either revert
+    ///   entirely or complete entirely (SQLite-WAL backed stores wrap
+    ///   the deletes in `BEGIN IMMEDIATE TRANSACTION`).
+    ///
+    /// The default implementation returns `SyncError::Unsupported` so
+    /// an out-of-tree store that hasn't opted in cannot silently leave
+    /// durable data behind on a schema bump.
+    fn clear_stream(&self, _stream: &SyncStreamName) -> SyncLocalFuture<'_, ()> {
+        Box::pin(std::future::ready(Err(SyncError::unsupported(
+            "SyncLocalStore::clear_stream is not implemented for this store",
         ))))
     }
 }

@@ -12,9 +12,10 @@ use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::schema::{
-    BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, DELETE_MUTATION_SQL,
-    DELETE_PENDING_FOR_ROW_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL, META_DEVICE_ID,
-    META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
+    BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, CLEAR_STREAM_SQL,
+    DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL,
+    META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
+    MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
     SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
     UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
@@ -157,6 +158,10 @@ impl SyncLocalStore for SqliteLocalStore {
     fn clear_all_streams(&self) -> SyncLocalFuture<'_, ()> {
         self.run(clear_all_streams())
     }
+
+    fn clear_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, ()> {
+        self.run(clear_stream(stream.clone()))
+    }
 }
 
 async fn ensure_database(database_name: &str) -> SyncResult<()> {
@@ -252,6 +257,7 @@ async fn migrate_schema() -> SyncResult<()> {
             "invalid sync sqlite schema version in local store: {existing}"
         ))
     })?;
+    // v2 -> v3: optimistic_row column on the mutations table.
     if version == 2 && !column_exists("__pocopine_mutations", "optimistic_row").await? {
         exec(
             "alter table __pocopine_mutations add column optimistic_row text",
@@ -259,7 +265,14 @@ async fn migrate_schema() -> SyncResult<()> {
         )
         .await?;
     }
-    if version == 2 {
+    // v3 -> v4: app_schema_version column on the streams table.
+    // Existing rows observe `NULL`, which the client treats as "never
+    // observed; adopt server value silently on next save".
+    if version <= 3 && !column_exists("__pocopine_streams", "app_schema_version").await? {
+        exec(MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, Vec::new()).await?;
+    }
+    // Only stamp the new version when we actually migrated forward.
+    if version < SCHEMA_VERSION {
         upsert_meta(META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string()).await?;
     }
     Ok(())
@@ -327,6 +340,7 @@ async fn hydrate_stream(stream: SyncStreamName) -> SyncResult<LocalStreamSnapsho
             cursor: None,
             rows,
             pending_mutations,
+            application_schema_version: None,
         });
     };
 
@@ -341,6 +355,7 @@ async fn hydrate_stream(stream: SyncStreamName) -> SyncResult<LocalStreamSnapsho
             .transpose()?,
         rows,
         pending_mutations,
+        application_schema_version: optional_u32(meta, "app_schema_version")?,
     })
 }
 
@@ -353,6 +368,7 @@ async fn save_snapshot(snapshot: LocalSnapshotBatch) -> SyncResult<()> {
             &snapshot.collection,
             snapshot.cursor.as_ref(),
             now,
+            snapshot.application_schema_version,
         )
         .await?;
         exec(
@@ -374,7 +390,17 @@ async fn apply_changes(changes: LocalChangeBatch) -> SyncResult<()> {
     let result = async {
         let now = epoch_ms();
         let stream = changes.stream;
-        upsert_stream(&stream, &changes.collection, changes.cursor.as_ref(), now).await?;
+        // apply_changes doesn't carry an advertised schema_version (it
+        // is a post-open delta path); pass None — the UPSERT's coalesce
+        // preserves whatever value `save_snapshot` already recorded.
+        upsert_stream(
+            &stream,
+            &changes.collection,
+            changes.cursor.as_ref(),
+            now,
+            None,
+        )
+        .await?;
         let changes = changes_after_last_reset(changes.changes);
         if changes.had_reset {
             exec(
@@ -445,7 +471,14 @@ async fn mark_push_result(result: LocalPushResult) -> SyncResult<()> {
         let now = epoch_ms();
 
         if let Some(collection) = result.collection.as_ref() {
-            upsert_stream(&result.stream, collection, result.cursor.as_ref(), now).await?;
+            upsert_stream(
+                &result.stream,
+                collection,
+                result.cursor.as_ref(),
+                now,
+                None,
+            )
+            .await?;
         } else if let Some(cursor) = result.cursor.as_ref() {
             exec(
                 "update __pocopine_streams set cursor = ?2, updated_at_ms = ?3 where stream = ?1",
@@ -543,6 +576,20 @@ async fn clear_all_streams() -> SyncResult<()> {
     finish_transaction(result).await
 }
 
+async fn clear_stream(stream: SyncStreamName) -> SyncResult<()> {
+    // Same atomicity rationale as `clear_all_streams`, scoped to one
+    // stream: other streams + the device identity row stay untouched.
+    exec("BEGIN IMMEDIATE TRANSACTION", Vec::new()).await?;
+    let result = async {
+        for sql in CLEAR_STREAM_SQL {
+            exec(sql, vec![JsValue::from_str(stream.as_str())]).await?;
+        }
+        Ok::<(), SyncError>(())
+    }
+    .await;
+    finish_transaction(result).await
+}
+
 async fn purge_pending_for_row(stream: SyncStreamName, key: RowKey) -> SyncResult<usize> {
     // SQLite WASM's exec wrapper doesn't return an affected-rows
     // count, so SELECT-then-DELETE the matching rows in the same
@@ -629,7 +676,15 @@ async fn upsert_stream(
     collection: &SyncCollectionName,
     cursor: Option<&SyncCursor>,
     updated_at_ms: i64,
+    application_schema_version: Option<u32>,
 ) -> SyncResult<()> {
+    // The UPSERT uses `coalesce(excluded.app_schema_version,
+    // __pocopine_streams.app_schema_version)` so passing `None` here
+    // doesn't clobber a previously recorded value.
+    let app_schema_version_param = match application_schema_version {
+        Some(v) => JsValue::from_f64(v as f64),
+        None => JsValue::NULL,
+    };
     exec(
         UPSERT_STREAM_SQL,
         vec![
@@ -638,6 +693,7 @@ async fn upsert_stream(
             optional_param(cursor.map(SyncCursor::as_str)),
             JsValue::from_f64(SCHEMA_VERSION as f64),
             JsValue::from_f64(updated_at_ms as f64),
+            app_schema_version_param,
         ],
     )
     .await
@@ -756,6 +812,27 @@ fn optional_string(row: &Value, field: &'static str) -> SyncResult<Option<String
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(other) => Err(SyncError::backend(format!(
             "invalid sqlite sync local-store field {field}: expected string, got {other}"
+        ))),
+    }
+}
+
+fn optional_u32(row: &Value, field: &'static str) -> SyncResult<Option<u32>> {
+    match row.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => {
+            let value = n.as_u64().ok_or_else(|| {
+                SyncError::backend(format!(
+                    "invalid sqlite sync local-store field {field}: not a u64"
+                ))
+            })?;
+            u32::try_from(value).map(Some).map_err(|_| {
+                SyncError::backend(format!(
+                    "invalid sqlite sync local-store field {field}: does not fit in u32"
+                ))
+            })
+        }
+        Some(other) => Err(SyncError::backend(format!(
+            "invalid sqlite sync local-store field {field}: expected number, got {other}"
         ))),
     }
 }
