@@ -796,7 +796,7 @@ where
     ///
     /// Failures are warned and skipped — the subsequent `/open`
     /// + `/pull` rebuild from scratch, the user just doesn't get
-    /// the instant-paint UX.
+    ///   the instant-paint UX.
     async fn hydrate_phase(&self) {
         let Some(store) = self.local_store.clone() else {
             return;
