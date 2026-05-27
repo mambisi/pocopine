@@ -60,14 +60,15 @@ fn macro_emits_constants() {
 
 #[test]
 fn builder_constructs_typed_query() {
+    use issues::field;
+
     let q = Issues::query()
-        .workspace_id("W1".to_string())
-        .status_in([Status::Open, Status::InProgress])
+        .eq(field::workspace_id, "W1".to_string())
+        .in_set(field::status, [Status::Open, Status::InProgress])
         .unwrap()
-        .title_contains("auth")
+        .contains(field::title, "auth")
         .unwrap()
-        .priority_range(params::Range::closed(1u32, 10))
-        .unwrap()
+        .range(field::priority, params::Range::closed(1u32, 10))
         .order_by("priority", Order::Asc)
         .limit(50)
         .build();
@@ -84,7 +85,11 @@ fn builder_constructs_typed_query() {
 
 #[test]
 fn matches_required_eq_row_in_workspace() {
-    let q = Issues::query().workspace_id("W1".to_string()).build();
+    use issues::field;
+
+    let q = Issues::query()
+        .eq(field::workspace_id, "W1".to_string())
+        .build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut other = sample_issue();
     other.workspace_id = "W2".to_string();
@@ -93,9 +98,11 @@ fn matches_required_eq_row_in_workspace() {
 
 #[test]
 fn matches_optional_eq_some_value() {
+    use issues::field;
+
     let q = Issues::query()
-        .workspace_id("W1".to_string())
-        .assignee_id("alice".to_string())
+        .eq(field::workspace_id, "W1".to_string())
+        .eq(field::assignee_id, "alice".to_string())
         .build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut bob = sample_issue();
@@ -108,9 +115,11 @@ fn matches_optional_eq_some_value() {
 
 #[test]
 fn matches_in_set() {
+    use issues::field;
+
     let q = Issues::query()
-        .workspace_id("W1".to_string())
-        .status_in([Status::Open, Status::InProgress])
+        .eq(field::workspace_id, "W1".to_string())
+        .in_set(field::status, [Status::Open, Status::InProgress])
         .unwrap()
         .build();
     assert!(issues::matches(&q, &sample_issue()));
@@ -121,10 +130,11 @@ fn matches_in_set() {
 
 #[test]
 fn matches_range() {
+    use issues::field;
+
     let q = Issues::query()
-        .workspace_id("W1".to_string())
-        .priority_range(params::Range::closed(1u32, 5))
-        .unwrap()
+        .eq(field::workspace_id, "W1".to_string())
+        .range(field::priority, params::Range::closed(1u32, 5))
         .build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut high = sample_issue();
@@ -134,9 +144,11 @@ fn matches_range() {
 
 #[test]
 fn matches_contains_case_insensitive() {
+    use issues::field;
+
     let q = Issues::query()
-        .workspace_id("W1".to_string())
-        .title_contains("AUTH")
+        .eq(field::workspace_id, "W1".to_string())
+        .contains(field::title, "AUTH")
         .unwrap()
         .build();
     assert!(issues::matches(&q, &sample_issue()));
@@ -162,8 +174,14 @@ fn matches_returns_false_when_required_field_absent_from_params() {
 
 #[test]
 fn distinct_workspace_queries_have_distinct_keys() {
-    let a = Issues::query().workspace_id("W1".to_string()).build();
-    let b = Issues::query().workspace_id("W2".to_string()).build();
+    use issues::field;
+
+    let a = Issues::query()
+        .eq(field::workspace_id, "W1".to_string())
+        .build();
+    let b = Issues::query()
+        .eq(field::workspace_id, "W2".to_string())
+        .build();
     assert_ne!(a.key(), b.key());
 }
 

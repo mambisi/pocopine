@@ -35,8 +35,8 @@ Estimated work to land the target design: medium-sized PR touching `SyncClient`,
 ┌─────────────────────────────────────────────────────────────────────┐
 │  App code                                                           │
 │  • Resource::create(...)   / save / remove                          │
-│  • Resource::stream().where_eq(field::workspace_id, W).observe()    │
-│  • Resource::query().where_in(field::status, [...]).observe_with(…) │
+│  • Resource::query().eq(field::workspace_id, W).observe(&client)   │
+│  • Resource::query().in_set(field::status, [...])?.observe(&client) │
 └─────────────────────────────┬───────────────────────────────────────┘
                               │
                               ▼

@@ -13,15 +13,14 @@
 //! | `created_at: params::Range<T>`   | `FieldRange<T>`        |
 //! | `title: params::Contains`        | `FieldContains`        |
 //!
-//! The query DSL methods (`.where_eq`, `.where_in`, `.where_range`,
-//! `.where_contains`) are generic over the trait, so misuse fails to
-//! compile:
+//! The query DSL methods (`.eq`, `.in_set`, `.range`, `.contains`)
+//! are generic over the trait, so misuse fails to compile:
 //!
 //! ```ignore
-//! Issues::query().where_in(field::workspace_id, [...])
-//! //                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ workspace_id is
-//! //                       declared `WorkspaceId` (required eq), not
-//! //                       `InSet<...>`, so this errors at compile time.
+//! Issues::query().in_set(field::workspace_id, [...])
+//! //                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ workspace_id is
+//! //                     declared `WorkspaceId` (required eq), not
+//! //                     `InSet<...>`, so this errors at compile time.
 //! ```
 //!
 //! All traits are sealed (private supertrait) so app code cannot

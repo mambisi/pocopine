@@ -78,11 +78,12 @@ The macro generates:
 ### 2.2 Building a query
 
 ```rust
+use issues::field;
 let query = Issues::query()
-    .where_eq(field::workspace_id, w1)?
-    .where_in(field::status, [Status::Open])?
-    .where_contains(field::title, "auth")?
-    .order_by(field::created_at, Order::Desc)
+    .eq(field::workspace_id, w1)
+    .in_set(field::status, [Status::Open])?
+    .contains(field::title, "auth")?
+    .order_by("created_at", Order::Desc)
     .limit(50)
     .build();
 ```
@@ -537,7 +538,7 @@ SettingsClient::save(form_data).await?;
 
 // Issues — multi-tenant, Query-shaped.
 let issues_in_w1 = query_client.subscribe(
-    Issues::query().where_eq(field::workspace_id, w1)?.build()
+    Issues::query().eq(issues::field::workspace_id, w1).build()
 );
 query_client.mutate::<create_issue::Mutator>(payload).await?;
 ```
@@ -571,8 +572,8 @@ For sources that want CRUD's transactional push handling (mutation log, dedup, t
 
 `crates/pocopine-sync-query-macros/tests/ui/`:
 
-* `query_in_on_eq_only_field.rs` — calling `.where_in` on a field declared as bare `T`.
-* `query_unknown_field.rs` — calling `.where_eq(unknown_field, _)`.
+* `query_in_on_eq_only_field.rs` — calling `.in_set` on a field declared as bare `T`.
+* `query_unknown_field.rs` — calling `.eq(unknown_field, _)`.
 * `query_empty_params.rs` — `#[query_resource(params())]` parse error.
 
 Ports the existing Batch 4 trybuild patterns.

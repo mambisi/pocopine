@@ -340,29 +340,34 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
 
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params, &row_ty);
-    let builder_methods = generate_builder_methods(&params);
 
     Ok(quote! {
         #item
 
         impl #resource_ident {
-            /// Build a typed query for this resource.
-            pub fn query() -> #module_ident::QueryBuilder {
-                #module_ident::QueryBuilder::new()
+            /// Build a typed query for this resource. Returns the
+            /// generic [`pocopine_sync_query::QueryBuilder`] pre-wired
+            /// with the resource's stream name and predicate
+            /// evaluator. Apply filters with the trait-gated DSL —
+            /// `.eq(field::name, value)`, `.in_set(field::name,
+            /// values)?`, `.range(field::name, range)`,
+            /// `.contains(field::name, "needle")?` — then `.build()`
+            /// (or `.observe(&client)` to subscribe directly).
+            pub fn query() -> ::pocopine_sync_query::QueryBuilder<#row_ty> {
+                let stream = ::pocopine_sync_query::SyncStreamName::new(#name_lit)
+                    .expect("query_resource name passed validation");
+                ::pocopine_sync_query::Query::<#row_ty>::builder(stream)
+                    .with_matches(#module_ident::matches)
             }
         }
 
         pub mod #module_ident {
             // We pull the caller's scope into this module so the
             // user's row type and per-field comparator types
-            // (declared in `params(...)`) resolve here. The glob is
-            // OK because Rust resolves locally-defined items in this
-            // module ahead of glob imports — so the macro's own
-            // `Row` alias, `QueryBuilder`, `field` submodule, and
-            // `matches` fn always shadow anything brought in from
-            // `super`, regardless of identifier collisions in caller
-            // scope. `#[allow(unused_imports)]` silences the lint for
-            // callers that don't import anything reusable.
+            // (declared in `params(...)`) resolve here. Local items in
+            // this module shadow anything brought in from `super`, so
+            // identifier collisions in caller scope can't break the
+            // macro-generated items (`Row`, `field`, `matches`).
             #[allow(unused_imports)]
             use super::*;
 
@@ -370,71 +375,12 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
             pub const SCHEMA_VERSION: u32 = #schema_version;
             pub type Row = #row_ty;
 
-            /// Typed query builder. Each `where_*` method requires the
-            /// matching `field::*` marker; misuse fails to compile via
-            /// the sealed comparator-trait gate in `pocopine_sync_query`.
-            pub struct QueryBuilder {
-                inner: ::pocopine_sync_query::QueryBuilder<Row>,
-            }
-
-            impl QueryBuilder {
-                pub fn new() -> Self {
-                    let stream = ::pocopine_sync_query::SyncStreamName::new(NAME)
-                        .expect("query_resource name passed validation");
-                    Self {
-                        inner: ::pocopine_sync_query::Query::<Row>::builder(stream)
-                            .with_matches(self::matches),
-                    }
-                }
-
-                #(#builder_methods)*
-
-                pub fn order_by(
-                    mut self,
-                    field: impl ::std::convert::Into<::std::string::String>,
-                    direction: ::pocopine_sync_query::Order,
-                ) -> Self {
-                    self.inner = self.inner.order_by(field, direction);
-                    self
-                }
-
-                pub fn limit(mut self, limit: u32) -> Self {
-                    self.inner = self.inner.limit(limit);
-                    self
-                }
-
-                pub fn build(self) -> ::pocopine_sync_query::Query<Row> {
-                    self.inner.build()
-                }
-
-                /// Subscribe to this query through `client`. Returns a
-                /// reactive [`QueryView`] that holds the subscription
-                /// alive until dropped. Equivalent to
-                /// `client.observe(self.build())` but reads better at
-                /// the call site:
-                ///
-                /// ```ignore
-                /// let view = Issues::query()
-                ///     .workspace_id(w1)
-                ///     .observe(&client);
-                /// ```
-                pub fn observe(
-                    self,
-                    client: &::pocopine_sync_query::QueryClient,
-                ) -> ::pocopine_sync_query::QueryView<Row> {
-                    client.observe(self.build())
-                }
-            }
-
-            impl Default for QueryBuilder {
-                fn default() -> Self {
-                    Self::new()
-                }
-            }
-
             /// Field markers for the type-safe query DSL. One marker
             /// per declared param; each impls exactly the comparator
-            /// trait matching its declared shape.
+            /// trait matching its declared shape — so
+            /// `.eq(field::workspace_id, ...)` requires a `FieldEq`
+            /// marker and `.in_set(field::status, ...)` requires a
+            /// `FieldInSet` marker. Misuse fails to compile.
             pub mod field {
                 #[allow(unused_imports)]
                 use super::*;
@@ -511,7 +457,8 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
             };
             quote! {
                 #[allow(non_camel_case_types)]
-                #[doc = concat!("Field marker for `", #name_str, "` — used by the query DSL's `where_*` methods.")]
+                #[doc = concat!("Field marker for `", #name_str, "` — used by the query DSL methods (`.eq`, `.in_set`, `.range`, `.contains`).")]
+                #[derive(::std::marker::Copy, ::std::clone::Clone)]
                 pub struct #marker_ident;
                 // SAFETY: marker is macro-generated and matches the
                 // comparator declared in `params(...)`. The `unsafe`
@@ -520,95 +467,6 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
                 #comparator_impl
                 #[allow(non_upper_case_globals)]
                 pub const #name: #marker_ident = #marker_ident;
-            }
-        })
-        .collect()
-}
-
-fn generate_builder_methods(params: &[ParamDef]) -> Vec<TokenStream2> {
-    params
-        .iter()
-        .map(|param| {
-            let name = &param.name;
-            let name_str = name.to_string();
-            match &param.kind {
-                ComparatorKind::RequiredEq => {
-                    let ty = &param.ty;
-                    quote! {
-                        pub fn #name(mut self, value: #ty) -> Self
-                        where
-                            #ty: ::pocopine_sync_query::__private::serde::Serialize,
-                        {
-                            let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&value)
-                                .expect("RequiredEq field encodes successfully");
-                            self.inner = self.inner.raw_param(#name_str, encoded);
-                            self
-                        }
-                    }
-                }
-                ComparatorKind::OptionalEq { inner } => {
-                    quote! {
-                        pub fn #name(mut self, value: #inner) -> Self
-                        where
-                            #inner: ::pocopine_sync_query::__private::serde::Serialize,
-                        {
-                            let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&value)
-                                .expect("OptionalEq field encodes successfully");
-                            self.inner = self.inner.raw_param(#name_str, encoded);
-                            self
-                        }
-                    }
-                }
-                ComparatorKind::InSet { inner } => {
-                    let method_name = Ident::new(&format!("{name_str}_in"), name.span());
-                    quote! {
-                        pub fn #method_name<I>(mut self, values: I) -> ::pocopine_sync::SyncResult<Self>
-                        where
-                            I: ::std::iter::IntoIterator<Item = #inner>,
-                            #inner: ::pocopine_sync_query::__private::serde::Serialize,
-                        {
-                            let set = ::pocopine_sync_query::params::InSet::<#inner>::new(values)
-                                .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
-                            let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&set)
-                                .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
-                            self.inner = self.inner.raw_param(#name_str, encoded);
-                            Ok(self)
-                        }
-                    }
-                }
-                ComparatorKind::Range { inner } => {
-                    let method_name = Ident::new(&format!("{name_str}_range"), name.span());
-                    quote! {
-                        pub fn #method_name(
-                            mut self,
-                            range: ::pocopine_sync_query::params::Range<#inner>,
-                        ) -> ::pocopine_sync::SyncResult<Self>
-                        where
-                            #inner: ::pocopine_sync_query::__private::serde::Serialize,
-                        {
-                            let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&range)
-                                .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
-                            self.inner = self.inner.raw_param(#name_str, encoded);
-                            Ok(self)
-                        }
-                    }
-                }
-                ComparatorKind::Contains => {
-                    let method_name = Ident::new(&format!("{name_str}_contains"), name.span());
-                    quote! {
-                        pub fn #method_name(
-                            mut self,
-                            needle: impl ::std::convert::Into<::std::string::String>,
-                        ) -> ::pocopine_sync::SyncResult<Self> {
-                            let contains = ::pocopine_sync_query::params::Contains::icontains(needle)
-                                .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
-                            let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&contains)
-                                .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
-                            self.inner = self.inner.raw_param(#name_str, encoded);
-                            Ok(self)
-                        }
-                    }
-                }
             }
         })
         .collect()
@@ -627,9 +485,8 @@ fn generate_matches_body(params: &[ParamDef], _row_ty: &Type) -> TokenStream2 {
                 ComparatorKind::RequiredEq => {
                     let ty = &param.ty;
                     // Required-equality: the param MUST be set. A
-                    // query built without the setter (e.g.
-                    // `Issues::query().build()` with no
-                    // `.workspace_id(...)` call) would otherwise
+                    // query built without the matching
+                    // `.eq(field::<name>, ...)` call would otherwise
                     // permissively match every row in the stream —
                     // a cross-tenant data leak the macro must close.
                     quote! {

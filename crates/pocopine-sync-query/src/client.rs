@@ -785,7 +785,7 @@ impl<Row: 'static> QueryView<Row> {
     /// component handler):
     ///
     /// ```ignore
-    /// let view = Issues::query().workspace_id(w1).observe(&qc);
+    /// let view = Issues::query().eq(field::workspace_id, w1).observe(&qc);
     /// let scope = pocopine_core::current_scope_id().unwrap();
     /// let _token = view.on_update(move || {
     ///     pocopine_core::scope::notify(scope, "issues_view");
