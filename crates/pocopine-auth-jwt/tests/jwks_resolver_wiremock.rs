@@ -267,6 +267,100 @@ async fn jwks_500_response_yields_key_resolution_failed() {
 }
 
 #[tokio::test]
+async fn jwks_404_response_yields_key_resolution_failed() {
+    // A 404 from the JWKS endpoint (misconfigured URL, retired
+    // provider) must surface as `KeyResolutionFailed`, not as a
+    // panic or a silent allow.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(JWKS_PATH))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let url = format!("{}{}", server.uri(), JWKS_PATH);
+    let v = verifier(&url, Duration::from_secs(3600), Duration::from_secs(30));
+    let key = synth_key("kid-A");
+    let token = sign_token(&key, "user-1");
+
+    let err = v.verify_token(&token).await.unwrap_err();
+    assert!(
+        matches!(err, JwtAuthError::KeyResolutionFailed { .. }),
+        "expected KeyResolutionFailed for 404 response; got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn jwks_empty_keyset_yields_key_resolution_failed() {
+    // 200 OK with a well-formed JWKS document carrying zero keys
+    // must NOT silently pass — every `kid` lookup will miss and
+    // the resolver must report `KeyResolutionFailed`.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(JWKS_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"keys":[]}"#))
+        .mount(&server)
+        .await;
+
+    let url = format!("{}{}", server.uri(), JWKS_PATH);
+    let v = verifier(&url, Duration::from_secs(3600), Duration::from_secs(30));
+    let key = synth_key("kid-A");
+    let token = sign_token(&key, "user-1");
+
+    let err = v.verify_token(&token).await.unwrap_err();
+    assert!(
+        matches!(err, JwtAuthError::KeyResolutionFailed { .. }),
+        "expected KeyResolutionFailed for empty keyset; got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn jwks_kid_disappearing_after_refresh_yields_key_resolution_failed() {
+    // Accidental key rotation that drops an in-use kid: first JWKS
+    // serves kid-A; refresh returns a different kid (kid-Z), with
+    // kid-A no longer present. A token still signed by kid-A must
+    // surface `KeyResolutionFailed`, never falsely verify against a
+    // stale cache.
+    let server = MockServer::start().await;
+    let key_a = synth_key("kid-A");
+    let key_z = synth_key("kid-Z");
+
+    // First fetch: kid-A only.
+    Mock::given(method("GET"))
+        .and(path(JWKS_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(jwks_doc(&[&key_a])))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    // All later fetches: kid-Z only — kid-A has been rotated out.
+    Mock::given(method("GET"))
+        .and(path(JWKS_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(jwks_doc(&[&key_z])))
+        .mount(&server)
+        .await;
+
+    // Short TTL so the second verify forces a refresh.
+    let url = format!("{}{}", server.uri(), JWKS_PATH);
+    let v = verifier(&url, Duration::from_millis(50), Duration::from_millis(1));
+
+    // First verify succeeds: kid-A is in the cached JWKS.
+    let token = sign_token(&key_a, "user-1");
+    v.verify_token(&token).await.unwrap();
+
+    // Wait past TTL so the next lookup re-fetches.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    // Second verify with the same kid-A token: refresh runs,
+    // returns a JWKS without kid-A. The resolver must surface
+    // `KeyResolutionFailed`, never accept the token.
+    let err = v.verify_token(&token).await.unwrap_err();
+    assert!(
+        matches!(err, JwtAuthError::KeyResolutionFailed { .. }),
+        "expected KeyResolutionFailed after kid rotation drops in-use key; got: {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn jwks_cache_ttl_triggers_refetch() {
     let server = MockServer::start().await;
     let key = synth_key("kid-A");

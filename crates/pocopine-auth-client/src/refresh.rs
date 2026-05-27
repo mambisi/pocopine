@@ -263,6 +263,57 @@ mod tests {
         assert!(matches!(result, Err(e) if matches!(*e, ServerError::Unauthorized(_))));
     }
 
+    #[test]
+    fn aborted_driver_wakes_waiters_with_synthetic_error() {
+        // ClearOnDrop must publish a synthetic error when the driver
+        // is dropped (or panics out) before publishing — otherwise
+        // waiters hang on a never-completed slot. Panic recovery
+        // exercises the same Drop path; cancelling the driver is the
+        // cleanest way to reach it without unwinding through the
+        // test harness.
+        use crate::test_util::noop_waker;
+        use std::task::Context;
+
+        __reset_refresh_for_test();
+
+        // A refresh that never resolves so the driver stays in-flight
+        // until we drop it.
+        set_refresh(Rc::new(|| async {
+            std::future::pending::<Result<String, ServerError>>().await
+        }));
+
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Start the driver and the waiter, then poll each once so:
+        //   - the driver claims the IN_FLIGHT slot and enters the
+        //     never-resolving refresh future (Pending),
+        //   - the waiter sees the slot already exists and registers
+        //     itself as a SlotWait waker (Pending).
+        let mut driver = Box::pin(refresh_single_flight());
+        let mut waiter = Box::pin(refresh_single_flight());
+        assert!(matches!(driver.as_mut().poll(&mut cx), Poll::Pending));
+        assert!(matches!(waiter.as_mut().poll(&mut cx), Poll::Pending));
+
+        // Drop the driver mid-flight. ClearOnDrop must publish
+        // Unauthorized("refresh aborted") to the slot so the waiter
+        // wakes with an error instead of hanging.
+        drop(driver);
+
+        match waiter.as_mut().poll(&mut cx) {
+            Poll::Ready(Err(e)) => {
+                assert!(
+                    matches!(*e, ServerError::Unauthorized(ref m) if m == "refresh aborted"),
+                    "waiter must wake with the synthetic abort error, got: {e:?}"
+                );
+            }
+            Poll::Ready(Ok(_)) => panic!("waiter must not see a stale Ok"),
+            Poll::Pending => panic!("waiter must be wakened by ClearOnDrop's publish"),
+        }
+
+        __reset_refresh_for_test();
+    }
+
     /// Hand-rolled join, avoids pulling `futures-util` just for tests.
     struct Join<A: Future, B: Future> {
         a: Option<Pin<Box<A>>>,
