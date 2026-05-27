@@ -385,12 +385,29 @@ impl QueryClient {
             &local_changes,
         );
 
+        // Arm a cancellation guard. If the mutate future is dropped
+        // BEFORE we explicitly disarm it (success or handled err
+        // path), the guard's Drop rolls back the optimistic overlay
+        // — without this, futures dropped via `tokio::select!`,
+        // task abort, or any other early-cancel path leave the
+        // optimistic overlay alive in the subscription's pending
+        // queue forever, rendering a row the server never received.
+        let guard: RollbackGuard<'_, M::Row> = RollbackGuard {
+            client: Some(self),
+            stream: stream.clone(),
+            mutation_id: mutation_id.clone(),
+            _row: std::marker::PhantomData,
+        };
+
         // 2. Wire push (caller-supplied context handles transport).
         let canonical_changes = match M::apply_remote(ctx, payload).await {
             Ok(c) => c,
             Err(err) => {
-                // Roll back the optimistic overlay on push failure.
-                self.dequeue_pending::<M::Row>(&stream, &mutation_id);
+                // Roll back the optimistic overlay on push failure
+                // via the guard's Drop — disarm not called, so when
+                // `guard` falls out of scope at function return its
+                // Drop runs `dequeue_pending` exactly once.
+                drop(guard);
                 return Err(err);
             }
         };
@@ -401,6 +418,12 @@ impl QueryClient {
         //    which the routing engine pulls the key via
         //    `row_key_of`.
         self.route_canonical_changes::<M::Row>(&stream, &mutation_id, &canonical_changes);
+
+        // Success path: disarm the guard so its Drop is a no-op
+        // (the canonical reconcile is authoritative; the optimistic
+        // overlay was already dequeued by `route_canonical_changes`
+        // via `state.remove_pending`).
+        guard.disarm();
 
         Ok(crate::MutationOutcome::Accepted(canonical_changes))
     }
@@ -425,9 +448,21 @@ impl QueryClient {
                 // a rejected status-change that knocked a row out of
                 // its filter) would leave the view empty until a
                 // server-side refresh.
+                //
+                // Conservative restore: only re-upsert when the key is
+                // NOT currently in canonical. If a concurrent
+                // successful mutation (or a server push) landed a
+                // newer canonical row for the same key while this
+                // mutation was in flight, the stale snapshot would
+                // clobber it. Skipping the restore in that case lets
+                // the newer canonical state stand; eventual
+                // consistency via the next `/pull` handles any
+                // genuine divergence.
                 for overlay in &overlays {
                     if let Some(restored) = overlay.deleted_row.clone() {
-                        state.upsert_canonical(restored);
+                        if !state.canonical_contains(&restored.key) {
+                            state.upsert_canonical(restored);
+                        }
                     }
                 }
                 overlays
@@ -468,13 +503,21 @@ impl QueryClient {
             for change in changes {
                 match change {
                     RowChange::Upsert(row) => {
+                        // Drop rows without an extractable key on the
+                        // floor — there's no way to render them and
+                        // pushing an all-None overlay would just leak
+                        // pending state. Mirrors the predicate-
+                        // departure branch's row_key_of gate.
+                        let Some(key) = row_key_of(row) else {
+                            continue;
+                        };
                         let matches = typed.matches(row);
                         if matches {
                             let mut state = typed.state.borrow_mut();
                             let overlay = PendingOverlay {
                                 mutation_id: mutation_id.clone(),
                                 mutation: wire_mutation.clone(),
-                                optimistic_row: row_key_of(row).map(|key| SyncRow {
+                                optimistic_row: Some(SyncRow {
                                     key,
                                     version: None,
                                     value: row.clone(),
@@ -482,34 +525,42 @@ impl QueryClient {
                                     conflict: false,
                                 }),
                                 deleted_row: None,
+                                evicted_key: None,
                                 conflict: false,
                             };
                             state.push_pending(overlay);
                             touched = true;
-                        } else if let Some(key) = row_key_of(row) {
+                        } else {
                             // Optimistic predicate-DEPARTURE: a row
                             // that previously satisfied this query
                             // but no longer does (e.g. an issue
                             // transitioning from `Open` to `Closed`
                             // in a query filtered to `Open`-only)
                             // must be optimistically removed from
-                            // the view, OR `view.rows()` keeps
-                            // rendering the stale row until the
-                            // server response. Capture the
-                            // canonical row in a Delete-shaped
-                            // overlay so rollback can restore it.
-                            let visible_row: Option<SyncRow<Row>> = {
+                            // the view. Visibility includes BOTH
+                            // canonical AND any prior pending
+                            // optimistic_row for the same key — a
+                            // row that's only-pending still needs to
+                            // get evicted from the rendered view.
+                            let (was_visible, canonical_snapshot) = {
                                 let state = typed.state.borrow();
-                                let found = state.canonical_rows().find(|r| r.key == key);
-                                found.cloned()
+                                let canonical = state.canonical_get(&key).cloned();
+                                let in_pending = state.pending().iter().any(|p| {
+                                    p.optimistic_row
+                                        .as_ref()
+                                        .map(|r| r.key == key)
+                                        .unwrap_or(false)
+                                });
+                                (canonical.is_some() || in_pending, canonical)
                             };
-                            if let Some(prev) = visible_row {
+                            if was_visible {
                                 let mut state = typed.state.borrow_mut();
                                 state.push_pending(PendingOverlay::<Row> {
                                     mutation_id: mutation_id.clone(),
                                     mutation: wire_mutation.clone(),
                                     optimistic_row: None,
-                                    deleted_row: Some(prev),
+                                    deleted_row: canonical_snapshot,
+                                    evicted_key: Some(key.clone()),
                                     conflict: false,
                                 });
                                 state.remove_canonical(&key);
@@ -527,18 +578,17 @@ impl QueryClient {
                         // subscription on the stream, spuriously
                         // marking unrelated views as non-empty and
                         // firing their listeners.
-                        let canonical_snapshot: Option<SyncRow<Row>> = {
+                        let (row_visible, canonical_snapshot) = {
                             let state = typed.state.borrow();
-                            let found = state.canonical_rows().find(|r| &r.key == key);
-                            found.cloned()
-                        };
-                        let row_visible = canonical_snapshot.is_some()
-                            || typed.state.borrow().pending().iter().any(|p| {
+                            let canonical = state.canonical_get(key).cloned();
+                            let in_pending = state.pending().iter().any(|p| {
                                 p.optimistic_row
                                     .as_ref()
                                     .map(|r| &r.key == key)
                                     .unwrap_or(false)
                             });
+                            (canonical.is_some() || in_pending, canonical)
+                        };
                         if row_visible {
                             let mut state = typed.state.borrow_mut();
                             state.push_pending(PendingOverlay::<Row> {
@@ -552,6 +602,7 @@ impl QueryClient {
                                 // `deleted_row` None — there's
                                 // nothing canonical to restore.
                                 deleted_row: canonical_snapshot,
+                                evicted_key: Some(key.clone()),
                                 conflict: false,
                             });
                             // Optimistic delete: ALSO remove the row
@@ -675,6 +726,38 @@ impl Default for QueryClient {
 // which uses `Rc::downcast::<QuerySubscription<Row>>` via the
 // `as_rc_any` upcast — fully safe stdlib path.)
 
+/// Cancellation-safety guard for `QueryClient::mutate`. The
+/// optimistic apply happens synchronously before any `.await`; if
+/// the mutate future is dropped between the optimistic apply and
+/// the canonical reconcile (a cancelled `tokio::select!` branch, a
+/// task abort, a `Drop` of the awaiting task), this guard's `Drop`
+/// runs `dequeue_pending` exactly once — rolling back the
+/// optimistic overlay. The success and handled-error paths call
+/// `disarm` to make the `Drop` a no-op (`dequeue_pending` for the
+/// success path has already happened via `route_canonical_changes`;
+/// the error path runs it manually via `drop(guard)`).
+struct RollbackGuard<'a, Row: Clone + 'static> {
+    /// `None` once `disarm()` has been called — Drop becomes a no-op.
+    client: Option<&'a QueryClient>,
+    stream: SyncStreamName,
+    mutation_id: MutationId,
+    _row: std::marker::PhantomData<fn() -> Row>,
+}
+
+impl<Row: Clone + 'static> RollbackGuard<'_, Row> {
+    fn disarm(mut self) {
+        self.client = None;
+    }
+}
+
+impl<Row: Clone + 'static> Drop for RollbackGuard<'_, Row> {
+    fn drop(&mut self) {
+        if let Some(client) = self.client {
+            client.dequeue_pending::<Row>(&self.stream, &self.mutation_id);
+        }
+    }
+}
+
 /// Best-effort row-key extractor.
 ///
 /// Requires the row's serialization to expose an `"id"` field of
@@ -706,27 +789,61 @@ where
 }
 
 /// Compare two `serde_json::Value`s for the rendered-rows
-/// `order_by` sort. Numbers compare numerically, strings compare
-/// lexicographically, bools (false < true), arrays/objects compare
-/// as `Ordering::Equal` (sort-stable fallback), and `None` /
-/// `Value::Null` sort as "less than" every present value. The sort
-/// in `QueryView::rows` is stable, so equal keys keep their
+/// `order_by` sort. The implementation MUST be a total order
+/// (reflexive, antisymmetric, transitive) — `sort_by` is allowed
+/// to panic on stdlib total-order debug assertions otherwise.
+///
+/// `None` and `Some(Value::Null)` are treated identically as
+/// "absent"; absent sorts as `Less` than every present value
+/// (asc → absents first, desc → absents last). Numbers compare
+/// losslessly via `as_i64`/`as_u64` before falling back to `f64`
+/// (so distinct `u64` values above `2^53` don't collide).
+/// Strings compare lexicographically, bools (false < true).
+/// Arrays/objects/cross-type fall back to `Equal`; the sort in
+/// `QueryView::rows` is stable, so equal keys keep their
 /// `BTreeMap` (RowKey-ordered) insertion order.
 fn json_value_cmp(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, _) | (Some(Value::Null), _) => Ordering::Less,
-        (_, None) | (_, Some(Value::Null)) => Ordering::Greater,
-        (Some(Value::Bool(x)), Some(Value::Bool(y))) => x.cmp(y),
-        (Some(Value::Number(x)), Some(Value::Number(y))) => x
-            .as_f64()
-            .partial_cmp(&y.as_f64())
-            .unwrap_or(Ordering::Equal),
-        (Some(Value::String(x)), Some(Value::String(y))) => x.cmp(y),
-        // Cross-type or container — stable fallback.
-        _ => Ordering::Equal,
+
+    fn is_absent(v: Option<&Value>) -> bool {
+        matches!(v, None | Some(Value::Null))
     }
+
+    match (is_absent(a), is_absent(b)) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => {
+            // Both Some(non-Null); the inner unwraps are safe.
+            let a = a.expect("checked by is_absent");
+            let b = b.expect("checked by is_absent");
+            match (a, b) {
+                (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+                (Value::Number(x), Value::Number(y)) => json_number_cmp(x, y),
+                (Value::String(x), Value::String(y)) => x.cmp(y),
+                _ => Ordering::Equal,
+            }
+        }
+    }
+}
+
+/// Compare two `serde_json::Number` values. Tries lossless
+/// integer compare first (both fit in `i64`, or both fit in `u64`),
+/// then falls back to `f64` for floats or mixed-sign large
+/// integers. Avoids the `u64 → f64` precision-loss collision that
+/// makes `u64::MAX` and `u64::MAX - 100` compare equal.
+fn json_number_cmp(x: &serde_json::Number, y: &serde_json::Number) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    if let (Some(xi), Some(yi)) = (x.as_i64(), y.as_i64()) {
+        return xi.cmp(&yi);
+    }
+    if let (Some(xu), Some(yu)) = (x.as_u64(), y.as_u64()) {
+        return xu.cmp(&yu);
+    }
+    // Mixed-sign large integer OR contains a float: fall back to f64.
+    x.as_f64()
+        .partial_cmp(&y.as_f64())
+        .unwrap_or(Ordering::Equal)
 }
 
 // (Owning downcast lives inline at the `subscribe` call site, which
@@ -800,13 +917,18 @@ impl<Row: 'static> QueryView<Row> {
     }
 
     /// Number of rendered rows: canonical, with optimistic upserts
-    /// applied. (Optimistic deletes are reflected by the routing
-    /// engine removing the row from `canonical_rows` immediately, so
-    /// they don't need to be counted out here.)
+    /// applied and optimistic deletes/predicate-departures
+    /// suppressed. Short-circuits to a cheap `rendered_key_count()`
+    /// walk when the query has no `order_by` and no `limit`;
+    /// otherwise materializes via `rows()` (sort + truncate).
     pub fn len(&self) -> usize
     where
         Row: Clone + serde::Serialize,
     {
+        let query = self.query();
+        if query.order_by().is_none() && query.limit().is_none() {
+            return self.rendered_key_count();
+        }
         self.rows().len()
     }
 
@@ -816,7 +938,31 @@ impl<Row: 'static> QueryView<Row> {
     where
         Row: Clone + serde::Serialize,
     {
-        self.rows().is_empty() && self.state().pending().is_empty()
+        // Cheap path: don't materialize rows just to ask "anything
+        // visible?". A `rendered_key_count` walk visits each
+        // canonical row and overlay once; no row cloning or JSON
+        // serialization. The pending-empty check matches the
+        // documented "idle view" semantics.
+        self.rendered_key_count() == 0 && self.state().pending().is_empty()
+    }
+
+    /// Number of distinct keys that survive the canonical + pending
+    /// merge (insertions from `optimistic_row`, evictions from
+    /// `evicted_key`). Used by `len()` / `is_empty()` to count
+    /// without cloning every row or JSON-serializing for sort.
+    fn rendered_key_count(&self) -> usize {
+        use std::collections::BTreeSet;
+        let state = self.state();
+        let mut keys: BTreeSet<&pocopine_sync::RowKey> =
+            state.canonical_rows().map(|r| &r.key).collect();
+        for overlay in state.pending() {
+            if let Some(opt_row) = &overlay.optimistic_row {
+                keys.insert(&opt_row.key);
+            } else if let Some(evicted) = &overlay.evicted_key {
+                keys.remove(evicted);
+            }
+        }
+        keys.len()
     }
 
     /// The view's current rendered row set: canonical rows MERGED
@@ -824,9 +970,12 @@ impl<Row: 'static> QueryView<Row> {
     /// `order_by()` and TRUNCATED per its `limit()`.
     ///
     /// Without an `order_by`, rows are returned in `RowKey` order
-    /// (the BTreeMap's natural ordering). If both a canonical and
-    /// an optimistic row share a key, the optimistic wins — local
-    /// edits are visible immediately.
+    /// (the BTreeMap's natural ordering). The merge applies pending
+    /// overlays in apply order — an `optimistic_row` inserts /
+    /// overwrites, an `evicted_key` removes. So a later Delete or
+    /// predicate-departure correctly hides a key whose only
+    /// visibility came from an earlier Upsert overlay (not yet in
+    /// canonical).
     ///
     /// Ordering reads the field via serde's JSON projection: a row
     /// type's serialization MUST expose the order-by field as a top-
@@ -846,6 +995,8 @@ impl<Row: 'static> QueryView<Row> {
         for overlay in state.pending() {
             if let Some(opt_row) = &overlay.optimistic_row {
                 rendered.insert(opt_row.key.clone(), opt_row.value.clone());
+            } else if let Some(evicted) = &overlay.evicted_key {
+                rendered.remove(evicted);
             }
         }
         let mut rows: Vec<Row> = rendered.into_values().collect();
@@ -1055,5 +1206,44 @@ mod tests {
         let state = h.state();
         assert_eq!(state.canonical_len(), 0);
         assert!(state.pending().is_empty());
+    }
+
+    /// Regression for the json_value_cmp total-order violation.
+    /// `(Some(Null), Some(Null))` previously returned `Less` (via
+    /// the `(Some(Null), _)` arm), which violates antisymmetry —
+    /// `cmp(a, b)` and `cmp(b, a)` must agree on Equal. Now both
+    /// directions return Equal, and an absent value sorts as Less
+    /// vs a present one consistently.
+    #[test]
+    fn json_value_cmp_null_is_total_order() {
+        use std::cmp::Ordering;
+        let null = Value::Null;
+        let s = Value::String("a".into());
+
+        assert_eq!(json_value_cmp(Some(&null), Some(&null)), Ordering::Equal);
+        assert_eq!(json_value_cmp(None, None), Ordering::Equal);
+        assert_eq!(json_value_cmp(None, Some(&null)), Ordering::Equal);
+        assert_eq!(json_value_cmp(Some(&null), None), Ordering::Equal);
+        assert_eq!(json_value_cmp(Some(&null), Some(&s)), Ordering::Less);
+        assert_eq!(json_value_cmp(Some(&s), Some(&null)), Ordering::Greater);
+        assert_eq!(json_value_cmp(None, Some(&s)), Ordering::Less);
+        assert_eq!(json_value_cmp(Some(&s), None), Ordering::Greater);
+    }
+
+    /// Regression for the f64 precision-loss bug in
+    /// `json_value_cmp`. Two distinct u64 values above 2^53 used
+    /// to round to the same f64 → `partial_cmp` returned Equal →
+    /// stable sort silently collapsed them. The new
+    /// `json_number_cmp` tries `as_u64` first, comparing losslessly.
+    #[test]
+    fn json_value_cmp_handles_u64_above_pow_2_53() {
+        use std::cmp::Ordering;
+        let small = Value::Number(serde_json::Number::from(u64::MAX - 100));
+        let big = Value::Number(serde_json::Number::from(u64::MAX));
+        // Sanity check the precondition: both round to the same f64.
+        assert_eq!(small.as_f64(), big.as_f64(), "precondition: f64 collision");
+        // But our comparator must distinguish them.
+        assert_eq!(json_value_cmp(Some(&small), Some(&big)), Ordering::Less);
+        assert_eq!(json_value_cmp(Some(&big), Some(&small)), Ordering::Greater);
     }
 }

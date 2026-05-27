@@ -73,6 +73,16 @@ pub struct PendingOverlay<Row> {
     /// rejects the delete; otherwise the canonical reconcile leaves
     /// it as-is (the server's confirmation supersedes the snapshot).
     pub deleted_row: Option<SyncRow<Row>>,
+    /// Key this overlay should suppress in the rendered view.
+    /// Populated on `RowChange::Delete` overlays AND on optimistic
+    /// predicate-departure overlays (an `Upsert` that no longer
+    /// matches the subscription's predicate). The merge in
+    /// [`crate::QueryView::rows`] removes this key from the rendered
+    /// row set so a Delete made against a row still pending its
+    /// canonical reconcile (visible only via a prior optimistic
+    /// `Upsert` overlay) hides correctly. `None` for Upsert
+    /// overlays — those insert rather than evict.
+    pub evicted_key: Option<RowKey>,
     /// Set when a server response surfaces a conflict for this
     /// mutation; the overlay stays visible with the conflict flag
     /// until the user resolves via the UI.
@@ -110,6 +120,19 @@ impl<Row> QueryState<Row> {
     /// Borrow the canonical rows in key order.
     pub fn canonical_rows(&self) -> impl Iterator<Item = &SyncRow<Row>> {
         self.canonical_rows.values()
+    }
+
+    /// O(log n) lookup for a canonical row by key. Used by the routing
+    /// engine and view layer to avoid the O(n) `canonical_rows().find()`
+    /// pattern that scales badly for subscriptions holding thousands of
+    /// rows.
+    pub fn canonical_get(&self, key: &RowKey) -> Option<&SyncRow<Row>> {
+        self.canonical_rows.get(key)
+    }
+
+    /// True iff `key` is currently in canonical state.
+    pub fn canonical_contains(&self, key: &RowKey) -> bool {
+        self.canonical_rows.contains_key(key)
     }
 
     /// Number of canonical rows currently held.

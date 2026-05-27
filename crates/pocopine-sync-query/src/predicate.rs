@@ -138,7 +138,16 @@ where
 
 /// True when `needle.contains` appears in `haystack`, honoring the
 /// `case_sensitive` flag.
-pub fn contains_matches(needle: &params::Contains, haystack: &str) -> bool {
+///
+/// `haystack` is `impl AsRef<str>` so the macro-emitted matches
+/// body works with `String`, `&str`, `Cow<str>`, AND user newtypes
+/// that impl `AsRef<str>` — without the macro having to inject a
+/// custom dereferencing call for each shape. A newtype that
+/// doesn't impl `AsRef<str>` gets a clearer trait-bound error at
+/// the user's field-declaration site rather than a confusing
+/// `expected &str, found &Slug` error pointing into macro output.
+pub fn contains_matches<H: AsRef<str> + ?Sized>(needle: &params::Contains, haystack: &H) -> bool {
+    let haystack = haystack.as_ref();
     if needle.case_sensitive {
         haystack.contains(&needle.contains)
     } else {
