@@ -28,7 +28,7 @@
 //! let handle = client.observe(
 //!     Issues::query()
 //!         .eq(field::workspace_id, w1)
-//!         .in_set(field::status, [Status::Open, Status::InProgress])?
+//!         .any_of(field::status, [Status::Open, Status::InProgress])?
 //!         .order_by("created_at", Order::Desc)
 //!         .limit(50)
 //!         .build()

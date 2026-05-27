@@ -13,11 +13,11 @@
 //! | `created_at: params::Range<T>`   | `FieldRange<T>`        |
 //! | `title: params::Contains`        | `FieldContains`        |
 //!
-//! The query DSL methods (`.eq`, `.in_set`, `.range`, `.contains`)
+//! The query DSL methods (`.eq`, `.any_of`, `.range`, `.contains`)
 //! are generic over the trait, so misuse fails to compile:
 //!
 //! ```ignore
-//! Issues::query().in_set(field::workspace_id, [...])
+//! Issues::query().any_of(field::workspace_id, [...])
 //! //                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ workspace_id is
 //! //                     declared `WorkspaceId` (required eq), not
 //! //                     `InSet<...>`, so this errors at compile time.

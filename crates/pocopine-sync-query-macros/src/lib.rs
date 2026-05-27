@@ -349,7 +349,7 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
             /// generic [`pocopine_sync_query::QueryBuilder`] pre-wired
             /// with the resource's stream name and predicate
             /// evaluator. Apply filters with the trait-gated DSL —
-            /// `.eq(field::name, value)`, `.in_set(field::name,
+            /// `.eq(field::name, value)`, `.any_of(field::name,
             /// values)?`, `.range(field::name, range)`,
             /// `.contains(field::name, "needle")?` — then `.build()`
             /// (or `.observe(&client)` to subscribe directly).
@@ -379,7 +379,7 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
             /// per declared param; each impls exactly the comparator
             /// trait matching its declared shape — so
             /// `.eq(field::workspace_id, ...)` requires a `FieldEq`
-            /// marker and `.in_set(field::status, ...)` requires a
+            /// marker and `.any_of(field::status, ...)` requires a
             /// `FieldInSet` marker. Misuse fails to compile.
             pub mod field {
                 #[allow(unused_imports)]
@@ -457,7 +457,7 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
             };
             quote! {
                 #[allow(non_camel_case_types)]
-                #[doc = concat!("Field marker for `", #name_str, "` — used by the query DSL methods (`.eq`, `.in_set`, `.range`, `.contains`).")]
+                #[doc = concat!("Field marker for `", #name_str, "` — used by the query DSL methods (`.eq`, `.any_of`, `.range`, `.contains`).")]
                 #[derive(::std::marker::Copy, ::std::clone::Clone)]
                 pub struct #marker_ident;
                 // SAFETY: marker is macro-generated and matches the

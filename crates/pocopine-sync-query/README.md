@@ -83,7 +83,7 @@ fn on_ready(&self, qc: Plugin<Rc<QueryClient>>) {
     use issues::field;
     let view = Issues::query()
         .eq(field::workspace_id, self.workspace_id.clone())
-        .in_set(field::status, [Status::Open, Status::InProgress])?
+        .any_of(field::status, [Status::Open, Status::InProgress])?
         .contains(field::title, "auth")?
         .order_by("created_at", Order::Desc)
         .limit(50)

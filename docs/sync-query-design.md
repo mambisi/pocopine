@@ -81,7 +81,7 @@ The macro generates:
 use issues::field;
 let query = Issues::query()
     .eq(field::workspace_id, w1)
-    .in_set(field::status, [Status::Open])?
+    .any_of(field::status, [Status::Open])?
     .contains(field::title, "auth")?
     .order_by("created_at", Order::Desc)
     .limit(50)
@@ -572,7 +572,7 @@ For sources that want CRUD's transactional push handling (mutation log, dedup, t
 
 `crates/pocopine-sync-query-macros/tests/ui/`:
 
-* `query_in_on_eq_only_field.rs` — calling `.in_set` on a field declared as bare `T`.
+* `query_in_on_eq_only_field.rs` — calling `.any_of` on a field declared as bare `T`.
 * `query_unknown_field.rs` — calling `.eq(unknown_field, _)`.
 * `query_empty_params.rs` — `#[query_resource(params())]` parse error.
 

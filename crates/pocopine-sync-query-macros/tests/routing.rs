@@ -99,7 +99,7 @@ async fn matching_view_receives_mutation_canonically() {
     let ctx = StubContext::new();
     let q = Issues::query()
         .eq(issues::field::workspace_id, "W1".to_string())
-        .in_set(issues::field::status, [Status::Open])
+        .any_of(issues::field::status, [Status::Open])
         .unwrap()
         .build();
     let view = client.observe::<Issue>(q);
