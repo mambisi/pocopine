@@ -396,6 +396,24 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
                 pub fn build(self) -> ::pocopine_sync_query::Query<Row> {
                     self.inner.build()
                 }
+
+                /// Subscribe to this query through `client`. Returns a
+                /// reactive [`QueryView`] that holds the subscription
+                /// alive until dropped. Equivalent to
+                /// `client.observe(self.build())` but reads better at
+                /// the call site:
+                ///
+                /// ```ignore
+                /// let view = Issues::query()
+                ///     .workspace_id(w1)
+                ///     .observe(&client);
+                /// ```
+                pub fn observe(
+                    self,
+                    client: &::pocopine_sync_query::QueryClient,
+                ) -> ::pocopine_sync_query::QueryView<Row> {
+                    client.observe(self.build())
+                }
             }
 
             impl Default for QueryBuilder {

@@ -1,15 +1,18 @@
-//! End-to-end routing test: macro-generated predicate evaluator feeds
-//! the `QueryClient`'s routing engine. Verifies that one mutation's
-//! row changes are visible in matching queries and invisible in
-//! non-matching queries — the design's "no active subscription"
-//! property.
+//! End-to-end routing tests using the public API. A mutator's
+//! row changes flow through `QueryClient::mutate(...)`, which
+//! routes via predicate evaluation into every observing view's
+//! state. Demonstrates the design's "no active subscription"
+//! property — a W1 mutation appears in the W1 view and not the
+//! W2 view, with no manual routing in user code.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use pocopine_sync::{ClientMutation, MutationId, SyncOp};
 #[allow(unused_imports)] // referenced by the macro emission
 use pocopine_sync_query::params;
-use pocopine_sync_query::{QueryClient, RowChange};
+use pocopine_sync_query::{
+    MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, Order, QueryClient,
+    RowChange,
+};
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};
 
@@ -40,139 +43,269 @@ struct Issue {
 )]
 pub struct Issues;
 
-fn wire_mutation() -> ClientMutation<serde_json::Value> {
-    ClientMutation {
-        id: MutationId::new("device:1").unwrap(),
-        key: None,
-        op: SyncOp::Upsert,
-        base_version: None,
-        payload: serde_json::Value::Null,
-        migration_outcome: None,
+/// Test mutator: takes a full `Issue` payload and surfaces it as both
+/// the optimistic and the canonical row change. A real mutator would
+/// generate an id, talk to a server, etc — this is a self-contained
+/// loopback so we can exercise the routing engine.
+struct CreateIssue;
+
+impl Mutator for CreateIssue {
+    type Payload = Issue;
+    type Row = Issue;
+    const NAME: &'static str = "create_issue";
+    const STREAM: &'static str = "issues";
+    const SCHEMA_VERSION: u32 = 1;
+
+    fn apply_local(payload: &Self::Payload) -> Vec<RowChange<Self::Row>> {
+        vec![RowChange::Upsert(payload.clone())]
+    }
+
+    fn apply_remote(
+        _ctx: &dyn MutatorRemoteContext,
+        payload: Self::Payload,
+    ) -> MutatorRemoteFuture<Self::Row> {
+        // Loopback: server "confirms" the same row.
+        Box::pin(async move { Ok(vec![RowChange::Upsert(payload)]) })
     }
 }
 
-#[test]
-fn matching_query_receives_optimistic_overlay() {
-    let client = QueryClient::new();
-    let q = Issues::query()
-        .workspace_id("W1".to_string())
-        .status_in([Status::Open, Status::InProgress])
-        .unwrap()
-        .build();
-    let handle = client.subscribe::<Issue>(q.clone());
-
-    let row = Issue {
-        id: "issue_1".to_string(),
-        workspace_id: "W1".to_string(),
-        title: "Auth bug".to_string(),
-        status: Status::Open,
-    };
-    let mutation = wire_mutation();
-    let changes = vec![RowChange::Upsert(row.clone())];
-    client.route_optimistic_changes::<Issue>(q.stream(), &mutation.id, &mutation, &changes);
-
-    let state = handle.state();
-    assert_eq!(state.pending().len(), 1);
-    let overlay = &state.pending()[0];
-    assert_eq!(overlay.mutation_id.as_str(), "device:1");
-    assert!(overlay.optimistic_row.is_some());
-    assert_eq!(overlay.optimistic_row.as_ref().unwrap().value, row);
+struct StubContext {
+    next_id: std::cell::Cell<u64>,
 }
 
-#[test]
-fn non_matching_query_does_not_receive_overlay() {
-    let client = QueryClient::new();
-    let q_w1 = Issues::query().workspace_id("W1".to_string()).build();
-    let q_w2 = Issues::query().workspace_id("W2".to_string()).build();
-    let h_w1 = client.subscribe::<Issue>(q_w1.clone());
-    let h_w2 = client.subscribe::<Issue>(q_w2.clone());
-
-    // A W1 mutation should appear in W1's overlay only.
-    let row = Issue {
-        id: "issue_1".to_string(),
-        workspace_id: "W1".to_string(),
-        title: "test".to_string(),
-        status: Status::Open,
-    };
-    let mutation = wire_mutation();
-    let changes = vec![RowChange::Upsert(row)];
-    client.route_optimistic_changes::<Issue>(q_w1.stream(), &mutation.id, &mutation, &changes);
-
-    assert_eq!(h_w1.state().pending().len(), 1);
-    assert_eq!(h_w2.state().pending().len(), 0);
+impl StubContext {
+    fn new() -> Self {
+        Self {
+            next_id: std::cell::Cell::new(1),
+        }
+    }
 }
 
-#[test]
-fn canonical_response_dequeues_overlay_and_upserts_canonical() {
-    let client = QueryClient::new();
-    let q = Issues::query().workspace_id("W1".to_string()).build();
-    let handle = client.subscribe::<Issue>(q.clone());
+impl MutatorRemoteContext for StubContext {
+    fn push_url(&self) -> &str {
+        "/__pocopine/sync/v1/push"
+    }
 
-    let row = Issue {
-        id: "issue_1".to_string(),
-        workspace_id: "W1".to_string(),
-        title: "test".to_string(),
-        status: Status::Open,
-    };
-    let mutation = wire_mutation();
-
-    // 1. Optimistic apply: overlay added.
-    client.route_optimistic_changes::<Issue>(
-        q.stream(),
-        &mutation.id,
-        &mutation,
-        &[RowChange::Upsert(row.clone())],
-    );
-    assert_eq!(handle.state().pending().len(), 1);
-    assert_eq!(handle.state().canonical_len(), 0);
-
-    // 2. Canonical reconciliation: server confirmed; overlay
-    //    removed; canonical row inserted.
-    let canonical_row = pocopine_sync::SyncRow::new("issue_1", row.clone()).unwrap();
-    client.route_canonical_changes::<Issue>(q.stream(), &mutation.id, &[canonical_row]);
-
-    let state = handle.state();
-    assert_eq!(state.pending().len(), 0);
-    assert_eq!(state.canonical_len(), 1);
+    fn next_mutation_id(&self) -> pocopine_sync::SyncResult<pocopine_sync::MutationId> {
+        let n = self.next_id.get();
+        self.next_id.set(n + 1);
+        pocopine_sync::MutationId::new(format!("test:{n}"))
+    }
 }
 
-#[test]
-fn canonical_row_no_longer_matching_is_removed() {
+#[tokio::test]
+async fn matching_view_receives_mutation_canonically() {
     let client = QueryClient::new();
+    let ctx = StubContext::new();
     let q = Issues::query()
         .workspace_id("W1".to_string())
         .status_in([Status::Open])
         .unwrap()
         .build();
-    let handle = client.subscribe::<Issue>(q.clone());
+    let view = client.observe::<Issue>(q);
 
-    // Seed: optimistic + canonical for an Open issue.
-    let row_open = Issue {
-        id: "issue_1".to_string(),
-        workspace_id: "W1".to_string(),
-        title: "test".to_string(),
-        status: Status::Open,
-    };
-    let mutation_id = MutationId::new("device:1").unwrap();
-    client.route_canonical_changes::<Issue>(
-        q.stream(),
-        &mutation_id,
-        &[pocopine_sync::SyncRow::new("issue_1", row_open.clone()).unwrap()],
-    );
-    assert_eq!(handle.state().canonical_len(), 1);
+    assert_eq!(view.len(), 0);
+    let version_before = view.version();
 
-    // Server now confirms the row has moved to status=Closed. It no
-    // longer matches our subscription (status_in=[Open]) — should be
-    // removed from canonical.
-    let row_closed = Issue {
-        status: Status::Closed,
-        ..row_open
-    };
-    client.route_canonical_changes::<Issue>(
-        q.stream(),
-        &mutation_id,
-        &[pocopine_sync::SyncRow::new("issue_1", row_closed).unwrap()],
-    );
+    let outcome = client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "issue_1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "Auth bug".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Accepted(_)));
 
-    assert_eq!(handle.state().canonical_len(), 0);
+    // Canonical row landed; optimistic was dequeued.
+    assert_eq!(view.len(), 1);
+    assert_eq!(view.state().pending().len(), 0);
+    assert!(view.version() > version_before);
+
+    let rows = view.rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "issue_1");
+}
+
+#[tokio::test]
+async fn non_matching_view_is_untouched() {
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+
+    let q_w1 = Issues::query().workspace_id("W1".to_string()).build();
+    let q_w2 = Issues::query().workspace_id("W2".to_string()).build();
+    let v_w1 = client.observe::<Issue>(q_w1);
+    let v_w2 = client.observe::<Issue>(q_w2);
+
+    // A W1 mutation: only W1's view should change.
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "issue_1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "test".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(v_w1.len(), 1);
+    assert_eq!(v_w2.len(), 0);
+}
+
+#[tokio::test]
+async fn version_counter_bumps_on_state_changes() {
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+    let view = client.observe::<Issue>(Issues::query().workspace_id("W1".to_string()).build());
+
+    let v0 = view.version();
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "i1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "a".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let v1 = view.version();
+    assert!(v1 > v0, "version should bump on canonical apply");
+
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "i2".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "b".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let v2 = view.version();
+    assert!(v2 > v1, "version should bump again");
+}
+
+#[tokio::test]
+async fn observe_dedupes_via_refcount() {
+    let client = QueryClient::new();
+    let q1 = Issues::query().workspace_id("W1".to_string()).build();
+    let q2 = Issues::query().workspace_id("W1".to_string()).build();
+
+    let v1 = client.observe::<Issue>(q1.clone());
+    assert_eq!(client.active_subscription_count(), 1);
+    let v2 = client.observe::<Issue>(q2);
+    assert_eq!(client.active_subscription_count(), 1);
+    assert_eq!(client.refcount_of(&q1), Some(2));
+
+    drop(v1);
+    assert_eq!(client.refcount_of(&q1), Some(1));
+    drop(v2);
+    assert_eq!(client.refcount_of(&q1), None);
+}
+
+#[tokio::test]
+async fn on_update_listener_fires_after_state_changes() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+    let view = client.observe::<Issue>(Issues::query().workspace_id("W1".to_string()).build());
+
+    let fired = Rc::new(Cell::new(0u32));
+    let fired_clone = fired.clone();
+    let _token = view.on_update(move || {
+        fired_clone.set(fired_clone.get() + 1);
+    });
+
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "i1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "test".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    // Optimistic apply + canonical reconcile both bumped the
+    // subscription's listener list, so the callback ran at least
+    // twice. The exact count is an implementation detail — we just
+    // require monotonic non-zero firing.
+    assert!(fired.get() >= 1, "listener should fire on state changes");
+}
+
+#[tokio::test]
+async fn on_update_listener_unregisters_on_token_drop() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+    let view = client.observe::<Issue>(Issues::query().workspace_id("W1".to_string()).build());
+
+    let fired = Rc::new(Cell::new(0u32));
+    let fired_clone = fired.clone();
+    let token = view.on_update(move || {
+        fired_clone.set(fired_clone.get() + 1);
+    });
+
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "i1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "a".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let first = fired.get();
+    assert!(first >= 1);
+
+    drop(token);
+
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "i2".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "b".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+    // No additional fires after token drop.
+    assert_eq!(fired.get(), first);
+}
+
+// Sanity: order_by + limit still build correctly through the macro.
+#[test]
+fn builder_supports_order_and_limit() {
+    let q = Issues::query()
+        .workspace_id("W1".to_string())
+        .order_by("status", Order::Asc)
+        .limit(10)
+        .build();
+    assert!(q.order_by().is_some());
+    assert_eq!(q.limit(), Some(10));
 }

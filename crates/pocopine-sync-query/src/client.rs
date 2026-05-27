@@ -40,10 +40,26 @@ trait AnyQuerySubscription: 'static {
 /// and background-task lifecycle. The state is `Rc<RefCell<...>>` so
 /// the routing engine and any reactive views can hold concurrent
 /// borrows in a single-threaded runtime.
+/// Boxed update listener. Fires after every state-mutating op on
+/// the owning subscription.
+type ListenerFn = Box<dyn Fn()>;
+
+/// `(id, callback)` entry in a subscription's listener list. The id
+/// is what [`UpdateToken`] keeps so drop can unregister.
+type ListenerEntry = (u64, ListenerFn);
+
 pub struct QuerySubscription<Row: 'static> {
     pub(crate) query: Query<Row>,
     pub(crate) state: Rc<RefCell<QueryState<Row>>>,
     refcount: Cell<usize>,
+    /// Update listeners. Each listener fires after every state-
+    /// mutating operation on this subscription. Listeners that want
+    /// finer-grained dependency tracking should consult
+    /// `state.version()` and diff externally.
+    listeners: RefCell<Vec<ListenerEntry>>,
+    /// Monotonic counter for listener ids. The token returned from
+    /// [`QueryView::on_update`] holds the id so drop can unregister.
+    next_listener_id: Cell<u64>,
     // Background-task lifecycle is owned externally; the runtime hooks
     // into the subscription via `state`. The Drop on `QueryHandle`
     // signals "no more observers" by decrementing the refcount; the
@@ -56,6 +72,8 @@ impl<Row: 'static> QuerySubscription<Row> {
             query,
             state: Rc::new(RefCell::new(QueryState::default())),
             refcount: Cell::new(0),
+            listeners: RefCell::new(Vec::new()),
+            next_listener_id: Cell::new(0),
         }
     }
 
@@ -68,6 +86,35 @@ impl<Row: 'static> QuerySubscription<Row> {
     /// should observe the state through a [`QueryHandle`].
     pub fn state(&self) -> &Rc<RefCell<QueryState<Row>>> {
         &self.state
+    }
+
+    /// Register an update listener. Called after every state-mutating
+    /// op on this subscription (canonical upsert / remove, optimistic
+    /// push / dequeue, schema reset). Returns an id used by
+    /// `unregister_listener`.
+    pub(crate) fn register_listener<F>(&self, callback: F) -> u64
+    where
+        F: Fn() + 'static,
+    {
+        let id = self.next_listener_id.get();
+        self.next_listener_id.set(id.wrapping_add(1));
+        self.listeners.borrow_mut().push((id, Box::new(callback)));
+        id
+    }
+
+    /// Drop a previously-registered listener by id.
+    pub(crate) fn unregister_listener(&self, id: u64) {
+        let mut listeners = self.listeners.borrow_mut();
+        listeners.retain(|(lid, _)| *lid != id);
+    }
+
+    /// Fire every registered listener. Called by the routing engine
+    /// after each batch of state mutations.
+    fn notify_listeners(&self) {
+        let listeners = self.listeners.borrow();
+        for (_, cb) in listeners.iter() {
+            cb();
+        }
     }
 }
 
@@ -172,6 +219,109 @@ impl QueryClient {
             .map(|sub| sub.refcount())
     }
 
+    /// Subscribe to a query and return a typed reactive view.
+    ///
+    /// This is the user-facing observation entry point. The view
+    /// holds the underlying [`QueryHandle`] and exposes a borrow-only
+    /// surface (`rows()`, `pending()`, `version()`). Drop the view to
+    /// decrement the subscription's refcount.
+    pub fn observe<Row>(&self, query: Query<Row>) -> QueryView<Row>
+    where
+        Row: Clone + 'static,
+    {
+        QueryView {
+            handle: self.subscribe(query),
+        }
+    }
+
+    /// Run a mutator end-to-end: apply optimistic locally, push to the
+    /// server, reconcile canonical state. The routing engine evaluates
+    /// every matching subscription's predicate to decide where the
+    /// row changes land — components observing matching queries see
+    /// the optimistic instantly, then the canonical replaces it.
+    ///
+    /// The push wire envelope carries EMPTY params — mutators are
+    /// query-agnostic on the wire; routing happens client-side via
+    /// predicate evaluation. See the wire/server contract in
+    /// `pocopine-sync` and the cookbook.
+    pub async fn mutate<M>(
+        &self,
+        payload: M::Payload,
+        ctx: &dyn crate::MutatorRemoteContext,
+    ) -> pocopine_sync::SyncResult<crate::MutationOutcome<M::Row>>
+    where
+        M: crate::Mutator,
+        M::Row: Clone + serde::Serialize + 'static,
+    {
+        // 1. Optimistic apply locally.
+        let local_changes = M::apply_local(&payload);
+        let stream = pocopine_sync::SyncStreamName::new(M::STREAM)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        let mutation_id = ctx.next_mutation_id()?;
+        let payload_value = serde_json::to_value(&payload)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        let wire_mutation =
+            pocopine_sync::ClientMutation::upsert(mutation_id.clone(), payload_value);
+
+        self.route_optimistic_changes::<M::Row>(
+            &stream,
+            &mutation_id,
+            &wire_mutation,
+            &local_changes,
+        );
+
+        // 2. Wire push (caller-supplied context handles transport).
+        let canonical_changes = match M::apply_remote(ctx, payload).await {
+            Ok(c) => c,
+            Err(err) => {
+                // Roll back the optimistic overlay on push failure.
+                self.dequeue_pending::<M::Row>(&stream, &mutation_id);
+                return Err(err);
+            }
+        };
+
+        // 3. Reconcile canonical: convert RowChange<M::Row> into
+        //    SyncRow<M::Row> and route into matching subscriptions.
+        let canonical_rows: Vec<pocopine_sync::SyncRow<M::Row>> = canonical_changes
+            .iter()
+            .filter_map(|c| match c {
+                crate::RowChange::Upsert(row) => {
+                    row_key_of(row).map(|key| pocopine_sync::SyncRow {
+                        key,
+                        version: None,
+                        value: row.clone(),
+                        pending: false,
+                        conflict: false,
+                    })
+                }
+                crate::RowChange::Delete(_) => None,
+            })
+            .collect();
+        self.route_canonical_changes::<M::Row>(&stream, &mutation_id, &canonical_rows);
+
+        Ok(crate::MutationOutcome::Accepted(canonical_changes))
+    }
+
+    /// Drop a pending overlay across every matching subscription.
+    /// Used to roll back optimistic state when the server push fails.
+    fn dequeue_pending<Row>(&self, stream: &SyncStreamName, mutation_id: &MutationId)
+    where
+        Row: Clone + 'static,
+    {
+        let registry = self.registry.borrow();
+        for sub in registry.values() {
+            if sub.stream() != stream {
+                continue;
+            }
+            let Some(typed): Option<&QuerySubscription<Row>> =
+                downcast_ref_subscription(sub.as_any())
+            else {
+                continue;
+            };
+            typed.state.borrow_mut().remove_pending(mutation_id);
+        }
+    }
+
     /// Route a batch of row changes for `stream` into every matching
     /// subscription's pending overlay.
     ///
@@ -181,10 +331,8 @@ impl QueryClient {
     /// get an optimistic upsert / remove; non-matching subscriptions
     /// are unaffected.
     ///
-    /// Called from `mutate(...)` (TBD wasm-side) after `apply_local`
-    /// produces the optimistic changes, and again from the canonical
-    /// reconciliation path after the server response.
-    pub fn route_optimistic_changes<Row>(
+    /// Internal API — consumers use [`QueryClient::mutate`] instead.
+    pub(crate) fn route_optimistic_changes<Row>(
         &self,
         stream: &SyncStreamName,
         mutation_id: &MutationId,
@@ -203,6 +351,7 @@ impl QueryClient {
             else {
                 continue;
             };
+            let mut touched = false;
             for change in changes {
                 match change {
                     RowChange::Upsert(row) => {
@@ -227,6 +376,7 @@ impl QueryClient {
                                 conflict: false,
                             };
                             state.push_pending(overlay);
+                            touched = true;
                         }
                     }
                     RowChange::Delete(key) => {
@@ -241,9 +391,13 @@ impl QueryClient {
                             conflict: false,
                         };
                         state.push_pending(overlay);
+                        touched = true;
                         let _ = key; // key drives the rebase render layer (TBD)
                     }
                 }
+            }
+            if touched {
+                typed.notify_listeners();
             }
         }
     }
@@ -251,7 +405,9 @@ impl QueryClient {
     /// Apply canonical row changes returned by a server push. Removes
     /// the corresponding pending overlay and upserts into each
     /// matching subscription's canonical row set.
-    pub fn route_canonical_changes<Row>(
+    ///
+    /// Internal API — consumers use [`QueryClient::mutate`] instead.
+    pub(crate) fn route_canonical_changes<Row>(
         &self,
         stream: &SyncStreamName,
         mutation_id: &MutationId,
@@ -269,19 +425,22 @@ impl QueryClient {
             else {
                 continue;
             };
-            let mut state = typed.state.borrow_mut();
-            // Dequeue the optimistic overlay (idempotent if not present).
-            let _ = state.remove_pending(mutation_id);
-            for row in canonical {
-                if typed.query.matches(&row.value) {
-                    state.upsert_canonical(row.clone());
-                } else {
-                    // Row no longer matches this query's predicate
-                    // (e.g. a workspace transition). Remove from
-                    // canonical too.
-                    state.remove_canonical(&row.key);
+            {
+                let mut state = typed.state.borrow_mut();
+                // Dequeue the optimistic overlay (idempotent if not present).
+                let _ = state.remove_pending(mutation_id);
+                for row in canonical {
+                    if typed.query.matches(&row.value) {
+                        state.upsert_canonical(row.clone());
+                    } else {
+                        // Row no longer matches this query's predicate
+                        // (e.g. a workspace transition). Remove from
+                        // canonical too.
+                        state.remove_canonical(&row.key);
+                    }
                 }
             }
+            typed.notify_listeners();
         }
     }
 
@@ -353,6 +512,11 @@ fn downcast_subscription<Row: 'static>(
 /// Handle to a live query subscription. Drop to decrement the
 /// refcount; the underlying `QuerySubscription` is gc'd when no
 /// handles remain.
+///
+/// Most user code goes through [`QueryView`] which wraps a handle
+/// with a read-only API. Use `QueryHandle` directly only when you
+/// need the raw `Rc<RefCell<QueryState<Row>>>` for custom reactive
+/// integrations.
 pub struct QueryHandle<Row: 'static> {
     subscription: Rc<QuerySubscription<Row>>,
     registry: RegistryWeakRef,
@@ -373,6 +537,126 @@ impl<Row: 'static> QueryHandle<Row> {
     /// Subscription's current refcount. Mostly useful for tests.
     pub fn refcount(&self) -> usize {
         self.subscription.refcount()
+    }
+
+    /// Raw `Rc<RefCell<...>>` over the per-query state. Returned for
+    /// callers that want to plumb the state into a custom reactive
+    /// system (e.g. integrate with pocopine's `effect()` /
+    /// `track()`). Most user code uses [`QueryView`] instead.
+    pub fn shared_state(&self) -> Rc<RefCell<QueryState<Row>>> {
+        self.subscription.state.clone()
+    }
+}
+
+/// User-facing read surface over a query subscription.
+///
+/// Returned from [`QueryClient::observe`]. Holds the underlying
+/// [`QueryHandle`] so the subscription is kept alive as long as the
+/// view is alive.
+///
+/// Read APIs (`rows`, `pending`, `version`) borrow from the state's
+/// `RefCell`; release the returned borrows before the next mutation
+/// goes through the routing engine. Most apps consume the view via
+/// the per-tick borrow-and-render pattern (see the cookbook).
+pub struct QueryView<Row: 'static> {
+    handle: QueryHandle<Row>,
+}
+
+impl<Row: 'static> QueryView<Row> {
+    /// Underlying query identity.
+    pub fn query(&self) -> &Query<Row> {
+        self.handle.query()
+    }
+
+    /// Borrow the per-query state.
+    pub fn state(&self) -> std::cell::Ref<'_, QueryState<Row>> {
+        self.handle.state()
+    }
+
+    /// Current canonical row count.
+    pub fn len(&self) -> usize {
+        self.state().canonical_len()
+    }
+
+    /// True when the view has no canonical rows AND no pending
+    /// overlays.
+    pub fn is_empty(&self) -> bool {
+        let state = self.state();
+        state.canonical_len() == 0 && state.pending().is_empty()
+    }
+
+    /// Borrow the canonical rows as a vector copy. Convenient when
+    /// callers want to iterate without holding a `Ref<_>` across
+    /// state mutations.
+    pub fn rows(&self) -> Vec<Row>
+    where
+        Row: Clone,
+    {
+        self.state()
+            .canonical_rows()
+            .map(|r| r.value.clone())
+            .collect()
+    }
+
+    /// Monotonic state-version counter. Bumps on every mutation
+    /// (canonical or optimistic) so a reactive observer can track
+    /// changes by reading this single integer.
+    pub fn version(&self) -> u64 {
+        self.state().version()
+    }
+
+    /// Borrow the shared state for custom reactive integration.
+    /// Same `Rc<RefCell<...>>` the routing engine writes through.
+    pub fn shared_state(&self) -> Rc<RefCell<QueryState<Row>>> {
+        self.handle.shared_state()
+    }
+
+    /// Register a callback to fire after every state-mutating
+    /// operation on this view's subscription.
+    ///
+    /// The callback runs from inside the routing engine, AFTER the
+    /// state is updated but BEFORE the caller's `await` resumes —
+    /// any reads of the view inside the callback see the new state.
+    ///
+    /// Returned token unregisters the callback on drop. Hold it in
+    /// the calling scope for the lifetime of the observation.
+    ///
+    /// Pocopine reactivity integration pattern (from inside a
+    /// component handler):
+    ///
+    /// ```ignore
+    /// let view = Issues::query().workspace_id(w1).observe(&qc);
+    /// let scope = pocopine_core::current_scope_id().unwrap();
+    /// let _token = view.on_update(move || {
+    ///     pocopine_core::scope::notify(scope, "issues_view");
+    /// });
+    /// pocopine_core::effect(move || {
+    ///     pocopine_core::track(scope, "issues_view");
+    ///     render_view(&view.rows());
+    /// });
+    /// ```
+    pub fn on_update<F>(&self, callback: F) -> UpdateToken<Row>
+    where
+        F: Fn() + 'static,
+    {
+        let id = self.handle.subscription.register_listener(callback);
+        UpdateToken {
+            subscription: self.handle.subscription.clone(),
+            id,
+        }
+    }
+}
+
+/// Token returned from [`QueryView::on_update`]. Drop to unregister
+/// the callback.
+pub struct UpdateToken<Row: 'static> {
+    subscription: Rc<QuerySubscription<Row>>,
+    id: u64,
+}
+
+impl<Row: 'static> Drop for UpdateToken<Row> {
+    fn drop(&mut self) {
+        self.subscription.unregister_listener(self.id);
     }
 }
 

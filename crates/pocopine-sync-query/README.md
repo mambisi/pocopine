@@ -47,34 +47,87 @@ Read [`docs/sync-query-design.md`](../../docs/sync-query-design.md) for the impl
 
 The branch `wip/sync-shape-subs-batch-4` is a **reference implementation** of shape subscriptions integrated into `pocopine-sync-crud`. It demonstrates what NOT to do — see the design doc's architectural-tension analysis. The wire protocol and macro DSL from that branch carry over to this crate; the client-side machinery does not.
 
-## Quickstart (target API)
+## Quickstart
 
-This is the API we're building toward. It does NOT work yet — the runtime crate isn't wired up.
+Install the plugin once at app boot:
 
 ```rust,ignore
-use pocopine_sync_query::{Query, QueryClient, Order};
-
-let client: &QueryClient = pocopine::query_client();
-
-// Subscribe to a filtered view.
-let handle = client.subscribe(
-    Issues::query()
-        .where_eq(field::workspace_id, w1)?
-        .where_in(field::status, [Status::Open, Status::InProgress])?
-        .where_contains(field::title, "auth")?
-        .order_by(field::created_at, Order::Desc)
-        .limit(50)
-        .build()
-);
-
-// Render. `handle.rows()` is a live snapshot; pass to your view.
-let visible: Vec<Issue> = handle.rows();
-
-// Run a mutation. The engine routes its row changes to every
-// subscription whose predicate matches the resulting rows.
-let payload = CreateIssuePayload { id: IssueId::new(), workspace_id: w1, /*...*/ };
-client.mutate::<create_issue::Mutator>(payload).await?;
+fn app(app: App) -> App {
+    app.plugin(pocopine_sync_query::query_client_plugin())
+}
 ```
+
+Declare a queryable resource (typically next to your row type):
+
+```rust,ignore
+use pocopine_sync_query::{params, query_resource};
+
+#[query_resource(
+    name = "issues", row = Issue, schema_version = 1,
+    params(
+        workspace_id: String,
+        assignee_id: Option<UserId>,
+        status: params::InSet<Status>,
+        title: params::Contains,
+        created_at: params::Range<DateTime>,
+    ),
+)]
+pub struct Issues;
+```
+
+In a component, get the client and observe:
+
+```rust,ignore
+fn on_ready(&self, qc: Plugin<Rc<QueryClient>>) {
+    // Build + subscribe. `view` is reactive; drop to unsubscribe.
+    let view = Issues::query()
+        .workspace_id(self.workspace_id.clone())
+        .status_in([Status::Open, Status::InProgress])?
+        .title_contains("auth")?
+        .order_by("created_at", Order::Desc)
+        .limit(50)
+        .observe(&qc);
+
+    // Read rows — synchronous, snapshot of canonical + pending overlay.
+    for issue in view.rows() {
+        render(issue);
+    }
+
+    // Wire pocopine reactivity: the view bumps `version()` on every
+    // state change; an `on_update` listener notifies the component.
+    let scope = pocopine_core::current_scope_id().unwrap();
+    let _token = view.on_update(move || {
+        pocopine_core::scope::notify(scope, "issues_view");
+    });
+}
+```
+
+Run a mutation — no manual routing in user code:
+
+```rust,ignore
+struct CreateIssue;
+impl Mutator for CreateIssue {
+    type Payload = CreateIssuePayload;
+    type Row = Issue;
+    const NAME: &'static str = "create_issue";
+    const STREAM: &'static str = "issues";
+    const SCHEMA_VERSION: u32 = 1;
+
+    fn apply_local(payload: &Self::Payload) -> Vec<RowChange<Issue>> {
+        vec![RowChange::Upsert(payload.clone().into())]
+    }
+    fn apply_remote(ctx: &dyn MutatorRemoteContext, payload: Self::Payload)
+        -> MutatorRemoteFuture<Issue>
+    {
+        Box::pin(async move { ctx.push::<CreateIssue>(payload).await })
+    }
+}
+
+// In a component:
+qc.mutate::<CreateIssue>(payload, &remote_ctx).await?;
+```
+
+The engine routes `apply_local`'s row changes through every observing query's predicate evaluator. W1's view sees a W1 mutation immediately; W2's view doesn't. No "active subscription" plumbing in user code.
 
 ## CRUD vs Query — which one?
 
