@@ -11,14 +11,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]
-enum Status {
+pub enum Status {
     Open,
     InProgress,
     Closed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-struct Issue {
+pub struct Issue {
     id: String,
     workspace_id: String,
     assignee_id: Option<String>,
@@ -63,7 +63,7 @@ fn builder_constructs_typed_query() {
     use issues::field;
 
     let q = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
+        .eq(field::workspace_id, "W1")
         .any_of(field::status, [Status::Open, Status::InProgress])
         .unwrap()
         .contains(field::title, "auth")
@@ -87,9 +87,7 @@ fn builder_constructs_typed_query() {
 fn matches_required_eq_row_in_workspace() {
     use issues::field;
 
-    let q = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
-        .build();
+    let q = Issues::query().eq(field::workspace_id, "W1").build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut other = sample_issue();
     other.workspace_id = "W2".to_string();
@@ -101,8 +99,8 @@ fn matches_optional_eq_some_value() {
     use issues::field;
 
     let q = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
-        .eq(field::assignee_id, "alice".to_string())
+        .eq(field::workspace_id, "W1")
+        .eq(field::assignee_id, "alice")
         .build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut bob = sample_issue();
@@ -118,7 +116,7 @@ fn matches_any_of() {
     use issues::field;
 
     let q = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
+        .eq(field::workspace_id, "W1")
         .any_of(field::status, [Status::Open, Status::InProgress])
         .unwrap()
         .build();
@@ -133,7 +131,7 @@ fn matches_range() {
     use issues::field;
 
     let q = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
+        .eq(field::workspace_id, "W1")
         .range(field::priority, params::Range::closed(1u32, 5))
         .build();
     assert!(issues::matches(&q, &sample_issue()));
@@ -147,7 +145,7 @@ fn matches_contains_case_insensitive() {
     use issues::field;
 
     let q = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
+        .eq(field::workspace_id, "W1")
         .contains(field::title, "AUTH")
         .unwrap()
         .build();
@@ -176,12 +174,8 @@ fn matches_returns_false_when_required_field_absent_from_params() {
 fn distinct_workspace_queries_have_distinct_keys() {
     use issues::field;
 
-    let a = Issues::query()
-        .eq(field::workspace_id, "W1".to_string())
-        .build();
-    let b = Issues::query()
-        .eq(field::workspace_id, "W2".to_string())
-        .build();
+    let a = Issues::query().eq(field::workspace_id, "W1").build();
+    let b = Issues::query().eq(field::workspace_id, "W2").build();
     assert_ne!(a.key(), b.key());
 }
 
@@ -189,20 +183,22 @@ fn distinct_workspace_queries_have_distinct_keys() {
 fn field_markers_typecheck_against_comparator_traits() {
     use pocopine_sync_query::{FieldContains, FieldEq, FieldInSet, FieldRange};
 
-    // The macro emitted: __Field_workspace_id impls FieldEq<String>.
-    fn _eq_workspace<F: FieldEq<String>>(_: F) {}
+    // The macro emitted: __Field_workspace_id impls
+    // FieldEq with Value = String.
+    fn _eq_workspace<F: FieldEq<Value = String>>(_: F) {}
     _eq_workspace(issues::field::workspace_id);
 
-    // __Field_assignee_id impls FieldEq<String> (Option<T> → T).
-    fn _eq_assignee<F: FieldEq<String>>(_: F) {}
+    // __Field_assignee_id impls FieldEq with Value = String
+    // (Option<T> → T).
+    fn _eq_assignee<F: FieldEq<Value = String>>(_: F) {}
     _eq_assignee(issues::field::assignee_id);
 
-    // __Field_status impls FieldInSet<Status>.
-    fn _inset_status<F: FieldInSet<Status>>(_: F) {}
+    // __Field_status impls FieldInSet with Item = Status.
+    fn _inset_status<F: FieldInSet<Item = Status>>(_: F) {}
     _inset_status(issues::field::status);
 
-    // __Field_priority impls FieldRange<u32>.
-    fn _range_priority<F: FieldRange<u32>>(_: F) {}
+    // __Field_priority impls FieldRange with Bound = u32.
+    fn _range_priority<F: FieldRange<Bound = u32>>(_: F) {}
     _range_priority(issues::field::priority);
 
     // __Field_title impls FieldContains.

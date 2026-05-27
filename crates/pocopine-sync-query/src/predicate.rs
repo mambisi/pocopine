@@ -36,24 +36,36 @@ mod sealed {
 }
 
 /// Field marker that matches a parameter declared as required `T` or
-/// `Option<T>` (i.e. equality predicate). The `Value` associated type
-/// is the inner type — for `Option<T>`, `Value = T`; for required
-/// `T`, `Value = T`.
-pub trait FieldEq<T>: sealed::Sealed {
+/// `Option<T>` (i.e. equality predicate). `Value` is the declared
+/// inner type — for `Option<T>`, `Value = T`; for required `T`,
+/// `Value = T`. Defined as an associated type (rather than a trait
+/// generic) so the compiler can pin the type from the marker alone
+/// and the builder can accept `impl Into<M::Value>` at the call site
+/// — i.e. `.eq(field::workspace_id, "W1")` works without
+/// `.to_string()`.
+pub trait FieldEq: sealed::Sealed {
+    /// The declared T for this field.
+    type Value;
     /// Wire param key for this field (e.g. `"workspace_id"`).
     const NAME: &'static str;
 }
 
 /// Field marker that matches a parameter declared as
-/// `params::InSet<T>`.
-pub trait FieldInSet<T>: sealed::Sealed {
+/// `params::InSet<T>`. `Item` is the element type — used by
+/// `.any_of(field::status, iter)` to accept any `impl IntoIterator`
+/// of `impl Into<Item>`.
+pub trait FieldInSet: sealed::Sealed {
+    /// The declared element T for this field.
+    type Item;
     /// Wire param key for this field.
     const NAME: &'static str;
 }
 
 /// Field marker that matches a parameter declared as
-/// `params::Range<T>`.
-pub trait FieldRange<T>: sealed::Sealed {
+/// `params::Range<T>`. `Bound` is the per-bound type.
+pub trait FieldRange: sealed::Sealed {
+    /// The declared bound T for this field.
+    type Bound;
     /// Wire param key for this field.
     const NAME: &'static str;
 }

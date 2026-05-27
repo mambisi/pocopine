@@ -270,32 +270,40 @@ impl<Row> QueryBuilder<Row> {
     }
 
     /// Equality predicate. Adds `(field, value)` to the param map iff
-    /// `field` is a marker type that implements [`crate::FieldEq<T>`].
-    /// The sealed-trait gate is what gives the DSL its type-level
-    /// correctness: misnaming a field or passing a `T` that doesn't
-    /// match the declared param's type fails at compile time, not at
-    /// the wire boundary.
+    /// `field` is a marker that implements [`crate::FieldEq`]. The
+    /// `value` argument is `impl Into<M::Value>` so the caller can
+    /// pass anything convertible to the declared field type — e.g.
+    /// `&str` where the field was declared as `String`. The sealed
+    /// associated-type trait gates compile-time correctness:
+    /// misnaming a field or passing a value that doesn't convert to
+    /// the declared param's type fails at compile time, not at the
+    /// wire boundary.
     ///
     /// ```ignore
     /// Issues::query()
-    ///     .eq(field::workspace_id, "W1".to_string())
-    ///     // field::status is FieldInSet<Status>, not FieldEq —
-    ///     // .eq(field::status, ...) would fail to compile
+    ///     // &str → String via the standard library's Into impl
+    ///     .eq(field::workspace_id, "W1")
+    ///     // field::status is FieldInSet, not FieldEq —
+    ///     // .eq(field::status, ...) fails to compile.
     ///     .build();
     /// ```
-    pub fn eq<M, T>(self, _field: M, value: T) -> Self
+    pub fn eq<M, V>(self, _field: M, value: V) -> Self
     where
-        M: crate::FieldEq<T>,
-        T: serde::Serialize,
+        M: crate::FieldEq,
+        V: Into<M::Value>,
+        M::Value: serde::Serialize,
     {
+        let value: M::Value = value.into();
         let encoded = serde_json::to_value(&value)
             .expect("FieldEq value must be JSON-serializable — contract violation");
-        self.raw_param(<M as crate::FieldEq<T>>::NAME, encoded)
+        self.raw_param(<M as crate::FieldEq>::NAME, encoded)
     }
 
     /// Set-membership predicate. Matches rows whose `field` is any
-    /// of `values`. Adds `(field, InSet<T>)` to the param map iff
-    /// `field` implements [`crate::FieldInSet<T>`]. Returns an
+    /// of `values`. Adds `(field, InSet<M::Item>)` to the param map
+    /// iff `field` implements [`crate::FieldInSet`]. Iterator items
+    /// are `impl Into<M::Item>` so `.any_of(field::status, ["open",
+    /// "closed"])` works when `Status` has `From<&str>`. Returns an
     /// error if `values` is empty (an empty set matches no rows;
     /// the caller likely meant to omit the param entirely).
     ///
@@ -306,39 +314,40 @@ impl<Row> QueryBuilder<Row> {
     ///     .any_of(field::status, [Status::Open, Status::InProgress])?
     ///     .build();
     /// ```
-    pub fn any_of<M, T, I>(self, _field: M, values: I) -> pocopine_sync::SyncResult<Self>
+    pub fn any_of<M, V, I>(self, _field: M, values: I) -> pocopine_sync::SyncResult<Self>
     where
-        M: crate::FieldInSet<T>,
-        T: serde::Serialize,
-        I: IntoIterator<Item = T>,
+        M: crate::FieldInSet,
+        M::Item: serde::Serialize,
+        V: Into<M::Item>,
+        I: IntoIterator<Item = V>,
     {
-        let set = crate::params::InSet::<T>::new(values)
+        let set = crate::params::InSet::<M::Item>::new(values.into_iter().map(Into::into))
             .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
         let encoded = serde_json::to_value(&set)
             .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
-        Ok(self.raw_param(<M as crate::FieldInSet<T>>::NAME, encoded))
+        Ok(self.raw_param(<M as crate::FieldInSet>::NAME, encoded))
     }
 
-    /// Range predicate. Adds `(field, Range<T>)` to the param map iff
-    /// `field` implements [`crate::FieldRange<T>`]. The range value
-    /// is pre-constructed via [`crate::params::Range`]'s helper
-    /// constructors (`closed`, `half_open`, `at_least`, `at_most`,
-    /// `greater_than`, `less_than`) — the constructor enforces the
-    /// "at least one bound" invariant.
+    /// Range predicate. Adds `(field, Range<M::Bound>)` to the param
+    /// map iff `field` implements [`crate::FieldRange`]. The range
+    /// value is pre-constructed via [`crate::params::Range`]'s
+    /// helper constructors (`closed`, `half_open`, `at_least`,
+    /// `at_most`, `greater_than`, `less_than`) — the constructor
+    /// enforces the "at least one bound" invariant.
     ///
     /// ```ignore
     /// Issues::query()
     ///     .range(field::priority, params::Range::closed(2, 5))
     ///     .build();
     /// ```
-    pub fn range<M, T>(self, _field: M, range: crate::params::Range<T>) -> Self
+    pub fn range<M>(self, _field: M, range: crate::params::Range<M::Bound>) -> Self
     where
-        M: crate::FieldRange<T>,
-        T: serde::Serialize,
+        M: crate::FieldRange,
+        M::Bound: serde::Serialize,
     {
         let encoded = serde_json::to_value(&range)
             .expect("Range<T> is always JSON-serializable when T: Serialize");
-        self.raw_param(<M as crate::FieldRange<T>>::NAME, encoded)
+        self.raw_param(<M as crate::FieldRange>::NAME, encoded)
     }
 
     /// Substring-match predicate (case-insensitive). Adds

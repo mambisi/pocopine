@@ -96,8 +96,8 @@ fn sealed_traits_exist() {
     // Just a sanity check that the trait paths resolve. The macro
     // (TBD) emits impls of these. The traits are NOT object-safe
     // by design — the sealed-trait gate uses an unsized marker.
-    fn _accept_field_eq<F: FieldEq<String>>(_f: F) {}
-    fn _accept_field_inset<F: FieldInSet<String>>(_f: F) {}
+    fn _accept_field_eq<F: FieldEq<Value = String>>(_f: F) {}
+    fn _accept_field_inset<F: FieldInSet<Item = String>>(_f: F) {}
 }
 
 // ---- Mutator trait -----------------------------------------------------
