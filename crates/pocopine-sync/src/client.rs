@@ -2406,6 +2406,7 @@ mod tests {
             collection: SyncCollectionName::new("posts").unwrap(),
             cursor: None,
             schema_version: 0,
+            params: ::std::collections::BTreeMap::new(),
         }]);
         // Sanity: protocol field is already set by `new`.
         response.protocol = crate::SYNC_PROTOCOL_V1.to_string();
@@ -2430,12 +2431,14 @@ mod tests {
                 collection: SyncCollectionName::new("posts").unwrap(),
                 cursor: None,
                 schema_version: 2,
+                params: ::std::collections::BTreeMap::new(),
             },
             SyncOpenStream {
                 stream: stream.clone(),
                 collection: SyncCollectionName::new("posts").unwrap(),
                 cursor: None,
                 schema_version: 1,
+                params: ::std::collections::BTreeMap::new(),
             },
         ]);
         let err = validate_open_response(response, &stream).unwrap_err();
@@ -2455,6 +2458,7 @@ mod tests {
             collection: SyncCollectionName::new("posts").unwrap(),
             cursor: None,
             schema_version: 3,
+            params: ::std::collections::BTreeMap::new(),
         }]);
         let v = validate_open_response(response, &stream).unwrap();
         assert_eq!(v, 3);
