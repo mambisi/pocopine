@@ -81,12 +81,15 @@ In a component, get the client and observe:
 fn on_ready(&self, qc: Plugin<Rc<QueryClient>>) {
     // Build + subscribe. `view` is reactive; drop to unsubscribe.
     // `.eq` takes `impl Into<M::Value>` so `&str` literals work
-    // directly where the field was declared as `String`.
+    // directly where the field was declared as `String`. `.range`
+    // accepts native Rust range syntax (`a..b`, `a..=b`, `a..`,
+    // `..b`, `..=b`) — `..` is rejected (matches everything).
     use issues::field;
     let view = Issues::query()
         .eq(field::workspace_id, self.workspace_id.as_str())
         .any_of(field::status, [Status::Open, Status::InProgress])?
         .contains(field::title, "auth")?
+        .range(field::created_at, last_week..now)
         .order_by("created_at", Order::Desc)
         .limit(50)
         .observe(&qc);

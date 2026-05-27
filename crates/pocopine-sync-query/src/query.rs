@@ -329,22 +329,35 @@ impl<Row> QueryBuilder<Row> {
     }
 
     /// Range predicate. Adds `(field, Range<M::Bound>)` to the param
-    /// map iff `field` implements [`crate::FieldRange`]. The range
-    /// value is pre-constructed via [`crate::params::Range`]'s
-    /// helper constructors (`closed`, `half_open`, `at_least`,
-    /// `at_most`, `greater_than`, `less_than`) — the constructor
-    /// enforces the "at least one bound" invariant.
+    /// map iff `field` implements [`crate::FieldRange`]. Accepts
+    /// either a pre-built [`crate::params::Range`] or any of the
+    /// standard library's range expressions:
+    ///
+    /// | Rust syntax | Wire shape                       |
+    /// |-------------|----------------------------------|
+    /// | `a..b`      | half-open `[a, b)`               |
+    /// | `a..=b`     | closed `[a, b]`                  |
+    /// | `a..`       | lower-bounded `[a, ∞)`           |
+    /// | `..b`       | strict upper-bounded `(-∞, b)`   |
+    /// | `..=b`      | inclusive upper-bounded `(-∞, b]`|
+    ///
+    /// `..` (`RangeFull`) is intentionally not supported — a
+    /// fully-unbounded range matches every row; omit the param.
     ///
     /// ```ignore
     /// Issues::query()
-    ///     .range(field::priority, params::Range::closed(2, 5))
+    ///     .range(field::priority, 2..5)              // a..b
+    ///     .range(field::priority, 2..=5)             // a..=b
+    ///     .range(field::priority, params::Range::greater_than(0))
     ///     .build();
     /// ```
-    pub fn range<M>(self, _field: M, range: crate::params::Range<M::Bound>) -> Self
+    pub fn range<M, R>(self, _field: M, range: R) -> Self
     where
         M: crate::FieldRange,
         M::Bound: serde::Serialize,
+        R: Into<crate::params::Range<M::Bound>>,
     {
+        let range: crate::params::Range<M::Bound> = range.into();
         let encoded = serde_json::to_value(&range)
             .expect("Range<T> is always JSON-serializable when T: Serialize");
         self.raw_param(<M as crate::FieldRange>::NAME, encoded)

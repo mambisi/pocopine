@@ -5,7 +5,10 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use pocopine_sync_query::{params, Order};
+// `params::*` is referenced from inside the `#[query_resource(params(...))]`
+// attribute below, which the macro parses but doesn't emit verbatim,
+// so we don't need a `use params` import at this scope.
+use pocopine_sync_query::Order;
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};
 
@@ -68,7 +71,7 @@ fn builder_constructs_typed_query() {
         .unwrap()
         .contains(field::title, "auth")
         .unwrap()
-        .range(field::priority, params::Range::closed(1u32, 10))
+        .range(field::priority, 1u32..=10)
         .order_by("priority", Order::Asc)
         .limit(50)
         .build();
@@ -132,7 +135,7 @@ fn matches_range() {
 
     let q = Issues::query()
         .eq(field::workspace_id, "W1")
-        .range(field::priority, params::Range::closed(1u32, 5))
+        .range(field::priority, 1u32..=5)
         .build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut high = sample_issue();
