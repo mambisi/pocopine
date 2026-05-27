@@ -6027,6 +6027,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-sync-query"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "http 1.4.0",
+ "http-body-util",
+ "js-sys",
+ "pocopine-auth",
+ "pocopine-core",
+ "pocopine-server",
+ "pocopine-sync",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "pocopine-sync-sqlite"
 version = "0.1.0"
 dependencies = [

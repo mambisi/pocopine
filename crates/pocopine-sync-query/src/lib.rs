@@ -1,0 +1,66 @@
+//! `pocopine-sync-query` — query-centric local-first data layer.
+//!
+//! Parallel to [`pocopine-sync-crud`]: where CRUD is **resource-centric**
+//! ("one entity type, one logical view, one optimistic state"), Query is
+//! **subscription-centric** ("one query, one cache compartment, one
+//! reactive view; many queries per entity type").
+//!
+//! See [RFC 086](../rfcs/rfc-086-sync-query.md) for design rationale and
+//! [`docs/sync-query-design.md`](../docs/sync-query-design.md) for the
+//! implementation spec.
+//!
+//! # Status
+//!
+//! Phase 3 scaffold. The crate exposes types and traits; the runtime
+//! (predicate-routed mutations, refcounted subscription registry,
+//! live wakeup integration) is being built out PR-by-PR per the
+//! design doc. See [`README.md`](../README.md) for current state.
+//!
+//! # Quickstart (target API)
+//!
+//! ```ignore
+//! use pocopine_sync_query::{Query, QueryClient, params};
+//!
+//! let client: &QueryClient = pocopine::query_client();
+//!
+//! // Subscribe to a filtered view
+//! let handle = client.subscribe(
+//!     Issues::query()
+//!         .where_eq(field::workspace_id, w1)?
+//!         .where_in(field::status, [Status::Open, Status::InProgress])?
+//!         .order_by(field::created_at, Order::Desc)
+//!         .limit(50)
+//!         .build()
+//! );
+//!
+//! // Run a mutation; the engine routes its row changes to every
+//! // subscription whose predicate matches.
+//! client.mutate::<create_issue::Mutator>(payload).await?;
+//! ```
+//!
+//! [`pocopine-sync-crud`]: https://docs.rs/pocopine-sync-crud
+
+pub mod mutator;
+pub mod params;
+pub mod predicate;
+pub mod query;
+pub mod state;
+
+// Re-exports of the curated public API.
+pub use mutator::{MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, RowChange};
+pub use predicate::{FieldContains, FieldEq, FieldInSet, FieldRange};
+pub use query::{Order, OrderBy, Query, QueryBuilder, QueryKey};
+pub use state::QueryState;
+
+// Re-export wire-level types from pocopine-sync that the macro emissions
+// and runtime touch directly. Users mostly don't see these.
+pub use pocopine_sync::{local_stream_key, SyncCursor, SyncStreamName, SyncStreamSubscription};
+
+/// Macro-implementation surface. **Not** part of the public API — every
+/// symbol here exists only because `pocopine-sync-query-macros` will emit
+/// code that names it from downstream crates. Stability is pinned to the
+/// macro version, NOT semver of this crate.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde_json;
+}
