@@ -14,8 +14,9 @@ use bytes::Bytes;
 use google_cloud_auth::credentials::anonymous::Builder as Anonymous;
 use google_cloud_storage::client::Storage;
 use pocopine_storage::{
-    CompleteUpload, InitiateUpload, SafeObjectKey, StorageBackend, StorageContext, StorageError,
-    StorageKey, StorageResult, UploadPolicy, UploadSession, UploadSessionStatus, UploadStrategy,
+    CompleteUpload, InitiateUpload, PrincipalRef, SafeObjectKey, StorageActor, StorageBackend,
+    StorageContext, StorageError, StorageKey, StorageResult, UploadPolicy, UploadSession,
+    UploadSessionStatus, UploadStrategy,
 };
 use pocopine_storage_gcs::GcsStorageBackend;
 use testcontainers::core::{wait::HttpWaitStrategy, ContainerPort, WaitFor};
@@ -117,6 +118,16 @@ fn session_object_key(backend: &GcsStorageBackend, session: &UploadSession, name
 
 fn ctx() -> StorageContext {
     StorageContext::system("gcs-fake-it")
+}
+
+fn principal_ctx(subject: &str) -> StorageContext {
+    StorageContext {
+        actor: StorageActor::Principal(PrincipalRef {
+            subject: subject.to_string(),
+            attributes: BTreeMap::new(),
+        }),
+        request: None,
+    }
 }
 
 fn policy() -> StorageResult<UploadPolicy> {
@@ -501,6 +512,39 @@ async fn set_upload_length_does_not_promote_staged_bytes() -> StorageResult<()> 
     assert_eq!(updated.next_offset, Some(0));
     let inspected = backend.inspect_upload(&ctx(), session.id).await?;
     assert_eq!(inspected.next_offset, Some(0));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_system_actor_cannot_abort_corrupt_upload_metadata_against_fake_gcs(
+) -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "corrupt-owner").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate(&backend, Some(5)).await?;
+    let meta_key = session_object_key(&backend, &session, "session.json");
+    clients
+        .storage
+        .write_object(
+            backend.bucket_resource(),
+            meta_key.clone(),
+            Bytes::from_static(b"{not-json"),
+        )
+        .send_unbuffered()
+        .await
+        .expect("corrupt session metadata");
+
+    let rejected = backend
+        .abort_upload(&principal_ctx("tenant-b"), session.id.clone())
+        .await;
+    assert!(matches!(rejected, Err(StorageError::Forbidden { .. })));
+    assert_eq!(
+        object_bytes(&clients.storage, backend.bucket(), &meta_key).await,
+        b"{not-json"
+    );
+
+    backend.abort_upload(&ctx(), session.id).await?;
     Ok(())
 }
 

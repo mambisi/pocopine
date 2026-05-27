@@ -60,7 +60,7 @@ impl std::fmt::Debug for AzureBlobStorageBackend {
         f.debug_struct("AzureBlobStorageBackend")
             .field("name", &self.name)
             .field("container", &self.layout.container_name)
-            .field("container_url", &self.layout.container_url)
+            .field("container_url", &self.layout.redacted_container_url())
             .field("object_prefix", &self.layout.object_prefix)
             .field("internal_prefix", &self.layout.internal_prefix)
             .field("max_proxy_upload_bytes", &self.max_proxy_upload_bytes)
@@ -993,5 +993,31 @@ impl StorageBackend for AzureBlobStorageBackend {
             meta_deleted?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use azure_core::http::Url;
+    use azure_storage_blob::BlobContainerClient;
+
+    use super::*;
+
+    #[test]
+    fn debug_redacts_container_sas_query() {
+        let url =
+            Url::parse("https://account.blob.core.windows.net/pocopine?sv=2024-01-01&sig=secret")
+                .unwrap();
+        let container =
+            BlobContainerClient::new(url, None, None).expect("build Azure container client");
+        let backend = AzureBlobStorageBackend::new(container).unwrap();
+
+        let debug = format!("{backend:?}");
+
+        assert!(debug.contains("AzureBlobStorageBackend"));
+        assert!(debug.contains("https://account.blob.core.windows.net/pocopine"));
+        assert!(!debug.contains("sig="));
+        assert!(!debug.contains("secret"));
+        assert!(!debug.contains("?sv="));
     }
 }

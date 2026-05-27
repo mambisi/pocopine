@@ -57,6 +57,10 @@ impl AzureKeyLayout {
         )
     }
 
+    pub(crate) fn redacted_container_url(&self) -> String {
+        redacted_url(&self.container_url)
+    }
+
     pub(crate) fn object_key(&self, key: &str) -> String {
         join_optional_prefix(self.object_prefix.as_deref(), key)
     }
@@ -81,7 +85,7 @@ fn container_name_from_url(url: &Url) -> StorageResult<String> {
         .unwrap_or_default();
     let container = match segments.as_slice() {
         [container] => (*container).to_string(),
-        [_account, container] if is_local_azurite_url(url) => (*container).to_string(),
+        [_account, container] if !is_official_azure_blob_host(url) => (*container).to_string(),
         [] => {
             return Err(StorageError::policy_rejected(
                 "Azure container URL must include a container name",
@@ -101,10 +105,26 @@ fn container_name_from_url(url: &Url) -> StorageResult<String> {
     Ok(container)
 }
 
-fn is_local_azurite_url(url: &Url) -> bool {
+fn is_official_azure_blob_host(url: &Url) -> bool {
     url.host_str()
-        .map(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"))
+        .map(|host| {
+            host.ends_with(".blob.core.windows.net")
+                || host.ends_with(".blob.core.usgovcloudapi.net")
+                || host.ends_with(".blob.core.chinacloudapi.cn")
+                || host.ends_with(".blob.core.cloudapi.de")
+        })
         .unwrap_or(false)
+}
+
+fn redacted_url(value: &str) -> String {
+    let Ok(mut url) = Url::parse(value) else {
+        return "<invalid Azure container URL>".to_string();
+    };
+    url.set_query(None);
+    url.set_fragment(None);
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.to_string()
 }
 
 fn normalize_object_prefix(prefix: String) -> StorageResult<Option<String>> {
@@ -198,6 +218,29 @@ mod tests {
     fn multi_segment_non_azurite_container_url_is_rejected() {
         let url = Url::parse("https://account.blob.core.windows.net/pocopine/audit/").unwrap();
         assert!(AzureKeyLayout::new(&url, None, DEFAULT_INTERNAL_PREFIX.to_string()).is_err());
+    }
+
+    #[test]
+    fn non_local_path_style_container_url_is_accepted() {
+        let url = Url::parse("http://azurite:10000/devstoreaccount1/pocopine").unwrap();
+        let layout = AzureKeyLayout::new(&url, None, DEFAULT_INTERNAL_PREFIX.to_string()).unwrap();
+
+        assert_eq!(layout.container_name, "pocopine");
+    }
+
+    #[test]
+    fn redacted_container_url_removes_query_fragment_and_userinfo() {
+        let url = Url::parse(
+            "https://user:password@account.blob.core.windows.net/pocopine?sig=secret#frag",
+        )
+        .unwrap();
+        let layout = AzureKeyLayout::new(&url, None, DEFAULT_INTERNAL_PREFIX.to_string()).unwrap();
+        let redacted = layout.redacted_container_url();
+
+        assert_eq!(redacted, "https://account.blob.core.windows.net/pocopine");
+        assert!(!redacted.contains("sig="));
+        assert!(!redacted.contains("secret"));
+        assert!(!redacted.contains("password"));
     }
 
     #[test]

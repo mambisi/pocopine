@@ -1,4 +1,4 @@
-use pocopine_storage::{StorageError, StorageResult, UploadSessionId};
+use pocopine_storage::{SafeObjectKey, StorageError, StorageResult, UploadSessionId};
 
 pub(crate) const DEFAULT_INTERNAL_PREFIX: &str = "__pocopine/storage/sessions";
 
@@ -33,8 +33,11 @@ impl GcsKeyLayout {
             ));
         }
         let bucket_resource = format!("projects/_/buckets/{bucket}");
-        let object_prefix = object_prefix.and_then(normalize_prefix);
-        let internal_prefix_base = normalize_prefix(internal_prefix).ok_or_else(|| {
+        let object_prefix = match object_prefix {
+            Some(prefix) => normalize_object_prefix(prefix)?,
+            None => None,
+        };
+        let internal_prefix_base = normalize_internal_prefix(internal_prefix).ok_or_else(|| {
             StorageError::policy_rejected("GCS internal prefix must not be empty")
         })?;
         let internal_prefix =
@@ -49,20 +52,15 @@ impl GcsKeyLayout {
     }
 
     pub(crate) fn with_prefix(&self, prefix: String) -> StorageResult<Self> {
-        let object_prefix = normalize_prefix(prefix);
         Self::new(
             self.bucket.clone(),
-            object_prefix,
+            Some(prefix),
             self.internal_prefix_base.clone(),
         )
     }
 
     pub(crate) fn with_internal_prefix(&self, prefix: String) -> StorageResult<Self> {
-        Self::new(
-            self.bucket.clone(),
-            self.object_prefix.clone(),
-            prefix.trim_matches('/').to_string(),
-        )
+        Self::new(self.bucket.clone(), self.object_prefix.clone(), prefix)
     }
 
     pub(crate) fn bucket_resource(&self) -> &str {
@@ -86,7 +84,16 @@ impl GcsKeyLayout {
     }
 }
 
-fn normalize_prefix(prefix: String) -> Option<String> {
+fn normalize_object_prefix(prefix: String) -> StorageResult<Option<String>> {
+    let prefix = prefix.trim().trim_matches('/');
+    if prefix.is_empty() {
+        return Ok(None);
+    }
+    SafeObjectKey::parse(prefix)?;
+    Ok(Some(prefix.to_string()))
+}
+
+fn normalize_internal_prefix(prefix: String) -> Option<String> {
     let prefix = prefix.trim().trim_matches('/');
     if prefix.is_empty() {
         None
@@ -175,5 +182,31 @@ mod tests {
         assert!(
             GcsKeyLayout::new("  ".to_string(), None, DEFAULT_INTERNAL_PREFIX.to_string()).is_err()
         );
+    }
+
+    #[test]
+    fn reserved_object_prefix_is_rejected() {
+        let rejected = GcsKeyLayout::new(
+            "bucket".to_string(),
+            Some("__pocopine".to_string()),
+            DEFAULT_INTERNAL_PREFIX.to_string(),
+        );
+        assert!(matches!(
+            rejected,
+            Err(StorageError::InvalidValue { field, .. }) if field == "object key"
+        ));
+    }
+
+    #[test]
+    fn path_traversal_object_prefix_is_rejected() {
+        let rejected = GcsKeyLayout::new(
+            "bucket".to_string(),
+            Some("tenant/../files".to_string()),
+            DEFAULT_INTERNAL_PREFIX.to_string(),
+        );
+        assert!(matches!(
+            rejected,
+            Err(StorageError::InvalidValue { field, .. }) if field == "object key"
+        ));
     }
 }
