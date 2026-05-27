@@ -281,11 +281,12 @@ impl RouteComponent for Help {
 }
 ```
 
-`Decision::Allow` → guard `Allow`. `Decision::Deny("unauthorized")`
+`Decision::Allow` → guard `Allow`. `Decision::Deny(DenyReason::Unauthorized)`
 (the "user is not signed in" branch the standard predicates emit)
 → `RouteGuardDecision::Reject(RouteRejection::Unauthorized)`,
 which the plugin's rejection handler translates into a redirect
-to the login route. Any other `Decision::Deny(reason)` → `Reject(Forbidden(reason))`,
+to the login route. `Decision::Deny(DenyReason::Forbidden)` or
+`Decision::Deny(DenyReason::Custom(reason))` → `Reject(Forbidden(reason.as_str()))`,
 which falls through to the next handler in the chain or to the
 generic error surface (see
 [`route-guards-and-loaders.md`](./route-guards-and-loaders.md)).

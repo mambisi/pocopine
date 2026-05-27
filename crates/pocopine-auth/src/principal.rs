@@ -82,7 +82,14 @@ impl Principal {
         self.user.as_deref()
     }
 
-    /// Authenticated user as a clonable handle, if present. Cheap clone.
+    /// Authenticated user as a cloned [`Arc`] handle, if present.
+    ///
+    /// This is a cheap reference-count bump — the underlying
+    /// `AuthUser` (and its `claims` map) is shared, not deep-copied.
+    /// Use this when middleware → guard → handler hops need to pass
+    /// identity along without paying allocation cost, or when storing
+    /// the user in a per-request extension that outlives the
+    /// `Principal`.
     pub fn user_arc(&self) -> Option<Arc<AuthUser>> {
         self.user.clone()
     }

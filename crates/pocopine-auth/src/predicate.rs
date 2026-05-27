@@ -6,18 +6,58 @@ use pocopine_core::ServerError;
 use crate::principal::Principal;
 use crate::role::{Permission, Role};
 
+/// Closed-set reason carried by [`Decision::Deny`].
+///
+/// Splitting `Unauthorized` and `Forbidden` into explicit variants
+/// makes the 401-vs-403 mapping in the [`From<Decision>`] adapter
+/// and in `pocopine-auth-client`'s `RouteGuard` blanket impl a
+/// type-checked match instead of an implicit `== "unauthorized"`
+/// string compare. App-defined reasons ride in [`DenyReason::Custom`]
+/// and are treated as forbidden by the standard mapping while keeping
+/// the reason string available for telemetry / `RouteRejection::Forbidden`.
+///
+/// The custom variant is `&'static str` on purpose — reasons must
+/// never carry user input, so the type system rules out dynamic
+/// (and therefore potentially user-influenced) strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DenyReason {
+    /// No authenticated user. Maps to `ServerError::Unauthorized`
+    /// server-side and `RouteRejection::Unauthorized` client-side
+    /// (typically a redirect to the login route).
+    Unauthorized,
+    /// Authenticated but lacks the required role/permission. Maps
+    /// to `ServerError::Forbidden("forbidden")` server-side and
+    /// `RouteRejection::Forbidden("forbidden")` client-side.
+    Forbidden,
+    /// App-defined reason carried verbatim into the rejection.
+    /// Treated as `Forbidden` by the standard mapping.
+    Custom(&'static str),
+}
+
+impl DenyReason {
+    /// Stable string identifier (`"unauthorized"`, `"forbidden"`, or
+    /// the custom reason). Used by adapters that need to feed the
+    /// reason into `&'static str`-typed rejection payloads.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            DenyReason::Unauthorized => "unauthorized",
+            DenyReason::Forbidden => "forbidden",
+            DenyReason::Custom(s) => s,
+        }
+    }
+}
+
 /// Outcome of a [`Predicate`] check against a [`Principal`].
 ///
-/// `Deny`'s reason is a stable, closed-set `&'static str` identifier
-/// (e.g. `"unauthorized"`, `"missing_role:admin"`). It is consumed
-/// by the server-side `From<Decision>` adapter (mapped to
+/// `Deny` carries a closed-set [`DenyReason`] consumed by the
+/// server-side `From<Decision>` adapter (mapped to
 /// `ServerError::Unauthorized` / `Forbidden`) and by the client-side
 /// `RouteGuard` blanket impl (mapped to `RouteRejection::Unauthorized`
-/// / `Forbidden`). Reasons must never carry user input.
+/// / `Forbidden`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decision {
     Allow,
-    Deny(&'static str),
+    Deny(DenyReason),
 }
 
 /// Sync, cross-target permission check against a [`Principal`].
@@ -56,7 +96,7 @@ pub fn require_auth() -> impl Predicate {
         if principal.is_authenticated() {
             Decision::Allow
         } else {
-            Decision::Deny("unauthorized")
+            Decision::Deny(DenyReason::Unauthorized)
         }
     }
 }
@@ -65,12 +105,12 @@ pub fn require_auth() -> impl Predicate {
 pub fn require_role(role: &'static str) -> impl Predicate {
     move |principal: &Principal| {
         if !principal.is_authenticated() {
-            return Decision::Deny("unauthorized");
+            return Decision::Deny(DenyReason::Unauthorized);
         }
         if principal.has_role(&Role::new(role)) {
             Decision::Allow
         } else {
-            Decision::Deny("forbidden")
+            Decision::Deny(DenyReason::Forbidden)
         }
     }
 }
@@ -79,12 +119,12 @@ pub fn require_role(role: &'static str) -> impl Predicate {
 pub fn require_permission(permission: &'static str) -> impl Predicate {
     move |principal: &Principal| {
         if !principal.is_authenticated() {
-            return Decision::Deny("unauthorized");
+            return Decision::Deny(DenyReason::Unauthorized);
         }
         if principal.has_permission(&Permission::new(permission)) {
             Decision::Allow
         } else {
-            Decision::Deny("forbidden")
+            Decision::Deny(DenyReason::Forbidden)
         }
     }
 }
@@ -121,22 +161,20 @@ where
 /// expects a guard returning `Result<(), ServerError>`. A `Decision`
 /// maps cleanly onto that.
 ///
-/// `"unauthorized"` (and reasons starting with that prefix) become
-/// `ServerError::Unauthorized`; everything else becomes
-/// `ServerError::Forbidden`. Apps that want a different mapping
-/// should write a wrapper guard that inspects the predicate's
-/// `Decision` directly.
+/// [`DenyReason::Unauthorized`] becomes `ServerError::Unauthorized`;
+/// [`DenyReason::Forbidden`] and [`DenyReason::Custom`] become
+/// `ServerError::Forbidden` (with the custom reason carried verbatim).
+/// Apps that want a different mapping should write a wrapper guard
+/// that inspects the predicate's `Decision` directly.
 impl From<Decision> for Result<(), ServerError> {
     fn from(decision: Decision) -> Self {
         match decision {
             Decision::Allow => Ok(()),
-            Decision::Deny(reason) => {
-                if reason == "unauthorized" {
-                    Err(ServerError::unauthorized(reason))
-                } else {
-                    Err(ServerError::forbidden(reason))
-                }
+            Decision::Deny(DenyReason::Unauthorized) => {
+                Err(ServerError::unauthorized("unauthorized"))
             }
+            Decision::Deny(DenyReason::Forbidden) => Err(ServerError::forbidden("forbidden")),
+            Decision::Deny(DenyReason::Custom(reason)) => Err(ServerError::forbidden(reason)),
         }
     }
 }
@@ -159,7 +197,7 @@ mod tests {
         );
         assert_eq!(
             auth.check(&Principal::anonymous()),
-            Decision::Deny("unauthorized")
+            Decision::Deny(DenyReason::Unauthorized)
         );
     }
 
@@ -167,15 +205,15 @@ mod tests {
     fn require_role_denies_unauthorized_before_role_check() {
         let admin_only = require_role("admin");
         // Anonymous: missing identity comes first, so the reason
-        // is `unauthorized` rather than `forbidden` — keeps the
+        // is `Unauthorized` rather than `Forbidden` — keeps the
         // server-side adapter mapping clean (401 vs 403).
         assert_eq!(
             admin_only.check(&Principal::anonymous()),
-            Decision::Deny("unauthorized")
+            Decision::Deny(DenyReason::Unauthorized)
         );
         assert_eq!(
             admin_only.check(&Principal::from_user(build_user_with_role(Role::user()))),
-            Decision::Deny("forbidden")
+            Decision::Deny(DenyReason::Forbidden)
         );
         assert_eq!(
             admin_only.check(&Principal::from_user(build_user_with_role(Role::admin()))),
@@ -188,7 +226,7 @@ mod tests {
         let perm = require_permission("posts.write");
         assert_eq!(
             perm.check(&Principal::anonymous()),
-            Decision::Deny("unauthorized")
+            Decision::Deny(DenyReason::Unauthorized)
         );
 
         let user = AuthUser::new("uid-1").with_permission(Permission::new("posts.write"));
@@ -199,14 +237,14 @@ mod tests {
     fn any_of_returns_second_reason_on_double_deny() {
         let p = any_of(require_role("admin"), require_role("editor"));
         let viewer = Principal::from_user(build_user_with_role(Role::user()));
-        // First check denies (`forbidden`), second check denies
-        // (`forbidden`); reason comes from the second.
-        assert_eq!(p.check(&viewer), Decision::Deny("forbidden"));
-        // Anonymous: both branches deny with `unauthorized`; the
-        // second branch's reason wins (still `unauthorized`).
+        // First check denies (`Forbidden`), second check denies
+        // (`Forbidden`); reason comes from the second.
+        assert_eq!(p.check(&viewer), Decision::Deny(DenyReason::Forbidden));
+        // Anonymous: both branches deny with `Unauthorized`; the
+        // second branch's reason wins (still `Unauthorized`).
         assert_eq!(
             p.check(&Principal::anonymous()),
-            Decision::Deny("unauthorized")
+            Decision::Deny(DenyReason::Unauthorized)
         );
     }
 
@@ -223,15 +261,15 @@ mod tests {
     fn all_of_short_circuits_on_first_deny() {
         let p = all_of(require_auth(), require_role("admin"));
         // Anonymous: short-circuits on require_auth, returns
-        // `unauthorized`.
+        // `Unauthorized`.
         assert_eq!(
             p.check(&Principal::anonymous()),
-            Decision::Deny("unauthorized")
+            Decision::Deny(DenyReason::Unauthorized)
         );
         // Non-admin authenticated: passes require_auth, fails
-        // require_role with `forbidden`.
+        // require_role with `Forbidden`.
         let viewer = Principal::from_user(build_user_with_role(Role::user()));
-        assert_eq!(p.check(&viewer), Decision::Deny("forbidden"));
+        assert_eq!(p.check(&viewer), Decision::Deny(DenyReason::Forbidden));
         let admin = Principal::from_user(build_user_with_role(Role::admin()));
         assert_eq!(p.check(&admin), Decision::Allow);
     }
@@ -241,16 +279,30 @@ mod tests {
         let allow: Result<(), ServerError> = Decision::Allow.into();
         assert!(allow.is_ok());
 
-        let unauth: Result<(), ServerError> = Decision::Deny("unauthorized").into();
+        let unauth: Result<(), ServerError> = Decision::Deny(DenyReason::Unauthorized).into();
         assert!(matches!(unauth, Err(ServerError::Unauthorized(_))));
 
-        // Anything other than `"unauthorized"` becomes Forbidden so
-        // the closed reason set drives 401 vs 403 cleanly.
-        let forbidden: Result<(), ServerError> = Decision::Deny("forbidden").into();
+        // Standard `Forbidden` maps to 403 with reason "forbidden".
+        let forbidden: Result<(), ServerError> = Decision::Deny(DenyReason::Forbidden).into();
         assert!(matches!(forbidden, Err(ServerError::Forbidden(_))));
 
-        let custom: Result<(), ServerError> = Decision::Deny("missing_role:admin").into();
-        assert!(matches!(custom, Err(ServerError::Forbidden(_))));
+        // Custom reasons are carried verbatim into the Forbidden surface.
+        let custom: Result<(), ServerError> =
+            Decision::Deny(DenyReason::Custom("missing_role:admin")).into();
+        match custom {
+            Err(ServerError::Forbidden(reason)) => assert_eq!(reason, "missing_role:admin"),
+            other => panic!("expected Forbidden(\"missing_role:admin\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deny_reason_as_str_round_trips() {
+        assert_eq!(DenyReason::Unauthorized.as_str(), "unauthorized");
+        assert_eq!(DenyReason::Forbidden.as_str(), "forbidden");
+        assert_eq!(
+            DenyReason::Custom("missing_tenant").as_str(),
+            "missing_tenant"
+        );
     }
 
     #[test]
@@ -259,7 +311,7 @@ mod tests {
         // into the trait via the blanket impl.
         let only_uid_one = |p: &Principal| match p.user() {
             Some(user) if user.id == "uid-1" => Decision::Allow,
-            _ => Decision::Deny("forbidden"),
+            _ => Decision::Deny(DenyReason::Forbidden),
         };
         assert_eq!(
             only_uid_one.check(&Principal::from_user(AuthUser::new("uid-1"))),
@@ -267,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             only_uid_one.check(&Principal::from_user(AuthUser::new("uid-2"))),
-            Decision::Deny("forbidden")
+            Decision::Deny(DenyReason::Forbidden)
         );
     }
 }
