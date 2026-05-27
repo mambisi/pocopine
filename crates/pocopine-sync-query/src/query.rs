@@ -24,26 +24,54 @@ use pocopine_sync::{StreamParams, SyncStreamName};
 /// `Query<Row>` is `Clone`, `Eq`, and yields a stable [`QueryKey`] via
 /// [`Query::key`]. The `Row` type parameter is erased on the wire (everything
 /// goes through `serde_json::Value`) but typed at the API.
-#[derive(Clone, Debug)]
+///
+/// `Row` is held in a `PhantomData<fn() -> Row>`, so neither `Clone` nor
+/// `Debug` for `Query<Row>` require `Row: Clone + Debug`.
+#[derive(Debug)]
 pub struct Query<Row> {
     pub(crate) stream: SyncStreamName,
     pub(crate) params: StreamParams,
     pub(crate) order_by: Option<OrderBy>,
     pub(crate) limit: Option<u32>,
+    /// Function pointer to the macro-generated predicate evaluator.
+    /// `None` for queries built without a `#[query_resource]` macro
+    /// declaration (which then can't participate in routing — they're
+    /// useful as a raw envelope but won't receive optimistic updates).
+    pub(crate) matches_fn: Option<MatchFn<Row>>,
     pub(crate) _row: PhantomData<fn() -> Row>,
 }
+
+/// Signature of a query's predicate evaluator. The macro emits one
+/// `fn(&Query<Row>, &Row) -> bool` per declared `#[query_resource]`
+/// and the builder injects it via [`QueryBuilder::with_matches`].
+pub type MatchFn<Row> = fn(query: &Query<Row>, row: &Row) -> bool;
 
 impl<Row> Query<Row> {
     /// Build a query from its parts. Most callers go through the macro-
     /// generated `Resource::query()` builder, which constructs the params
-    /// map via typed `where_*` setters.
+    /// map via typed `where_*` setters and injects the macro-generated
+    /// predicate evaluator via [`QueryBuilder::with_matches`].
     pub fn builder(stream: SyncStreamName) -> QueryBuilder<Row> {
         QueryBuilder {
             stream,
             params: StreamParams::new(),
             order_by: None,
             limit: None,
+            matches_fn: None,
             _row: PhantomData,
+        }
+    }
+
+    /// True when the row matches every declared param's comparator
+    /// constraint. Delegates to the macro-generated predicate
+    /// evaluator stored in `matches_fn`. For queries built without
+    /// a `#[query_resource]` macro declaration (no predicate
+    /// registered), returns `true` — caller should treat that as
+    /// "this query doesn't participate in routing."
+    pub fn matches(&self, row: &Row) -> bool {
+        match self.matches_fn {
+            Some(f) => f(self, row),
+            None => true,
         }
     }
 
@@ -95,6 +123,19 @@ impl<Row> Query<Row> {
             hasher_input.extend_from_slice(&limit.to_le_bytes());
         }
         QueryKey(fnv1a_64(&hasher_input))
+    }
+}
+
+impl<Row> Clone for Query<Row> {
+    fn clone(&self) -> Self {
+        Self {
+            stream: self.stream.clone(),
+            params: self.params.clone(),
+            order_by: self.order_by.clone(),
+            limit: self.limit,
+            matches_fn: self.matches_fn,
+            _row: PhantomData,
+        }
     }
 }
 
@@ -152,13 +193,27 @@ pub enum Order {
 /// The macro generates wrappers over this that constrain the `where_*`
 /// methods to the resource's declared fields via the sealed comparator
 /// traits in [`crate::predicate`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct QueryBuilder<Row> {
     stream: SyncStreamName,
     params: StreamParams,
     order_by: Option<OrderBy>,
     limit: Option<u32>,
+    matches_fn: Option<MatchFn<Row>>,
     _row: PhantomData<fn() -> Row>,
+}
+
+impl<Row> Clone for QueryBuilder<Row> {
+    fn clone(&self) -> Self {
+        Self {
+            stream: self.stream.clone(),
+            params: self.params.clone(),
+            order_by: self.order_by.clone(),
+            limit: self.limit,
+            matches_fn: self.matches_fn,
+            _row: PhantomData,
+        }
+    }
 }
 
 impl<Row> QueryBuilder<Row> {
@@ -189,6 +244,14 @@ impl<Row> QueryBuilder<Row> {
         &self.params
     }
 
+    /// Inject the macro-generated predicate evaluator. Called by
+    /// the macro's `QueryBuilder::new()` so that queries built via
+    /// `#[query_resource]` participate in routing automatically.
+    pub fn with_matches(mut self, matches_fn: MatchFn<Row>) -> Self {
+        self.matches_fn = Some(matches_fn);
+        self
+    }
+
     /// Finalize into a [`Query<Row>`].
     pub fn build(self) -> Query<Row> {
         Query {
@@ -196,6 +259,7 @@ impl<Row> QueryBuilder<Row> {
             params: self.params,
             order_by: self.order_by,
             limit: self.limit,
+            matches_fn: self.matches_fn,
             _row: PhantomData,
         }
     }

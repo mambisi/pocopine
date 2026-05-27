@@ -6046,6 +6046,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-sync-query-macros"
+version = "0.1.0"
+dependencies = [
+ "pocopine-core",
+ "pocopine-sync",
+ "pocopine-sync-query",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "trybuild",
+]
+
+[[package]]
 name = "pocopine-sync-sqlite"
 version = "0.1.0"
 dependencies = [
