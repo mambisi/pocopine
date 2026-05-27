@@ -45,8 +45,10 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use pocopine_sync::{
-    SyncCursor, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullMode, SyncPullRequest,
-    SyncPullResponse, SyncReason, SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
+    local_stream_key, LocalPendingMutation, LocalSnapshotBatch, LocalStreamSnapshot,
+    SyncCollectionName, SyncCursor, SyncLocalStore, SyncOpenRequest, SyncOpenResponse,
+    SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncReason, SyncRow,
+    SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -54,6 +56,7 @@ use serde_json::Value;
 
 use crate::client::{QueryClient, QueryClientInner, QuerySubscription};
 use crate::mutator::RowChange;
+use crate::state::PendingOverlay;
 use crate::wire::{build_open_request, build_pull_request};
 
 /// Default sync endpoint prefix. Re-exported from `pocopine-sync`
@@ -69,7 +72,7 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Tunable knobs for a [`QueryClient`]. See per-field docs for the
 /// individual defaults.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct QueryClientConfig {
     /// Base endpoint for `/open`, `/pull`, `/push`. Defaults to
     /// [`DEFAULT_SYNC_ENDPOINT`]. Override for tests against a
@@ -96,6 +99,22 @@ pub struct QueryClientConfig {
     /// middleware (per RFC 078). A future RFC may unify the two,
     /// at which point this flag would govern both.
     pub with_credentials: bool,
+    /// Durable local store. `None` means in-memory only (the
+    /// historical default; no migration burden).
+    ///
+    /// When set, every spawned [`SubscriptionDriver`] hydrates from
+    /// the store BEFORE the first `/open` (RFC 088 §A.3 Phase 0),
+    /// persists snapshots after every successful `/pull`, and
+    /// replays persisted pending mutations through the registered
+    /// [`crate::mutator::AnyMutator`] entries.
+    ///
+    /// Stored as `Rc<dyn SyncLocalStore>` so the same store handle
+    /// can be threaded into CRUD + sync-query clients in the same
+    /// app — the two compartments don't collide because
+    /// sync-query keys on
+    /// [`pocopine_sync::local_stream_key`]`(stream, params)` while
+    /// CRUD keys on the bare stream name.
+    pub local_store: Option<Rc<dyn SyncLocalStore>>,
 }
 
 impl Default for QueryClientConfig {
@@ -105,7 +124,29 @@ impl Default for QueryClientConfig {
             poll_interval: Some(DEFAULT_POLL_INTERVAL),
             disable_live: false,
             with_credentials: true,
+            local_store: None,
         }
+    }
+}
+
+impl std::fmt::Debug for QueryClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryClientConfig")
+            .field("endpoint", &self.endpoint)
+            .field("poll_interval", &self.poll_interval)
+            .field("disable_live", &self.disable_live)
+            .field("with_credentials", &self.with_credentials)
+            .field("local_store", &self.local_store.as_ref().map(|_| "<store>"))
+            .finish()
+    }
+}
+
+impl QueryClientConfig {
+    /// Builder: attach a durable [`SyncLocalStore`]. See the field
+    /// doc on [`Self::local_store`] for the persistence semantics.
+    pub fn with_local_store(mut self, store: Rc<dyn SyncLocalStore>) -> Self {
+        self.local_store = Some(store);
+        self
     }
 }
 
@@ -227,6 +268,11 @@ pub(crate) struct SubscriptionDriver<Row: 'static> {
     /// limitation.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     with_credentials: bool,
+    /// Durable local store hooked into Phase 0 hydrate + post-pull
+    /// persist + schema-drift wipe. `None` keeps the driver
+    /// in-memory-only — every store call site short-circuits and
+    /// the driver behaves identically to the pre-RFC-088 shape.
+    local_store: Option<Rc<dyn SyncLocalStore>>,
 }
 
 impl<Row> SubscriptionDriver<Row>
@@ -248,11 +294,28 @@ where
             poll_interval: config.poll_interval,
             disable_live: config.disable_live,
             with_credentials: config.with_credentials,
+            local_store: config.local_store.clone(),
         }
     }
 
     /// Drive the subscription forever (or until cancelled).
     pub(crate) async fn run(self) {
+        // ── Phase 0: hydrate from durable store (RFC 088 §A.3) ──
+        //
+        // Runs INSIDE the driver task (not as a separate spawn) so
+        // it shares the same cancellation semantics as the
+        // /open/pull phases. Populates canonical_rows + pending
+        // overlays + cursor + application_schema_version on the
+        // subscription's state so observers see cached rows on
+        // first read — before /open even fires. The schema-drift
+        // gate in apply_open will wipe the in-memory state if
+        // /open advertises a fresh version; until that lands, the
+        // hydrated rows are shown.
+        self.hydrate_phase().await;
+        if !self.epoch.is_current() {
+            return;
+        }
+
         // ── Phase 1: /open ──────────────────────────────────────
         //
         // Sets `loading = true` synchronously BEFORE the await so a
@@ -277,9 +340,11 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        if let Err(()) = self.apply_open(open_response) {
+        if let Err(()) = self.apply_open(open_response).await {
             // Schema-drift path bumped state.version; nothing more
-            // to do here, the next /pull rebuilds the rows.
+            // to do here, the next /pull rebuilds the rows. The
+            // durable wipe (clear_stream) was awaited inside
+            // apply_open so it's already on disk.
         }
 
         // ── Phase 2: initial /pull ──────────────────────────────
@@ -298,6 +363,13 @@ where
             return;
         }
         self.apply_pull(pull_response);
+        if !self.epoch.is_current() {
+            return;
+        }
+        // Persist the freshly-pulled canonical snapshot. Runs after
+        // apply_pull so the persisted view matches what's on the
+        // subscription's state.
+        self.persist_snapshot().await;
         if !self.epoch.is_current() {
             return;
         }
@@ -449,6 +521,12 @@ where
             return;
         }
         self.apply_pull(response);
+        if !self.epoch.is_current() {
+            return;
+        }
+        // Persist after every successful /pull (RFC 088 §A.3) so a
+        // reload after the tick observes the latest canonical set.
+        self.persist_snapshot().await;
     }
 
     /// Walk the pending-replay queue on the client and re-fire
@@ -550,7 +628,15 @@ where
     /// Returns `Err(())` when schema-drift triggered a state
     /// reset — caller should NOT treat that as a hard error
     /// (the next `/pull` rebuilds the canonical set).
-    fn apply_open(&self, response: SyncOpenResponse) -> Result<(), ()> {
+    ///
+    /// Schema-drift wipe atomicity: when drift is detected we
+    /// awaited the durable wipe (`clear_stream`) FIRST, then the
+    /// in-memory `state.reset()` runs synchronously while the
+    /// `RefMut` is held. Observers see the canonical row set
+    /// transition in one borrow — no observer can land between
+    /// `clear_stream` and `reset` and read empty-but-stale-version
+    /// state.
+    async fn apply_open(&self, response: SyncOpenResponse) -> Result<(), ()> {
         let Some(sub) = self.subscription.upgrade() else {
             return Ok(());
         };
@@ -574,18 +660,42 @@ where
             schema_version,
             ..
         } = opened;
-        let mut state = sub.state().borrow_mut();
-        // Schema-drift gate.
-        let drift =
-            matches!(state.application_schema_version, Some(cached) if cached != schema_version);
+        // Schema-drift detection MUST run while not holding the
+        // state borrow — the durable wipe is async and we don't
+        // want a `RefMut` held across an .await. Read the cached
+        // version, drop the borrow, run the wipe, then re-borrow
+        // to apply the in-memory transition atomically.
+        let cached = self.with_state_borrow(|s| s.application_schema_version).flatten();
+        let drift = matches!(cached, Some(c) if c != schema_version);
         if drift {
             tracing::info!(
                 target: "pocopine.log",
                 stream = stream_name.as_str(),
-                from = state.application_schema_version,
+                from = ?cached,
                 to = schema_version,
-                "sync-query: schema drift detected; resetting state"
+                "sync-query: schema drift detected; resetting state + wiping store",
             );
+            if let Some(store) = &self.local_store {
+                let compartment = self.compartment_key();
+                if let Err(err) = store.clear_stream(&compartment).await {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = stream_name.as_str(),
+                        error = %err,
+                        "sync-query: schema-drift wipe failed; in-memory reset still proceeds",
+                    );
+                }
+                if !self.epoch.is_current() {
+                    return Ok(());
+                }
+            }
+        }
+        let mut state = sub.state().borrow_mut();
+        if drift {
+            // Reset BEFORE writing the new schema_version so an
+            // observer that reads inside the RefMut would see
+            // `(canonical_empty, version=new)` rather than
+            // `(canonical_stale, version=new)`.
             state.reset();
         }
         state.application_schema_version = Some(schema_version);
@@ -660,6 +770,270 @@ where
         state.error.clear();
         drop(state);
         sub.notify_listeners_external();
+    }
+
+    /// Stable cache compartment for this driver's subscription.
+    /// Returns `local_stream_key(stream, params)` per RFC 088 §A.2.
+    /// Two subscriptions on the same stream with different params
+    /// get distinct compartments; the same params share one.
+    fn compartment_key(&self) -> SyncStreamName {
+        match self.subscription.upgrade() {
+            Some(sub) => local_stream_key(sub.query().stream(), sub.query().params()),
+            // Subscription already reclaimed — fall back to a bare
+            // placeholder so the caller's await doesn't panic; the
+            // epoch check will catch the cancellation immediately
+            // after.
+            None => SyncStreamName::new("__sync_query_orphaned").expect("static valid stream"),
+        }
+    }
+
+    /// Phase 0 (RFC 088 §A.3): hydrate canonical rows, pending
+    /// overlays, cursor, and application_schema_version from the
+    /// durable store BEFORE `/open` fires. No-op when the client
+    /// has no `local_store` configured.
+    ///
+    /// Failures are warned and skipped — the subsequent `/open`
+    /// + `/pull` rebuild from scratch, the user just doesn't get
+    /// the instant-paint UX.
+    async fn hydrate_phase(&self) {
+        let Some(store) = self.local_store.clone() else {
+            return;
+        };
+        let compartment = self.compartment_key();
+        let snapshot = match store.hydrate_stream(&compartment).await {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    error = %err,
+                    "sync-query: hydrate failed; continuing with empty state",
+                );
+                return;
+            }
+        };
+        if !self.epoch.is_current() {
+            return;
+        }
+        let Some(sub) = self.subscription.upgrade() else {
+            return;
+        };
+        self.apply_hydrated_snapshot(&sub, snapshot);
+    }
+
+    /// Pour a `LocalStreamSnapshot` into the subscription's
+    /// `QueryState`. Decodes the wire-shape `Vec<SyncRow<Value>>`
+    /// into typed `SyncRow<Row>` (rows that fail to decode are
+    /// dropped + warned, matching the `/pull` decode policy). The
+    /// pending overlays are reconstructed with `evicted_key` /
+    /// `deleted_row` left at `None` because the persisted layer
+    /// doesn't carry the routing engine's optimistic-departure
+    /// metadata — the next /pull or replay reconciles either way.
+    fn apply_hydrated_snapshot(
+        &self,
+        sub: &Rc<QuerySubscription<Row>>,
+        snapshot: LocalStreamSnapshot,
+    ) {
+        let stream_name = sub.query().stream().clone();
+        let mut state = sub.state().borrow_mut();
+        // Adopt the cached schema_version BEFORE writing rows so
+        // an observer that races a read in between sees the
+        // version + rows together (we never expose a row count
+        // with a stale schema_version).
+        state.application_schema_version = snapshot.application_schema_version;
+        state.cursor = snapshot.cursor.clone();
+        // Hydrated canonical rows. Per-row decode failures are
+        // logged and skipped; the next /pull will resurface them
+        // if they're still server-confirmed.
+        for wire_row in snapshot.rows.iter() {
+            match serde_json::from_value::<Row>(wire_row.value.clone()) {
+                Ok(value) => {
+                    state.upsert_canonical(SyncRow {
+                        key: wire_row.key.clone(),
+                        version: wire_row.version.clone(),
+                        value,
+                        pending: false,
+                        conflict: false,
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = stream_name.as_str(),
+                        key = wire_row.key.as_str(),
+                        error = %err,
+                        "sync-query: dropping hydrated row that failed to decode"
+                    );
+                }
+            }
+        }
+        // Hydrated pending overlays. The persisted shape carries
+        // the wire `ClientMutation<Value>` + an optional
+        // `optimistic_row: SyncRow<Value>`; we decode the optimistic
+        // row payload back to `Row` when present, and leave the
+        // departure metadata as None (the replay tick will route
+        // the canonical changes through `route_canonical_changes`
+        // which clears the overlay either way).
+        for pending in snapshot.pending_mutations.iter() {
+            let optimistic_row: Option<SyncRow<Row>> =
+                pending.optimistic_row.as_ref().and_then(|wire_row| {
+                    match serde_json::from_value::<Row>(wire_row.value.clone()) {
+                        Ok(value) => Some(SyncRow {
+                            key: wire_row.key.clone(),
+                            version: wire_row.version.clone(),
+                            value,
+                            pending: true,
+                            conflict: false,
+                        }),
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "pocopine.log",
+                                stream = stream_name.as_str(),
+                                key = wire_row.key.as_str(),
+                                error = %err,
+                                "sync-query: dropping hydrated pending row that failed to decode"
+                            );
+                            None
+                        }
+                    }
+                });
+            state.push_pending(PendingOverlay {
+                mutation_id: pending.mutation.id.clone(),
+                mutation: pending.mutation.clone(),
+                optimistic_row,
+                deleted_row: None,
+                evicted_key: None,
+                conflict: false,
+            });
+        }
+        drop(state);
+        sub.notify_listeners_external();
+        // Hand persisted pending mutations to the client-level
+        // replay path so the first tick after /open runs them
+        // through the registered MutatorRegistry → AnyMutator.
+        // We pass the wire mutation list (with persistence
+        // envelope intact); the registry unwraps before invoking
+        // apply_remote.
+        let Some(client_inner) = self.client.upgrade() else {
+            return;
+        };
+        let stream_for_replay = stream_name;
+        QueryClient::enqueue_hydrated_pending(
+            &client_inner,
+            stream_for_replay,
+            snapshot
+                .pending_mutations
+                .into_iter()
+                .map(|p| p.mutation)
+                .collect(),
+        );
+    }
+
+    /// Persist the current canonical state into the local store.
+    /// Called after every successful `/pull` (RFC 088 §A.3). No-op
+    /// when the client has no `local_store` configured.
+    async fn persist_snapshot(&self) {
+        let Some(store) = self.local_store.clone() else {
+            return;
+        };
+        let Some(sub) = self.subscription.upgrade() else {
+            return;
+        };
+        // Snapshot canonical rows + pending under a single
+        // immutable borrow so the persisted view is a coherent
+        // slice. We re-serialize through `serde_json::Value`
+        // because the local store contract is `SyncRow<Value>`.
+        let snapshot_inputs = {
+            let state = sub.state().borrow();
+            let stream = sub.query().stream().clone();
+            let cursor = state.cursor.clone();
+            let app_version = state.application_schema_version;
+            let canonical: Vec<SyncRow<Value>> = state
+                .canonical_rows()
+                .filter_map(|row| {
+                    let value = serde_json::to_value(&row.value).ok()?;
+                    Some(SyncRow {
+                        key: row.key.clone(),
+                        version: row.version.clone(),
+                        value,
+                        pending: false,
+                        conflict: false,
+                    })
+                })
+                .collect();
+            let pending: Vec<LocalPendingMutation> = state
+                .pending()
+                .iter()
+                .map(|overlay| {
+                    let optimistic_row: Option<SyncRow<Value>> =
+                        overlay.optimistic_row.as_ref().and_then(|r| {
+                            let value = serde_json::to_value(&r.value).ok()?;
+                            Some(SyncRow {
+                                key: r.key.clone(),
+                                version: r.version.clone(),
+                                value,
+                                pending: true,
+                                conflict: false,
+                            })
+                        });
+                    LocalPendingMutation::new(overlay.mutation.clone())
+                        .with_optimistic_row(optimistic_row)
+                })
+                .collect();
+            (stream, cursor, app_version, canonical, pending)
+        };
+        let (stream, cursor, app_version, canonical, pending) = snapshot_inputs;
+        let compartment = local_stream_key(&stream, sub.query().params());
+        // sync-query streams don't have a separate "collection"
+        // surface; reuse the stream name as the collection token
+        // so the local store's compartment is stable. The
+        // collection field is informational on the local store
+        // (used by CRUD callers); sync-query never reads it back.
+        let collection = match SyncCollectionName::new(compartment.as_str()) {
+            Ok(c) => c,
+            Err(err) => {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    error = %err,
+                    "sync-query: persist_snapshot could not derive a collection name; skipping",
+                );
+                return;
+            }
+        };
+        let batch = LocalSnapshotBatch::new(compartment.clone(), collection, canonical, cursor)
+            .with_application_schema_version(app_version);
+        if let Err(err) = store.save_snapshot(batch).await {
+            tracing::warn!(
+                target: "pocopine.log",
+                stream = compartment.as_str(),
+                error = %err,
+                "sync-query: persist_snapshot failed; in-memory state still authoritative",
+            );
+        }
+        if !self.epoch.is_current() {
+            return;
+        }
+        // The save_snapshot call replaces canonical_rows but
+        // leaves any pre-existing persisted pending mutations
+        // intact in MemoryLocalStore + SQLite + IndexedDB. So we
+        // also enqueue the current pending overlay's wire
+        // payload, which is idempotent — the store's
+        // enqueue_pending_mutation overwrites by mutation id (per
+        // its contract).
+        for pending_mut in pending {
+            if let Err(err) = store
+                .enqueue_pending_mutation(&compartment, pending_mut)
+                .await
+            {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    error = %err,
+                    "sync-query: enqueue_pending_mutation during persist failed; will retry on next pull"
+                );
+            }
+        }
     }
 
     /// Set the subscription's loading flag without writing to
