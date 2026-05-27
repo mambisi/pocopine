@@ -421,28 +421,32 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
                 ComparatorKind::RequiredEq => {
                     let ty = &param.ty;
                     quote! {
-                        impl ::pocopine_sync_query::FieldEq<#ty> for #marker_ident {
+                        impl ::pocopine_sync_query::FieldEq for #marker_ident {
+                            type Value = #ty;
                             const NAME: &'static str = #name_str;
                         }
                     }
                 }
                 ComparatorKind::OptionalEq { inner } => {
                     quote! {
-                        impl ::pocopine_sync_query::FieldEq<#inner> for #marker_ident {
+                        impl ::pocopine_sync_query::FieldEq for #marker_ident {
+                            type Value = #inner;
                             const NAME: &'static str = #name_str;
                         }
                     }
                 }
                 ComparatorKind::InSet { inner } => {
                     quote! {
-                        impl ::pocopine_sync_query::FieldInSet<#inner> for #marker_ident {
+                        impl ::pocopine_sync_query::FieldInSet for #marker_ident {
+                            type Item = #inner;
                             const NAME: &'static str = #name_str;
                         }
                     }
                 }
                 ComparatorKind::Range { inner } => {
                     quote! {
-                        impl ::pocopine_sync_query::FieldRange<#inner> for #marker_ident {
+                        impl ::pocopine_sync_query::FieldRange for #marker_ident {
+                            type Bound = #inner;
                             const NAME: &'static str = #name_str;
                         }
                     }
