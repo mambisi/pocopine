@@ -43,13 +43,22 @@ struct StoredUploadSession {
 /// per-session async mutex, and the underlying `std::fs` I/O runs on
 /// `spawn_blocking` workers so the tokio runtime stays responsive even when
 /// the disk is slow.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LocalFsStorageBackend {
     name: &'static str,
     root: PathBuf,
     // Per-session async locks. Cloned cheaply via Arc; the inner StdMutex
     // protects only the map and is held briefly.
     session_locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
+}
+
+impl std::fmt::Debug for LocalFsStorageBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalFsStorageBackend")
+            .field("name", &self.name)
+            .field("root", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalFsStorageBackend {
@@ -621,4 +630,21 @@ fn local_io_error(operation: &'static str, err: std::io::Error) -> StorageError 
         .map(|code| format!(" (os error {code})"))
         .unwrap_or_default();
     StorageError::backend(format!("{operation}: {kind:?}{raw}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_does_not_expose_root_or_session_locks() {
+        let backend = LocalFsStorageBackend::new("/tmp/pocopine-secret-storage-root");
+
+        let debug = format!("{backend:?}");
+
+        assert!(debug.contains("LocalFsStorageBackend"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("/tmp/pocopine-secret-storage-root"));
+        assert!(!debug.contains("session_locks"));
+    }
 }

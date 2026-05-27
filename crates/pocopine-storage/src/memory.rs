@@ -39,10 +39,18 @@ struct Inner {
 ///
 /// It mirrors the local filesystem backend's sequential session semantics but
 /// does not persist across process restarts.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MemoryStorageBackend {
     name: &'static str,
     inner: Arc<Mutex<Inner>>,
+}
+
+impl std::fmt::Debug for MemoryStorageBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryStorageBackend")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for MemoryStorageBackend {
@@ -304,5 +312,28 @@ impl StorageBackend for MemoryStorageBackend {
 fn refresh_expired_public(stored: &mut StoredUpload) {
     if refresh_expired(&mut stored.public) {
         stored.public.next_offset = Some(stored.bytes.len() as u64);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_does_not_dump_in_memory_objects() {
+        let backend = MemoryStorageBackend::new();
+        backend
+            .inner
+            .lock()
+            .unwrap()
+            .objects
+            .insert("secret-key".to_string(), b"secret-bytes".to_vec());
+
+        let debug = format!("{backend:?}");
+
+        assert!(debug.contains("MemoryStorageBackend"));
+        assert!(!debug.contains("secret-key"));
+        assert!(!debug.contains("secret-bytes"));
+        assert!(!debug.contains("objects"));
     }
 }

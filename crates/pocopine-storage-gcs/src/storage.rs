@@ -7,9 +7,9 @@ use pocopine_storage::backend_common::{
 };
 use pocopine_storage::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
 use pocopine_storage::{
-    CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef, StorageBackend, StorageBoxFuture,
-    StorageContext, StorageError, StorageResult, TransferPlan, UploadSession, UploadSessionId,
-    UploadSessionStatus, UploadStrategy,
+    CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef, StorageActor, StorageBackend,
+    StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan, UploadSession,
+    UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 use uuid::Uuid;
 
@@ -869,7 +869,14 @@ impl StorageBackend for GcsStorageBackend {
                         });
                     }
                 }
-                AbortSessionRead::Missing | AbortSessionRead::Corrupt => {}
+                AbortSessionRead::Missing => {}
+                AbortSessionRead::Corrupt => {
+                    if !matches!(&ctx.actor, StorageActor::System(_)) {
+                        return Err(StorageError::forbidden(
+                            "corrupt GCS upload metadata can only be aborted by a system actor",
+                        ));
+                    }
+                }
             }
             let meta_key = self.layout.session_meta_key(&session);
             let bytes_key = self.layout.session_bytes_key(&session);
