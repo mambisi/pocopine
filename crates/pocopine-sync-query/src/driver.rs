@@ -287,22 +287,18 @@ where
     /// offline replay. The function returns when the epoch goes stale
     /// or the subscription's Weak fails to upgrade.
     async fn run_loop(&self) {
-        // The wasm path could `select!` on a live-wakeup stream
-        // here; this PR ships the polling cadence + offline replay
-        // hooks and leaves the live-wakeup stream wiring for the
-        // wasm-side hook in `tick_live_wakeup`. Host code paths
-        // run polling-only.
-        if self.disable_live {
-            tracing::debug!(
-                target: "pocopine.log",
-                "sync-query driver: live wakeup disabled; relying on polling"
-            );
-        }
+        // Open the live wakeup channel if enabled. The receiver
+        // participates in `wait_for_tick`'s select! alongside the
+        // polling timer. Host targets get a permanently-empty
+        // receiver because the LiveClient is wasm-only.
+        let mut live = self.open_live_wakeup();
         loop {
-            // 1. Wait for the next tick.
-            if !self.wait_tick().await {
-                // Stale — caller already returned.
-                return;
+            // 1. Wait for the next tick: either the poll timer or
+            //    a matching live event (whichever first).
+            let outcome = self.wait_for_tick(&mut live).await;
+            match outcome {
+                TickOutcome::Poll | TickOutcome::Live => {}
+                TickOutcome::Stale => return,
             }
             if !self.epoch.is_current() {
                 return;
@@ -323,27 +319,91 @@ where
         }
     }
 
-    /// Wait for the next polling tick. Returns `false` when the
-    /// epoch went stale during the wait — caller should bail.
-    /// `None` poll interval parks indefinitely (until live wakeup
-    /// would arrive — placeholder until wasm wiring lands).
-    async fn wait_tick(&self) -> bool {
+    /// Open the live-wakeup receiver. On wasm this calls into
+    /// `pocopine-live::LiveClient` to subscribe to the
+    /// per-collection topic and pipes events through an
+    /// unbounded mpsc into the driver's select!. On host (or with
+    /// `disable_live = true`) returns a stub that never fires.
+    fn open_live_wakeup(&self) -> LiveWakeup {
+        if self.disable_live {
+            tracing::debug!(
+                target: "pocopine.log",
+                "sync-query driver: live wakeup disabled by config"
+            );
+            return LiveWakeup::disabled();
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let Some(sub) = self.subscription.upgrade() else {
+                return LiveWakeup::disabled();
+            };
+            // We need a stable collection name to subscribe to;
+            // pocopine-sync's `local_stream_key(stream, params)`
+            // gives us the per-`(stream, params)` topic identity,
+            // but the live channel today only knows the
+            // collection (stream name). Use the stream as the
+            // collection topic per RFC 087 §6 — server filters by
+            // collection, client filters by params.
+            let stream_name = sub.query().stream().as_str().to_string();
+            let captured_params = sub.query().params().clone();
+            LiveWakeup::open_on_collection(stream_name, captured_params)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            LiveWakeup::disabled()
+        }
+    }
+
+    /// Wait for the next driver tick. Returns the originating
+    /// signal so the loop can decide whether to pull. The select
+    /// on (sleep, live) is biased toward live wakeup so a coherent
+    /// burst of events doesn't get starved by the poll timer.
+    async fn wait_for_tick(&self, live: &mut LiveWakeup) -> TickOutcome {
+        use futures::future::{self, Either};
         match self.poll_interval {
             Some(interval) => {
-                sleep(interval).await;
-                self.epoch.is_current()
+                let timer = sleep(interval);
+                let live_fut = live.next_matching();
+                futures::pin_mut!(timer);
+                futures::pin_mut!(live_fut);
+                match future::select(timer, live_fut).await {
+                    Either::Left((_, _)) => {
+                        if !self.epoch.is_current() {
+                            return TickOutcome::Stale;
+                        }
+                        TickOutcome::Poll
+                    }
+                    Either::Right((event, _)) => {
+                        if !self.epoch.is_current() {
+                            return TickOutcome::Stale;
+                        }
+                        match event {
+                            LiveTickOutcome::Match => TickOutcome::Live,
+                            LiveTickOutcome::Closed => {
+                                // Live channel closed (subscription
+                                // dropped or server hung up); fall
+                                // back to polling — the next loop
+                                // iteration just sleeps again.
+                                TickOutcome::Poll
+                            }
+                        }
+                    }
+                }
             }
             None => {
-                // Polling disabled. In a fully-wired wasm build
-                // this `select!`s on the live wakeup channel;
-                // here we exit since there's nothing else to wait
-                // on (host tests should always set a poll
-                // interval).
-                tracing::debug!(
-                    target: "pocopine.log",
-                    "sync-query driver polling disabled and no live wakeup available; exiting"
-                );
-                false
+                // Polling disabled. Block on live; if that's also
+                // unavailable, exit cleanly.
+                if live.is_disabled() {
+                    tracing::debug!(
+                        target: "pocopine.log",
+                        "sync-query driver: polling disabled + no live wakeup; exiting"
+                    );
+                    return TickOutcome::Stale;
+                }
+                match live.next_matching().await {
+                    LiveTickOutcome::Match => TickOutcome::Live,
+                    LiveTickOutcome::Closed => TickOutcome::Stale,
+                }
             }
         }
     }
@@ -807,6 +867,172 @@ impl std::fmt::Debug for ReplayEntry {
             .field("stream", &self.stream.as_str())
             .field("mutation_id", &self.mutation_id)
             .finish_non_exhaustive()
+    }
+}
+
+/// Why the driver woke up. Returned from `wait_for_tick` so the
+/// loop can record telemetry (poll vs live) without re-checking
+/// the timer.
+#[derive(Debug)]
+enum TickOutcome {
+    /// Heartbeat poll timer fired.
+    Poll,
+    /// A matching live wakeup event arrived.
+    Live,
+    /// Epoch is stale OR neither source can produce another event;
+    /// caller exits.
+    Stale,
+}
+
+/// Outcome of one live-wakeup pump.
+#[derive(Debug)]
+enum LiveTickOutcome {
+    /// An incoming event matched the captured params (or carried
+    /// no field projection, which we conservatively treat as a
+    /// match per RFC 087 §6).
+    Match,
+    /// The underlying receiver was closed.
+    Closed,
+}
+
+/// Per-subscription live wakeup. Owns the `LiveSubscription` (so
+/// the underlying EventSource closes on drop) and the receiver
+/// end of the bridge mpsc.
+///
+/// On host targets this is a stub — the LiveClient is wasm-only;
+/// `next_matching()` returns `LiveTickOutcome::Closed` once.
+struct LiveWakeup {
+    /// `Some` when live wakeup is wired up; `None` for the
+    /// host-stub / disabled-by-config path.
+    receiver: Option<futures::channel::mpsc::UnboundedReceiver<LiveWakeupEvent>>,
+    /// Captured params used for client-side filtering on every
+    /// arriving event. Stored here (not just on the subscription)
+    /// so the filter can be exercised in unit tests without an
+    /// active LiveClient.
+    captured_params: pocopine_sync::StreamParams,
+    /// Owned EventSource handle. On host this is always `None`;
+    /// on wasm dropping it closes the SSE stream so the live
+    /// subscription's lifetime is tied to the driver's.
+    #[cfg(target_arch = "wasm32")]
+    _subscription: Option<pocopine_live::LiveSubscription>,
+}
+
+/// Payload pushed through the live-wakeup mpsc. Carries the
+/// affected_fields projection (when the server includes one) so
+/// the client-side filter can decide whether to trigger /pull.
+#[derive(Debug)]
+struct LiveWakeupEvent {
+    affected_fields: std::collections::BTreeMap<String, Value>,
+}
+
+impl LiveWakeup {
+    /// Build a no-op wakeup — used for host targets and the
+    /// `disable_live = true` config knob.
+    fn disabled() -> Self {
+        Self {
+            receiver: None,
+            captured_params: pocopine_sync::StreamParams::new(),
+            #[cfg(target_arch = "wasm32")]
+            _subscription: None,
+        }
+    }
+
+    /// Returns `true` when the wakeup channel will never deliver
+    /// — host stub or `disable_live`.
+    fn is_disabled(&self) -> bool {
+        self.receiver.is_none()
+    }
+
+    /// Pump one matching live event. Drops every non-matching
+    /// event until either a match arrives or the receiver closes.
+    /// The "no projection" case forwards to /pull per the
+    /// RFC 087 §6 conservative fallback.
+    async fn next_matching(&mut self) -> LiveTickOutcome {
+        use futures::stream::StreamExt;
+        let Some(rx) = self.receiver.as_mut() else {
+            // Never resolves — but the caller checks
+            // `is_disabled()` first and short-circuits.
+            futures::future::pending::<()>().await;
+            return LiveTickOutcome::Closed;
+        };
+        loop {
+            match rx.next().await {
+                Some(event) => {
+                    if live_event_matches_params(&self.captured_params, &event.affected_fields) {
+                        return LiveTickOutcome::Match;
+                    }
+                    // Mismatched — drop and wait for the next.
+                }
+                None => return LiveTickOutcome::Closed,
+            }
+        }
+    }
+
+    /// Open a live subscription against the per-collection topic.
+    /// wasm-only — host falls back to `disabled()` in the caller.
+    #[cfg(target_arch = "wasm32")]
+    fn open_on_collection(
+        collection: String,
+        captured_params: pocopine_sync::StreamParams,
+    ) -> Self {
+        let (tx, rx) = futures::channel::mpsc::unbounded::<LiveWakeupEvent>();
+        let connect_result = pocopine_live::LiveClient::new()
+            .collection(collection.clone())
+            .on_event({
+                let tx = tx.clone();
+                move |event| {
+                    let affected_fields = extract_affected_fields(&event);
+                    let _ = tx.unbounded_send(LiveWakeupEvent { affected_fields });
+                }
+            })
+            .open();
+        let _subscription = match connect_result {
+            Ok(sub) => Some(sub),
+            Err(err) => {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    collection = collection.as_str(),
+                    error = ?err,
+                    "sync-query driver: live wakeup open failed; relying on polling"
+                );
+                None
+            }
+        };
+        Self {
+            receiver: Some(rx),
+            captured_params,
+            _subscription,
+        }
+    }
+}
+
+/// Best-effort extraction of `affected_fields` from a live event.
+/// The wire shape (RFC 071) carries this on the `payload`
+/// envelope; the typed `LiveEvent` doesn't expose it directly, so
+/// we rebuild from the event's `keys` (treated as a degenerate
+/// projection) until the live protocol grows a richer field
+/// projection in a follow-up RFC.
+#[cfg(target_arch = "wasm32")]
+fn extract_affected_fields(
+    event: &pocopine_live::LiveEvent,
+) -> std::collections::BTreeMap<String, Value> {
+    use pocopine_live::LiveEvent;
+    // Today's wire shape: server publishes the affected `keys`
+    // for the collection. Until RFC 071 grows a field-level
+    // projection we conservatively treat the projection as
+    // empty — every collection event triggers a pull, which the
+    // client-side filter then narrows on the SUBSEQUENT match
+    // attempt. (The filter logic returns `true` when the
+    // projection is missing-key, per RFC 087 §6.)
+    let _ = event;
+    match event {
+        LiveEvent::CollectionChanged { .. }
+        | LiveEvent::CollectionDeleted { .. }
+        | LiveEvent::QueryInvalidated { .. }
+        | LiveEvent::Ready { .. } => std::collections::BTreeMap::new(),
+        LiveEvent::Gap { .. } | LiveEvent::Error { .. } | LiveEvent::Custom { .. } => {
+            std::collections::BTreeMap::new()
+        }
     }
 }
 

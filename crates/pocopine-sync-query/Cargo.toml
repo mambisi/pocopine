@@ -44,6 +44,10 @@ wasm-bindgen-futures = { workspace = true }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 web-sys = { version = "0.3", features = ["Window"] }
+# RFC 087 §6 — live wakeup via the per-collection SSE topic. The
+# driver opens one `LiveClient` per subscription, filters incoming
+# events against the captured params, and triggers `/pull` on match.
+pocopine-live = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 http = { workspace = true }
