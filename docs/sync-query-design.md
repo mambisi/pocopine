@@ -43,43 +43,43 @@ The proc-macro crate splits the same way as CRUD's does (binary boundary). Namin
 ### 2.1 Defining a queryable resource
 
 ```rust
-use pocopine_sync_query::{query_resource, params, Mutator, RowChange};
+use pocopine_sync_query::{query_resource, Mutator, RowChange};
 
-#[query_resource(
-    name = "issues",
-    schema_version = 1,
-    params(
-        workspace_id: String,
-        assignee_id: Option<String>,
-        status: params::InSet<Status>,
-        title: params::Contains,
-        created_at: params::Range<DateTime>,
-    ),
-)]
-pub struct Issues;
-
-impl Issues {
-    pub type Row = Issue;       // the typed row
-    pub type Id = IssueId;
-    // No CrudSource. Authors can implement SyncStreamSource directly
-    // or use the optional CrudSource→QuerySource adapter.
+// `#[query_resource]` decorates the row struct directly. Queryable
+// fields opt in with `#[query_param]` (default `eq`) or
+// `#[query_param(any_of|range|contains)]`. The macro auto-detects
+// `Option<T>` and emits `OptionalEq`.
+//
+// The attribute MUST appear before `#[derive(...)]` so it strips the
+// per-field annotations before downstream derives (serde, etc.) see
+// them.
+#[query_resource(name = "issues", schema_version = 1)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: IssueId,
+    #[query_param]            pub workspace_id: String,
+    #[query_param]            pub assignee_id: Option<String>,
+    #[query_param(any_of)]    pub status: Status,
+    #[query_param(contains)]  pub title: String,
+    #[query_param(range)]     pub created_at: DateTime,
 }
 ```
 
 The macro generates:
 
-* `Issues::query() -> QueryBuilder<Issue>`.
-* `field::workspace_id`, `field::assignee_id`, ... markers (one per declared param).
-* Comparator trait impls on each marker (same sealed-trait gate as CRUD).
-* `Query<Issue>::matches(&self, row: &Issue) -> bool` — the typed predicate evaluator.
-* `IssuesParams` typed struct, `extract` / `serialize_params` (carried from CRUD).
-* `IssuesMutators` namespace for `#[mutator]`-annotated functions (next section).
+* `impl Issue { fn query() -> QueryBuilder<Self> }`.
+* `field::workspace_id`, `field::assignee_id`, ... markers (one per `#[query_param]` field).
+* Comparator trait impls on each marker (sealed-trait gate).
+* `pub fn matches(&Query<Issue>, &Issue) -> bool` inside the resource's
+  module — the typed predicate evaluator, auto-wired into the
+  builder's `matches_fn`.
+* `NAME` and `SCHEMA_VERSION` constants.
 
 ### 2.2 Building a query
 
 ```rust
 use issues::field;
-let query = Issues::query()
+let query = Issue::query()
     .eq(field::workspace_id, w1)
     .any_of(field::status, [Status::Open])?
     .contains(field::title, "auth")?
@@ -180,7 +180,7 @@ pub struct QueryKey([u8; 8]);  // FNV-1a 64-bit of canonical JSON
 
 `Query<Row>` is `Clone`, `Eq`, `Hash` (via `QueryKey`). The `Row` type parameter is erased at the wire layer (everything goes through `Value`) but typed at the API.
 
-`Query::matches(&self, row: &Row) -> bool` is the macro-generated typed predicate. The macro reads the resource's `params(...)` declaration and emits one comparator per declared field.
+`Query::matches(&self, row: &Row) -> bool` is the macro-generated typed predicate. The macro walks the row struct's `#[query_param]`-annotated fields and emits one comparator per annotation.
 
 ### 3.2 `QueryClient`
 
@@ -336,15 +336,15 @@ The macro generates one `matches` method per declared resource. Each comparator 
 
 ```rust
 // Input (user code):
-#[query_resource(
-    name = "issues",
-    params(
-        workspace_id: String,
-        status: params::InSet<Status>,
-        created_at: params::Range<DateTime>,
-    ),
-)]
-pub struct Issues;
+#[query_resource(name = "issues", schema_version = 1)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: IssueId,
+    #[query_param]            pub workspace_id: String,
+    #[query_param(any_of)]    pub status: Status,
+    #[query_param(range)]     pub created_at: DateTime,
+    // ... other fields, queryable or not
+}
 
 // Generated:
 impl Query<Issue> {
@@ -538,7 +538,7 @@ SettingsClient::save(form_data).await?;
 
 // Issues — multi-tenant, Query-shaped.
 let issues_in_w1 = query_client.subscribe(
-    Issues::query().eq(issues::field::workspace_id, w1).build()
+    Issue::query().eq(issues::field::workspace_id, w1).build()
 );
 query_client.mutate::<create_issue::Mutator>(payload).await?;
 ```
@@ -622,7 +622,7 @@ A reasonable PR sequence for Phase 3:
 ### PR 2 — `pocopine-sync-query-macros` skeleton
 
 * `#[query_resource]` parses the declaration.
-* Emits `Issues::query() -> QueryBuilder<Issue>` with typed setters.
+* Emits `Issue::query() -> QueryBuilder<Issue>` with typed setters.
 * Emits `field::*` markers + sealed comparator trait impls (carried from CRUD macros).
 * No predicate evaluator yet.
 

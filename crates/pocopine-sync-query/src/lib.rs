@@ -26,7 +26,7 @@
 //! // Subscribe to a filtered view
 //! use issues::field;
 //! let handle = client.observe(
-//!     Issues::query()
+//!     Issue::query()
 //!         .eq(field::workspace_id, w1)
 //!         .any_of(field::status, [Status::Open, Status::InProgress])?
 //!         .order_by("created_at", Order::Desc)
