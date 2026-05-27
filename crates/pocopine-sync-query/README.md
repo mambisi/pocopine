@@ -57,22 +57,26 @@ fn app(app: App) -> App {
 }
 ```
 
-Declare a queryable resource (typically next to your row type):
+Declare a queryable resource by annotating the row struct directly.
+Each queryable field opts in with `#[query_param]` (default `eq`) or
+`#[query_param(any_of|range|contains)]`. The macro auto-detects
+`Option<T>` and emits `OptionalEq` rather than `RequiredEq`.
 
 ```rust,ignore
-use pocopine_sync_query::{params, query_resource};
+use pocopine_sync_query::query_resource;
 
-#[query_resource(
-    name = "issues", row = Issue, schema_version = 1,
-    params(
-        workspace_id: String,
-        assignee_id: Option<UserId>,
-        status: params::InSet<Status>,
-        title: params::Contains,
-        created_at: params::Range<DateTime>,
-    ),
-)]
-pub struct Issues;
+// `#[query_resource]` must come BEFORE `#[derive(...)]` so it strips
+// the per-field `#[query_param]` annotations before serde sees them.
+#[query_resource(name = "issues", schema_version = 1)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: String,
+    #[query_param]            pub workspace_id: String,
+    #[query_param]            pub assignee_id: Option<UserId>,
+    #[query_param(any_of)]    pub status: Status,
+    #[query_param(contains)]  pub title: String,
+    #[query_param(range)]     pub created_at: DateTime,
+}
 ```
 
 In a component, get the client and observe:
@@ -85,7 +89,7 @@ fn on_ready(&self, qc: Plugin<Rc<QueryClient>>) {
     // accepts native Rust range syntax (`a..b`, `a..=b`, `a..`,
     // `..b`, `..=b`) — `..` is rejected (matches everything).
     use issues::field;
-    let view = Issues::query()
+    let view = Issue::query()
         .eq(field::workspace_id, self.workspace_id.as_str())
         .any_of(field::status, [Status::Open, Status::InProgress])?
         .contains(field::title, "auth")?

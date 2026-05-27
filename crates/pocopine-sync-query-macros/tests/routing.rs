@@ -7,8 +7,6 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-#[allow(unused_imports)] // referenced by the macro emission
-use pocopine_sync_query::params;
 use pocopine_sync_query::{
     MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, Order, QueryClient,
     RowChange,
@@ -24,24 +22,16 @@ pub enum Status {
     Closed,
 }
 
+#[query_resource(name = "issues", schema_version = 1)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
-    id: String,
-    workspace_id: String,
-    title: String,
-    status: Status,
+    pub id: String,
+    #[query_param]
+    pub workspace_id: String,
+    pub title: String,
+    #[query_param(any_of)]
+    pub status: Status,
 }
-
-#[query_resource(
-    name = "issues",
-    row = Issue,
-    schema_version = 1,
-    params(
-        workspace_id: String,
-        status: params::InSet<Status>,
-    ),
-)]
-pub struct Issues;
 
 /// Test mutator: takes a full `Issue` payload and surfaces it as both
 /// the optimistic and the canonical row change. A real mutator would
@@ -97,7 +87,7 @@ impl MutatorRemoteContext for StubContext {
 async fn matching_view_receives_mutation_canonically() {
     let client = QueryClient::new();
     let ctx = StubContext::new();
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(issues::field::workspace_id, "W1")
         .any_of(issues::field::status, [Status::Open])
         .unwrap()
@@ -136,12 +126,8 @@ async fn non_matching_view_is_untouched() {
     let client = QueryClient::new();
     let ctx = StubContext::new();
 
-    let q_w1 = Issues::query()
-        .eq(issues::field::workspace_id, "W1")
-        .build();
-    let q_w2 = Issues::query()
-        .eq(issues::field::workspace_id, "W2")
-        .build();
+    let q_w1 = Issue::query().eq(issues::field::workspace_id, "W1").build();
+    let q_w2 = Issue::query().eq(issues::field::workspace_id, "W2").build();
     let v_w1 = client.observe::<Issue>(q_w1);
     let v_w2 = client.observe::<Issue>(q_w2);
 
@@ -167,11 +153,8 @@ async fn non_matching_view_is_untouched() {
 async fn version_counter_bumps_on_state_changes() {
     let client = QueryClient::new();
     let ctx = StubContext::new();
-    let view = client.observe::<Issue>(
-        Issues::query()
-            .eq(issues::field::workspace_id, "W1")
-            .build(),
-    );
+    let view =
+        client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
     let v0 = view.version();
     client
@@ -208,12 +191,8 @@ async fn version_counter_bumps_on_state_changes() {
 #[tokio::test]
 async fn observe_dedupes_via_refcount() {
     let client = QueryClient::new();
-    let q1 = Issues::query()
-        .eq(issues::field::workspace_id, "W1")
-        .build();
-    let q2 = Issues::query()
-        .eq(issues::field::workspace_id, "W1")
-        .build();
+    let q1 = Issue::query().eq(issues::field::workspace_id, "W1").build();
+    let q2 = Issue::query().eq(issues::field::workspace_id, "W1").build();
 
     let v1 = client.observe::<Issue>(q1.clone());
     assert_eq!(client.active_subscription_count(), 1);
@@ -234,11 +213,8 @@ async fn on_update_listener_fires_after_state_changes() {
 
     let client = QueryClient::new();
     let ctx = StubContext::new();
-    let view = client.observe::<Issue>(
-        Issues::query()
-            .eq(issues::field::workspace_id, "W1")
-            .build(),
-    );
+    let view =
+        client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
     let fired = Rc::new(Cell::new(0u32));
     let fired_clone = fired.clone();
@@ -273,11 +249,8 @@ async fn on_update_listener_unregisters_on_token_drop() {
 
     let client = QueryClient::new();
     let ctx = StubContext::new();
-    let view = client.observe::<Issue>(
-        Issues::query()
-            .eq(issues::field::workspace_id, "W1")
-            .build(),
-    );
+    let view =
+        client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
     let fired = Rc::new(Cell::new(0u32));
     let fired_clone = fired.clone();
@@ -348,11 +321,8 @@ impl Mutator for DeleteIssue {
 async fn delete_mutation_removes_canonical_row() {
     let client = QueryClient::new();
     let ctx = StubContext::new();
-    let view = client.observe::<Issue>(
-        Issues::query()
-            .eq(issues::field::workspace_id, "W1")
-            .build(),
-    );
+    let view =
+        client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
     // Seed: create an issue.
     client
@@ -390,9 +360,7 @@ async fn delete_mutation_removes_canonical_row() {
 /// no-op instead of a use-after-free.
 #[test]
 fn handle_outliving_client_is_safe() {
-    let q = Issues::query()
-        .eq(issues::field::workspace_id, "W1")
-        .build();
+    let q = Issue::query().eq(issues::field::workspace_id, "W1").build();
     let h = {
         let c = QueryClient::new();
         c.subscribe::<Issue>(q)
@@ -433,11 +401,8 @@ async fn rollback_notifies_observers() {
 
     let client = QueryClient::new();
     let ctx = StubContext::new();
-    let view = client.observe::<Issue>(
-        Issues::query()
-            .eq(issues::field::workspace_id, "W1")
-            .build(),
-    );
+    let view =
+        client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
     let fired = Rc::new(Cell::new(0u32));
     let fired_clone = fired.clone();
@@ -471,7 +436,7 @@ async fn rollback_notifies_observers() {
 // Sanity: order_by + limit still build correctly through the macro.
 #[test]
 fn builder_supports_order_and_limit() {
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(issues::field::workspace_id, "W1")
         .order_by("status", Order::Asc)
         .limit(10)

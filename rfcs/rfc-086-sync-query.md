@@ -86,7 +86,7 @@ The macro generates per-resource builders (carried forward from RFC 085):
 
 ```rust
 use issues::field;
-let q: Query<Issue> = Issues::query()
+let q: Query<Issue> = Issue::query()
     .eq(field::workspace_id, w1)
     .any_of(field::status, [Status::Open, Status::InProgress])?
     .order_by("created_at", Order::Desc)

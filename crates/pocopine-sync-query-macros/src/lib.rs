@@ -1,18 +1,22 @@
 //! Proc-macros for `pocopine-sync-query`.
 //!
-//! The headline macro is `#[query_resource]`. It attaches to a unit
+//! The headline macro is `#[query_resource]`. It attaches to the row
 //! struct that names a queryable resource and emits:
 //!
-//! * A `Resource::query()` builder yielding `pocopine_sync_query::Query<Row>`.
+//! * A `Row::query()` builder yielding `pocopine_sync_query::QueryBuilder<Row>`.
 //! * Per-field zero-sized markers + sealed comparator-trait impls.
-//! * A predicate evaluator: `impl Query<Row> { fn matches(&self, row: &Row) -> bool }`.
-//! * Constants: `NAME`, `SCHEMA_VERSION`, `STREAM`.
+//! * A predicate evaluator: `pub fn matches(query, row) -> bool` (the
+//!   builder injects this as the query's `matches_fn`).
+//! * Constants: `NAME`, `SCHEMA_VERSION`.
 //!
-//! Unlike `pocopine-sync-crud-macros`, this macro is decoupled from any
-//! particular source impl. The author declares the *shape* of queries
-//! that can target this resource; how the server actually serves those
-//! queries (CrudSource adapter, raw SyncStreamSource impl) is the
-//! author's concern.
+//! Queryable fields are declared in-line on the struct with
+//! `#[query_param]` (default `eq`) or `#[query_param(any_of|range|contains)]`.
+//! The macro strips those attrs from the emitted struct so downstream
+//! derives (`Serialize`, `Deserialize`, …) see a clean shape.
+//!
+//! **Attribute order matters.** `#[query_resource]` must come BEFORE
+//! `#[derive(...)]` so it processes the struct first and strips the
+//! per-field annotations.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -20,8 +24,8 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, GenericArgument, Ident, ItemStruct, LitInt, LitStr, PathArguments,
-    PathSegment, Token, Type, TypePath,
+    parse_macro_input, Attribute, Fields, GenericArgument, Ident, ItemStruct, LitInt, LitStr, Meta,
+    PathArguments, PathSegment, Token, Type,
 };
 
 const MAX_SYNC_TOKEN_LEN: usize = 1024;
@@ -52,18 +56,13 @@ struct ParamDef {
 #[derive(Debug)]
 struct QueryResourceArgs {
     name: LitStr,
-    row: Type,
     schema_version: u32,
-    params: Vec<ParamDef>,
 }
 
 impl Parse for QueryResourceArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut name = None;
-        let mut row: Option<Type> = None;
         let mut schema_version: Option<u32> = None;
-        let mut params: Vec<ParamDef> = Vec::new();
-        let mut params_set = false;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -74,12 +73,6 @@ impl Parse for QueryResourceArgs {
                 }
                 input.parse::<Token![=]>()?;
                 name = Some(input.parse()?);
-            } else if key == "row" {
-                if row.is_some() {
-                    return Err(syn::Error::new(key.span(), "duplicate `row`"));
-                }
-                input.parse::<Token![=]>()?;
-                row = Some(input.parse()?);
             } else if key == "schema_version" {
                 if schema_version.is_some() {
                     return Err(syn::Error::new(key.span(), "duplicate `schema_version`"));
@@ -111,47 +104,20 @@ impl Parse for QueryResourceArgs {
                     ));
                 }
                 schema_version = Some(value);
+            } else if key == "row" {
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`row = Type` is no longer supported — `#[query_resource]` now decorates the row struct itself; the row type is the decorated struct",
+                ));
             } else if key == "params" {
-                if params_set {
-                    return Err(syn::Error::new(key.span(), "duplicate `params(...)`"));
-                }
-                params_set = true;
-                let content;
-                let paren = syn::parenthesized!(content in input);
-                while !content.is_empty() {
-                    let field_name: Ident = content.parse()?;
-                    if params.iter().any(|p| p.name == field_name) {
-                        return Err(syn::Error::new(
-                            field_name.span(),
-                            format!(
-                                "duplicate param field `{field_name}` in params(...) — each field name must be unique"
-                            ),
-                        ));
-                    }
-                    content.parse::<Token![:]>()?;
-                    let field_type: Type = content.parse()?;
-                    let kind = classify_param_type(&field_type)?;
-                    params.push(ParamDef {
-                        name: field_name,
-                        ty: field_type,
-                        kind,
-                    });
-                    if content.peek(Token![,]) {
-                        content.parse::<Token![,]>()?;
-                    } else if !content.is_empty() {
-                        return Err(content.error("expected `,` between params(...) entries"));
-                    }
-                }
-                if params.is_empty() {
-                    return Err(syn::Error::new(
-                        paren.span.join(),
-                        "`params(...)` requires at least one field; drop the empty parens to omit shape params",
-                    ));
-                }
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`params(...)` is no longer supported — annotate each queryable field with `#[query_param]` / `#[query_param(any_of|range|contains)]`",
+                ));
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name = \"...\"`, `row = Type`, `schema_version = N`, or `params(field: Type, ...)`",
+                    "expected `name = \"...\"` or `schema_version = N`",
                 ));
             }
 
@@ -164,71 +130,167 @@ impl Parse for QueryResourceArgs {
 
         let name = name.ok_or_else(|| input.error("expected `name = \"...\"`"))?;
         validate_resource_name(&name)?;
-        let row =
-            row.ok_or_else(|| input.error("expected `row = Type` naming the query row type"))?;
         let schema_version = schema_version.unwrap_or(1);
 
         Ok(Self {
             name,
-            row,
             schema_version,
-            params,
         })
     }
 }
 
-/// Map a declared params field type to its comparator semantics.
-///
-/// Same pattern as the reference CRUD macro: comparator wrappers
-/// (`InSet`, `Range`, `Contains`) must come from
-/// `pocopine_sync_query::params::*` (or its `params::*` re-export via
-/// `use`). Anything else falls through to `RequiredEq`.
-fn classify_param_type(ty: &Type) -> syn::Result<ComparatorKind> {
-    let Type::Path(type_path) = ty else {
-        return Ok(ComparatorKind::RequiredEq);
+/// Comparator keyword as written in `#[query_param(...)]`. Bare
+/// `#[query_param]` defaults to `Eq`.
+#[derive(Clone, Copy, Debug)]
+enum ComparatorKeyword {
+    Eq,
+    AnyOf,
+    Range,
+    Contains,
+}
+
+/// Walk a struct's named fields, collect a `ParamDef` for every field
+/// that carries `#[query_param(...)]`. The inner T for `InSet` / `Range`
+/// / `Contains` is read from the field's declared type — no
+/// `params::InSet<Status>` duplication.
+fn extract_field_params(item: &ItemStruct) -> syn::Result<Vec<ParamDef>> {
+    let fields = match &item.fields {
+        Fields::Named(named) => named,
+        Fields::Unit => return Ok(Vec::new()),
+        Fields::Unnamed(_) => {
+            return Err(syn::Error::new(
+                item.ident.span(),
+                "#[query_resource] requires a struct with named fields (tuple structs and unit structs cannot carry `#[query_param]` annotations)",
+            ));
+        }
     };
-    let Some(last) = type_path.path.segments.last() else {
-        return Ok(ComparatorKind::RequiredEq);
-    };
-    match last.ident.to_string().as_str() {
-        "Option" => match extract_single_generic_type(last) {
-            Some(inner) => Ok(ComparatorKind::OptionalEq { inner }),
-            None => Err(syn::Error::new(
-                last.span(),
-                "`Option<T>` requires exactly one generic type argument",
-            )),
-        },
-        "InSet" => {
-            ensure_pocopine_params_prefix(type_path, "InSet")?;
-            match extract_single_generic_type(last) {
-                Some(inner) => Ok(ComparatorKind::InSet { inner }),
-                None => Err(syn::Error::new(
-                    last.span(),
-                    "`InSet<T>` requires exactly one generic type argument",
+
+    let mut params: Vec<ParamDef> = Vec::new();
+    for field in &fields.named {
+        let Some(field_name) = field.ident.clone() else {
+            continue;
+        };
+
+        let query_param_attrs: Vec<&Attribute> = field
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("query_param"))
+            .collect();
+        if query_param_attrs.len() > 1 {
+            return Err(syn::Error::new(
+                query_param_attrs[1].span(),
+                format!(
+                    "duplicate `#[query_param]` on field `{field_name}` — at most one per field"
+                ),
+            ));
+        }
+        let Some(attr) = query_param_attrs.first() else {
+            continue;
+        };
+
+        let keyword = parse_query_param_keyword(attr)?;
+        let (inner_ty, is_option) = unwrap_option_type(&field.ty);
+
+        let kind = match keyword {
+            ComparatorKeyword::Eq => {
+                if is_option {
+                    ComparatorKind::OptionalEq { inner: inner_ty }
+                } else {
+                    ComparatorKind::RequiredEq
+                }
+            }
+            ComparatorKeyword::AnyOf => {
+                if is_option {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "`#[query_param(any_of)]` on `Option<T>` is not supported — declare the field as `T` (and add a `None` variant to the set if needed)",
+                    ));
+                }
+                ComparatorKind::InSet { inner: inner_ty }
+            }
+            ComparatorKeyword::Range => {
+                if is_option {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "`#[query_param(range)]` on `Option<T>` is not supported — declare the field as `T`",
+                    ));
+                }
+                ComparatorKind::Range { inner: inner_ty }
+            }
+            ComparatorKeyword::Contains => {
+                if is_option {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "`#[query_param(contains)]` on `Option<T>` is not supported — declare the field as `T`",
+                    ));
+                }
+                ComparatorKind::Contains
+            }
+        };
+
+        params.push(ParamDef {
+            name: field_name,
+            ty: field.ty.clone(),
+            kind,
+        });
+    }
+
+    Ok(params)
+}
+
+/// Parse the comparator keyword from `#[query_param]` / `#[query_param(eq)]`
+/// / `#[query_param(any_of)]` / etc.
+fn parse_query_param_keyword(attr: &Attribute) -> syn::Result<ComparatorKeyword> {
+    match &attr.meta {
+        Meta::Path(_) => Ok(ComparatorKeyword::Eq),
+        Meta::List(_) => {
+            let ident: Ident = attr.parse_args().map_err(|_| {
+                syn::Error::new(
+                    attr.span(),
+                    "expected a comparator keyword inside `#[query_param(...)]` — one of `eq`, `any_of`, `range`, `contains`",
+                )
+            })?;
+            match ident.to_string().as_str() {
+                "eq" => Ok(ComparatorKeyword::Eq),
+                "any_of" => Ok(ComparatorKeyword::AnyOf),
+                "range" => Ok(ComparatorKeyword::Range),
+                "contains" => Ok(ComparatorKeyword::Contains),
+                other => Err(syn::Error::new(
+                    ident.span(),
+                    format!("unknown comparator `{other}` — expected `eq`, `any_of`, `range`, or `contains`"),
                 )),
             }
         }
-        "Range" => {
-            ensure_pocopine_params_prefix(type_path, "Range")?;
-            match extract_single_generic_type(last) {
-                Some(inner) => Ok(ComparatorKind::Range { inner }),
-                None => Err(syn::Error::new(
-                    last.span(),
-                    "`Range<T>` requires exactly one generic type argument",
-                )),
+        Meta::NameValue(_) => Err(syn::Error::new(
+            attr.span(),
+            "expected `#[query_param]` or `#[query_param(eq|any_of|range|contains)]`, not `key = value`",
+        )),
+    }
+}
+
+/// If `ty` is `Option<T>`, return `(T, true)`. Otherwise `(ty, false)`.
+fn unwrap_option_type(ty: &Type) -> (Type, bool) {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            if seg.ident == "Option" {
+                if let Some(inner) = extract_single_generic_type(seg) {
+                    return (inner, true);
+                }
             }
         }
-        "Contains" => {
-            ensure_pocopine_params_prefix(type_path, "Contains")?;
-            if !matches!(last.arguments, PathArguments::None) {
-                return Err(syn::Error::new(
-                    last.span(),
-                    "`Contains` takes no generic arguments",
-                ));
-            }
-            Ok(ComparatorKind::Contains)
+    }
+    (ty.clone(), false)
+}
+
+/// Remove every `#[query_param(...)]` attr from every named field of
+/// `item`. Called before emitting the struct so downstream derives
+/// (`Serialize`, `Deserialize`, …) never see the macro's per-field
+/// annotations.
+fn strip_query_param_attrs(item: &mut ItemStruct) {
+    if let Fields::Named(fields) = &mut item.fields {
+        for field in &mut fields.named {
+            field.attrs.retain(|a| !a.path().is_ident("query_param"));
         }
-        _ => Ok(ComparatorKind::RequiredEq),
     }
 }
 
@@ -248,48 +310,6 @@ fn extract_single_generic_type(segment: &PathSegment) -> Option<Type> {
         return None;
     }
     Some(first)
-}
-
-fn ensure_pocopine_params_prefix(type_path: &TypePath, wrapper: &str) -> syn::Result<()> {
-    let segments = &type_path.path.segments;
-    if segments.len() < 2 {
-        return Err(syn::Error::new(
-            type_path.path.span(),
-            format!(
-                "bare `{wrapper}` is ambiguous — write `params::{wrapper}` (with `use pocopine_sync_query::params;`)"
-            ),
-        ));
-    }
-    let parent = &segments[segments.len() - 2];
-    if parent.ident != "params" {
-        return Err(syn::Error::new(
-            type_path.path.span(),
-            format!(
-                "`{}::{wrapper}` is not a pocopine comparator wrapper — write `params::{wrapper}`",
-                parent.ident
-            ),
-        ));
-    }
-    // Fully-qualified paths must root in pocopine_sync_query.
-    if segments.len() >= 3 {
-        let root_ident = &segments[0].ident;
-        let crate_root = if root_ident == "pocopine_sync_query" {
-            true
-        } else if segments.len() >= 4 && root_ident == "crate" {
-            segments[1].ident == "pocopine_sync_query"
-        } else {
-            false
-        };
-        if !crate_root {
-            return Err(syn::Error::new(
-                type_path.path.span(),
-                format!(
-                    "fully-qualified `{wrapper}` path must start with `pocopine_sync_query::params::{wrapper}`"
-                ),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn validate_resource_name(name: &LitStr) -> syn::Result<()> {
@@ -317,8 +337,15 @@ fn module_ident_from_name(name: &LitStr) -> syn::Result<Ident> {
     })
 }
 
-/// `#[query_resource(name = "issues", row = Issue, params(...))]` on a
-/// unit struct generates the query DSL surface for that resource.
+/// `#[query_resource(name = "issues", schema_version = 1)]` on a row
+/// struct generates the query DSL surface for that resource. Queryable
+/// fields opt in with `#[query_param]` (defaults to `eq`) or
+/// `#[query_param(any_of|range|contains)]`. `Option<T>` is auto-detected
+/// and emits `OptionalEq` rather than `RequiredEq`.
+///
+/// **Attribute order matters.** This attribute must come BEFORE
+/// `#[derive(...)]` so it strips the per-field `#[query_param]` attrs
+/// from the emitted struct before downstream derives see them.
 #[proc_macro_attribute]
 pub fn query_resource(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as QueryResourceArgs);
@@ -330,21 +357,25 @@ pub fn query_resource(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Result<TokenStream2> {
-    let resource_ident = item.ident.clone();
+fn expand_query_resource(
+    args: QueryResourceArgs,
+    mut item: ItemStruct,
+) -> syn::Result<TokenStream2> {
+    let row_ident = item.ident.clone();
     let module_ident = module_ident_from_name(&args.name)?;
     let name_lit = args.name;
-    let row_ty = args.row;
     let schema_version = args.schema_version;
-    let params = args.params;
+
+    let params = extract_field_params(&item)?;
+    strip_query_param_attrs(&mut item);
 
     let field_markers = generate_field_markers(&params);
-    let matches_body = generate_matches_body(&params, &row_ty);
+    let matches_body = generate_matches_body(&params);
 
     Ok(quote! {
         #item
 
-        impl #resource_ident {
+        impl #row_ident {
             /// Build a typed query for this resource. Returns the
             /// generic [`pocopine_sync_query::QueryBuilder`] pre-wired
             /// with the resource's stream name and predicate
@@ -353,32 +384,32 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
             /// values)?`, `.range(field::name, range)`,
             /// `.contains(field::name, "needle")?` — then `.build()`
             /// (or `.observe(&client)` to subscribe directly).
-            pub fn query() -> ::pocopine_sync_query::QueryBuilder<#row_ty> {
+            pub fn query() -> ::pocopine_sync_query::QueryBuilder<Self> {
                 let stream = ::pocopine_sync_query::SyncStreamName::new(#name_lit)
                     .expect("query_resource name passed validation");
-                ::pocopine_sync_query::Query::<#row_ty>::builder(stream)
+                ::pocopine_sync_query::Query::<Self>::builder(stream)
                     .with_matches(#module_ident::matches)
             }
         }
 
         pub mod #module_ident {
             // We pull the caller's scope into this module so the
-            // user's row type and per-field comparator types
-            // (declared in `params(...)`) resolve here. Local items in
-            // this module shadow anything brought in from `super`, so
-            // identifier collisions in caller scope can't break the
-            // macro-generated items (`Row`, `field`, `matches`).
+            // user's row type and per-field comparator types resolve
+            // here. Local items in this module shadow anything
+            // brought in from `super`, so identifier collisions in
+            // caller scope can't break the macro-generated items
+            // (`Row`, `field`, `matches`).
             #[allow(unused_imports)]
             use super::*;
 
             pub const NAME: &str = #name_lit;
             pub const SCHEMA_VERSION: u32 = #schema_version;
-            pub type Row = #row_ty;
+            pub type Row = super::#row_ident;
 
             /// Field markers for the type-safe query DSL. One marker
-            /// per declared param; each impls exactly the comparator
-            /// trait matching its declared shape — so
-            /// `.eq(field::workspace_id, ...)` requires a `FieldEq`
+            /// per `#[query_param]`-annotated field; each impls exactly
+            /// the comparator trait matching the keyword on the attr —
+            /// so `.eq(field::workspace_id, ...)` requires a `FieldEq`
             /// marker and `.any_of(field::status, ...)` requires a
             /// `FieldInSet` marker. Misuse fails to compile.
             pub mod field {
@@ -478,7 +509,7 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
 
 /// Generate the body of `matches(query, row) -> bool`. Each declared
 /// param emits a check that returns false on mismatch.
-fn generate_matches_body(params: &[ParamDef], _row_ty: &Type) -> TokenStream2 {
+fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
     let checks: Vec<TokenStream2> = params
         .iter()
         .map(|param| {

@@ -5,9 +5,6 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-// `params::*` is referenced from inside the `#[query_resource(params(...))]`
-// attribute below, which the macro parses but doesn't emit verbatim,
-// so we don't need a `use params` import at this scope.
 use pocopine_sync_query::Order;
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};
@@ -20,29 +17,23 @@ pub enum Status {
     Closed,
 }
 
+// `#[query_resource]` must come BEFORE `#[derive(...)]` so it strips
+// the per-field `#[query_param]` annotations before serde sees them.
+#[query_resource(name = "issues", schema_version = 1)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
-    id: String,
-    workspace_id: String,
-    assignee_id: Option<String>,
-    title: String,
-    status: Status,
-    priority: u32,
+    pub id: String,
+    #[query_param]
+    pub workspace_id: String,
+    #[query_param]
+    pub assignee_id: Option<String>,
+    #[query_param(contains)]
+    pub title: String,
+    #[query_param(any_of)]
+    pub status: Status,
+    #[query_param(range)]
+    pub priority: u32,
 }
-
-#[query_resource(
-    name = "issues",
-    row = Issue,
-    schema_version = 1,
-    params(
-        workspace_id: String,
-        assignee_id: Option<String>,
-        status: params::InSet<Status>,
-        title: params::Contains,
-        priority: params::Range<u32>,
-    ),
-)]
-pub struct Issues;
 
 fn sample_issue() -> Issue {
     Issue {
@@ -65,7 +56,7 @@ fn macro_emits_constants() {
 fn builder_constructs_typed_query() {
     use issues::field;
 
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(field::workspace_id, "W1")
         .any_of(field::status, [Status::Open, Status::InProgress])
         .unwrap()
@@ -90,7 +81,7 @@ fn builder_constructs_typed_query() {
 fn matches_required_eq_row_in_workspace() {
     use issues::field;
 
-    let q = Issues::query().eq(field::workspace_id, "W1").build();
+    let q = Issue::query().eq(field::workspace_id, "W1").build();
     assert!(issues::matches(&q, &sample_issue()));
     let mut other = sample_issue();
     other.workspace_id = "W2".to_string();
@@ -101,7 +92,7 @@ fn matches_required_eq_row_in_workspace() {
 fn matches_optional_eq_some_value() {
     use issues::field;
 
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(field::workspace_id, "W1")
         .eq(field::assignee_id, "alice")
         .build();
@@ -118,7 +109,7 @@ fn matches_optional_eq_some_value() {
 fn matches_any_of() {
     use issues::field;
 
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(field::workspace_id, "W1")
         .any_of(field::status, [Status::Open, Status::InProgress])
         .unwrap()
@@ -133,7 +124,7 @@ fn matches_any_of() {
 fn matches_range() {
     use issues::field;
 
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(field::workspace_id, "W1")
         .range(field::priority, 1u32..=5)
         .build();
@@ -147,7 +138,7 @@ fn matches_range() {
 fn matches_contains_case_insensitive() {
     use issues::field;
 
-    let q = Issues::query()
+    let q = Issue::query()
         .eq(field::workspace_id, "W1")
         .contains(field::title, "AUTH")
         .unwrap()
@@ -177,8 +168,8 @@ fn matches_returns_false_when_required_field_absent_from_params() {
 fn distinct_workspace_queries_have_distinct_keys() {
     use issues::field;
 
-    let a = Issues::query().eq(field::workspace_id, "W1").build();
-    let b = Issues::query().eq(field::workspace_id, "W2").build();
+    let a = Issue::query().eq(field::workspace_id, "W1").build();
+    let b = Issue::query().eq(field::workspace_id, "W2").build();
     assert_ne!(a.key(), b.key());
 }
 
