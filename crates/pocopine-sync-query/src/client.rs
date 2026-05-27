@@ -14,12 +14,18 @@
 
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
 
-use pocopine_sync::{ClientMutation, MutationId, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX};
+use pocopine_sync::{
+    ClientMutation, MutationId, RowKey, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+};
 use serde_json::Value;
 
+use crate::driver::{
+    spawn_driver, DriverEpoch, DriverHandle, QueryClientConfig, ReplayEntry, ReplayOutcome,
+    SubscriptionDriver,
+};
 use crate::mutator::RowChange;
 use crate::query::{MatchFn, Order, Query, QueryKey};
 use crate::state::{PendingOverlay, QueryState};
@@ -38,11 +44,23 @@ type RegistryKey = (TypeId, QueryKey);
 /// `Rc::downcast` (replacing the prior `Rc::into_raw`/`from_raw`
 /// hack that relied on `RcBox<dyn>` / `RcBox<Concrete>` layout
 /// coincidence).
-trait AnyQuerySubscription: 'static {
+pub(crate) trait AnyQuerySubscription: 'static {
     fn stream(&self) -> &SyncStreamName;
     fn refcount(&self) -> usize;
     fn bump_refcount(&self) -> usize;
     fn decrement_refcount(&self) -> usize;
+    /// Snapshot of this subscription's driver epoch — bumped on
+    /// last-handle drop so the spawned driver exits at its next
+    /// `.await`.
+    fn driver_epoch(&self) -> DriverEpoch;
+    /// `true` once a driver task has been spawned for this
+    /// subscription. The flag is sticky for the lifetime of the
+    /// subscription; `observe` checks it to avoid double-spawn
+    /// when a second `subscribe` lands on the same entry.
+    fn driver_spawned(&self) -> bool;
+    /// Mark the driver as spawned. The framework calls this once
+    /// from `observe` immediately after `spawn_driver` returns.
+    fn set_driver_spawned(&self);
     /// Re-package self into `Rc<dyn Any>` for safe `Rc::downcast`.
     /// The default-method-style cannot work here because `Rc::downcast`
     /// requires the source to be `Rc<dyn Any>`, not `Rc<dyn OtherTrait>`.
@@ -85,10 +103,19 @@ pub struct QuerySubscription<Row: 'static> {
     /// Monotonic counter for listener ids. The token returned from
     /// [`QueryView::on_update`] holds the id so drop can unregister.
     next_listener_id: Cell<u64>,
-    // Background-task lifecycle is owned externally; the runtime hooks
-    // into the subscription via `state`. The Drop on `QueryHandle`
-    // signals "no more observers" by decrementing the refcount; the
-    // QueryClient gc'd entry triggers cleanup.
+    /// Generation counter that the spawned driver task watches.
+    /// Bumped from `release_inner` on the last-handle drop so the
+    /// driver exits at its next `.await` per RFC 087 §8.
+    epoch: DriverEpoch,
+    /// Whether a driver task has been spawned for this subscription.
+    /// Set once by `observe`; never cleared (a re-subscribe after
+    /// the entry is GC'd builds a new `QuerySubscription` and the
+    /// flag starts fresh).
+    driver_spawned: Cell<bool>,
+    /// Owned driver handle. Currently a marker (cancellation is
+    /// epoch-driven, not abort-driven) — present so the type-shape
+    /// can carry per-platform metadata in follow-ups.
+    _driver_handle: Cell<Option<DriverHandle>>,
 }
 
 impl<Row: 'static> QuerySubscription<Row> {
@@ -101,7 +128,18 @@ impl<Row: 'static> QuerySubscription<Row> {
             refcount: Cell::new(0),
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(0),
+            epoch: DriverEpoch::new(),
+            driver_spawned: Cell::new(false),
+            _driver_handle: Cell::new(None),
         }
+    }
+
+    /// Fire `notify_listeners` from a caller outside this module —
+    /// the driver path needs to notify after applying a `/open` or
+    /// `/pull` response but doesn't have access to the private
+    /// `notify_listeners` symbol.
+    pub(crate) fn notify_listeners_external(&self) {
+        self.notify_listeners();
     }
 
     /// Borrow the query this subscription serves.
@@ -209,6 +247,18 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
         next
     }
 
+    fn driver_epoch(&self) -> DriverEpoch {
+        self.epoch.clone()
+    }
+
+    fn driver_spawned(&self) -> bool {
+        self.driver_spawned.get()
+    }
+
+    fn set_driver_spawned(&self) {
+        self.driver_spawned.set(true);
+    }
+
     fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any> {
         self
     }
@@ -227,13 +277,23 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
 /// handle that outlives the client sees `Weak::upgrade` → `None`
 /// and silently no-ops its refcount decrement instead of triggering
 /// a use-after-free.
-struct QueryClientInner {
+pub(crate) struct QueryClientInner {
     endpoint: String,
+    /// Driver configuration (poll interval, live-wakeup flag,
+    /// credentials). `None` means "no driver" — `observe` skips the
+    /// spawn step. Set by `QueryClient::without_driver`.
+    pub(crate) config: Option<QueryClientConfig>,
     /// Active subscriptions keyed by `(Row TypeId, QueryKey)`. Two
     /// queries with the same `(stream, params, order, limit)` but
     /// different `Row` types live in separate entries — no
     /// `Rc<dyn Any>` downcast can panic on a Row mismatch.
     registry: RefCell<HashMap<RegistryKey, Rc<dyn AnyQuerySubscription>>>,
+    /// Mutations that failed with a transport error and need to be
+    /// re-fired by the driver on the next successful tick. FIFO so
+    /// the original order is preserved on replay. The driver
+    /// dequeues the whole batch on each tick and re-inserts
+    /// entries that are still offline.
+    pub(crate) replay_queue: RefCell<VecDeque<ReplayEntry>>,
 }
 
 pub struct QueryClient {
@@ -241,21 +301,73 @@ pub struct QueryClient {
 }
 
 impl QueryClient {
-    /// Build a fresh client. The default endpoint is the framework's
-    /// `/__pocopine/sync/v1` prefix; tests can override.
+    /// Build a fresh client with default config (driver enabled,
+    /// 30s poll cadence, framework endpoint).
+    ///
+    /// **Native runtime requirement.** When this client's driver
+    /// runs (via the first [`observe`](Self::observe) call), it
+    /// spawns the per-subscription task with
+    /// `tokio::task::spawn_local`. The caller's tokio runtime
+    /// must therefore have an active
+    /// [`tokio::task::LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html);
+    /// tests should wrap their body in
+    /// `LocalSet::new().run_until(async { ... }).await`. Wasm
+    /// builds use `wasm_bindgen_futures::spawn_local` and have no
+    /// equivalent constraint. If you only want the routing engine
+    /// — no spawned drivers — use [`without_driver`](Self::without_driver).
     pub fn new() -> Self {
-        Self::with_endpoint(SYNC_ENDPOINT_PREFIX.to_string())
+        Self::with_config(QueryClientConfig::default())
     }
 
     /// Build a client targeting a custom endpoint prefix. Useful for
-    /// tests against a router mounted at a different path.
+    /// tests against a router mounted at a different path. The
+    /// other config knobs stay at their defaults.
     pub fn with_endpoint(endpoint: String) -> Self {
+        let cfg = QueryClientConfig {
+            endpoint,
+            ..QueryClientConfig::default()
+        };
+        Self::with_config(cfg)
+    }
+
+    /// Build a client with a fully-specified [`QueryClientConfig`].
+    /// The driver is spawned on the first [`observe`](Self::observe)
+    /// for each subscription — see [`Self::new`] for the native
+    /// LocalSet requirement.
+    pub fn with_config(config: QueryClientConfig) -> Self {
+        let endpoint = config.endpoint.clone();
         Self {
             inner: Rc::new(QueryClientInner {
                 endpoint,
+                config: Some(config),
                 registry: RefCell::new(HashMap::new()),
+                replay_queue: RefCell::new(VecDeque::new()),
             }),
         }
+    }
+
+    /// Build a client with the driver disabled. Pure routing-engine
+    /// mode — `observe` returns a view whose `canonical_rows`
+    /// stays empty until the caller manually feeds it through
+    /// `mutate`. Used by tests that want to exercise the routing
+    /// engine without spawning background tasks.
+    pub fn without_driver() -> Self {
+        let endpoint = SYNC_ENDPOINT_PREFIX.to_string();
+        Self {
+            inner: Rc::new(QueryClientInner {
+                endpoint,
+                config: None,
+                registry: RefCell::new(HashMap::new()),
+                replay_queue: RefCell::new(VecDeque::new()),
+            }),
+        }
+    }
+
+    /// Re-wrap an existing [`QueryClientInner`] so the driver's
+    /// replay path can call `mutate` against the canonical
+    /// `QueryClient` shape. Crate-internal helper.
+    pub(crate) fn from_inner(inner: Rc<QueryClientInner>) -> Self {
+        Self { inner }
     }
 
     /// The endpoint prefix this client posts against.
@@ -323,13 +435,44 @@ impl QueryClient {
     /// holds the underlying [`QueryHandle`] and exposes a borrow-only
     /// surface (`rows()`, `pending()`, `version()`). Drop the view to
     /// decrement the subscription's refcount.
+    ///
+    /// When the underlying client has a [`QueryClientConfig`]
+    /// installed (the default; cleared by
+    /// [`without_driver`](Self::without_driver)), this is also the
+    /// moment a per-subscription driver task is spawned. The
+    /// driver issues `/open` + initial `/pull` immediately, then
+    /// loops on the configured poll interval — per RFC 087 §1.
+    ///
+    /// Spawn happens once per subscription identity; observing
+    /// the same `Query` twice doesn't re-spawn.
     pub fn observe<Row>(&self, query: Query<Row>) -> QueryView<Row>
     where
-        Row: Clone + 'static,
+        Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
     {
-        QueryView {
-            handle: self.subscribe(query),
+        let handle = self.subscribe(query);
+        self.maybe_spawn_driver(&handle.subscription);
+        QueryView { handle }
+    }
+
+    /// Spawn the driver for `subscription` if (1) the client has a
+    /// config and (2) the subscription doesn't already have a
+    /// driver. Idempotent.
+    fn maybe_spawn_driver<Row>(&self, subscription: &Rc<QuerySubscription<Row>>)
+    where
+        Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    {
+        let Some(config) = self.inner.config.as_ref() else {
+            return;
+        };
+        if subscription.driver_spawned() {
+            return;
         }
+        let epoch = subscription.epoch.clone();
+        let weak_sub = Rc::downgrade(subscription);
+        let weak_inner = Rc::downgrade(&self.inner);
+        let driver = SubscriptionDriver::<Row>::new(weak_sub, weak_inner, epoch, config);
+        subscription.set_driver_spawned();
+        spawn_driver(driver.run());
     }
 
     /// Run a mutator end-to-end: apply optimistic locally, push to the
@@ -399,14 +542,38 @@ impl QueryClient {
             _row: std::marker::PhantomData,
         };
 
+        // Capture the original push URL + mutation_id so an
+        // offline replay can rebuild a `MutatorRemoteContext`
+        // that surfaces the SAME identity on retry — preserving
+        // the server-side dedup contract (RFC 087 §7 / RFC 072).
+        let original_push_url = ctx.push_url().to_string();
+
         // 2. Wire push (caller-supplied context handles transport).
         let canonical_changes = match M::apply_remote(ctx, payload).await {
             Ok(c) => c,
             Err(err) => {
-                // Roll back the optimistic overlay on push failure
-                // via the guard's Drop — disarm not called, so when
-                // `guard` falls out of scope at function return its
-                // Drop runs `dequeue_pending` exactly once.
+                if err.is_transport() && self.inner.config.is_some() {
+                    // RFC 087 §7 offline path: keep the optimistic
+                    // overlay in pending + enqueue a replay for the
+                    // driver to fire on the next successful tick.
+                    guard.disarm();
+                    let entry = build_replay_entry::<M>(
+                        stream.clone(),
+                        mutation_id.clone(),
+                        original_push_url,
+                        wire_mutation.payload.clone(),
+                    );
+                    self.inner.replay_queue.borrow_mut().push_back(entry);
+                    tracing::info!(
+                        target: "pocopine.log",
+                        stream = stream.as_str(),
+                        mutation_id = %mutation_id.as_str(),
+                        "sync-query: apply_remote network error; queued for replay"
+                    );
+                    return Err(err);
+                }
+                // Non-transport error OR driver disabled — fall
+                // through to the guard's Drop, which rolls back.
                 drop(guard);
                 return Err(err);
             }
@@ -695,6 +862,155 @@ impl QueryClient {
         }
     }
 
+    /// Route a server-confirmed canonical pull into matching
+    /// subscriptions. Driver-only entry point — distinct from
+    /// [`route_canonical_changes`] because `/pull` results carry
+    /// no `mutation_id` (they're unsolicited canonical updates
+    /// from the server, not the canonical-side of a client
+    /// mutation).
+    ///
+    /// Semantics:
+    ///
+    /// * `Upsert(row)` — for each subscription on `stream`:
+    ///   * predicate matches AND row not in canonical → upsert.
+    ///   * predicate matches AND row already in canonical → upsert
+    ///     (refresh the cached value).
+    ///   * predicate doesn't match AND row in canonical → remove
+    ///     (server-confirmed predicate departure).
+    ///   * predicate doesn't match AND row not in canonical → no-op.
+    /// * `Delete(key)` — remove from every subscription's
+    ///   canonical that holds the key.
+    ///
+    /// Does NOT touch the pending overlay — overlays are the
+    /// mutation-driven path's responsibility; the driver is only
+    /// authoritative on canonical state. Pending overlays for a
+    /// matching key remain visible; the merge in `QueryView::rows`
+    /// makes the optimistic upsert win over the canonical until
+    /// the matching `mutate()` clears it.
+    pub(crate) fn route_canonical_pull<Row>(
+        inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
+        canonical: &[RowChange<Row>],
+    ) where
+        Row: Clone + serde::Serialize + 'static,
+    {
+        let subscriptions = collect_subscriptions_on_stream_inner::<Row>(inner, stream);
+        for typed in subscriptions {
+            let touched = {
+                let mut state = typed.state.borrow_mut();
+                let mut touched = false;
+                for change in canonical {
+                    match change {
+                        RowChange::Upsert(row) => {
+                            let Some(key) = row_key_of(row) else {
+                                continue;
+                            };
+                            if typed.matches(row) {
+                                state.upsert_canonical(SyncRow {
+                                    key,
+                                    version: None,
+                                    value: row.clone(),
+                                    pending: false,
+                                    conflict: false,
+                                });
+                                touched = true;
+                            } else if state.canonical_contains(&key) {
+                                state.remove_canonical(&key);
+                                touched = true;
+                            }
+                        }
+                        RowChange::Delete(key) => {
+                            if state.canonical_contains(key) {
+                                state.remove_canonical(key);
+                                touched = true;
+                            }
+                        }
+                    }
+                }
+                touched
+            };
+            if touched {
+                typed.notify_listeners();
+            }
+        }
+    }
+
+    /// Wipe canonical rows on every subscription on `stream` whose
+    /// `Row` type matches. Driver-only — invoked from the
+    /// `SyncPullMode::Snapshot` path so the next `route_canonical_pull`
+    /// builds the canonical set from scratch instead of accumulating
+    /// stale rows alongside the snapshot's fresh ones.
+    ///
+    /// Notifies listeners only when the canonical set was actually
+    /// non-empty — avoids gratuitous re-renders for a snapshot pull
+    /// that lands on a fresh subscription.
+    pub(crate) fn clear_canonical_on_stream<Row>(
+        inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
+    ) where
+        Row: Clone + 'static,
+    {
+        let subscriptions = collect_subscriptions_on_stream_inner::<Row>(inner, stream);
+        for typed in subscriptions {
+            let touched = {
+                let mut state = typed.state.borrow_mut();
+                let keys: Vec<RowKey> = state.canonical_rows().map(|r| r.key.clone()).collect();
+                let was_non_empty = !keys.is_empty();
+                for key in keys {
+                    state.remove_canonical(&key);
+                }
+                was_non_empty
+            };
+            if touched {
+                typed.notify_listeners();
+            }
+        }
+    }
+
+    /// Driver-only: drain the replay queue. The caller iterates the
+    /// returned `Vec` and pushes still-failing entries back via
+    /// [`reinsert_replay_entry`].
+    pub(crate) fn take_replay_entries(inner: &Rc<QueryClientInner>) -> Vec<ReplayEntry> {
+        let mut q = inner.replay_queue.borrow_mut();
+        q.drain(..).collect()
+    }
+
+    /// Driver-only: push a replay entry back on the queue (the
+    /// caller's replay attempt observed `StillOffline`).
+    pub(crate) fn reinsert_replay_entry(inner: &Rc<QueryClientInner>, entry: ReplayEntry) {
+        inner.replay_queue.borrow_mut().push_back(entry);
+    }
+
+    /// Driver-only: roll back the optimistic overlay for one
+    /// `(subscription, mutation_id)` pair without scanning the
+    /// registry. Used by the replay path when the server rejects
+    /// a mutation after a network blip — the offline-queued
+    /// optimistic state was a "best guess" the server later
+    /// invalidated.
+    pub(crate) fn dequeue_pending_for_subscription<Row>(
+        _inner: &Rc<QueryClientInner>,
+        subscription: &QuerySubscription<Row>,
+        mutation_id: &MutationId,
+    ) where
+        Row: Clone + 'static,
+    {
+        let removed = {
+            let mut state = subscription.state.borrow_mut();
+            let overlays = state.remove_pending(mutation_id);
+            for overlay in &overlays {
+                if let Some(restored) = overlay.deleted_row.clone() {
+                    if !state.canonical_contains(&restored.key) {
+                        state.upsert_canonical(restored);
+                    }
+                }
+            }
+            overlays
+        };
+        if !removed.is_empty() {
+            subscription.notify_listeners();
+        }
+    }
+
     /// Snapshot all subscriptions on a given stream whose Row type
     /// matches `Row`. The returned Vec holds `Rc` clones so callers
     /// can freely call back into the `QueryClient` from inside the
@@ -704,16 +1020,25 @@ impl QueryClient {
         &self,
         stream: &SyncStreamName,
     ) -> Vec<Rc<QuerySubscription<Row>>> {
-        let target = (TypeId::of::<Row>(), ());
-        let registry = self.inner.registry.borrow();
-        registry
-            .iter()
-            .filter(|((tid, _), sub)| *tid == target.0 && sub.stream() == stream)
-            .filter_map(|(_, sub)| {
-                Rc::downcast::<QuerySubscription<Row>>(sub.clone().as_rc_any()).ok()
-            })
-            .collect()
+        collect_subscriptions_on_stream_inner(&self.inner, stream)
     }
+}
+
+/// Free-function variant of `collect_subscriptions_on_stream` that
+/// takes `Rc<QueryClientInner>` directly. Used by the driver's
+/// canonical-pull / clear-canonical paths, which only hold the
+/// inner `Rc` (not the outer `QueryClient`).
+fn collect_subscriptions_on_stream_inner<Row: 'static>(
+    inner: &Rc<QueryClientInner>,
+    stream: &SyncStreamName,
+) -> Vec<Rc<QuerySubscription<Row>>> {
+    let target = TypeId::of::<Row>();
+    let registry = inner.registry.borrow();
+    registry
+        .iter()
+        .filter(|((tid, _), sub)| *tid == target && sub.stream() == stream)
+        .filter_map(|(_, sub)| Rc::downcast::<QuerySubscription<Row>>(sub.clone().as_rc_any()).ok())
+        .collect()
 }
 
 impl Default for QueryClient {
@@ -756,6 +1081,119 @@ impl<Row: Clone + 'static> Drop for RollbackGuard<'_, Row> {
             client.dequeue_pending::<Row>(&self.stream, &self.mutation_id);
         }
     }
+}
+
+/// Context handed to a replayed `Mutator::apply_remote`. Surfaces
+/// the ORIGINAL `mutation_id` (not a fresh one) so the server's
+/// idempotency log accepts the retry as the same logical write —
+/// per RFC 087 §7 and the wire dedup contract in RFC 072.
+struct ReplayContext {
+    mutation_id: MutationId,
+    push_url: String,
+}
+
+impl crate::mutator::MutatorRemoteContext for ReplayContext {
+    fn push_url(&self) -> &str {
+        &self.push_url
+    }
+
+    fn next_mutation_id(&self) -> pocopine_sync::SyncResult<MutationId> {
+        // The driver re-fires apply_remote with the same logical
+        // identity. Clone instead of regenerate so the server
+        // dedup path treats this as the same row.
+        Ok(self.mutation_id.clone())
+    }
+}
+
+/// Build the offline-replay closure for one mutator + captured
+/// payload. The returned [`ReplayEntry`] is stored on the
+/// `QueryClientInner::replay_queue` and re-fired by the driver on
+/// the next successful tick.
+///
+/// Boxed as `Fn(&QueryClient) -> LocalBoxFuture` so the queue can
+/// hold heterogeneous entries — different `Mutator` impls
+/// monomorphize to different concrete types, but the wire-side
+/// behavior collapses to the same trait-object shape.
+fn build_replay_entry<M>(
+    stream: SyncStreamName,
+    mutation_id: MutationId,
+    push_url: String,
+    payload_value: Value,
+) -> ReplayEntry
+where
+    M: crate::Mutator,
+    M::Row: Clone + serde::Serialize + 'static,
+{
+    let replay_stream = stream.clone();
+    let replay_mutation_id = mutation_id.clone();
+    let replay_push_url = push_url.clone();
+    let replay_payload = payload_value.clone();
+    let replay: crate::driver::ReplayFuture = Box::new(move |client: &QueryClient| {
+        let stream = replay_stream.clone();
+        let mutation_id = replay_mutation_id.clone();
+        let push_url = replay_push_url.clone();
+        let payload_value = replay_payload.clone();
+        let inner = client.inner.clone();
+        Box::pin(async move {
+            // Decode the captured wire payload back into the
+            // mutator's typed Payload. A decode failure means
+            // the user changed the payload shape between
+            // submitting the mutation and the replay tick — we
+            // treat that as Rejected (drop the pending; surface
+            // via state.error on the next observe tick).
+            let payload: M::Payload = match serde_json::from_value(payload_value) {
+                Ok(p) => p,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = stream.as_str(),
+                        error = %err,
+                        "sync-query: replay payload could not be decoded; dropping mutation"
+                    );
+                    return ReplayOutcome::Rejected;
+                }
+            };
+            let ctx = ReplayContext {
+                mutation_id: mutation_id.clone(),
+                push_url,
+            };
+            match M::apply_remote(&ctx, payload).await {
+                Ok(canonical_changes) => {
+                    // Route into matching subscriptions; this also
+                    // clears the pending overlay via remove_pending.
+                    let client = QueryClient::from_inner(inner);
+                    client.route_canonical_changes::<M::Row>(
+                        &stream,
+                        &mutation_id,
+                        &canonical_changes,
+                    );
+                    ReplayOutcome::Accepted
+                }
+                Err(err) if err.is_transport() => ReplayOutcome::StillOffline,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = stream.as_str(),
+                        error = %err,
+                        "sync-query: replay rejected by server; rolling back overlay"
+                    );
+                    ReplayOutcome::Rejected
+                }
+            }
+        })
+    });
+    ReplayEntry {
+        stream,
+        mutation_id,
+        replay,
+    }
+}
+
+/// Bump the driver epoch for a subscription that just lost its
+/// last `QueryHandle`. Crate-internal entry point so
+/// `release_inner` doesn't need to know the trait-object shape.
+fn maybe_bump_driver_epoch(sub: &Rc<dyn AnyQuerySubscription>) {
+    sub.driver_epoch().bump();
 }
 
 /// Best-effort row-key extractor.
@@ -1128,11 +1566,15 @@ fn release_inner(inner: &QueryClientInner, key: RegistryKey) {
     let Ok(mut registry) = inner.registry.try_borrow_mut() else {
         return;
     };
-    let should_remove = registry
-        .get(&key)
-        .map(|sub| sub.decrement_refcount() == 0)
-        .unwrap_or(false);
-    if should_remove {
+    let Some(sub) = registry.get(&key).cloned() else {
+        return;
+    };
+    if sub.decrement_refcount() == 0 {
+        // Bump the driver epoch BEFORE removing the registry
+        // entry — the spawned task may still hold a `Weak<inner>`
+        // and re-enter; the epoch check at the next .await is
+        // what guarantees it stops touching state.
+        maybe_bump_driver_epoch(&sub);
         registry.remove(&key);
     }
 }

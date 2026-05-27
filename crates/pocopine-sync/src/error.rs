@@ -42,6 +42,19 @@ pub enum SyncError {
     /// schema. The variant is introduced here so downstream callers can
     /// already typecheck against it.
     SchemaMigration { stream: String, from: u32, to: u32 },
+    /// Transport-class failure: the HTTP request could not reach the
+    /// server, the response could not be parsed, or the browser
+    /// reported a network-level error.
+    ///
+    /// Distinct from [`Self::Client`] (which captures e.g. wasm
+    /// runtime integration bugs) so the sync-query driver can
+    /// classify a failed `Mutator::apply_remote` as "retry on
+    /// reconnect" without parsing the error message. Wrap a
+    /// `ServerError::Network(msg)` from
+    /// [`pocopine_core::fetch::call`] with this variant when
+    /// surfacing transport failures up to the sync-query mutate
+    /// path.
+    Network(String),
 }
 
 impl SyncError {
@@ -86,6 +99,21 @@ impl SyncError {
             to,
         }
     }
+
+    /// Build a transport/network failure (HTTP timeout, fetch refused,
+    /// SSE stream lost). Used by sync-query's `Mutator::apply_remote`
+    /// path so the driver can identify retry-on-reconnect errors
+    /// without parsing the message string.
+    pub fn network(msg: impl Into<String>) -> Self {
+        Self::Network(msg.into())
+    }
+
+    /// Returns `true` for errors the sync layer treats as transient
+    /// — the mutation should be re-queued for replay rather than
+    /// rolled back.
+    pub fn is_transport(&self) -> bool {
+        matches!(self, Self::Network(_))
+    }
 }
 
 impl fmt::Display for SyncError {
@@ -105,6 +133,7 @@ impl fmt::Display for SyncError {
                 f,
                 "sync schema migration required for stream {stream}: client at v{from}, server at v{to}"
             ),
+            Self::Network(msg) => write!(f, "sync network error: {msg}"),
         }
     }
 }

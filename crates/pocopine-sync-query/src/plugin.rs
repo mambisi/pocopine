@@ -11,6 +11,7 @@ use std::rc::Rc;
 use pocopine_core::{App, AppPlugin};
 
 use crate::client::QueryClient;
+use crate::driver::QueryClientConfig;
 
 /// Build the query-client app plugin.
 ///
@@ -31,30 +32,31 @@ pub fn query_client_plugin() -> QueryClientPlugin {
 
 /// Builder for the query-client app plugin. Configure endpoint /
 /// transport options here before installing.
+#[derive(Default)]
 pub struct QueryClientPlugin {
-    endpoint: String,
+    config: QueryClientConfig,
 }
 
 impl QueryClientPlugin {
     /// Override the sync HTTP endpoint prefix this client posts to.
     /// Defaults to [`pocopine_sync::SYNC_ENDPOINT_PREFIX`].
     pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.endpoint = endpoint.into();
+        self.config.endpoint = endpoint.into();
+        self
+    }
+
+    /// Replace the full driver configuration. Use this when the
+    /// app needs to tune the poll interval, disable live wakeup,
+    /// or strip credentials from sync requests.
+    pub fn config(mut self, config: QueryClientConfig) -> Self {
+        self.config = config;
         self
     }
 
     /// Build the runtime client without installing. Useful for tests
     /// and host-side bench harnesses that don't run a full `App`.
     pub fn into_client(self) -> QueryClient {
-        QueryClient::with_endpoint(self.endpoint)
-    }
-}
-
-impl Default for QueryClientPlugin {
-    fn default() -> Self {
-        Self {
-            endpoint: pocopine_sync::SYNC_ENDPOINT_PREFIX.to_string(),
-        }
+        QueryClient::with_config(self.config)
     }
 }
 
@@ -86,7 +88,7 @@ mod tests {
     #[test]
     fn builder_accepts_endpoint_override() {
         let plugin = query_client_plugin().endpoint("/custom/prefix");
-        assert_eq!(plugin.endpoint, "/custom/prefix");
+        assert_eq!(plugin.config.endpoint, "/custom/prefix");
         let client = plugin.into_client();
         assert_eq!(client.endpoint(), "/custom/prefix");
     }
