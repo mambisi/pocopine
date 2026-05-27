@@ -20,4 +20,5 @@ pocopine-sync = { workspace = true }
 pocopine-sync-query = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt"] }
 trybuild = "1"

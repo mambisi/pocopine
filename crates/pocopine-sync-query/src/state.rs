@@ -49,6 +49,13 @@ pub struct QueryState<Row> {
     /// tasks can detect staleness via `is_current(token)`.
     #[serde(skip)]
     request_generation: u64,
+    /// Monotonically-bumped version counter that ticks on every
+    /// state-mutating operation (canonical upsert / remove, pending
+    /// push / remove, reset). Observers register pocopine effects
+    /// that track this field; any internal state change re-fires
+    /// the effect via `pocopine_core::track(...)` on the same key.
+    #[serde(skip)]
+    version: u64,
 }
 
 /// One in-flight optimistic mutation overlaid on top of canonical state.
@@ -81,7 +88,31 @@ impl<Row> Default for QueryState<Row> {
             error: String::new(),
             last_reason: pocopine_sync::SyncReason::Idle,
             request_generation: 0,
+            version: 0,
         }
+    }
+}
+
+impl<Row> QueryState<Row> {
+    /// Monotonically-bumped version. Observers read this to detect
+    /// any state change without diffing the full state.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Borrow the canonical rows in key order.
+    pub fn canonical_rows(&self) -> impl Iterator<Item = &SyncRow<Row>> {
+        self.canonical_rows.values()
+    }
+
+    /// Number of canonical rows currently held.
+    pub fn canonical_len(&self) -> usize {
+        self.canonical_rows.len()
+    }
+
+    /// Pending overlays in apply order.
+    pub fn pending(&self) -> &[PendingOverlay<Row>] {
+        &self.pending
     }
 }
 
@@ -102,36 +133,33 @@ impl<Row: Clone> QueryState<Row> {
         self.error.clear();
         self.last_reason = SyncReason::Initial;
         self.request_generation = self.request_generation.saturating_add(1);
+        self.bump_version();
     }
 
-    /// Borrow the canonical rows in key order.
-    pub fn canonical_rows(&self) -> impl Iterator<Item = &SyncRow<Row>> {
-        self.canonical_rows.values()
-    }
-
-    /// Number of canonical rows currently held.
-    pub fn canonical_len(&self) -> usize {
-        self.canonical_rows.len()
-    }
-
-    /// Pending overlays in apply order.
-    pub fn pending(&self) -> &[PendingOverlay<Row>] {
-        &self.pending
+    /// Tick the version counter. Called by every state-mutating
+    /// method below so observers can react to any change without
+    /// diffing.
+    fn bump_version(&mut self) {
+        self.version = self.version.saturating_add(1);
     }
 
     /// Internal helper for the routing engine.
     pub(crate) fn upsert_canonical(&mut self, row: SyncRow<Row>) {
         self.canonical_rows.insert(row.key.clone(), row);
+        self.bump_version();
     }
 
     /// Internal helper for the routing engine.
     pub(crate) fn remove_canonical(&mut self, key: &RowKey) {
-        self.canonical_rows.remove(key);
+        if self.canonical_rows.remove(key).is_some() {
+            self.bump_version();
+        }
     }
 
     /// Internal helper for the routing engine.
     pub(crate) fn push_pending(&mut self, overlay: PendingOverlay<Row>) {
         self.pending.push(overlay);
+        self.bump_version();
     }
 
     /// Internal helper for the routing engine. Removes a pending overlay
@@ -139,7 +167,9 @@ impl<Row: Clone> QueryState<Row> {
     /// mutation).
     pub(crate) fn remove_pending(&mut self, id: &MutationId) -> Option<PendingOverlay<Row>> {
         let idx = self.pending.iter().position(|p| &p.mutation_id == id)?;
-        Some(self.pending.remove(idx))
+        let removed = self.pending.remove(idx);
+        self.bump_version();
+        Some(removed)
     }
 }
 

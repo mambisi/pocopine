@@ -43,14 +43,16 @@
 pub mod client;
 pub mod mutator;
 pub mod params;
+pub mod plugin;
 pub mod predicate;
 pub mod query;
 pub mod state;
 pub mod wire;
 
 // Re-exports of the curated public API.
-pub use client::{QueryClient, QueryHandle, QuerySubscription};
+pub use client::{QueryClient, QueryHandle, QuerySubscription, QueryView, UpdateToken};
 pub use mutator::{MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, RowChange};
+pub use plugin::{query_client_plugin, QueryClientPlugin};
 pub use predicate::{
     contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldRange,
 };

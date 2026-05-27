@@ -6057,6 +6057,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.117",
+ "tokio",
  "trybuild",
 ]
 
