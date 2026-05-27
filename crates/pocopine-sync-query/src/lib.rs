@@ -58,8 +58,8 @@ pub use driver::{
     DEFAULT_SYNC_ENDPOINT,
 };
 pub use mutator::{
-    AnyMutator, HydrateReplayOutcome, MutationOutcome, Mutator, MutatorEntry,
-    MutatorRemoteContext, MutatorRemoteFuture, RowChange,
+    AnyMutator, HydrateReplayOutcome, MutationOutcome, Mutator, MutatorEntry, MutatorRemoteContext,
+    MutatorRemoteFuture, RowChange,
 };
 pub use plugin::{query_client_plugin, QueryClientPlugin};
 pub use predicate::{
