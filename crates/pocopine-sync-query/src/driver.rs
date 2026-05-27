@@ -84,8 +84,17 @@ pub struct QueryClientConfig {
     /// `true` for offline-only flows or tests that don't want SSE
     /// traffic.
     pub disable_live: bool,
-    /// Send cookies / credentials with `/open` + `/pull` + `/push`.
-    /// Defaults to `true`.
+    /// Send cookies / credentials with credentialed live-channel
+    /// requests. Defaults to `true`.
+    ///
+    /// **Scope:** today this flag only controls the wasm
+    /// `LiveClient.with_credentials(...)` call. The HTTP path
+    /// (`/open` / `/pull` / `/push`) goes through
+    /// `pocopine_core::fetch::call`, which doesn't expose a
+    /// per-call credentials toggle — cross-origin credentialing
+    /// for those calls is configured globally via fetch
+    /// middleware (per RFC 078). A future RFC may unify the two,
+    /// at which point this flag would govern both.
     pub with_credentials: bool,
 }
 
@@ -204,6 +213,20 @@ pub(crate) struct SubscriptionDriver<Row: 'static> {
     /// `disable_live = false` as "no live wakeup available; rely
     /// on polling".
     disable_live: bool,
+    /// Mirrors `QueryClientConfig::with_credentials` — passed to the
+    /// wasm `LiveClient.with_credentials(...)` so cookie- or
+    /// session-backed live channels actually carry credentials.
+    ///
+    /// **Note on HTTP `/open` / `/pull` / `/push`:** the
+    /// `pocopine_core::fetch::call` path doesn't expose a
+    /// per-call credentials toggle; cross-origin credentialing
+    /// for those calls is configured globally via fetch
+    /// middleware. This flag therefore only affects the live
+    /// channel today. The doc on
+    /// [`QueryClientConfig::with_credentials`] records the same
+    /// limitation.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    with_credentials: bool,
 }
 
 impl<Row> SubscriptionDriver<Row>
@@ -224,6 +247,7 @@ where
             endpoint: config.endpoint.clone(),
             poll_interval: config.poll_interval,
             disable_live: config.disable_live,
+            with_credentials: config.with_credentials,
         }
     }
 
@@ -320,10 +344,16 @@ where
     }
 
     /// Open the live-wakeup receiver. On wasm this calls into
-    /// `pocopine-live::LiveClient` to subscribe to the
-    /// per-collection topic and pipes events through an
-    /// unbounded mpsc into the driver's select!. On host (or with
-    /// `disable_live = true`) returns a stub that never fires.
+    /// `pocopine-live::LiveClient` to subscribe to the per-stream
+    /// **query-tag** topic (`sync_stream_tag(stream)`) — the same
+    /// topic `SyncServer::invalidate_stream` publishes to and the
+    /// CRUD client's `LiveRefresh::scoped().query_tag(...)`
+    /// listener consumes. Earlier drafts subscribed to the
+    /// collection-name topic; that mismatched the server's publish
+    /// path and silently dropped every live invalidation, leaving
+    /// query views to refresh only on the poll fallback. On host
+    /// (or with `disable_live = true`) returns a stub that never
+    /// fires.
     fn open_live_wakeup(&self) -> LiveWakeup {
         if self.disable_live {
             tracing::debug!(
@@ -337,16 +367,9 @@ where
             let Some(sub) = self.subscription.upgrade() else {
                 return LiveWakeup::disabled();
             };
-            // We need a stable collection name to subscribe to;
-            // pocopine-sync's `local_stream_key(stream, params)`
-            // gives us the per-`(stream, params)` topic identity,
-            // but the live channel today only knows the
-            // collection (stream name). Use the stream as the
-            // collection topic per RFC 087 §6 — server filters by
-            // collection, client filters by params.
             let stream_name = sub.query().stream().as_str().to_string();
             let captured_params = sub.query().params().clone();
-            LiveWakeup::open_on_collection(stream_name, captured_params)
+            LiveWakeup::open_on_stream(stream_name, captured_params, self.with_credentials)
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -471,17 +494,24 @@ where
                 }
                 ReplayOutcome::Rejected => {
                     // Server explicitly rejected (4xx, app error).
-                    // Roll back the pending overlay. The wire
-                    // contract says retries of a rejected
+                    // Roll back the pending overlay ACROSS EVERY
+                    // subscription on the stream — the original
+                    // optimistic apply fanned out to every view
+                    // whose predicate matched at apply_local time,
+                    // and the replay queue is also shared across
+                    // every driver on the stream (any driver may
+                    // dequeue this entry). Cleaning only the
+                    // driver-local subscription leaks stale
+                    // pending rows into every other view that
+                    // received the same optimistic upsert. The
+                    // wire contract says retries of a rejected
                     // mutation must NOT change the outcome — so
                     // dropping the queue entry is correct.
-                    if let Some(sub) = self.subscription.upgrade() {
-                        QueryClient::dequeue_pending_for_subscription::<Row>(
-                            &client_inner,
-                            &sub,
-                            &entry.mutation_id,
-                        );
-                    }
+                    QueryClient::dequeue_pending_for_stream::<Row>(
+                        &client_inner,
+                        &entry.stream,
+                        &entry.mutation_id,
+                    );
                 }
             }
         }
@@ -984,16 +1014,30 @@ impl LiveWakeup {
         }
     }
 
-    /// Open a live subscription against the per-collection topic.
-    /// wasm-only — host falls back to `disabled()` in the caller.
+    /// Open a live subscription against the per-stream query-tag
+    /// topic — same topic `pocopine_sync::SyncServer::invalidate_stream`
+    /// publishes to. wasm-only; host falls back to `disabled()` in
+    /// the caller.
+    ///
+    /// On open failure we drop the receiver and return
+    /// `Self { receiver: None, ... }`. That makes
+    /// [`Self::is_disabled`] true and [`Self::next_matching`]
+    /// block forever, so the driver's `select!` resolves cleanly
+    /// on the poll timer instead of busy-looping on a closed
+    /// receiver (which would treat every immediate-`Closed`
+    /// resolution as a poll trigger and hammer `/pull` without
+    /// honoring the configured poll interval).
     #[cfg(target_arch = "wasm32")]
-    fn open_on_collection(
-        collection: String,
+    fn open_on_stream(
+        stream_name: String,
         captured_params: pocopine_sync::StreamParams,
+        with_credentials: bool,
     ) -> Self {
         let (tx, rx) = futures::channel::mpsc::unbounded::<LiveWakeupEvent>();
+        let live_tag = pocopine_sync::sync_stream_tag(stream_name.as_str());
         let connect_result = pocopine_live::LiveClient::new()
-            .collection(collection.clone())
+            .query_tag(live_tag.clone())
+            .with_credentials(with_credentials)
             .on_event({
                 let tx = tx.clone();
                 move |event| {
@@ -1002,22 +1046,33 @@ impl LiveWakeup {
                 }
             })
             .open();
-        let _subscription = match connect_result {
-            Ok(sub) => Some(sub),
+        match connect_result {
+            Ok(subscription) => Self {
+                receiver: Some(rx),
+                captured_params,
+                _subscription: Some(subscription),
+            },
             Err(err) => {
                 tracing::warn!(
                     target: "pocopine.log",
-                    collection = collection.as_str(),
+                    stream = stream_name.as_str(),
+                    live_tag = live_tag.as_str(),
                     error = ?err,
                     "sync-query driver: live wakeup open failed; relying on polling"
                 );
-                None
+                // CRITICAL: drop the receiver. Keeping `Some(rx)`
+                // with closed senders makes `next_matching`
+                // resolve `Closed` immediately; the driver's
+                // select treats that as a poll trigger, then
+                // loops back to `next_matching` which resolves
+                // `Closed` again — a tight loop that hammers
+                // `/pull` ignoring the configured poll interval.
+                Self {
+                    receiver: None,
+                    captured_params,
+                    _subscription: None,
+                }
             }
-        };
-        Self {
-            receiver: Some(rx),
-            captured_params,
-            _subscription,
         }
     }
 }
