@@ -58,9 +58,13 @@ fn app(app: App) -> App {
 ```
 
 Declare a queryable resource by annotating the row struct directly.
-Each queryable field opts in with `#[query_param]` (default `eq`) or
-`#[query_param(any_of|range|contains)]`. The macro auto-detects
-`Option<T>` and emits `OptionalEq` rather than `RequiredEq`.
+Every `#[query_param]` field automatically gets `.eq()` and
+`.any_of()` at the call site (both apply to any T). `.range()` and
+`.contains()` are auto-emitted via a type-name heuristic — numeric
+primitives, `String`, and common `DateTime`-y types get range;
+`String` / `str` / `Cow` get contains. Custom newtypes the
+heuristic misses can opt in explicitly. The macro auto-detects
+`Option<T>` and treats those fields as nullable.
 
 ```rust,ignore
 use pocopine_sync_query::query_resource;
@@ -71,11 +75,18 @@ use pocopine_sync_query::query_resource;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
-    #[query_param]            pub workspace_id: String,
-    #[query_param]            pub assignee_id: Option<UserId>,
-    #[query_param(any_of)]    pub status: Status,
-    #[query_param(contains)]  pub title: String,
-    #[query_param(range)]     pub created_at: DateTime,
+    // `required` makes this a tenant gate: predicate fails when the
+    // query has no workspace_id filter (cross-tenant safety).
+    #[query_param(required)]  pub workspace_id: String,
+    // Bare #[query_param] = optional filter. Heuristic adds range
+    // and/or contains based on the field type.
+    #[query_param]            pub assignee_id: Option<UserId>,  // eq only
+    #[query_param]            pub status: Status,               // eq + any_of
+    #[query_param]            pub title: String,                // eq + any_of + range + contains
+    #[query_param]            pub created_at: DateTime,         // eq + any_of + range
+    // Heuristic missed: WorkspaceId(String) newtype needs explicit
+    // `(contains)` to enable substring search on it.
+    // #[query_param(contains)] pub slug: Slug,
 }
 ```
 
