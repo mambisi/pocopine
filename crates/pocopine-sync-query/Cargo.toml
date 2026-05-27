@@ -1,0 +1,31 @@
+[package]
+name = "pocopine-sync-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Query-centric local-first data layer for Pocopine sync. Parallel to `pocopine-sync-crud`; recommended for filtered multi-tenant apps."
+
+[dependencies]
+pocopine-core = { workspace = true }
+pocopine-sync = { workspace = true }
+serde = { workspace = true }
+# Macro-emitted code (future PR) references `pocopine_sync_query::__private::serde_json`,
+# matching the pattern from pocopine-sync-crud. Declared unconditionally so wasm
+# consumers don't need their own transitive serde_json dep.
+serde_json = { workspace = true }
+
+[dev-dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+async-trait = "0.1"
+pocopine-auth = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+http = { workspace = true }
+http-body-util = "0.1"
+pocopine-server = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
