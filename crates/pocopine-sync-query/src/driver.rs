@@ -571,10 +571,18 @@ where
         }
     }
 
-    /// Apply a `/pull` response: route each row into the
-    /// canonical state of every matching subscription on the
-    /// stream. Snapshot mode replaces the canonical set; delta
-    /// mode applies the changes.
+    /// Apply a `/pull` response.
+    ///
+    /// `Snapshot` mode replaces THIS subscription's canonical set:
+    /// only the originating subscription's rows are wiped before
+    /// the routing engine re-upserts the snapshot's rows. Other
+    /// subscriptions on the same stream keep their independent
+    /// canonical state — they may be ahead or behind this
+    /// subscription's cursor because each driver issues its own
+    /// `/pull`.
+    ///
+    /// `Incremental` mode just routes the deltas through
+    /// `route_canonical_pull`; nothing is wiped first.
     fn apply_pull(&self, response: SyncPullResponse<Value>) {
         let Some(sub) = self.subscription.upgrade() else {
             return;
@@ -589,14 +597,22 @@ where
         // Decode failures are warned + skipped per RFC 086.
         let changes = decode_pull_changes::<Row>(&response);
 
-        match response.mode {
-            SyncPullMode::Snapshot => {
-                // For a snapshot, the canonical set is REPLACED.
-                // Wipe canonical_rows on every matching
-                // subscription, then upsert the new rows.
-                QueryClient::clear_canonical_on_stream::<Row>(&client_inner, &stream);
+        if matches!(response.mode, SyncPullMode::Snapshot) {
+            // Wipe only THIS subscription's canonical set; the
+            // routing engine's predicate evaluation below
+            // re-inserts the matching rows. Other subscriptions
+            // on the same stream are untouched — their cursors
+            // and snapshots are independent.
+            let keys: Vec<pocopine_sync::RowKey> = {
+                let state = sub.state().borrow();
+                state.canonical_rows().map(|r| r.key.clone()).collect()
+            };
+            if !keys.is_empty() {
+                let mut state = sub.state().borrow_mut();
+                for key in keys {
+                    state.remove_canonical(&key);
+                }
             }
-            SyncPullMode::Incremental => {}
         }
 
         QueryClient::route_canonical_pull::<Row>(&client_inner, &stream, &changes);

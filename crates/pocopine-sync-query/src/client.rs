@@ -936,14 +936,18 @@ impl QueryClient {
     }
 
     /// Wipe canonical rows on every subscription on `stream` whose
-    /// `Row` type matches. Driver-only — invoked from the
-    /// `SyncPullMode::Snapshot` path so the next `route_canonical_pull`
-    /// builds the canonical set from scratch instead of accumulating
-    /// stale rows alongside the snapshot's fresh ones.
+    /// `Row` type matches. Retained for future stream-wide reset
+    /// scenarios (e.g., admin-initiated schema rollover across
+    /// every subscription on a stream). The driver's per-pull
+    /// snapshot path uses a per-subscription wipe inside
+    /// `apply_pull` instead — different subscriptions are
+    /// independent compartments and a stream-wide wipe would
+    /// clobber a subscription whose /pull hasn't run yet.
     ///
     /// Notifies listeners only when the canonical set was actually
     /// non-empty — avoids gratuitous re-renders for a snapshot pull
     /// that lands on a fresh subscription.
+    #[allow(dead_code)]
     pub(crate) fn clear_canonical_on_stream<Row>(
         inner: &Rc<QueryClientInner>,
         stream: &SyncStreamName,
