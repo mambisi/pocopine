@@ -60,6 +60,11 @@ pub use predicate::{
 pub use query::{MatchFn, Order, OrderBy, Query, QueryBuilder, QueryKey};
 pub use state::QueryState;
 
+// The macro lives in its own crate (proc-macros must), but downstream
+// code follows the same one-stop-shop import path as
+// `pocopine-sync-crud`: `use pocopine_sync_query::query_resource;`.
+pub use pocopine_sync_query_macros::query_resource;
+
 // Re-export wire-level types from pocopine-sync that the macro emissions
 // and runtime touch directly. Users mostly don't see these.
 pub use pocopine_sync::{local_stream_key, SyncCursor, SyncStreamName, SyncStreamSubscription};

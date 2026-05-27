@@ -66,6 +66,13 @@ pub struct PendingOverlay<Row> {
     /// Rendered optimistic row, if the mutation produces one (Upsert);
     /// `None` for Delete-shaped mutations.
     pub optimistic_row: Option<SyncRow<Row>>,
+    /// Snapshot of the canonical row a Delete overlay removed
+    /// optimistically — populated only on Delete branches that
+    /// actually evicted a canonical row. The rollback path
+    /// re-upserts this row into canonical state if the server
+    /// rejects the delete; otherwise the canonical reconcile leaves
+    /// it as-is (the server's confirmation supersedes the snapshot).
+    pub deleted_row: Option<SyncRow<Row>>,
     /// Set when a server response surfaces a conflict for this
     /// mutation; the overlay stays visible with the conflict flag
     /// until the user resolves via the UI.
@@ -162,14 +169,27 @@ impl<Row: Clone> QueryState<Row> {
         self.bump_version();
     }
 
-    /// Internal helper for the routing engine. Removes a pending overlay
-    /// by mutation id (called when the server accepts/rejects the
-    /// mutation).
-    pub(crate) fn remove_pending(&mut self, id: &MutationId) -> Option<PendingOverlay<Row>> {
-        let idx = self.pending.iter().position(|p| &p.mutation_id == id)?;
-        let removed = self.pending.remove(idx);
-        self.bump_version();
-        Some(removed)
+    /// Internal helper for the routing engine. Removes EVERY pending
+    /// overlay attached to `id` (called when the server accepts or
+    /// rejects the mutation). A single mutation can produce multiple
+    /// `RowChange`s — each gets its own overlay with the same
+    /// `mutation_id`, so the dequeue path must clear them all.
+    /// Returns the removed overlays (caller may inspect them to
+    /// restore optimistic-delete state on rollback).
+    pub(crate) fn remove_pending(&mut self, id: &MutationId) -> Vec<PendingOverlay<Row>> {
+        let mut removed = Vec::new();
+        let mut i = 0;
+        while i < self.pending.len() {
+            if &self.pending[i].mutation_id == id {
+                removed.push(self.pending.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        if !removed.is_empty() {
+            self.bump_version();
+        }
+        removed
     }
 }
 

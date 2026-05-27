@@ -9,6 +9,7 @@ description = "Query-centric local-first data layer for Pocopine sync. Parallel 
 [dependencies]
 pocopine-core = { workspace = true }
 pocopine-sync = { workspace = true }
+pocopine-sync-query-macros = { workspace = true }
 serde = { workspace = true }
 # Macro-emitted code (future PR) references `pocopine_sync_query::__private::serde_json`,
 # matching the pattern from pocopine-sync-crud. Declared unconditionally so wasm
