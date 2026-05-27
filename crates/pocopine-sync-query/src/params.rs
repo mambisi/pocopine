@@ -230,6 +230,53 @@ impl<T> Range<T> {
     }
 }
 
+// Conversions from the standard library's range syntax so callers
+// can write `.range(field::priority, 2..5)` instead of
+// `params::Range::half_open(2, 5)`. The builder accepts
+// `impl Into<params::Range<M::Bound>>`, so every From impl below is
+// directly usable at the call site.
+//
+// `core::ops::RangeFull` (`..`) is intentionally NOT supported —
+// a fully-unbounded range matches every row, which is the
+// deserialize invariant the framework rejects. Callers wanting
+// "no constraint" should omit the param entirely.
+
+/// `a..b` — half-open `[a, b)`.
+impl<T> From<core::ops::Range<T>> for Range<T> {
+    fn from(r: core::ops::Range<T>) -> Self {
+        Self::half_open(r.start, r.end)
+    }
+}
+
+/// `a..=b` — closed `[a, b]`.
+impl<T> From<core::ops::RangeInclusive<T>> for Range<T> {
+    fn from(r: core::ops::RangeInclusive<T>) -> Self {
+        let (start, end) = r.into_inner();
+        Self::closed(start, end)
+    }
+}
+
+/// `a..` — lower-bounded `[a, ∞)`.
+impl<T> From<core::ops::RangeFrom<T>> for Range<T> {
+    fn from(r: core::ops::RangeFrom<T>) -> Self {
+        Self::at_least(r.start)
+    }
+}
+
+/// `..b` — strict upper-bounded `(-∞, b)`.
+impl<T> From<core::ops::RangeTo<T>> for Range<T> {
+    fn from(r: core::ops::RangeTo<T>) -> Self {
+        Self::less_than(r.end)
+    }
+}
+
+/// `..=b` — inclusive upper-bounded `(-∞, b]`.
+impl<T> From<core::ops::RangeToInclusive<T>> for Range<T> {
+    fn from(r: core::ops::RangeToInclusive<T>) -> Self {
+        Self::at_most(r.end)
+    }
+}
+
 /// Substring-match predicate: row matches when the declared text
 /// field contains `needle`. The match is case-insensitive by
 /// default; flip `case_sensitive` for exact-case matching. Empty
@@ -338,6 +385,46 @@ mod tests {
         let at_least = Range::at_least(1);
         assert_eq!(at_least.from, Some(1));
         assert_eq!(at_least.to, None);
+    }
+
+    #[test]
+    fn range_from_std_ops_range_is_half_open() {
+        let r: Range<i32> = (1..10).into();
+        assert_eq!(r.from, Some(1));
+        assert_eq!(r.to, Some(10));
+        assert_eq!(r.inclusive, (true, false));
+    }
+
+    #[test]
+    fn range_from_std_ops_range_inclusive_is_closed() {
+        let r: Range<i32> = (1..=10).into();
+        assert_eq!(r.from, Some(1));
+        assert_eq!(r.to, Some(10));
+        assert_eq!(r.inclusive, (true, true));
+    }
+
+    #[test]
+    fn range_from_std_ops_range_from_is_at_least() {
+        let r: Range<i32> = (5..).into();
+        assert_eq!(r.from, Some(5));
+        assert_eq!(r.to, None);
+        assert_eq!(r.inclusive, (true, false));
+    }
+
+    #[test]
+    fn range_from_std_ops_range_to_is_less_than() {
+        let r: Range<i32> = (..5).into();
+        assert_eq!(r.from, None);
+        assert_eq!(r.to, Some(5));
+        assert_eq!(r.inclusive, (false, false));
+    }
+
+    #[test]
+    fn range_from_std_ops_range_to_inclusive_is_at_most() {
+        let r: Range<i32> = (..=5).into();
+        assert_eq!(r.from, None);
+        assert_eq!(r.to, Some(5));
+        assert_eq!(r.inclusive, (false, true));
     }
 
     #[test]
