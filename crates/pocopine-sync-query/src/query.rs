@@ -49,7 +49,7 @@ pub type MatchFn<Row> = fn(query: &Query<Row>, row: &Row) -> bool;
 impl<Row> Query<Row> {
     /// Build a query from its parts. Most callers go through the macro-
     /// generated `Resource::query()` builder, which constructs the params
-    /// map via the typed DSL (`.eq` / `.in_set` / `.range` / `.contains`)
+    /// map via the typed DSL (`.eq` / `.any_of` / `.range` / `.contains`)
     /// and injects the macro-generated predicate evaluator via
     /// [`QueryBuilder::with_matches`].
     pub fn builder(stream: SyncStreamName) -> QueryBuilder<Row> {
@@ -189,7 +189,7 @@ pub enum Order {
 
 /// Builder produced by [`Query::builder`] and the macro-generated
 /// `Resource::query()` helper. Provides the trait-gated query DSL
-/// (`.eq` / `.in_set` / `.range` / `.contains` / `.contains_exact`)
+/// (`.eq` / `.any_of` / `.range` / `.contains` / `.contains_exact`)
 /// plus `.order_by` and `.limit` setters; finalize with `.build()`
 /// or subscribe directly with `.observe(&client)`.
 ///
@@ -293,17 +293,20 @@ impl<Row> QueryBuilder<Row> {
         self.raw_param(<M as crate::FieldEq<T>>::NAME, encoded)
     }
 
-    /// Set-membership predicate. Adds `(field, InSet<T>)` to the
-    /// param map iff `field` implements [`crate::FieldInSet<T>`].
-    /// Returns an error if `values` is empty (an empty set matches
-    /// no rows; the caller likely meant to omit the param entirely).
+    /// Set-membership predicate. Matches rows whose `field` is any
+    /// of `values`. Adds `(field, InSet<T>)` to the param map iff
+    /// `field` implements [`crate::FieldInSet<T>`]. Returns an
+    /// error if `values` is empty (an empty set matches no rows;
+    /// the caller likely meant to omit the param entirely).
+    ///
+    /// Reads naturally on the call site as "status is any of these":
     ///
     /// ```ignore
     /// Issues::query()
-    ///     .in_set(field::status, [Status::Open, Status::InProgress])?
+    ///     .any_of(field::status, [Status::Open, Status::InProgress])?
     ///     .build();
     /// ```
-    pub fn in_set<M, T, I>(self, _field: M, values: I) -> pocopine_sync::SyncResult<Self>
+    pub fn any_of<M, T, I>(self, _field: M, values: I) -> pocopine_sync::SyncResult<Self>
     where
         M: crate::FieldInSet<T>,
         T: serde::Serialize,

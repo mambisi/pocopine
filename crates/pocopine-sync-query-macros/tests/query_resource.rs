@@ -64,7 +64,7 @@ fn builder_constructs_typed_query() {
 
     let q = Issues::query()
         .eq(field::workspace_id, "W1".to_string())
-        .in_set(field::status, [Status::Open, Status::InProgress])
+        .any_of(field::status, [Status::Open, Status::InProgress])
         .unwrap()
         .contains(field::title, "auth")
         .unwrap()
@@ -114,12 +114,12 @@ fn matches_optional_eq_some_value() {
 }
 
 #[test]
-fn matches_in_set() {
+fn matches_any_of() {
     use issues::field;
 
     let q = Issues::query()
         .eq(field::workspace_id, "W1".to_string())
-        .in_set(field::status, [Status::Open, Status::InProgress])
+        .any_of(field::status, [Status::Open, Status::InProgress])
         .unwrap()
         .build();
     assert!(issues::matches(&q, &sample_issue()));
