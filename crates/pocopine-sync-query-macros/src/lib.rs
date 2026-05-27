@@ -329,58 +329,40 @@ fn parse_query_param_extras(attr: &Attribute) -> syn::Result<Vec<CapabilityKeywo
 }
 
 /// True when the inner type's last path segment is a known orderable
-/// type. Used to auto-enable `FieldRange` on a `#[query_param]` field.
+/// stdlib primitive. Used to auto-enable `FieldRange` on a bare
+/// `#[query_param]` field.
+///
+/// The heuristic is intentionally narrow: only types whose last path
+/// segment cannot collide with a user-defined ident. Earlier
+/// versions included `DateTime`, `Date`, `Time`, `Instant`,
+/// `Duration`, `Timestamp`, `Zoned` etc. — but `last_segment_ident`
+/// matches by the trailing ident alone, so a user-defined
+/// `struct Date(u32)` (no `PartialOrd`) hits the heuristic, the
+/// macro auto-emits `FieldRange`, and the generated matches body
+/// fails to compile with an error pointing into macro output.
+/// Authors who want range on DateTime-y types opt in explicitly:
+/// `#[query_param(range)]`.
 fn is_ordered_type(ty: &Type) -> bool {
     const ORDERED: &[&str] = &[
-        // Integers
-        "i8",
-        "i16",
-        "i32",
-        "i64",
-        "i128",
-        "isize",
-        "u8",
-        "u16",
-        "u32",
-        "u64",
-        "u128",
-        "usize",
+        // Integers — stdlib idents; safe to auto-enable.
+        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
         // Floats (NaN aside; `PartialOrd` is enough for the macro).
-        "f32",
-        "f64",
-        // Strings (lexicographic).
-        "String",
-        "str",
-        // Common third-party DateTime / Date / Time types. The
-        // heuristic matches on the LAST path segment, so qualified
-        // paths like `chrono::DateTime<Utc>` or `time::OffsetDateTime`
-        // hit the same `DateTime` / `OffsetDateTime` ident.
-        "DateTime",
-        "OffsetDateTime",
-        "PrimitiveDateTime",
-        "NaiveDateTime",
-        "NaiveDate",
-        "NaiveTime",
-        "Date",
-        "Time",
-        "SystemTime",
-        "Instant",
-        "Duration",
-        "Timestamp",
-        "Zoned",
+        "f32", "f64",
+        // Strings — stdlib idents; lexicographic ordering is what
+        // most users expect on String range filters.
+        "String", "str",
     ];
     last_segment_ident(ty)
         .map(|i| ORDERED.contains(&i.to_string().as_str()))
         .unwrap_or(false)
 }
 
-/// True when the inner type's last path segment is a known string-y
-/// type. Used to auto-enable `FieldContains` on a `#[query_param]`
-/// field. Newtype wrappers around `String` (e.g. `WorkspaceId(String)`)
-/// don't match — callers opt in with `#[query_param(contains)]` for
-/// those.
+/// True when the inner type's last path segment is a known stdlib
+/// string-y type. Same narrowing rationale as `is_ordered_type` —
+/// `Cow` is excluded (a common newtype name) so users opt in
+/// explicitly on non-`String` types with `#[query_param(contains)]`.
 fn is_string_type(ty: &Type) -> bool {
-    const STRINGS: &[&str] = &["String", "str", "Cow"];
+    const STRINGS: &[&str] = &["String", "str"];
     last_segment_ident(ty)
         .map(|i| STRINGS.contains(&i.to_string().as_str()))
         .unwrap_or(false)
@@ -392,6 +374,22 @@ fn last_segment_ident(ty: &Type) -> Option<&Ident> {
     } else {
         None
     }
+}
+
+/// Wire param key for a field ident. Strips the `r#` raw-identifier
+/// prefix because serde's row serialization emits the bare name
+/// (e.g. a field `r#type: String` serializes as the JSON key
+/// `"type"`); we must look up params using the same string.
+fn ident_wire_key(name: &Ident) -> String {
+    raw_ident_body(name)
+}
+
+/// Returns the ident's body sans any leading `r#`. Used for both the
+/// wire key (matches serde's row serialization) and the marker
+/// type-name (raw `r#` chars are illegal in struct identifiers).
+fn raw_ident_body(name: &Ident) -> String {
+    let s = name.to_string();
+    s.strip_prefix("r#").map(str::to_string).unwrap_or(s)
 }
 
 /// If `ty` is `Option<T>`, return `(T, true)`. Otherwise `(ty, false)`.
@@ -454,6 +452,21 @@ fn validate_resource_name(name: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
+/// Convert the resource's `name = "..."` literal into a Rust ident
+/// used as the generated module name. The wire stream name and the
+/// module name share one string by design — the resource module
+/// (`pub mod issues`) holds the field markers and predicate
+/// evaluator that map to wire keys for `name = "issues"`.
+///
+/// **Collision note.** The macro emits `pub mod <name>` in the same
+/// scope as the decorated struct. If the caller already has a
+/// module / type / const with that name in scope, the duplicate
+/// produces a Rust `defined multiple times` error. Pick a `name`
+/// that doesn't collide with existing items, or move the
+/// `#[query_resource]` declaration into a dedicated submodule.
+/// (We can't detect the collision at expansion time — the macro
+/// doesn't see the caller's other items — so this is documented
+/// rather than enforced.)
 fn module_ident_from_name(name: &LitStr) -> syn::Result<Ident> {
     syn::parse_str::<Ident>(&name.value()).map_err(|_| {
         syn::Error::new(
@@ -487,6 +500,25 @@ fn expand_query_resource(
     args: QueryResourceArgs,
     mut item: ItemStruct,
 ) -> syn::Result<TokenStream2> {
+    // Reject generic row structs. Propagating `item.generics` +
+    // `item.generics.where_clause` through every emitted item
+    // (`impl Row { … }`, `pub type Row = super::Row<…>`, `fn matches`)
+    // is doable but adds complexity the current users don't need;
+    // we'd rather fail loudly than silently emit broken code that
+    // looks like `impl Issue { … }` for a `struct Issue<'a, T>`.
+    if !item.generics.params.is_empty() {
+        return Err(syn::Error::new(
+            item.generics.params.span(),
+            "#[query_resource] does not support generic row structs (type or lifetime parameters). Open an issue if you need this — the macro needs to propagate generics through the generated `impl`, type alias, and `matches` fn.",
+        ));
+    }
+    if let Some(where_clause) = &item.generics.where_clause {
+        return Err(syn::Error::new(
+            where_clause.span(),
+            "#[query_resource] does not support row structs with `where` clauses (same limitation as type/lifetime parameters).",
+        ));
+    }
+
     let row_ident = item.ident.clone();
     let module_ident = module_ident_from_name(&args.name)?;
     let name_lit = args.name;
@@ -494,6 +526,24 @@ fn expand_query_resource(
 
     let params = extract_field_params(&item)?;
     strip_query_param_attrs(&mut item);
+
+    // Reject a #[query_resource] struct with no #[query_param]
+    // fields. Without any predicate the generated matches() body
+    // returns `true` unconditionally — every routed change on the
+    // stream lands in every subscription, including cross-tenant
+    // rows. Treat this as a programming error so the macro fails at
+    // compile time rather than silently shipping a stream-wide
+    // wildcard.
+    if params.is_empty() {
+        return Err(syn::Error::new(
+            row_ident.span(),
+            "#[query_resource] requires at least one `#[query_param]`-annotated field. \
+             A struct with no query params would generate a predicate that matches every row, \
+             routing every cross-tenant mutation into the subscription. \
+             Annotate your tenant-gate field with `#[query_param(required)]` (and other filter \
+             fields with `#[query_param]`).",
+        ));
+    }
 
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params);
@@ -569,9 +619,16 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
         .iter()
         .map(|param| {
             let name = &param.name;
-            let name_str = name.to_string();
+            // Wire key matches serde's serialization (which strips the
+            // `r#` raw-identifier prefix). Without this strip, a row
+            // field declared as `r#type: String` would have wire key
+            // `"r#type"` here but `"type"` in the serialized row body
+            // — params.get would never find the value.
+            let name_str = ident_wire_key(name);
+            // Marker ident still uses the raw form (no `r#` allowed in
+            // type names but unique per field).
             let marker_ident = Ident::new(
-                &format!("__Field_{}", name_str),
+                &format!("__Field_{}", raw_ident_body(name)),
                 proc_macro2::Span::call_site(),
             );
             let inner = &param.inner_ty;
@@ -642,11 +699,14 @@ fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
         .iter()
         .map(|param| {
             let name = &param.name;
-            let name_str = name.to_string();
+            // Same wire-key strip as `generate_field_markers` —
+            // matches the row's serde serialization, which strips
+            // the raw-identifier `r#` prefix.
+            let name_str = ident_wire_key(name);
             let inner = &param.inner_ty;
             let field_access: TokenStream2 = quote! { row.#name };
             let block_label = syn::Lifetime::new(
-                &format!("'__pp_check_{}", name),
+                &format!("'__pp_check_{}", raw_ident_body(name)),
                 proc_macro2::Span::call_site(),
             );
 

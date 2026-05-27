@@ -57,7 +57,16 @@ where
         // must reject it on the wire too — otherwise the doc-promise
         // "empty sets rejected at deserialization time" is a lie and
         // a wire payload `{"in": []}` would silently select no rows.
+        //
+        // `deny_unknown_fields` prevents an ambiguous wire payload
+        // — e.g. `{"in":[...], "from":..., "to":...}` — from
+        // succeeding as InSet AND as Range simultaneously. Combined
+        // with the same constraint on `Range` / `Contains`, this
+        // gives each comparator a disjoint wire shape so the
+        // matches() dispatch can't silently route to the wrong
+        // comparator.
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Raw<T> {
             #[serde(rename = "in")]
             values: Vec<T>,
@@ -139,7 +148,16 @@ where
         // (both `from` and `to` None) matches every row and is
         // always a mistake. The doc promise rejects it; on the wire,
         // it would silently disable the filter.
+        //
+        // `deny_unknown_fields` gives Range a disjoint wire shape
+        // vs InSet (`in`) and Contains (`contains`). Without this,
+        // a payload like `{"contains":"x", "from":"a"}` would
+        // succeed as `Range<String>{from:Some("a")}` AND silently
+        // drop the `contains` field — the matches() dispatch (which
+        // tries Range before Contains) would then route to range
+        // semantics on a value the author intended as a substring.
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Raw<T> {
             #[serde(default = "Option::default")]
             from: Option<T>,
@@ -299,7 +317,12 @@ impl<'de> Deserialize<'de> for Contains {
         // Re-run the constructor invariant: an empty needle matches
         // every row. The doc promise rejects it; on the wire it would
         // silently disable the filter.
+        //
+        // `deny_unknown_fields` keeps Contains' wire shape disjoint
+        // from Range / InSet so the matches() dispatch can't route
+        // an ambiguous payload to the wrong comparator.
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Raw {
             contains: String,
             #[serde(default)]
@@ -484,5 +507,34 @@ mod tests {
         let needle: Contains = serde_json::from_value(json).unwrap();
         assert_eq!(needle.contains, "alice");
         assert!(!needle.case_sensitive);
+    }
+
+    /// Regression: deny_unknown_fields keeps the comparators'
+    /// wire shapes disjoint. Without it, an ambiguous payload
+    /// (Range + Contains keys mixed) would decode as Range and
+    /// silently drop the `contains` field — the matches() dispatch
+    /// (which tries Range before Contains) would route to range
+    /// semantics on a value the author intended as substring.
+    #[test]
+    fn range_rejects_extra_keys() {
+        let json = serde_json::json!({"from": "a", "contains": "needle"});
+        let err = serde_json::from_value::<Range<String>>(json).unwrap_err();
+        // serde's unknown-field error message format may evolve;
+        // just check it's an error (not a successful parse).
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn contains_rejects_extra_keys() {
+        let json = serde_json::json!({"contains": "x", "from": "a"});
+        let err = serde_json::from_value::<Contains>(json).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn in_set_rejects_extra_keys() {
+        let json = serde_json::json!({"in": ["a"], "contains": "x"});
+        let err = serde_json::from_value::<InSet<String>>(json).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 }
