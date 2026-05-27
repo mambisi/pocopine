@@ -394,6 +394,80 @@ async fn config_validation_rejects_jwks_with_hmac_alg() {
 }
 
 #[tokio::test]
+async fn config_validation_rejects_hmac_source_with_asymmetric_alg() {
+    // Mirror of the JWT-confusion test from the other direction:
+    // an HMAC secret paired with an RS-family algorithm would never
+    // verify any real token (the decoding key is bytes, the alg
+    // expects a public key), but the failure should surface at
+    // verifier-construction time so misconfigurations are caught
+    // at deploy, not at first request.
+    let bad = JwtConfig {
+        keys: KeySource::Hmac {
+            secret: SecretBytes::new(SECRET.to_vec()),
+        },
+        issuer: Some("x".into()),
+        audience: Some(vec!["x".into()]),
+        algorithms: vec![Algorithm::Rs256],
+        leeway: Duration::from_secs(5),
+        sources: vec![TokenSource::Bearer],
+        revocation: None,
+        claim_map: ClaimMap::oidc(),
+        required_scopes: vec![],
+    };
+    match JwtVerifier::custom(bad) {
+        Ok(_) => panic!("validation should reject hmac source + asymmetric alg"),
+        Err(JwtAuthError::InvalidConfig { .. }) => {}
+        Err(other) => panic!("expected InvalidConfig, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn nbf_in_future_beyond_leeway_is_rejected() {
+    // Tokens with `nbf` (not-before) in the future must be rejected
+    // even when `exp` is fine — jsonwebtoken's `validate_nbf` is
+    // explicitly enabled by the verifier.
+    let mut claims = standard_claims();
+    claims["nbf"] = json!(now_secs() + 3600);
+    let token = issue_token(claims);
+    let verifier = JwtVerifier::custom(standard_config(vec![Algorithm::Hs256])).unwrap();
+    let err = verifier.verify_token(&token).await.unwrap_err();
+    assert!(
+        matches!(err, JwtAuthError::ClaimRejected { claim: "nbf", .. }),
+        "got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn nbf_in_future_within_leeway_is_accepted() {
+    // `nbf` slightly in the future but inside the configured leeway
+    // window must verify. Locks down the leeway behavior — a
+    // regression that drops `validation.leeway` would surface here.
+    let mut config = standard_config(vec![Algorithm::Hs256]);
+    config.leeway = Duration::from_secs(60);
+
+    let mut claims = standard_claims();
+    claims["nbf"] = json!(now_secs() + 5);
+    let token = issue_token(claims);
+    let verifier = JwtVerifier::custom(config).unwrap();
+    verifier.verify_token(&token).await.unwrap();
+}
+
+#[tokio::test]
+async fn exp_just_past_within_leeway_is_accepted() {
+    // `exp` a few seconds in the past but inside the leeway window
+    // must still verify. Pairs with `expired_token_is_rejected`
+    // (exp beyond leeway) to lock down both sides of the threshold.
+    let mut config = standard_config(vec![Algorithm::Hs256]);
+    config.leeway = Duration::from_secs(60);
+
+    let mut claims = standard_claims();
+    claims["exp"] = json!(now_secs() - 5);
+    let token = issue_token(claims);
+    let verifier = JwtVerifier::custom(config).unwrap();
+    verifier.verify_token(&token).await.unwrap();
+}
+
+#[tokio::test]
 async fn cookie_token_source_extracts_token_from_named_cookie() {
     let mut config = standard_config(vec![Algorithm::Hs256]);
     config.sources = vec![TokenSource::Cookie(std::borrow::Cow::Borrowed(

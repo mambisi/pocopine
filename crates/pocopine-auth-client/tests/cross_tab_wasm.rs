@@ -15,6 +15,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use js_sys::Promise;
+use pocopine_auth::{AuthUser, Principal};
 use pocopine_auth_client::{cross_tab, AuthSession};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
@@ -70,6 +71,66 @@ async fn outbound_post_triggers_inbound_listener_in_peer() {
         session.epoch() > initial_epoch,
         "framework listener should have called bump_epoch \
          (initial={initial_epoch}, now={})",
+        session.epoch()
+    );
+
+    origin.close();
+    cross_tab::__teardown_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn peer_sign_out_fences_in_flight_request_via_epoch() {
+    // Simulates "request dispatched under user X; peer tab signs
+    // out while it's in flight." The bearer middleware captures
+    // `session.epoch()` at dispatch and compares against `epoch()`
+    // on response — a mismatch is the fence that drops a stale
+    // response from a now-invalidated identity (RFC-078 §5.10.5).
+    //
+    // This test asserts both halves of the fence:
+    //   1. the epoch advances when a peer sign-out arrives, and
+    //   2. the local principal is cleared so the UI stops rendering
+    //      authenticated shells.
+    cross_tab::__teardown_for_test();
+    pocopine_auth_client::storage::__reset_storage_for_test();
+
+    // Start authenticated locally — the "in-flight request" is sent
+    // under this identity.
+    let session = AuthSession::new();
+    session.set_principal(Principal::from_user(AuthUser::new("u1")));
+    assert!(session.is_authenticated());
+    let epoch_before = session.epoch();
+
+    cross_tab::__install_for_test(session.clone());
+    next_task().await;
+
+    // Peer tab signs out. Token storage is empty (no backend
+    // installed), so the listener's `hydrate_from_storage()` sees
+    // no token and routes to `apply_cross_tab_token_state(false)`
+    // — the sign-out branch.
+    let origin =
+        BroadcastChannel::new("pocopine-auth").expect("BroadcastChannel must be available");
+    origin
+        .post_message(&JsValue::from_str("session_changed"))
+        .expect("post_message must succeed");
+
+    // Bounded retry — MessageEvent delivery is a task; settle until
+    // the listener has run (or we've waited enough turns to fail
+    // meaningfully).
+    for _ in 0..5 {
+        next_task().await;
+        if !session.is_authenticated() {
+            break;
+        }
+    }
+
+    assert!(
+        !session.is_authenticated(),
+        "peer sign-out must clear the local principal so authenticated UI tears down"
+    );
+    assert!(
+        session.epoch() > epoch_before,
+        "peer sign-out must bump the epoch (fence for in-flight requests): \
+         before={epoch_before}, now={}",
         session.epoch()
     );
 
