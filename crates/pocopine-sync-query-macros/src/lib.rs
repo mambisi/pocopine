@@ -10,9 +10,26 @@
 //! * Constants: `NAME`, `SCHEMA_VERSION`.
 //!
 //! Queryable fields are declared in-line on the struct with
-//! `#[query_param]` (default `eq`) or `#[query_param(any_of|range|contains)]`.
-//! The macro strips those attrs from the emitted struct so downstream
-//! derives (`Serialize`, `Deserialize`, …) see a clean shape.
+//! `#[query_param]`. Every annotated field automatically supports
+//! `.eq()` and `.any_of()` at the call site (both apply to any T).
+//! `FieldRange` is auto-emitted when the inner type's last path
+//! segment is a known orderable (numeric primitives, `String`,
+//! common `DateTime`-y types); `FieldContains` is auto-emitted when
+//! it's `String` / `str` / `Cow`. The type-name heuristic can be
+//! overridden with explicit keywords:
+//!
+//! * `#[query_param(required)]` — predicate fails if the query has
+//!   no value for this field. Use for tenant-gate fields
+//!   (`workspace_id`, `tenant_id`) to prevent cross-tenant leaks.
+//! * `#[query_param(range)]` — force `FieldRange` emission when the
+//!   heuristic missed it (newtypes around numerics / DateTimes).
+//! * `#[query_param(contains)]` — force `FieldContains` emission for
+//!   newtypes around `String`.
+//!
+//! Multiple keywords combine: `#[query_param(required, range)]`.
+//!
+//! The macro strips its own attrs from the emitted struct so
+//! downstream derives (`Serialize`, `Deserialize`, …) see a clean shape.
 //!
 //! **Attribute order matters.** `#[query_resource]` must come BEFORE
 //! `#[derive(...)]` so it processes the struct first and strips the
@@ -30,27 +47,39 @@ use syn::{
 
 const MAX_SYNC_TOKEN_LEN: usize = 1024;
 
-/// Inferred comparator kind for one entry in `params(...)`.
-#[derive(Clone, Debug)]
-enum ComparatorKind {
-    /// Bare `T` — required equality.
-    RequiredEq,
-    /// `Option<T>` — optional equality.
-    OptionalEq { inner: Type },
-    /// `params::InSet<T>` — membership in a non-empty set.
-    InSet { inner: Type },
-    /// `params::Range<T>` — bounded range.
-    Range { inner: Type },
-    /// `params::Contains` — substring match against a text field.
-    Contains,
+/// Which comparator traits to emit for a `#[query_param]`-annotated
+/// field. `FieldEq` + `FieldInSet` are always emitted (they're
+/// universally applicable to any T); `range` and `contains` are gated
+/// by the inner-type heuristic OR an explicit opt-in
+/// (`#[query_param(range)]` / `#[query_param(contains)]`).
+#[derive(Clone, Debug, Default)]
+struct FieldCapabilities {
+    /// True when the field type is `Option<T>` — gates the
+    /// "param absent = no constraint" and "param null = matches None"
+    /// branches in the matches body.
+    optional: bool,
+    /// True when the user opted in with `#[query_param(required)]`.
+    /// A required field's predicate FAILS when the query has no
+    /// param for it — used for tenant-gate fields (`workspace_id`,
+    /// `tenant_id`, …) to prevent accidental cross-tenant leaks from
+    /// queries built without the required filter. Default is false
+    /// (queryable but not required).
+    required: bool,
+    /// Emit `FieldRange` + a Range branch in matches().
+    range: bool,
+    /// Emit `FieldContains` + a Contains branch in matches().
+    contains: bool,
 }
 
-/// One field declared in `#[query_resource(params(...))]`.
+/// One field declared with `#[query_param]`. `inner_ty` is `T`
+/// (unwrapped from any outer `Option`). The macro uses `inner_ty` for
+/// every comparator's `Value` / `Item` / `Bound` projection so a
+/// `pub assignee_id: Option<String>` field gets `FieldEq<Value = String>`.
 #[derive(Clone, Debug)]
 struct ParamDef {
     name: Ident,
-    ty: Type,
-    kind: ComparatorKind,
+    inner_ty: Type,
+    caps: FieldCapabilities,
 }
 
 #[derive(Debug)]
@@ -139,20 +168,27 @@ impl Parse for QueryResourceArgs {
     }
 }
 
-/// Comparator keyword as written in `#[query_param(...)]`. Bare
-/// `#[query_param]` defaults to `Eq`.
+/// Capability keyword in `#[query_param(...)]`. `eq` and `any_of` are
+/// always on for an annotated field; the explicit keywords are for:
+///
+/// * `required` — make the field a tenant gate (predicate fails if
+///   the query lacks this param).
+/// * `range` — force `FieldRange` emission when the type-name
+///   heuristic missed it (e.g. a `WorkspaceId(u32)` newtype).
+/// * `contains` — force `FieldContains` emission for the same reason
+///   (e.g. a `Slug(String)` newtype).
 #[derive(Clone, Copy, Debug)]
-enum ComparatorKeyword {
-    Eq,
-    AnyOf,
+enum CapabilityKeyword {
+    Required,
     Range,
     Contains,
 }
 
 /// Walk a struct's named fields, collect a `ParamDef` for every field
-/// that carries `#[query_param(...)]`. The inner T for `InSet` / `Range`
-/// / `Contains` is read from the field's declared type — no
-/// `params::InSet<Status>` duplication.
+/// that carries `#[query_param(...)]`. `range` / `contains` are
+/// auto-detected from the inner type's name (numeric / DateTime-y →
+/// range; `String` / `str` / `Cow` → contains). Anything the heuristic
+/// misses can be opted in explicitly.
 fn extract_field_params(item: &ItemStruct) -> syn::Result<Vec<ParamDef>> {
     let fields = match &item.fields {
         Fields::Named(named) => named,
@@ -188,83 +224,173 @@ fn extract_field_params(item: &ItemStruct) -> syn::Result<Vec<ParamDef>> {
             continue;
         };
 
-        let keyword = parse_query_param_keyword(attr)?;
+        let extras = parse_query_param_extras(attr)?;
         let (inner_ty, is_option) = unwrap_option_type(&field.ty);
 
-        let kind = match keyword {
-            ComparatorKeyword::Eq => {
-                if is_option {
-                    ComparatorKind::OptionalEq { inner: inner_ty }
-                } else {
-                    ComparatorKind::RequiredEq
-                }
-            }
-            ComparatorKeyword::AnyOf => {
-                if is_option {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        "`#[query_param(any_of)]` on `Option<T>` is not supported — declare the field as `T` (and add a `None` variant to the set if needed)",
-                    ));
-                }
-                ComparatorKind::InSet { inner: inner_ty }
-            }
-            ComparatorKeyword::Range => {
-                if is_option {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        "`#[query_param(range)]` on `Option<T>` is not supported — declare the field as `T`",
-                    ));
-                }
-                ComparatorKind::Range { inner: inner_ty }
-            }
-            ComparatorKeyword::Contains => {
-                if is_option {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        "`#[query_param(contains)]` on `Option<T>` is not supported — declare the field as `T`",
-                    ));
-                }
-                ComparatorKind::Contains
-            }
+        let auto_range = !is_option && is_ordered_type(&inner_ty);
+        let auto_contains = !is_option && is_string_type(&inner_ty);
+
+        let mut caps = FieldCapabilities {
+            optional: is_option,
+            required: false,
+            range: auto_range,
+            contains: auto_contains,
         };
+
+        for extra in extras {
+            match extra {
+                CapabilityKeyword::Required => {
+                    if is_option {
+                        return Err(syn::Error::new(
+                            attr.span(),
+                            "`(required)` on `Option<T>` is contradictory — an Option field is intrinsically nullable; drop the keyword or change the type to `T`",
+                        ));
+                    }
+                    caps.required = true;
+                }
+                CapabilityKeyword::Range => {
+                    if is_option {
+                        return Err(syn::Error::new(
+                            attr.span(),
+                            "explicit `(range)` on `Option<T>` is not supported — declare the field as `T`",
+                        ));
+                    }
+                    caps.range = true;
+                }
+                CapabilityKeyword::Contains => {
+                    if is_option {
+                        return Err(syn::Error::new(
+                            attr.span(),
+                            "explicit `(contains)` on `Option<T>` is not supported — declare the field as `T`",
+                        ));
+                    }
+                    caps.contains = true;
+                }
+            }
+        }
 
         params.push(ParamDef {
             name: field_name,
-            ty: field.ty.clone(),
-            kind,
+            inner_ty,
+            caps,
         });
     }
 
     Ok(params)
 }
 
-/// Parse the comparator keyword from `#[query_param]` / `#[query_param(eq)]`
-/// / `#[query_param(any_of)]` / etc.
-fn parse_query_param_keyword(attr: &Attribute) -> syn::Result<ComparatorKeyword> {
+/// Parse the keyword list inside `#[query_param(...)]`. Returns the
+/// explicit opt-in capabilities. Bare `#[query_param]` returns an
+/// empty list — eq/any_of are still emitted (they're universal);
+/// range/contains fall back to the type-name heuristic.
+fn parse_query_param_extras(attr: &Attribute) -> syn::Result<Vec<CapabilityKeyword>> {
     match &attr.meta {
-        Meta::Path(_) => Ok(ComparatorKeyword::Eq),
-        Meta::List(_) => {
-            let ident: Ident = attr.parse_args().map_err(|_| {
-                syn::Error::new(
-                    attr.span(),
-                    "expected a comparator keyword inside `#[query_param(...)]` — one of `eq`, `any_of`, `range`, `contains`",
-                )
-            })?;
-            match ident.to_string().as_str() {
-                "eq" => Ok(ComparatorKeyword::Eq),
-                "any_of" => Ok(ComparatorKeyword::AnyOf),
-                "range" => Ok(ComparatorKeyword::Range),
-                "contains" => Ok(ComparatorKeyword::Contains),
-                other => Err(syn::Error::new(
-                    ident.span(),
-                    format!("unknown comparator `{other}` — expected `eq`, `any_of`, `range`, or `contains`"),
-                )),
+        Meta::Path(_) => Ok(Vec::new()),
+        Meta::List(list) => {
+            let parsed: syn::punctuated::Punctuated<Ident, Token![,]> =
+                list.parse_args_with(syn::punctuated::Punctuated::parse_terminated)
+                    .map_err(|_| {
+                        syn::Error::new(
+                            attr.span(),
+                            "expected a comma-separated list of capability keywords inside `#[query_param(...)]` — `required`, `range`, and/or `contains` (eq + any_of are automatic)",
+                        )
+                    })?;
+            let mut extras = Vec::new();
+            for ident in parsed {
+                match ident.to_string().as_str() {
+                    "required" => extras.push(CapabilityKeyword::Required),
+                    "range" => extras.push(CapabilityKeyword::Range),
+                    "contains" => extras.push(CapabilityKeyword::Contains),
+                    "eq" | "any_of" => {
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            format!(
+                                "`{ident}` is now automatic for every `#[query_param]` field — drop this keyword and use bare `#[query_param]`"
+                            ),
+                        ));
+                    }
+                    other => {
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            format!(
+                                "unknown capability `{other}` — expected `required`, `range`, or `contains`"
+                            ),
+                        ));
+                    }
+                }
             }
+            Ok(extras)
         }
         Meta::NameValue(_) => Err(syn::Error::new(
             attr.span(),
-            "expected `#[query_param]` or `#[query_param(eq|any_of|range|contains)]`, not `key = value`",
+            "expected `#[query_param]` or `#[query_param(required|range|contains|...)]`, not `key = value`",
         )),
+    }
+}
+
+/// True when the inner type's last path segment is a known orderable
+/// type. Used to auto-enable `FieldRange` on a `#[query_param]` field.
+fn is_ordered_type(ty: &Type) -> bool {
+    const ORDERED: &[&str] = &[
+        // Integers
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        // Floats (NaN aside; `PartialOrd` is enough for the macro).
+        "f32",
+        "f64",
+        // Strings (lexicographic).
+        "String",
+        "str",
+        // Common third-party DateTime / Date / Time types. The
+        // heuristic matches on the LAST path segment, so qualified
+        // paths like `chrono::DateTime<Utc>` or `time::OffsetDateTime`
+        // hit the same `DateTime` / `OffsetDateTime` ident.
+        "DateTime",
+        "OffsetDateTime",
+        "PrimitiveDateTime",
+        "NaiveDateTime",
+        "NaiveDate",
+        "NaiveTime",
+        "Date",
+        "Time",
+        "SystemTime",
+        "Instant",
+        "Duration",
+        "Timestamp",
+        "Zoned",
+    ];
+    last_segment_ident(ty)
+        .map(|i| ORDERED.contains(&i.to_string().as_str()))
+        .unwrap_or(false)
+}
+
+/// True when the inner type's last path segment is a known string-y
+/// type. Used to auto-enable `FieldContains` on a `#[query_param]`
+/// field. Newtype wrappers around `String` (e.g. `WorkspaceId(String)`)
+/// don't match — callers opt in with `#[query_param(contains)]` for
+/// those.
+fn is_string_type(ty: &Type) -> bool {
+    const STRINGS: &[&str] = &["String", "str", "Cow"];
+    last_segment_ident(ty)
+        .map(|i| STRINGS.contains(&i.to_string().as_str()))
+        .unwrap_or(false)
+}
+
+fn last_segment_ident(ty: &Type) -> Option<&Ident> {
+    if let Type::Path(tp) = ty {
+        tp.path.segments.last().map(|s| &s.ident)
+    } else {
+        None
     }
 }
 
@@ -448,58 +574,53 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
                 &format!("__Field_{}", name_str),
                 proc_macro2::Span::call_site(),
             );
-            let comparator_impl = match &param.kind {
-                ComparatorKind::RequiredEq => {
-                    let ty = &param.ty;
-                    quote! {
-                        impl ::pocopine_sync_query::FieldEq for #marker_ident {
-                            type Value = #ty;
-                            const NAME: &'static str = #name_str;
-                        }
+            let inner = &param.inner_ty;
+
+            // Always emit FieldEq + FieldInSet. Inner type is T (after
+            // unwrapping any Option<T>), so `.eq(field::assignee_id,
+            // "alice")` on a `Option<String>` field still typechecks
+            // with `&str → String` via `Into<M::Value>`.
+            let mut trait_impls = vec![
+                quote! {
+                    impl ::pocopine_sync_query::FieldEq for #marker_ident {
+                        type Value = #inner;
+                        const NAME: &'static str = #name_str;
                     }
-                }
-                ComparatorKind::OptionalEq { inner } => {
-                    quote! {
-                        impl ::pocopine_sync_query::FieldEq for #marker_ident {
-                            type Value = #inner;
-                            const NAME: &'static str = #name_str;
-                        }
+                },
+                quote! {
+                    impl ::pocopine_sync_query::FieldInSet for #marker_ident {
+                        type Item = #inner;
+                        const NAME: &'static str = #name_str;
                     }
-                }
-                ComparatorKind::InSet { inner } => {
-                    quote! {
-                        impl ::pocopine_sync_query::FieldInSet for #marker_ident {
-                            type Item = #inner;
-                            const NAME: &'static str = #name_str;
-                        }
+                },
+            ];
+
+            if param.caps.range {
+                trait_impls.push(quote! {
+                    impl ::pocopine_sync_query::FieldRange for #marker_ident {
+                        type Bound = #inner;
+                        const NAME: &'static str = #name_str;
                     }
-                }
-                ComparatorKind::Range { inner } => {
-                    quote! {
-                        impl ::pocopine_sync_query::FieldRange for #marker_ident {
-                            type Bound = #inner;
-                            const NAME: &'static str = #name_str;
-                        }
+                });
+            }
+            if param.caps.contains {
+                trait_impls.push(quote! {
+                    impl ::pocopine_sync_query::FieldContains for #marker_ident {
+                        const NAME: &'static str = #name_str;
                     }
-                }
-                ComparatorKind::Contains => {
-                    quote! {
-                        impl ::pocopine_sync_query::FieldContains for #marker_ident {
-                            const NAME: &'static str = #name_str;
-                        }
-                    }
-                }
-            };
+                });
+            }
+
             quote! {
                 #[allow(non_camel_case_types)]
                 #[doc = concat!("Field marker for `", #name_str, "` — used by the query DSL methods (`.eq`, `.any_of`, `.range`, `.contains`).")]
                 #[derive(::std::marker::Copy, ::std::clone::Clone)]
                 pub struct #marker_ident;
                 // SAFETY: marker is macro-generated and matches the
-                // comparator declared in `params(...)`. The `unsafe`
+                // comparator declared on the row struct. The `unsafe`
                 // here is API-stability, not memory-safety.
                 unsafe impl ::pocopine_sync_query::predicate::__SealedFieldMarker for #marker_ident {}
-                #comparator_impl
+                #(#trait_impls)*
                 #[allow(non_upper_case_globals)]
                 pub const #name: #marker_ident = #marker_ident;
             }
@@ -507,93 +628,166 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
         .collect()
 }
 
-/// Generate the body of `matches(query, row) -> bool`. Each declared
-/// param emits a check that returns false on mismatch.
+/// Generate the body of `matches(query, row) -> bool`. For each
+/// `#[query_param]` field, emits a labeled block that:
+/// * fetches `params[field_name]`,
+/// * fails closed if absent and the field is required (non-Option),
+/// * dispatches on the wire value's JSON shape (InSet object → set
+///   membership; Range object → range_contains; Contains object →
+///   contains_matches; bare T → equality),
+/// * the dispatch order tries the most specific structured shapes
+///   before the bare-value fallback.
 fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
     let checks: Vec<TokenStream2> = params
         .iter()
         .map(|param| {
             let name = &param.name;
             let name_str = name.to_string();
+            let inner = &param.inner_ty;
             let field_access: TokenStream2 = quote! { row.#name };
-            match &param.kind {
-                ComparatorKind::RequiredEq => {
-                    let ty = &param.ty;
-                    // Required-equality: the param MUST be set. A
-                    // query built without the matching
-                    // `.eq(field::<name>, ...)` call would otherwise
-                    // permissively match every row in the stream —
-                    // a cross-tenant data leak the macro must close.
-                    quote! {
-                        let raw = match params.get(#name_str) {
-                            Some(r) => r,
-                            None => return false,
-                        };
-                        let want: #ty = match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
-                            Ok(v) => v,
-                            Err(_) => return false,
-                        };
-                        if #field_access != want { return false; }
+            let block_label = syn::Lifetime::new(
+                &format!("'__pp_check_{}", name),
+                proc_macro2::Span::call_site(),
+            );
+
+            // Per-branch handlers. Each `if let Ok(...) = parse {
+            // predicate; break 'label }` block; if predicate fails
+            // we `return false`; if predicate passes we exit the
+            // labeled block (continue to next field check).
+            let any_of_predicate = if param.caps.optional {
+                quote! {
+                    match &#field_access {
+                        ::std::option::Option::Some(v) if set.values().iter().any(|x| x == v) => {}
+                        _ => return false,
                     }
                 }
-                ComparatorKind::OptionalEq { inner } => {
-                    // For Option<T>: when the query specifies it, row.field
-                    // must equal Some(want). When the query has it as null,
-                    // accept None. When the query omits the key, no check.
-                    quote! {
-                        if let Some(raw) = params.get(#name_str) {
+            } else {
+                quote! {
+                    if !set.values().iter().any(|v| v == &#field_access) {
+                        return false;
+                    }
+                }
+            };
+            let any_of_branch = quote! {
+                if let ::std::result::Result::Ok(set) =
+                    ::pocopine_sync_query::__private::serde_json::from_value::<
+                        ::pocopine_sync_query::params::InSet<#inner>
+                    >(raw.clone())
+                {
+                    #any_of_predicate
+                    break #block_label;
+                }
+            };
+
+            let range_branch = if param.caps.range {
+                quote! {
+                    if let ::std::result::Result::Ok(range) =
+                        ::pocopine_sync_query::__private::serde_json::from_value::<
+                            ::pocopine_sync_query::params::Range<#inner>
+                        >(raw.clone())
+                    {
+                        if !::pocopine_sync_query::predicate::range_contains(&range, &#field_access) {
+                            return false;
+                        }
+                        break #block_label;
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            let contains_branch = if param.caps.contains {
+                quote! {
+                    if let ::std::result::Result::Ok(needle) =
+                        ::pocopine_sync_query::__private::serde_json::from_value::<
+                            ::pocopine_sync_query::params::Contains
+                        >(raw.clone())
+                    {
+                        if !::pocopine_sync_query::predicate::contains_matches(&needle, &#field_access) {
+                            return false;
+                        }
+                        break #block_label;
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            let eq_predicate = if param.caps.optional {
+                quote! {
+                    match &#field_access {
+                        ::std::option::Option::Some(v) if v == &want => {}
+                        _ => return false,
+                    }
+                }
+            } else {
+                quote! {
+                    if #field_access != want { return false; }
+                }
+            };
+            let eq_branch = quote! {
+                if let ::std::result::Result::Ok(want) =
+                    ::pocopine_sync_query::__private::serde_json::from_value::<#inner>(raw.clone())
+                {
+                    #eq_predicate
+                    break #block_label;
+                }
+            };
+
+            if param.caps.optional {
+                // Option<T>: param-absent = no constraint;
+                // param-null = field MUST be None.
+                quote! {
+                    if let ::std::option::Option::Some(raw) = params.get(#name_str) {
+                        #block_label: {
                             if raw.is_null() {
                                 if #field_access.is_some() { return false; }
-                            } else {
-                                let want: #inner = match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
-                                    Ok(v) => v,
-                                    Err(_) => return false,
-                                };
-                                match &#field_access {
-                                    ::std::option::Option::Some(v) if v == &want => {}
-                                    _ => return false,
-                                }
+                                break #block_label;
                             }
+                            #any_of_branch
+                            #range_branch
+                            #contains_branch
+                            #eq_branch
+                            // No known wire shape matched.
+                            return false;
                         }
                     }
                 }
-                ComparatorKind::InSet { inner } => {
-                    quote! {
-                        if let Some(raw) = params.get(#name_str) {
-                            let set: ::pocopine_sync_query::params::InSet<#inner> =
-                                match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
-                                    Ok(v) => v,
-                                    Err(_) => return false,
-                                };
-                            if !set.values().iter().any(|v| v == &#field_access) { return false; }
+            } else if param.caps.required {
+                // `#[query_param(required)]`: param MUST be in
+                // params or the predicate fails (cross-tenant leak
+                // guard for fields like `workspace_id`). Then
+                // dispatch on the wire shape.
+                quote! {
+                    {
+                        let raw = match params.get(#name_str) {
+                            ::std::option::Option::Some(r) => r,
+                            ::std::option::Option::None => return false,
+                        };
+                        #block_label: {
+                            #any_of_branch
+                            #range_branch
+                            #contains_branch
+                            #eq_branch
+                            // No known wire shape matched.
+                            return false;
                         }
                     }
                 }
-                ComparatorKind::Range { inner } => {
-                    quote! {
-                        if let Some(raw) = params.get(#name_str) {
-                            let range: ::pocopine_sync_query::params::Range<#inner> =
-                                match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
-                                    Ok(v) => v,
-                                    Err(_) => return false,
-                                };
-                            if !::pocopine_sync_query::predicate::range_contains(&range, &#field_access) {
-                                return false;
-                            }
-                        }
-                    }
-                }
-                ComparatorKind::Contains => {
-                    quote! {
-                        if let Some(raw) = params.get(#name_str) {
-                            let needle: ::pocopine_sync_query::params::Contains =
-                                match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
-                                    Ok(v) => v,
-                                    Err(_) => return false,
-                                };
-                            if !::pocopine_sync_query::predicate::contains_matches(&needle, &#field_access) {
-                                return false;
-                            }
+            } else {
+                // Bare `#[query_param]` on a non-Option field:
+                // queryable but not required. Param-absent = no
+                // constraint (skip the check). Dispatch on wire
+                // shape only when set.
+                quote! {
+                    if let ::std::option::Option::Some(raw) = params.get(#name_str) {
+                        #block_label: {
+                            #any_of_branch
+                            #range_branch
+                            #contains_branch
+                            #eq_branch
+                            // No known wire shape matched.
+                            return false;
                         }
                     }
                 }
@@ -602,7 +796,7 @@ fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
         .collect();
 
     quote! {
-        let _ = params; // silence unused if no params declared
+        let _ = params; // silence unused if no #[query_param] fields declared
         #(#checks)*
     }
 }

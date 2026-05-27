@@ -45,10 +45,12 @@ The proc-macro crate splits the same way as CRUD's does (binary boundary). Namin
 ```rust
 use pocopine_sync_query::{query_resource, Mutator, RowChange};
 
-// `#[query_resource]` decorates the row struct directly. Queryable
-// fields opt in with `#[query_param]` (default `eq`) or
-// `#[query_param(any_of|range|contains)]`. The macro auto-detects
-// `Option<T>` and emits `OptionalEq`.
+// `#[query_resource]` decorates the row struct directly. Every
+// `#[query_param]` field auto-gets `.eq()` + `.any_of()`. Range and
+// contains are inferred from the inner type's name (numeric / `String`
+// / DateTime-y), with explicit `(range)` / `(contains)` opt-ins for
+// newtypes the heuristic misses. `(required)` marks a tenant gate —
+// the predicate fails if the query has no value for that field.
 //
 // The attribute MUST appear before `#[derive(...)]` so it strips the
 // per-field annotations before downstream derives (serde, etc.) see
@@ -57,11 +59,11 @@ use pocopine_sync_query::{query_resource, Mutator, RowChange};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Issue {
     pub id: IssueId,
-    #[query_param]            pub workspace_id: String,
+    #[query_param(required)]  pub workspace_id: String,
     #[query_param]            pub assignee_id: Option<String>,
-    #[query_param(any_of)]    pub status: Status,
-    #[query_param(contains)]  pub title: String,
-    #[query_param(range)]     pub created_at: DateTime,
+    #[query_param]            pub status: Status,
+    #[query_param]            pub title: String,        // String → also range + contains
+    #[query_param]            pub created_at: DateTime, // DateTime → also range
 }
 ```
 
@@ -340,9 +342,9 @@ The macro generates one `matches` method per declared resource. Each comparator 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub id: IssueId,
-    #[query_param]            pub workspace_id: String,
-    #[query_param(any_of)]    pub status: Status,
-    #[query_param(range)]     pub created_at: DateTime,
+    #[query_param(required)]  pub workspace_id: String,
+    #[query_param]            pub status: Status,
+    #[query_param]            pub created_at: DateTime,
     // ... other fields, queryable or not
 }
 

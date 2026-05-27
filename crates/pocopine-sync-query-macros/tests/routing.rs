@@ -26,10 +26,10 @@ pub enum Status {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
-    #[query_param]
+    #[query_param(required)]
     pub workspace_id: String,
     pub title: String,
-    #[query_param(any_of)]
+    #[query_param]
     pub status: Status,
 }
 

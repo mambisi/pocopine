@@ -23,15 +23,19 @@ pub enum Status {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
-    #[query_param]
+    // `required` makes `workspace_id` a tenant gate — predicate fails
+    // if a query has no workspace_id filter (cross-tenant safety).
+    // The other queryable fields are optional filters: queries can
+    // include them or not.
+    #[query_param(required)]
     pub workspace_id: String,
     #[query_param]
     pub assignee_id: Option<String>,
-    #[query_param(contains)]
+    #[query_param]
     pub title: String,
-    #[query_param(any_of)]
+    #[query_param]
     pub status: Status,
-    #[query_param(range)]
+    #[query_param]
     pub priority: u32,
 }
 
