@@ -6,7 +6,7 @@ use std::sync::Arc;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
 use pocopine_core::{ServerError, ServerResult};
-use pocopine_server::auth::{Decision, Predicate, RequestContext};
+use pocopine_server::auth::{Decision, DenyReason, Predicate, RequestContext};
 use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::extract::{Path, State};
 use pocopine_server::axum::http::{
@@ -165,7 +165,7 @@ where
     fn check(&self, ctx: StorageContext) -> StorageGuardFuture<'_> {
         let result: ServerResult<()> = match &ctx.request {
             Some(request) => self.0.check(&request.user).into(),
-            None => Decision::Deny("unauthorized").into(),
+            None => Decision::Deny(DenyReason::Unauthorized).into(),
         };
         Box::pin(async move { result })
     }

@@ -106,10 +106,11 @@ pub trait Predicate: Send + Sync + 'static {
 A single `Predicate` value plugs into **two** install points:
 
 - **Server-side**: `#[server(guard = require_role("admin"))]` —
-  `Decision::Deny("unauthorized")` becomes
-  `ServerError::Unauthorized`, anything else becomes
-  `ServerError::Forbidden`. The `From<Decision>` adapter lives
-  in `pocopine-auth`.
+  `Decision::Deny(DenyReason::Unauthorized)` becomes
+  `ServerError::Unauthorized`; `DenyReason::Forbidden` and
+  `DenyReason::Custom(reason)` become `ServerError::Forbidden`
+  (custom reasons carried verbatim). The `From<Decision>` adapter
+  lives in `pocopine-auth`.
 - **Client-side**: a future `pocopine-auth-client` plugin will
   ship `impl<P: Predicate> RouteGuard for P` — same predicate
   value, two install points. Until that plugin lands, write a
@@ -120,11 +121,11 @@ RouteConfig::new().guard(move |_: &RouteContext| {
     let principal = current_principal(); // your AuthSession
     match require_role("admin").check(&principal) {
         Decision::Allow => RouteGuardDecision::Allow,
-        Decision::Deny("unauthorized") => {
+        Decision::Deny(DenyReason::Unauthorized) => {
             RouteGuardDecision::Reject(RouteRejection::Unauthorized)
         }
-        Decision::Deny(_) => {
-            RouteGuardDecision::Reject(RouteRejection::Forbidden("missing_role"))
+        Decision::Deny(reason) => {
+            RouteGuardDecision::Reject(RouteRejection::Forbidden(reason.as_str()))
         }
     }
 })

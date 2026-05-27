@@ -28,7 +28,7 @@ mod user;
 mod context;
 
 pub use predicate::{
-    all_of, any_of, require_auth, require_permission, require_role, Decision, Predicate,
+    all_of, any_of, require_auth, require_permission, require_role, Decision, DenyReason, Predicate,
 };
 pub use principal::{Principal, Session};
 pub use role::{Permission, Role};

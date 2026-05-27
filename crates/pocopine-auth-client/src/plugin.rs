@@ -24,7 +24,7 @@
 
 use std::rc::Rc;
 
-use pocopine_auth::{Decision, Predicate, Principal};
+use pocopine_auth::{Decision, DenyReason, Predicate, Principal};
 use pocopine_core::{
     App, AppPlugin, ReturnTo, RouteContext, RouteGuard, RouteGuardDecision, RouteRejection,
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
@@ -377,12 +377,14 @@ fn percent_encode_into(out: &mut String, s: &str) {
 /// [`RouteGuardDecision`]:
 ///
 /// - `Decision::Allow` → `RouteGuardDecision::Allow`.
-/// - `Decision::Deny("unauthorized")` (the standard predicates'
-///   not-logged-in branch) → `RouteGuardDecision::Reject(RouteRejection::Unauthorized)`,
+/// - `Decision::Deny(DenyReason::Unauthorized)` (the standard
+///   predicates' not-logged-in branch) →
+///   `RouteGuardDecision::Reject(RouteRejection::Unauthorized)`,
 ///   which the auth plugin's handler then redirects to the login
 ///   route.
-/// - Any other `Decision::Deny(reason)` →
-///   `RouteGuardDecision::Reject(RouteRejection::Forbidden(reason))`.
+/// - `Decision::Deny(DenyReason::Forbidden)` or
+///   `Decision::Deny(DenyReason::Custom(reason))` →
+///   `RouteGuardDecision::Reject(RouteRejection::Forbidden(reason.as_str()))`.
 ///
 /// ```ignore
 /// use pocopine_auth::{require_auth, require_role};
@@ -439,8 +441,12 @@ pub fn predicate_guard<P: Predicate>(predicate: P) -> impl RouteGuard {
 fn predicate_decision<P: Predicate>(predicate: &P, principal: &Principal) -> RouteGuardDecision {
     match Predicate::check(predicate, principal) {
         Decision::Allow => RouteGuardDecision::Allow,
-        Decision::Deny("unauthorized") => RouteGuardDecision::Reject(RouteRejection::Unauthorized),
-        Decision::Deny(reason) => RouteGuardDecision::Reject(RouteRejection::Forbidden(reason)),
+        Decision::Deny(DenyReason::Unauthorized) => {
+            RouteGuardDecision::Reject(RouteRejection::Unauthorized)
+        }
+        Decision::Deny(reason) => {
+            RouteGuardDecision::Reject(RouteRejection::Forbidden(reason.as_str()))
+        }
     }
 }
 
@@ -682,8 +688,8 @@ mod tests {
         let admin = require_role("admin");
 
         let anon = pocopine_auth::Principal::anonymous();
-        assert_eq!(auth.check(&anon), Decision::Deny("unauthorized"));
-        assert_eq!(admin.check(&anon), Decision::Deny("unauthorized"));
+        assert_eq!(auth.check(&anon), Decision::Deny(DenyReason::Unauthorized));
+        assert_eq!(admin.check(&anon), Decision::Deny(DenyReason::Unauthorized));
 
         let user =
             pocopine_auth::Principal::from_user(AuthUser::new("u1").with_role(Role::admin()));
@@ -691,7 +697,7 @@ mod tests {
         assert_eq!(admin.check(&user), Decision::Allow);
 
         let no_role = pocopine_auth::Principal::from_user(AuthUser::new("u1"));
-        assert_eq!(admin.check(&no_role), Decision::Deny("forbidden"));
+        assert_eq!(admin.check(&no_role), Decision::Deny(DenyReason::Forbidden));
     }
 
     #[test]

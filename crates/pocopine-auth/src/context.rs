@@ -15,6 +15,15 @@ use crate::user::AuthUser;
 pub const SESSION_COOKIE: &str = "pocopine_session";
 
 /// Request metadata available to server-function auth guards.
+///
+/// Host-only — wasm clients don't construct a `RequestContext`
+/// because they're not on the receiving end of HTTP requests.
+/// The client-side equivalent for "what identity is active right
+/// now" is `pocopine_auth_client::AuthSession`, which exposes the
+/// reactive [`Principal`] without the request-shaped fields
+/// (`method`, `uri`, `headers`, cookies, bearer token) that only
+/// make sense on the server. A single [`Predicate`](crate::Predicate)
+/// value plugs into both surfaces.
 #[derive(Clone, Debug)]
 pub struct RequestContext {
     method: Method,
