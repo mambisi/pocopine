@@ -57,7 +57,10 @@ pub use driver::{
     live_event_matches_params, DriverEpoch, QueryClientConfig, DEFAULT_POLL_INTERVAL,
     DEFAULT_SYNC_ENDPOINT,
 };
-pub use mutator::{MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, RowChange};
+pub use mutator::{
+    AnyMutator, HydrateReplayOutcome, MutationOutcome, Mutator, MutatorEntry,
+    MutatorRemoteContext, MutatorRemoteFuture, RowChange,
+};
 pub use plugin::{query_client_plugin, QueryClientPlugin};
 pub use predicate::{
     contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldRange,
@@ -72,7 +75,10 @@ pub use pocopine_sync_query_macros::query_resource;
 
 // Re-export wire-level types from pocopine-sync that the macro emissions
 // and runtime touch directly. Users mostly don't see these.
-pub use pocopine_sync::{local_stream_key, SyncCursor, SyncStreamName, SyncStreamSubscription};
+pub use pocopine_sync::{
+    local_stream_key, MemoryLocalStore, SyncCursor, SyncLocalStore, SyncStreamName,
+    SyncStreamSubscription,
+};
 
 /// Macro-implementation surface. **Not** part of the public API — every
 /// symbol here exists only because `pocopine-sync-query-macros` will emit
