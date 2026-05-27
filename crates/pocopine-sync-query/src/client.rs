@@ -15,7 +15,7 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use pocopine_sync::{ClientMutation, MutationId, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX};
 use serde_json::Value;
@@ -152,9 +152,18 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
 /// `QueryClient` is `!Send + !Sync` by design — it lives in one wasm
 /// task per browser tab. Host-side tests can construct one for unit
 /// tests but it never crosses thread boundaries.
-pub struct QueryClient {
+/// Shared interior of [`QueryClient`]. Held by the client itself
+/// (strong `Rc`) and by every issued [`QueryHandle`] (`Weak`). A
+/// handle that outlives the client sees `Weak::upgrade` → `None`
+/// and silently no-ops its refcount decrement instead of triggering
+/// a use-after-free.
+struct QueryClientInner {
     endpoint: String,
     registry: RefCell<HashMap<QueryKey, Rc<dyn AnyQuerySubscription>>>,
+}
+
+pub struct QueryClient {
+    inner: Rc<QueryClientInner>,
 }
 
 impl QueryClient {
@@ -168,14 +177,16 @@ impl QueryClient {
     /// tests against a router mounted at a different path.
     pub fn with_endpoint(endpoint: String) -> Self {
         Self {
-            endpoint,
-            registry: RefCell::new(HashMap::new()),
+            inner: Rc::new(QueryClientInner {
+                endpoint,
+                registry: RefCell::new(HashMap::new()),
+            }),
         }
     }
 
     /// The endpoint prefix this client posts against.
     pub fn endpoint(&self) -> &str {
-        &self.endpoint
+        &self.inner.endpoint
     }
 
     /// Subscribe to a query, returning a refcounted handle. Two
@@ -186,7 +197,7 @@ impl QueryClient {
         Row: 'static,
     {
         let key = query.key();
-        let mut registry = self.registry.borrow_mut();
+        let mut registry = self.inner.registry.borrow_mut();
         let entry = registry.entry(key).or_insert_with(|| {
             let sub = QuerySubscription::new(query.clone());
             Rc::new(sub) as Rc<dyn AnyQuerySubscription>
@@ -200,20 +211,21 @@ impl QueryClient {
             .expect("subscription Row type matches the query's Row type");
         QueryHandle {
             subscription: typed,
-            registry: RegistryWeakRef::new(self, key),
+            registry: RegistryWeakRef::new(&self.inner, key),
         }
     }
 
     /// Returns the number of distinct subscriptions currently held.
     /// Mostly useful for tests.
     pub fn active_subscription_count(&self) -> usize {
-        self.registry.borrow().len()
+        self.inner.registry.borrow().len()
     }
 
     /// Returns the current refcount for a query's subscription, or
     /// `None` if no subscription exists for that query.
     pub fn refcount_of<Row: 'static>(&self, query: &Query<Row>) -> Option<usize> {
-        self.registry
+        self.inner
+            .registry
             .borrow()
             .get(&query.key())
             .map(|sub| sub.refcount())
@@ -280,35 +292,26 @@ impl QueryClient {
             }
         };
 
-        // 3. Reconcile canonical: convert RowChange<M::Row> into
-        //    SyncRow<M::Row> and route into matching subscriptions.
-        let canonical_rows: Vec<pocopine_sync::SyncRow<M::Row>> = canonical_changes
-            .iter()
-            .filter_map(|c| match c {
-                crate::RowChange::Upsert(row) => {
-                    row_key_of(row).map(|key| pocopine_sync::SyncRow {
-                        key,
-                        version: None,
-                        value: row.clone(),
-                        pending: false,
-                        conflict: false,
-                    })
-                }
-                crate::RowChange::Delete(_) => None,
-            })
-            .collect();
-        self.route_canonical_changes::<M::Row>(&stream, &mutation_id, &canonical_rows);
+        // 3. Reconcile canonical: route every RowChange (upsert AND
+        //    delete) into matching subscriptions. Deletes carry a
+        //    `RowKey` directly; upserts carry the row payload from
+        //    which the routing engine pulls the key via
+        //    `row_key_of`.
+        self.route_canonical_changes::<M::Row>(&stream, &mutation_id, &canonical_changes);
 
         Ok(crate::MutationOutcome::Accepted(canonical_changes))
     }
 
     /// Drop a pending overlay across every matching subscription.
     /// Used to roll back optimistic state when the server push fails.
+    /// Fires each affected subscription's `on_update` listeners so
+    /// observers re-render the rolled-back state instead of waiting
+    /// for an unrelated mutation to refresh them.
     fn dequeue_pending<Row>(&self, stream: &SyncStreamName, mutation_id: &MutationId)
     where
         Row: Clone + 'static,
     {
-        let registry = self.registry.borrow();
+        let registry = self.inner.registry.borrow();
         for sub in registry.values() {
             if sub.stream() != stream {
                 continue;
@@ -318,7 +321,10 @@ impl QueryClient {
             else {
                 continue;
             };
-            typed.state.borrow_mut().remove_pending(mutation_id);
+            let removed = typed.state.borrow_mut().remove_pending(mutation_id);
+            if removed.is_some() {
+                typed.notify_listeners();
+            }
         }
     }
 
@@ -341,7 +347,7 @@ impl QueryClient {
     ) where
         Row: Clone + serde::Serialize + 'static,
     {
-        let registry = self.registry.borrow();
+        let registry = self.inner.registry.borrow();
         for sub in registry.values() {
             if sub.stream() != stream {
                 continue;
@@ -402,20 +408,27 @@ impl QueryClient {
         }
     }
 
-    /// Apply canonical row changes returned by a server push. Removes
-    /// the corresponding pending overlay and upserts into each
-    /// matching subscription's canonical row set.
+    /// Apply canonical row changes returned by a server push.
+    /// Removes the corresponding pending overlay and applies each
+    /// change to the canonical row set of every matching
+    /// subscription:
+    ///
+    /// * `Upsert(row)` — predicate matches → upsert into canonical;
+    ///   predicate doesn't match → remove (the row left this
+    ///   subscription's filter set).
+    /// * `Delete(key)` — remove from canonical on every matching
+    ///   subscription.
     ///
     /// Internal API — consumers use [`QueryClient::mutate`] instead.
     pub(crate) fn route_canonical_changes<Row>(
         &self,
         stream: &SyncStreamName,
         mutation_id: &MutationId,
-        canonical: &[SyncRow<Row>],
+        canonical: &[RowChange<Row>],
     ) where
-        Row: Clone + 'static,
+        Row: Clone + serde::Serialize + 'static,
     {
-        let registry = self.registry.borrow();
+        let registry = self.inner.registry.borrow();
         for sub in registry.values() {
             if sub.stream() != stream {
                 continue;
@@ -429,31 +442,36 @@ impl QueryClient {
                 let mut state = typed.state.borrow_mut();
                 // Dequeue the optimistic overlay (idempotent if not present).
                 let _ = state.remove_pending(mutation_id);
-                for row in canonical {
-                    if typed.query.matches(&row.value) {
-                        state.upsert_canonical(row.clone());
-                    } else {
-                        // Row no longer matches this query's predicate
-                        // (e.g. a workspace transition). Remove from
-                        // canonical too.
-                        state.remove_canonical(&row.key);
+                for change in canonical {
+                    match change {
+                        RowChange::Upsert(row) => {
+                            let key = match row_key_of(row) {
+                                Some(k) => k,
+                                None => continue,
+                            };
+                            if typed.query.matches(row) {
+                                state.upsert_canonical(SyncRow {
+                                    key,
+                                    version: None,
+                                    value: row.clone(),
+                                    pending: false,
+                                    conflict: false,
+                                });
+                            } else {
+                                // Row no longer matches this query's
+                                // predicate (e.g. a workspace
+                                // transition). Remove from canonical
+                                // too.
+                                state.remove_canonical(&key);
+                            }
+                        }
+                        RowChange::Delete(key) => {
+                            state.remove_canonical(key);
+                        }
                     }
                 }
             }
             typed.notify_listeners();
-        }
-    }
-
-    /// Drop a subscription by key when its refcount has reached zero.
-    /// Called by [`QueryHandle::drop`] via the back-pointer.
-    fn release(&self, key: QueryKey) {
-        let mut registry = self.registry.borrow_mut();
-        let should_remove = registry
-            .get(&key)
-            .map(|sub| sub.decrement_refcount() == 0)
-            .unwrap_or(false);
-        if should_remove {
-            registry.remove(&key);
         }
     }
 }
@@ -666,31 +684,39 @@ impl<Row: 'static> Drop for QueryHandle<Row> {
     }
 }
 
-/// Internal helper so [`QueryHandle::drop`] can reach back into the
-/// registry to decrement the refcount + remove the entry. Uses a raw
-/// pointer (not `Weak`) because `QueryClient` isn't held by `Rc`
-/// itself — it's owned by the app's `SyncClient` and stable across
-/// the subscription's lifetime.
+/// Back-reference from a [`QueryHandle`] to its [`QueryClient`].
+/// Holds a `Weak<QueryClientInner>` so a handle that outlives the
+/// client (e.g. handle returned from a nested block where the
+/// client itself was dropped first) sees `Weak::upgrade → None`
+/// and no-ops the refcount decrement. Safe Rust — no raw pointers.
 struct RegistryWeakRef {
-    client: *const QueryClient,
+    client: Weak<QueryClientInner>,
     key: QueryKey,
 }
 
 impl RegistryWeakRef {
-    fn new(client: &QueryClient, key: QueryKey) -> Self {
+    fn new(client: &Rc<QueryClientInner>, key: QueryKey) -> Self {
         Self {
-            client: client as *const QueryClient,
+            client: Rc::downgrade(client),
             key,
         }
     }
 
     fn release(&self) {
-        // SAFETY: `QueryClient` outlives all `QueryHandle`s it issues
-        // (handles can't outlive the client because the client owns
-        // the registry that holds the refcounted subscriptions). The
-        // pointer is non-null and points at a valid `QueryClient` for
-        // the duration of the handle.
-        unsafe { &*self.client }.release(self.key);
+        if let Some(inner) = self.client.upgrade() {
+            release_inner(&inner, self.key);
+        }
+    }
+}
+
+fn release_inner(inner: &QueryClientInner, key: QueryKey) {
+    let mut registry = inner.registry.borrow_mut();
+    let should_remove = registry
+        .get(&key)
+        .map(|sub| sub.decrement_refcount() == 0)
+        .unwrap_or(false);
+    if should_remove {
+        registry.remove(&key);
     }
 }
 

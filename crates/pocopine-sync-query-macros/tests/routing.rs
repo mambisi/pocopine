@@ -298,6 +298,146 @@ async fn on_update_listener_unregisters_on_token_drop() {
     assert_eq!(fired.get(), first);
 }
 
+/// Delete-shaped mutator. Codex pass 1 P2 #1: a successful delete
+/// must remove the row from canonical state, not just from the
+/// optimistic overlay. Previously `RowChange::Delete` was filtered
+/// out before reaching `route_canonical_changes`, leaving the row
+/// visible after the mutation accepted.
+struct DeleteIssue;
+
+impl Mutator for DeleteIssue {
+    type Payload = pocopine_sync::RowKey;
+    type Row = Issue;
+    const NAME: &'static str = "delete_issue";
+    const STREAM: &'static str = "issues";
+    const SCHEMA_VERSION: u32 = 1;
+
+    fn apply_local(payload: &Self::Payload) -> Vec<RowChange<Self::Row>> {
+        vec![RowChange::Delete(payload.clone())]
+    }
+
+    fn apply_remote(
+        _ctx: &dyn MutatorRemoteContext,
+        payload: Self::Payload,
+    ) -> MutatorRemoteFuture<Self::Row> {
+        Box::pin(async move { Ok(vec![RowChange::Delete(payload)]) })
+    }
+}
+
+#[tokio::test]
+async fn delete_mutation_removes_canonical_row() {
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+    let view = client.observe::<Issue>(Issues::query().workspace_id("W1".to_string()).build());
+
+    // Seed: create an issue.
+    client
+        .mutate::<CreateIssue>(
+            Issue {
+                id: "issue_1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "test".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(view.len(), 1);
+
+    // Delete it. Both the optimistic overlay AND the canonical
+    // row should be cleared after the mutation accepts.
+    client
+        .mutate::<DeleteIssue>(pocopine_sync::RowKey::new("issue_1").unwrap(), &ctx)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        view.len(),
+        0,
+        "canonical row should be removed after delete"
+    );
+    assert_eq!(view.state().pending().len(), 0);
+}
+
+/// Codex pass 1 P1: handles can outlive the client safely. The
+/// registry now lives in an `Rc<QueryClientInner>` and handles hold
+/// a `Weak`. Dropping a handle after the client is freed is a safe
+/// no-op instead of a use-after-free.
+#[test]
+fn handle_outliving_client_is_safe() {
+    let q = Issues::query().workspace_id("W1".to_string()).build();
+    let h = {
+        let c = QueryClient::new();
+        c.subscribe::<Issue>(q)
+    };
+    // Client is gone; dropping the handle must not panic or UAF.
+    drop(h);
+}
+
+/// Codex pass 1 P2 #2: rollback fires observers. When `apply_remote`
+/// errors, optimistic overlays are dropped; observers must see the
+/// state change immediately, not wait for some unrelated mutation
+/// to refresh them.
+struct FailingMutator;
+
+impl Mutator for FailingMutator {
+    type Payload = Issue;
+    type Row = Issue;
+    const NAME: &'static str = "failing";
+    const STREAM: &'static str = "issues";
+    const SCHEMA_VERSION: u32 = 1;
+
+    fn apply_local(payload: &Self::Payload) -> Vec<RowChange<Self::Row>> {
+        vec![RowChange::Upsert(payload.clone())]
+    }
+
+    fn apply_remote(
+        _ctx: &dyn MutatorRemoteContext,
+        _payload: Self::Payload,
+    ) -> MutatorRemoteFuture<Self::Row> {
+        Box::pin(async move { Err(pocopine_sync::SyncError::client("simulated push failure")) })
+    }
+}
+
+#[tokio::test]
+async fn rollback_notifies_observers() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+    let view = client.observe::<Issue>(Issues::query().workspace_id("W1".to_string()).build());
+
+    let fired = Rc::new(Cell::new(0u32));
+    let fired_clone = fired.clone();
+    let _token = view.on_update(move || {
+        fired_clone.set(fired_clone.get() + 1);
+    });
+
+    let result = client
+        .mutate::<FailingMutator>(
+            Issue {
+                id: "issue_1".to_string(),
+                workspace_id: "W1".to_string(),
+                title: "test".to_string(),
+                status: Status::Open,
+            },
+            &ctx,
+        )
+        .await;
+    assert!(result.is_err());
+
+    // The optimistic apply fired one listener event; the rollback
+    // must fire another so the observer sees the cleared state.
+    assert!(
+        fired.get() >= 2,
+        "rollback should notify listeners (got {} fires)",
+        fired.get()
+    );
+    assert_eq!(view.state().pending().len(), 0);
+}
+
 // Sanity: order_by + limit still build correctly through the macro.
 #[test]
 fn builder_supports_order_and_limit() {
