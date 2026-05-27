@@ -672,23 +672,21 @@ impl QueryClient {
         // Multiple changes may match — capture the first Upsert
         // (Delete-only mutations leave optimistic_row None, matching
         // the in-memory PendingOverlay shape).
-        let optimistic_row = local_changes
-            .iter()
-            .find_map(|change| match change {
-                RowChange::Upsert(row) => {
-                    let value = serde_json::to_value(row).ok()?;
-                    let id = value.get("id").and_then(|v| v.as_str())?.to_string();
-                    let key = RowKey::new(id).ok()?;
-                    Some(SyncRow {
-                        key,
-                        version: None,
-                        value,
-                        pending: true,
-                        conflict: false,
-                    })
-                }
-                RowChange::Delete(_) => None,
-            });
+        let optimistic_row = local_changes.iter().find_map(|change| match change {
+            RowChange::Upsert(row) => {
+                let value = serde_json::to_value(row).ok()?;
+                let id = value.get("id").and_then(|v| v.as_str())?.to_string();
+                let key = RowKey::new(id).ok()?;
+                Some(SyncRow {
+                    key,
+                    version: None,
+                    value,
+                    pending: true,
+                    conflict: false,
+                })
+            }
+            RowChange::Delete(_) => None,
+        });
         // Walk every subscription on the stream that received the
         // optimistic upsert (or delete) and persist into its
         // compartment. The routing engine already gated visibility
@@ -698,10 +696,15 @@ impl QueryClient {
             std::collections::BTreeSet::new();
         for typed in self.collect_subscriptions_on_stream::<M::Row>(stream) {
             let state = typed.state.borrow();
-            let has_overlay = state.pending().iter().any(|o| &o.mutation_id == mutation_id);
+            let has_overlay = state
+                .pending()
+                .iter()
+                .any(|o| &o.mutation_id == mutation_id);
             if has_overlay {
-                compartments
-                    .insert(pocopine_sync::local_stream_key(stream, typed.query.params()));
+                compartments.insert(pocopine_sync::local_stream_key(
+                    stream,
+                    typed.query.params(),
+                ));
             }
         }
         if compartments.is_empty() {
@@ -729,7 +732,6 @@ impl QueryClient {
             }
         }
     }
-
 
     /// Drop a pending overlay across every matching subscription.
     /// Used to roll back optimistic state when the server push fails.
@@ -1130,10 +1132,7 @@ impl QueryClient {
         M::Row: Clone + serde::Serialize + 'static,
     {
         let entry: Rc<dyn AnyMutator> = Rc::new(MutatorEntry::<M>::new());
-        self.inner
-            .mutators
-            .borrow_mut()
-            .insert(M::NAME, entry);
+        self.inner.mutators.borrow_mut().insert(M::NAME, entry);
     }
 
     /// Driver-only: enqueue hydrated pending mutations for replay
@@ -1183,24 +1182,25 @@ impl QueryClient {
                     // — in that case we have no NAME and must
                     // reject (the registered NAME -> AnyMutator
                     // map is the only resolution path).
-                    let mutator_name =
-                        match crate::mutator::unwrap_persisted_payload(&mutation.payload) {
-                            Some((name, _)) => name,
-                            None => {
-                                tracing::warn!(
-                                    target: "pocopine.log",
-                                    stream = stream.as_str(),
-                                    mutation_id = %mutation.id,
-                                    "sync-query: hydrated mutation missing mutator name envelope; dropping"
-                                );
-                                Self::dequeue_pending_for_stream::<()>(
-                                    &client_inner,
-                                    &stream,
-                                    &mutation.id,
-                                );
-                                return ReplayOutcome::Rejected;
-                            }
-                        };
+                    let mutator_name = match crate::mutator::unwrap_persisted_payload(
+                        &mutation.payload,
+                    ) {
+                        Some((name, _)) => name,
+                        None => {
+                            tracing::warn!(
+                                target: "pocopine.log",
+                                stream = stream.as_str(),
+                                mutation_id = %mutation.id,
+                                "sync-query: hydrated mutation missing mutator name envelope; dropping"
+                            );
+                            Self::dequeue_pending_for_stream::<()>(
+                                &client_inner,
+                                &stream,
+                                &mutation.id,
+                            );
+                            return ReplayOutcome::Rejected;
+                        }
+                    };
                     let entry = client_inner
                         .mutators
                         .borrow()

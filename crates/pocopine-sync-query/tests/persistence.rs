@@ -224,8 +224,8 @@ async fn hydrate_populates_canonical_rows_then_pull_refreshes() {
                 workspace_id: "W1".into(),
                 title: "from cache".into(),
             };
-            let row = SyncRow::new(cached.id.clone(), serde_json::to_value(&cached).unwrap())
-                .unwrap();
+            let row =
+                SyncRow::new(cached.id.clone(), serde_json::to_value(&cached).unwrap()).unwrap();
             store
                 .save_snapshot(
                     pocopine_sync::LocalSnapshotBatch::new(
@@ -241,11 +241,7 @@ async fn hydrate_populates_canonical_rows_then_pull_refreshes() {
 
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
             let client = QueryClient::with_config(test_config_with_store(store_handle));
-            let view = client.observe(
-                Issue::query()
-                    .eq(issues::field::workspace_id, "W1")
-                    .build(),
-            );
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
             // After settle, both cached + /pull rows should be visible.
             settle(3).await;
@@ -305,8 +301,8 @@ async fn hydrate_shows_cached_rows_before_pull_lands() {
                 workspace_id: "W1".into(),
                 title: "from cache".into(),
             };
-            let row = SyncRow::new(cached.id.clone(), serde_json::to_value(&cached).unwrap())
-                .unwrap();
+            let row =
+                SyncRow::new(cached.id.clone(), serde_json::to_value(&cached).unwrap()).unwrap();
             store
                 .save_snapshot(
                     pocopine_sync::LocalSnapshotBatch::new(
@@ -322,11 +318,7 @@ async fn hydrate_shows_cached_rows_before_pull_lands() {
 
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
             let client = QueryClient::with_config(test_config_with_store(store_handle));
-            let view = client.observe(
-                Issue::query()
-                    .eq(issues::field::workspace_id, "W1")
-                    .build(),
-            );
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
             // After 1-2 ticks the hydrate phase has populated the
             // state but the /open/pull responses haven't landed yet
@@ -376,8 +368,8 @@ async fn schema_drift_wipes_persisted_state_and_repopulates() {
                 workspace_id: "W1".into(),
                 title: "stale".into(),
             };
-            let row = SyncRow::new(stale.id.clone(), serde_json::to_value(&stale).unwrap())
-                .unwrap();
+            let row =
+                SyncRow::new(stale.id.clone(), serde_json::to_value(&stale).unwrap()).unwrap();
             store
                 .save_snapshot(
                     pocopine_sync::LocalSnapshotBatch::new(
@@ -397,11 +389,7 @@ async fn schema_drift_wipes_persisted_state_and_repopulates() {
 
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
             let client = QueryClient::with_config(test_config_with_store(store_handle));
-            let view = client.observe(
-                Issue::query()
-                    .eq(issues::field::workspace_id, "W1")
-                    .build(),
-            );
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle(5).await;
 
             let rows = view.rows();
@@ -640,10 +628,8 @@ async fn distinct_params_persist_to_distinct_compartments() {
             // hide.
             let hydrated_a = store.hydrate_stream(&compartment_a).await.unwrap();
             let hydrated_b = store.hydrate_stream(&compartment_b).await.unwrap();
-            let a_keys: Vec<&str> =
-                hydrated_a.rows.iter().map(|r| r.key.as_str()).collect();
-            let b_keys: Vec<&str> =
-                hydrated_b.rows.iter().map(|r| r.key.as_str()).collect();
+            let a_keys: Vec<&str> = hydrated_a.rows.iter().map(|r| r.key.as_str()).collect();
+            let b_keys: Vec<&str> = hydrated_b.rows.iter().map(|r| r.key.as_str()).collect();
             assert!(
                 a_keys.contains(&"row_only_in_A"),
                 "compartment A holds its own row"
@@ -686,11 +672,7 @@ async fn no_local_store_keeps_in_memory_only_behavior() {
 
             // No `with_local_store` — backwards-compat path.
             let client = QueryClient::new();
-            let view = client.observe(
-                Issue::query()
-                    .eq(issues::field::workspace_id, "W1")
-                    .build(),
-            );
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle(3).await;
             assert_eq!(view.rows().len(), 1);
             // The mutate path with no local_store still works.

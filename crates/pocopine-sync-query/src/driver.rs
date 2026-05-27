@@ -665,7 +665,9 @@ where
         // want a `RefMut` held across an .await. Read the cached
         // version, drop the borrow, run the wipe, then re-borrow
         // to apply the in-memory transition atomically.
-        let cached = self.with_state_borrow(|s| s.application_schema_version).flatten();
+        let cached = self
+            .with_state_borrow(|s| s.application_schema_version)
+            .flatten();
         let drift = matches!(cached, Some(c) if c != schema_version);
         if drift {
             tracing::info!(
