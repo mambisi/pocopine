@@ -113,7 +113,14 @@ pub trait SyncStreamSource: Send + Sync + 'static {
     /// open/pull/push handler rejects the request before invoking
     /// the source.
     fn validate_params(&self, params: &crate::StreamParams) -> SyncResult<()> {
-        if params.is_empty() {
+        // The default validator accepts empty params AND
+        // reserved-only params (keys prefixed with `__`). Reserved
+        // keys carry framework-level metadata — `__order_by`,
+        // `__limit`, etc. — that any source can safely ignore.
+        // Sources that don't declare a shape should still pass for
+        // wire envelopes that only carry reserved-key metadata.
+        // Non-reserved keys still require an opt-in override.
+        if params.keys().all(|k| k.starts_with("__")) {
             Ok(())
         } else {
             Err(SyncError::invalid_value(

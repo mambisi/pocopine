@@ -185,7 +185,11 @@ async fn open_validates_stream_then_pull_renders_snapshot() {
                 match req.url.as_str() {
                     SYNC_OPEN_PATH => {
                         let request: SyncOpenRequest = serde_json::from_str(&req.body).unwrap();
-                        assert_eq!(request.streams[0].as_str(), STREAM);
+                        assert_eq!(request.streams[0].stream.as_str(), STREAM);
+                        assert!(
+                            request.streams[0].params.is_empty(),
+                            "default subscription must serialize with empty params (RFC-085 backwards-compat)"
+                        );
                         let response = SyncOpenResponse::new(vec![SyncOpenStream {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
@@ -294,7 +298,11 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
                 match req.url.as_str() {
                     SYNC_OPEN_PATH => {
                         let request: SyncOpenRequest = serde_json::from_str(&req.body).unwrap();
-                        assert_eq!(request.streams[0].as_str(), STREAM);
+                        assert_eq!(request.streams[0].stream.as_str(), STREAM);
+                        assert!(
+                            request.streams[0].params.is_empty(),
+                            "default subscription must serialize with empty params (RFC-085 backwards-compat)"
+                        );
                         let response = SyncOpenResponse::new(vec![SyncOpenStream {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),

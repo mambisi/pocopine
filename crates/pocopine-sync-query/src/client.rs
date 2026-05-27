@@ -12,7 +12,7 @@
 //! runtime to drive `/open` + `/pull` + replay. The actual wasm/host
 //! drivers wire up in subsequent PRs (Phase 6 — offline + live wakeup).
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -21,17 +21,32 @@ use pocopine_sync::{ClientMutation, MutationId, SyncRow, SyncStreamName, SYNC_EN
 use serde_json::Value;
 
 use crate::mutator::RowChange;
-use crate::query::{Query, QueryKey};
+use crate::query::{MatchFn, Query, QueryKey};
 use crate::state::{PendingOverlay, QueryState};
+
+/// Composite registry key. Including the `TypeId` of the row type
+/// prevents two queries with the same `(stream, params, order, limit)`
+/// but different `Row` types from colliding — a collision used to
+/// trigger `downcast_subscription.expect(...)` panics.
+type RegistryKey = (TypeId, QueryKey);
 
 /// Untyped subscription trait — needed so the registry can hold
 /// subscriptions of any `Row` type behind one map.
+///
+/// Each impl is for `QuerySubscription<Row>` where `Row: 'static`,
+/// so the type carries an `Any` upcast for safe downcasting via
+/// `Rc::downcast` (replacing the prior `Rc::into_raw`/`from_raw`
+/// hack that relied on `RcBox<dyn>` / `RcBox<Concrete>` layout
+/// coincidence).
 trait AnyQuerySubscription: 'static {
     fn stream(&self) -> &SyncStreamName;
-    fn as_any(&self) -> &dyn Any;
     fn refcount(&self) -> usize;
     fn bump_refcount(&self) -> usize;
     fn decrement_refcount(&self) -> usize;
+    /// Re-package self into `Rc<dyn Any>` for safe `Rc::downcast`.
+    /// The default-method-style cannot work here because `Rc::downcast`
+    /// requires the source to be `Rc<dyn Any>`, not `Rc<dyn OtherTrait>`.
+    fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any>;
 }
 
 /// One live subscription against `(stream, params)`.
@@ -40,9 +55,12 @@ trait AnyQuerySubscription: 'static {
 /// and background-task lifecycle. The state is `Rc<RefCell<...>>` so
 /// the routing engine and any reactive views can hold concurrent
 /// borrows in a single-threaded runtime.
-/// Boxed update listener. Fires after every state-mutating op on
-/// the owning subscription.
-type ListenerFn = Box<dyn Fn()>;
+/// Update listener handle. Stored as `Rc<dyn Fn()>` (not `Box`) so
+/// `notify_listeners` can snapshot the handles into a local vec
+/// before invoking — letting callbacks safely drop their
+/// `UpdateToken` or register a new listener without re-entering the
+/// `listeners` RefCell.
+type ListenerFn = Rc<dyn Fn()>;
 
 /// `(id, callback)` entry in a subscription's listener list. The id
 /// is what [`UpdateToken`] keeps so drop can unregister.
@@ -50,6 +68,13 @@ type ListenerEntry = (u64, ListenerFn);
 
 pub struct QuerySubscription<Row: 'static> {
     pub(crate) query: Query<Row>,
+    /// Best-known predicate evaluator. Subscribed queries may upgrade
+    /// this from `None` to `Some(fn)` — e.g., a hand-built Query<Row>
+    /// (no macro) subscribes first, then a macro-built one with the
+    /// same `(TypeId, QueryKey)` subscribes second and provides the
+    /// real predicate. Storing the latest non-None value here avoids
+    /// silent stale-predicate routing.
+    pub(crate) matches_fn: Cell<Option<MatchFn<Row>>>,
     pub(crate) state: Rc<RefCell<QueryState<Row>>>,
     refcount: Cell<usize>,
     /// Update listeners. Each listener fires after every state-
@@ -68,8 +93,10 @@ pub struct QuerySubscription<Row: 'static> {
 
 impl<Row: 'static> QuerySubscription<Row> {
     fn new(query: Query<Row>) -> Self {
+        let matches_fn = Cell::new(query.matches_fn);
         Self {
             query,
+            matches_fn,
             state: Rc::new(RefCell::new(QueryState::default())),
             refcount: Cell::new(0),
             listeners: RefCell::new(Vec::new()),
@@ -88,6 +115,28 @@ impl<Row: 'static> QuerySubscription<Row> {
         &self.state
     }
 
+    /// Evaluate this subscription's predicate against `row`. Uses the
+    /// most-recently-installed [`MatchFn`]; defaults to `true` when
+    /// no predicate has been set (a hand-built `Query<Row>` with no
+    /// macro). Routing engine uses this — NOT [`Query::matches`] —
+    /// so a hand-built subscription that's later joined by a
+    /// macro-built one starts honoring the macro's predicate.
+    pub(crate) fn matches(&self, row: &Row) -> bool {
+        match self.matches_fn.get() {
+            Some(f) => f(&self.query, row),
+            None => true,
+        }
+    }
+
+    /// Upgrade the predicate evaluator if the new one is `Some` and
+    /// the existing one is `None`. Never downgrades. Called by
+    /// `QueryClient::subscribe` when an existing entry is reused.
+    pub(crate) fn maybe_upgrade_matches_fn(&self, candidate: Option<MatchFn<Row>>) {
+        if candidate.is_some() && self.matches_fn.get().is_none() {
+            self.matches_fn.set(candidate);
+        }
+    }
+
     /// Register an update listener. Called after every state-mutating
     /// op on this subscription (canonical upsert / remove, optimistic
     /// push / dequeue, schema reset). Returns an id used by
@@ -98,21 +147,42 @@ impl<Row: 'static> QuerySubscription<Row> {
     {
         let id = self.next_listener_id.get();
         self.next_listener_id.set(id.wrapping_add(1));
-        self.listeners.borrow_mut().push((id, Box::new(callback)));
+        self.listeners.borrow_mut().push((id, Rc::new(callback)));
         id
     }
 
-    /// Drop a previously-registered listener by id.
+    /// Drop a previously-registered listener by id. Uses `try_borrow_mut`
+    /// so an `UpdateToken::drop` that runs while another panic is
+    /// unwinding silently no-ops instead of triggering a double-panic
+    /// abort. The matching listener stays alive in the list until the
+    /// next non-borrowed unregister call.
     pub(crate) fn unregister_listener(&self, id: u64) {
-        let mut listeners = self.listeners.borrow_mut();
-        listeners.retain(|(lid, _)| *lid != id);
+        if let Ok(mut listeners) = self.listeners.try_borrow_mut() {
+            listeners.retain(|(lid, _)| *lid != id);
+        }
     }
 
-    /// Fire every registered listener. Called by the routing engine
-    /// after each batch of state mutations.
+    /// Fire every registered listener.
+    ///
+    /// Snapshots the listener list into a local `Vec<Rc<dyn Fn()>>`
+    /// BEFORE invoking any callback, then releases the `listeners`
+    /// borrow. This makes the following user-code patterns safe:
+    ///
+    /// * A callback that drops an `UpdateToken` (which `borrow_mut`s
+    ///   `listeners`) — runs without re-entry panic.
+    /// * A callback that registers a new listener via
+    ///   `view.on_update(...)` — the new listener is added to the
+    ///   underlying `Vec`, but isn't invoked in this notify pass.
     fn notify_listeners(&self) {
-        let listeners = self.listeners.borrow();
-        for (_, cb) in listeners.iter() {
+        // Take a snapshot of the listener Rc handles. Listener
+        // identities are stable across this snapshot — they refer to
+        // the same `Rc<dyn Fn()>` even if the underlying Vec is
+        // mutated concurrently by a callback below.
+        let snapshot: Vec<Rc<dyn Fn()>> = {
+            let listeners = self.listeners.borrow();
+            listeners.iter().map(|(_, cb)| cb.clone()).collect()
+        };
+        for cb in snapshot {
             cb();
         }
     }
@@ -121,10 +191,6 @@ impl<Row: 'static> QuerySubscription<Row> {
 impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
     fn stream(&self) -> &SyncStreamName {
         self.query.stream()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn refcount(&self) -> usize {
@@ -141,6 +207,10 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
         let next = self.refcount.get().saturating_sub(1);
         self.refcount.set(next);
         next
+    }
+
+    fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any> {
+        self
     }
 }
 
@@ -159,7 +229,11 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
 /// a use-after-free.
 struct QueryClientInner {
     endpoint: String,
-    registry: RefCell<HashMap<QueryKey, Rc<dyn AnyQuerySubscription>>>,
+    /// Active subscriptions keyed by `(Row TypeId, QueryKey)`. Two
+    /// queries with the same `(stream, params, order, limit)` but
+    /// different `Row` types live in separate entries — no
+    /// `Rc<dyn Any>` downcast can panic on a Row mismatch.
+    registry: RefCell<HashMap<RegistryKey, Rc<dyn AnyQuerySubscription>>>,
 }
 
 pub struct QueryClient {
@@ -191,27 +265,38 @@ impl QueryClient {
 
     /// Subscribe to a query, returning a refcounted handle. Two
     /// subscribe calls with logically-equal queries return handles
-    /// over the same underlying `QuerySubscription`.
+    /// over the same underlying `QuerySubscription`. When the new
+    /// query carries a `matches_fn` and the existing subscription's
+    /// is `None`, the predicate is upgraded so a hand-built Query
+    /// (no macro) followed by a macro-built one starts honoring
+    /// the macro's predicate.
     pub fn subscribe<Row>(&self, query: Query<Row>) -> QueryHandle<Row>
     where
         Row: 'static,
     {
-        let key = query.key();
+        let registry_key: RegistryKey = (TypeId::of::<Row>(), query.key());
+        let candidate_matches_fn = query.matches_fn;
         let mut registry = self.inner.registry.borrow_mut();
-        let entry = registry.entry(key).or_insert_with(|| {
-            let sub = QuerySubscription::new(query.clone());
-            Rc::new(sub) as Rc<dyn AnyQuerySubscription>
+        let entry = registry.entry(registry_key).or_insert_with(|| {
+            Rc::new(QuerySubscription::new(query)) as Rc<dyn AnyQuerySubscription>
         });
         entry.bump_refcount();
-        // Coerce back to the typed subscription. The registry maps one
-        // QueryKey to one Row type (queries built via the macro can
-        // only target one row type per stream), so this downcast is
-        // always Some() in correct usage.
-        let typed: Rc<QuerySubscription<Row>> = downcast_subscription(entry.clone())
-            .expect("subscription Row type matches the query's Row type");
+        // Safe downcast via `Rc<dyn Any>`. The `(TypeId, QueryKey)`
+        // composite key guarantees the entry's concrete `Row` type
+        // matches the caller's, so this downcast is total — no
+        // possibility of panic on `Row` collision.
+        let typed: Rc<QuerySubscription<Row>> = Rc::downcast::<QuerySubscription<Row>>(
+            entry.clone().as_rc_any(),
+        )
+        .expect(
+            "(TypeId, QueryKey) collision keys to wrong Row type — framework invariant violated",
+        );
+        // Upgrade the stored predicate if the caller has a Some()
+        // matches_fn and the existing one is None.
+        typed.maybe_upgrade_matches_fn(candidate_matches_fn);
         QueryHandle {
             subscription: typed,
-            registry: RegistryWeakRef::new(&self.inner, key),
+            registry: RegistryWeakRef::new(&self.inner, registry_key),
         }
     }
 
@@ -224,10 +309,11 @@ impl QueryClient {
     /// Returns the current refcount for a query's subscription, or
     /// `None` if no subscription exists for that query.
     pub fn refcount_of<Row: 'static>(&self, query: &Query<Row>) -> Option<usize> {
+        let key: RegistryKey = (TypeId::of::<Row>(), query.key());
         self.inner
             .registry
             .borrow()
-            .get(&query.key())
+            .get(&key)
             .map(|sub| sub.refcount())
     }
 
@@ -272,8 +358,25 @@ impl QueryClient {
         let mutation_id = ctx.next_mutation_id()?;
         let payload_value = serde_json::to_value(&payload)
             .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        // Derive the wire `SyncOp` from the mutator's local row
+        // changes. A mutator that only produces deletes is encoded
+        // as a Delete on the wire; a mutator that produces both
+        // (rare) defaults to Upsert because the per-mutation
+        // envelope can only carry one op. For pure-delete mutators
+        // (the common case for "remove" actions), this avoids
+        // sending op=Upsert with a key-shaped payload which would
+        // corrupt the server's mutation log.
+        let wire_op = if !local_changes.is_empty()
+            && local_changes
+                .iter()
+                .all(|c| matches!(c, RowChange::Delete(_)))
+        {
+            pocopine_sync::SyncOp::Delete
+        } else {
+            pocopine_sync::SyncOp::Upsert
+        };
         let wire_mutation =
-            pocopine_sync::ClientMutation::upsert(mutation_id.clone(), payload_value);
+            pocopine_sync::ClientMutation::new(mutation_id.clone(), wire_op, payload_value);
 
         self.route_optimistic_changes::<M::Row>(
             &stream,
@@ -311,16 +414,7 @@ impl QueryClient {
     where
         Row: Clone + 'static,
     {
-        let registry = self.inner.registry.borrow();
-        for sub in registry.values() {
-            if sub.stream() != stream {
-                continue;
-            }
-            let Some(typed): Option<&QuerySubscription<Row>> =
-                downcast_ref_subscription(sub.as_any())
-            else {
-                continue;
-            };
+        for typed in self.collect_subscriptions_on_stream::<Row>(stream) {
             let removed = typed.state.borrow_mut().remove_pending(mutation_id);
             if removed.is_some() {
                 typed.notify_listeners();
@@ -338,6 +432,12 @@ impl QueryClient {
     /// are unaffected.
     ///
     /// Internal API — consumers use [`QueryClient::mutate`] instead.
+    ///
+    /// Snapshots matching subscriptions into a local Vec BEFORE
+    /// mutating state / firing listeners, so callbacks can safely
+    /// call back into the client (e.g. `client.observe(...)`,
+    /// `client.mutate(...)`, or drop an `UpdateToken`) without
+    /// re-entering the `registry` RefCell.
     pub(crate) fn route_optimistic_changes<Row>(
         &self,
         stream: &SyncStreamName,
@@ -347,27 +447,12 @@ impl QueryClient {
     ) where
         Row: Clone + serde::Serialize + 'static,
     {
-        let registry = self.inner.registry.borrow();
-        for sub in registry.values() {
-            if sub.stream() != stream {
-                continue;
-            }
-            let Some(typed): Option<&QuerySubscription<Row>> =
-                downcast_ref_subscription(sub.as_any())
-            else {
-                continue;
-            };
+        for typed in self.collect_subscriptions_on_stream::<Row>(stream) {
             let mut touched = false;
             for change in changes {
                 match change {
                     RowChange::Upsert(row) => {
-                        if typed.query.matches(row) {
-                            // Build the optimistic row to overlay. The
-                            // row's `RowKey` comes from the
-                            // serialization side — here we rely on
-                            // the macro / mutator author placing the
-                            // key inside the row before calling
-                            // route_optimistic_changes.
+                        if typed.matches(row) {
                             let mut state = typed.state.borrow_mut();
                             let overlay = PendingOverlay {
                                 mutation_id: mutation_id.clone(),
@@ -386,19 +471,42 @@ impl QueryClient {
                         }
                     }
                     RowChange::Delete(key) => {
-                        // Delete-shaped overlays remove the row from
-                        // visibility while the canonical confirmation
-                        // is in flight.
-                        let mut state = typed.state.borrow_mut();
-                        let overlay = PendingOverlay::<Row> {
-                            mutation_id: mutation_id.clone(),
-                            mutation: wire_mutation.clone(),
-                            optimistic_row: None,
-                            conflict: false,
+                        // Predicate-gate the delete: a subscription
+                        // only gets a Delete overlay when the row
+                        // identified by `key` is currently visible
+                        // (in canonical or as an optimistic upsert).
+                        // Without this gate, every delete would
+                        // broadcast a no-op overlay to every
+                        // subscription on the stream, spuriously
+                        // marking unrelated views as non-empty and
+                        // firing their listeners.
+                        let row_visible = {
+                            let state = typed.state.borrow();
+                            state.canonical_rows().any(|r| &r.key == key)
+                                || state.pending().iter().any(|p| {
+                                    p.optimistic_row
+                                        .as_ref()
+                                        .map(|r| &r.key == key)
+                                        .unwrap_or(false)
+                                })
                         };
-                        state.push_pending(overlay);
-                        touched = true;
-                        let _ = key; // key drives the rebase render layer (TBD)
+                        if row_visible {
+                            let mut state = typed.state.borrow_mut();
+                            state.push_pending(PendingOverlay::<Row> {
+                                mutation_id: mutation_id.clone(),
+                                mutation: wire_mutation.clone(),
+                                optimistic_row: None,
+                                conflict: false,
+                            });
+                            // Optimistic delete: ALSO remove the row
+                            // from canonical_rows so `view.rows()`
+                            // reflects the disappearance immediately.
+                            // The canonical reconcile path will
+                            // re-confirm the absence (or restore via
+                            // rollback if the push fails).
+                            state.remove_canonical(key);
+                            touched = true;
+                        }
                     }
                 }
             }
@@ -420,6 +528,9 @@ impl QueryClient {
     ///   subscription.
     ///
     /// Internal API — consumers use [`QueryClient::mutate`] instead.
+    /// Fires `notify_listeners` only when the subscription's state
+    /// actually changed — avoids over-notifying observers of
+    /// unrelated subscriptions on cross-tenant mutations.
     pub(crate) fn route_canonical_changes<Row>(
         &self,
         stream: &SyncStreamName,
@@ -428,20 +539,14 @@ impl QueryClient {
     ) where
         Row: Clone + serde::Serialize + 'static,
     {
-        let registry = self.inner.registry.borrow();
-        for sub in registry.values() {
-            if sub.stream() != stream {
-                continue;
-            }
-            let Some(typed): Option<&QuerySubscription<Row>> =
-                downcast_ref_subscription(sub.as_any())
-            else {
-                continue;
-            };
-            {
+        for typed in self.collect_subscriptions_on_stream::<Row>(stream) {
+            let touched = {
                 let mut state = typed.state.borrow_mut();
-                // Dequeue the optimistic overlay (idempotent if not present).
-                let _ = state.remove_pending(mutation_id);
+                let mut touched = false;
+                // Dequeue the optimistic overlay (idempotent).
+                if state.remove_pending(mutation_id).is_some() {
+                    touched = true;
+                }
                 for change in canonical {
                     match change {
                         RowChange::Upsert(row) => {
@@ -449,7 +554,7 @@ impl QueryClient {
                                 Some(k) => k,
                                 None => continue,
                             };
-                            if typed.query.matches(row) {
+                            if typed.matches(row) {
                                 state.upsert_canonical(SyncRow {
                                     key,
                                     version: None,
@@ -457,22 +562,46 @@ impl QueryClient {
                                     pending: false,
                                     conflict: false,
                                 });
-                            } else {
-                                // Row no longer matches this query's
-                                // predicate (e.g. a workspace
-                                // transition). Remove from canonical
-                                // too.
+                                touched = true;
+                            } else if state.canonical_rows().any(|r| r.key == key) {
                                 state.remove_canonical(&key);
+                                touched = true;
                             }
                         }
                         RowChange::Delete(key) => {
-                            state.remove_canonical(key);
+                            if state.canonical_rows().any(|r| &r.key == key) {
+                                state.remove_canonical(key);
+                                touched = true;
+                            }
                         }
                     }
                 }
+                touched
+            };
+            if touched {
+                typed.notify_listeners();
             }
-            typed.notify_listeners();
         }
+    }
+
+    /// Snapshot all subscriptions on a given stream whose Row type
+    /// matches `Row`. The returned Vec holds `Rc` clones so callers
+    /// can freely call back into the `QueryClient` from inside the
+    /// iteration body — no `registry` borrow is held across the
+    /// `notify_listeners` invocations downstream.
+    fn collect_subscriptions_on_stream<Row: 'static>(
+        &self,
+        stream: &SyncStreamName,
+    ) -> Vec<Rc<QuerySubscription<Row>>> {
+        let target = (TypeId::of::<Row>(), ());
+        let registry = self.inner.registry.borrow();
+        registry
+            .iter()
+            .filter(|((tid, _), sub)| *tid == target.0 && sub.stream() == stream)
+            .filter_map(|(_, sub)| {
+                Rc::downcast::<QuerySubscription<Row>>(sub.clone().as_rc_any()).ok()
+            })
+            .collect()
     }
 }
 
@@ -482,17 +611,25 @@ impl Default for QueryClient {
     }
 }
 
-/// Borrow-form downcast helper used by the routing engine. Returns
-/// `None` when the registry entry holds a different `Row` type than
-/// the caller expects.
-fn downcast_ref_subscription<Row: 'static>(any_ref: &dyn Any) -> Option<&QuerySubscription<Row>> {
-    any_ref.downcast_ref::<QuerySubscription<Row>>()
-}
+// (Routing engine downcasts via `collect_subscriptions_on_stream`,
+// which uses `Rc::downcast::<QuerySubscription<Row>>` via the
+// `as_rc_any` upcast — fully safe stdlib path.)
 
-/// Best-effort row-key extractor. For now we look for a `id` field
-/// in the row's serialization and use that as the `RowKey`. A future
-/// PR will replace this with a `Row: HasRowKey` trait so the routing
-/// engine doesn't depend on serialization.
+/// Best-effort row-key extractor.
+///
+/// Requires the row's serialization to expose an `"id"` field of
+/// JSON String type. Non-string ids (numbers, bool, null, arrays)
+/// previously fell through to `Value::to_string()` which JSON-encoded
+/// them — two distinct rows could collapse to the same `RowKey` (`42`
+/// and `"42"`; multiple `null`s; etc.). Returning `None` for
+/// non-string ids surfaces the misuse as a "row silently dropped from
+/// routing" symptom — source authors should ensure their row types
+/// serialize `id` as a string (`id: String`, `id: SomeWrapper`
+/// where the wrapper's serde repr is a string, etc.).
+///
+/// A future trait `HasRowKey` will replace this serialization-based
+/// extractor with a typed contract; until then, the JSON-string
+/// constraint is the wire-contract proxy.
 fn row_key_of<Row>(row: &Row) -> Option<pocopine_sync::RowKey>
 where
     Row: serde::Serialize,
@@ -501,31 +638,18 @@ where
     let id = value.get("id")?;
     let id_str = match id {
         Value::String(s) => s.clone(),
-        other => other.to_string(),
+        // Non-string ids: refuse rather than JSON-stringify. See
+        // doc comment above for the collision rationale.
+        _ => return None,
     };
     pocopine_sync::RowKey::new(id_str).ok()
 }
 
-/// Downcast helper. Returns `None` when the registry entry is held
-/// against a different `Row` type than the caller expects — should
-/// never happen in correct usage (one stream → one Row type).
-fn downcast_subscription<Row: 'static>(
-    sub: Rc<dyn AnyQuerySubscription>,
-) -> Option<Rc<QuerySubscription<Row>>> {
-    // Rc<dyn Trait> → Rc<ConcreteType> needs an unsafe transmute on
-    // stable, or we can route through `as_any`. We use `as_any` for
-    // safety; the cost is one virtual call at downcast time.
-    if sub.as_any().is::<QuerySubscription<Row>>() {
-        // SAFETY: `as_any().is::<T>()` returned true, so the concrete
-        // type matches. The `Rc` already owns the allocation; we
-        // re-typed the pointer.
-        let raw = Rc::into_raw(sub) as *const QuerySubscription<Row>;
-        // SAFETY: same as above; the layout matches.
-        Some(unsafe { Rc::from_raw(raw) })
-    } else {
-        None
-    }
-}
+// (Owning downcast lives inline at the `subscribe` call site, which
+// uses `Rc::downcast::<QuerySubscription<Row>>(rc.as_rc_any())` — a
+// fully-safe path supported by the stdlib that replaces the prior
+// `Rc::into_raw`/`from_raw` cast that relied on `RcBox<dyn T>` /
+// `RcBox<T>` layout coincidence.)
 
 /// Handle to a live query subscription. Drop to decrement the
 /// refcount; the underlying `QuerySubscription` is gc'd when no
@@ -591,29 +715,47 @@ impl<Row: 'static> QueryView<Row> {
         self.handle.state()
     }
 
-    /// Current canonical row count.
-    pub fn len(&self) -> usize {
-        self.state().canonical_len()
+    /// Number of rendered rows: canonical, with optimistic upserts
+    /// applied. (Optimistic deletes are reflected by the routing
+    /// engine removing the row from `canonical_rows` immediately, so
+    /// they don't need to be counted out here.)
+    pub fn len(&self) -> usize
+    where
+        Row: Clone + serde::Serialize,
+    {
+        self.rows().len()
     }
 
-    /// True when the view has no canonical rows AND no pending
-    /// overlays.
-    pub fn is_empty(&self) -> bool {
-        let state = self.state();
-        state.canonical_len() == 0 && state.pending().is_empty()
+    /// True when the rendered row set is empty AND there are no
+    /// pending overlays.
+    pub fn is_empty(&self) -> bool
+    where
+        Row: Clone + serde::Serialize,
+    {
+        self.rows().is_empty() && self.state().pending().is_empty()
     }
 
-    /// Borrow the canonical rows as a vector copy. Convenient when
-    /// callers want to iterate without holding a `Ref<_>` across
-    /// state mutations.
+    /// The view's current rendered row set: canonical rows MERGED
+    /// with optimistic pending overlays. Rows are returned in
+    /// `RowKey` order; if both a canonical and an optimistic row
+    /// share a key, the optimistic wins (that's the point — local
+    /// edits are visible immediately).
     pub fn rows(&self) -> Vec<Row>
     where
-        Row: Clone,
+        Row: Clone + serde::Serialize,
     {
-        self.state()
+        use std::collections::BTreeMap;
+        let state = self.state();
+        let mut rendered: BTreeMap<pocopine_sync::RowKey, Row> = state
             .canonical_rows()
-            .map(|r| r.value.clone())
-            .collect()
+            .map(|r| (r.key.clone(), r.value.clone()))
+            .collect();
+        for overlay in state.pending() {
+            if let Some(opt_row) = &overlay.optimistic_row {
+                rendered.insert(opt_row.key.clone(), opt_row.value.clone());
+            }
+        }
+        rendered.into_values().collect()
     }
 
     /// Monotonic state-version counter. Bumps on every mutation
@@ -691,11 +833,11 @@ impl<Row: 'static> Drop for QueryHandle<Row> {
 /// and no-ops the refcount decrement. Safe Rust — no raw pointers.
 struct RegistryWeakRef {
     client: Weak<QueryClientInner>,
-    key: QueryKey,
+    key: RegistryKey,
 }
 
 impl RegistryWeakRef {
-    fn new(client: &Rc<QueryClientInner>, key: QueryKey) -> Self {
+    fn new(client: &Rc<QueryClientInner>, key: RegistryKey) -> Self {
         Self {
             client: Rc::downgrade(client),
             key,
@@ -709,8 +851,14 @@ impl RegistryWeakRef {
     }
 }
 
-fn release_inner(inner: &QueryClientInner, key: QueryKey) {
-    let mut registry = inner.registry.borrow_mut();
+fn release_inner(inner: &QueryClientInner, key: RegistryKey) {
+    // `try_borrow_mut` so a Drop running while the routing engine
+    // already holds the registry borrow no-ops instead of
+    // double-panicking. The decrement will happen when the next
+    // entry-touching op runs — refcount staleness is bounded.
+    let Ok(mut registry) = inner.registry.try_borrow_mut() else {
+        return;
+    };
     let should_remove = registry
         .get(&key)
         .map(|sub| sub.decrement_refcount() == 0)
