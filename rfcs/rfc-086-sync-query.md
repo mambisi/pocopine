@@ -85,10 +85,11 @@ impl<Row> Query<Row> {
 The macro generates per-resource builders (carried forward from RFC 085):
 
 ```rust
+use issues::field;
 let q: Query<Issue> = Issues::query()
-    .where_eq(field::workspace_id, w1)?
-    .where_in(field::status, [Status::Open, Status::InProgress])?
-    .order_by(field::created_at, Order::Desc)
+    .eq(field::workspace_id, w1)
+    .in_set(field::status, [Status::Open, Status::InProgress])?
+    .order_by("created_at", Order::Desc)
     .limit(50)
     .build();
 ```
@@ -280,7 +281,7 @@ New crate. Builds on `pocopine-sync` directly. Includes:
 
 * `Query<Row>`, `QueryClient`, `QuerySubscription`, `QueryHandle` types.
 * `Mutator` trait + predicate-routing engine.
-* New proc-macro crate `pocopine-sync-query-macros` for the typed DSL (`Query::where_eq`, etc.) + the predicate evaluator generator.
+* New proc-macro crate `pocopine-sync-query-macros` for the trait-gated query DSL (`.eq` / `.in_set` / `.range` / `.contains` on `QueryBuilder<Row>`) + the predicate evaluator generator.
 * `params::*` comparator wrappers (moved from `pocopine-sync-crud`).
 * Optional `CrudSource → QuerySource` adapter for transactional writes.
 

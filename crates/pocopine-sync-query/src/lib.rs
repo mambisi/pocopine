@@ -24,11 +24,12 @@
 //! let client: &QueryClient = pocopine::query_client();
 //!
 //! // Subscribe to a filtered view
-//! let handle = client.subscribe(
+//! use issues::field;
+//! let handle = client.observe(
 //!     Issues::query()
-//!         .where_eq(field::workspace_id, w1)?
-//!         .where_in(field::status, [Status::Open, Status::InProgress])?
-//!         .order_by(field::created_at, Order::Desc)
+//!         .eq(field::workspace_id, w1)
+//!         .in_set(field::status, [Status::Open, Status::InProgress])?
+//!         .order_by("created_at", Order::Desc)
 //!         .limit(50)
 //!         .build()
 //! );

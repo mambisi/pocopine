@@ -80,10 +80,11 @@ In a component, get the client and observe:
 ```rust,ignore
 fn on_ready(&self, qc: Plugin<Rc<QueryClient>>) {
     // Build + subscribe. `view` is reactive; drop to unsubscribe.
+    use issues::field;
     let view = Issues::query()
-        .workspace_id(self.workspace_id.clone())
-        .status_in([Status::Open, Status::InProgress])?
-        .title_contains("auth")?
+        .eq(field::workspace_id, self.workspace_id.clone())
+        .in_set(field::status, [Status::Open, Status::InProgress])?
+        .contains(field::title, "auth")?
         .order_by("created_at", Order::Desc)
         .limit(50)
         .observe(&qc);

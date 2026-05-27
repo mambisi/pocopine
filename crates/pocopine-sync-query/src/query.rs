@@ -49,8 +49,9 @@ pub type MatchFn<Row> = fn(query: &Query<Row>, row: &Row) -> bool;
 impl<Row> Query<Row> {
     /// Build a query from its parts. Most callers go through the macro-
     /// generated `Resource::query()` builder, which constructs the params
-    /// map via typed `where_*` setters and injects the macro-generated
-    /// predicate evaluator via [`QueryBuilder::with_matches`].
+    /// map via the typed DSL (`.eq` / `.in_set` / `.range` / `.contains`)
+    /// and injects the macro-generated predicate evaluator via
+    /// [`QueryBuilder::with_matches`].
     pub fn builder(stream: SyncStreamName) -> QueryBuilder<Row> {
         QueryBuilder {
             stream,
@@ -187,12 +188,16 @@ pub enum Order {
 }
 
 /// Builder produced by [`Query::builder`] and the macro-generated
-/// `Resource::query()` helper. Provides typed `.where_*` / `.order_by` /
-/// `.limit` setters; finalize with `.build()`.
+/// `Resource::query()` helper. Provides the trait-gated query DSL
+/// (`.eq` / `.in_set` / `.range` / `.contains` / `.contains_exact`)
+/// plus `.order_by` and `.limit` setters; finalize with `.build()`
+/// or subscribe directly with `.observe(&client)`.
 ///
-/// The macro generates wrappers over this that constrain the `where_*`
-/// methods to the resource's declared fields via the sealed comparator
-/// traits in [`crate::predicate`].
+/// The DSL methods take a field marker (e.g. `field::workspace_id`)
+/// as their first argument and route through the sealed comparator
+/// traits in [`crate::predicate`]. Misuse — passing a field marker
+/// whose declared comparator doesn't match the method called —
+/// fails at compile time, not at the wire boundary.
 #[derive(Debug)]
 pub struct QueryBuilder<Row> {
     stream: SyncStreamName,
@@ -262,6 +267,123 @@ impl<Row> QueryBuilder<Row> {
             matches_fn: self.matches_fn,
             _row: PhantomData,
         }
+    }
+
+    /// Equality predicate. Adds `(field, value)` to the param map iff
+    /// `field` is a marker type that implements [`crate::FieldEq<T>`].
+    /// The sealed-trait gate is what gives the DSL its type-level
+    /// correctness: misnaming a field or passing a `T` that doesn't
+    /// match the declared param's type fails at compile time, not at
+    /// the wire boundary.
+    ///
+    /// ```ignore
+    /// Issues::query()
+    ///     .eq(field::workspace_id, "W1".to_string())
+    ///     // field::status is FieldInSet<Status>, not FieldEq —
+    ///     // .eq(field::status, ...) would fail to compile
+    ///     .build();
+    /// ```
+    pub fn eq<M, T>(self, _field: M, value: T) -> Self
+    where
+        M: crate::FieldEq<T>,
+        T: serde::Serialize,
+    {
+        let encoded = serde_json::to_value(&value)
+            .expect("FieldEq value must be JSON-serializable — contract violation");
+        self.raw_param(<M as crate::FieldEq<T>>::NAME, encoded)
+    }
+
+    /// Set-membership predicate. Adds `(field, InSet<T>)` to the
+    /// param map iff `field` implements [`crate::FieldInSet<T>`].
+    /// Returns an error if `values` is empty (an empty set matches
+    /// no rows; the caller likely meant to omit the param entirely).
+    ///
+    /// ```ignore
+    /// Issues::query()
+    ///     .in_set(field::status, [Status::Open, Status::InProgress])?
+    ///     .build();
+    /// ```
+    pub fn in_set<M, T, I>(self, _field: M, values: I) -> pocopine_sync::SyncResult<Self>
+    where
+        M: crate::FieldInSet<T>,
+        T: serde::Serialize,
+        I: IntoIterator<Item = T>,
+    {
+        let set = crate::params::InSet::<T>::new(values)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        let encoded = serde_json::to_value(&set)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        Ok(self.raw_param(<M as crate::FieldInSet<T>>::NAME, encoded))
+    }
+
+    /// Range predicate. Adds `(field, Range<T>)` to the param map iff
+    /// `field` implements [`crate::FieldRange<T>`]. The range value
+    /// is pre-constructed via [`crate::params::Range`]'s helper
+    /// constructors (`closed`, `half_open`, `at_least`, `at_most`,
+    /// `greater_than`, `less_than`) — the constructor enforces the
+    /// "at least one bound" invariant.
+    ///
+    /// ```ignore
+    /// Issues::query()
+    ///     .range(field::priority, params::Range::closed(2, 5))
+    ///     .build();
+    /// ```
+    pub fn range<M, T>(self, _field: M, range: crate::params::Range<T>) -> Self
+    where
+        M: crate::FieldRange<T>,
+        T: serde::Serialize,
+    {
+        let encoded = serde_json::to_value(&range)
+            .expect("Range<T> is always JSON-serializable when T: Serialize");
+        self.raw_param(<M as crate::FieldRange<T>>::NAME, encoded)
+    }
+
+    /// Substring-match predicate (case-insensitive). Adds
+    /// `(field, Contains { contains: needle, case_sensitive: false })`
+    /// to the param map iff `field` implements [`crate::FieldContains`].
+    /// Returns an error on empty needle (empty matches every row —
+    /// likely a misuse; omit the param instead).
+    ///
+    /// For case-sensitive matching, use [`Self::contains_exact`].
+    ///
+    /// ```ignore
+    /// Issues::query()
+    ///     .contains(field::title, "google")?
+    ///     .build();
+    /// ```
+    pub fn contains<M, S>(self, _field: M, needle: S) -> pocopine_sync::SyncResult<Self>
+    where
+        M: crate::FieldContains,
+        S: Into<String>,
+    {
+        let contains = crate::params::Contains::icontains(needle)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        let encoded =
+            serde_json::to_value(&contains).expect("Contains is always JSON-serializable");
+        Ok(self.raw_param(<M as crate::FieldContains>::NAME, encoded))
+    }
+
+    /// Substring-match predicate (case-sensitive). Like
+    /// [`Self::contains`] but enforces exact-case matching.
+    pub fn contains_exact<M, S>(self, _field: M, needle: S) -> pocopine_sync::SyncResult<Self>
+    where
+        M: crate::FieldContains,
+        S: Into<String>,
+    {
+        let contains = crate::params::Contains::matches(needle)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+        let encoded =
+            serde_json::to_value(&contains).expect("Contains is always JSON-serializable");
+        Ok(self.raw_param(<M as crate::FieldContains>::NAME, encoded))
+    }
+
+    /// Subscribe to this query through `client` and return a reactive
+    /// view. Sugar for `client.observe(self.build())`.
+    pub fn observe(self, client: &crate::QueryClient) -> crate::QueryView<Row>
+    where
+        Row: Clone + 'static,
+    {
+        client.observe(self.build())
     }
 }
 
