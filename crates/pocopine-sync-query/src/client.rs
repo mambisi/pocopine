@@ -985,33 +985,47 @@ impl QueryClient {
         inner.replay_queue.borrow_mut().push_back(entry);
     }
 
-    /// Driver-only: roll back the optimistic overlay for one
-    /// `(subscription, mutation_id)` pair without scanning the
-    /// registry. Used by the replay path when the server rejects
-    /// a mutation after a network blip — the offline-queued
-    /// optimistic state was a "best guess" the server later
-    /// invalidated.
-    pub(crate) fn dequeue_pending_for_subscription<Row>(
-        _inner: &Rc<QueryClientInner>,
-        subscription: &QuerySubscription<Row>,
+    /// Driver-only: roll back the optimistic overlay for `mutation_id`
+    /// across EVERY matching subscription on `stream`. Same semantics
+    /// as the private `dequeue_pending` method on `QueryClient` — the
+    /// shape this is exposed for the offline-replay path which only
+    /// holds the inner `Rc`, not the outer `QueryClient`.
+    ///
+    /// This is the correct entry point for the rejected-replay
+    /// cleanup path because optimistic state for one mutation is
+    /// fan-out across every subscription whose predicate matched at
+    /// the original `apply_local` time. Cleaning only the driver's
+    /// own subscription leaves stale pending state behind on every
+    /// other view that received the same optimistic upsert.
+    pub(crate) fn dequeue_pending_for_stream<Row>(
+        inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
         mutation_id: &MutationId,
     ) where
         Row: Clone + 'static,
     {
-        let removed = {
-            let mut state = subscription.state.borrow_mut();
-            let overlays = state.remove_pending(mutation_id);
-            for overlay in &overlays {
-                if let Some(restored) = overlay.deleted_row.clone() {
-                    if !state.canonical_contains(&restored.key) {
-                        state.upsert_canonical(restored);
+        for typed in collect_subscriptions_on_stream_inner::<Row>(inner, stream) {
+            let removed = {
+                let mut state = typed.state.borrow_mut();
+                let overlays = state.remove_pending(mutation_id);
+                // Same conservative-restore rule as the in-flight
+                // mutate() rollback: only re-upsert when canonical
+                // doesn't already hold a (potentially newer) row
+                // for the key. Skipping the restore on collision
+                // lets the newer canonical stand; the next /pull
+                // will reconcile.
+                for overlay in &overlays {
+                    if let Some(restored) = overlay.deleted_row.clone() {
+                        if !state.canonical_contains(&restored.key) {
+                            state.upsert_canonical(restored);
+                        }
                     }
                 }
+                overlays
+            };
+            if !removed.is_empty() {
+                typed.notify_listeners();
             }
-            overlays
-        };
-        if !removed.is_empty() {
-            subscription.notify_listeners();
         }
     }
 
