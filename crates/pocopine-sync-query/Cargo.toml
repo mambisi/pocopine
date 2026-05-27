@@ -15,6 +15,11 @@ serde = { workspace = true }
 # matching the pattern from pocopine-sync-crud. Declared unconditionally so wasm
 # consumers don't need their own transitive serde_json dep.
 serde_json = { workspace = true }
+# RFC 087 driver — `futures::select!` + `FutureExt::fuse()` provide a
+# runtime-agnostic select-shape across wasm + tokio so the driver's
+# main loop source compiles unchanged on both targets.
+futures = "0.3"
+tracing = { workspace = true }
 
 [dev-dependencies]
 js-sys = { workspace = true }
@@ -23,10 +28,25 @@ wasm-bindgen = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-trait = "0.1"
 pocopine-auth = { workspace = true }
+# RFC 087 driver — `tokio::task::spawn_local` requires the host
+# caller to have a `LocalSet` active (documented on `QueryClient`).
+# `sync` brings `Mutex`/`Notify`; `time` brings `sleep`. `rt` is
+# transitive but explicit for clarity.
+tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# RFC 087 driver — wasm spawn shim is `spawn_local` here, with the
+# task captured in a `JoinHandle`-like wrapper for the eventual
+# scope-lifetime hook.
+wasm-bindgen-futures = { workspace = true }
+# `setTimeout` bridge for the polling tick + `Promise::new` for the
+# resolve callback. Plus `wasm-bindgen` for `JsCast` / `closure`.
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { version = "0.3", features = ["Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 http = { workspace = true }
 http-body-util = "0.1"
 pocopine-server = { workspace = true }
-tokio = { version = "1", features = ["macros", "rt"] }
 tower = { version = "0.5", features = ["util"] }

@@ -623,6 +623,19 @@ fn server_error(error: SyncError) -> ServerError {
             tracing::error!(target: "pocopine.log", error = %msg, "sync backend error");
             ServerError::App("sync internal error".to_string())
         }
+        SyncError::Network(msg) => {
+            // Server-side handlers don't generate Network errors —
+            // that variant is for the sync-query driver classifying
+            // transport failures from a `Mutator::apply_remote`
+            // future. If we ever observe one here it's a bug; map
+            // to a generic 500 with the message in the log.
+            tracing::error!(
+                target: "pocopine.log",
+                error = %msg,
+                "unexpected SyncError::Network surfaced from a sync request handler"
+            );
+            ServerError::App("sync internal error".to_string())
+        }
     }
 }
 

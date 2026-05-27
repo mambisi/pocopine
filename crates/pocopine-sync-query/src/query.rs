@@ -406,7 +406,7 @@ impl<Row> QueryBuilder<Row> {
     /// view. Sugar for `client.observe(self.build())`.
     pub fn observe(self, client: &crate::QueryClient) -> crate::QueryView<Row>
     where
-        Row: Clone + 'static,
+        Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
     {
         client.observe(self.build())
     }

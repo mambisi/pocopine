@@ -42,6 +42,7 @@
 //! [`pocopine-sync-crud`]: https://docs.rs/pocopine-sync-crud
 
 pub mod client;
+pub mod driver;
 pub mod mutator;
 pub mod params;
 pub mod plugin;
@@ -52,6 +53,10 @@ pub mod wire;
 
 // Re-exports of the curated public API.
 pub use client::{QueryClient, QueryHandle, QuerySubscription, QueryView, UpdateToken};
+pub use driver::{
+    live_event_matches_params, DriverEpoch, QueryClientConfig, DEFAULT_POLL_INTERVAL,
+    DEFAULT_SYNC_ENDPOINT,
+};
 pub use mutator::{MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, RowChange};
 pub use plugin::{query_client_plugin, QueryClientPlugin};
 pub use predicate::{

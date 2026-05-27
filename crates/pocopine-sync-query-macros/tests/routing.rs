@@ -85,7 +85,7 @@ impl MutatorRemoteContext for StubContext {
 
 #[tokio::test]
 async fn matching_view_receives_mutation_canonically() {
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let q = Issue::query()
         .eq(issues::field::workspace_id, "W1")
@@ -123,7 +123,7 @@ async fn matching_view_receives_mutation_canonically() {
 
 #[tokio::test]
 async fn non_matching_view_is_untouched() {
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
 
     let q_w1 = Issue::query().eq(issues::field::workspace_id, "W1").build();
@@ -151,7 +151,7 @@ async fn non_matching_view_is_untouched() {
 
 #[tokio::test]
 async fn version_counter_bumps_on_state_changes() {
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
@@ -190,7 +190,7 @@ async fn version_counter_bumps_on_state_changes() {
 
 #[tokio::test]
 async fn observe_dedupes_via_refcount() {
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let q1 = Issue::query().eq(issues::field::workspace_id, "W1").build();
     let q2 = Issue::query().eq(issues::field::workspace_id, "W1").build();
 
@@ -211,7 +211,7 @@ async fn on_update_listener_fires_after_state_changes() {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
@@ -247,7 +247,7 @@ async fn on_update_listener_unregisters_on_token_drop() {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
@@ -319,7 +319,7 @@ impl Mutator for DeleteIssue {
 
 #[tokio::test]
 async fn delete_mutation_removes_canonical_row() {
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
@@ -362,7 +362,7 @@ async fn delete_mutation_removes_canonical_row() {
 fn handle_outliving_client_is_safe() {
     let q = Issue::query().eq(issues::field::workspace_id, "W1").build();
     let h = {
-        let c = QueryClient::new();
+        let c = QueryClient::without_driver();
         c.subscribe::<Issue>(q)
     };
     // Client is gone; dropping the handle must not panic or UAF.
@@ -399,7 +399,7 @@ async fn rollback_notifies_observers() {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
@@ -447,7 +447,7 @@ fn builder_supports_order_and_limit() {
 
 #[tokio::test]
 async fn rows_applied_order_by_and_limit() {
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view = client.observe::<Issue>(
         Issue::query()
@@ -536,7 +536,7 @@ async fn delete_suppresses_prior_pending_upsert() {
         }
     }
 
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
@@ -599,7 +599,7 @@ async fn rollback_does_not_clobber_concurrent_canonical() {
         }
     }
 
-    let client = QueryClient::new();
+    let client = QueryClient::without_driver();
     let ctx = StubContext::new();
     let view =
         client.observe::<Issue>(Issue::query().eq(issues::field::workspace_id, "W1").build());
