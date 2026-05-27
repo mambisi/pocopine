@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Indexed by `RowKey` rather than position so the predicate-routing
 /// engine can insert / remove rows by identity in O(log n).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryState<Row> {
     /// Server-confirmed canonical rows, keyed by row identity.
     canonical_rows: BTreeMap<RowKey, SyncRow<Row>>,
@@ -63,6 +63,26 @@ pub struct PendingOverlay<Row> {
     /// mutation; the overlay stays visible with the conflict flag
     /// until the user resolves via the UI.
     pub conflict: bool,
+}
+
+impl<Row> Default for QueryState<Row> {
+    // Manual impl avoids the `Row: Default` bound that `derive(Default)`
+    // would add — the `Row` only appears inside `Vec` / `BTreeMap`
+    // values, all of which have their own empty constructors.
+    fn default() -> Self {
+        Self {
+            canonical_rows: BTreeMap::new(),
+            pending: Vec::new(),
+            cursor: None,
+            application_schema_version: None,
+            loading: false,
+            syncing: false,
+            stale: false,
+            error: String::new(),
+            last_reason: pocopine_sync::SyncReason::Idle,
+            request_generation: 0,
+        }
+    }
 }
 
 // `remove_canonical` / `push_pending` / `remove_pending` are entrypoints

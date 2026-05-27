@@ -1,0 +1,23 @@
+[package]
+name = "pocopine-sync-query-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Proc-macros for `pocopine-sync-query` — typed query DSL + predicate evaluator codegen."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { workspace = true, features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+pocopine-core = { workspace = true }
+pocopine-sync = { workspace = true }
+pocopine-sync-query = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+trybuild = "1"

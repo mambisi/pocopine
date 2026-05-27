@@ -40,16 +40,21 @@
 //!
 //! [`pocopine-sync-crud`]: https://docs.rs/pocopine-sync-crud
 
+pub mod client;
 pub mod mutator;
 pub mod params;
 pub mod predicate;
 pub mod query;
 pub mod state;
+pub mod wire;
 
 // Re-exports of the curated public API.
+pub use client::{QueryClient, QueryHandle, QuerySubscription};
 pub use mutator::{MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture, RowChange};
-pub use predicate::{FieldContains, FieldEq, FieldInSet, FieldRange};
-pub use query::{Order, OrderBy, Query, QueryBuilder, QueryKey};
+pub use predicate::{
+    contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldRange,
+};
+pub use query::{MatchFn, Order, OrderBy, Query, QueryBuilder, QueryKey};
 pub use state::QueryState;
 
 // Re-export wire-level types from pocopine-sync that the macro emissions

@@ -93,3 +93,100 @@ pub unsafe trait __SealedFieldMarker {}
 // trait. The blanket is safe — only the supertrait's impl-side is
 // unsafe — because `Sealed` carries no methods of its own.
 impl<T: ?Sized + __SealedFieldMarker> sealed::Sealed for T {}
+
+// ---------------------------------------------------------------------------
+// Comparator runtime helpers used by macro-emitted predicate evaluators.
+// Kept here (rather than in `params.rs`) because they're called from
+// generated code — the path `pocopine_sync_query::predicate::*` is part
+// of the macro's contract.
+// ---------------------------------------------------------------------------
+
+use crate::params;
+
+/// True when `value` falls inside `range`, honoring inclusivity.
+///
+/// A `None` bound on either side means "unbounded in that direction". A
+/// fully-unbounded range is rejected at deserialization so we don't have
+/// to special-case it here.
+pub fn range_contains<T>(range: &params::Range<T>, value: &T) -> bool
+where
+    T: PartialOrd,
+{
+    let after_lower = match (&range.from, range.inclusive.0) {
+        (Some(lo), true) => value >= lo,
+        (Some(lo), false) => value > lo,
+        (None, _) => true,
+    };
+    let before_upper = match (&range.to, range.inclusive.1) {
+        (Some(hi), true) => value <= hi,
+        (Some(hi), false) => value < hi,
+        (None, _) => true,
+    };
+    after_lower && before_upper
+}
+
+/// True when `needle.contains` appears in `haystack`, honoring the
+/// `case_sensitive` flag.
+pub fn contains_matches(needle: &params::Contains, haystack: &str) -> bool {
+    if needle.case_sensitive {
+        haystack.contains(&needle.contains)
+    } else {
+        haystack
+            .to_ascii_lowercase()
+            .contains(&needle.contains.to_ascii_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_contains_closed_inclusive() {
+        let r = params::Range::closed(1, 10);
+        assert!(range_contains(&r, &1));
+        assert!(range_contains(&r, &5));
+        assert!(range_contains(&r, &10));
+        assert!(!range_contains(&r, &0));
+        assert!(!range_contains(&r, &11));
+    }
+
+    #[test]
+    fn range_contains_half_open() {
+        let r = params::Range::half_open(1, 10); // [1, 10)
+        assert!(range_contains(&r, &1));
+        assert!(range_contains(&r, &9));
+        assert!(!range_contains(&r, &10));
+    }
+
+    #[test]
+    fn range_contains_at_least() {
+        let r = params::Range::at_least(5);
+        assert!(range_contains(&r, &5));
+        assert!(range_contains(&r, &1000));
+        assert!(!range_contains(&r, &4));
+    }
+
+    #[test]
+    fn range_contains_at_most() {
+        let r = params::Range::at_most(5);
+        assert!(range_contains(&r, &5));
+        assert!(range_contains(&r, &-1000));
+        assert!(!range_contains(&r, &6));
+    }
+
+    #[test]
+    fn contains_matches_case_insensitive_by_default() {
+        let needle = params::Contains::icontains("auth").unwrap();
+        assert!(contains_matches(&needle, "Authentication"));
+        assert!(contains_matches(&needle, "user auth flow"));
+        assert!(!contains_matches(&needle, "unrelated"));
+    }
+
+    #[test]
+    fn contains_matches_case_sensitive_when_flagged() {
+        let needle = params::Contains::matches("Auth").unwrap();
+        assert!(contains_matches(&needle, "Authentication"));
+        assert!(!contains_matches(&needle, "authentication"));
+    }
+}

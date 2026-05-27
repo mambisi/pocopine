@@ -1,0 +1,188 @@
+//! End-to-end tests for `#[query_resource]`.
+//!
+//! Declare a queryable resource, build queries with the typed DSL,
+//! exercise the macro-generated predicate evaluator on row data.
+
+#![cfg(not(target_arch = "wasm32"))]
+
+use pocopine_sync_query::{params, Order};
+use pocopine_sync_query_macros::query_resource;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+enum Status {
+    Open,
+    InProgress,
+    Closed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct Issue {
+    id: String,
+    workspace_id: String,
+    assignee_id: Option<String>,
+    title: String,
+    status: Status,
+    priority: u32,
+}
+
+#[query_resource(
+    name = "issues",
+    row = Issue,
+    schema_version = 1,
+    params(
+        workspace_id: String,
+        assignee_id: Option<String>,
+        status: params::InSet<Status>,
+        title: params::Contains,
+        priority: params::Range<u32>,
+    ),
+)]
+pub struct Issues;
+
+fn sample_issue() -> Issue {
+    Issue {
+        id: "post_1".to_string(),
+        workspace_id: "W1".to_string(),
+        assignee_id: Some("alice".to_string()),
+        title: "Auth bug".to_string(),
+        status: Status::Open,
+        priority: 5,
+    }
+}
+
+#[test]
+fn macro_emits_constants() {
+    assert_eq!(issues::NAME, "issues");
+    assert_eq!(issues::SCHEMA_VERSION, 1);
+}
+
+#[test]
+fn builder_constructs_typed_query() {
+    let q = Issues::query()
+        .workspace_id("W1".to_string())
+        .status_in([Status::Open, Status::InProgress])
+        .unwrap()
+        .title_contains("auth")
+        .unwrap()
+        .priority_range(params::Range::closed(1u32, 10))
+        .unwrap()
+        .order_by("priority", Order::Asc)
+        .limit(50)
+        .build();
+
+    assert_eq!(q.stream().as_str(), "issues");
+    assert_eq!(q.params().len(), 4);
+    assert!(q.params().contains_key("workspace_id"));
+    assert!(q.params().contains_key("status"));
+    assert!(q.params().contains_key("title"));
+    assert!(q.params().contains_key("priority"));
+    assert!(q.order_by().is_some());
+    assert_eq!(q.limit(), Some(50));
+}
+
+#[test]
+fn matches_required_eq_row_in_workspace() {
+    let q = Issues::query().workspace_id("W1".to_string()).build();
+    assert!(issues::matches(&q, &sample_issue()));
+    let mut other = sample_issue();
+    other.workspace_id = "W2".to_string();
+    assert!(!issues::matches(&q, &other));
+}
+
+#[test]
+fn matches_optional_eq_some_value() {
+    let q = Issues::query()
+        .workspace_id("W1".to_string())
+        .assignee_id("alice".to_string())
+        .build();
+    assert!(issues::matches(&q, &sample_issue()));
+    let mut bob = sample_issue();
+    bob.assignee_id = Some("bob".to_string());
+    assert!(!issues::matches(&q, &bob));
+    let mut none = sample_issue();
+    none.assignee_id = None;
+    assert!(!issues::matches(&q, &none));
+}
+
+#[test]
+fn matches_in_set() {
+    let q = Issues::query()
+        .workspace_id("W1".to_string())
+        .status_in([Status::Open, Status::InProgress])
+        .unwrap()
+        .build();
+    assert!(issues::matches(&q, &sample_issue()));
+    let mut closed = sample_issue();
+    closed.status = Status::Closed;
+    assert!(!issues::matches(&q, &closed));
+}
+
+#[test]
+fn matches_range() {
+    let q = Issues::query()
+        .workspace_id("W1".to_string())
+        .priority_range(params::Range::closed(1u32, 5))
+        .unwrap()
+        .build();
+    assert!(issues::matches(&q, &sample_issue()));
+    let mut high = sample_issue();
+    high.priority = 6;
+    assert!(!issues::matches(&q, &high));
+}
+
+#[test]
+fn matches_contains_case_insensitive() {
+    let q = Issues::query()
+        .workspace_id("W1".to_string())
+        .title_contains("AUTH")
+        .unwrap()
+        .build();
+    assert!(issues::matches(&q, &sample_issue()));
+    let mut unrelated = sample_issue();
+    unrelated.title = "Layout bug".to_string();
+    assert!(!issues::matches(&q, &unrelated));
+}
+
+#[test]
+fn matches_returns_true_when_no_params_declared() {
+    // Empty params → every row matches.
+    let q: pocopine_sync_query::Query<Issue> = pocopine_sync_query::Query::builder(
+        pocopine_sync_query::SyncStreamName::new("issues").unwrap(),
+    )
+    .build();
+    assert!(issues::matches(&q, &sample_issue()));
+}
+
+#[test]
+fn distinct_workspace_queries_have_distinct_keys() {
+    let a = Issues::query().workspace_id("W1".to_string()).build();
+    let b = Issues::query().workspace_id("W2".to_string()).build();
+    assert_ne!(a.key(), b.key());
+}
+
+#[test]
+fn field_markers_typecheck_against_comparator_traits() {
+    use pocopine_sync_query::{FieldContains, FieldEq, FieldInSet, FieldRange};
+
+    // The macro emitted: __Field_workspace_id impls FieldEq<String>.
+    fn _eq_workspace<F: FieldEq<String>>(_: F) {}
+    _eq_workspace(issues::field::workspace_id);
+
+    // __Field_assignee_id impls FieldEq<String> (Option<T> → T).
+    fn _eq_assignee<F: FieldEq<String>>(_: F) {}
+    _eq_assignee(issues::field::assignee_id);
+
+    // __Field_status impls FieldInSet<Status>.
+    fn _inset_status<F: FieldInSet<Status>>(_: F) {}
+    _inset_status(issues::field::status);
+
+    // __Field_priority impls FieldRange<u32>.
+    fn _range_priority<F: FieldRange<u32>>(_: F) {}
+    _range_priority(issues::field::priority);
+
+    // __Field_title impls FieldContains.
+    fn _contains_title<F: FieldContains>(_: F) {}
+    _contains_title(issues::field::title);
+}

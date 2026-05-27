@@ -28,19 +28,20 @@ Read [`docs/sync-query-design.md`](../../docs/sync-query-design.md) for the impl
 
 ## What ships in this branch
 
-| File                          | Status      | Notes                                                  |
-| ----------------------------- | ----------- | ------------------------------------------------------ |
-| `src/lib.rs`                  | ✅ scaffold | Module declarations + re-exports                       |
-| `src/query.rs`                | ✅ done     | `Query<Row>`, `QueryKey`, `OrderBy`, `Order` + builder |
-| `src/params.rs`               | ✅ done     | Comparator wrappers (`InSet`, `Range`, `Contains`)     |
-| `src/predicate.rs`            | ✅ done     | Sealed comparator-trait gate + field markers           |
-| `src/mutator.rs`              | ✅ done     | `Mutator` trait + `RowChange` + `MutationOutcome`      |
-| `src/state.rs`                | ✅ done     | `QueryState<Row>` (per-query reactive state)           |
-| `src/client.rs` (TBD)         | ⏳ next     | `QueryClient` + `QuerySubscription` runtime            |
-| `src/view.rs` (TBD)           | ⏳ next     | `QueryView<Row>` typed-row wrapper                     |
-| `src/wire.rs` (TBD)           | ⏳ next     | `SyncOpenRequest` / `SyncPullRequest` builders         |
-| `pocopine-sync-query-macros`  | ⏳ later    | `#[query_resource]` and `Query<Row>::matches` codegen  |
-| Examples + cookbook           | ⏳ later    | `examples/issue-tracker` + `docs/sync-query-cookbook`  |
+| File                              | Status  | Notes                                                  |
+| --------------------------------- | ------- | ------------------------------------------------------ |
+| `src/lib.rs`                      | ✅      | Module declarations + re-exports                       |
+| `src/query.rs`                    | ✅      | `Query<Row>`, `QueryKey`, `OrderBy`, `Order` + builder, `MatchFn<Row>` |
+| `src/params.rs`                   | ✅      | Comparator wrappers (`InSet`, `Range`, `Contains`)     |
+| `src/predicate.rs`                | ✅      | Sealed comparator-trait gate + `range_contains` / `contains_matches` runtime helpers |
+| `src/mutator.rs`                  | ✅      | `Mutator` trait + `RowChange` + `MutationOutcome`      |
+| `src/state.rs`                    | ✅      | `QueryState<Row>` (per-query reactive state)           |
+| `src/client.rs`                   | ✅      | `QueryClient` + refcounted `QuerySubscription` registry + routing engine |
+| `src/wire.rs`                     | ✅      | Build `SyncOpenRequest` / `SyncPullRequest` / `SyncPushRequest` from typed queries |
+| `pocopine-sync-query-macros`      | ✅      | `#[query_resource]` macro: builders, field markers, comparator trait impls, predicate evaluator |
+| Background-task drivers (wasm)    | ⏳ next | spawn-aware `/open` + `/pull` flow; live wakeup; offline replay |
+| `examples/issue-tracker`          | ⏳ later| Linear-clone demo                                      |
+| `docs/sync-query-cookbook.md`     | ⏳ later| User-facing cookbook                                   |
 
 ## Reference implementation
 

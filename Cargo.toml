@@ -38,6 +38,7 @@ members = [
     "crates/pocopine-sync-crud-macros",
     "crates/pocopine-sync-indexdb",
     "crates/pocopine-sync-query",
+    "crates/pocopine-sync-query-macros",
     "crates/pocopine-sync-sqlx",
     "crates/pocopine-sync-sqlite",
     "crates/pocopine-ts-rs",
@@ -109,6 +110,7 @@ pocopine-sync-crud = { path = "crates/pocopine-sync-crud", version = "0.1.0" }
 pocopine-sync-crud-macros = { path = "crates/pocopine-sync-crud-macros", version = "0.1.0" }
 pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.1.0" }
 pocopine-sync-query = { path = "crates/pocopine-sync-query", version = "0.1.0" }
+pocopine-sync-query-macros = { path = "crates/pocopine-sync-query-macros", version = "0.1.0" }
 pocopine-sync-sqlx = { path = "crates/pocopine-sync-sqlx", version = "0.1.0" }
 pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.1.0" }
 pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.1.0" }
