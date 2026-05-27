@@ -444,3 +444,34 @@ fn builder_supports_order_and_limit() {
     assert!(q.order_by().is_some());
     assert_eq!(q.limit(), Some(10));
 }
+
+#[tokio::test]
+async fn rows_applied_order_by_and_limit() {
+    let client = QueryClient::new();
+    let ctx = StubContext::new();
+    let view = client.observe::<Issue>(
+        Issue::query()
+            .eq(issues::field::workspace_id, "W1")
+            .order_by("title", Order::Desc)
+            .limit(2)
+            .build(),
+    );
+    for (i, title) in ["alpha", "bravo", "charlie", "delta"].iter().enumerate() {
+        client
+            .mutate::<CreateIssue>(
+                Issue {
+                    id: format!("i{i}"),
+                    workspace_id: "W1".to_string(),
+                    title: title.to_string(),
+                    status: Status::Open,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+    }
+    let rows = view.rows();
+    assert_eq!(rows.len(), 2, "limit must truncate to 2");
+    assert_eq!(rows[0].title, "delta", "Desc title sort puts delta first");
+    assert_eq!(rows[1].title, "charlie", "then charlie");
+}

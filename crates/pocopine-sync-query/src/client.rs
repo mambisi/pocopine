@@ -21,7 +21,7 @@ use pocopine_sync::{ClientMutation, MutationId, SyncRow, SyncStreamName, SYNC_EN
 use serde_json::Value;
 
 use crate::mutator::RowChange;
-use crate::query::{MatchFn, Query, QueryKey};
+use crate::query::{MatchFn, Order, Query, QueryKey};
 use crate::state::{PendingOverlay, QueryState};
 
 /// Composite registry key. Including the `TypeId` of the row type
@@ -415,8 +415,24 @@ impl QueryClient {
         Row: Clone + 'static,
     {
         for typed in self.collect_subscriptions_on_stream::<Row>(stream) {
-            let removed = typed.state.borrow_mut().remove_pending(mutation_id);
-            if removed.is_some() {
+            let removed = {
+                let mut state = typed.state.borrow_mut();
+                let overlays = state.remove_pending(mutation_id);
+                // Restore any canonical rows that were optimistically
+                // removed by Delete or predicate-departure overlays —
+                // each overlay carries the displaced row in
+                // `deleted_row`. Without this, a rejected delete (or
+                // a rejected status-change that knocked a row out of
+                // its filter) would leave the view empty until a
+                // server-side refresh.
+                for overlay in &overlays {
+                    if let Some(restored) = overlay.deleted_row.clone() {
+                        state.upsert_canonical(restored);
+                    }
+                }
+                overlays
+            };
+            if !removed.is_empty() {
                 typed.notify_listeners();
             }
         }
@@ -452,7 +468,8 @@ impl QueryClient {
             for change in changes {
                 match change {
                     RowChange::Upsert(row) => {
-                        if typed.matches(row) {
+                        let matches = typed.matches(row);
+                        if matches {
                             let mut state = typed.state.borrow_mut();
                             let overlay = PendingOverlay {
                                 mutation_id: mutation_id.clone(),
@@ -464,10 +481,40 @@ impl QueryClient {
                                     pending: true,
                                     conflict: false,
                                 }),
+                                deleted_row: None,
                                 conflict: false,
                             };
                             state.push_pending(overlay);
                             touched = true;
+                        } else if let Some(key) = row_key_of(row) {
+                            // Optimistic predicate-DEPARTURE: a row
+                            // that previously satisfied this query
+                            // but no longer does (e.g. an issue
+                            // transitioning from `Open` to `Closed`
+                            // in a query filtered to `Open`-only)
+                            // must be optimistically removed from
+                            // the view, OR `view.rows()` keeps
+                            // rendering the stale row until the
+                            // server response. Capture the
+                            // canonical row in a Delete-shaped
+                            // overlay so rollback can restore it.
+                            let visible_row: Option<SyncRow<Row>> = {
+                                let state = typed.state.borrow();
+                                let found = state.canonical_rows().find(|r| r.key == key);
+                                found.cloned()
+                            };
+                            if let Some(prev) = visible_row {
+                                let mut state = typed.state.borrow_mut();
+                                state.push_pending(PendingOverlay::<Row> {
+                                    mutation_id: mutation_id.clone(),
+                                    mutation: wire_mutation.clone(),
+                                    optimistic_row: None,
+                                    deleted_row: Some(prev),
+                                    conflict: false,
+                                });
+                                state.remove_canonical(&key);
+                                touched = true;
+                            }
                         }
                     }
                     RowChange::Delete(key) => {
@@ -480,30 +527,39 @@ impl QueryClient {
                         // subscription on the stream, spuriously
                         // marking unrelated views as non-empty and
                         // firing their listeners.
-                        let row_visible = {
+                        let canonical_snapshot: Option<SyncRow<Row>> = {
                             let state = typed.state.borrow();
-                            state.canonical_rows().any(|r| &r.key == key)
-                                || state.pending().iter().any(|p| {
-                                    p.optimistic_row
-                                        .as_ref()
-                                        .map(|r| &r.key == key)
-                                        .unwrap_or(false)
-                                })
+                            let found = state.canonical_rows().find(|r| &r.key == key);
+                            found.cloned()
                         };
+                        let row_visible = canonical_snapshot.is_some()
+                            || typed.state.borrow().pending().iter().any(|p| {
+                                p.optimistic_row
+                                    .as_ref()
+                                    .map(|r| &r.key == key)
+                                    .unwrap_or(false)
+                            });
                         if row_visible {
                             let mut state = typed.state.borrow_mut();
                             state.push_pending(PendingOverlay::<Row> {
                                 mutation_id: mutation_id.clone(),
                                 mutation: wire_mutation.clone(),
                                 optimistic_row: None,
+                                // Capture the canonical row (if any)
+                                // so rollback can restore it. A
+                                // delete that targets only an
+                                // optimistic upsert leaves
+                                // `deleted_row` None — there's
+                                // nothing canonical to restore.
+                                deleted_row: canonical_snapshot,
                                 conflict: false,
                             });
                             // Optimistic delete: ALSO remove the row
                             // from canonical_rows so `view.rows()`
                             // reflects the disappearance immediately.
                             // The canonical reconcile path will
-                            // re-confirm the absence (or restore via
-                            // rollback if the push fails).
+                            // re-confirm the absence (or rollback via
+                            // `deleted_row` snapshot if push fails).
                             state.remove_canonical(key);
                             touched = true;
                         }
@@ -543,8 +599,12 @@ impl QueryClient {
             let touched = {
                 let mut state = typed.state.borrow_mut();
                 let mut touched = false;
-                // Dequeue the optimistic overlay (idempotent).
-                if state.remove_pending(mutation_id).is_some() {
+                // Dequeue the optimistic overlays (idempotent). Note
+                // we DON'T restore `deleted_row` here — the server
+                // accepted the mutation, so the canonical reconcile
+                // below is authoritative; the snapshot is only used
+                // on rollback (see `dequeue_pending`).
+                if !state.remove_pending(mutation_id).is_empty() {
                     touched = true;
                 }
                 for change in canonical {
@@ -645,6 +705,30 @@ where
     pocopine_sync::RowKey::new(id_str).ok()
 }
 
+/// Compare two `serde_json::Value`s for the rendered-rows
+/// `order_by` sort. Numbers compare numerically, strings compare
+/// lexicographically, bools (false < true), arrays/objects compare
+/// as `Ordering::Equal` (sort-stable fallback), and `None` /
+/// `Value::Null` sort as "less than" every present value. The sort
+/// in `QueryView::rows` is stable, so equal keys keep their
+/// `BTreeMap` (RowKey-ordered) insertion order.
+fn json_value_cmp(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, _) | (Some(Value::Null), _) => Ordering::Less,
+        (_, None) | (_, Some(Value::Null)) => Ordering::Greater,
+        (Some(Value::Bool(x)), Some(Value::Bool(y))) => x.cmp(y),
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (Some(Value::String(x)), Some(Value::String(y))) => x.cmp(y),
+        // Cross-type or container — stable fallback.
+        _ => Ordering::Equal,
+    }
+}
+
 // (Owning downcast lives inline at the `subscribe` call site, which
 // uses `Rc::downcast::<QuerySubscription<Row>>(rc.as_rc_any())` — a
 // fully-safe path supported by the stdlib that replaces the prior
@@ -736,10 +820,19 @@ impl<Row: 'static> QueryView<Row> {
     }
 
     /// The view's current rendered row set: canonical rows MERGED
-    /// with optimistic pending overlays. Rows are returned in
-    /// `RowKey` order; if both a canonical and an optimistic row
-    /// share a key, the optimistic wins (that's the point — local
-    /// edits are visible immediately).
+    /// with optimistic pending overlays, ORDERED per the query's
+    /// `order_by()` and TRUNCATED per its `limit()`.
+    ///
+    /// Without an `order_by`, rows are returned in `RowKey` order
+    /// (the BTreeMap's natural ordering). If both a canonical and
+    /// an optimistic row share a key, the optimistic wins — local
+    /// edits are visible immediately.
+    ///
+    /// Ordering reads the field via serde's JSON projection: a row
+    /// type's serialization MUST expose the order-by field as a top-
+    /// level key for the comparator to find it. Rows that don't
+    /// expose the field sort as "less than" any present value
+    /// (stable sort; original BTreeMap order tie-breaks).
     pub fn rows(&self) -> Vec<Row>
     where
         Row: Clone + serde::Serialize,
@@ -755,7 +848,32 @@ impl<Row: 'static> QueryView<Row> {
                 rendered.insert(opt_row.key.clone(), opt_row.value.clone());
             }
         }
-        rendered.into_values().collect()
+        let mut rows: Vec<Row> = rendered.into_values().collect();
+
+        let query = self.query();
+        if let Some(order_by) = query.order_by() {
+            let field = order_by.field.as_str();
+            let direction = order_by.direction;
+            rows.sort_by(|a, b| {
+                let a_key = serde_json::to_value(a)
+                    .ok()
+                    .and_then(|v| v.get(field).cloned());
+                let b_key = serde_json::to_value(b)
+                    .ok()
+                    .and_then(|v| v.get(field).cloned());
+                let cmp = json_value_cmp(a_key.as_ref(), b_key.as_ref());
+                match direction {
+                    Order::Asc => cmp,
+                    Order::Desc => cmp.reverse(),
+                }
+            });
+        }
+
+        if let Some(limit) = query.limit() {
+            rows.truncate(limit as usize);
+        }
+
+        rows
     }
 
     /// Monotonic state-version counter. Bumps on every mutation
