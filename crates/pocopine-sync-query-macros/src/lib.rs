@@ -353,6 +353,16 @@ fn expand_query_resource(args: QueryResourceArgs, item: ItemStruct) -> syn::Resu
         }
 
         pub mod #module_ident {
+            // We pull the caller's scope into this module so the
+            // user's row type and per-field comparator types
+            // (declared in `params(...)`) resolve here. The glob is
+            // OK because Rust resolves locally-defined items in this
+            // module ahead of glob imports — so the macro's own
+            // `Row` alias, `QueryBuilder`, `field` submodule, and
+            // `matches` fn always shadow anything brought in from
+            // `super`, regardless of identifier collisions in caller
+            // scope. `#[allow(unused_imports)]` silences the lint for
+            // callers that don't import anything reusable.
             #[allow(unused_imports)]
             use super::*;
 
@@ -527,7 +537,7 @@ fn generate_builder_methods(params: &[ParamDef]) -> Vec<TokenStream2> {
                     quote! {
                         pub fn #name(mut self, value: #ty) -> Self
                         where
-                            #ty: ::serde::Serialize,
+                            #ty: ::pocopine_sync_query::__private::serde::Serialize,
                         {
                             let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&value)
                                 .expect("RequiredEq field encodes successfully");
@@ -540,7 +550,7 @@ fn generate_builder_methods(params: &[ParamDef]) -> Vec<TokenStream2> {
                     quote! {
                         pub fn #name(mut self, value: #inner) -> Self
                         where
-                            #inner: ::serde::Serialize,
+                            #inner: ::pocopine_sync_query::__private::serde::Serialize,
                         {
                             let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&value)
                                 .expect("OptionalEq field encodes successfully");
@@ -555,7 +565,7 @@ fn generate_builder_methods(params: &[ParamDef]) -> Vec<TokenStream2> {
                         pub fn #method_name<I>(mut self, values: I) -> ::pocopine_sync::SyncResult<Self>
                         where
                             I: ::std::iter::IntoIterator<Item = #inner>,
-                            #inner: ::serde::Serialize,
+                            #inner: ::pocopine_sync_query::__private::serde::Serialize,
                         {
                             let set = ::pocopine_sync_query::params::InSet::<#inner>::new(values)
                                 .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
@@ -574,7 +584,7 @@ fn generate_builder_methods(params: &[ParamDef]) -> Vec<TokenStream2> {
                             range: ::pocopine_sync_query::params::Range<#inner>,
                         ) -> ::pocopine_sync::SyncResult<Self>
                         where
-                            #inner: ::serde::Serialize,
+                            #inner: ::pocopine_sync_query::__private::serde::Serialize,
                         {
                             let encoded = ::pocopine_sync_query::__private::serde_json::to_value(&range)
                                 .map_err(|e| ::pocopine_sync::SyncError::client(e.to_string()))?;
@@ -616,14 +626,22 @@ fn generate_matches_body(params: &[ParamDef], _row_ty: &Type) -> TokenStream2 {
             match &param.kind {
                 ComparatorKind::RequiredEq => {
                     let ty = &param.ty;
+                    // Required-equality: the param MUST be set. A
+                    // query built without the setter (e.g.
+                    // `Issues::query().build()` with no
+                    // `.workspace_id(...)` call) would otherwise
+                    // permissively match every row in the stream —
+                    // a cross-tenant data leak the macro must close.
                     quote! {
-                        if let Some(raw) = params.get(#name_str) {
-                            let want: #ty = match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
-                                Ok(v) => v,
-                                Err(_) => return false,
-                            };
-                            if #field_access != want { return false; }
-                        }
+                        let raw = match params.get(#name_str) {
+                            Some(r) => r,
+                            None => return false,
+                        };
+                        let want: #ty = match ::pocopine_sync_query::__private::serde_json::from_value(raw.clone()) {
+                            Ok(v) => v,
+                            Err(_) => return false,
+                        };
+                        if #field_access != want { return false; }
                     }
                 }
                 ComparatorKind::OptionalEq { inner } => {

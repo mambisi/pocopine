@@ -616,6 +616,28 @@ where
         self.schema_version
     }
 
+    /// CRUD resources accept empty params (or reserved-only params)
+    /// — the resource has no declared shape. The reserved-key
+    /// carve-out (`__order_by`, `__limit`) follows the
+    /// `SyncStreamSource::validate_params` default convention.
+    fn validate_params(&self, params: &pocopine_sync::StreamParams) -> SyncResult<()> {
+        if params.keys().all(|k| k.starts_with("__")) {
+            Ok(())
+        } else {
+            Err(SyncError::invalid_value(
+                "params",
+                "CRUD resource does not declare subscription params (use `pocopine-sync-query` for filtered subscriptions)",
+            ))
+        }
+    }
+
+    /// CRUD push helpers don't carry params on the wire; always
+    /// accept here so generated `create`/`save`/`remove` keep
+    /// working under any deployment.
+    fn validate_push_params(&self, _params: &pocopine_sync::StreamParams) -> SyncResult<()> {
+        Ok(())
+    }
+
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
         let stream = self.stream.as_str().to_string();
         if let Some(migrate) = self.migrate_payload.clone() {
@@ -932,6 +954,28 @@ where
 
     fn schema_version(&self) -> u32 {
         self.schema_version
+    }
+
+    /// CRUD resources accept empty params (or reserved-only params)
+    /// — the resource has no declared shape. The reserved-key
+    /// carve-out (`__order_by`, `__limit`) follows the
+    /// `SyncStreamSource::validate_params` default convention.
+    fn validate_params(&self, params: &pocopine_sync::StreamParams) -> SyncResult<()> {
+        if params.keys().all(|k| k.starts_with("__")) {
+            Ok(())
+        } else {
+            Err(SyncError::invalid_value(
+                "params",
+                "CRUD resource does not declare subscription params (use `pocopine-sync-query` for filtered subscriptions)",
+            ))
+        }
+    }
+
+    /// CRUD push helpers don't carry params on the wire; always
+    /// accept here so generated `create`/`save`/`remove` keep
+    /// working under any deployment.
+    fn validate_push_params(&self, _params: &pocopine_sync::StreamParams) -> SyncResult<()> {
+        Ok(())
     }
 
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {

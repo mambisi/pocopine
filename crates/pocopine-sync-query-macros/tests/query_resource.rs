@@ -146,13 +146,18 @@ fn matches_contains_case_insensitive() {
 }
 
 #[test]
-fn matches_returns_true_when_no_params_declared() {
-    // Empty params → every row matches.
+fn matches_returns_false_when_required_field_absent_from_params() {
+    // Safety: a resource declaring `workspace_id` as a RequiredEq
+    // param must NOT match arbitrary rows when the query was built
+    // without that param — otherwise a misuse of the raw builder
+    // would silently leak cross-workspace rows into a view that
+    // never authorized them. The required-field absence acts as a
+    // deny-by-default gate.
     let q: pocopine_sync_query::Query<Issue> = pocopine_sync_query::Query::builder(
         pocopine_sync_query::SyncStreamName::new("issues").unwrap(),
     )
     .build();
-    assert!(issues::matches(&q, &sample_issue()));
+    assert!(!issues::matches(&q, &sample_issue()));
 }
 
 #[test]

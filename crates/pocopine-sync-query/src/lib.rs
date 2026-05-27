@@ -70,4 +70,9 @@ pub use pocopine_sync::{local_stream_key, SyncCursor, SyncStreamName, SyncStream
 #[doc(hidden)]
 pub mod __private {
     pub use serde_json;
+    // Re-export so generated macro code never needs `::serde::*` (which
+    // would force every downstream crate to add `serde` as a direct
+    // dep — the macro should compile inside a workspace whose only
+    // serde access is transitive through `pocopine-sync-query`).
+    pub use serde;
 }
