@@ -203,3 +203,71 @@ fn field_markers_typecheck_against_comparator_traits() {
     fn _contains_title<F: FieldContains>(_: F) {}
     _contains_title(issues::field::title);
 }
+
+// ---- RFC 088 §C: row_to_params codegen tests ---------------------
+
+use pocopine_sync::StreamParams;
+use serde_json::json;
+
+#[test]
+fn row_to_params_includes_required_and_categorical_fields() {
+    // Per the include-rule:
+    //   - workspace_id: required=true → INCLUDE
+    //   - assignee_id: contains=true (String), required=false → SKIP
+    //   - assignee_id: Option<String> → contains=false (auto-detect
+    //     only flags non-Option strings) → INCLUDE. This matches the
+    //     usual intent: Option<String> is typically a categorical FK
+    //     (assignee id), partition-friendly.
+    //   - title: String, required=false → SKIP (free-text contains)
+    //   - status: contains=false (enum) → INCLUDE
+    //   - priority: contains=false (numeric) → INCLUDE
+    let row = json!({
+        "id": "i1",
+        "workspace_id": "W1",
+        "assignee_id": "alice",
+        "title": "Auth bug",
+        "status": "open",
+        "priority": 5,
+    });
+    let params = issues::row_to_params(&row).expect("row deserializes");
+    let expected: StreamParams = [
+        ("workspace_id".to_string(), json!("W1")),
+        ("assignee_id".to_string(), json!("alice")),
+        ("status".to_string(), json!("open")),
+        ("priority".to_string(), json!(5u32)),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(params, expected);
+    // `title` is SKIPPED because it's the prototypical contains-only
+    // (free-text) field: substring filters don't partition a topic
+    // space.
+    assert!(!params.contains_key("title"));
+}
+
+#[test]
+fn row_to_params_skips_none_options() {
+    // assignee_id: Option<String> with None → must be omitted from
+    // the returned map even though the field is INCLUDED in
+    // principle.
+    let row = json!({
+        "id": "i1",
+        "workspace_id": "W1",
+        "assignee_id": null,
+        "title": "",
+        "status": "open",
+        "priority": 0,
+    });
+    let params = issues::row_to_params(&row).expect("row deserializes");
+    assert!(!params.contains_key("assignee_id"));
+}
+
+#[test]
+fn row_to_params_propagates_deserialize_error() {
+    // A malformed row (missing required field) bubbles up as
+    // SyncError::client, NOT a panic — the server logs + falls back
+    // to bare-topic publish.
+    let bad_row = json!({"id": "i1"}); // missing workspace_id, etc.
+    let result = issues::row_to_params(&bad_row);
+    assert!(result.is_err());
+}

@@ -806,6 +806,23 @@ mod browser {
             self
         }
 
+        /// Subscribe to the per-`(tag, params_hash)` framework topic
+        /// for RFC 088 §C precise live-wakeup routing.
+        ///
+        /// Wire shape: `query:{tag}:{params_hash:016x}`.
+        ///
+        /// Clients that want precise routing call BOTH
+        /// [`Self::query_tag`] (bare) AND this method (per-params) —
+        /// during the rollout window servers publish to both topics
+        /// and old clients only listen on the bare one. Once servers
+        /// drop the bare publish (RFC 088 §C.6 phase 2), this becomes
+        /// the only live-wakeup path for parameterized subscriptions.
+        pub fn query_tag_with_params(mut self, tag: impl Into<String>, params_hash: u64) -> Self {
+            self.topics
+                .push(format!("query:{}:{:016x}", tag.into(), params_hash));
+            self
+        }
+
         /// Resume from an opaque stream cursor.
         pub fn last_event_id(mut self, cursor: impl Into<String>) -> Self {
             self.last_event_id = Some(cursor.into());

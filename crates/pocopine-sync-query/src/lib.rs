@@ -94,6 +94,12 @@ pub mod __private {
     // dep — the macro should compile inside a workspace whose only
     // serde access is transitive through `pocopine-sync-query`).
     pub use serde;
+    // Re-export so the `#[query_resource]` macro's emitted
+    // `row_to_params` impl (RFC 088 §C) can reach `StreamParams`,
+    // `SyncResult`, `SyncError`, and `stream_params_hash` through
+    // one stable path — the user's crate only needs
+    // `pocopine-sync-query` as a direct dep.
+    pub use pocopine_sync;
 
     /// FNV-1a 64-bit hash. `const fn` so the `#[query]` macro's
     /// generated `const SELECTOR_ID` initializer evaluates it at the

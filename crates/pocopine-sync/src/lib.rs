@@ -26,12 +26,12 @@ pub use local_store::{
     SyncLocalIdentity, SyncLocalStore,
 };
 pub use protocol::{
-    default_schema_version_one, local_stream_key, sync_stream_tag, ClientMutation,
-    ClientMutationDraft, MigrationOutcome, MutationId, RowKey, RowVersion, StreamParams,
-    SyncChange, SyncCollectionName, SyncConflict, SyncCursor, SyncDeviceId, SyncOp,
-    SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullMode, SyncPullRequest,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation, SyncRow,
-    SyncSessionId, SyncStreamName, SyncStreamSubscription, MAX_SYNC_TOKEN_LEN,
+    default_schema_version_one, local_stream_key, stream_params_hash, sync_stream_params_tag,
+    sync_stream_tag, ClientMutation, ClientMutationDraft, MigrationOutcome, MutationId, RowKey,
+    RowVersion, StreamParams, SyncChange, SyncCollectionName, SyncConflict, SyncCursor,
+    SyncDeviceId, SyncOp, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullMode,
+    SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation,
+    SyncRow, SyncSessionId, SyncStreamName, SyncStreamSubscription, MAX_SYNC_TOKEN_LEN,
     SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};

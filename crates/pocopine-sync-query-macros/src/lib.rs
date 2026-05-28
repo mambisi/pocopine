@@ -547,6 +547,7 @@ fn expand_query_resource(
 
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params);
+    let row_to_params_body = generate_row_to_params_body(&params);
 
     Ok(quote! {
         #item
@@ -609,6 +610,55 @@ fn expand_query_resource(
                 let params = query.params();
                 #matches_body
                 true
+            }
+
+            /// Project a canonical row into the `StreamParams` that
+            /// identify which (RFC 088 §C) per-`(stream, params_hash)`
+            /// live topic should be invalidated when this row changes.
+            ///
+            /// Plug this into your `SyncStreamSource::row_to_params`
+            /// impl so the server can route precise wakeups to
+            /// matching subscribers:
+            ///
+            /// ```ignore
+            /// impl SyncStreamSource for MyIssuesSource {
+            ///     fn row_to_params(&self, row: &serde_json::Value)
+            ///         -> SyncResult<StreamParams>
+            ///     {
+            ///         issues::row_to_params(row)
+            ///     }
+            ///     // ... other methods ...
+            /// }
+            /// ```
+            ///
+            /// Field selection: includes every `#[query_param]` field
+            /// EXCEPT those whose only emitted comparator is
+            /// `FieldContains` (substring search). Substring filters
+            /// can't partition a topic space — a partial-text match
+            /// doesn't tell the server which audience cares. Required-
+            /// flagged fields are ALWAYS included; explicit
+            /// `#[query_param(range)]` / equality-shaped types are
+            /// included automatically.
+            ///
+            /// `None` values from `Option<T>` fields are omitted from
+            /// the returned map (a null in the topic key would
+            /// fragment unnecessarily; the client's params filter
+            /// already handles null match semantics).
+            pub fn row_to_params(
+                row: &::pocopine_sync_query::__private::serde_json::Value,
+            ) -> ::pocopine_sync_query::__private::pocopine_sync::SyncResult<
+                ::pocopine_sync_query::__private::pocopine_sync::StreamParams,
+            > {
+                let typed: Row = ::pocopine_sync_query::__private::serde_json::from_value(
+                    row.clone(),
+                )
+                .map_err(|e| ::pocopine_sync_query::__private::pocopine_sync::SyncError::client(
+                    format!("row_to_params: {} row didn't deserialize: {}", NAME, e),
+                ))?;
+                let mut params =
+                    ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
+                #row_to_params_body
+                ::std::result::Result::Ok(params)
             }
         }
     })
@@ -859,6 +909,99 @@ fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
         let _ = params; // silence unused if no #[query_param] fields declared
         #(#checks)*
     }
+}
+
+/// Generate the body of the `row_to_params(row: &Value) ->
+/// SyncResult<StreamParams>` function inside the generated module
+/// (see RFC 088 §C). Iterates the same `#[query_param]` fields the
+/// matches() body iterates, but:
+///
+/// 1. **Skips contains-only fields.** A field whose only emitted
+///    comparator is `FieldContains` (substring search) can't
+///    partition the topic space — a `.contains(field::title,
+///    "auth")?` filter matches an unbounded set of row values, so
+///    including the row's title in the params map would generate a
+///    distinct topic per row and defeat the fanout-reduction goal.
+///    Fields that ALSO carry `range`/`required`/or-are-non-String
+///    stay in the map.
+///
+/// 2. **Drops `None` from `Option<T>` fields.** Inserting a JSON
+///    null into params would partition `Option::None` rows into a
+///    distinct topic — almost always not what the user wants. The
+///    routing engine's predicate evaluator (matches() body) already
+///    handles `None` symmetry.
+///
+/// 3. **Uses each field's wire-key** (raw-ident-stripped) so the
+///    emitted topic keys match `serde_json::to_value(row)`'s field
+///    names. If the user later adds `#[serde(rename = "…")]`, the
+///    macro doesn't currently follow it — same limitation as the
+///    existing matches() body and the existing macro tests.
+fn generate_row_to_params_body(params: &[ParamDef]) -> TokenStream2 {
+    let inserts: Vec<TokenStream2> = params
+        .iter()
+        .filter(|p| include_in_row_params(&p.caps))
+        .map(|param| {
+            let name = &param.name;
+            let name_str = ident_wire_key(name);
+            let field_access: TokenStream2 = quote! { typed.#name };
+            if param.caps.optional {
+                quote! {
+                    if let ::std::option::Option::Some(inner) = &#field_access {
+                        let v = ::pocopine_sync_query::__private::serde_json::to_value(inner)
+                            .map_err(|e|
+                                ::pocopine_sync_query::__private::pocopine_sync::SyncError::client(
+                                    format!(
+                                        "row_to_params: field `{}` failed to serialize: {}",
+                                        #name_str, e,
+                                    ),
+                                )
+                            )?;
+                        params.insert(#name_str.to_string(), v);
+                    }
+                }
+            } else {
+                quote! {
+                    let v = ::pocopine_sync_query::__private::serde_json::to_value(&#field_access)
+                        .map_err(|e|
+                            ::pocopine_sync_query::__private::pocopine_sync::SyncError::client(
+                                format!(
+                                    "row_to_params: field `{}` failed to serialize: {}",
+                                    #name_str, e,
+                                ),
+                            )
+                        )?;
+                    params.insert(#name_str.to_string(), v);
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        #(#inserts)*
+    }
+}
+
+/// Decide whether a `#[query_param]` field contributes to the
+/// per-(stream, params_hash) topic key (RFC 088 §C).
+///
+/// Skip when the field is a fuzzy-text candidate: `caps.contains`
+/// is set (auto-emitted on `String` / `Cow` / `str` types, or
+/// explicitly via `#[query_param(contains)]`) AND no other signal
+/// promotes it. A `required` flag overrides skip — required fields
+/// are tenant gates and MUST partition the topic (otherwise
+/// cross-tenant rows would publish to the same topic).
+///
+/// Examples:
+///   - `#[query_param(required)] pub workspace_id: String`
+///     → contains=true (heuristic), required=true → INCLUDE.
+///   - `#[query_param] pub title: String`
+///     → contains=true, required=false → SKIP.
+///   - `#[query_param] pub status: Status`
+///     → contains=false → INCLUDE.
+///   - `#[query_param] pub priority: u32`
+///     → contains=false, range=true → INCLUDE.
+fn include_in_row_params(caps: &FieldCapabilities) -> bool {
+    !caps.contains || caps.required
 }
 
 // ---- #[query] selector macro --------------------------------------
