@@ -66,7 +66,7 @@ pub use plugin::{query_client_plugin, QueryClientPlugin};
 pub use predicate::{
     contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldRange,
 };
-pub use query::{MatchFn, Order, OrderBy, Query, QueryBuilder, QueryKey};
+pub use query::{MatchFn, Order, OrderBy, PartitionHashFn, Query, QueryBuilder, QueryKey};
 pub use selector::{AnyArgs, AnyTrackable, SelectorId, SelectorView, TrackToken};
 pub use state::QueryState;
 

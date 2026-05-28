@@ -441,7 +441,13 @@ where
             };
             let stream_name = sub.query().stream().as_str().to_string();
             let captured_params = sub.query().params().clone();
-            LiveWakeup::open_on_stream(stream_name, captured_params, self.with_credentials)
+            let partition_hash = sub.query().partition_hash();
+            LiveWakeup::open_on_stream(
+                stream_name,
+                captured_params,
+                partition_hash,
+                self.with_credentials,
+            )
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1472,6 +1478,7 @@ impl LiveWakeup {
     fn open_on_stream(
         stream_name: String,
         captured_params: pocopine_sync::StreamParams,
+        partition_hash: Option<u64>,
         with_credentials: bool,
     ) -> Self {
         let (tx, rx) = futures::channel::mpsc::unbounded::<LiveWakeupEvent>();
@@ -1493,10 +1500,15 @@ impl LiveWakeup {
         //     new rows. See RFC 088 §C.4 for the dedup-by-mutation_
         //     id follow-up.
         let mut live_builder = pocopine_live::LiveClient::new().query_tag(live_tag.clone());
-        if !captured_params.is_empty() {
-            let params_hash =
-                pocopine_sync::stream_params_hash(stream_name.as_str(), &captured_params);
-            live_builder = live_builder.query_tag_with_params(live_tag.clone(), params_hash);
+        // RFC 088 §C per-(stream, params_hash) subscription. The hash
+        // is supplied by the macro-generated `partition_for_topic`
+        // (via `Query::partition_hash`), which projects the captured
+        // params onto the canonical required-field projection that
+        // matches the server's `row_to_params`. None means: required
+        // field absent OR a comparator wrapper (any_of/range/contains)
+        // — fall back to bare-topic only.
+        if let Some(hash) = partition_hash {
+            live_builder = live_builder.query_tag_with_params(live_tag.clone(), hash);
         }
         let connect_result = live_builder
             .with_credentials(with_credentials)

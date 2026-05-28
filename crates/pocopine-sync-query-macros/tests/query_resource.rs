@@ -210,17 +210,14 @@ use pocopine_sync::StreamParams;
 use serde_json::json;
 
 #[test]
-fn row_to_params_includes_required_and_categorical_fields() {
-    // Per the include-rule:
+fn row_to_params_includes_only_required_fields() {
+    // Post-codex-review (P2.1): only `required`-flagged fields
+    // partition the topic. Anything else would produce a hash on
+    // the server that no subset-filtering client subscription
+    // computes on its side (Codex finding).
+    //
     //   - workspace_id: required=true → INCLUDE
-    //   - assignee_id: contains=true (String), required=false → SKIP
-    //   - assignee_id: Option<String> → contains=false (auto-detect
-    //     only flags non-Option strings) → INCLUDE. This matches the
-    //     usual intent: Option<String> is typically a categorical FK
-    //     (assignee id), partition-friendly.
-    //   - title: String, required=false → SKIP (free-text contains)
-    //   - status: contains=false (enum) → INCLUDE
-    //   - priority: contains=false (numeric) → INCLUDE
+    //   - everything else → SKIP
     let row = json!({
         "id": "i1",
         "workspace_id": "W1",
@@ -230,19 +227,62 @@ fn row_to_params_includes_required_and_categorical_fields() {
         "priority": 5,
     });
     let params = issues::row_to_params(&row).expect("row deserializes");
-    let expected: StreamParams = [
-        ("workspace_id".to_string(), json!("W1")),
-        ("assignee_id".to_string(), json!("alice")),
-        ("status".to_string(), json!("open")),
-        ("priority".to_string(), json!(5u32)),
-    ]
-    .into_iter()
-    .collect();
+    let expected: StreamParams = [("workspace_id".to_string(), json!("W1"))]
+        .into_iter()
+        .collect();
     assert_eq!(params, expected);
-    // `title` is SKIPPED because it's the prototypical contains-only
-    // (free-text) field: substring filters don't partition a topic
-    // space.
-    assert!(!params.contains_key("title"));
+}
+
+#[test]
+fn partition_for_topic_matches_row_to_params_hash() {
+    // The whole point of the projection: server-side
+    // row_to_params and client-side partition_for_topic MUST hash
+    // identically when both project the same canonical fields.
+    use pocopine_sync::stream_params_hash;
+
+    let row = json!({
+        "id": "i1",
+        "workspace_id": "W1",
+        "assignee_id": "alice",
+        "title": "Auth bug",
+        "status": "open",
+        "priority": 5,
+    });
+    let server_params = issues::row_to_params(&row).unwrap();
+    let server_hash = stream_params_hash("issues", &server_params);
+
+    // Client subscription: just the tenant gate.
+    use issues::field;
+    let query = Issue::query().eq(field::workspace_id, "W1").build();
+    let client_hash = query.partition_hash().expect("partition_hash computes");
+
+    assert_eq!(client_hash, server_hash);
+}
+
+#[test]
+fn partition_for_topic_returns_none_for_missing_required_field() {
+    // A query that doesn't filter by the required field can't
+    // partition — falls back to bare-topic subscription.
+    let query: pocopine_sync_query::Query<Issue> = pocopine_sync_query::Query::builder(
+        pocopine_sync_query::SyncStreamName::new("issues").unwrap(),
+    )
+    .with_partition_hash(issues::partition_for_topic)
+    .build();
+    assert!(query.partition_hash().is_none());
+}
+
+#[test]
+fn partition_for_topic_returns_none_for_any_of_wrapper() {
+    // Comparator-wrapped values (any_of / range / contains) don't
+    // map to a single topic — fall back to bare. Here the user
+    // does `.any_of(workspace_id, [...])` so the partition is
+    // ambiguous.
+    use issues::field;
+    let query = Issue::query()
+        .any_of(field::workspace_id, ["W1", "W2"])
+        .unwrap()
+        .build();
+    assert!(query.partition_hash().is_none());
 }
 
 #[test]
