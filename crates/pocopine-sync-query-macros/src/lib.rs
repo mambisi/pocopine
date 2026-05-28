@@ -1096,8 +1096,11 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
     // * `#[cfg]` and `#[cfg_attr]` end up on BOTH so a cfg-disabled
     //   selector compiles consistently (the module and the body
     //   need to disappear together).
-    let (module_attrs, inner_attrs): (Vec<&Attribute>, Vec<&Attribute>) =
-        partition_selector_attrs(&attrs);
+    let (module_attrs, observe_attrs, inner_attrs): (
+        Vec<&Attribute>,
+        Vec<&Attribute>,
+        Vec<&Attribute>,
+    ) = partition_selector_attrs(&attrs);
 
     // Mangled name for the carried-over user body. Lives at the
     // SAME module level as the original `#[query] fn` so any
@@ -1160,6 +1163,7 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
             /// cached value is reused. On a cache miss, the body
             /// runs inside the selector's tracking frame so any
             /// `QueryView::rows()` reads register as dependencies.
+            #(#observe_attrs)*
             pub fn observe(
                 __pq_client: &::pocopine_sync_query::QueryClient,
                 #( #user_arg_idents : #user_arg_types ),*
@@ -1209,36 +1213,42 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Split user-supplied attrs on a `#[query] fn` into two groups —
-/// `(module_attrs, inner_attrs)` — by audience. See the call site
-/// in `expand_query` for the rationale.
+/// Split user-supplied attrs on a `#[query] fn` into three groups —
+/// `(module_attrs, observe_attrs, inner_attrs)` — by audience. See
+/// the call site in `expand_query` for the rationale.
 ///
-/// * `#[doc]` / `///`, `#[deprecated]`, `#[must_use]` → module
-///   (public API surface).
+/// * `#[doc]` / `///`, `#[deprecated]` → module (public API surface).
+/// * `#[must_use]`, `#[track_caller]` → `observe()` (Rust rejects
+///   `#[must_use]` on modules, and these attrs fire against the
+///   call site that consumes the selector — `observe()` is the
+///   user-visible call site, not the module).
 /// * `#[allow]` / `#[deny]` / `#[warn]` / `#[forbid]` / `#[expect]`,
 ///   `#[inline]` / `#[cold]` / `#[no_mangle]` → inner fn (body
 ///   audience).
-/// * `#[cfg]` / `#[cfg_attr]` → both (module and body must compile
-///   or disappear together).
-/// * Unknown attrs default to the inner fn — they probably affect
-///   the body and `#[deprecated]`-style attrs on the inner fn don't
-///   fire warnings as long as the macro doesn't reference an
-///   unknown-named attr. Erring inward is conservative.
-fn partition_selector_attrs(attrs: &[Attribute]) -> (Vec<&Attribute>, Vec<&Attribute>) {
+/// * `#[cfg]` / `#[cfg_attr]` → all three (module, observe, and
+///   body must compile or disappear together).
+/// * Unknown attrs default to the inner fn (it carries the body, so
+///   most behavior-y attrs belong there).
+fn partition_selector_attrs(
+    attrs: &[Attribute],
+) -> (Vec<&Attribute>, Vec<&Attribute>, Vec<&Attribute>) {
     let mut module = Vec::new();
+    let mut observe = Vec::new();
     let mut inner = Vec::new();
     for attr in attrs {
         let ident = attr.path().segments.last().map(|s| s.ident.to_string());
         match ident.as_deref() {
-            Some("doc" | "deprecated" | "must_use") => module.push(attr),
+            Some("doc" | "deprecated") => module.push(attr),
+            Some("must_use" | "track_caller") => observe.push(attr),
             Some("cfg" | "cfg_attr") => {
                 module.push(attr);
+                observe.push(attr);
                 inner.push(attr);
             }
             _ => inner.push(attr),
         }
     }
-    (module, inner)
+    (module, observe, inner)
 }
 
 /// Detect whether a type is `QueryClient` by last path segment.
