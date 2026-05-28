@@ -683,9 +683,24 @@ mod host {
 
     /// Process-local event backend with bounded replay.
     ///
-    /// This backend is suitable for tests, development, and explicit
-    /// single-process deployments. It is not shared across processes and
-    /// does not survive restarts.
+    /// Suitable for tests, development, and explicit single-process
+    /// deployments. **Not** shared across processes and does not
+    /// survive restarts.
+    ///
+    /// # ⚠ NOT for multi-node production
+    ///
+    /// Events published on one process do NOT reach subscribers on
+    /// another process — each [`MemoryEventBackend`] is a private
+    /// per-process broadcast channel. If you run more than one
+    /// server process (Kubernetes replicas, auto-scaling, blue/green,
+    /// load-balanced fleets), use [`RedisEventBackend`] (or another
+    /// shared broker) instead. Symptom of the wrong choice: live
+    /// invalidations work in dev but mysteriously drop in production
+    /// the moment traffic crosses node boundaries.
+    ///
+    /// See `docs/live.md §8 "Production Backends"` for the broker
+    /// comparison and `pocopine_events::build_event_backend` for the
+    /// one-line config switch.
     #[derive(Clone, Debug)]
     pub struct MemoryEventBackend {
         config: MemoryEventConfig,

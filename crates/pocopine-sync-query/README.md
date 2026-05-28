@@ -179,6 +179,28 @@ The convention: if the first arg's type is `QueryClient`, it's the selector's cl
 
 Selectors compose: `#[query] fn dashboard(...) { open_issue_count::observe(&client, ws).value() + … }`. An inner selector whose output is `PartialEq`-equal across reruns stops the cascade — the outer selector doesn't rerun. See [`docs/sync-query-selector-mechanism.md`](../../docs/sync-query-selector-mechanism.md) for the full design and [`docs/sync-query-selector-implementation.md`](../../docs/sync-query-selector-implementation.md) for the code map (layer diagram, data flows, file pointers).
 
+## Live invalidation and multi-node deployments
+
+Live wakeups for `#[query]` selectors (and any `#[query_resource]`-backed view) flow through the `pocopine-events` event spine. If you deploy more than one server process — Kubernetes replicas, Render auto-scaling, blue/green, anything horizontally scaled — the in-process `MemoryEventBackend` will silently drop cross-node invalidations: a mutation on Node 2 never wakes a subscriber on Node 1.
+
+**Production needs a shared backend.** Swap to `RedisEventBackend` (already in tree, behind the `redis` feature) — one line at app boot, no code changes downstream:
+
+```rust,ignore
+let backend = pocopine_events::build_event_backend(
+    pocopine_events::EventBackendConfig::Redis(pocopine_events::RedisEventConfig {
+        url: "redis://prod-redis:6379".into(),
+        app: "myapp".into(),
+        ..Default::default()
+    })
+)?;
+let hub = pocopine_live::LiveHub::new(backend)
+    .allow_topic_prefixes(sync.live_topic_prefixes()); // RFC 088 §C
+```
+
+RFC 088 §C (per-`(stream, params_hash)` topics) is also broker-agnostic — it changes the *topic naming* scheme, not the broker contract. For ~1M users single-node Redis is fine; if you cross ~10M distinct partition hashes, shard with Redis Cluster or move to NATS / Kafka.
+
+Full picture, broker comparison, and topic-cardinality scaling notes in [`docs/live.md` §8 "Production Backends"](../../docs/live.md#8-production-backends).
+
 ## CRUD vs Query — which one?
 
 | You want to                                  | Use                  |
