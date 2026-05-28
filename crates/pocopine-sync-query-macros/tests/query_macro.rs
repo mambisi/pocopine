@@ -198,6 +198,29 @@ fn macro_preserves_super_resolution_in_body() {
     assert_eq!(view.value(), HELPER_CONST);
 }
 
+// ---- Regression: user attrs propagate to the lifted body ----------
+//
+// Lint attrs on the original `#[query] fn` must follow the body when
+// the macro lifts it to a sibling fn — otherwise lints emitted INSIDE
+// the body (where the user's `#[allow(...)]` would silence them) hit
+// the new fn without the silencer and break `#[deny(warnings)]` /
+// `-D warnings` builds. Here `#[allow(unused_variables)]` silences
+// the unused `extra` param; without forwarding, that would warn-as-
+// error in CI.
+
+#[query]
+#[allow(unused_variables)]
+fn allow_attr_followed_through(_client: QueryClient, n: u32, extra: u32) -> u32 {
+    n + 1
+}
+
+#[test]
+fn macro_forwards_user_attrs_to_lifted_body() {
+    let client = QueryClient::without_driver();
+    let view = allow_attr_followed_through::observe(&client, 41, 999);
+    assert_eq!(view.value(), 42);
+}
+
 // ---- Regression: mut binding preserved ----------------------------
 //
 // A user body that mutates a `mut`-bound arg must still compile —
