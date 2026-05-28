@@ -227,7 +227,9 @@ async fn invalidate_posts() {
 ## 4. Mount Routes
 
 Mount sync routes with the host server plugin. If live wake-up is
-enabled, allow the topics reported by `sync.live_topics()`.
+enabled, allow the topic PREFIXES reported by
+`sync.live_topic_prefixes()` so RFC 088 §C per-`(stream, params_hash)`
+topics are authorized too.
 
 ```rust
 #[cfg(pocopine_host)]
@@ -240,10 +242,11 @@ async fn main() -> std::io::Result<()> {
     pocopine_logging::init_default().map_err(std::io::Error::other)?;
 
     let sync = sync_server();
-    let sync_topics = sync.live_topics().map_err(std::io::Error::other)?;
+    let sync_topic_prefixes = sync.live_topic_prefixes();
+    let default_topics = sync.live_topics().map_err(std::io::Error::other)?;
     let live_hub = LiveHub::new(live_backend())
-        .allow_topics(sync_topics.clone())
-        .default_topics(sync_topics);
+        .allow_topic_prefixes(sync_topic_prefixes)
+        .default_topics(default_topics);
 
     let router = Router::new()
         .merge(routes(live_hub))
@@ -258,8 +261,14 @@ async fn main() -> std::io::Result<()> {
 }
 ```
 
-The default live topic policy is deny-all. `sync.live_topics()` returns
-only the wake-up topics for registered streams.
+The default live topic policy is deny-all. `sync.live_topic_prefixes()`
+returns one prefix per registered stream (`query:sync:stream:{name}`);
+`LiveHub::allow_topic_prefixes` authorizes both the bare topic AND any
+per-`(stream, params_hash)` extension (`{prefix}:<16-hex>`). Apps that
+don't use RFC 088 §C per-params routing can still pair the older
+`allow_topics(sync.live_topics())` (exact-match) — but adopting
+`#[query_resource]` with overridden `row_to_params` requires the
+prefix variant or per-params subscriptions get silently denied.
 
 `/open` is not a session token. It validates discovery and gives the
 client metadata before the first pull, but `/pull` and `/push` still run

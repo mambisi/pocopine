@@ -680,18 +680,31 @@ fn validate_collection(collection: &str) -> Result<String, LiveClientError> {
     Ok(value)
 }
 
-/// Returns `true` iff `suffix` is exactly `:` followed by 16
-/// lowercase-hex digits — the format produced by
+/// Length of the per-params hash hex suffix produced by
 /// `pocopine_sync::sync_stream_params_tag`'s `{:016x}` formatter
-/// (RFC 088 §C). Used by `LiveHub::allow_topic_prefixes` (host-only)
-/// to disambiguate a per-params extension from a sibling stream
-/// name that happens to start with the same byte prefix + `:`.
-/// `#[allow(dead_code)]` because the host module is `cfg`-gated to
-/// non-wasm targets; this fn is reachable only from there.
+/// (RFC 088 §C). Mirrors `pocopine_sync::PARAMS_HASH_HEX_LEN`
+/// verbatim — they cannot share a single const because
+/// `pocopine_sync` depends on `pocopine_live` (we can't reverse the
+/// arrow without restructuring the workspace). A coupling test in
+/// `pocopine_sync` (`params_hash_hex_len_matches_live`) asserts the
+/// two constants agree, so a future widening of the hash trips that
+/// test if either side is updated in isolation.
+#[allow(dead_code)]
+const PARAMS_HASH_HEX_LEN: usize = 16;
+
+/// Returns `true` iff `suffix` is exactly `:` followed by
+/// [`PARAMS_HASH_HEX_LEN`] lowercase-hex digits — the format
+/// produced by `pocopine_sync::sync_stream_params_tag`'s `{:016x}`
+/// formatter (RFC 088 §C). Used by `LiveHub::allow_topic_prefixes`
+/// (host-only) to disambiguate a per-params extension from a
+/// sibling stream name that happens to start with the same byte
+/// prefix + `:`. `#[allow(dead_code)]` because the host module is
+/// `cfg`-gated to non-wasm targets; this fn is reachable only from
+/// there.
 #[allow(dead_code)]
 fn is_params_hash_suffix(suffix: &str) -> bool {
     let bytes = suffix.as_bytes();
-    if bytes.len() != 17 || bytes[0] != b':' {
+    if bytes.len() != PARAMS_HASH_HEX_LEN + 1 || bytes[0] != b':' {
         return false;
     }
     bytes[1..]

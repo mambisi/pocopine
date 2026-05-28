@@ -10,10 +10,15 @@ async fn main() -> std::io::Result<()> {
     init_default().map_err(std::io::Error::other)?;
 
     let sync = sync_server();
-    let sync_topics = sync.live_topics().map_err(std::io::Error::other)?;
+    // RFC 088 §C: use `allow_topic_prefixes` so per-`(stream, params_hash)`
+    // topics are authorized too. `allow_topics` alone would silently
+    // deny per-params subscriptions the moment any source overrides
+    // `SyncStreamSource::row_to_params`.
+    let sync_topic_prefixes = sync.live_topic_prefixes();
+    let default_topics = sync.live_topics().map_err(std::io::Error::other)?;
     let live_hub = LiveHub::new(live_backend())
-        .allow_topics(sync_topics.clone())
-        .default_topics(sync_topics);
+        .allow_topic_prefixes(sync_topic_prefixes)
+        .default_topics(default_topics);
 
     // $POCOPINE_DIST is set by the deploy container (RFC 080 §4.2);
     // unset under `pocopine dev`, so fall back to the source tree.

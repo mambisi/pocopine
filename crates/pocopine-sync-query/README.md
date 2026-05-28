@@ -187,11 +187,9 @@ Live wakeups for `#[query]` selectors (and any `#[query_resource]`-backed view) 
 
 ```rust,ignore
 let backend = pocopine_events::build_event_backend(
-    pocopine_events::EventBackendConfig::Redis(pocopine_events::RedisEventConfig {
-        url: "redis://prod-redis:6379".into(),
-        app: "myapp".into(),
-        ..Default::default()
-    })
+    pocopine_events::EventBackendConfig::Redis(
+        pocopine_events::RedisEventConfig::new("redis://prod-redis:6379", "myapp")?,
+    ),
 )?;
 let hub = pocopine_live::LiveHub::new(backend)
     .allow_topic_prefixes(sync.live_topic_prefixes()); // RFC 088 §C
