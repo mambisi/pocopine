@@ -1081,7 +1081,23 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
     // Visibility for the generated module. Forward the user's
     // visibility so a `pub fn` selector becomes a `pub mod`.
     let mod_vis = &vis;
-    let user_attrs = &attrs;
+
+    // Split the user-written attrs by audience:
+    //
+    // * Lint / behavior attrs (`#[allow]`, `#[deny]`, `#[warn]`,
+    //   `#[forbid]`, `#[expect]`, `#[inline]`, `#[cold]`, `#[cfg]`,
+    //   `#[cfg_attr]`) follow the body to the lifted inner fn so
+    //   lints emitted inside the body see them.
+    // * Public-API attrs (`#[doc]` / `///`, `#[deprecated]`,
+    //   `#[must_use]`) go on the public module — they describe the
+    //   selector's outward surface. Putting `#[deprecated]` on the
+    //   inner fn would cause the macro's own `super::<inner>()`
+    //   call to trigger `deny(deprecated)`.
+    // * `#[cfg]` and `#[cfg_attr]` end up on BOTH so a cfg-disabled
+    //   selector compiles consistently (the module and the body
+    //   need to disappear together).
+    let (module_attrs, inner_attrs): (Vec<&Attribute>, Vec<&Attribute>) =
+        partition_selector_attrs(&attrs);
 
     // Mangled name for the carried-over user body. Lives at the
     // SAME module level as the original `#[query] fn` so any
@@ -1102,17 +1118,19 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
         .collect();
 
     Ok(quote! {
-        // User attrs go on the inner fn — that's where the body
-        // lives, so function-scoped lint attrs (e.g.
-        // `#[allow(unused_variables)]`, `#[expect(…)]`) emitted by
-        // the user have to follow the body to keep their effect.
-        // Doc comments end up on a `#[doc(hidden)]` private fn,
-        // which is harmless (they aren't surfaced in rustdoc).
-        #(#user_attrs)*
+        // Inner-fn attrs: lint and behavior attrs that need to
+        // follow the body. `#[doc(hidden)]` keeps any user docs out
+        // of rustdoc (the public module already carries them).
+        #(#inner_attrs)*
         #[doc(hidden)]
         #[allow(non_snake_case, clippy::too_many_arguments)]
         fn #inner_fn_ident( #( #inner_fn_params ),* ) -> #ret_type #block
 
+        // Module attrs: doc comments, `#[deprecated]`,
+        // `#[must_use]` — they describe the selector's public API.
+        // `#[cfg(...)]` attrs are duplicated here so the module
+        // disappears in lockstep with the body.
+        #(#module_attrs)*
         #[allow(non_camel_case_types, non_snake_case, dead_code)]
         #mod_vis mod #fn_name {
             // Bring the parent module's items into scope so `observe`
@@ -1191,6 +1209,38 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
     })
 }
 
+/// Split user-supplied attrs on a `#[query] fn` into two groups —
+/// `(module_attrs, inner_attrs)` — by audience. See the call site
+/// in `expand_query` for the rationale.
+///
+/// * `#[doc]` / `///`, `#[deprecated]`, `#[must_use]` → module
+///   (public API surface).
+/// * `#[allow]` / `#[deny]` / `#[warn]` / `#[forbid]` / `#[expect]`,
+///   `#[inline]` / `#[cold]` / `#[no_mangle]` → inner fn (body
+///   audience).
+/// * `#[cfg]` / `#[cfg_attr]` → both (module and body must compile
+///   or disappear together).
+/// * Unknown attrs default to the inner fn — they probably affect
+///   the body and `#[deprecated]`-style attrs on the inner fn don't
+///   fire warnings as long as the macro doesn't reference an
+///   unknown-named attr. Erring inward is conservative.
+fn partition_selector_attrs(attrs: &[Attribute]) -> (Vec<&Attribute>, Vec<&Attribute>) {
+    let mut module = Vec::new();
+    let mut inner = Vec::new();
+    for attr in attrs {
+        let ident = attr.path().segments.last().map(|s| s.ident.to_string());
+        match ident.as_deref() {
+            Some("doc" | "deprecated" | "must_use") => module.push(attr),
+            Some("cfg" | "cfg_attr") => {
+                module.push(attr);
+                inner.push(attr);
+            }
+            _ => inner.push(attr),
+        }
+    }
+    (module, inner)
+}
+
 /// Detect whether a type is `QueryClient` by last path segment.
 /// Matches `QueryClient`, `pocopine_sync_query::QueryClient`, etc;
 /// does NOT match `&QueryClient` or `Rc<QueryClient>` (the macro's
@@ -1221,15 +1271,49 @@ fn contains_impl_trait(ty: &Type) -> bool {
         Type::Paren(p) => contains_impl_trait(&p.elem),
         Type::Group(g) => contains_impl_trait(&g.elem),
         Type::Tuple(t) => t.elems.iter().any(contains_impl_trait),
-        Type::Path(p) => p.path.segments.iter().any(|seg| {
-            if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                args.args
+        Type::Path(p) => p
+            .path
+            .segments
+            .iter()
+            .any(|seg| path_args_contain_impl_trait(&seg.arguments)),
+        // Walk `dyn Trait1 + Trait2<Item = impl X>` — the bound's
+        // path can carry assoc-type bindings that contain
+        // `impl Trait`.
+        Type::TraitObject(t) => t.bounds.iter().any(|b| {
+            if let syn::TypeParamBound::Trait(tb) = b {
+                tb.path
+                    .segments
                     .iter()
-                    .any(|arg| matches!(arg, GenericArgument::Type(t) if contains_impl_trait(t)))
+                    .any(|seg| path_args_contain_impl_trait(&seg.arguments))
             } else {
                 false
             }
         }),
         _ => false,
     }
+}
+
+fn path_args_contain_impl_trait(args: &PathArguments) -> bool {
+    let PathArguments::AngleBracketed(args) = args else {
+        return false;
+    };
+    args.args.iter().any(|arg| match arg {
+        GenericArgument::Type(t) => contains_impl_trait(t),
+        // `Trait<Item = impl X>` — the assoc-type's RHS can be
+        // `impl Trait`.
+        GenericArgument::AssocType(at) => contains_impl_trait(&at.ty),
+        // `Trait<Item: impl X>` — the constraint's bounds can carry
+        // trait paths whose segments embed `impl Trait`.
+        GenericArgument::Constraint(c) => c.bounds.iter().any(|b| {
+            if let syn::TypeParamBound::Trait(tb) = b {
+                tb.path
+                    .segments
+                    .iter()
+                    .any(|seg| path_args_contain_impl_trait(&seg.arguments))
+            } else {
+                false
+            }
+        }),
+        _ => false,
+    })
 }

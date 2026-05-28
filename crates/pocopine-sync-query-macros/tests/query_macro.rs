@@ -198,6 +198,41 @@ fn macro_preserves_super_resolution_in_body() {
     assert_eq!(view.value(), HELPER_CONST);
 }
 
+// ---- Regression: public attrs survive on the generated module ----
+//
+// `#[doc]` and `#[deprecated]` on a `#[query] fn` must end up on
+// the GENERATED MODULE (the public surface), not on the hidden
+// lifted body. Otherwise `#![deny(missing_docs)]` rejects the
+// public module and `#[deprecated]` on the body trips
+// `deny(deprecated)` when the macro's own `super::__user_fn(...)`
+// call references it.
+//
+// We can't easily assert "doc string is present in rustdoc" from a
+// Rust test, but we CAN observe `#[deprecated]` via the lint:
+// the user-side `observe()` call on a deprecated selector should
+// fire `deprecated` ONCE (from the module-level attr), not twice.
+// We assert "compiles with -D deprecated" elsewhere; here we just
+// confirm `#[doc]` doesn't break compilation.
+
+/// This selector has a doc comment. The macro must route the doc
+/// to the public module, not to the hidden lifted fn (which is
+/// `#[doc(hidden)]` and would swallow it).
+#[query]
+fn documented_selector(_client: QueryClient) -> u32 {
+    42
+}
+
+#[test]
+fn macro_routes_doc_to_module() {
+    // The selector works; the doc comment didn't cause expansion to
+    // fail. Doc visibility is verified by rustdoc rendering, not by
+    // a runtime assert — this test just locks in that doc attrs
+    // pass through the macro without breaking the build.
+    let client = QueryClient::without_driver();
+    let view = documented_selector::observe(&client);
+    assert_eq!(view.value(), 42);
+}
+
 // ---- Regression: raw-identifier args ------------------------------
 //
 // A user fn arg whose ident is a raw identifier (e.g. `r#type:
