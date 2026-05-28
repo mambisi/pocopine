@@ -326,7 +326,23 @@ where
                     HydrateReplayOutcome::Accepted
                 }
                 Err(err) if err.is_transport() => HydrateReplayOutcome::StillOffline,
-                Err(err) => HydrateReplayOutcome::Rejected(err.to_string()),
+                Err(err) => {
+                    // Codex P2: dequeue the pending overlay using
+                    // the MUTATOR'S row type before returning
+                    // Rejected. The outer replay loop in
+                    // driver.rs uses the driver's monomorphized
+                    // Row type to dequeue, which would skip
+                    // subscriptions of a different row type that
+                    // received this same optimistic overlay
+                    // (cross-mutator routing fan-out). Doing the
+                    // cleanup here pins it to M::Row.
+                    crate::client::dequeue_pending_for_mutator_row::<M::Row>(
+                        client,
+                        &stream,
+                        &mutation.id,
+                    );
+                    HydrateReplayOutcome::Rejected(err.to_string())
+                }
             }
         })
     }

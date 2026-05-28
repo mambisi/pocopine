@@ -523,17 +523,33 @@ async fn distinct_params_persist_to_distinct_compartments() {
     local
         .run_until(async {
             reset_middleware();
+            // Per-request middleware: return different /pull
+            // snapshots for W_A vs W_B so the driver's
+            // persist-after-pull writes distinct row sets per
+            // compartment. We inspect the request body to pick.
             install_middleware(|req: FetchRequest, _next: FetchNext| async move {
                 match req.url.as_str() {
                     SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
                     SYNC_PULL_PATH => {
-                        // Both compartments get the same /pull
-                        // shape — the test isn't about server-side
-                        // params filtering; it's about client-side
-                        // compartment isolation. Send distinct
-                        // rows so we can verify A's compartment
-                        // doesn't see B's row and vice versa.
-                        Ok(json_response(&snapshot_response(vec![])))
+                        let body = &req.body;
+                        let is_a = body.contains("\"W_A\"");
+                        let is_b = body.contains("\"W_B\"");
+                        let rows = if is_a {
+                            vec![Issue {
+                                id: "row_only_in_A".into(),
+                                workspace_id: "W_A".into(),
+                                title: "A".into(),
+                            }]
+                        } else if is_b {
+                            vec![Issue {
+                                id: "row_only_in_B".into(),
+                                workspace_id: "W_B".into(),
+                                title: "B".into(),
+                            }]
+                        } else {
+                            vec![]
+                        };
+                        Ok(json_response(&snapshot_response(rows)))
                     }
                     other => Err(ServerError::Network(format!("unexpected {other}"))),
                 }
@@ -573,78 +589,36 @@ async fn distinct_params_persist_to_distinct_compartments() {
                 "distinct params produce distinct compartments"
             );
 
-            // Manually seed each compartment with a marker row so we
-            // can verify isolation in both directions.
-            let collection_a = SyncCollectionName::new(compartment_a.as_str()).unwrap();
-            let collection_b = SyncCollectionName::new(compartment_b.as_str()).unwrap();
-            let row_a = SyncRow::new(
-                "row_only_in_A",
-                serde_json::to_value(&Issue {
-                    id: "row_only_in_A".into(),
-                    workspace_id: "W_A".into(),
-                    title: "A".into(),
-                })
-                .unwrap(),
-            )
-            .unwrap();
-            let row_b = SyncRow::new(
-                "row_only_in_B",
-                serde_json::to_value(&Issue {
-                    id: "row_only_in_B".into(),
-                    workspace_id: "W_B".into(),
-                    title: "B".into(),
-                })
-                .unwrap(),
-            )
-            .unwrap();
-            store
-                .save_snapshot(
-                    pocopine_sync::LocalSnapshotBatch::new(
-                        compartment_a.clone(),
-                        collection_a.clone(),
-                        vec![row_a.clone()],
-                        Some(SyncCursor::new("c_a").unwrap()),
-                    )
-                    .with_application_schema_version(Some(1)),
-                )
-                .await
-                .unwrap();
-            store
-                .save_snapshot(
-                    pocopine_sync::LocalSnapshotBatch::new(
-                        compartment_b.clone(),
-                        collection_b.clone(),
-                        vec![row_b.clone()],
-                        Some(SyncCursor::new("c_b").unwrap()),
-                    )
-                    .with_application_schema_version(Some(1)),
-                )
-                .await
-                .unwrap();
-
-            // Pull each compartment back; A must not contain B's
-            // marker and B must not contain A's marker. We test
-            // BOTH directions so neither A->B nor B->A leakage can
-            // hide.
+            // Driver-persisted state (NOT manually seeded). The
+            // driver should have observed /pull and persisted A's
+            // row only in compartment A, B's row only in
+            // compartment B.
             let hydrated_a = store.hydrate_stream(&compartment_a).await.unwrap();
             let hydrated_b = store.hydrate_stream(&compartment_b).await.unwrap();
             let a_keys: Vec<&str> = hydrated_a.rows.iter().map(|r| r.key.as_str()).collect();
             let b_keys: Vec<&str> = hydrated_b.rows.iter().map(|r| r.key.as_str()).collect();
+            // Drive both directions: A's compartment must NOT
+            // contain B's marker AND B's compartment must NOT
+            // contain A's marker.
             assert!(
                 a_keys.contains(&"row_only_in_A"),
-                "compartment A holds its own row"
+                "compartment A holds its own driver-persisted row; got {:?}",
+                a_keys
             );
             assert!(
                 !a_keys.contains(&"row_only_in_B"),
-                "compartment A must NOT see B's row"
+                "compartment A must NOT see B's row; got {:?}",
+                a_keys
             );
             assert!(
                 b_keys.contains(&"row_only_in_B"),
-                "compartment B holds its own row"
+                "compartment B holds its own driver-persisted row; got {:?}",
+                b_keys
             );
             assert!(
                 !b_keys.contains(&"row_only_in_A"),
-                "compartment B must NOT see A's row"
+                "compartment B must NOT see A's row; got {:?}",
+                b_keys
             );
         })
         .await;
