@@ -267,17 +267,26 @@ jobs:
       # either have no host-runnable shape (gated on wasm32) or live in
       # `src/` and run cleanly on host.
       #
-      # The sync CRUD macro crate is the exception: its trybuild suite
-      # spawns nested cargo builds and dev-depends on `pocopine-sync-crud`,
-      # while `pocopine-sync-crud` normally depends on the macro crate.
-      # Keeping those nested builds in an isolated target dir avoids
-      # CI-only local crate metadata misses in the broad workspace graph.
+      # The sync CRUD and sync Query macro crates are the exception:
+      # both ship a trybuild suite that spawns nested cargo builds and
+      # dev-depends on the sister runtime crate (`pocopine-sync-crud` /
+      # `pocopine-sync-query`), while that runtime crate normally depends
+      # on the macro crate. Keeping each nested build in an isolated
+      # target dir avoids CI-only local crate metadata misses in the
+      # broad workspace graph (the dev-cycle otherwise unifies features
+      # across `pocopine-auth`/`pocopine-core` units and races their
+      # outputs, surfacing as `E0463: can't find crate for pocopine_auth`
+      # later in the workspace compile).
       # `--tests` skips doc-tests (a few example snippets reference deps
       # the workspace doesn't carry — they're not the contract here).
       - name: sync CRUD macro host tests
         run: cargo test -p pocopine-sync-crud-macros --tests
         env:
           CARGO_TARGET_DIR: target/sync-crud-macros-host
+      - name: sync Query macro host tests
+        run: cargo test -p pocopine-sync-query-macros --tests
+        env:
+          CARGO_TARGET_DIR: target/sync-query-macros-host
       - name: SQLx sync helper tests
         run: cargo test -p pocopine-sync-sqlx --features sqlite --tests
       - name: SQLx sync backend feature checks
@@ -285,7 +294,7 @@ jobs:
           cargo check -p pocopine-sync-sqlx --features postgres
           cargo check -p pocopine-sync-sqlx --features mysql
       - name: workspace host tests
-        run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-crud-macros --tests
+        run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-crud-macros --exclude pocopine-sync-query-macros --tests
 
   observability-otlp:
     name: observability OTLP smoke
