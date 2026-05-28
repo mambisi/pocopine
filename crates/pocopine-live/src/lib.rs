@@ -1646,21 +1646,35 @@ mod host {
             self.with_topic_policy(move |_, topic| allowed.iter().any(|allowed| allowed == topic))
         }
 
-        /// Allow any topic whose name starts with one of the listed
-        /// prefixes. Designed for RFC 088 §C-style routing schemes
-        /// where one logical stream produces a family of topics:
-        /// `sync:stream:issues` (bare), `sync:stream:issues:abc…`,
-        /// `sync:stream:issues:def…`, … all share a prefix.
+        /// Allow any topic that EITHER equals one of the listed
+        /// prefixes exactly OR extends it with a `:` delimiter.
+        /// Designed for RFC 088 §C-style routing schemes where one
+        /// logical stream produces a family of topics:
+        /// `query:sync:stream:issues` (bare),
+        /// `query:sync:stream:issues:abc…`,
+        /// `query:sync:stream:issues:def…`, … all share a prefix.
         ///
-        /// Match is byte-prefix on the topic's string form (no
-        /// glob, no regex). For the sync server: call with
-        /// `sync.live_topic_prefixes()` (which returns the
-        /// `query:sync:stream:{name}` prefix per registered stream).
+        /// The `:` delimiter requirement is what makes this safe to
+        /// generate from a stream name. Without it, the prefix
+        /// `query:sync:stream:issues` would also authorize a
+        /// neighboring topic like `query:sync:stream:issues_private`
+        /// or `query:sync:stream:issues2` — a public stream
+        /// allowlist could leak access to a private stream whose
+        /// name happens to share a byte prefix.
+        ///
+        /// For the sync server: call with
+        /// `sync.live_topic_prefixes()`, which returns the
+        /// `query:sync:stream:{name}` prefix per registered stream.
         pub fn allow_topic_prefixes(self, prefixes: impl IntoIterator<Item = String>) -> Self {
             let allowed = Arc::new(prefixes.into_iter().collect::<Vec<_>>());
             self.with_topic_policy(move |_, topic| {
                 let topic_str = topic.as_str();
-                allowed.iter().any(|p| topic_str.starts_with(p.as_str()))
+                allowed.iter().any(|p| {
+                    let prefix = p.as_str();
+                    topic_str == prefix
+                        || (topic_str.starts_with(prefix)
+                            && topic_str.as_bytes().get(prefix.len()) == Some(&b':'))
+                })
             })
         }
 
@@ -2005,6 +2019,38 @@ mod host {
             let topics = hub.allowed_topics(&ctx, &query).unwrap();
 
             assert_eq!(topics, vec![posts]);
+        }
+
+        #[test]
+        fn allow_topic_prefixes_accepts_exact_and_delimited_extensions() {
+            // RFC 088 §C: the prefix `query:sync:stream:issues` must
+            // authorize the bare topic AND every per-params variant
+            // `query:sync:stream:issues:<hash>` — they're delimited
+            // by `:`. The prefix must NOT authorize a neighboring
+            // topic like `query:sync:stream:issues_private` (codex
+            // P2 finding).
+            let backend = MemoryEventBackend::new();
+            let hub = LiveHub::new(backend)
+                .allow_topic_prefixes(["query:sync:stream:issues".to_string()]);
+            let ctx = RequestContext::new(Method::GET, Uri::from_static("/"), HeaderMap::new());
+
+            // Exact match: bare topic.
+            let bare = crate::query_tag_topic("sync:stream:issues").unwrap();
+            assert!((hub.policy)(&ctx, &bare));
+
+            // Delimited extension: per-params topic.
+            let with_hash = crate::query_tag_topic("sync:stream:issues:abcd1234abcd1234").unwrap();
+            assert!((hub.policy)(&ctx, &with_hash));
+
+            // Underscore extension — same byte-prefix but a
+            // DIFFERENT stream name. MUST be rejected.
+            let neighbor = crate::query_tag_topic("sync:stream:issues_private").unwrap();
+            assert!(!(hub.policy)(&ctx, &neighbor));
+
+            // Numeric extension — same byte-prefix, different
+            // stream. MUST be rejected.
+            let neighbor2 = crate::query_tag_topic("sync:stream:issues2").unwrap();
+            assert!(!(hub.policy)(&ctx, &neighbor2));
         }
 
         #[test]

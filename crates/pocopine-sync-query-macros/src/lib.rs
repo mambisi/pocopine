@@ -685,6 +685,17 @@ fn expand_query_resource(
                 let mut canonical =
                     ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
                 #partition_for_topic_body
+                // Symmetric to the server: an empty canonical
+                // projection means there's no per-`(stream, params)`
+                // topic to subscribe to (the server's
+                // `invalidate_stream_with_row` short-circuits on
+                // empty params). Falling back to bare-topic only
+                // also avoids requesting a topic that exact-match
+                // allowlists (`allow_topics(sync.live_topics())`)
+                // would reject.
+                if canonical.is_empty() {
+                    return ::std::option::Option::None;
+                }
                 ::std::option::Option::Some(
                     ::pocopine_sync_query::__private::pocopine_sync::stream_params_hash(
                         NAME, &canonical,
@@ -1059,22 +1070,33 @@ fn generate_partition_for_topic_body(params: &[ParamDef]) -> TokenStream2 {
                     // Required field absent → no partition; `?` on
                     // Option<&Value> yields None from the outer fn.
                     let value = captured.get(#name_str)?;
-                    // Reject comparator-wrapped values
-                    // (`{"in": [...]}` / `{"range": ...}` /
-                    // `{"contains": ...}` etc.). These don't map to a
-                    // single topic key — fall back to bare-topic
-                    // subscription.
+                    // Reject comparator-wrapped values — InSet
+                    // (`{"in": [...]}`), Contains
+                    // (`{"contains": "...", "case_sensitive": bool}`),
+                    // and Range (`{"from": ..., "to": ..., "inclusive": [_, _]}`).
+                    // These don't map to a single topic key — fall
+                    // back to bare-topic subscription.
+                    //
+                    // We detect via the wire-shape's distinctive
+                    // keys. The set is closed (these are the only
+                    // comparators `pocopine_sync_query::params`
+                    // emits); a future comparator would need to be
+                    // added here, or the macro could opt for a
+                    // strict allowlist of plain JSON value kinds
+                    // instead.
                     if let ::pocopine_sync_query::__private::serde_json::Value::Object(obj) = value {
                         let is_comparator = obj.keys().any(|k| {
                             matches!(
                                 k.as_str(),
-                                "in" | "range"
-                                    | "any_of"
-                                    | "contains"
-                                    | "at_least"
-                                    | "at_most"
-                                    | "less_than"
-                                    | "greater_than",
+                                // InSet
+                                "in"
+                                // Contains
+                                | "contains"
+                                | "case_sensitive"
+                                // Range
+                                | "from"
+                                | "to"
+                                | "inclusive",
                             )
                         });
                         if is_comparator {
