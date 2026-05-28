@@ -349,11 +349,134 @@ That test opens the real SSE route for `query:posts:list`, calls
 
 ## 8. Production Backends
 
-Use `MemoryEventBackend` only when all publishers and subscribers live in
-one process. For multi-process servers, deploy a shared backend such as
-Redis and build the hub from that backend instead. The browser stream
-URL, component subscriptions, collection names, and query tags do not
-change.
+Pocopine ships two event backends; the one you pick is the single most
+important deployment decision for live invalidation.
+
+| Backend | Crate path | Use when |
+|---|---|---|
+| `MemoryEventBackend` | `pocopine_events::MemoryEventBackend` | Tests, dev, single-process deployments only |
+| `RedisEventBackend` | `pocopine_events::RedisEventBackend` (`redis` feature) | Multi-process / horizontally-scaled servers |
+
+### Why `MemoryEventBackend` is not enough for production
+
+`MemoryEventBackend` is a per-process `tokio::sync::broadcast`. Events
+published on one process **never reach a subscriber on another process** —
+they live and die inside one node's memory.
+
+```text
+   Single node (MemoryEventBackend works):
+
+     ┌─────────── Node 1 ──────────────┐
+     │                                  │
+     │  /push  ──► MemoryEventBackend   │
+     │              │                    │
+     │              ▼                    │
+     │  ◄── SSE to all clients on Node 1 │
+     └──────────────────────────────────┘
+
+
+   Multi-node with MemoryEventBackend (BROKEN):
+
+     Client A ──SSE──► Node 1                     Node 2 ◄──/push── Client B
+                       │                            │
+                       │  Memory backend            │  Memory backend
+                       │  (Node 1, in-proc)         │  (Node 2, in-proc)
+                       │                            │
+                       ▼                            ▼
+                Sees only events Node 1     Sees only events Node 2
+                publishes locally           publishes locally
+
+                ❌ Client A never receives Client B's mutation.
+                   The publish stayed in Node 2's memory.
+
+
+   Multi-node with shared broker (works):
+
+     Client A ──SSE──► Node 1                     Node 2 ◄──/push── Client B
+                       │                            │
+                       ▼                            ▼
+                  RedisEventBackend  ◄────►  RedisEventBackend
+                       │                            ▲
+                       │      ┌── Redis ──┐         │
+                       └──────┤  PUB/SUB  ├─────────┘
+                              │  + Streams│
+                              └───────────┘
+
+                ✓ Node 1 receives Client B's invalidation via Redis,
+                  forwards to Client A's SSE.
+```
+
+If you run more than one server process — `kubectl` replica count > 1,
+Render auto-scaling, blue/green deploy, anything — you need a shared
+backend. The symptom of a missing shared backend is "live updates work
+locally but mysteriously drop in production"; the fix is one line.
+
+### Switching to `RedisEventBackend`
+
+```rust,ignore
+use pocopine_events::{build_event_backend, EventBackendConfig, RedisEventConfig};
+use pocopine_live::LiveHub;
+
+let backend = build_event_backend(EventBackendConfig::Redis(RedisEventConfig {
+    url: "redis://prod-redis:6379".to_string(),
+    app:  "myapp".to_string(),
+    ..Default::default()
+}))?;
+
+let hub = LiveHub::new(backend)
+    .allow_topic_prefixes(sync.live_topic_prefixes())  // RFC 088 §C; or
+    // .allow_topics(sync.live_topics())               // pre-§C bare-only.
+    .default_topics(default_topics);
+```
+
+No `LiveHub` / `SyncServer` / `LiveClient` / browser code changes. The
+backend is plug-and-play.
+
+### Choosing a broker at scale
+
+For most apps, `RedisEventBackend` is the right answer; it's batteries-
+included and handles ~1M topics on a single node comfortably. The table
+below covers the alternatives if your scale or platform constraints
+make Redis a poor fit.
+
+| Broker | Scale | When to pick |
+|---|---|---|
+| **Redis Pub/Sub + Streams** (built-in) | ~1M topics single-node, multi-million across Redis Cluster | Default. Already a dep. Streams give replay; fall back to /pull works. |
+| **NATS JetStream** (custom backend) | 10M+ subjects across cluster | Subject-based routing maps naturally to RFC 088 §C's `(stream, params_hash)` topic shape. Best for fanout-heavy workloads. |
+| **Kafka** (custom backend) | High-throughput sequential workloads | Use if you already run Kafka. Topic cardinality stresses Kafka — prefer one topic + header filtering over one-topic-per-(stream, hash). |
+| **Postgres LISTEN/NOTIFY** (custom backend) | <10k concurrent subscribers per node | Smallest-scale option; no extra infra if you already run Postgres. |
+
+`pocopine-events` ships Memory + Redis; NATS / Kafka / Postgres
+backends are user-implementable via the `LiveEventBackend` trait.
+
+### Topic cardinality with RFC 088 §C
+
+RFC 088 §C (`sync-query` selector-level live routing) publishes to
+per-`(stream, params_hash)` topics. With 1M users observing N streams ×
+M workspaces (or other partition keys), the active topic count is
+typically `N × M` — for 10 streams × 5k workspaces, that's 50k topics.
+Redis single-node handles this without breaking a sweat.
+
+If your topic count crosses ~10M (e.g. millions of distinct partition
+hashes), shard with Redis Cluster (topic name is the shard key) or
+move to NATS / Kafka. The `LiveHub::allow_topic_prefixes` policy is
+broker-agnostic; only your config + backend change.
+
+### What §C changes (and doesn't)
+
+- **Subscribers per topic** drops dramatically (the whole point — from
+  O(all clients) to O(matching clients)).
+- **Topic count** rises (more topics, each with fewer subscribers).
+- **Events per mutation** stays approximately the same (one bare publish
+  + one per-params publish per row, vs the pre-§C single bare publish).
+- **Broker CPU** is roughly a wash; broker memory rises slightly with
+  topic metadata.
+
+You only see the bandwidth win once the matching-subscriber count is
+much smaller than the all-subscriber count — i.e. for filtered
+multi-tenant workloads. For single-tenant or low-traffic apps, the
+plain bare topic is enough; `MemoryEventBackend` + `allow_topics` is
+fine.
 
 ## Failure Model
 
