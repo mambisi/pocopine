@@ -30,6 +30,7 @@ use crate::mutator::{
     wrap_persisted_payload, AnyMutator, HydrateReplayOutcome, MutatorEntry, RowChange,
 };
 use crate::query::{MatchFn, Order, Query, QueryKey};
+use crate::selector::{AnySelector, SelectorEntry, SelectorId, SelectorView};
 use crate::state::{PendingOverlay, QueryState};
 
 /// Composite registry key. Including the `TypeId` of the row type
@@ -185,9 +186,18 @@ impl<Row: 'static> QuerySubscription<Row> {
     where
         F: Fn() + 'static,
     {
+        self.register_listener_rc(Rc::new(callback))
+    }
+
+    /// Variant of `register_listener` that takes a pre-built
+    /// `Rc<dyn Fn()>`. Used by the selector layer's
+    /// `AnyTrackable` impl to avoid re-wrapping a closure that's
+    /// already shared (a selector's rerun callback is held by every
+    /// upstream).
+    pub(crate) fn register_listener_rc(&self, callback: Rc<dyn Fn()>) -> u64 {
         let id = self.next_listener_id.get();
         self.next_listener_id.set(id.wrapping_add(1));
-        self.listeners.borrow_mut().push((id, Rc::new(callback)));
+        self.listeners.borrow_mut().push((id, callback));
         id
     }
 
@@ -225,6 +235,17 @@ impl<Row: 'static> QuerySubscription<Row> {
         for cb in snapshot {
             cb();
         }
+    }
+}
+
+impl<Row: 'static> crate::selector::AnyTrackable for QuerySubscription<Row> {
+    fn register_listener(&self, callback: Rc<dyn Fn()>) -> u64 {
+        self.register_listener_rc(callback)
+    }
+
+    fn unregister_listener(&self, id: u64) {
+        // Disambiguate from the trait method we're inside via UFCS.
+        QuerySubscription::<Row>::unregister_listener(self, id);
     }
 }
 
@@ -306,6 +327,13 @@ pub(crate) struct QueryClientInner {
     /// Apps that don't enable persistence never touch this map.
     /// Mutators register via [`QueryClient::register_mutator`].
     pub(crate) mutators: RefCell<MutatorRegistry>,
+    /// Selector registry, keyed by `(SelectorId, args_hash)`. Holds
+    /// `Weak` so an entry whose last `SelectorView` and last parent-
+    /// selector tracker dropped is GC'd via the entry's `Drop` impl
+    /// (which clears the now-dangling Weak from this map). Strong
+    /// references live on `SelectorView`s and inside parent
+    /// selectors' captured-dep keepers.
+    pub(crate) selectors: RefCell<HashMap<(SelectorId, u64), Weak<dyn AnySelector>>>,
 }
 
 /// Type alias for the mutator registry — `clippy::type_complexity`
@@ -314,6 +342,18 @@ type MutatorRegistry = HashMap<(&'static str, &'static str), Rc<dyn AnyMutator>>
 
 pub struct QueryClient {
     inner: Rc<QueryClientInner>,
+}
+
+impl Clone for QueryClient {
+    /// Cheap — clones the inner `Rc`. Two clones share the same
+    /// subscription + selector registry, so a clone passed into a
+    /// `#[query]` selector's compute closure observes the same
+    /// reactive state as the outer caller.
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl QueryClient {
@@ -359,6 +399,7 @@ impl QueryClient {
                 registry: RefCell::new(HashMap::new()),
                 replay_queue: RefCell::new(VecDeque::new()),
                 mutators: RefCell::new(HashMap::new()),
+                selectors: RefCell::new(HashMap::new()),
             }),
         }
     }
@@ -377,6 +418,7 @@ impl QueryClient {
                 registry: RefCell::new(HashMap::new()),
                 replay_queue: RefCell::new(VecDeque::new()),
                 mutators: RefCell::new(HashMap::new()),
+                selectors: RefCell::new(HashMap::new()),
             }),
         }
     }
@@ -470,6 +512,77 @@ impl QueryClient {
         let handle = self.subscribe(query);
         self.maybe_spawn_driver(&handle.subscription);
         QueryView { handle }
+    }
+
+    /// Runtime entry point for the `#[query]` macro. Users normally
+    /// don't call this directly; the macro's generated
+    /// `<fn_name>::observe(client, args)` desugars to this call.
+    ///
+    /// * `id` — stable selector identity (from the macro).
+    /// * `args_hash` — caller-computed hash of the args tuple.
+    /// * `compute` — closure that runs the user fn body with the args
+    ///   captured. Called once per rerun.
+    ///
+    /// On a cache hit (entry with `(id, args_hash)` already lives in
+    /// the selector registry), returns a fresh
+    /// [`SelectorView`](crate::SelectorView) wrapping the existing
+    /// entry; `compute` is NOT invoked.
+    ///
+    /// On a cache miss, builds the entry, runs `compute` once inside
+    /// a tracking frame, captures the read deps + wires listeners,
+    /// caches the output, and returns the view. The entry stays in
+    /// the registry until its last strong reference (`SelectorView`
+    /// plus any parent selector's captured-dep keeper) drops.
+    pub fn observe_selector<T, F>(
+        &self,
+        id: SelectorId,
+        args_hash: u64,
+        compute: F,
+    ) -> SelectorView<T>
+    where
+        T: PartialEq + Clone + 'static,
+        F: Fn() -> T + 'static,
+    {
+        let key = (id, args_hash);
+
+        // Cache hit path. Drop the immutable borrow before any
+        // downcast / refcount work — a downstream `Rc::downcast`
+        // doesn't touch the map but keeping the borrow narrow
+        // mirrors the subscription registry's pattern.
+        if let Some(existing) = self
+            .inner
+            .selectors
+            .borrow()
+            .get(&key)
+            .and_then(|w| w.upgrade())
+        {
+            // Same (SelectorId, args_hash) MUST mean the same `T` —
+            // SelectorId encodes the fn's crate-qualified identity,
+            // which uniquely determines the return type. A failed
+            // downcast here would mean two `#[query]` fns hashed to
+            // the same id with different signatures — framework
+            // invariant violation, not a user-recoverable error.
+            let typed: Rc<SelectorEntry<T>> =
+                Rc::downcast::<SelectorEntry<T>>(existing.as_rc_any()).expect(
+                    "(SelectorId, args_hash) collision across selectors with different T \
+                     — framework invariant violated",
+                );
+            return SelectorView::from_entry(typed);
+        }
+
+        // Cache miss. Build, insert, run first rerun, return.
+        let entry = Rc::new(SelectorEntry::<T>::new(
+            id,
+            args_hash,
+            Box::new(compute),
+            Rc::downgrade(&self.inner),
+        ));
+        {
+            let mut map = self.inner.selectors.borrow_mut();
+            map.insert(key, Rc::downgrade(&entry) as Weak<dyn AnySelector>);
+        }
+        entry.rerun();
+        SelectorView::from_entry(entry)
     }
 
     /// Spawn the driver for `subscription` if (1) the client has a
@@ -1721,6 +1834,21 @@ pub struct QueryHandle<Row: 'static> {
     registry: RegistryWeakRef,
 }
 
+impl<Row: 'static> Clone for QueryHandle<Row> {
+    /// Bumps the subscription's refcount and clones the registry
+    /// weak-ref. The new handle's `Drop` decrements just like the
+    /// original. Used by [`QueryView::rows`] when running inside a
+    /// selector body, so the selector entry can keep the underlying
+    /// subscription alive between reruns via an erased keeper.
+    fn clone(&self) -> Self {
+        self.subscription.bump_refcount();
+        Self {
+            subscription: self.subscription.clone(),
+            registry: self.registry.clone(),
+        }
+    }
+}
+
 impl<Row: 'static> QueryHandle<Row> {
     /// Borrow the underlying query.
     pub fn query(&self) -> &Query<Row> {
@@ -1781,6 +1909,7 @@ impl<Row: 'static> QueryView<Row> {
     where
         Row: Clone + serde::Serialize,
     {
+        self.track_for_selector();
         let query = self.query();
         if query.order_by().is_none() && query.limit().is_none() {
             return self.rendered_key_count();
@@ -1794,12 +1923,32 @@ impl<Row: 'static> QueryView<Row> {
     where
         Row: Clone + serde::Serialize,
     {
+        self.track_for_selector();
         // Cheap path: don't materialize rows just to ask "anything
         // visible?". A `rendered_key_count` walk visits each
         // canonical row and overlay once; no row cloning or JSON
         // serialization. The pending-empty check matches the
         // documented "idle view" semantics.
         self.rendered_key_count() == 0 && self.state().pending().is_empty()
+    }
+
+    /// Record this view's subscription as a dependency on the current
+    /// selector's tracking frame, if one is active. No-op when no
+    /// selector is running (ordinary component reads aren't tracked).
+    ///
+    /// The keeper is a cloned `QueryHandle`, which bumps the
+    /// subscription's refcount and stays alive in the selector
+    /// entry's `keepers` list until the selector reruns and the dep
+    /// is no longer captured (or the selector itself is dropped).
+    /// This is what prevents the subscription from being GC'd while
+    /// a selector still observes it.
+    fn track_for_selector(&self) {
+        if !crate::selector::currently_tracking() {
+            return;
+        }
+        let trackable: Rc<dyn crate::selector::AnyTrackable> = self.handle.subscription.clone();
+        let keeper: Box<dyn std::any::Any> = Box::new(self.handle.clone());
+        crate::selector::record_read(trackable, keeper);
     }
 
     /// Number of distinct keys that survive the canonical + pending
@@ -1842,6 +1991,7 @@ impl<Row: 'static> QueryView<Row> {
     where
         Row: Clone + serde::Serialize,
     {
+        self.track_for_selector();
         use std::collections::BTreeMap;
         let state = self.state();
         let mut rendered: BTreeMap<pocopine_sync::RowKey, Row> = state
@@ -1959,6 +2109,19 @@ impl<Row: 'static> Drop for QueryHandle<Row> {
 struct RegistryWeakRef {
     client: Weak<QueryClientInner>,
     key: RegistryKey,
+}
+
+impl Clone for RegistryWeakRef {
+    /// Cheap — the `Weak` clone is one atomic ref bump and `key` is
+    /// `Copy`. Used by [`QueryHandle::clone`] so a selector can carry
+    /// its own handle into the entry's keepers without re-running
+    /// `subscribe()`.
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            key: self.key,
+        }
+    }
 }
 
 impl RegistryWeakRef {

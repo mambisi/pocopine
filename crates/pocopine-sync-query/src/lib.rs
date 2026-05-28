@@ -48,6 +48,7 @@ pub mod params;
 pub mod plugin;
 pub mod predicate;
 pub mod query;
+pub mod selector;
 pub mod state;
 pub mod wire;
 
@@ -66,6 +67,7 @@ pub use predicate::{
     contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldRange,
 };
 pub use query::{MatchFn, Order, OrderBy, Query, QueryBuilder, QueryKey};
+pub use selector::{AnyTrackable, SelectorId, SelectorView, TrackToken};
 pub use state::QueryState;
 
 // The macro lives in its own crate (proc-macros must), but downstream
