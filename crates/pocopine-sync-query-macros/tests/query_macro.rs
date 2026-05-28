@@ -258,6 +258,35 @@ fn macro_routes_must_use_to_observe() {
     assert_eq!(view.value(), 99);
 }
 
+// ---- Regression: `#[track_caller]` lands on observe() AND body ----
+//
+// `#[track_caller]` on a `#[query] fn` must propagate to BOTH the
+// generated `observe()` and the lifted inner body, so panics
+// originating in the body (or in observe()'s own
+// `Location::caller()` reads) point at the user's call site instead
+// of the macro's generated chain. The chain through the anonymous
+// compute closure still breaks full propagation — that's a
+// documented limitation — but having the attr on both endpoints
+// keeps the easy cases working.
+
+#[query]
+#[track_caller]
+fn tc_selector(_client: QueryClient, n: u32) -> u32 {
+    n * 2
+}
+
+#[test]
+fn macro_routes_track_caller_to_both_surfaces() {
+    let client = QueryClient::without_driver();
+    // We mainly assert the build compiles + runs: a missing or
+    // wrongly-routed `#[track_caller]` doesn't cause runtime
+    // failures, but it WOULD silently break panic-location quality
+    // (verified offline by inspecting Location::caller() output —
+    // not portable to a runtime assert).
+    let view = tc_selector::observe(&client, 21);
+    assert_eq!(view.value(), 42);
+}
+
 // ---- Regression: raw-identifier args ------------------------------
 //
 // A user fn arg whose ident is a raw identifier (e.g. `r#type:
