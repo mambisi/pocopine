@@ -190,6 +190,34 @@ enum CapabilityKeyword {
 /// range; `String` / `str` / `Cow` → contains). Anything the heuristic
 /// misses can be opted in explicitly.
 fn extract_field_params(item: &ItemStruct) -> syn::Result<Vec<ParamDef>> {
+    // Struct-level `#[serde(rename_all = "...")]` silently changes
+    // every field's wire key. The macro keys row_to_params and
+    // partition_for_topic on the Rust ident, so a struct-level
+    // rename_all would produce a server-side hash on the renamed
+    // keys (because `from_value` deserializes from them) but the
+    // macro's `params.insert(<rust_ident>, ...)` writes the Rust
+    // names — net effect: client and server both use Rust idents
+    // (an accidentally-correct outcome), but third-party clients
+    // following the wire spec would use the renamed keys and miss
+    // every wakeup. Reject up front.
+    for serde_attr in item.attrs.iter().filter(|a| a.path().is_ident("serde")) {
+        let meta_tokens = match &serde_attr.meta {
+            Meta::List(list) => list.tokens.to_string(),
+            _ => continue,
+        };
+        if meta_tokens.contains("rename") {
+            return Err(syn::Error::new(
+                serde_attr.span(),
+                "`#[serde(rename...)]` on a `#[query_resource]` struct is not supported. The \
+                 macro keys both the predicate evaluator and the RFC 088 §C topic-hash projection \
+                 on the Rust field names (with `r#` stripped), so a serde rename would diverge \
+                 from the wire spec — third-party clients implementing the spec would hash \
+                 different bytes and miss every per-params wakeup. Remove the rename, or open an \
+                 issue if you need serde-rename-aware projection.",
+            ));
+        }
+    }
+
     let fields = match &item.fields {
         Fields::Named(named) => named,
         Fields::Unit => return Ok(Vec::new()),
@@ -223,6 +251,45 @@ fn extract_field_params(item: &ItemStruct) -> syn::Result<Vec<ParamDef>> {
         let Some(attr) = query_param_attrs.first() else {
             continue;
         };
+
+        // RFC 088 §C: reject `#[serde(rename)]` / `#[serde(rename_all)]`
+        // shaped attrs on `#[query_param]` fields. The macro
+        // currently keys both the predicate evaluator (`matches()`)
+        // and the topic-hash projection (`row_to_params` /
+        // `partition_for_topic`) on the raw Rust ident (with the
+        // `r#` prefix stripped), NOT on the serde wire key. A field
+        // with a serde rename would silently produce a different
+        // wire-shape than the projector expects — third-party
+        // language clients implementing the golden-fixture spec
+        // would hash a different value and miss every per-params
+        // wakeup. Rejecting at compile time turns a silent runtime
+        // routing-precision bug into a clear error.
+        //
+        // Detection is structural: any `#[serde(rename ...)]` or
+        // `#[serde(rename_all ...)]` on the same field is fatal.
+        // We don't try to parse serde's full attribute grammar —
+        // just look for the keyword in the meta list's tokens. A
+        // future enhancement could thread the rename through the
+        // macro's wire-key derivation; until then, reject.
+        for serde_attr in field.attrs.iter().filter(|a| a.path().is_ident("serde")) {
+            let meta_tokens = match &serde_attr.meta {
+                Meta::List(list) => list.tokens.to_string(),
+                _ => continue,
+            };
+            if meta_tokens.contains("rename") {
+                return Err(syn::Error::new(
+                    serde_attr.span(),
+                    format!(
+                        "field `{field_name}`: `#[serde(rename...)]` on a `#[query_param]` field \
+                         is not supported. The `#[query_resource]` macro keys both the predicate \
+                         evaluator and the RFC 088 §C topic-hash projection on the Rust field \
+                         name (with `r#` stripped), NOT the serde-renamed wire key — a third-party \
+                         client implementing the wire spec would hash a different value and miss \
+                         every per-params wakeup. Remove the rename or omit the `#[query_param]`."
+                    ),
+                ));
+            }
+        }
 
         let extras = parse_query_param_extras(attr)?;
         let (inner_ty, is_option) = unwrap_option_type(&field.ty);
@@ -449,6 +516,20 @@ fn validate_resource_name(name: &LitStr) -> syn::Result<()> {
             "invalid query_resource name: must be a non-empty sync token without leading/trailing whitespace or control chars (max 1024 bytes)",
         ));
     }
+    // RFC 088 §C: `:` is the live-wakeup wire delimiter. A resource
+    // name containing `:` would produce a topic that collides with
+    // the per-`(stream, params_hash)` format. `SyncStreamName::new`
+    // also rejects this at runtime, but catching it at compile time
+    // turns the `.expect("query_resource name passed validation")`
+    // panic in the generated `Resource::query()` into a clear
+    // proc-macro error.
+    if value.contains(':') {
+        return Err(syn::Error::new(
+            name.span(),
+            "invalid query_resource name: must not contain `:` — the live-wakeup wire \
+             protocol uses `:` as a structural delimiter (RFC 088 §C)",
+        ));
+    }
     Ok(())
 }
 
@@ -550,6 +631,57 @@ fn expand_query_resource(
     let row_to_params_body = generate_row_to_params_body(&params);
     let partition_for_topic_body = generate_partition_for_topic_body(&params);
 
+    // RFC 088 §C / code-review fix #10: per-(stream, params_hash)
+    // live wakeups depend on at least one `#[query_param(required)]`
+    // field to partition the topic space. A `#[query_resource]` with
+    // zero required fields generates a `partition_for_topic` that
+    // ALWAYS returns `None`, silently downgrading every live
+    // subscription to the bare stream tag — which means every routed
+    // change on the stream wakes every subscriber regardless of
+    // tenant. That's correct (the matches() predicate still gates
+    // delivery), but loses §C's fanout-reduction benefit.
+    //
+    // Surface the trade-off via:
+    //   1. A public const `HAS_PER_PARAMS_LIVE_ROUTING: bool` users
+    //      can introspect or assert against in their own builds.
+    //   2. When the count is zero, a one-shot `tracing::warn!` from
+    //      `partition_for_topic` the first time it returns `None`
+    //      due to the missing-required-field cause. Uses
+    //      `std::sync::Once` so production logs see one line per
+    //      process, not one per call. We chose the runtime channel
+    //      over a compile-time `#[deprecated]` because the macro-
+    //      generated lint surfaces in the user's crate's
+    //      `#[query_resource(...)]` site and CAN'T be suppressed
+    //      from outside the macro (lint attrs don't reach into
+    //      attr-macro-emitted sibling items in stable Rust).
+    let required_count = params.iter().filter(|p| p.caps.required).count();
+    let has_per_params_live_routing = required_count > 0;
+    let zero_required_runtime_warning = if required_count == 0 {
+        let name_for_warning = name_lit.clone();
+        quote! {
+            // One-shot warning the first time partition_for_topic
+            // returns `None` because no #[query_param(required)]
+            // field was declared. Cf. RFC 088 §C / code-review
+            // finding #10.
+            static __PER_PARAMS_ROUTING_DISABLED_WARNING: ::std::sync::Once =
+                ::std::sync::Once::new();
+            __PER_PARAMS_ROUTING_DISABLED_WARNING.call_once(|| {
+                ::pocopine_sync_query::__private::tracing::warn!(
+                    target: "pocopine.log",
+                    resource = #name_for_warning,
+                    "RFC 088 §C live routing disabled: `#[query_resource]` `{}` declares no \
+                     `#[query_param(required)]` field, so partition_for_topic always returns \
+                     None. Every routed change on this stream will wake every subscriber. \
+                     Annotate the tenant-gate field (e.g. workspace_id) with \
+                     `#[query_param(required)]` to enable precise live wakeups.",
+                    #name_for_warning,
+                );
+            });
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #item
 
@@ -583,6 +715,15 @@ fn expand_query_resource(
 
             pub const NAME: &str = #name_lit;
             pub const SCHEMA_VERSION: u32 = #schema_version;
+            /// `true` iff this resource declares at least one
+            /// `#[query_param(required)]` field — the gate that
+            /// enables RFC 088 §C per-(stream, params_hash) live
+            /// wakeups. When `false`, `partition_for_topic` always
+            /// returns `None` and live subscriptions fall back to
+            /// the bare stream tag (fanout-reduction disabled). The
+            /// macro also emits a `#[deprecated]` build warning
+            /// when this is `false`.
+            pub const HAS_PER_PARAMS_LIVE_ROUTING: bool = #has_per_params_live_routing;
             pub type Row = super::#row_ident;
 
             /// Field markers for the type-safe query DSL. One marker
@@ -651,12 +792,18 @@ fn expand_query_resource(
             ) -> ::pocopine_sync_query::__private::pocopine_sync::SyncResult<
                 ::pocopine_sync_query::__private::pocopine_sync::StreamParams,
             > {
-                let typed: Row = ::pocopine_sync_query::__private::serde_json::from_value(
-                    row.clone(),
-                )
-                .map_err(|e| ::pocopine_sync_query::__private::pocopine_sync::SyncError::client(
-                    format!("row_to_params: {} row didn't deserialize: {}", NAME, e),
-                ))?;
+                // RFC 088 §C / code-review fix #12: project required
+                // fields directly from the JSON `row` rather than
+                // round-tripping through `serde_json::from_value::<Row>`.
+                // The typed-roundtrip path forced the full row payload
+                // through serde even when the partition projection only
+                // cares about the (typically 1–2) `required`-flagged
+                // fields, and failed the whole publish if any unrelated
+                // field on `Row` was non-deserializable. Direct
+                // projection only touches the keys we actually need and
+                // never fails — a missing/null required field yields an
+                // empty `StreamParams` and the caller treats that as
+                // "skip per-params publish".
                 let mut params =
                     ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
                 #row_to_params_body
@@ -694,6 +841,7 @@ fn expand_query_resource(
                 // allowlists (`allow_topics(sync.live_topics())`)
                 // would reject.
                 if canonical.is_empty() {
+                    #zero_required_runtime_warning
                     return ::std::option::Option::None;
                 }
                 ::std::option::Option::Some(
@@ -985,34 +1133,20 @@ fn generate_row_to_params_body(params: &[ParamDef]) -> TokenStream2 {
         .map(|param| {
             let name = &param.name;
             let name_str = ident_wire_key(name);
-            let field_access: TokenStream2 = quote! { typed.#name };
-            if param.caps.optional {
-                quote! {
-                    if let ::std::option::Option::Some(inner) = &#field_access {
-                        let v = ::pocopine_sync_query::__private::serde_json::to_value(inner)
-                            .map_err(|e|
-                                ::pocopine_sync_query::__private::pocopine_sync::SyncError::client(
-                                    format!(
-                                        "row_to_params: field `{}` failed to serialize: {}",
-                                        #name_str, e,
-                                    ),
-                                )
-                            )?;
-                        params.insert(#name_str.to_string(), v);
+            // Direct JSON projection (code-review fix #12). For both
+            // required and Option-wrapped required fields the semantics
+            // are the same: insert only if the JSON has the key and
+            // it's non-null. A missing or null required field
+            // short-circuits the partition (the surrounding caller
+            // treats an empty `StreamParams` as "skip per-params
+            // publish"), which matches what the typed-roundtrip path
+            // produced via the `Option::None` skip and serde's
+            // `default` handling.
+            quote! {
+                if let ::std::option::Option::Some(v) = row.get(#name_str) {
+                    if !v.is_null() {
+                        params.insert(#name_str.to_string(), v.clone());
                     }
-                }
-            } else {
-                quote! {
-                    let v = ::pocopine_sync_query::__private::serde_json::to_value(&#field_access)
-                        .map_err(|e|
-                            ::pocopine_sync_query::__private::pocopine_sync::SyncError::client(
-                                format!(
-                                    "row_to_params: field `{}` failed to serialize: {}",
-                                    #name_str, e,
-                                ),
-                            )
-                        )?;
-                    params.insert(#name_str.to_string(), v);
                 }
             }
         })
@@ -1066,60 +1200,63 @@ fn generate_partition_for_topic_body(params: &[ParamDef]) -> TokenStream2 {
             let name = &param.name;
             let name_str = ident_wire_key(name);
 
-            // Per-field comparator-key set. ONLY include the keys
-            // for comparators this field can actually emit:
-            //   * InSet (`{"in": [...]}`) — universal (every
-            //     `#[query_param]` field gets FieldInSet).
-            //   * Contains (`{"contains", "case_sensitive"}`) —
-            //     only if `caps.contains` is set (auto for non-
-            //     Option `String`/`Cow`/`str`, or explicit
-            //     `#[query_param(contains)]`).
-            //   * Range (`{"from", "to", "inclusive"}`) — only if
-            //     `caps.range` is set (auto for orderable types, or
-            //     explicit `#[query_param(range)]`).
+            // Detect comparator-wrapped values by FULL-shape match,
+            // not key-overlap. The three comparator wire shapes
+            // (defined in `pocopine_sync_query::params`) all use
+            // `deny_unknown_fields`, so a user type that happens to
+            // contain a `"contains"` or `"in"` or `"from"` key
+            // AMONG OTHER KEYS isn't a comparator and must be
+            // hashed as a plain partition value.
             //
-            // Gating by capability is what avoids false positives
-            // on user types whose plain equality value happens to
-            // serialize as an object with `from`/`to` keys — e.g.
-            // `#[query_param(required)] window: TimeWindow` where
-            // `TimeWindow` serializes as `{"from": ..., "to": ...}`
-            // and the user filters with `.eq(field::window, w)`.
-            // Without this gate, we'd reject the plain equality
-            // value as a comparator and the client would miss
-            // scoped invalidations the server publishes.
-            let mut comparator_keys: Vec<&'static str> = vec!["in"];
+            //   * InSet wire shape: keys == {"in"}
+            //   * Contains wire shape (if caps.contains):
+            //       keys ⊆ {"contains","case_sensitive"} AND "contains"∈keys
+            //   * Range wire shape (if caps.range):
+            //       keys ⊆ {"from","to","inclusive"} AND (from|to)∈keys
+            //
+            // Capability gating ensures a `(range)`-only-on-paper
+            // field (e.g. a `Range`-impl'd numeric) doesn't reject
+            // a TimeWindow-shaped equality value if the field
+            // wasn't marked range-capable. Plus the FULL-shape
+            // match means even marking the field `(range)` doesn't
+            // false-positive on a user struct like `{from, to,
+            // label, status}` — the extra keys disqualify the
+            // match.
+            let mut shape_checks: Vec<TokenStream2> = Vec::new();
+            // InSet always — every `#[query_param]` field gets `FieldInSet`.
+            shape_checks.push(quote! {
+                if obj.len() == 1 && obj.contains_key("in") {
+                    return ::std::option::Option::None;
+                }
+            });
             if param.caps.contains {
-                comparator_keys.push("contains");
-                comparator_keys.push("case_sensitive");
+                shape_checks.push(quote! {
+                    if obj.contains_key("contains")
+                        && obj.keys().all(|k| matches!(k.as_str(), "contains" | "case_sensitive"))
+                    {
+                        return ::std::option::Option::None;
+                    }
+                });
             }
             if param.caps.range {
-                comparator_keys.push("from");
-                comparator_keys.push("to");
-                comparator_keys.push("inclusive");
+                shape_checks.push(quote! {
+                    if (obj.contains_key("from") || obj.contains_key("to"))
+                        && obj.keys().all(|k| matches!(k.as_str(), "from" | "to" | "inclusive"))
+                    {
+                        return ::std::option::Option::None;
+                    }
+                });
             }
-            let key_arms: Vec<TokenStream2> = comparator_keys
-                .iter()
-                .map(|k| {
-                    let lit = syn::LitStr::new(k, proc_macro2::Span::call_site());
-                    quote! { #lit }
-                })
-                .collect();
 
             quote! {
                 {
                     // Required field absent → no partition; `?` on
                     // Option<&Value> yields None from the outer fn.
                     let value = captured.get(#name_str)?;
-                    // Reject comparator-wrapped values for the
-                    // comparators THIS field can emit. See the
-                    // per-field key set above.
+                    // Reject comparator-wrapped values. See the
+                    // FULL-shape rationale above.
                     if let ::pocopine_sync_query::__private::serde_json::Value::Object(obj) = value {
-                        let is_comparator = obj.keys().any(|k| {
-                            matches!(k.as_str(), #(#key_arms)|*)
-                        });
-                        if is_comparator {
-                            return ::std::option::Option::None;
-                        }
+                        #(#shape_checks)*
                     }
                     canonical.insert(#name_str.to_string(), value.clone());
                 }

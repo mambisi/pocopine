@@ -17,11 +17,12 @@ use tower::ServiceExt;
 async fn sync_pull_and_live_wakeup_share_the_stream_topic() {
     pocopine_server::__reset_for_test();
     let sync = sync_server();
-    let sync_topics = sync.live_topics().unwrap();
+    let sync_topic_prefixes = sync.live_topic_prefixes();
+    let default_topics = sync.live_topics().unwrap();
     let app = Server::new(routes(
         LiveHub::new(live_backend())
-            .allow_topics(sync_topics.clone())
-            .default_topics(sync_topics),
+            .allow_topic_prefixes(sync_topic_prefixes)
+            .default_topics(default_topics),
     ))
     .plugin(sync_server_plugin(sync))
     .try_finalize()

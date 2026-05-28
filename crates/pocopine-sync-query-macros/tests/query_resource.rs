@@ -396,11 +396,43 @@ fn row_to_params_skips_none_options() {
 }
 
 #[test]
-fn row_to_params_propagates_deserialize_error() {
-    // A malformed row (missing required field) bubbles up as
-    // SyncError::client, NOT a panic — the server logs + falls back
-    // to bare-topic publish.
+fn row_to_params_missing_required_field_yields_empty_params() {
+    // Direct JSON projection (code-review fix #12). A malformed row
+    // — missing a required field — no longer errors. It silently
+    // yields an empty `StreamParams`, which the caller
+    // (`invalidate_stream_with_rows`) treats as "skip per-params
+    // publish" and falls back to bare-topic invalidation only.
+    // That's the right semantic: a row we can't project shouldn't
+    // be wrongly attributed to any partition.
     let bad_row = json!({"id": "i1"}); // missing workspace_id, etc.
-    let result = issues::row_to_params(&bad_row);
-    assert!(result.is_err());
+    let params = issues::row_to_params(&bad_row).expect("direct projection never fails");
+    assert!(
+        params.is_empty(),
+        "missing required field must yield empty params, got {params:?}"
+    );
+}
+
+#[test]
+fn row_to_params_skips_unrelated_fields_that_dont_deserialize() {
+    // A row whose IRRELEVANT fields (not in the partition
+    // projection) are malformed must still project the required
+    // fields correctly. The old typed-roundtrip path would have
+    // failed the whole row; the direct JSON projection only touches
+    // the keys we actually need.
+    let row = json!({
+        "id": "i1",
+        "workspace_id": "W1",
+        // `priority` is declared as a number in the test fixture
+        // but here we pass a string to force `serde_json::from_value`
+        // to fail. Direct projection ignores it.
+        "priority": "not a number",
+        "assignee_id": null,
+        "title": "Auth bug",
+        "status": "open",
+    });
+    let params = issues::row_to_params(&row).expect("direct projection never fails");
+    assert_eq!(
+        params.get("workspace_id").map(|v| v.as_str()),
+        Some(Some("W1"))
+    );
 }

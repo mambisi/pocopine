@@ -417,16 +417,13 @@ locally but mysteriously drop in production"; the fix is one line.
 use pocopine_events::{build_event_backend, EventBackendConfig, RedisEventConfig};
 use pocopine_live::LiveHub;
 
-let backend = build_event_backend(EventBackendConfig::Redis(RedisEventConfig {
-    url: "redis://prod-redis:6379".to_string(),
-    app:  "myapp".to_string(),
-    ..Default::default()
-}))?;
+let backend = build_event_backend(EventBackendConfig::Redis(
+    RedisEventConfig::new("redis://prod-redis:6379", "myapp")?,
+))?;
 
 let hub = LiveHub::new(backend)
-    .allow_topic_prefixes(sync.live_topic_prefixes())  // RFC 088 §C; or
-    // .allow_topics(sync.live_topics())               // pre-§C bare-only.
-    .default_topics(default_topics);
+    .allow_topic_prefixes(sync.live_topic_prefixes());  // RFC 088 §C; or
+    // .allow_topics(sync.live_topics())                // pre-§C bare-only.
 ```
 
 No `LiveHub` / `SyncServer` / `LiveClient` / browser code changes. The

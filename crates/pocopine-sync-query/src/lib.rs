@@ -100,6 +100,12 @@ pub mod __private {
     // one stable path — the user's crate only needs
     // `pocopine-sync-query` as a direct dep.
     pub use pocopine_sync;
+    // Re-export so the `#[query_resource]` macro's emitted
+    // `partition_for_topic` (code-review fix #10) can reach
+    // `tracing::warn!` through one stable path. The macro emits a
+    // one-shot warning when the resource declares no `required`
+    // field and §C live routing is therefore disabled.
+    pub use tracing;
 
     /// FNV-1a 64-bit hash. `const fn` so the `#[query]` macro's
     /// generated `const SELECTOR_ID` initializer evaluates it at the

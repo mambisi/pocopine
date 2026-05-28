@@ -383,6 +383,68 @@ impl SyncServer {
         Ok(())
     }
 
+    /// Batched variant of [`Self::invalidate_stream_with_row`] —
+    /// project each row in `rows` to its params, DEDUPLICATE by
+    /// `(stream, params_hash)`, and publish ONCE per distinct hash.
+    ///
+    /// The dedup matters for bulk pushes: a single push that
+    /// accepts N rows all belonging to the same workspace (or
+    /// other partition) would otherwise issue N identical publishes
+    /// to the same topic — wasting broker capacity and waking
+    /// matching clients N times only for them to /pull-with-cursor
+    /// N times (the second through Nth are no-ops, but each costs
+    /// a round-trip). With dedup the same push issues one publish
+    /// per distinct hash.
+    ///
+    /// Per-row `row_to_params` errors are logged via
+    /// `tracing::warn!` and skipped; the rest of the batch still
+    /// publishes. The bare-topic publish is the caller's
+    /// responsibility (issued once per push regardless of row
+    /// count), so partial per-params publish failures don't break
+    /// back-compat clients.
+    pub async fn invalidate_stream_with_rows<'a, I>(&self, stream: &str, rows: I) -> SyncResult<()>
+    where
+        I: IntoIterator<Item = &'a Value>,
+    {
+        let Some(events) = self.inner.events.as_ref() else {
+            return Ok(());
+        };
+        let registered = self.stream(stream)?;
+        let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for row in rows {
+            let params = match registered.source.row_to_params(row) {
+                Ok(p) => p,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = stream,
+                        error = %err,
+                        "RFC 088 §C: row_to_params failed; skipping per-params publish for row",
+                    );
+                    continue;
+                }
+            };
+            if params.is_empty() {
+                continue;
+            }
+            let hash = crate::stream_params_hash(stream, &params);
+            if !seen.insert(hash) {
+                // Same partition already published in this batch.
+                continue;
+            }
+            let params_tag = crate::sync_stream_params_tag(stream, hash);
+            let params_topic = pocopine_live::query_tag_topic(&params_tag)
+                .map_err(|err| SyncError::backend(err.to_string()))?;
+            let params_draft = pocopine_live::query_invalidated(params_topic, [params_tag])
+                .map_err(|err| SyncError::backend(err.to_string()))?;
+            events
+                .publish(params_draft)
+                .await
+                .map_err(|err| SyncError::backend(err.to_string()))?;
+        }
+        Ok(())
+    }
+
     fn stream(&self, stream: &str) -> SyncResult<Arc<RegisteredSyncStream>> {
         self.inner
             .streams
@@ -689,30 +751,39 @@ async fn push_handler(
                 );
             }
 
-            // PER-PARAMS topic — one publish per accepted row that
-            // returned a canonical payload. Sources that don't
+            // PER-PARAMS topics — batch all accepted rows, project
+            // each through `row_to_params`, and publish ONCE per
+            // distinct hash (multiple rows hitting the same
+            // partition collapse to one wakeup). Sources that don't
             // override `row_to_params` (default impl returns empty)
-            // make this a no-op via the early return inside
-            // `invalidate_stream_with_row`. Sources that do override
-            // route precisely to the audience whose subscription
-            // params project to the same hash (RFC 088 §C). Pushes
-            // that accepted but returned no rows (deletes that
-            // don't echo the removed row) get bare-only invalidation
-            // — that's the right semantic since per-params routing
-            // needs a row to project.
-            for row in &response.rows {
-                if let Err(err) = sync
-                    .invalidate_stream_with_row(response.stream.as_str(), &row.value)
-                    .await
-                {
-                    tracing::warn!(
-                        target: "pocopine.log",
-                        error = %err,
-                        stream = response.stream.as_str(),
-                        row_key = row.key.as_str(),
-                        "failed to publish per-params sync stream invalidation after push"
-                    );
-                }
+            // make this a no-op via the empty-params guard inside
+            // the helper. Sources that DO override route precisely
+            // to the audience whose subscription params project to
+            // the same hash (RFC 088 §C). Pushes that accepted but
+            // returned no rows (deletes that don't echo the removed
+            // row) get bare-only invalidation — that's the right
+            // semantic since per-params routing needs a row to
+            // project.
+            // Collect into a `Vec<&Value>` rather than passing the
+            // lazy `map(|r| &r.value)` iterator directly. The map
+            // closure infers a single concrete lifetime for its
+            // argument, which trips the route-handler's HRTB FnOnce
+            // bound (axum needs `for<'r>` generality). Collecting
+            // sidesteps the HRTB by handing
+            // `invalidate_stream_with_rows` an already-erased
+            // iterator type.
+            let row_values: ::std::vec::Vec<&Value> =
+                response.rows.iter().map(|r| &r.value).collect();
+            if let Err(err) = sync
+                .invalidate_stream_with_rows(response.stream.as_str(), row_values)
+                .await
+            {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    error = %err,
+                    stream = response.stream.as_str(),
+                    "failed to publish per-params sync stream invalidations after push"
+                );
             }
         }
         Ok(response)

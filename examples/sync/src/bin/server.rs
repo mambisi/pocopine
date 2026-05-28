@@ -10,10 +10,14 @@ async fn main() -> std::io::Result<()> {
     init_default().map_err(std::io::Error::other)?;
 
     let sync = sync_server();
-    let sync_topics = sync.live_topics().map_err(std::io::Error::other)?;
+    // RFC 088 §C: prefix-based allowlist authorizes both the bare
+    // `query:sync:stream:{name}` topic AND per-`(stream, params_hash)`
+    // variants `query:sync:stream:{name}:<16-hex>`.
+    let sync_topic_prefixes = sync.live_topic_prefixes();
+    let default_topics = sync.live_topics().map_err(std::io::Error::other)?;
     let live_hub = LiveHub::new(live_backend())
-        .allow_topics(sync_topics.clone())
-        .default_topics(sync_topics);
+        .allow_topic_prefixes(sync_topic_prefixes)
+        .default_topics(default_topics);
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let router = Router::new()

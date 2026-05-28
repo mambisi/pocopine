@@ -177,9 +177,20 @@ pub fn sync_stream_tag(stream: &str) -> String {
     format!("sync:stream:{stream}")
 }
 
+/// Number of lowercase-hex digits in the per-params topic suffix
+/// (RFC 088 §C). The suffix is `{params_hash:016x}` — a `u64`
+/// formatted as 16 lowercase hex digits — so the validator in
+/// `pocopine_live::is_params_hash_suffix` checks against
+/// `PARAMS_HASH_HEX_LEN + 1` total bytes (the leading `:` plus 16
+/// hex digits). Exporting the constant keeps the formatter and the
+/// validator coupled so a future widening of the hash (say, to 128
+/// bits / 32 hex chars) updates both call sites simultaneously.
+pub const PARAMS_HASH_HEX_LEN: usize = 16;
+
 /// Per-(stream, params) live query tag, used for RFC 088 §C precise
 /// invalidation routing. Same prefix as [`sync_stream_tag`] plus a
-/// 16-hex suffix derived from [`stream_params_hash`].
+/// `PARAMS_HASH_HEX_LEN`-hex suffix derived from
+/// [`stream_params_hash`].
 ///
 /// Wire shape: `sync:stream:{stream}:{params_hash:016x}`.
 ///
@@ -193,10 +204,17 @@ pub fn sync_stream_params_tag(stream: &str, params_hash: u64) -> String {
 }
 
 /// FNV-1a 64-bit hash over `(stream_name, sorted-by-key params JSON)`.
-/// Same algorithm as [`local_stream_key`] (so on-disk + on-wire
-/// hashes match), with the stream name folded into the digest so two
-/// streams sharing an empty params map still partition to distinct
-/// topics.
+/// Closely related to [`local_stream_key`] — both use the same
+/// FNV-1a constants and the same `stream + 0x00 + canonical_json`
+/// byte recipe — but with one edge-case difference: `local_stream_key`
+/// short-circuits to the bare stream name for `params.is_empty()`,
+/// while this function always hashes (folding in the separator byte
+/// plus the empty-object JSON `"{}"`). In practice the wire-side
+/// path only calls this for non-empty params (the publish helper
+/// guards on empty), so the divergence is invisible; cross-language
+/// porters matching this byte spec for cache scoping should mirror
+/// the always-hash form here rather than copying
+/// `local_stream_key`'s short-circuit.
 ///
 /// This is the cross-language contract for RFC 088 §C — the
 /// SERVER computes this from the row's `row_to_params` projection,
@@ -212,7 +230,19 @@ pub fn sync_stream_params_tag(stream: &str, params_hash: u64) -> String {
 /// params) → hex-hash pairs that future ports (Swift / Go / Kotlin
 /// clients) MUST reproduce.
 pub fn stream_params_hash(stream: &str, params: &StreamParams) -> u64 {
-    let canonical = serde_json::to_vec(params).unwrap_or_default();
+    // Canonical JSON of a `BTreeMap<String, Value>` is infallible
+    // for any value that `serde_json::Value` can hold (Value rejects
+    // NaN/Infinity at construction time). The only documented
+    // failure path is `serde_json`'s default 128-level recursion
+    // limit on deeply-nested `Value::Object`/`Value::Array`. A
+    // silent `unwrap_or_default()` here would collapse every such
+    // failure to the same hash (FNV-1a of `stream + 0x00`), aliasing
+    // distinct subscriptions onto one topic — codex caught the
+    // regression in review. We `expect()` instead so the failure
+    // surfaces as a clear panic at the publish site rather than as
+    // mis-routed live wakeups in production.
+    let canonical = serde_json::to_vec(params)
+        .expect("BTreeMap<String, Value> canonical JSON is infallible for serde_json::Value");
     let mut buf: Vec<u8> = Vec::with_capacity(stream.len() + 1 + canonical.len());
     buf.extend_from_slice(stream.as_bytes());
     // Separator so `stream="ab", params={}` ≠ `stream="a", params={b:…}`.
@@ -1529,6 +1559,18 @@ mod tests {
     fn stream_params_tag_format() {
         let tag = sync_stream_params_tag("issues", 0xABCD_1234_5678_9ABC);
         assert_eq!(tag, "sync:stream:issues:abcd123456789abc");
+    }
+
+    #[test]
+    fn params_hash_hex_len_matches_formatter() {
+        // The formatter in `sync_stream_params_tag` hard-codes
+        // `{:016x}`. `PARAMS_HASH_HEX_LEN` must match — otherwise
+        // the live validator (`pocopine_live::is_params_hash_suffix`)
+        // would gate the wrong byte-count and reject valid topics
+        // (or accept malformed ones).
+        let tag = sync_stream_params_tag("s", 0);
+        let suffix = tag.rsplit_once(':').unwrap().1;
+        assert_eq!(suffix.len(), PARAMS_HASH_HEX_LEN);
     }
 
     #[test]

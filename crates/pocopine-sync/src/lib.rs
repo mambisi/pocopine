@@ -32,7 +32,8 @@ pub use protocol::{
     SyncDeviceId, SyncOp, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullMode,
     SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation,
     SyncRow, SyncSessionId, SyncStreamName, SyncStreamSubscription, MAX_SYNC_TOKEN_LEN,
-    SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    PARAMS_HASH_HEX_LEN, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH,
+    SYNC_PUSH_PATH,
 };
 pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};
 
