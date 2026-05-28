@@ -335,6 +335,49 @@ fn partition_for_topic_returns_none_when_no_required_fields_declared() {
     assert!(query.partition_hash().is_none());
 }
 
+// Regression for codex second-pass P2: the comparator-key
+// detection MUST be gated by the field's actual capabilities. A
+// required field with non-numeric, non-string type — that the
+// user filters with `.eq()` to a struct value whose JSON
+// serialization happens to share keys with the Range wire shape
+// (`from`, `to`) — must NOT be misclassified as a comparator
+// wrapper.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct TimeWindow {
+    pub from: u32,
+    pub to: u32,
+}
+
+#[query_resource(name = "windowed", schema_version = 1)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Windowed {
+    pub id: String,
+    // TimeWindow isn't in is_ordered_type, so caps.range stays
+    // false. The macro should NOT check `from`/`to`/`inclusive`
+    // keys for this field's captured value.
+    #[query_param(required)]
+    pub window: TimeWindow,
+}
+
+#[test]
+fn partition_for_topic_accepts_plain_struct_value_with_range_like_keys() {
+    use windowed::field;
+    let w = TimeWindow { from: 1, to: 10 };
+    let query = Windowed::query().eq(field::window, w.clone()).build();
+    let hash = query
+        .partition_hash()
+        .expect("plain equality value (not a Range comparator) partitions");
+    // Sanity: server-side projection of the same canonical row
+    // should hash identically.
+    let row = json!({
+        "id": "i1",
+        "window": {"from": 1, "to": 10},
+    });
+    let server_params = windowed::row_to_params(&row).unwrap();
+    let server_hash = pocopine_sync::stream_params_hash("windowed", &server_params);
+    assert_eq!(hash, server_hash);
+}
+
 #[test]
 fn row_to_params_skips_none_options() {
     // assignee_id: Option<String> with None → must be omitted from
