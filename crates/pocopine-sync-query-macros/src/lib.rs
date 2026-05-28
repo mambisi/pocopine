@@ -1221,13 +1221,15 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
 /// * `#[must_use]` → `observe()` (Rust rejects `#[must_use]` on
 ///   modules; the lint fires against the callsite of `observe()`,
 ///   which is what the user intended).
-/// * `#[track_caller]` → BOTH `observe()` and the inner fn.
-///   `observe()` carries it so `Location::caller()` resolves to the
-///   user's call site at the first synchronous compute. The inner
-///   fn also carries it so panics inside the body report a
-///   meaningful location (the chain still goes through an
-///   anonymous compute closure, which is a documented limitation —
-///   `Location::caller()` doesn't propagate through closures).
+/// * `#[track_caller]` → `observe()` only. The user body is invoked
+///   through an anonymous compute closure that breaks the
+///   `#[track_caller]` chain regardless of where the attr lives, so
+///   putting it on the lifted body would actually DEGRADE panic
+///   location quality: `panic!()` inside the body without the attr
+///   reports the body's panic line; with the attr it reports the
+///   (opaque) closure call site. Observe-only is the best we can
+///   do; `Location::caller()` reads inside the body are a
+///   documented unsupported case.
 /// * `#[allow]` / `#[deny]` / `#[warn]` / `#[forbid]` / `#[expect]`,
 ///   `#[inline]` / `#[cold]` / `#[no_mangle]` → inner fn (body
 ///   audience).
@@ -1245,11 +1247,7 @@ fn partition_selector_attrs(
         let ident = attr.path().segments.last().map(|s| s.ident.to_string());
         match ident.as_deref() {
             Some("doc" | "deprecated") => module.push(attr),
-            Some("must_use") => observe.push(attr),
-            Some("track_caller") => {
-                observe.push(attr);
-                inner.push(attr);
-            }
+            Some("must_use" | "track_caller") => observe.push(attr),
             Some("cfg" | "cfg_attr") => {
                 module.push(attr);
                 observe.push(attr);
