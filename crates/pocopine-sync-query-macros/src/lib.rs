@@ -1045,9 +1045,11 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
         (arg_idents.clone(), arg_types.clone())
     };
     // Per-arg helper idents for the captured + per-rerun clones.
-    let captured_user_idents: Vec<Ident> = user_arg_idents
-        .iter()
-        .map(|i| Ident::new(&format!("__pq_arg_{i}"), i.span()))
+    // Named by position (`__pq_arg_0`, `__pq_arg_1`, …) so a raw
+    // identifier user-arg (`r#type: String`) doesn't produce an
+    // invalid `__pq_arg_r#type` and panic during macro expansion.
+    let captured_user_idents: Vec<Ident> = (0..user_arg_idents.len())
+        .map(|i| Ident::new(&format!("__pq_arg_{i}"), proc_macro2::Span::call_site()))
         .collect();
 
     // `let __pq_client_for_compute = client.clone();` — emitted only
@@ -1144,16 +1146,25 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
                 __pq_client: &::pocopine_sync_query::QueryClient,
                 #( #user_arg_idents : #user_arg_types ),*
             ) -> ::pocopine_sync_query::SelectorView<#ret_type> {
-                // Hash hashable args (everything except the
-                // recognized client param). `DefaultHasher` is fine
-                // here — the hash is consumed only by an in-process
-                // HashMap lookup; it isn't exposed on the wire.
+                // Hash hashable args. `DefaultHasher` is fine for
+                // bucketing speed; the actual cache equality check
+                // uses `AnyArgs::dyn_eq` on the boxed tuple below,
+                // so hash collisions cannot cause cross-args
+                // aliasing.
                 let mut __pq_hasher =
                     ::std::collections::hash_map::DefaultHasher::new();
                 #(
                     ::std::hash::Hash::hash(&#user_arg_idents, &mut __pq_hasher);
                 )*
                 let __pq_args_hash = ::std::hash::Hasher::finish(&__pq_hasher);
+
+                // Boxed args tuple — used by the runtime to
+                // disambiguate hash collisions via PartialEq.
+                let __pq_args_boxed: ::std::boxed::Box<
+                    dyn ::pocopine_sync_query::AnyArgs,
+                > = ::std::boxed::Box::new((
+                    #( ::core::clone::Clone::clone(&#user_arg_idents), )*
+                ));
 
                 // Capture owned clones of args (and a clone of the
                 // client, if the user declared a client arg) into
@@ -1169,7 +1180,12 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
                 let __pq_compute = move || -> #ret_type {
                     super::#inner_fn_ident( #( #user_fn_call_args ),* )
                 };
-                __pq_client.observe_selector(SELECTOR_ID, __pq_args_hash, __pq_compute)
+                __pq_client.observe_selector(
+                    SELECTOR_ID,
+                    __pq_args_hash,
+                    __pq_args_boxed,
+                    __pq_compute,
+                )
             }
         }
     })

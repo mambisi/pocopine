@@ -102,6 +102,34 @@ fn issue(id: &str, ws: &str, title: &str) -> Issue {
     }
 }
 
+// ---- 0. Hash-collision disambiguation -----------------------------
+//
+// Regression for the codex finding that `Hash` is not collision-free.
+// Two `observe_selector` calls with the SAME `(id, args_hash)` but
+// distinct `AnyArgs` values must land in distinct entries — the
+// second call must NOT receive the first's cached value.
+
+#[tokio::test]
+async fn hash_collision_does_not_alias_distinct_args() {
+    LocalSet::new()
+        .run_until(async {
+            let client = QueryClient::without_driver();
+            let id = SelectorId::new(0xC0);
+
+            // Same args_hash, different boxed args. (In practice the
+            // macro hashes args, but a colliding hash is rare for
+            // String — we force it here to exercise the bucket.)
+            let v_a =
+                client.observe_selector::<u32, _>(id, 0xCAFE, Box::new("A".to_string()), || 1u32);
+            let v_b =
+                client.observe_selector::<u32, _>(id, 0xCAFE, Box::new("B".to_string()), || 2u32);
+
+            assert_eq!(v_a.value(), 1, "first entry preserved");
+            assert_eq!(v_b.value(), 2, "second entry NOT aliased to first");
+        })
+        .await;
+}
+
 // ---- 1. Caching by (id, args_hash) --------------------------------
 
 #[tokio::test]
@@ -121,18 +149,18 @@ async fn observe_selector_caches_by_id_and_args_hash() {
             };
 
             // First observe — compute fires once, caches.
-            let v1 = client.observe_selector(id, 0xAA, compute.clone());
+            let v1 = client.observe_selector(id, 0xAA, Box::new(0xAAu64), compute.clone());
             assert_eq!(v1.value(), 0);
             assert_eq!(call_count.get(), 1);
 
             // Second observe with SAME (id, args_hash) — cache hit,
             // compute does NOT fire.
-            let v2 = client.observe_selector(id, 0xAA, compute.clone());
+            let v2 = client.observe_selector(id, 0xAA, Box::new(0xAAu64), compute.clone());
             assert_eq!(v2.value(), 0);
             assert_eq!(call_count.get(), 1, "compute reused cached entry");
 
             // Same id, different args_hash — distinct entry, compute fires.
-            let v3 = client.observe_selector(id, 0xBB, compute.clone());
+            let v3 = client.observe_selector(id, 0xBB, Box::new(0xBBu64), compute.clone());
             assert_eq!(v3.value(), 0);
             assert_eq!(call_count.get(), 2);
         })
@@ -151,7 +179,7 @@ async fn selector_reruns_when_tracked_subscription_changes() {
             let runs = Rc::new(Cell::new(0u32));
             let client_for_compute = client.clone();
             let runs_for_compute = runs.clone();
-            let view = client.observe_selector(id, 0, move || {
+            let view = client.observe_selector(id, 0, Box::new(()), move || {
                 runs_for_compute.set(runs_for_compute.get() + 1);
                 let qv = client_for_compute.observe(workspace_query("W1"));
                 qv.rows().len() as u32
@@ -194,7 +222,7 @@ async fn diff_suppression_blocks_listener_when_output_unchanged() {
             let runs = Rc::new(Cell::new(0u32));
             let client_for_compute = client.clone();
             let runs_for_compute = runs.clone();
-            let view = client.observe_selector(id, 0, move || {
+            let view = client.observe_selector(id, 0, Box::new(()), move || {
                 runs_for_compute.set(runs_for_compute.get() + 1);
                 let qv = client_for_compute.observe(workspace_query("W1"));
                 let _force_read = qv.rows();
@@ -246,16 +274,20 @@ async fn nested_selector_propagates_through_outer() {
                 let qv = client_for_inner.observe(workspace_query("W1"));
                 qv.rows().len() as u32
             };
-            let _inner = client.observe_selector(inner_id, 0, inner_compute.clone());
+            let _inner = client.observe_selector(inner_id, 0, Box::new(()), inner_compute.clone());
 
             // Outer: wraps inner, multiplies by 2.
             let client_for_outer = client.clone();
             let outer_runs = Rc::new(Cell::new(0u32));
             let outer_runs_c = outer_runs.clone();
-            let outer = client.observe_selector(outer_id, 0, move || {
+            let outer = client.observe_selector(outer_id, 0, Box::new(()), move || {
                 outer_runs_c.set(outer_runs_c.get() + 1);
-                let inner_view =
-                    client_for_outer.observe_selector(inner_id, 0, inner_compute.clone());
+                let inner_view = client_for_outer.observe_selector(
+                    inner_id,
+                    0,
+                    Box::new(()),
+                    inner_compute.clone(),
+                );
                 inner_view.value() * 2
             });
 
@@ -297,9 +329,14 @@ async fn nested_diff_suppression_stops_cascade() {
             let outer_runs = Rc::new(Cell::new(0u32));
             let outer_runs_c = outer_runs.clone();
             let client_for_outer = client.clone();
-            let outer = client.observe_selector(outer_id, 0, move || {
+            let outer = client.observe_selector(outer_id, 0, Box::new(()), move || {
                 outer_runs_c.set(outer_runs_c.get() + 1);
-                let iv = client_for_outer.observe_selector(inner_id, 0, inner_compute.clone());
+                let iv = client_for_outer.observe_selector(
+                    inner_id,
+                    0,
+                    Box::new(()),
+                    inner_compute.clone(),
+                );
                 iv.value()
             });
 
@@ -339,7 +376,7 @@ async fn drop_view_removes_entry_from_registry() {
             };
 
             {
-                let _view = client.observe_selector(id, 0, compute);
+                let _view = client.observe_selector(id, 0, Box::new(()), compute);
                 // Underlying subscription is alive while the view holds.
                 assert!(client.refcount_of(&workspace_query("W1")).is_some());
             }
