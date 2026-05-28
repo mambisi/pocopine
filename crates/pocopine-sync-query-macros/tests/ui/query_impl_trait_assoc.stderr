@@ -1,0 +1,19 @@
+error: `#[query]` selectors cannot use argument-position `impl Trait` — not even nested (e.g. `Box<impl Trait>`, `Option<impl Trait>`). Argument-position `impl Trait` makes the fn generic over the call-site type, but the cache key only covers `(SelectorId, args_hash)`, so two concrete instantiations could alias each other's cached entries. Use a concrete type.
+  --> tests/ui/query_impl_trait_assoc.rs:15:8
+   |
+15 |     x: *const dyn Assoc<Item = impl Debug + 'static>,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pocopine_sync_query::QueryClient`
+ --> tests/ui/query_impl_trait_assoc.rs:4:5
+  |
+4 | use pocopine_sync_query::QueryClient;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::fmt::Debug`
+ --> tests/ui/query_impl_trait_assoc.rs:6:5
+  |
+6 | use std::fmt::Debug;
+  |     ^^^^^^^^^^^^^^^

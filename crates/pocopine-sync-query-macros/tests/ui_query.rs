@@ -11,5 +11,6 @@ fn query_rejected_inputs_fail_to_compile() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/ui/query_impl_trait_top_level.rs");
     cases.compile_fail("tests/ui/query_impl_trait_nested.rs");
+    cases.compile_fail("tests/ui/query_impl_trait_assoc.rs");
     cases.compile_fail("tests/ui/query_async_fn.rs");
 }
