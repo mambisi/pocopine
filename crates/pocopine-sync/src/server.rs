@@ -293,6 +293,23 @@ impl SyncServer {
             .collect()
     }
 
+    /// Return the live topic PREFIXES this server publishes against
+    /// for each registered stream. Each prefix matches the bare
+    /// topic AND every RFC 088 §C per-`(stream, params_hash)`
+    /// variant: `query:sync:stream:{name}` covers `query:sync:stream:{name}`
+    /// and `query:sync:stream:{name}:abc…`.
+    ///
+    /// Pair with [`pocopine_live::LiveHub::allow_topic_prefixes`]
+    /// to permit clients to subscribe to per-params topics that the
+    /// exact-match `allow_topics` couldn't accept (the hashes are
+    /// computed at runtime, so the allowlist must be a prefix).
+    pub fn live_topic_prefixes(&self) -> Vec<String> {
+        self.live_query_tags()
+            .into_iter()
+            .map(|tag| format!("query:{tag}"))
+            .collect()
+    }
+
     /// Publish a live wake-up for one stream when an event backend is
     /// attached. The sync data still moves through pull; this only wakes
     /// browsers to pull with their current sync cursor.
@@ -313,40 +330,27 @@ impl SyncServer {
     }
 
     /// Publish a live wake-up scoped to the (stream, params_hash)
-    /// audience the row's params identify (RFC 088 §C).
+    /// audience the row's params identify (RFC 088 §C). Per-params
+    /// ONLY — the caller is responsible for the bare-topic publish
+    /// once per push (see the `/push` handler).
     ///
-    /// Always publishes to the bare topic too (backwards compat —
-    /// old clients only listen on the bare topic and still need to
-    /// receive every event). If the stream's source overrides
-    /// [`SyncStreamSource::row_to_params`] AND returns a non-empty
-    /// params map, ALSO publishes to the per-`(stream, params_hash)`
-    /// topic so new clients listening there wake up too.
+    /// If the stream's source overrides
+    /// [`SyncStreamSource::row_to_params`] AND the projection
+    /// returns non-empty params, publishes to
+    /// `sync:stream:{stream}:{hash:016x}` so new clients listening
+    /// on the per-params topic wake up. Sources that don't override
+    /// (or that return empty params) make this a no-op — the
+    /// caller's bare publish already reaches everyone.
     ///
     /// If `row_to_params` errors, the per-params publish is skipped
-    /// and a `tracing::warn!` is emitted — a malformed row MUST NOT
-    /// block the bare invalidation (which is the back-compat lifeline
-    /// for old clients).
-    ///
-    /// The framework's `/push` handler calls this once per accepted
-    /// row. Stream-wide invalidations from other code paths can keep
-    /// calling [`Self::invalidate_stream`] for the bare publish.
+    /// and a `tracing::warn!` is emitted. The caller's bare publish
+    /// (issued once per push, regardless of how many rows were
+    /// accepted or whether any rows were returned) is the back-
+    /// compat lifeline; a malformed row MUST NOT block it.
     pub async fn invalidate_stream_with_row(&self, stream: &str, row: &Value) -> SyncResult<()> {
         let Some(events) = self.inner.events.as_ref() else {
             return Ok(());
         };
-
-        // 1) Bare-topic publish (backwards compat).
-        let bare_tag = sync_stream_tag(stream);
-        let bare_topic = pocopine_live::query_tag_topic(&bare_tag)
-            .map_err(|err| SyncError::backend(err.to_string()))?;
-        let bare_draft = pocopine_live::query_invalidated(bare_topic, [bare_tag.clone()])
-            .map_err(|err| SyncError::backend(err.to_string()))?;
-        events
-            .publish(bare_draft)
-            .await
-            .map_err(|err| SyncError::backend(err.to_string()))?;
-
-        // 2) Per-params topic publish (precise routing).
         let registered = self.stream(stream)?;
         let params = match registered.source.row_to_params(row) {
             Ok(p) => p,
@@ -355,16 +359,15 @@ impl SyncServer {
                     target: "pocopine.log",
                     stream = stream,
                     error = %err,
-                    "RFC 088 §C: row_to_params failed; bare publish only",
+                    "RFC 088 §C: row_to_params failed; skipping per-params publish",
                 );
                 return Ok(());
             }
         };
         if params.is_empty() {
-            // Source doesn't override row_to_params, or this row's
-            // projection genuinely has no partition keys. Either way
-            // the bare publish already covers everyone — no per-
-            // params topic to add.
+            // Source doesn't override row_to_params, or this row
+            // projects to no required partition keys. The caller's
+            // bare publish already covers everyone.
             return Ok(());
         }
         let hash = crate::stream_params_hash(stream, &params);
@@ -670,22 +673,33 @@ async fn push_handler(
             response.collection = Some(collection_name);
         }
         if !response.accepted.is_empty() {
-            // RFC 088 §C: publish per-row to BOTH the bare topic AND
-            // the per-(stream, params_hash) topic for each accepted
-            // row, so new clients on precise topics wake up while
-            // old clients on the bare topic keep working. The bare-
-            // topic publish would be redundant if we hit it once per
-            // row (vs once per stream), but `invalidate_stream_with_row`
-            // is currently shaped to bundle the bare publish per
-            // call. For pushes with many accepted rows hitting the
-            // SAME params_hash, this duplicates the bare publish —
-            // the event backend dedupes per topic and the receivers
-            // don't suffer (they only /pull once via their cursor).
-            //
-            // Sources that DON'T override `row_to_params` (every
-            // source today) get a single bare publish per row; the
-            // per-params publish is a no-op (empty params → early
-            // return inside `invalidate_stream_with_row`).
+            // BARE topic — one publish per push, regardless of how
+            // many rows were accepted or returned. This preserves
+            // the pre-RFC 088 §C behavior for delete-only pushes
+            // (where `response.rows` may be empty even though
+            // `accepted` is non-empty) and stops old clients on the
+            // bare topic from receiving N redundant wakeups for a
+            // multi-row push.
+            if let Err(err) = sync.invalidate_stream(response.stream.as_str()).await {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    error = %err,
+                    stream = response.stream.as_str(),
+                    "failed to publish bare sync stream invalidation after push"
+                );
+            }
+
+            // PER-PARAMS topic — one publish per accepted row that
+            // returned a canonical payload. Sources that don't
+            // override `row_to_params` (default impl returns empty)
+            // make this a no-op via the early return inside
+            // `invalidate_stream_with_row`. Sources that do override
+            // route precisely to the audience whose subscription
+            // params project to the same hash (RFC 088 §C). Pushes
+            // that accepted but returned no rows (deletes that
+            // don't echo the removed row) get bare-only invalidation
+            // — that's the right semantic since per-params routing
+            // needs a row to project.
             for row in &response.rows {
                 if let Err(err) = sync
                     .invalidate_stream_with_row(response.stream.as_str(), &row.value)
@@ -696,7 +710,7 @@ async fn push_handler(
                         error = %err,
                         stream = response.stream.as_str(),
                         row_key = row.key.as_str(),
-                        "failed to publish sync stream invalidation after push"
+                        "failed to publish per-params sync stream invalidation after push"
                     );
                 }
             }
@@ -1018,8 +1032,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalidate_stream_with_row_publishes_to_both_topics() {
-        use pocopine_events::{MemoryEventBackend, ReplayRequest, Topic};
+    async fn invalidate_stream_with_row_publishes_per_params_only() {
+        // Post-codex-review (P2.2): `invalidate_stream_with_row` no
+        // longer emits the bare-topic publish. The caller (the
+        // `/push` handler) issues a SINGLE bare publish per push
+        // and lets this helper publish only the per-params topic
+        // per row.
+        use pocopine_events::{MemoryEventBackend, ReplayRequest};
         use std::sync::Arc;
 
         let backend: SharedEventBackend = Arc::new(MemoryEventBackend::new());
@@ -1033,7 +1052,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Expected topics: bare + per-(stream, params_hash).
         let bare_tag = sync_stream_tag("issues");
         let mut expected_params = crate::StreamParams::new();
         expected_params.insert("workspace_id".into(), json!("W1"));
@@ -1042,7 +1060,6 @@ mod tests {
         let bare_topic = pocopine_live::query_tag_topic(&bare_tag).unwrap();
         let params_topic = pocopine_live::query_tag_topic(&params_tag).unwrap();
 
-        // Replay the recorded events on each topic; assert one each.
         let replay = backend
             .replay(ReplayRequest::new(vec![
                 bare_topic.clone(),
@@ -1050,25 +1067,25 @@ mod tests {
             ]))
             .await
             .unwrap();
-        let by_topic: std::collections::HashMap<Topic, usize> =
-            replay
-                .events
-                .iter()
-                .fold(std::collections::HashMap::new(), |mut acc, env| {
-                    *acc.entry(env.topic.clone()).or_insert(0) += 1;
-                    acc
-                });
-        assert_eq!(by_topic.get(&bare_topic).copied(), Some(1), "bare publish");
-        assert_eq!(
-            by_topic.get(&params_topic).copied(),
-            Some(1),
-            "per-params publish"
-        );
+        let bare_count = replay
+            .events
+            .iter()
+            .filter(|e| e.topic == bare_topic)
+            .count();
+        let params_count = replay
+            .events
+            .iter()
+            .filter(|e| e.topic == params_topic)
+            .count();
+        assert_eq!(bare_count, 0, "no bare publish (caller's responsibility)");
+        assert_eq!(params_count, 1, "exactly one per-params publish");
     }
 
     /// When `row_to_params` returns empty params (the default impl,
-    /// or a source that opts out), only the bare topic is published.
-    /// Verifies the back-compat path stays clean.
+    /// or a source that opts out), the per-params publish is a
+    /// no-op — and since the bare publish is now the caller's
+    /// responsibility, this test verifies the helper emits NO
+    /// events at all in that case.
     struct DefaultRoutedStream {
         name: SyncStreamName,
         collection: SyncCollectionName,
@@ -1127,10 +1144,12 @@ mod tests {
             .replay(ReplayRequest::new(vec![bare_topic.clone()]))
             .await
             .unwrap();
-        // Bare publish: exactly one event. No per-params topic was
-        // published because row_to_params returned empty.
-        assert_eq!(replay.events.len(), 1);
-        assert_eq!(replay.events[0].topic, bare_topic);
+        // No events: the helper publishes per-params only, and
+        // row_to_params returned empty so the per-params publish
+        // was skipped. The bare invalidation is the `/push`
+        // handler's responsibility (a separate code path), so this
+        // direct invocation produces zero events.
+        assert_eq!(replay.events.len(), 0);
     }
 
     fn router_with_guarded_posts_stream<P>(predicate: P) -> Router

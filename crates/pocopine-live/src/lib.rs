@@ -1646,6 +1646,24 @@ mod host {
             self.with_topic_policy(move |_, topic| allowed.iter().any(|allowed| allowed == topic))
         }
 
+        /// Allow any topic whose name starts with one of the listed
+        /// prefixes. Designed for RFC 088 §C-style routing schemes
+        /// where one logical stream produces a family of topics:
+        /// `sync:stream:issues` (bare), `sync:stream:issues:abc…`,
+        /// `sync:stream:issues:def…`, … all share a prefix.
+        ///
+        /// Match is byte-prefix on the topic's string form (no
+        /// glob, no regex). For the sync server: call with
+        /// `sync.live_topic_prefixes()` (which returns the
+        /// `query:sync:stream:{name}` prefix per registered stream).
+        pub fn allow_topic_prefixes(self, prefixes: impl IntoIterator<Item = String>) -> Self {
+            let allowed = Arc::new(prefixes.into_iter().collect::<Vec<_>>());
+            self.with_topic_policy(move |_, topic| {
+                let topic_str = topic.as_str();
+                allowed.iter().any(|p| topic_str.starts_with(p.as_str()))
+            })
+        }
+
         /// Allow every requested topic. Apps should only use this for
         /// already-public topic sets.
         pub fn allow_all_topics(self) -> Self {

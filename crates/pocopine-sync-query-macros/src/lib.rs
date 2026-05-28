@@ -548,6 +548,7 @@ fn expand_query_resource(
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params);
     let row_to_params_body = generate_row_to_params_body(&params);
+    let partition_for_topic_body = generate_partition_for_topic_body(&params);
 
     Ok(quote! {
         #item
@@ -566,6 +567,7 @@ fn expand_query_resource(
                     .expect("query_resource name passed validation");
                 ::pocopine_sync_query::Query::<Self>::builder(stream)
                     .with_matches(#module_ident::matches)
+                    .with_partition_hash(#module_ident::partition_for_topic)
             }
         }
 
@@ -659,6 +661,35 @@ fn expand_query_resource(
                     ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
                 #row_to_params_body
                 ::std::result::Result::Ok(params)
+            }
+
+            /// Project the caller's captured query params into a hash
+            /// of the SAME canonical projection that `row_to_params`
+            /// projects on the server. Used by the client driver to
+            /// subscribe to the per-`(stream, params_hash)` live
+            /// topic — must agree byte-for-byte with the server's
+            /// hash for routing to work (RFC 088 §C).
+            ///
+            /// Returns `None` if the captured params can't be
+            /// projected unambiguously:
+            ///   * a required field is missing (no tenant gate → no
+            ///     partition possible)
+            ///   * a required field's value is a comparator wrapper
+            ///     (`any_of` / `range` / `contains` — partition isn't
+            ///     well-defined for a single topic)
+            /// In either case the client should fall back to the
+            /// bare topic subscription only.
+            pub fn partition_for_topic(
+                captured: &::pocopine_sync_query::__private::pocopine_sync::StreamParams,
+            ) -> ::std::option::Option<u64> {
+                let mut canonical =
+                    ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
+                #partition_for_topic_body
+                ::std::option::Option::Some(
+                    ::pocopine_sync_query::__private::pocopine_sync::stream_params_hash(
+                        NAME, &canonical,
+                    ),
+                )
             }
         }
     })
@@ -984,24 +1015,82 @@ fn generate_row_to_params_body(params: &[ParamDef]) -> TokenStream2 {
 /// Decide whether a `#[query_param]` field contributes to the
 /// per-(stream, params_hash) topic key (RFC 088 §C).
 ///
-/// Skip when the field is a fuzzy-text candidate: `caps.contains`
-/// is set (auto-emitted on `String` / `Cow` / `str` types, or
-/// explicitly via `#[query_param(contains)]`) AND no other signal
-/// promotes it. A `required` flag overrides skip — required fields
-/// are tenant gates and MUST partition the topic (otherwise
-/// cross-tenant rows would publish to the same topic).
+/// **Only `required`-flagged fields partition the topic.** This
+/// keeps the server-side `row_to_params` and the client-side
+/// `partition_for_topic` projections aligned: a client subscription
+/// like `Issue::query().eq(workspace_id, "W1")` (just the tenant
+/// gate) hashes to the same value as `row_to_params` extracts from a
+/// row in that workspace, regardless of what other filters the
+/// query carries (status, assignee, title, etc.).
 ///
-/// Examples:
-///   - `#[query_param(required)] pub workspace_id: String`
-///     → contains=true (heuristic), required=true → INCLUDE.
-///   - `#[query_param] pub title: String`
-///     → contains=true, required=false → SKIP.
-///   - `#[query_param] pub status: Status`
-///     → contains=false → INCLUDE.
-///   - `#[query_param] pub priority: u32`
-///     → contains=false, range=true → INCLUDE.
+/// Optional / non-required fields are NOT in the topic key because:
+///   1. Different queries on the same stream filter on different
+///      subsets — including all optional fields in the row's hash
+///      would produce a hash that no subset-filtering subscriber
+///      ever computes on its side. (Codex finding.)
+///   2. Free-text (`contains`) fields naturally explode topic
+///      cardinality.
+///   3. Range / any_of comparator wrappers can't be hashed as plain
+///      values; they don't fit the "exact-match hash" contract.
+///
+/// Users who want finer routing (e.g. per-(workspace, status)) mark
+/// `status` as `required` too. The routing engine's existing
+/// matches predicate then handles the cross-tenant gate AND the
+/// status filter on the client side.
 fn include_in_row_params(caps: &FieldCapabilities) -> bool {
-    !caps.contains || caps.required
+    caps.required
+}
+
+/// Generate the body of `partition_for_topic` — the client-side
+/// projection that mirrors `row_to_params` for the topic hash.
+/// Reads each REQUIRED `#[query_param]` field from the caller's
+/// captured `StreamParams` and inserts it (verbatim) into the
+/// canonical map. Returns `None` from the surrounding function if
+/// any required field is missing or is a comparator wrapper.
+fn generate_partition_for_topic_body(params: &[ParamDef]) -> TokenStream2 {
+    let extracts: Vec<TokenStream2> = params
+        .iter()
+        .filter(|p| include_in_row_params(&p.caps))
+        .map(|param| {
+            let name = &param.name;
+            let name_str = ident_wire_key(name);
+            quote! {
+                {
+                    // Required field absent → no partition; `?` on
+                    // Option<&Value> yields None from the outer fn.
+                    let value = captured.get(#name_str)?;
+                    // Reject comparator-wrapped values
+                    // (`{"in": [...]}` / `{"range": ...}` /
+                    // `{"contains": ...}` etc.). These don't map to a
+                    // single topic key — fall back to bare-topic
+                    // subscription.
+                    if let ::pocopine_sync_query::__private::serde_json::Value::Object(obj) = value {
+                        let is_comparator = obj.keys().any(|k| {
+                            matches!(
+                                k.as_str(),
+                                "in" | "range"
+                                    | "any_of"
+                                    | "contains"
+                                    | "at_least"
+                                    | "at_most"
+                                    | "less_than"
+                                    | "greater_than",
+                            )
+                        });
+                        if is_comparator {
+                            return ::std::option::Option::None;
+                        }
+                    }
+                    canonical.insert(#name_str.to_string(), value.clone());
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        let _ = captured; // silence unused if no required fields declared
+        #(#extracts)*
+    }
 }
 
 // ---- #[query] selector macro --------------------------------------

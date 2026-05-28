@@ -38,6 +38,13 @@ pub struct Query<Row> {
     /// declaration (which then can't participate in routing — they're
     /// useful as a raw envelope but won't receive optimistic updates).
     pub(crate) matches_fn: Option<MatchFn<Row>>,
+    /// Function pointer to the macro-generated partition projector.
+    /// Returns `Some(hash)` when the captured params project cleanly
+    /// onto the resource's canonical partition keys (RFC 088 §C);
+    /// `None` when a required field is missing or wraps a comparator
+    /// (`any_of`, `range`, …). Driver uses this to decide whether to
+    /// subscribe to the per-`(stream, params_hash)` live topic.
+    pub(crate) partition_hash_fn: Option<PartitionHashFn>,
     pub(crate) _row: PhantomData<fn() -> Row>,
 }
 
@@ -45,6 +52,13 @@ pub struct Query<Row> {
 /// `fn(&Query<Row>, &Row) -> bool` per declared `#[query_resource]`
 /// and the builder injects it via [`QueryBuilder::with_matches`].
 pub type MatchFn<Row> = fn(query: &Query<Row>, row: &Row) -> bool;
+
+/// Signature of a query's partition-hash projector. Macro-emitted;
+/// reads from the caller's captured params and produces the hash
+/// that matches what the server publishes against the row (RFC 088
+/// §C). Independent of `Row` because the projection operates on the
+/// already-typed params map.
+pub type PartitionHashFn = fn(captured: &StreamParams) -> Option<u64>;
 
 impl<Row> Query<Row> {
     /// Build a query from its parts. Most callers go through the macro-
@@ -59,8 +73,22 @@ impl<Row> Query<Row> {
             order_by: None,
             limit: None,
             matches_fn: None,
+            partition_hash_fn: None,
             _row: PhantomData,
         }
+    }
+
+    /// Compute the RFC 088 §C partition hash for this query's
+    /// captured params, if the macro registered a projector AND the
+    /// projection succeeds (all required fields present as plain
+    /// values, no comparator wrappers).
+    ///
+    /// `None` means the client should NOT subscribe to a per-params
+    /// topic for this query — fall back to the bare-topic
+    /// subscription (which the routing engine's params filter still
+    /// gates correctly).
+    pub fn partition_hash(&self) -> Option<u64> {
+        self.partition_hash_fn.and_then(|f| f(&self.params))
     }
 
     /// True when the row matches every declared param's comparator
@@ -135,6 +163,7 @@ impl<Row> Clone for Query<Row> {
             order_by: self.order_by.clone(),
             limit: self.limit,
             matches_fn: self.matches_fn,
+            partition_hash_fn: self.partition_hash_fn,
             _row: PhantomData,
         }
     }
@@ -205,6 +234,7 @@ pub struct QueryBuilder<Row> {
     order_by: Option<OrderBy>,
     limit: Option<u32>,
     matches_fn: Option<MatchFn<Row>>,
+    partition_hash_fn: Option<PartitionHashFn>,
     _row: PhantomData<fn() -> Row>,
 }
 
@@ -216,6 +246,7 @@ impl<Row> Clone for QueryBuilder<Row> {
             order_by: self.order_by.clone(),
             limit: self.limit,
             matches_fn: self.matches_fn,
+            partition_hash_fn: self.partition_hash_fn,
             _row: PhantomData,
         }
     }
@@ -257,6 +288,15 @@ impl<Row> QueryBuilder<Row> {
         self
     }
 
+    /// Inject the macro-generated partition-hash projector (RFC 088
+    /// §C). Called by the macro's `Resource::query()` so the client
+    /// driver can compute the per-`(stream, params_hash)` topic
+    /// matching the server's `row_to_params` projection.
+    pub fn with_partition_hash(mut self, partition_hash_fn: PartitionHashFn) -> Self {
+        self.partition_hash_fn = Some(partition_hash_fn);
+        self
+    }
+
     /// Finalize into a [`Query<Row>`].
     pub fn build(self) -> Query<Row> {
         Query {
@@ -265,6 +305,7 @@ impl<Row> QueryBuilder<Row> {
             order_by: self.order_by,
             limit: self.limit,
             matches_fn: self.matches_fn,
+            partition_hash_fn: self.partition_hash_fn,
             _row: PhantomData,
         }
     }
