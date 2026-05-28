@@ -38,7 +38,8 @@ Read [`docs/sync-query-design.md`](../../docs/sync-query-design.md) for the impl
 | `src/state.rs`                    | ✅      | `QueryState<Row>` (per-query reactive state)           |
 | `src/client.rs`                   | ✅      | `QueryClient` + refcounted `QuerySubscription` registry + routing engine |
 | `src/wire.rs`                     | ✅      | Build `SyncOpenRequest` / `SyncPullRequest` / `SyncPushRequest` from typed queries |
-| `pocopine-sync-query-macros`      | ✅      | `#[query_resource]` macro: builders, field markers, comparator trait impls, predicate evaluator |
+| `pocopine-sync-query-macros`      | ✅      | `#[query_resource]` + `#[query]` macros: query DSL builders, comparator-trait impls, predicate evaluator, selector memoization |
+| `src/selector.rs`                 | ✅      | `#[query]` runtime: tracking stack, `SelectorEntry`, `SelectorView`, `AnyTrackable`, `PartialEq` diff-suppression |
 | Background-task drivers (wasm)    | ⏳ next | spawn-aware `/open` + `/pull` flow; live wakeup; offline replay |
 | `examples/issue-tracker`          | ⏳ later| Linear-clone demo                                      |
 | `docs/sync-query-cookbook.md`     | ⏳ later| User-facing cookbook                                   |
@@ -149,6 +150,34 @@ qc.mutate::<CreateIssue>(payload, &remote_ctx).await?;
 ```
 
 The engine routes `apply_local`'s row changes through every observing query's predicate evaluator. W1's view sees a W1 mutation immediately; W2's view doesn't. No "active subscription" plumbing in user code.
+
+## Derived state with `#[query]` selectors
+
+For derived values over queries — counts, filtered projections, joins, dashboards — wrap the computation in a `#[query]` function. The framework caches the result by `(fn identity, args)`, tracks which subscriptions the body reads, reruns when any tracked subscription changes, and suppresses downstream notifications when the new output equals the cached one (`PartialEq`).
+
+```rust,ignore
+use pocopine_sync_query::{query, QueryClient};
+
+#[query]
+fn open_issue_count(client: QueryClient, ws: String) -> u32 {
+    let view = client.observe(
+        Issue::query()
+            .eq(issues::field::workspace_id, ws.clone())
+            .any_of(issues::field::status, [Status::Open])?
+            .build()
+    );
+    view.rows().len() as u32
+}
+
+// In a component:
+let view = open_issue_count::observe(&qc, "W1".to_string());
+view.value();                // current count
+let _tok = view.on_update(|| pocopine_core::scope::notify(scope, "open_count"));
+```
+
+The convention: if the first arg's type is `QueryClient`, it's the selector's client handle — not hashed, not in `observe()`'s public arg list (which always takes `&QueryClient` first). Every other arg must be `Hash + Clone + 'static`; the return type must be `PartialEq + Clone + 'static`.
+
+Selectors compose: `#[query] fn dashboard(...) { open_issue_count::observe(&client, ws).value() + … }`. An inner selector whose output is `PartialEq`-equal across reruns stops the cascade — the outer selector doesn't rerun. See [`docs/sync-query-selector-mechanism.md`](../docs/sync-query-selector-mechanism.md) for the full design.
 
 ## CRUD vs Query — which one?
 
