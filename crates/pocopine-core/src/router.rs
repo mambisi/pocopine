@@ -429,10 +429,10 @@ fn begin_prefetch(key: &str) -> Option<(u64, Option<web_sys::AbortSignal>)> {
 }
 
 fn cancel_prefetch(key: &str) {
-    if let Some((_, controller)) = PREFETCH_IN_FLIGHT.with(|cache| cache.borrow_mut().remove(key)) {
-        if let Some(controller) = controller {
-            controller.abort();
-        }
+    if let Some((_, Some(controller))) =
+        PREFETCH_IN_FLIGHT.with(|cache| cache.borrow_mut().remove(key))
+    {
+        controller.abort();
     }
 }
 
