@@ -453,6 +453,7 @@ If profiling shows these are real bottlenecks, row-key tracking can layer on top
 
 ## Related
 
+* [`sync-query-selector-implementation.md`](sync-query-selector-implementation.md) — implementation map: where each piece lives, data flows, areas to scrutinize when reviewing or modifying the code.
 * [RFC 086 — `pocopine-sync-query`](../rfcs/rfc-086-sync-query.md) — the routing engine + DSL.
 * [RFC 087 — driver lifecycle](../rfcs/rfc-087-sync-query-driver.md) — what `notify_listeners` fires on.
 * [RFC 088 — production parity (§B)](../rfcs/rfc-088-sync-query-production-parity.md) — the formal spec for `#[query]`.
