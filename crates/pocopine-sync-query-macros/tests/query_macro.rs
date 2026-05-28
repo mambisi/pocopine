@@ -198,6 +198,26 @@ fn macro_preserves_super_resolution_in_body() {
     assert_eq!(view.value(), HELPER_CONST);
 }
 
+// ---- Regression: raw-identifier args ------------------------------
+//
+// A user fn arg whose ident is a raw identifier (e.g. `r#type:
+// String` — `type` is a keyword) is valid Rust. The macro must not
+// panic at expansion time when it builds helper names. The fix names
+// helpers by position (`__pq_arg_0`, …) rather than splicing the
+// ident, so raw idents survive.
+
+#[query]
+fn with_raw_ident(_client: QueryClient, r#type: u32) -> u32 {
+    r#type + 1
+}
+
+#[test]
+fn macro_handles_raw_identifier_args() {
+    let client = QueryClient::without_driver();
+    let view = with_raw_ident::observe(&client, 41);
+    assert_eq!(view.value(), 42);
+}
+
 // ---- Regression: user attrs propagate to the lifted body ----------
 //
 // Lint attrs on the original `#[query] fn` must follow the body when

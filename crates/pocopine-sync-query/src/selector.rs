@@ -55,6 +55,35 @@ pub trait AnyTrackable: 'static {
     fn unregister_listener(&self, id: u64);
 }
 
+/// Type-erased selector arguments. The `#[query]` macro boxes the
+/// args tuple at every `observe()` call so the cache can do an
+/// equality check on lookup — NOT just a hash compare. Without this,
+/// two distinct arg values whose `Hash` outputs happen to collide
+/// would share one cached entry and the second caller would receive
+/// the first call's cached value.
+///
+/// Implemented automatically for any `T: PartialEq + 'static` via a
+/// blanket impl, so user code never names this trait directly.
+pub trait AnyArgs: std::any::Any + 'static {
+    /// `self == other` after a successful concrete-type downcast.
+    /// Different concrete types compare `false`.
+    fn dyn_eq(&self, other: &dyn AnyArgs) -> bool;
+    /// Upcast to `&dyn Any` for safe downcasting in [`Self::dyn_eq`].
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: PartialEq + 'static> AnyArgs for T {
+    fn dyn_eq(&self, other: &dyn AnyArgs) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<T>()
+            .is_some_and(|o| self == o)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// RAII handle returned by selector tracking. Drop unregisters the
 /// listener from the upstream trackable; holds a `Weak` so a token
 /// outliving its source silently no-ops.
@@ -156,6 +185,9 @@ fn pop_frame() -> TrackingFrame {
 /// the safe-stdlib path to `Rc::downcast`.
 pub(crate) trait AnySelector: AnyTrackable {
     fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any>;
+    /// The args this selector was built with. Used by `observe_selector`
+    /// to disambiguate hash collisions in the cache bucket.
+    fn args(&self) -> &dyn AnyArgs;
 }
 
 /// `(id, callback)` entry in a selector's listener list. The id is
@@ -171,6 +203,9 @@ type Listener = (u64, Rc<dyn Fn()>);
 pub(crate) struct SelectorEntry<T: PartialEq + Clone + 'static> {
     id: SelectorId,
     args_hash: u64,
+    /// Owned args (boxed, type-erased) for equality-disambiguation
+    /// when multiple entries land in the same hash bucket.
+    args: Box<dyn AnyArgs>,
     cached_output: RefCell<Option<T>>,
     /// Erased keepers (cloned `QueryHandle`s for subscriptions,
     /// nested `Rc<SelectorEntry<_>>`s for sub-selectors) holding each
@@ -199,12 +234,14 @@ impl<T: PartialEq + Clone + 'static> SelectorEntry<T> {
     pub(crate) fn new(
         id: SelectorId,
         args_hash: u64,
+        args: Box<dyn AnyArgs>,
         compute: Box<dyn Fn() -> T>,
         client: Weak<QueryClientInner>,
     ) -> Self {
         Self {
             id,
             args_hash,
+            args,
             cached_output: RefCell::new(None),
             keepers: RefCell::new(Vec::new()),
             listener_tokens: RefCell::new(Vec::new()),
@@ -312,14 +349,18 @@ impl<T: PartialEq + Clone + 'static> AnySelector for SelectorEntry<T> {
     fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any> {
         self
     }
+    fn args(&self) -> &dyn AnyArgs {
+        &*self.args
+    }
 }
 
 impl<T: PartialEq + Clone + 'static> Drop for SelectorEntry<T> {
     fn drop(&mut self) {
-        // Self-remove from the client's selector registry. Only
-        // touch the slot if its Weak still points at THIS entry —
-        // a replacement entry inserted between the strong-count
-        // hitting zero and this Drop running must not be clobbered.
+        // Self-remove from the client's selector registry. Walk the
+        // bucket at `(id, args_hash)`, prune any dead Weaks. When the
+        // bucket empties, drop the slot entirely. Other live entries
+        // in the bucket (distinct args that happened to collide on
+        // hash) are left alone.
         let Some(inner) = self.client.upgrade() else {
             return;
         };
@@ -327,12 +368,11 @@ impl<T: PartialEq + Clone + 'static> Drop for SelectorEntry<T> {
             return;
         };
         let key = (self.id, self.args_hash);
-        let still_ours = selectors
-            .get(&key)
-            .map(|w| w.strong_count() == 0)
-            .unwrap_or(false);
-        if still_ours {
-            selectors.remove(&key);
+        if let Some(bucket) = selectors.get_mut(&key) {
+            bucket.retain(|w| w.strong_count() > 0);
+            if bucket.is_empty() {
+                selectors.remove(&key);
+            }
         }
     }
 }

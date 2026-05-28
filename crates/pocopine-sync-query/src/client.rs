@@ -30,7 +30,7 @@ use crate::mutator::{
     wrap_persisted_payload, AnyMutator, HydrateReplayOutcome, MutatorEntry, RowChange,
 };
 use crate::query::{MatchFn, Order, Query, QueryKey};
-use crate::selector::{AnySelector, SelectorEntry, SelectorId, SelectorView};
+use crate::selector::{AnyArgs, AnySelector, SelectorEntry, SelectorId, SelectorView};
 use crate::state::{PendingOverlay, QueryState};
 
 /// Composite registry key. Including the `TypeId` of the row type
@@ -38,6 +38,12 @@ use crate::state::{PendingOverlay, QueryState};
 /// but different `Row` types from colliding — a collision used to
 /// trigger `downcast_subscription.expect(...)` panics.
 type RegistryKey = (TypeId, QueryKey);
+
+/// One bucket in the selector registry. Each bucket holds the live
+/// `Weak`s for entries whose args happen to hash to the same
+/// `(SelectorId, args_hash)` slot — the bucket lookup disambiguates
+/// by `AnyArgs::dyn_eq` per [`QueryClient::observe_selector`].
+type SelectorBucket = Vec<Weak<dyn AnySelector>>;
 
 /// Untyped subscription trait — needed so the registry can hold
 /// subscriptions of any `Row` type behind one map.
@@ -327,13 +333,19 @@ pub(crate) struct QueryClientInner {
     /// Apps that don't enable persistence never touch this map.
     /// Mutators register via [`QueryClient::register_mutator`].
     pub(crate) mutators: RefCell<MutatorRegistry>,
-    /// Selector registry, keyed by `(SelectorId, args_hash)`. Holds
-    /// `Weak` so an entry whose last `SelectorView` and last parent-
-    /// selector tracker dropped is GC'd via the entry's `Drop` impl
-    /// (which clears the now-dangling Weak from this map). Strong
-    /// references live on `SelectorView`s and inside parent
+    /// Selector registry, keyed by `(SelectorId, args_hash)`. Each
+    /// slot is a small bucket so two distinct arg values whose
+    /// `Hash` outputs collide can coexist — the lookup
+    /// disambiguates with `AnyArgs::dyn_eq`. Without this, a hash
+    /// collision would return the wrong cached value to the second
+    /// caller.
+    ///
+    /// Holds `Weak` so an entry whose last `SelectorView` and last
+    /// parent-selector tracker dropped is GC'd via the entry's
+    /// `Drop` impl (which clears its own dead Weak from the bucket).
+    /// Strong references live on `SelectorView`s and inside parent
     /// selectors' captured-dep keepers.
-    pub(crate) selectors: RefCell<HashMap<(SelectorId, u64), Weak<dyn AnySelector>>>,
+    pub(crate) selectors: RefCell<HashMap<(SelectorId, u64), SelectorBucket>>,
 }
 
 /// Type alias for the mutator registry — `clippy::type_complexity`
@@ -520,13 +532,17 @@ impl QueryClient {
     ///
     /// * `id` — stable selector identity (from the macro).
     /// * `args_hash` — caller-computed hash of the args tuple.
+    /// * `args` — type-erased copy of the args. The lookup
+    ///   disambiguates hash collisions by equality on this value,
+    ///   so two distinct arg values whose hashes collide can't
+    ///   alias each other's cache entries.
     /// * `compute` — closure that runs the user fn body with the args
     ///   captured. Called once per rerun.
     ///
-    /// On a cache hit (entry with `(id, args_hash)` already lives in
-    /// the selector registry), returns a fresh
-    /// [`SelectorView`](crate::SelectorView) wrapping the existing
-    /// entry; `compute` is NOT invoked.
+    /// On a cache hit (entry with matching `(id, args_hash)` AND
+    /// `args.dyn_eq(...)` already lives in the selector registry),
+    /// returns a fresh [`SelectorView`](crate::SelectorView)
+    /// wrapping the existing entry; `compute` is NOT invoked.
     ///
     /// On a cache miss, builds the entry, runs `compute` once inside
     /// a tracking frame, captures the read deps + wires listeners,
@@ -537,6 +553,7 @@ impl QueryClient {
         &self,
         id: SelectorId,
         args_hash: u64,
+        args: Box<dyn AnyArgs>,
         compute: F,
     ) -> SelectorView<T>
     where
@@ -545,26 +562,31 @@ impl QueryClient {
     {
         let key = (id, args_hash);
 
-        // Cache hit path. Drop the immutable borrow before any
-        // downcast / refcount work — a downstream `Rc::downcast`
-        // doesn't touch the map but keeping the borrow narrow
-        // mirrors the subscription registry's pattern.
-        if let Some(existing) = self
-            .inner
-            .selectors
-            .borrow()
-            .get(&key)
-            .and_then(|w| w.upgrade())
-        {
-            // Same (SelectorId, args_hash) MUST mean the same `T` —
+        // Cache hit path. Walk the bucket; for each live `Weak`,
+        // check args equality. Dead `Weak`s are tolerated here —
+        // they get cleaned up by the entry's `Drop`.
+        if let Some(hit) = {
+            let map = self.inner.selectors.borrow();
+            map.get(&key).and_then(|bucket| {
+                bucket.iter().find_map(|w| {
+                    let alive = w.upgrade()?;
+                    if alive.args().dyn_eq(&*args) {
+                        Some(alive)
+                    } else {
+                        None
+                    }
+                })
+            })
+        } {
+            // Same `(SelectorId, args)` MUST mean the same `T` —
             // SelectorId encodes the fn's crate-qualified identity,
             // which uniquely determines the return type. A failed
-            // downcast here would mean two `#[query]` fns hashed to
-            // the same id with different signatures — framework
+            // downcast would mean two `#[query]` fns hashed to the
+            // same id with different signatures — framework
             // invariant violation, not a user-recoverable error.
-            let typed: Rc<SelectorEntry<T>> =
-                Rc::downcast::<SelectorEntry<T>>(existing.as_rc_any()).expect(
-                    "(SelectorId, args_hash) collision across selectors with different T \
+            let typed: Rc<SelectorEntry<T>> = Rc::downcast::<SelectorEntry<T>>(hit.as_rc_any())
+                .expect(
+                    "(SelectorId, args) match across selectors with different T \
                      — framework invariant violated",
                 );
             return SelectorView::from_entry(typed);
@@ -574,12 +596,17 @@ impl QueryClient {
         let entry = Rc::new(SelectorEntry::<T>::new(
             id,
             args_hash,
+            args,
             Box::new(compute),
             Rc::downgrade(&self.inner),
         ));
         {
             let mut map = self.inner.selectors.borrow_mut();
-            map.insert(key, Rc::downgrade(&entry) as Weak<dyn AnySelector>);
+            let bucket = map.entry(key).or_default();
+            // Opportunistic GC: prune any dead Weaks already in the
+            // bucket. Keeps bucket size bounded under churn.
+            bucket.retain(|w| w.strong_count() > 0);
+            bucket.push(Rc::downgrade(&entry) as Weak<dyn AnySelector>);
         }
         entry.rerun();
         SelectorView::from_entry(entry)
