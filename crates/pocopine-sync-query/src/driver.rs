@@ -802,7 +802,7 @@ where
             return;
         };
         let compartment = self.compartment_key();
-        let snapshot = match store.hydrate_stream(&compartment).await {
+        let mut snapshot = match store.hydrate_stream(&compartment).await {
             Ok(snapshot) => snapshot,
             Err(err) => {
                 tracing::warn!(
@@ -817,10 +817,57 @@ where
         if !self.epoch.is_current() {
             return;
         }
+        // Codex P2: also drain the bare-stream compartment's pending
+        // queue. `persist_pending_mutation` writes into the
+        // bare-stream compartment as a fallback when no active
+        // subscription matched at mutate time; without this merge,
+        // those entries would never be picked up. We only merge
+        // PENDING mutations (not rows) because the bare compartment
+        // is shared across every params-scoped subscription and
+        // surfacing bare rows here would cross-pollute compartments.
+        let bare_stream = self.bare_stream_name();
+        if let Some(bare) = bare_stream {
+            if bare != compartment {
+                match store.hydrate_stream(&bare).await {
+                    Ok(bare_snapshot) => {
+                        let existing_ids: std::collections::HashSet<_> = snapshot
+                            .pending_mutations
+                            .iter()
+                            .map(|p| p.mutation.id.clone())
+                            .collect();
+                        for p in bare_snapshot.pending_mutations {
+                            if !existing_ids.contains(&p.mutation.id) {
+                                snapshot.pending_mutations.push(p);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            target: "pocopine.log",
+                            stream = bare.as_str(),
+                            error = %err,
+                            "sync-query: bare-stream pending fallback read failed; ignoring"
+                        );
+                    }
+                }
+            }
+            if !self.epoch.is_current() {
+                return;
+            }
+        }
         let Some(sub) = self.subscription.upgrade() else {
             return;
         };
         self.apply_hydrated_snapshot(&sub, snapshot);
+    }
+
+    /// The driver's bare stream name (without the params hash).
+    /// Used for the bare-fallback pending lookup in
+    /// [`Self::hydrate_phase`].
+    fn bare_stream_name(&self) -> Option<SyncStreamName> {
+        self.subscription
+            .upgrade()
+            .map(|sub| sub.query().stream().clone())
     }
 
     /// Pour a `LocalStreamSnapshot` into the subscription's
@@ -909,7 +956,25 @@ where
             });
         }
         drop(state);
-        sub.notify_listeners_external();
+        // Notify only when the cached schema_version is None OR
+        // matches the in-memory state. When None (no advertised
+        // version observed yet) the hydrated rows are kept until
+        // /open advertises a version, at which point apply_open
+        // either confirms or wipes them in a single transition.
+        // When schema_version is Some, surface the cached rows
+        // immediately — apply_open will catch drift and reset
+        // BEFORE the next notify. Either way we avoid the
+        // rows-then-empty-then-rows flicker on a known-stale cache
+        // by letting apply_open own the "drift-aware first notify".
+        //
+        // Conservatively suppress the notify entirely here:
+        // mark_loading() runs synchronously right after this and
+        // will fire a notify with the freshly-hydrated state +
+        // loading=true. Observers see one notify (loading=true,
+        // hydrated rows) rather than two (hydrated, then
+        // mark_loading bumps loading=true).
+        // If apply_open detects drift it resets state + notifies
+        // empty; if not, the rows stay visible.
         // Hand persisted pending mutations to the client-level
         // replay path so the first tick after /open runs them
         // through the registered MutatorRegistry → AnyMutator.

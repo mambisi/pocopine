@@ -296,16 +296,21 @@ pub(crate) struct QueryClientInner {
     /// dequeues the whole batch on each tick and re-inserts
     /// entries that are still offline.
     pub(crate) replay_queue: RefCell<VecDeque<ReplayEntry>>,
-    /// Registered `Mutator` impls, keyed by `Mutator::NAME` (the
-    /// scoping by `STREAM` happens at lookup time). Used by the
-    /// driver's Phase 0 hydrate path to replay persisted
-    /// `ClientMutation<Value>` payloads against the matching
-    /// `Mutator::apply_remote`.
+    /// Registered `Mutator` impls, keyed by
+    /// `(Mutator::STREAM, Mutator::NAME)` so two streams sharing a
+    /// common mutator name (e.g. `"create"`) don't overwrite each
+    /// other. Used by the driver's Phase 0 hydrate path to replay
+    /// persisted `ClientMutation<Value>` payloads against the
+    /// matching `Mutator::apply_remote`.
     ///
     /// Apps that don't enable persistence never touch this map.
     /// Mutators register via [`QueryClient::register_mutator`].
-    pub(crate) mutators: RefCell<HashMap<&'static str, Rc<dyn AnyMutator>>>,
+    pub(crate) mutators: RefCell<MutatorRegistry>,
 }
+
+/// Type alias for the mutator registry — `clippy::type_complexity`
+/// silenced by extraction.
+type MutatorRegistry = HashMap<(&'static str, &'static str), Rc<dyn AnyMutator>>;
 
 pub struct QueryClient {
     inner: Rc<QueryClientInner>,
@@ -541,6 +546,19 @@ impl QueryClient {
             &local_changes,
         );
 
+        // Arm a cancellation guard BEFORE the persist .await so a
+        // future dropped mid-persist still rolls back the optimistic
+        // overlay. Without this, IndexedDB / SQLite yields inside
+        // persist_pending_mutation could leave a pending overlay
+        // alive across cancellation even though apply_remote never
+        // ran.
+        let guard: RollbackGuard<'_, M::Row> = RollbackGuard {
+            client: Some(self),
+            stream: stream.clone(),
+            mutation_id: mutation_id.clone(),
+            _row: std::marker::PhantomData,
+        };
+
         // Persist the pending mutation immediately (RFC 088 §A.5)
         // so a reload BEFORE the server response can still replay
         // the mutation on the next online tick. We wrap the
@@ -556,20 +574,6 @@ impl QueryClient {
             &local_changes,
         )
         .await;
-
-        // Arm a cancellation guard. If the mutate future is dropped
-        // BEFORE we explicitly disarm it (success or handled err
-        // path), the guard's Drop rolls back the optimistic overlay
-        // — without this, futures dropped via `tokio::select!`,
-        // task abort, or any other early-cancel path leave the
-        // optimistic overlay alive in the subscription's pending
-        // queue forever, rendering a row the server never received.
-        let guard: RollbackGuard<'_, M::Row> = RollbackGuard {
-            client: Some(self),
-            stream: stream.clone(),
-            mutation_id: mutation_id.clone(),
-            _row: std::marker::PhantomData,
-        };
 
         // Capture the original push URL + mutation_id so an
         // offline replay can rebuild a `MutatorRemoteContext`
@@ -621,7 +625,76 @@ impl QueryClient {
         // via `state.remove_pending`).
         guard.disarm();
 
+        // Clear the durable pending entry from every compartment
+        // we wrote it into. Without this, an accepted mutation
+        // would persist forever and re-fire on every subsequent
+        // reload (the server's mutation_id dedup would no-op the
+        // replay, but the overlay would still bounce through the
+        // pending state machine every session — wasted bandwidth +
+        // confusing UX).
+        self.clear_persisted_pending::<M::Row>(&stream, &mutation_id)
+            .await;
+
         Ok(crate::MutationOutcome::Accepted(canonical_changes))
+    }
+
+    /// Clear a durable pending mutation across every compartment
+    /// of `stream` after the canonical reconcile confirmed it.
+    /// Uses `mark_push_result` (which the store contract guarantees
+    /// removes accepted ids from the pending queue) so the
+    /// implementation works against every `SyncLocalStore` impl
+    /// without depending on a future purge-by-id primitive.
+    async fn clear_persisted_pending<Row>(&self, stream: &SyncStreamName, mutation_id: &MutationId)
+    where
+        Row: 'static,
+    {
+        let Some(config) = self.inner.config.as_ref() else {
+            return;
+        };
+        let Some(store) = config.local_store.clone() else {
+            return;
+        };
+        // Walk every compartment we may have written into:
+        // each currently-active subscription's compartment plus
+        // the bare-stream fallback. We over-clear (some
+        // compartments may not contain the entry) — that's safe:
+        // `mark_push_result` is a no-op for a missing id.
+        let mut compartments: std::collections::BTreeSet<SyncStreamName> =
+            std::collections::BTreeSet::new();
+        for typed in self.collect_subscriptions_on_stream::<Row>(stream) {
+            compartments.insert(pocopine_sync::local_stream_key(
+                stream,
+                typed.query.params(),
+            ));
+        }
+        compartments.insert(stream.clone());
+        for compartment in compartments {
+            let mut result = pocopine_sync::LocalPushResult {
+                stream: compartment.clone(),
+                collection: None,
+                accepted: vec![mutation_id.clone()],
+                rejected: Vec::new(),
+                rows: Vec::new(),
+                conflicts: Vec::new(),
+                cursor: None,
+            };
+            // Some stores expect a collection on every result.
+            // MemoryLocalStore tolerates None — the SQLite +
+            // IndexedDB impls also handle it (collection is
+            // informational on the local store). Leave it None
+            // so we don't fabricate a name.
+            let _ = &mut result;
+            if let Err(err) = store.mark_push_result(result).await {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    mutation_id = %mutation_id,
+                    error = %err,
+                    "sync-query: mark_push_result on accepted mutation failed; \
+                     the entry may replay on next hydrate (server dedup will no-op)"
+                );
+            }
+        }
     }
 
     /// Persist a freshly-created pending mutation to the durable
@@ -1132,7 +1205,10 @@ impl QueryClient {
         M::Row: Clone + serde::Serialize + 'static,
     {
         let entry: Rc<dyn AnyMutator> = Rc::new(MutatorEntry::<M>::new());
-        self.inner.mutators.borrow_mut().insert(M::NAME, entry);
+        self.inner
+            .mutators
+            .borrow_mut()
+            .insert((M::STREAM, M::NAME), entry);
     }
 
     /// Driver-only: enqueue hydrated pending mutations for replay
@@ -1201,11 +1277,17 @@ impl QueryClient {
                             return ReplayOutcome::Rejected;
                         }
                     };
+                    // Lookup by (stream, NAME) so two streams that
+                    // register a common mutator name like `create`
+                    // don't overwrite each other (codex P1).
                     let entry = client_inner
                         .mutators
                         .borrow()
-                        .get(mutator_name.as_str())
-                        .cloned();
+                        .iter()
+                        .find(|((entry_stream, entry_name), _)| {
+                            *entry_stream == stream.as_str() && *entry_name == mutator_name.as_str()
+                        })
+                        .map(|(_, e)| e.clone());
                     let Some(entry) = entry else {
                         tracing::warn!(
                             target: "pocopine.log",
@@ -1216,16 +1298,6 @@ impl QueryClient {
                         );
                         return ReplayOutcome::Rejected;
                     };
-                    if entry.stream() != stream.as_str() {
-                        tracing::warn!(
-                            target: "pocopine.log",
-                            stream = stream.as_str(),
-                            mutator_name = %mutator_name,
-                            registered_stream = entry.stream(),
-                            "sync-query: registered Mutator stream mismatch; dropping"
-                        );
-                        return ReplayOutcome::Rejected;
-                    }
                     let outcome = entry
                         .replay_hydrated(client, stream.clone(), mutation.clone(), push_url)
                         .await;
@@ -1352,6 +1424,22 @@ pub(crate) fn route_canonical_changes_from_replay<Row>(
     Row: Clone + serde::Serialize + 'static,
 {
     client.route_canonical_changes::<Row>(stream, mutation_id, canonical);
+}
+
+/// Crate-internal route used by [`AnyMutator::replay_hydrated`] on
+/// the Rejected path to clean up the pending overlay using the
+/// MUTATOR'S row type (rather than the draining driver's row
+/// type). Without this, a hydrated rejection routed through a
+/// driver of a different row type would skip the matching
+/// subscriptions and leak stale optimistic state.
+pub(crate) fn dequeue_pending_for_mutator_row<Row>(
+    client: &QueryClient,
+    stream: &SyncStreamName,
+    mutation_id: &MutationId,
+) where
+    Row: Clone + 'static,
+{
+    QueryClient::dequeue_pending_for_stream::<Row>(&client.inner, stream, mutation_id);
 }
 
 /// Free-function variant of `collect_subscriptions_on_stream` that
