@@ -110,7 +110,7 @@ impl Route {
                 Segment::Literal(s) if s == got => {}
                 Segment::Literal(_) => return None,
                 Segment::Param(name) => {
-                    params.insert(name.clone(), (*got).to_string());
+                    params.insert(name.clone(), url_decode_path_segment(got));
                 }
                 Segment::Wildcard => {}
             }
@@ -236,6 +236,12 @@ thread_local! {
     /// navigation to the same key.
     static PREFETCHED_LOADER_DATA: RefCell<HashMap<String, Rc<dyn std::any::Any>>> =
         RefCell::new(HashMap::new());
+    /// In-flight loader prefetches keyed by `path?query`. The
+    /// generation prevents a late prefetch from populating the cache
+    /// after a real navigation superseded it.
+    static PREFETCH_IN_FLIGHT: RefCell<HashMap<String, (u64, Option<web_sys::AbortController>)>> =
+        RefCell::new(HashMap::new());
+    static PREFETCH_TOKEN: Cell<u64> = const { Cell::new(0) };
     /// Document title captured before Pocopine first applies page
     /// metadata. Restored for routes that do not provide a title.
     static BASE_DOCUMENT_TITLE: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -261,6 +267,10 @@ pub enum NavigationFailure {
     InvalidTarget(RouteTargetError),
     MissingWindow,
     HistoryRejected,
+    GuardPending,
+    GuardRejected(RouteRejection),
+    Redirected(RouteTarget),
+    MountFailed(&'static str),
 }
 
 pub type NavigationResult = Result<RouteLocation, NavigationFailure>;
@@ -302,6 +312,14 @@ impl RouteToken {
     pub fn current() -> Self {
         ROUTE_TOKEN.with(|cell| RouteToken(cell.get()))
     }
+
+    fn prefetch(token: u64) -> Self {
+        RouteToken(u64::MAX - token)
+    }
+
+    fn is_prefetch(self) -> bool {
+        self.0 > (u64::MAX / 2)
+    }
 }
 
 /// Internal — bumps the router's monotonic token. Called once at
@@ -320,6 +338,15 @@ fn bump_route_token() -> RouteToken {
 /// navigation. Used by spawned loaders to short-circuit and by the
 /// post-resolve check to drop stale results.
 fn is_token_current(token: RouteToken) -> bool {
+    if token.is_prefetch() {
+        return PREFETCH_IN_FLIGHT.with(|cache| {
+            let token = u64::MAX - token.0;
+            cache
+                .borrow()
+                .values()
+                .any(|(active_token, _)| *active_token == token)
+        });
+    }
     ROUTE_TOKEN.with(|cell| cell.get() == token.0)
 }
 
@@ -378,11 +405,86 @@ fn take_prefetched_loader_data(key: &str) -> Option<Rc<dyn std::any::Any>> {
     PREFETCHED_LOADER_DATA.with(|cache| cache.borrow_mut().remove(key))
 }
 
-fn put_prefetched_loader_data(key: String, data: Box<dyn std::any::Any>) {
+fn has_prefetched_loader_data(key: &str) -> bool {
+    PREFETCHED_LOADER_DATA.with(|cache| cache.borrow().contains_key(key))
+}
+
+fn begin_prefetch(key: &str) -> Option<(u64, Option<web_sys::AbortSignal>)> {
+    if PREFETCH_IN_FLIGHT.with(|cache| cache.borrow().contains_key(key)) {
+        return None;
+    }
+    let token = PREFETCH_TOKEN.with(|cell| {
+        let next = cell.get().wrapping_add(1);
+        cell.set(next);
+        next
+    });
+    let controller = web_sys::AbortController::new().ok();
+    let signal = controller.as_ref().map(|controller| controller.signal());
+    PREFETCH_IN_FLIGHT.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(key.to_string(), (token, controller));
+    });
+    Some((token, signal))
+}
+
+fn cancel_prefetch(key: &str) {
+    if let Some((_, controller)) = PREFETCH_IN_FLIGHT.with(|cache| cache.borrow_mut().remove(key)) {
+        if let Some(controller) = controller {
+            controller.abort();
+        }
+    }
+}
+
+fn clear_prefetch_state() {
+    PREFETCHED_LOADER_DATA.with(|cache| cache.borrow_mut().clear());
+    PREFETCH_IN_FLIGHT.with(|cache| {
+        for (_, (_, controller)) in cache.borrow_mut().drain() {
+            if let Some(controller) = controller {
+                controller.abort();
+            }
+        }
+    });
+}
+
+fn put_prefetched_loader_data_if_current(key: String, token: u64, data: Box<dyn std::any::Any>) {
+    let still_current = PREFETCH_IN_FLIGHT.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let matches = cache
+            .get(&key)
+            .map(|(active_token, _)| *active_token == token)
+            .unwrap_or(false);
+        if matches {
+            cache.remove(&key);
+        }
+        matches
+    });
+    if !still_current {
+        return;
+    }
     let rc: Rc<dyn std::any::Any> = Rc::from(data);
     PREFETCHED_LOADER_DATA.with(|cache| {
         cache.borrow_mut().insert(key, rc);
     });
+}
+
+fn finish_prefetch_without_data(key: &str, token: u64) {
+    PREFETCH_IN_FLIGHT.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let matches = cache
+            .get(key)
+            .map(|(active_token, _)| *active_token == token)
+            .unwrap_or(false);
+        if matches {
+            cache.remove(key);
+        }
+    });
+}
+
+fn log_prefetch_loader_error(key: &str, err: &crate::app::LoaderError) {
+    web_sys::console::warn_1(&JsValue::from_str(&format!(
+        "pocopine route prefetch loader failed for {key}: {err:?}"
+    )));
 }
 
 /// Resolve loader data for the lifecycle hook running under
@@ -457,6 +559,7 @@ pub(crate) fn register_route_with_config(
     component_name: &'static str,
     config: RouteRuntimeConfig,
 ) {
+    clear_prefetch_state();
     ROUTES.with(|r| {
         let route = Route::parse(pattern, component_name, config);
         r.borrow_mut().push(route);
@@ -530,11 +633,7 @@ fn commit_navigation(target: impl IntoRouteTarget, mode: NavigationMode) -> Navi
     let loc = win.location();
     let current_path = loc.pathname().unwrap_or_else(|_| "/".into());
     let current_search = loc.search().unwrap_or_default();
-    let current_hash = loc.hash().ok().filter(|hash| !hash.is_empty());
-    let current_hash = current_hash
-        .as_deref()
-        .map(|hash| hash.trim_start_matches('#'));
-    if full_path_from_parts(&current_path, &current_search, current_hash)
+    if route_navigation_key(&current_path, &current_search)
         == navigation_key_from_url(target.as_str())
     {
         return Err(NavigationFailure::Duplicated);
@@ -552,7 +651,9 @@ fn commit_navigation(target: impl IntoRouteTarget, mode: NavigationMode) -> Navi
     };
     result.map_err(|_| NavigationFailure::HistoryRejected)?;
     let location = location_for_url(target.as_str());
-    mount_current();
+    if let Some(failure) = mount_current() {
+        return Err(failure);
+    }
     Ok(location)
 }
 
@@ -595,21 +696,30 @@ pub fn prefetch(target: impl IntoRouteTarget) -> PrefetchResult {
         return PrefetchResult::Skipped(PrefetchSkip::NoLoader);
     };
     let key = loader_cache_key_from_url(target.as_str());
+    if has_prefetched_loader_data(&key) {
+        return PrefetchResult::Ready(location);
+    }
+    let Some((prefetch_token, abort_signal)) = begin_prefetch(&key) else {
+        return PrefetchResult::Started(location);
+    };
     let loader_ctx = LoaderContext {
         path: location.path.clone(),
         params: location.params.clone(),
         query: location.query.clone(),
         matched_pattern: location.route_pattern,
-        navigation_token: RouteToken::current(),
-        abort_signal: None,
+        navigation_token: RouteToken::prefetch(prefetch_token),
+        abort_signal,
     };
     let location_for_result = location.clone();
     wasm_bindgen_futures::spawn_local(async move {
         match loader.run(loader_ctx).await {
             Ok(data) => {
-                put_prefetched_loader_data(key, data);
+                put_prefetched_loader_data_if_current(key, prefetch_token, data);
             }
-            Err(_) => {}
+            Err(err) => {
+                log_prefetch_loader_error(&key, &err);
+                finish_prefetch_without_data(&key, prefetch_token);
+            }
         }
     });
     PrefetchResult::Started(location_for_result)
@@ -623,10 +733,17 @@ pub(crate) fn target_for_name(
     let mut found: Option<Result<String, RouteTargetError>> = None;
     ROUTES.with(|r| {
         let routes = r.borrow();
-        let Some(route) = routes.iter().find(|route| route.config.name == Some(name)) else {
+        let mut named_routes = routes
+            .iter()
+            .filter(|route| route.config.name == Some(name));
+        let Some(route) = named_routes.next() else {
             found = Some(Err(RouteTargetError::UnknownRouteName(name.as_str())));
             return;
         };
+        if named_routes.next().is_some() {
+            found = Some(Err(RouteTargetError::DuplicateRouteName(name.as_str())));
+            return;
+        }
         if route.is_wildcard() {
             found = Some(Err(RouteTargetError::UnbuildablePattern(route.pattern)));
             return;
@@ -644,6 +761,10 @@ pub(crate) fn target_for_name(
                             found = Some(Err(RouteTargetError::MissingParam(param.clone())));
                             return;
                         };
+                        if value.is_empty() {
+                            found = Some(Err(RouteTargetError::EmptyParam(param.clone())));
+                            return;
+                        }
                         push_encoded_route_path_segment(value, &mut path);
                     }
                     Segment::Wildcard => {
@@ -708,8 +829,8 @@ fn full_path_from_parts(path: &str, search: &str, hash: Option<&str>) -> String 
 }
 
 fn navigation_key_from_url(url: &str) -> String {
-    let (path, search, hash) = split_route_url(url);
-    full_path_from_parts(&path, &search, hash.as_deref())
+    let (path, search, _) = split_route_url(url);
+    route_navigation_key(&path, &search)
 }
 
 fn loader_cache_key_from_url(url: &str) -> String {
@@ -729,14 +850,14 @@ pub fn init() {
 
     // popstate → re-mount.
     let cb = Closure::wrap(Box::new(move |_: Event| {
-        mount_current();
+        let _ = mount_current();
     }) as Box<dyn FnMut(Event)>);
     if let Some(win) = web_sys::window() {
         let _ = win.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
     }
     cb.forget();
 
-    mount_current();
+    let _ = mount_current();
 }
 
 fn ensure_route_scope() {
@@ -809,7 +930,7 @@ pub fn reevaluate_current() {
     match decision {
         RouteGuardDecision::Allow => {
             if take_pending_guard_navigation(&path, &search) {
-                mount_current();
+                let _ = mount_current();
             } else {
                 // Identity change made the user MORE privileged or
                 // the route was already permissive. Existing mount
@@ -827,7 +948,7 @@ pub fn reevaluate_current() {
             // outlet is empty.
             clear_pending_guard_navigation();
             clear_outlet();
-            mount_current();
+            let _ = mount_current();
         }
     }
 }
@@ -839,7 +960,7 @@ fn clear_outlet() {
     outlet.set_inner_html("");
 }
 
-fn mount_current() {
+fn mount_current() -> Option<NavigationFailure> {
     ensure_route_scope();
 
     // Abort any loader request from the previous navigation before
@@ -874,7 +995,7 @@ fn mount_current() {
                 duration_ms: 0.0,
             });
         }
-        return;
+        return Some(NavigationFailure::MissingWindow);
     };
     let loc = win.location();
     let path = loc.pathname().unwrap_or_else(|_| "/".into());
@@ -913,7 +1034,8 @@ fn mount_current() {
                             duration_ms: elapsed_since(start_ms),
                         });
                     }
-                    return;
+                    apply_page_meta(None);
+                    return Some(NavigationFailure::GuardPending);
                 }
                 RouteGuardDecision::Redirect(target) => {
                     clear_pending_guard_navigation();
@@ -926,11 +1048,13 @@ fn mount_current() {
                             duration_ms: elapsed_since(start_ms),
                         });
                     }
-                    let target = target.into_path();
-                    if target != path {
-                        navigate(&target);
+                    let current_key = route_navigation_key(&path, &search);
+                    let target_key = loader_cache_key_from_url(target.as_str());
+                    apply_page_meta(None);
+                    if target_key != current_key {
+                        let _ = push(target.clone());
                     }
-                    return;
+                    return Some(NavigationFailure::Redirected(target));
                 }
                 RouteGuardDecision::Reject(rejection) => {
                     clear_pending_guard_navigation();
@@ -944,7 +1068,7 @@ fn mount_current() {
                         has_route_hooks,
                         start_ms,
                     );
-                    return;
+                    return Some(NavigationFailure::GuardRejected(rejection));
                 }
             }
         }
@@ -955,9 +1079,12 @@ fn mount_current() {
         // `spawn_local` so the synchronous fast path is still
         // available for routes without loaders.
         if let Some(loader) = matched.config.loader.clone() {
-            if let Some(data) = take_prefetched_loader_data(&route_navigation_key(&path, &search)) {
+            let loader_key = route_navigation_key(&path, &search);
+            cancel_prefetch(&loader_key);
+            if let Some(data) = take_prefetched_loader_data(&loader_key) {
                 put_pending_loader_rc(data);
-                finish_route_mount(
+                update_route_state(&path, &params, query);
+                return finish_route_mount(
                     Some(matched.component_name),
                     route_pattern,
                     &path,
@@ -966,7 +1093,6 @@ fn mount_current() {
                     has_route_hooks,
                     start_ms,
                 );
-                return;
             }
             let abort_signal = begin_loader_abort(nav_token);
             let loader_ctx = LoaderContext {
@@ -1031,7 +1157,7 @@ fn mount_current() {
                     }
                 }
             });
-            return;
+            return None;
         }
     }
 
@@ -1044,7 +1170,7 @@ fn mount_current() {
         matched.as_ref().and_then(|m| m.config.page_meta.clone()),
         has_route_hooks,
         start_ms,
-    );
+    )
 }
 
 fn update_route_state(
@@ -1080,7 +1206,7 @@ fn finish_route_mount(
     page_meta: Option<PageMetaFactory>,
     has_route_hooks: bool,
     start_ms: Option<f64>,
-) {
+) -> Option<NavigationFailure> {
     clear_pending_guard_navigation();
 
     // Devtools hook — fires on every resolved route change, even
@@ -1104,7 +1230,7 @@ fn finish_route_mount(
                     component: Some(fallback),
                     duration_ms: elapsed_since(start_ms),
                 });
-                return;
+                return None;
             }
         }
         apply_page_meta(None);
@@ -1116,10 +1242,12 @@ fn finish_route_mount(
                 duration_ms: elapsed_since(start_ms),
             });
         }
-        return;
+        return None;
     };
 
-    let Some(win) = web_sys::window() else { return };
+    let Some(win) = web_sys::window() else {
+        return Some(NavigationFailure::MissingWindow);
+    };
     // Paint into the outlet. `replace_children` removes the previous
     // page's subtree, which the MutationObserver turns into effect +
     // scope cleanup via `mount::release_subtree`.
@@ -1134,7 +1262,8 @@ fn finish_route_mount(
             });
         }
         clear_pending_loader_data();
-        return;
+        apply_page_meta(None);
+        return Some(NavigationFailure::MountFailed("missing_outlet"));
     };
     let Some(doc) = win.document() else {
         if has_route_hooks {
@@ -1147,7 +1276,8 @@ fn finish_route_mount(
             });
         }
         clear_pending_loader_data();
-        return;
+        apply_page_meta(None);
+        return Some(NavigationFailure::MountFailed("missing_document"));
     };
 
     // Build `<name key="value" ...>`; the mount handles the mount.
@@ -1164,7 +1294,8 @@ fn finish_route_mount(
                 });
             }
             clear_pending_loader_data();
-            return;
+            apply_page_meta(None);
+            return Some(NavigationFailure::MountFailed("create_element_failed"));
         }
     };
     for (k, v) in params {
@@ -1195,6 +1326,7 @@ fn finish_route_mount(
             duration_ms: elapsed_since(start_ms),
         });
     }
+    None
 }
 
 fn apply_page_meta(factory: Option<PageMetaFactory>) {
@@ -1335,15 +1467,19 @@ fn dispatch_route_rejection(
     }
     match action {
         RouteRejectionAction::Redirect(target) => {
-            let target = target.into_path();
-            if target != path {
-                navigate(&target);
+            apply_page_meta(None);
+            let current_key = route_navigation_key_from_query(path, query);
+            let target_key = loader_cache_key_from_url(target.as_str());
+            if target_key != current_key {
+                let _ = push(target);
             }
         }
         RouteRejectionAction::Paint(surface) => {
             paint_route_error_surface(&surface);
         }
-        RouteRejectionAction::AbortNavigation => {}
+        RouteRejectionAction::AbortNavigation => {
+            apply_page_meta(None);
+        }
     }
 }
 
@@ -1407,6 +1543,25 @@ fn route_navigation_key(path: &str, search: &str) -> String {
     }
 }
 
+fn route_navigation_key_from_query(path: &str, query: &HashMap<String, String>) -> String {
+    if query.is_empty() {
+        return path.to_string();
+    }
+    let mut pairs: Vec<_> = query.iter().collect();
+    pairs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut out = path.to_string();
+    out.push('?');
+    for (idx, (key, value)) in pairs.into_iter().enumerate() {
+        if idx > 0 {
+            out.push('&');
+        }
+        crate::app::push_encoded_route_query_part(key, &mut out);
+        out.push('=');
+        crate::app::push_encoded_route_query_part(value, &mut out);
+    }
+    out
+}
+
 fn record_pending_guard_navigation(path: &str, search: &str) {
     PENDING_GUARD_NAVIGATION.with(|slot| {
         *slot.borrow_mut() = Some(route_navigation_key(path, search));
@@ -1455,6 +1610,7 @@ fn handle_route_rejection(
 }
 
 fn paint_route_error_surface(surface: &RouteErrorSurface) {
+    apply_page_meta(None);
     // App-configured override wins. Mount the user's component
     // through the normal route-mount path so it has a full
     // `#[component]` surface (template, handlers, lifecycle).
@@ -1559,7 +1715,19 @@ fn parse_query(search: &str) -> HashMap<String, String> {
 fn url_decode(s: &str) -> String {
     // Minimal percent-decode + `+` → ` `. js_sys has URLSearchParams
     // but avoiding the extra feature for the host-compat path.
-    let s = s.replace('+', " ");
+    percent_decode(s, true)
+}
+
+fn url_decode_path_segment(s: &str) -> String {
+    percent_decode(s, false)
+}
+
+fn percent_decode(s: &str, plus_as_space: bool) -> String {
+    let s = if plus_as_space {
+        s.replace('+', " ")
+    } else {
+        s.to_string()
+    };
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -1594,6 +1762,18 @@ mod tests {
     use std::collections::HashMap;
     use std::rc::Rc;
 
+    fn reset_router_for_test() {
+        ROUTES.with(|routes| routes.borrow_mut().clear());
+        ROUTE_REJECTION_HANDLERS.with(|handlers| handlers.borrow_mut().clear());
+        PENDING_LOADER_DATA.with(|slot| slot.borrow_mut().take());
+        LOADER_SLOTS.with(|slots| slots.borrow_mut().clear());
+        PENDING_GUARD_NAVIGATION.with(|slot| slot.borrow_mut().take());
+        clear_prefetch_state();
+        ROUTE_TOKEN.with(|token| token.set(0));
+        PREFETCH_TOKEN.with(|token| token.set(0));
+        BASE_DOCUMENT_TITLE.with(|title| title.borrow_mut().take());
+    }
+
     #[test]
     fn literal_match() {
         let r = Route::parse("/about", "about", RouteRuntimeConfig::default());
@@ -1607,6 +1787,16 @@ mod tests {
         let r = Route::parse("/blog/:id", "blog", RouteRuntimeConfig::default());
         let caps = r.match_path("/blog/42").unwrap();
         assert_eq!(caps.get("id"), Some(&"42".to_string()));
+    }
+
+    #[test]
+    fn param_capture_decodes_percent_encoded_segments() {
+        let r = Route::parse("/blog/:id", "blog", RouteRuntimeConfig::default());
+        let caps = r.match_path("/blog/user%2042").unwrap();
+        assert_eq!(caps.get("id"), Some(&"user 42".to_string()));
+
+        let slash = r.match_path("/blog/user%2F42").unwrap();
+        assert_eq!(slash.get("id"), Some(&"user/42".to_string()));
     }
 
     #[test]
@@ -1630,6 +1820,7 @@ mod tests {
 
     #[test]
     fn named_route_target_replaces_params_and_query() {
+        reset_router_for_test();
         const NAME: RouteName = RouteName::new("router.tests.named");
 
         register_route_with_config(
@@ -1652,6 +1843,7 @@ mod tests {
 
     #[test]
     fn named_route_target_reports_missing_param() {
+        reset_router_for_test();
         const NAME: RouteName = RouteName::new("router.tests.missing-param");
 
         register_route_with_config(
@@ -1670,7 +1862,50 @@ mod tests {
     }
 
     #[test]
+    fn named_route_target_reports_empty_param() {
+        reset_router_for_test();
+        const NAME: RouteName = RouteName::new("router.tests.empty-param");
+
+        register_route_with_config(
+            "/needs/:id",
+            "needs-param",
+            RouteRuntimeConfig {
+                name: Some(NAME),
+                ..RouteRuntimeConfig::default()
+            },
+        );
+
+        assert_eq!(
+            RouteTarget::named(NAME).param("id", "").build(),
+            Err(RouteTargetError::EmptyParam("id".into()))
+        );
+    }
+
+    #[test]
+    fn named_route_target_reports_duplicate_name() {
+        reset_router_for_test();
+        const NAME: RouteName = RouteName::new("router.tests.duplicate");
+
+        for pattern in ["/one/:id", "/two/:id"] {
+            register_route_with_config(
+                pattern,
+                "duplicate",
+                RouteRuntimeConfig {
+                    name: Some(NAME),
+                    ..RouteRuntimeConfig::default()
+                },
+            );
+        }
+
+        assert_eq!(
+            RouteTarget::named(NAME).param("id", "42").build(),
+            Err(RouteTargetError::DuplicateRouteName(NAME.as_str()))
+        );
+    }
+
+    #[test]
     fn route_location_splits_path_query_and_hash() {
+        reset_router_for_test();
         let loc = location_for_url("/reports?tab=active#summary");
 
         assert_eq!(loc.path, "/reports");
@@ -1681,6 +1916,7 @@ mod tests {
 
     #[test]
     fn route_location_exposes_route_meta() {
+        reset_router_for_test();
         const SECTION: RouteMetaKey<&'static str> = RouteMetaKey::new("section");
         let mut meta = RouteMeta::new();
         meta.insert(SECTION, "reports");
@@ -1711,6 +1947,12 @@ mod tests {
         let q = parse_query("?name=Ada&hello=world%20%26%20mars");
         assert_eq!(q.get("name"), Some(&"Ada".to_string()));
         assert_eq!(q.get("hello"), Some(&"world & mars".to_string()));
+    }
+
+    #[test]
+    fn navigation_key_ignores_fragment() {
+        assert_eq!(navigation_key_from_url("/foo#section"), "/foo");
+        assert_eq!(navigation_key_from_url("/foo?tab=a#section"), "/foo?tab=a");
     }
 
     #[test]
@@ -1799,6 +2041,7 @@ mod tests {
 
     #[test]
     fn route_rejection_handlers_run_until_action() {
+        reset_router_for_test();
         let first_called = Rc::new(Cell::new(false));
         let second_called = Rc::new(Cell::new(false));
         let first_called_for_handler = Rc::clone(&first_called);
@@ -1844,6 +2087,7 @@ mod tests {
 
     #[test]
     fn route_token_advances_on_each_bump() {
+        reset_router_for_test();
         let before = RouteToken::current();
         let bumped = bump_route_token();
         assert_ne!(before, bumped);
@@ -1853,6 +2097,7 @@ mod tests {
 
     #[test]
     fn route_token_is_current_only_for_latest() {
+        reset_router_for_test();
         // Two consecutive navigations: each bump produces a fresh
         // token, and only the latest is "current". The earlier
         // token's loader (if any) finds itself stale on resolve.
@@ -1866,6 +2111,7 @@ mod tests {
 
     #[test]
     fn route_token_is_copy_and_eq() {
+        reset_router_for_test();
         let t = bump_route_token();
         let copy = t;
         assert_eq!(t, copy);

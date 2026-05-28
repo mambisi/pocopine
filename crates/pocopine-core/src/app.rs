@@ -301,7 +301,7 @@ pub(crate) fn push_encoded_route_path_segment(input: &str, out: &mut String) {
     push_percent_encoded(input, out);
 }
 
-fn push_encoded_route_query_part(input: &str, out: &mut String) {
+pub(crate) fn push_encoded_route_query_part(input: &str, out: &mut String) {
     push_percent_encoded(input, out);
 }
 
@@ -387,9 +387,12 @@ impl RouteUrl {
         } else {
             self.path
         };
+        let existing_hash = out.find('#').map(|idx| out.split_off(idx));
         self.query.append_to(&mut out);
         if let Some(hash) = self.hash {
             out.push('#');
+            out.push_str(&hash);
+        } else if let Some(hash) = existing_hash {
             out.push_str(&hash);
         }
         out
@@ -410,17 +413,20 @@ impl RouteTarget {
         if path.is_empty() {
             return Err(RouteTargetError::Empty);
         }
-        if route_target_path(&path).starts_with("/_pocopine/") {
-            return Err(RouteTargetError::ReservedNamespace);
-        }
         if !is_app_local_route_target(&path) {
             return Err(RouteTargetError::NotAppLocalPath);
+        }
+        if route_target_path(&path).starts_with("/_pocopine") {
+            return Err(RouteTargetError::ReservedNamespace);
         }
         Ok(Self(path))
     }
 
     pub fn path(path: impl Into<String>) -> Self {
-        Self::new(path).expect("route targets must be app-local paths")
+        match Self::new(path) {
+            Ok(target) => target,
+            Err(err) => panic!("invalid route target: {err}"),
+        }
     }
 
     pub fn path_with_query(
@@ -442,7 +448,7 @@ impl RouteTarget {
         &self.0
     }
 
-    pub(crate) fn into_path(self) -> String {
+    pub fn into_path(self) -> String {
         self.0
     }
 }
@@ -453,9 +459,32 @@ pub enum RouteTargetError {
     NotAppLocalPath,
     ReservedNamespace,
     UnknownRouteName(&'static str),
+    DuplicateRouteName(&'static str),
     MissingParam(String),
+    EmptyParam(String),
     UnbuildablePattern(&'static str),
 }
+
+impl fmt::Display for RouteTargetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("route target is empty"),
+            Self::NotAppLocalPath => f.write_str("route target must be an app-local path"),
+            Self::ReservedNamespace => {
+                f.write_str("route target uses the reserved /_pocopine namespace")
+            }
+            Self::UnknownRouteName(name) => write!(f, "unknown route name `{name}`"),
+            Self::DuplicateRouteName(name) => write!(f, "duplicate route name `{name}`"),
+            Self::MissingParam(param) => write!(f, "missing route param `{param}`"),
+            Self::EmptyParam(param) => write!(f, "route param `{param}` is empty"),
+            Self::UnbuildablePattern(pattern) => {
+                write!(f, "route pattern `{pattern}` cannot be built")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RouteTargetError {}
 
 fn is_app_local_route_target(path: &str) -> bool {
     path.starts_with('/') && !path.starts_with("//") && !path.contains('\\')
@@ -1405,6 +1434,14 @@ mod route_config_tests {
             RouteTarget::new("/_pocopine/server-fn"),
             Err(RouteTargetError::ReservedNamespace)
         );
+        assert_eq!(
+            RouteTarget::new("/_pocopine"),
+            Err(RouteTargetError::ReservedNamespace)
+        );
+        assert_eq!(
+            RouteTarget::new("/_pocopine-secret/admin"),
+            Err(RouteTargetError::ReservedNamespace)
+        );
         assert_eq!(RouteTarget::new(""), Err(RouteTargetError::Empty));
     }
 
@@ -1437,6 +1474,17 @@ mod route_config_tests {
             target.into_path(),
             "/users/user%2F42?tab=a%20b#top%23section"
         );
+    }
+
+    #[test]
+    fn route_url_replaces_existing_hash_when_hash_is_set() {
+        let target = RouteUrl::path("/reports#old")
+            .query("tab", "active")
+            .hash("new")
+            .target()
+            .unwrap();
+
+        assert_eq!(target.into_path(), "/reports?tab=active#new");
     }
 
     #[test]
