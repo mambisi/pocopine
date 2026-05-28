@@ -357,9 +357,7 @@ impl RouteUrl {
 
     /// Append one encoded path segment.
     pub fn segment(mut self, value: impl AsRef<str>) -> Self {
-        if self.path.is_empty() {
-            self.path.push('/');
-        } else if !self.path.ends_with('/') {
+        if self.path.is_empty() || !self.path.ends_with('/') {
             self.path.push('/');
         }
         push_encoded_route_path_segment(value.as_ref(), &mut self.path);
