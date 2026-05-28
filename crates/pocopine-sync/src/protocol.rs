@@ -40,6 +40,23 @@ fn validate_token(field: &'static str, value: String) -> SyncResult<String> {
     {
         return Err(SyncError::invalid_value(field, value));
     }
+    // Stream-name-only: reject `:` because the live-wakeup wire
+    // protocol uses it as a structural delimiter (see
+    // [`sync_stream_tag`] / [`sync_stream_params_tag`] / RFC 088
+    // §C). A stream named `"issues:abcd1234abcd1234"` would
+    // produce the bare topic `query:sync:stream:issues:abcd…`
+    // which is indistinguishable from a per-params topic for the
+    // public `issues` prefix — a public-prefix allowlist would
+    // then authorize access to the private sibling stream. We
+    // forbid the collision at the source of truth (the token
+    // validator) rather than chase it downstream.
+    //
+    // Field-specific via the `field` discriminator — RowKey,
+    // MutationId, etc. legitimately use `:` in composite keys.
+    // Only the stream token namespace is protocol-reserved.
+    if field == "stream" && value.contains(':') {
+        return Err(SyncError::invalid_value(field, value));
+    }
     Ok(value)
 }
 
@@ -1102,6 +1119,24 @@ mod tests {
         assert!(SyncStreamName::new(" posts").is_err());
         assert!(SyncStreamName::new("posts\nbad").is_err());
         assert!(SyncStreamName::new("x".repeat(MAX_SYNC_TOKEN_LEN + 1)).is_err());
+    }
+
+    // RFC 088 §C: stream names must not contain `:` — the live-
+    // wakeup wire protocol uses it as a structural delimiter, and
+    // a sibling stream `issues:abcd1234abcd1234` would otherwise
+    // collide with `issues`'s per-params topic format, breaking the
+    // `LiveHub::allow_topic_prefixes` security boundary.
+    #[test]
+    fn rejects_colon_in_stream_name() {
+        // 16-hex-suffix sibling: indistinguishable from per-params
+        // format `query:sync:stream:issues:<hash>`.
+        assert!(SyncStreamName::new("issues:abcd1234abcd1234").is_err());
+        // Other colon-containing names also rejected.
+        assert!(SyncStreamName::new("a:b").is_err());
+        // Other token types may still use `:` (RowKey composite keys,
+        // etc.). Only `stream` is protocol-reserved.
+        assert!(RowKey::new("tenant:row_42").is_ok());
+        assert!(MutationId::new("test:1").is_ok());
     }
 
     #[test]
