@@ -1065,39 +1065,57 @@ fn generate_partition_for_topic_body(params: &[ParamDef]) -> TokenStream2 {
         .map(|param| {
             let name = &param.name;
             let name_str = ident_wire_key(name);
+
+            // Per-field comparator-key set. ONLY include the keys
+            // for comparators this field can actually emit:
+            //   * InSet (`{"in": [...]}`) — universal (every
+            //     `#[query_param]` field gets FieldInSet).
+            //   * Contains (`{"contains", "case_sensitive"}`) —
+            //     only if `caps.contains` is set (auto for non-
+            //     Option `String`/`Cow`/`str`, or explicit
+            //     `#[query_param(contains)]`).
+            //   * Range (`{"from", "to", "inclusive"}`) — only if
+            //     `caps.range` is set (auto for orderable types, or
+            //     explicit `#[query_param(range)]`).
+            //
+            // Gating by capability is what avoids false positives
+            // on user types whose plain equality value happens to
+            // serialize as an object with `from`/`to` keys — e.g.
+            // `#[query_param(required)] window: TimeWindow` where
+            // `TimeWindow` serializes as `{"from": ..., "to": ...}`
+            // and the user filters with `.eq(field::window, w)`.
+            // Without this gate, we'd reject the plain equality
+            // value as a comparator and the client would miss
+            // scoped invalidations the server publishes.
+            let mut comparator_keys: Vec<&'static str> = vec!["in"];
+            if param.caps.contains {
+                comparator_keys.push("contains");
+                comparator_keys.push("case_sensitive");
+            }
+            if param.caps.range {
+                comparator_keys.push("from");
+                comparator_keys.push("to");
+                comparator_keys.push("inclusive");
+            }
+            let key_arms: Vec<TokenStream2> = comparator_keys
+                .iter()
+                .map(|k| {
+                    let lit = syn::LitStr::new(k, proc_macro2::Span::call_site());
+                    quote! { #lit }
+                })
+                .collect();
+
             quote! {
                 {
                     // Required field absent → no partition; `?` on
                     // Option<&Value> yields None from the outer fn.
                     let value = captured.get(#name_str)?;
-                    // Reject comparator-wrapped values — InSet
-                    // (`{"in": [...]}`), Contains
-                    // (`{"contains": "...", "case_sensitive": bool}`),
-                    // and Range (`{"from": ..., "to": ..., "inclusive": [_, _]}`).
-                    // These don't map to a single topic key — fall
-                    // back to bare-topic subscription.
-                    //
-                    // We detect via the wire-shape's distinctive
-                    // keys. The set is closed (these are the only
-                    // comparators `pocopine_sync_query::params`
-                    // emits); a future comparator would need to be
-                    // added here, or the macro could opt for a
-                    // strict allowlist of plain JSON value kinds
-                    // instead.
+                    // Reject comparator-wrapped values for the
+                    // comparators THIS field can emit. See the
+                    // per-field key set above.
                     if let ::pocopine_sync_query::__private::serde_json::Value::Object(obj) = value {
                         let is_comparator = obj.keys().any(|k| {
-                            matches!(
-                                k.as_str(),
-                                // InSet
-                                "in"
-                                // Contains
-                                | "contains"
-                                | "case_sensitive"
-                                // Range
-                                | "from"
-                                | "to"
-                                | "inclusive",
-                            )
+                            matches!(k.as_str(), #(#key_arms)|*)
                         });
                         if is_comparator {
                             return ::std::option::Option::None;

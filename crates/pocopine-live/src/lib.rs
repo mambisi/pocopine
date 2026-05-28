@@ -680,6 +680,25 @@ fn validate_collection(collection: &str) -> Result<String, LiveClientError> {
     Ok(value)
 }
 
+/// Returns `true` iff `suffix` is exactly `:` followed by 16
+/// lowercase-hex digits — the format produced by
+/// `pocopine_sync::sync_stream_params_tag`'s `{:016x}` formatter
+/// (RFC 088 §C). Used by `LiveHub::allow_topic_prefixes` (host-only)
+/// to disambiguate a per-params extension from a sibling stream
+/// name that happens to start with the same byte prefix + `:`.
+/// `#[allow(dead_code)]` because the host module is `cfg`-gated to
+/// non-wasm targets; this fn is reachable only from there.
+#[allow(dead_code)]
+fn is_params_hash_suffix(suffix: &str) -> bool {
+    let bytes = suffix.as_bytes();
+    if bytes.len() != 17 || bytes[0] != b':' {
+        return false;
+    }
+    bytes[1..]
+        .iter()
+        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 fn validate_topic(topic: &str) -> Result<String, LiveClientError> {
     let value = validate_csv_value("topic", topic)?;
     Topic::new(value.clone()).map_err(LiveClientError::Event)?;
@@ -1671,9 +1690,24 @@ mod host {
                 let topic_str = topic.as_str();
                 allowed.iter().any(|p| {
                     let prefix = p.as_str();
-                    topic_str == prefix
-                        || (topic_str.starts_with(prefix)
-                            && topic_str.as_bytes().get(prefix.len()) == Some(&b':'))
+                    if topic_str == prefix {
+                        return true;
+                    }
+                    if !topic_str.starts_with(prefix) {
+                        return false;
+                    }
+                    // The only legal extension of a sync-stream
+                    // prefix is `:<16-char lowercase-hex>` — the
+                    // `{:016x}` form produced by
+                    // `pocopine_sync::sync_stream_params_tag`.
+                    // Anything else (including `:private` for a
+                    // sibling stream named `issues:private`, which
+                    // `SyncStreamName::new` currently accepts) MUST
+                    // be rejected so a public prefix doesn't leak
+                    // access to a private sibling. Future
+                    // changes that broaden the wire format must
+                    // bump `LIVE_PROTOCOL_V1` and update this gate.
+                    crate::is_params_hash_suffix(&topic_str[prefix.len()..])
                 })
             })
         }
@@ -2051,6 +2085,28 @@ mod host {
             // stream. MUST be rejected.
             let neighbor2 = crate::query_tag_topic("sync:stream:issues2").unwrap();
             assert!(!(hub.policy)(&ctx, &neighbor2));
+
+            // Codex second-pass P2: a sibling stream named
+            // `issues:private` produces the topic
+            // `query:sync:stream:issues:private`, which shares the
+            // prefix `query:sync:stream:issues:` with legitimate
+            // per-params topics. The `is_params_hash_suffix` gate
+            // must reject it because `:private` is not 16
+            // lowercase-hex chars.
+            let sibling = crate::query_tag_topic("sync:stream:issues:private").unwrap();
+            assert!(
+                !(hub.policy)(&ctx, &sibling),
+                "sibling stream `issues:private` must NOT be authorized"
+            );
+
+            // Uppercase hex is rejected — the wire format is
+            // strictly lowercase per `{:016x}`.
+            let uppercase = crate::query_tag_topic("sync:stream:issues:ABCD1234ABCD1234").unwrap();
+            assert!(!(hub.policy)(&ctx, &uppercase));
+
+            // Too-short hex suffix.
+            let short = crate::query_tag_topic("sync:stream:issues:abc").unwrap();
+            assert!(!(hub.policy)(&ctx, &short));
         }
 
         #[test]
