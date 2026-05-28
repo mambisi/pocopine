@@ -177,7 +177,7 @@ let _tok = view.on_update(|| pocopine_core::scope::notify(scope, "open_count"));
 
 The convention: if the first arg's type is `QueryClient`, it's the selector's client handle — not hashed, not in `observe()`'s public arg list (which always takes `&QueryClient` first). Every other arg must be `Hash + Clone + 'static`; the return type must be `PartialEq + Clone + 'static`.
 
-Selectors compose: `#[query] fn dashboard(...) { open_issue_count::observe(&client, ws).value() + … }`. An inner selector whose output is `PartialEq`-equal across reruns stops the cascade — the outer selector doesn't rerun. See [`docs/sync-query-selector-mechanism.md`](../docs/sync-query-selector-mechanism.md) for the full design.
+Selectors compose: `#[query] fn dashboard(...) { open_issue_count::observe(&client, ws).value() + … }`. An inner selector whose output is `PartialEq`-equal across reruns stops the cascade — the outer selector doesn't rerun. See [`docs/sync-query-selector-mechanism.md`](../../docs/sync-query-selector-mechanism.md) for the full design and [`docs/sync-query-selector-implementation.md`](../../docs/sync-query-selector-implementation.md) for the code map (layer diagram, data flows, file pointers).
 
 ## CRUD vs Query — which one?
 
