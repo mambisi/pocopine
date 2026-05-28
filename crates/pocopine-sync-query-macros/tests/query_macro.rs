@@ -233,6 +233,31 @@ fn macro_routes_doc_to_module() {
     assert_eq!(view.value(), 42);
 }
 
+// ---- Regression: `#[must_use]` routes to observe(), not module ----
+//
+// `#[must_use]` on a module is a Rust warning (and `-D warnings`
+// would make it a build failure). The macro must route the attr to
+// `observe()` instead, where it actually fires the must-use lint
+// against callers that drop the returned `SelectorView`.
+
+#[query]
+#[must_use]
+fn must_use_selector(_client: QueryClient) -> u32 {
+    99
+}
+
+#[test]
+#[deny(unused_must_use)]
+fn macro_routes_must_use_to_observe() {
+    let client = QueryClient::without_driver();
+    // We USE the returned view, so `must_use` is satisfied. The
+    // value of this test is the build itself: if the macro had
+    // placed `#[must_use]` on the module, this file would fail
+    // under `-D warnings` even before reaching the assertion.
+    let view = must_use_selector::observe(&client);
+    assert_eq!(view.value(), 99);
+}
+
 // ---- Regression: raw-identifier args ------------------------------
 //
 // A user fn arg whose ident is a raw identifier (e.g. `r#type:
