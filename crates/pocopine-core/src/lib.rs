@@ -60,10 +60,13 @@ pub mod watch;
 pub mod web;
 
 pub use app::{
-    App, AppPlugin, Component, Loader, LoaderContext, LoaderError, RouteComponent, RouteConfig,
+    encode_route_fragment, encode_route_path_segment, encode_route_query_part, App, AppPlugin,
+    Component, IntoRouteTarget, Loader, LoaderContext, LoaderError, PageLink, PageMeta,
+    PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent, RouteConfig,
     RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
-    RouteLoaderFuture, RouteRejection, RouteRejectionAction, RouteRejectionContext,
-    RouteRejectionHandler, RouteTarget, RouteTargetError, SubtreeHandle,
+    RouteLoaderFuture, RouteMeta, RouteMetaKey, RouteName, RouteQuery, RouteRejection,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
+    RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle,
 };
 pub use client_module::{ClientModule, ClientModuleError};
 pub use computed::{computed, Computed};
@@ -111,7 +114,10 @@ pub use registry::{
     ComponentEntry, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
     RegistryErrorKind, COMPONENT_ENTRIES,
 };
-pub use router::{navigate, reevaluate_current, register_route, ReturnTo, RouteToken};
+pub use router::{
+    go, navigate, prefetch, push, reevaluate_current, register_route, replace, NavigationFailure,
+    NavigationResult, PrefetchResult, PrefetchSkip, ReturnTo, RouteLocation, RouteToken,
+};
 pub use scope::{
     append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache,
     patch_list_at_inline, patch_list_indices_inline, prepend_list_inline, remove_list_at_inline,

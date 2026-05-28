@@ -24,8 +24,9 @@
 //! `Counter::register()` and `pocopine::run()` still work for
 //! ad-hoc use — the trait is what `App` calls under the hood.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -89,6 +90,316 @@ pub struct RouteContext<'a> {
     pub matched_pattern: Option<&'static str>,
 }
 
+/// Route context passed to page metadata factories.
+pub struct PageMetaContext<'a> {
+    pub path: &'a str,
+    pub full_path: &'a str,
+    pub params: &'a HashMap<String, String>,
+    pub query: &'a HashMap<String, String>,
+    pub hash: Option<&'a str>,
+    pub route_pattern: Option<&'static str>,
+    pub component: Option<&'static str>,
+}
+
+/// Metadata that Pocopine manages in the document `<head>` for the
+/// currently mounted page.
+///
+/// Route components attach this through [`RouteConfig::page_meta`].
+/// Unlike [`RouteMeta`], this is document/head metadata: title,
+/// description, canonical URL, Open Graph tags, robots directives,
+/// and similar browser-visible page metadata.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PageMeta {
+    title: Option<String>,
+    meta_tags: Vec<PageMetaTag>,
+    links: Vec<PageLink>,
+}
+
+impl PageMeta {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn description(self, content: impl Into<String>) -> Self {
+        self.meta_name("description", content)
+    }
+
+    pub fn robots(self, content: impl Into<String>) -> Self {
+        self.meta_name("robots", content)
+    }
+
+    pub fn canonical(self, href: impl Into<String>) -> Self {
+        self.link("canonical", href)
+    }
+
+    pub fn og_title(self, content: impl Into<String>) -> Self {
+        self.meta_property("og:title", content)
+    }
+
+    pub fn og_description(self, content: impl Into<String>) -> Self {
+        self.meta_property("og:description", content)
+    }
+
+    pub fn meta_name(mut self, name: impl Into<String>, content: impl Into<String>) -> Self {
+        self.meta_tags.push(PageMetaTag::Name {
+            name: name.into(),
+            content: content.into(),
+        });
+        self
+    }
+
+    pub fn meta_property(
+        mut self,
+        property: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        self.meta_tags.push(PageMetaTag::Property {
+            property: property.into(),
+            content: content.into(),
+        });
+        self
+    }
+
+    pub fn link(mut self, rel: impl Into<String>, href: impl Into<String>) -> Self {
+        self.links.push(PageLink {
+            rel: rel.into(),
+            href: href.into(),
+        });
+        self
+    }
+
+    pub fn title_text(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    pub fn meta_tags(&self) -> &[PageMetaTag] {
+        &self.meta_tags
+    }
+
+    pub fn links(&self) -> &[PageLink] {
+        &self.links
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none() && self.meta_tags.is_empty() && self.links.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PageMetaTag {
+    Name { name: String, content: String },
+    Property { property: String, content: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageLink {
+    pub rel: String,
+    pub href: String,
+}
+
+pub(crate) type PageMetaFactory = Rc<dyn for<'a> Fn(&PageMetaContext<'a>) -> PageMeta>;
+
+/// Stable application-owned name for a route.
+///
+/// Named routes are optional. They exist for Rust-side navigation
+/// where the caller wants parameter validation rather than stringly
+/// assembling `/users/{id}` paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RouteName(&'static str);
+
+impl RouteName {
+    pub const fn new(name: &'static str) -> Self {
+        Self(name)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+/// Query pairs attached to a [`RouteTarget`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RouteQuery {
+    pairs: Vec<(String, String)>,
+}
+
+impl RouteQuery {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pair(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.pairs.push((key.into(), value.into()));
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    pub(crate) fn append_to(&self, path: &mut String) {
+        if self.pairs.is_empty() {
+            return;
+        }
+        let hash = path.find('#').map(|idx| path.split_off(idx));
+        let joiner = if path.contains('?') { '&' } else { '?' };
+        path.push(joiner);
+        for (idx, (key, value)) in self.pairs.iter().enumerate() {
+            if idx > 0 {
+                path.push('&');
+            }
+            push_encoded_route_query_part(key, path);
+            path.push('=');
+            push_encoded_route_query_part(value, path);
+        }
+        if let Some(hash) = hash {
+            path.push_str(&hash);
+        }
+    }
+}
+
+impl<const N: usize> From<[(&str, &str); N]> for RouteQuery {
+    fn from(value: [(&str, &str); N]) -> Self {
+        let mut query = RouteQuery::new();
+        for (key, val) in value {
+            query = query.pair(key, val);
+        }
+        query
+    }
+}
+
+/// Percent-encode one path segment for a Pocopine route URL.
+///
+/// This encodes `/`, `?`, `#`, spaces, and other reserved bytes so a
+/// dynamic id can safely become exactly one route segment.
+pub fn encode_route_path_segment(input: &str) -> String {
+    let mut out = String::new();
+    push_encoded_route_path_segment(input, &mut out);
+    out
+}
+
+/// Percent-encode one query key or value for a Pocopine route URL.
+pub fn encode_route_query_part(input: &str) -> String {
+    let mut out = String::new();
+    push_encoded_route_query_part(input, &mut out);
+    out
+}
+
+/// Percent-encode one URL fragment value for a Pocopine route URL.
+pub fn encode_route_fragment(input: &str) -> String {
+    let mut out = String::new();
+    push_encoded_route_query_part(input, &mut out);
+    out
+}
+
+pub(crate) fn push_encoded_route_path_segment(input: &str, out: &mut String) {
+    push_percent_encoded(input, out);
+}
+
+fn push_encoded_route_query_part(input: &str, out: &mut String) {
+    push_percent_encoded(input, out);
+}
+
+fn push_percent_encoded(input: &str, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char);
+            }
+            other => {
+                out.push('%');
+                out.push(HEX[(other >> 4) as usize] as char);
+                out.push(HEX[(other & 0x0f) as usize] as char);
+            }
+        }
+    }
+}
+
+/// Builder for app-local route URLs.
+///
+/// Use this when any part of the path, query, or fragment comes from
+/// data. `segment(...)`, `query(...)`, and `hash(...)` encode their
+/// inputs before producing the final [`RouteTarget`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RouteUrl {
+    path: String,
+    query: RouteQuery,
+    hash: Option<String>,
+}
+
+impl RouteUrl {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn root() -> Self {
+        Self {
+            path: "/".into(),
+            query: RouteQuery::new(),
+            hash: None,
+        }
+    }
+
+    /// Start from an already-formed app-local path.
+    pub fn path(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            query: RouteQuery::new(),
+            hash: None,
+        }
+    }
+
+    /// Append one encoded path segment.
+    pub fn segment(mut self, value: impl AsRef<str>) -> Self {
+        if self.path.is_empty() {
+            self.path.push('/');
+        } else if !self.path.ends_with('/') {
+            self.path.push('/');
+        }
+        push_encoded_route_path_segment(value.as_ref(), &mut self.path);
+        self
+    }
+
+    pub fn query(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.query = self.query.pair(key, value);
+        self
+    }
+
+    pub fn query_pairs(mut self, query: impl Into<RouteQuery>) -> Self {
+        self.query = query.into();
+        self
+    }
+
+    pub fn hash(mut self, hash: impl AsRef<str>) -> Self {
+        self.hash = Some(encode_route_fragment(hash.as_ref()));
+        self
+    }
+
+    pub fn into_string(self) -> String {
+        let mut out = if self.path.is_empty() {
+            "/".to_string()
+        } else {
+            self.path
+        };
+        self.query.append_to(&mut out);
+        if let Some(hash) = self.hash {
+            out.push('#');
+            out.push_str(&hash);
+        }
+        out
+    }
+
+    pub fn target(self) -> Result<RouteTarget, RouteTargetError> {
+        RouteTarget::new(self.into_string())
+    }
+}
+
 /// Concrete client-side route target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteTarget(String);
@@ -99,6 +410,9 @@ impl RouteTarget {
         if path.is_empty() {
             return Err(RouteTargetError::Empty);
         }
+        if route_target_path(&path).starts_with("/_pocopine/") {
+            return Err(RouteTargetError::ReservedNamespace);
+        }
         if !is_app_local_route_target(&path) {
             return Err(RouteTargetError::NotAppLocalPath);
         }
@@ -107,6 +421,21 @@ impl RouteTarget {
 
     pub fn path(path: impl Into<String>) -> Self {
         Self::new(path).expect("route targets must be app-local paths")
+    }
+
+    pub fn path_with_query(
+        path: impl Into<String>,
+        query: impl Into<RouteQuery>,
+    ) -> Result<Self, RouteTargetError> {
+        RouteUrl::path(path).query_pairs(query).target()
+    }
+
+    pub fn url(url: RouteUrl) -> Result<Self, RouteTargetError> {
+        url.target()
+    }
+
+    pub fn named(name: RouteName) -> RouteTargetBuilder {
+        RouteTargetBuilder::new(name)
     }
 
     pub fn as_str(&self) -> &str {
@@ -122,10 +451,269 @@ impl RouteTarget {
 pub enum RouteTargetError {
     Empty,
     NotAppLocalPath,
+    ReservedNamespace,
+    UnknownRouteName(&'static str),
+    MissingParam(String),
+    UnbuildablePattern(&'static str),
 }
 
 fn is_app_local_route_target(path: &str) -> bool {
     path.starts_with('/') && !path.starts_with("//") && !path.contains('\\')
+}
+
+fn route_target_path(target: &str) -> &str {
+    target
+        .split(['?', '#'])
+        .next()
+        .filter(|path| !path.is_empty())
+        .unwrap_or("/")
+}
+
+/// Builder returned by [`RouteTarget::named`].
+#[derive(Clone, Debug)]
+pub struct RouteTargetBuilder {
+    name: RouteName,
+    params: HashMap<String, String>,
+    query: RouteQuery,
+}
+
+impl RouteTargetBuilder {
+    fn new(name: RouteName) -> Self {
+        Self {
+            name,
+            params: HashMap::new(),
+            query: RouteQuery::new(),
+        }
+    }
+
+    pub fn param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.params.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn query(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.query = self.query.pair(key, value);
+        self
+    }
+
+    pub fn query_pairs(mut self, query: impl Into<RouteQuery>) -> Self {
+        self.query = query.into();
+        self
+    }
+
+    pub fn build(self) -> Result<RouteTarget, RouteTargetError> {
+        crate::router::target_for_name(self.name, &self.params, self.query)
+    }
+}
+
+/// Convert common caller inputs into a validated [`RouteTarget`].
+pub trait IntoRouteTarget {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError>;
+}
+
+impl IntoRouteTarget for RouteTarget {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError> {
+        Ok(self)
+    }
+}
+
+impl IntoRouteTarget for &RouteTarget {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError> {
+        Ok(self.clone())
+    }
+}
+
+impl IntoRouteTarget for &str {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError> {
+        RouteTarget::new(self)
+    }
+}
+
+impl IntoRouteTarget for String {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError> {
+        RouteTarget::new(self)
+    }
+}
+
+impl IntoRouteTarget for RouteUrl {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError> {
+        self.target()
+    }
+}
+
+impl IntoRouteTarget for &RouteUrl {
+    fn into_route_target(self) -> Result<RouteTarget, RouteTargetError> {
+        self.clone().target()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct RouteMetaId {
+    name: &'static str,
+    type_id: TypeId,
+}
+
+/// Typed key for route metadata.
+///
+/// Metadata is declared inside `RouteComponent::config()` through
+/// [`RouteConfig::meta`]. This keeps route policy local to the route
+/// component while preserving Pocopine's central `App::route(...)`
+/// URL table. This is Vue Router-style route metadata for app UI and
+/// policy; document head metadata belongs in a separate `PageMeta`
+/// surface.
+#[derive(Debug)]
+pub struct RouteMetaKey<T: 'static> {
+    name: &'static str,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T: 'static> Clone for RouteMetaKey<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: 'static> Copy for RouteMetaKey<T> {}
+
+impl<T: 'static> RouteMetaKey<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _marker: PhantomData,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+
+    fn id(self) -> RouteMetaId {
+        RouteMetaId {
+            name: self.name,
+            type_id: TypeId::of::<T>(),
+        }
+    }
+}
+
+/// Typed route-record metadata.
+///
+/// Use this for data that belongs to the route graph: side-nav labels,
+/// breadcrumbs, access hints, layout flags, analytics names, and other
+/// route-adjacent UI policy. It is intentionally separate from page
+/// metadata such as title, description, canonical URL, or Open Graph
+/// tags.
+#[derive(Clone, Default)]
+pub struct RouteMeta {
+    entries: Vec<RouteMetaEntry>,
+}
+
+impl fmt::Debug for RouteMeta {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RouteMeta")
+            .field("len", &self.entries.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+struct RouteMetaEntry {
+    id: RouteMetaId,
+    value: Rc<dyn Any>,
+}
+
+impl RouteMeta {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert<T: 'static>(&mut self, key: RouteMetaKey<T>, value: T) {
+        let id = key.id();
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) {
+            entry.value = Rc::new(value);
+            return;
+        }
+        self.entries.push(RouteMetaEntry {
+            id,
+            value: Rc::new(value),
+        });
+    }
+
+    pub fn get<T: 'static>(&self, key: RouteMetaKey<T>) -> Option<&T> {
+        let id = key.id();
+        self.entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.value.as_ref().downcast_ref::<T>())
+    }
+
+    pub fn contains<T: 'static>(&self, key: RouteMetaKey<T>) -> bool {
+        self.get(key).is_some()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Route prefetch policy.
+///
+/// The trigger controls how directives may schedule a prefetch. The
+/// `loader` flag is opt-in because loader functions may be expensive
+/// or touch app data; plain route/code prefetch is the conservative
+/// default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prefetch {
+    trigger: PrefetchTrigger,
+    loader: bool,
+}
+
+impl Prefetch {
+    pub const fn none() -> Self {
+        Self {
+            trigger: PrefetchTrigger::Never,
+            loader: false,
+        }
+    }
+
+    pub const fn on_intent() -> Self {
+        Self {
+            trigger: PrefetchTrigger::Intent,
+            loader: false,
+        }
+    }
+
+    pub const fn on_visible() -> Self {
+        Self {
+            trigger: PrefetchTrigger::Visible,
+            loader: false,
+        }
+    }
+
+    pub const fn loader(mut self) -> Self {
+        self.loader = true;
+        self
+    }
+
+    pub const fn trigger(self) -> PrefetchTrigger {
+        self.trigger
+    }
+
+    pub const fn includes_loader(self) -> bool {
+        self.loader
+    }
+}
+
+impl Default for Prefetch {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefetchTrigger {
+    Never,
+    Intent,
+    Visible,
 }
 
 /// Reason a route cannot continue through the normal mount path.
@@ -488,18 +1076,63 @@ impl<T: 'static> Loader<T> {
 /// Route-local configuration for component `C`.
 #[derive(Clone)]
 pub struct RouteConfig<C: Component> {
+    pub(crate) name: Option<RouteName>,
+    pub(crate) meta: RouteMeta,
+    pub(crate) page_meta: Option<PageMetaFactory>,
     pub(crate) guards: Vec<Rc<dyn RouteGuard>>,
     pub(crate) loader: Option<Rc<dyn RouteLoader>>,
+    pub(crate) prefetch: Prefetch,
     _component: PhantomData<fn() -> C>,
 }
 
 impl<C: Component> RouteConfig<C> {
     pub fn new() -> Self {
         Self {
+            name: None,
+            meta: RouteMeta::new(),
+            page_meta: None,
             guards: Vec::new(),
             loader: None,
+            prefetch: Prefetch::none(),
             _component: PhantomData,
         }
+    }
+
+    /// Give this route a stable Rust-side name for typed navigation.
+    pub fn name(mut self, name: RouteName) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    /// Attach typed metadata to this route.
+    ///
+    /// Route metadata is route policy/configuration, not component
+    /// state or document head metadata. Define static keys near the
+    /// plugin or feature that consumes them, then attach values from
+    /// `RouteComponent::config()`.
+    pub fn meta<T: 'static>(mut self, key: RouteMetaKey<T>, value: T) -> Self {
+        self.meta.insert(key, value);
+        self
+    }
+
+    /// Attach document/head metadata for this route.
+    ///
+    /// The factory runs after a successful navigation and receives the
+    /// resolved route params/query. Use this for page title,
+    /// description, canonical URL, Open Graph tags, and similar
+    /// browser-visible metadata.
+    pub fn page_meta(
+        mut self,
+        meta: impl for<'a> Fn(&PageMetaContext<'a>) -> PageMeta + 'static,
+    ) -> Self {
+        self.page_meta = Some(Rc::new(meta));
+        self
+    }
+
+    /// Attach static document/head metadata for this route.
+    pub fn static_page_meta(mut self, meta: PageMeta) -> Self {
+        self.page_meta = Some(Rc::new(move |_| meta.clone()));
+        self
     }
 
     /// Attach a synchronous client-side guard.
@@ -542,10 +1175,25 @@ impl<C: Component> RouteConfig<C> {
         self
     }
 
+    /// Configure route prefetch behavior.
+    ///
+    /// Route/code prefetch is conservative; loader prefetch happens
+    /// only when [`Prefetch::loader`] is set. Guards still run before
+    /// a loader prefetch, so rejected or pending routes do not fetch
+    /// loader data speculatively.
+    pub fn prefetch(mut self, prefetch: Prefetch) -> Self {
+        self.prefetch = prefetch;
+        self
+    }
+
     pub(crate) fn into_runtime(self) -> router::RouteRuntimeConfig {
         router::RouteRuntimeConfig {
+            name: self.name,
+            meta: self.meta,
+            page_meta: self.page_meta,
             guards: self.guards,
             loader: self.loader,
+            prefetch: self.prefetch,
         }
     }
 }
@@ -574,6 +1222,86 @@ mod route_config_tests {
     fn route_component_default_config_has_no_guards() {
         let config = TestRoute::config();
         assert!(config.guards.is_empty());
+    }
+
+    #[test]
+    fn route_config_records_name_and_prefetch_policy() {
+        const TEST: RouteName = RouteName::new("test");
+
+        let config = RouteConfig::<TestRoute>::new()
+            .name(TEST)
+            .prefetch(Prefetch::on_intent().loader());
+
+        assert_eq!(config.name, Some(TEST));
+        assert_eq!(config.prefetch.trigger(), PrefetchTrigger::Intent);
+        assert!(config.prefetch.includes_loader());
+    }
+
+    #[test]
+    fn route_config_records_typed_metadata() {
+        const REQUIRES_AUTH: RouteMetaKey<bool> = RouteMetaKey::new("requires_auth");
+        const SECTION: RouteMetaKey<&'static str> = RouteMetaKey::new("section");
+
+        let config = RouteConfig::<TestRoute>::new()
+            .meta(REQUIRES_AUTH, true)
+            .meta(SECTION, "admin");
+
+        assert_eq!(config.meta.get(REQUIRES_AUTH), Some(&true));
+        assert_eq!(config.meta.get(SECTION), Some(&"admin"));
+        assert!(config.meta.contains(REQUIRES_AUTH));
+    }
+
+    #[test]
+    fn page_meta_builder_records_head_tags() {
+        let meta = PageMeta::new()
+            .title("Dashboard")
+            .description("Team dashboard")
+            .canonical("/dashboard")
+            .og_title("Dashboard");
+
+        assert_eq!(meta.title_text(), Some("Dashboard"));
+        assert_eq!(
+            meta.meta_tags(),
+            &[
+                PageMetaTag::Name {
+                    name: "description".into(),
+                    content: "Team dashboard".into()
+                },
+                PageMetaTag::Property {
+                    property: "og:title".into(),
+                    content: "Dashboard".into()
+                }
+            ]
+        );
+        assert_eq!(
+            meta.links(),
+            &[PageLink {
+                rel: "canonical".into(),
+                href: "/dashboard".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn route_config_records_page_meta_factory() {
+        let mut params = HashMap::new();
+        params.insert("id".into(), "42".into());
+        let query = HashMap::new();
+        let config = RouteConfig::<TestRoute>::new()
+            .page_meta(|ctx| PageMeta::new().title(format!("Story {}", ctx.params["id"])));
+        let ctx = PageMetaContext {
+            path: "/story/42",
+            full_path: "/story/42",
+            params: &params,
+            query: &query,
+            hash: None,
+            route_pattern: Some("/story/:id"),
+            component: Some("test-route"),
+        };
+
+        let page_meta = config.page_meta.as_ref().expect("page meta")(&ctx);
+
+        assert_eq!(page_meta.title_text(), Some("Story 42"));
     }
 
     // ── Store-reference scanner (RFC: missing-store boot-error) ──
@@ -673,7 +1401,49 @@ mod route_config_tests {
             RouteTarget::new("//example.com/login"),
             Err(RouteTargetError::NotAppLocalPath)
         );
+        assert_eq!(
+            RouteTarget::new("/_pocopine/server-fn"),
+            Err(RouteTargetError::ReservedNamespace)
+        );
         assert_eq!(RouteTarget::new(""), Err(RouteTargetError::Empty));
+    }
+
+    #[test]
+    fn route_target_builds_query_strings() {
+        let target = RouteTarget::path_with_query(
+            "/search",
+            RouteQuery::from([("q", "router api"), ("tab", "a&b")]),
+        )
+        .unwrap();
+
+        assert_eq!(target.into_path(), "/search?q=router%20api&tab=a%26b");
+
+        let target = RouteTarget::path_with_query("/search#results", [("q", "router")]).unwrap();
+
+        assert_eq!(target.into_path(), "/search?q=router#results");
+    }
+
+    #[test]
+    fn route_url_encodes_segments_query_and_hash() {
+        let target = RouteUrl::new()
+            .segment("users")
+            .segment("user/42")
+            .query("tab", "a b")
+            .hash("top#section")
+            .target()
+            .unwrap();
+
+        assert_eq!(
+            target.into_path(),
+            "/users/user%2F42?tab=a%20b#top%23section"
+        );
+    }
+
+    #[test]
+    fn route_encoding_helpers_are_public_and_stable() {
+        assert_eq!(encode_route_path_segment("a/b c"), "a%2Fb%20c");
+        assert_eq!(encode_route_query_part("a&b c"), "a%26b%20c");
+        assert_eq!(encode_route_fragment("top#2"), "top%232");
     }
 
     #[test]

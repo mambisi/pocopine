@@ -30,9 +30,11 @@ use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
 use crate::app::{
-    Loader, LoaderContext, RejectionSource, RouteContext, RouteErrorSurface, RouteGuard,
-    RouteGuardDecision, RouteLoader, RouteRejection, RouteRejectionAction, RouteRejectionContext,
-    RouteRejectionHandler,
+    push_encoded_route_path_segment, IntoRouteTarget, Loader, LoaderContext, PageMeta,
+    PageMetaContext, PageMetaFactory, PageMetaTag, Prefetch, RejectionSource, RouteContext,
+    RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader, RouteMeta, RouteName,
+    RouteQuery, RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
+    RouteTarget, RouteTargetError,
 };
 use crate::mount;
 use crate::reactive::{trigger_scope, ScopeId};
@@ -119,8 +121,12 @@ impl Route {
 
 #[derive(Clone, Default)]
 pub(crate) struct RouteRuntimeConfig {
+    pub(crate) name: Option<RouteName>,
+    pub(crate) meta: RouteMeta,
+    pub(crate) page_meta: Option<PageMetaFactory>,
     pub(crate) guards: Vec<Rc<dyn RouteGuard>>,
     pub(crate) loader: Option<Rc<dyn RouteLoader>>,
+    pub(crate) prefetch: Prefetch,
 }
 
 #[derive(Clone)]
@@ -225,6 +231,58 @@ thread_local! {
     /// an `Allow` decision remounts this route instead of treating the
     /// already-empty outlet as a valid mounted page.
     static PENDING_GUARD_NAVIGATION: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Loader data produced by an explicit route prefetch. Keyed by
+    /// full app-local URL (`path?query`) and consumed by the next
+    /// navigation to the same key.
+    static PREFETCHED_LOADER_DATA: RefCell<HashMap<String, Rc<dyn std::any::Any>>> =
+        RefCell::new(HashMap::new());
+    /// Document title captured before Pocopine first applies page
+    /// metadata. Restored for routes that do not provide a title.
+    static BASE_DOCUMENT_TITLE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Normalized location returned by programmatic navigation.
+#[derive(Clone, Debug)]
+pub struct RouteLocation {
+    pub path: String,
+    pub full_path: String,
+    pub query: HashMap<String, String>,
+    pub hash: Option<String>,
+    pub params: HashMap<String, String>,
+    pub route_pattern: Option<&'static str>,
+    pub component: Option<&'static str>,
+    pub meta: RouteMeta,
+}
+
+/// Why a programmatic navigation could not be accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NavigationFailure {
+    Duplicated,
+    InvalidTarget(RouteTargetError),
+    MissingWindow,
+    HistoryRejected,
+}
+
+pub type NavigationResult = Result<RouteLocation, NavigationFailure>;
+
+/// Result of an explicit prefetch request.
+#[derive(Clone, Debug)]
+pub enum PrefetchResult {
+    Ready(RouteLocation),
+    Started(RouteLocation),
+    Skipped(PrefetchSkip),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrefetchSkip {
+    InvalidTarget(RouteTargetError),
+    NotFound,
+    GuardPending,
+    GuardRejected(RouteRejection),
+    GuardRedirected(RouteTarget),
+    LoaderDisabled,
+    NoLoader,
+    MissingWindow,
 }
 
 /// Monotonic identity of a navigation attempt. Two
@@ -309,7 +367,22 @@ fn clear_active_loader_abort(token: RouteToken) {
 /// entries are independent and live until each scope's teardown.
 pub(crate) fn put_pending_loader_data(data: Box<dyn std::any::Any>) {
     let rc: Rc<dyn std::any::Any> = Rc::from(data);
-    PENDING_LOADER_DATA.with(|cell| *cell.borrow_mut() = Some(rc));
+    put_pending_loader_rc(rc);
+}
+
+fn put_pending_loader_rc(data: Rc<dyn std::any::Any>) {
+    PENDING_LOADER_DATA.with(|cell| *cell.borrow_mut() = Some(data));
+}
+
+fn take_prefetched_loader_data(key: &str) -> Option<Rc<dyn std::any::Any>> {
+    PREFETCHED_LOADER_DATA.with(|cache| cache.borrow_mut().remove(key))
+}
+
+fn put_prefetched_loader_data(key: String, data: Box<dyn std::any::Any>) {
+    let rc: Rc<dyn std::any::Any> = Rc::from(data);
+    PREFETCHED_LOADER_DATA.with(|cache| {
+        cache.borrow_mut().insert(key, rc);
+    });
 }
 
 /// Resolve loader data for the lifecycle hook running under
@@ -417,13 +490,231 @@ pub fn set_outlet(el: Element) {
 }
 
 /// Navigate to `url`. Pushes a history entry and paints the matched
-/// page.
+/// page. Kept as the source-compatible shorthand for [`push`].
 pub fn navigate(url: &str) {
+    let _ = push(url);
+}
+
+/// Push a new browser history entry and paint the matched route.
+pub fn push(target: impl IntoRouteTarget) -> NavigationResult {
+    commit_navigation(target, NavigationMode::Push)
+}
+
+/// Replace the current browser history entry and paint the matched route.
+pub fn replace(target: impl IntoRouteTarget) -> NavigationResult {
+    commit_navigation(target, NavigationMode::Replace)
+}
+
+/// Move in browser history. The `popstate` listener installed by
+/// [`init`] drives the eventual route mount.
+pub fn go(delta: i32) {
     let Some(win) = web_sys::window() else { return };
     if let Ok(history) = win.history() {
-        let _ = history.push_state_with_url(&JsValue::NULL, "", Some(url));
+        let _ = history.go_with_delta(delta);
     }
+}
+
+#[derive(Clone, Copy)]
+enum NavigationMode {
+    Push,
+    Replace,
+}
+
+fn commit_navigation(target: impl IntoRouteTarget, mode: NavigationMode) -> NavigationResult {
+    let target = target
+        .into_route_target()
+        .map_err(NavigationFailure::InvalidTarget)?;
+    let Some(win) = web_sys::window() else {
+        return Err(NavigationFailure::MissingWindow);
+    };
+    let loc = win.location();
+    let current_path = loc.pathname().unwrap_or_else(|_| "/".into());
+    let current_search = loc.search().unwrap_or_default();
+    let current_hash = loc.hash().ok().filter(|hash| !hash.is_empty());
+    let current_hash = current_hash
+        .as_deref()
+        .map(|hash| hash.trim_start_matches('#'));
+    if full_path_from_parts(&current_path, &current_search, current_hash)
+        == navigation_key_from_url(target.as_str())
+    {
+        return Err(NavigationFailure::Duplicated);
+    }
+    let history = win
+        .history()
+        .map_err(|_| NavigationFailure::HistoryRejected)?;
+    let result = match mode {
+        NavigationMode::Push => {
+            history.push_state_with_url(&JsValue::NULL, "", Some(target.as_str()))
+        }
+        NavigationMode::Replace => {
+            history.replace_state_with_url(&JsValue::NULL, "", Some(target.as_str()))
+        }
+    };
+    result.map_err(|_| NavigationFailure::HistoryRejected)?;
+    let location = location_for_url(target.as_str());
     mount_current();
+    Ok(location)
+}
+
+/// Explicitly prefetch a route target.
+///
+/// In the current single-bundle runtime, route/code prefetch is a
+/// readiness check. If the matched route opted into
+/// `Prefetch::loader()`, its loader runs and caches data for the next
+/// navigation to the same URL.
+pub fn prefetch(target: impl IntoRouteTarget) -> PrefetchResult {
+    let target = match target.into_route_target() {
+        Ok(target) => target,
+        Err(err) => return PrefetchResult::Skipped(PrefetchSkip::InvalidTarget(err)),
+    };
+    let Some(_win) = web_sys::window() else {
+        return PrefetchResult::Skipped(PrefetchSkip::MissingWindow);
+    };
+    let location = location_for_url(target.as_str());
+    let Some(matched) = match_route(&location.path, true) else {
+        return PrefetchResult::Skipped(PrefetchSkip::NotFound);
+    };
+    if let Some(decision) = evaluate_guards(&matched, &location.path, &location.query) {
+        match decision {
+            RouteGuardDecision::Allow => {}
+            RouteGuardDecision::Pending => {
+                return PrefetchResult::Skipped(PrefetchSkip::GuardPending);
+            }
+            RouteGuardDecision::Reject(rejection) => {
+                return PrefetchResult::Skipped(PrefetchSkip::GuardRejected(rejection));
+            }
+            RouteGuardDecision::Redirect(target) => {
+                return PrefetchResult::Skipped(PrefetchSkip::GuardRedirected(target));
+            }
+        }
+    }
+    if !matched.config.prefetch.includes_loader() {
+        return PrefetchResult::Skipped(PrefetchSkip::LoaderDisabled);
+    }
+    let Some(loader) = matched.config.loader.clone() else {
+        return PrefetchResult::Skipped(PrefetchSkip::NoLoader);
+    };
+    let key = loader_cache_key_from_url(target.as_str());
+    let loader_ctx = LoaderContext {
+        path: location.path.clone(),
+        params: location.params.clone(),
+        query: location.query.clone(),
+        matched_pattern: location.route_pattern,
+        navigation_token: RouteToken::current(),
+        abort_signal: None,
+    };
+    let location_for_result = location.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        match loader.run(loader_ctx).await {
+            Ok(data) => {
+                put_prefetched_loader_data(key, data);
+            }
+            Err(_) => {}
+        }
+    });
+    PrefetchResult::Started(location_for_result)
+}
+
+pub(crate) fn target_for_name(
+    name: RouteName,
+    params: &HashMap<String, String>,
+    query: RouteQuery,
+) -> Result<RouteTarget, RouteTargetError> {
+    let mut found: Option<Result<String, RouteTargetError>> = None;
+    ROUTES.with(|r| {
+        let routes = r.borrow();
+        let Some(route) = routes.iter().find(|route| route.config.name == Some(name)) else {
+            found = Some(Err(RouteTargetError::UnknownRouteName(name.as_str())));
+            return;
+        };
+        if route.is_wildcard() {
+            found = Some(Err(RouteTargetError::UnbuildablePattern(route.pattern)));
+            return;
+        }
+        let mut path = String::new();
+        if route.segments.is_empty() {
+            path.push('/');
+        } else {
+            for segment in &route.segments {
+                path.push('/');
+                match segment {
+                    Segment::Literal(value) => path.push_str(value),
+                    Segment::Param(param) => {
+                        let Some(value) = params.get(param) else {
+                            found = Some(Err(RouteTargetError::MissingParam(param.clone())));
+                            return;
+                        };
+                        push_encoded_route_path_segment(value, &mut path);
+                    }
+                    Segment::Wildcard => {
+                        found = Some(Err(RouteTargetError::UnbuildablePattern(route.pattern)));
+                        return;
+                    }
+                }
+            }
+        }
+        query.append_to(&mut path);
+        found = Some(Ok(path));
+    });
+    let path = found.unwrap_or_else(|| Err(RouteTargetError::UnknownRouteName(name.as_str())))?;
+    RouteTarget::new(path)
+}
+
+fn location_for_url(url: &str) -> RouteLocation {
+    let (path, search, hash) = split_route_url(url);
+    let query = parse_query(&search);
+    let matched = match_route(&path, true);
+    let meta = matched
+        .as_ref()
+        .map(|m| m.config.meta.clone())
+        .unwrap_or_default();
+    RouteLocation {
+        full_path: full_path_from_parts(&path, &search, hash.as_deref()),
+        path,
+        query,
+        hash,
+        params: matched
+            .as_ref()
+            .map(|m| m.params.clone())
+            .unwrap_or_default(),
+        route_pattern: matched.as_ref().and_then(|m| m.route_pattern),
+        component: matched.as_ref().map(|m| m.component_name),
+        meta,
+    }
+}
+
+fn split_route_url(url: &str) -> (String, String, Option<String>) {
+    let (before_hash, hash) = match url.split_once('#') {
+        Some((before, after)) => (before, Some(after.to_string())),
+        None => (url, None),
+    };
+    let (path, search) = match before_hash.split_once('?') {
+        Some((path, query)) => (path, format!("?{query}")),
+        None => (before_hash, String::new()),
+    };
+    let path = if path.is_empty() { "/" } else { path }.to_string();
+    (path, search, hash)
+}
+
+fn full_path_from_parts(path: &str, search: &str, hash: Option<&str>) -> String {
+    let mut full = String::with_capacity(path.len() + search.len() + 1);
+    full.push_str(path);
+    full.push_str(search);
+    if let Some(hash) = hash {
+        full.push('#');
+        full.push_str(hash);
+    }
+    full
+}
+
+fn navigation_key_from_url(url: &str) -> String {
+    let (path, search, hash) = split_route_url(url);
+    full_path_from_parts(&path, &search, hash.as_deref())
+}
+
+fn loader_cache_key_from_url(url: &str) -> String {
+    let (path, search, _) = split_route_url(url);
+    route_navigation_key(&path, &search)
 }
 
 /// Initialise the router: attach a `popstate` listener and paint the
@@ -664,6 +955,19 @@ fn mount_current() {
         // `spawn_local` so the synchronous fast path is still
         // available for routes without loaders.
         if let Some(loader) = matched.config.loader.clone() {
+            if let Some(data) = take_prefetched_loader_data(&route_navigation_key(&path, &search)) {
+                put_pending_loader_rc(data);
+                finish_route_mount(
+                    Some(matched.component_name),
+                    route_pattern,
+                    &path,
+                    &params,
+                    matched.config.page_meta.clone(),
+                    has_route_hooks,
+                    start_ms,
+                );
+                return;
+            }
             let abort_signal = begin_loader_abort(nav_token);
             let loader_ctx = LoaderContext {
                 path: path.clone(),
@@ -699,6 +1003,7 @@ fn mount_current() {
                             route_pattern,
                             &path_for_async,
                             &params_for_async,
+                            matched_for_async.config.page_meta.clone(),
                             has_route_hooks,
                             start_ms,
                         );
@@ -736,6 +1041,7 @@ fn mount_current() {
         route_pattern,
         &path,
         &params,
+        matched.as_ref().and_then(|m| m.config.page_meta.clone()),
         has_route_hooks,
         start_ms,
     );
@@ -771,6 +1077,7 @@ fn finish_route_mount(
     route_pattern: Option<&'static str>,
     path: &str,
     params: &HashMap<String, String>,
+    page_meta: Option<PageMetaFactory>,
     has_route_hooks: bool,
     start_ms: Option<f64>,
 ) {
@@ -790,6 +1097,7 @@ fn finish_route_mount(
         // never ran because the route doesn't exist.
         if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get()) {
             if mount_component_into_outlet(fallback) && has_route_hooks {
+                apply_page_meta(None);
                 crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                     path: path.to_string(),
                     route_pattern: None,
@@ -799,6 +1107,7 @@ fn finish_route_mount(
                 return;
             }
         }
+        apply_page_meta(None);
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                 path: path.to_string(),
@@ -869,6 +1178,7 @@ fn finish_route_mount(
     // the macro-emitted entries.
     mount::mount_child_component(&el, name);
     mount::finalize_compiled_subtree(&el);
+    apply_page_meta(page_meta);
 
     // The component's `Loader<T>` extractor (if any) consumed the
     // pending slot during setup; for routes without a loader the
@@ -885,6 +1195,104 @@ fn finish_route_mount(
             duration_ms: elapsed_since(start_ms),
         });
     }
+}
+
+fn apply_page_meta(factory: Option<PageMetaFactory>) {
+    let Some(doc) = crate::dom::document() else {
+        return;
+    };
+    let base_title = BASE_DOCUMENT_TITLE.with(|cell| {
+        let mut title = cell.borrow_mut();
+        title.get_or_insert_with(|| doc.title()).clone()
+    });
+    remove_managed_page_meta_tags(&doc);
+
+    let Some(factory) = factory else {
+        doc.set_title(&base_title);
+        return;
+    };
+
+    let full_path = current_full_path();
+    let location = location_for_url(&full_path);
+    let ctx = PageMetaContext {
+        path: &location.path,
+        full_path: &location.full_path,
+        params: &location.params,
+        query: &location.query,
+        hash: location.hash.as_deref(),
+        route_pattern: location.route_pattern,
+        component: location.component,
+    };
+    let meta = factory(&ctx);
+    apply_page_meta_to_document(&doc, &base_title, &meta);
+}
+
+fn current_full_path() -> String {
+    let Some(win) = web_sys::window() else {
+        return "/".into();
+    };
+    let loc = win.location();
+    let path = loc.pathname().unwrap_or_else(|_| "/".into());
+    let search = loc.search().unwrap_or_default();
+    let hash = loc
+        .hash()
+        .ok()
+        .filter(|hash| !hash.is_empty())
+        .map(|hash| hash.trim_start_matches('#').to_string());
+    full_path_from_parts(&path, &search, hash.as_deref())
+}
+
+fn remove_managed_page_meta_tags(doc: &web_sys::Document) {
+    let Some(head) = doc.head() else {
+        return;
+    };
+    let Ok(nodes) = head.query_selector_all("[data-pocopine-page-meta]") else {
+        return;
+    };
+    for idx in 0..nodes.length() {
+        if let Some(node) = nodes.item(idx) {
+            let _ = head.remove_child(&node);
+        }
+    }
+}
+
+fn apply_page_meta_to_document(doc: &web_sys::Document, base_title: &str, meta: &PageMeta) {
+    doc.set_title(meta.title_text().unwrap_or(base_title));
+    let Some(head) = doc.head() else {
+        return;
+    };
+
+    for tag in meta.meta_tags() {
+        let Ok(el) = doc.create_element("meta") else {
+            continue;
+        };
+        mark_page_meta_element(&el);
+        match tag {
+            PageMetaTag::Name { name, content } => {
+                let _ = el.set_attribute("name", name);
+                let _ = el.set_attribute("content", content);
+            }
+            PageMetaTag::Property { property, content } => {
+                let _ = el.set_attribute("property", property);
+                let _ = el.set_attribute("content", content);
+            }
+        }
+        let _ = head.append_child(&el);
+    }
+
+    for link in meta.links() {
+        let Ok(el) = doc.create_element("link") else {
+            continue;
+        };
+        mark_page_meta_element(&el);
+        let _ = el.set_attribute("rel", &link.rel);
+        let _ = el.set_attribute("href", &link.href);
+        let _ = head.append_child(&el);
+    }
+}
+
+fn mark_page_meta_element(el: &Element) {
+    let _ = el.set_attribute("data-pocopine-page-meta", "");
 }
 
 /// Run the rejection chain for a guard- or loader-produced
@@ -1181,7 +1589,7 @@ fn hex_nib(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{RouteRejection, RouteTarget};
+    use crate::app::{RouteMetaKey, RouteRejection, RouteTarget};
     use std::cell::Cell;
     use std::collections::HashMap;
     use std::rc::Rc;
@@ -1221,6 +1629,77 @@ mod tests {
     }
 
     #[test]
+    fn named_route_target_replaces_params_and_query() {
+        const NAME: RouteName = RouteName::new("router.tests.named");
+
+        register_route_with_config(
+            "/named/:id",
+            "named-route",
+            RouteRuntimeConfig {
+                name: Some(NAME),
+                ..RouteRuntimeConfig::default()
+            },
+        );
+
+        let target = RouteTarget::named(NAME)
+            .param("id", "user 42")
+            .query("tab", "a b")
+            .build()
+            .unwrap();
+
+        assert_eq!(target.into_path(), "/named/user%2042?tab=a%20b");
+    }
+
+    #[test]
+    fn named_route_target_reports_missing_param() {
+        const NAME: RouteName = RouteName::new("router.tests.missing-param");
+
+        register_route_with_config(
+            "/needs/:id",
+            "needs-param",
+            RouteRuntimeConfig {
+                name: Some(NAME),
+                ..RouteRuntimeConfig::default()
+            },
+        );
+
+        assert_eq!(
+            RouteTarget::named(NAME).build(),
+            Err(RouteTargetError::MissingParam("id".into()))
+        );
+    }
+
+    #[test]
+    fn route_location_splits_path_query_and_hash() {
+        let loc = location_for_url("/reports?tab=active#summary");
+
+        assert_eq!(loc.path, "/reports");
+        assert_eq!(loc.full_path, "/reports?tab=active#summary");
+        assert_eq!(loc.query.get("tab"), Some(&"active".to_string()));
+        assert_eq!(loc.hash.as_deref(), Some("summary"));
+    }
+
+    #[test]
+    fn route_location_exposes_route_meta() {
+        const SECTION: RouteMetaKey<&'static str> = RouteMetaKey::new("section");
+        let mut meta = RouteMeta::new();
+        meta.insert(SECTION, "reports");
+
+        register_route_with_config(
+            "/reports-meta",
+            "reports-meta",
+            RouteRuntimeConfig {
+                meta,
+                ..RouteRuntimeConfig::default()
+            },
+        );
+
+        let loc = location_for_url("/reports-meta");
+
+        assert_eq!(loc.meta.get(SECTION).copied(), Some("reports"));
+    }
+
+    #[test]
     fn root_path() {
         let r = Route::parse("/", "home", RouteRuntimeConfig::default());
         assert!(r.match_path("/").is_some());
@@ -1253,7 +1732,7 @@ mod tests {
             params,
             config: RouteRuntimeConfig {
                 guards: vec![guard],
-                loader: None,
+                ..RouteRuntimeConfig::default()
             },
         };
 
@@ -1280,7 +1759,7 @@ mod tests {
             params: HashMap::new(),
             config: RouteRuntimeConfig {
                 guards: vec![first_guard, second_guard],
-                loader: None,
+                ..RouteRuntimeConfig::default()
             },
         };
 
@@ -1307,7 +1786,7 @@ mod tests {
             params: HashMap::new(),
             config: RouteRuntimeConfig {
                 guards: vec![first_guard, second_guard],
-                loader: None,
+                ..RouteRuntimeConfig::default()
             },
         };
 
