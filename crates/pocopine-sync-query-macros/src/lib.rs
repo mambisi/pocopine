@@ -974,8 +974,14 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
 
     // Extract typed args. Reject `self` receivers and patterns more
     // complex than a simple ident (the compute closure needs to
-    // capture each by name).
+    // capture each by name). Also reject argument-position
+    // `impl Trait`: it makes the user fn generic over the type at
+    // the call site, but the cache key only carries
+    // `(SelectorId, args_hash)` — two instantiations with the same
+    // hash would alias each other's cached entry across different
+    // monomorphized return types.
     let mut arg_idents: Vec<Ident> = Vec::with_capacity(sig.inputs.len());
+    let mut arg_mutabilities: Vec<Option<Token![mut]>> = Vec::with_capacity(sig.inputs.len());
     let mut arg_types: Vec<Type> = Vec::with_capacity(sig.inputs.len());
     for input in &sig.inputs {
         match input {
@@ -986,21 +992,33 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
                 ));
             }
             FnArg::Typed(pt) => {
-                let ident = match &*pt.pat {
+                let (ident, mutability) = match &*pt.pat {
                     Pat::Ident(PatIdent {
                         ident,
+                        mutability,
                         subpat: None,
+                        by_ref: None,
                         ..
-                    }) => ident.clone(),
+                    }) => (ident.clone(), *mutability),
                     other => {
                         return Err(syn::Error::new_spanned(
                             other,
                             "`#[query]` selector args must use simple identifier patterns \
-                             (e.g. `ws_id: String`); destructuring is not supported",
+                             (e.g. `ws_id: String`); destructuring and `ref` are not supported",
                         ));
                     }
                 };
+                if matches!(&*pt.ty, Type::ImplTrait(_)) {
+                    return Err(syn::Error::new_spanned(
+                        &pt.ty,
+                        "`#[query]` selectors cannot use argument-position `impl Trait` — \
+                         the cache key only covers `(SelectorId, args_hash)`, so two \
+                         instantiations could alias each other's entries. Use a concrete \
+                         type instead.",
+                    ));
+                }
                 arg_idents.push(ident);
+                arg_mutabilities.push(mutability);
                 arg_types.push((*pt.ty).clone());
             }
         }
@@ -1061,13 +1079,37 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
     let mod_vis = &vis;
     let user_attrs = &attrs;
 
+    // Mangled name for the carried-over user body. Lives at the
+    // SAME module level as the original `#[query] fn` so any
+    // `super::*` references in the body keep their original
+    // resolution. The generated module's `observe()` calls it via
+    // `super::<this_ident>`.
+    let inner_fn_ident = Ident::new(&format!("__pq_user_fn__{fn_name_str}"), fn_name.span());
+
+    // Reconstruct each parameter for the inner fn, preserving any
+    // `mut` binding the user wrote.
+    let inner_fn_params: Vec<TokenStream2> = arg_idents
+        .iter()
+        .zip(arg_mutabilities.iter())
+        .zip(arg_types.iter())
+        .map(|((ident, mutability), ty)| {
+            quote! { #mutability #ident: #ty }
+        })
+        .collect();
+
     Ok(quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case, clippy::too_many_arguments)]
+        fn #inner_fn_ident( #( #inner_fn_params ),* ) -> #ret_type #block
+
         #(#user_attrs)*
         #[allow(non_camel_case_types, non_snake_case, dead_code)]
         #mod_vis mod #fn_name {
-            // Bring the parent module's items into scope so the user
-            // body's references (sibling fns, types) resolve. We use
-            // a glob import so the macro doesn't have to enumerate.
+            // Bring the parent module's items into scope so `observe`
+            // can resolve `QueryClient` / `SelectorId` if the parent
+            // already has them in scope. Doesn't pollute the user
+            // body's resolution, since the body lives in the parent
+            // module (see `super::#inner_fn_ident`).
             use super::*;
 
             /// Stable identity for this selector. FNV-1a 64 of
@@ -1086,9 +1128,9 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
             /// creates the cached entry, returns a fresh
             /// [`SelectorView`](::pocopine_sync_query::SelectorView).
             ///
-            /// On a cache hit, `__user_fn` is NOT called — the cached
-            /// value is reused. On a cache miss, `__user_fn` runs
-            /// inside the selector's tracking frame so any
+            /// On a cache hit, the user body is NOT called — the
+            /// cached value is reused. On a cache miss, the body
+            /// runs inside the selector's tracking frame so any
             /// `QueryView::rows()` reads register as dependencies.
             pub fn observe(
                 __pq_client: &::pocopine_sync_query::QueryClient,
@@ -1108,8 +1150,8 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
                 // Capture owned clones of args (and a clone of the
                 // client, if the user declared a client arg) into
                 // the `'static` `Fn` closure. Each rerun further
-                // clones them to pass into `__user_fn` (which takes
-                // args by value, matching the user-written
+                // clones them to pass into the user body (which
+                // takes args by value, matching the user-written
                 // signature).
                 #client_capture_let
                 #(
@@ -1117,15 +1159,10 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
                         ::core::clone::Clone::clone(&#user_arg_idents);
                 )*
                 let __pq_compute = move || -> #ret_type {
-                    __user_fn( #( #user_fn_call_args ),* )
+                    super::#inner_fn_ident( #( #user_fn_call_args ),* )
                 };
                 __pq_client.observe_selector(SELECTOR_ID, __pq_args_hash, __pq_compute)
             }
-
-            /// Original `#[query]` function body. Kept private — call
-            /// through [`observe`] so the cache + tracking machinery
-            /// runs.
-            fn __user_fn( #( #arg_idents : #arg_types ),* ) -> #ret_type #block
         }
     })
 }
