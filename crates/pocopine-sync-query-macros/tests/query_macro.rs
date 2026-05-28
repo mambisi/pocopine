@@ -169,6 +169,53 @@ async fn macro_observe_returns_cached_value_and_reacts_to_mutations() {
         .await;
 }
 
+// ---- Regression: super:: resolution -------------------------------
+//
+// If the macro nested the user body inside the generated module,
+// `super::*` references in the body would resolve through the wrong
+// scope. The macro keeps the body at the same module level as the
+// original `#[query] fn`, so `super::HELPER_CONST` here must continue
+// to refer to `crate::HELPER_CONST`.
+
+const HELPER_CONST: u32 = 1234;
+
+mod nested_scope {
+    use super::*;
+
+    #[query]
+    pub fn uses_parent_const(_client: QueryClient) -> u32 {
+        // Should resolve to crate::HELPER_CONST. Pre-fix this would
+        // have been `nested_scope::uses_parent_const::HELPER_CONST`
+        // which doesn't exist.
+        super::HELPER_CONST
+    }
+}
+
+#[test]
+fn macro_preserves_super_resolution_in_body() {
+    let client = QueryClient::without_driver();
+    let view = nested_scope::uses_parent_const::observe(&client);
+    assert_eq!(view.value(), HELPER_CONST);
+}
+
+// ---- Regression: mut binding preserved ----------------------------
+//
+// A user body that mutates a `mut`-bound arg must still compile —
+// the macro propagates `mut` to the inner fn's parameter list.
+
+#[query]
+fn doubled_via_mut(_client: QueryClient, mut n: u32) -> u32 {
+    n *= 2;
+    n
+}
+
+#[test]
+fn macro_preserves_mut_arg_binding() {
+    let client = QueryClient::without_driver();
+    let view = doubled_via_mut::observe(&client, 21);
+    assert_eq!(view.value(), 42);
+}
+
 #[tokio::test]
 async fn macro_selector_composes_inside_another_selector() {
     LocalSet::new()
