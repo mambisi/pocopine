@@ -41,8 +41,8 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Fields, GenericArgument, Ident, ItemStruct, LitInt, LitStr, Meta,
-    PathArguments, PathSegment, Token, Type,
+    parse_macro_input, Attribute, Fields, FnArg, GenericArgument, Ident, ItemFn, ItemStruct,
+    LitInt, LitStr, Meta, Pat, PatIdent, PathArguments, PathSegment, ReturnType, Token, Type,
 };
 
 const MAX_SYNC_TOKEN_LEN: usize = 1024;
@@ -859,4 +859,286 @@ fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
         let _ = params; // silence unused if no #[query_param] fields declared
         #(#checks)*
     }
+}
+
+// ---- #[query] selector macro --------------------------------------
+
+/// `#[query]` — declare a memoized selector function over
+/// `pocopine-sync-query` reactive state.
+///
+/// Wraps a Rust function so that its return value is cached by
+/// `(SelectorId, args_hash)`, its reads of `QueryView::rows()` are
+/// tracked, and the cached value is automatically refreshed when a
+/// tracked subscription changes. The user-facing return type
+/// MUST implement `PartialEq + Clone + 'static`; each argument MUST
+/// implement `Clone + std::hash::Hash + 'static`.
+///
+/// The macro replaces the annotated `fn name(args...) -> Ret { ... }`
+/// with a sibling module `name` containing:
+///
+/// * `pub const SELECTOR_ID: pocopine_sync_query::SelectorId` —
+///   `FNV-1a 64(concat!(module_path!(), "::", "name"))`.
+/// * `pub fn observe(client: &QueryClient, args...) -> SelectorView<Ret>`.
+/// * a private `__user_fn(args) -> Ret` carrying the original body.
+///
+/// `observe()` hashes the args via `std::hash::Hash`, looks up or
+/// creates the cached entry, and returns a fresh `SelectorView`. The
+/// compute closure clones the args and the client into a `'static`
+/// `Fn` so it can be invoked on every rerun.
+///
+/// See `docs/sync-query-selector-mechanism.md` for the runtime
+/// design and the four-moving-parts walk-through.
+#[proc_macro_attribute]
+pub fn query(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // No selector attributes are accepted in v1. `#[query(no_diff)]`
+    // is deferred — keep the parser strict so misuse fails loud
+    // instead of silently being ignored.
+    if !attr.is_empty() {
+        let attr_ts: TokenStream2 = attr.into();
+        return syn::Error::new_spanned(
+            attr_ts,
+            "`#[query]` does not accept any arguments yet (the `no_diff` opt-out is \
+             deferred — track via RFC follow-up)",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let func = parse_macro_input!(item as ItemFn);
+    match expand_query(func) {
+        Ok(ts) => ts.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
+    let ItemFn {
+        attrs,
+        vis,
+        sig,
+        block,
+    } = func;
+
+    // Reject anything that doesn't fit the selector contract.
+    if let Some(asyncness) = sig.asyncness {
+        return Err(syn::Error::new(
+            asyncness.span,
+            "`#[query]` selectors must be synchronous — the compute closure runs inside the \
+             reactive-rerun path",
+        ));
+    }
+    if let Some(unsafety) = sig.unsafety {
+        return Err(syn::Error::new(
+            unsafety.span,
+            "`#[query]` selectors must not be `unsafe`",
+        ));
+    }
+    if !sig.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &sig.generics,
+            "`#[query]` selectors must not be generic — the cache key is keyed by the args' \
+             runtime hash, not by type parameters",
+        ));
+    }
+    if let Some(where_clause) = &sig.generics.where_clause {
+        return Err(syn::Error::new_spanned(
+            where_clause,
+            "`#[query]` selectors must not have a `where` clause",
+        ));
+    }
+    if let Some(variadic) = &sig.variadic {
+        return Err(syn::Error::new_spanned(
+            variadic,
+            "`#[query]` selectors must not be variadic",
+        ));
+    }
+    if sig.constness.is_some() {
+        return Err(syn::Error::new_spanned(
+            sig.constness,
+            "`#[query]` selectors cannot be `const fn`",
+        ));
+    }
+
+    let fn_name = sig.ident.clone();
+    let fn_name_str = fn_name.to_string();
+    let ret_type = match &sig.output {
+        ReturnType::Type(_, t) => (**t).clone(),
+        ReturnType::Default => {
+            return Err(syn::Error::new_spanned(
+                &sig.ident,
+                "`#[query]` selectors must declare an explicit return type — the default `()` \
+                 return is rarely useful and trips up `PartialEq + Clone` inference",
+            ));
+        }
+    };
+
+    // Extract typed args. Reject `self` receivers and patterns more
+    // complex than a simple ident (the compute closure needs to
+    // capture each by name).
+    let mut arg_idents: Vec<Ident> = Vec::with_capacity(sig.inputs.len());
+    let mut arg_types: Vec<Type> = Vec::with_capacity(sig.inputs.len());
+    for input in &sig.inputs {
+        match input {
+            FnArg::Receiver(rec) => {
+                return Err(syn::Error::new_spanned(
+                    rec,
+                    "`#[query]` selectors must be free functions — no `self` parameter",
+                ));
+            }
+            FnArg::Typed(pt) => {
+                let ident = match &*pt.pat {
+                    Pat::Ident(PatIdent {
+                        ident,
+                        subpat: None,
+                        ..
+                    }) => ident.clone(),
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "`#[query]` selector args must use simple identifier patterns \
+                             (e.g. `ws_id: String`); destructuring is not supported",
+                        ));
+                    }
+                };
+                arg_idents.push(ident);
+                arg_types.push((*pt.ty).clone());
+            }
+        }
+    }
+
+    // Convention: if the user fn's first arg is typed `QueryClient`
+    // (any path ending in that segment), the macro treats it as the
+    // selector's client handle — NOT hashed, NOT replicated in the
+    // generated `observe()`'s arg list (which always takes
+    // `&QueryClient` as its first param). The user's body sees the
+    // client as that first param so it can call `client.observe(q)`
+    // ergonomically. If the user fn has no `QueryClient` arg, the
+    // body must reach a client some other way (thread_local, etc.).
+    let client_arg_present = arg_types.first().is_some_and(is_query_client_type);
+
+    // Hashable (user-visible) args: everything except the recognized
+    // client arg. These are what `observe()` exposes publicly and
+    // what `args_hash` covers.
+    let (user_arg_idents, user_arg_types): (Vec<Ident>, Vec<Type>) = if client_arg_present {
+        (arg_idents[1..].to_vec(), arg_types[1..].to_vec())
+    } else {
+        (arg_idents.clone(), arg_types.clone())
+    };
+    // Per-arg helper idents for the captured + per-rerun clones.
+    let captured_user_idents: Vec<Ident> = user_arg_idents
+        .iter()
+        .map(|i| Ident::new(&format!("__pq_arg_{i}"), i.span()))
+        .collect();
+
+    // `let __pq_client_for_compute = client.clone();` — emitted only
+    // when the user declared a client arg, so the closure has
+    // something to clone into each rerun's `__user_fn` call.
+    let client_capture_let: TokenStream2 = if client_arg_present {
+        quote! {
+            let __pq_client_for_compute =
+                ::core::clone::Clone::clone(__pq_client);
+        }
+    } else {
+        quote! {}
+    };
+
+    // Args passed into `__user_fn` per rerun. When the user
+    // declared a client param, the first arg is a cloned client;
+    // the rest are cloned hashed args.
+    let user_fn_call_args: Vec<TokenStream2> = {
+        let mut out: Vec<TokenStream2> = Vec::with_capacity(arg_idents.len());
+        if client_arg_present {
+            out.push(quote! { ::core::clone::Clone::clone(&__pq_client_for_compute) });
+        }
+        for captured in &captured_user_idents {
+            out.push(quote! { ::core::clone::Clone::clone(&#captured) });
+        }
+        out
+    };
+
+    // Visibility for the generated module. Forward the user's
+    // visibility so a `pub fn` selector becomes a `pub mod`.
+    let mod_vis = &vis;
+    let user_attrs = &attrs;
+
+    Ok(quote! {
+        #(#user_attrs)*
+        #[allow(non_camel_case_types, non_snake_case, dead_code)]
+        #mod_vis mod #fn_name {
+            // Bring the parent module's items into scope so the user
+            // body's references (sibling fns, types) resolve. We use
+            // a glob import so the macro doesn't have to enumerate.
+            use super::*;
+
+            /// Stable identity for this selector. FNV-1a 64 of
+            /// `concat!(module_path!(), "::", "<fn_name>")` evaluated
+            /// at the user-crate compile time. Uniqueness collapses
+            /// to "no two `#[query]` fns share the same module path
+            /// AND name" — a conflict rustc already rejects.
+            pub const SELECTOR_ID: ::pocopine_sync_query::SelectorId =
+                ::pocopine_sync_query::SelectorId::new(
+                    ::pocopine_sync_query::__private::fnv1a64(
+                        ::core::concat!(::core::module_path!(), "::", #fn_name_str).as_bytes()
+                    )
+                );
+
+            /// Observe this selector. Hashes the args, looks up or
+            /// creates the cached entry, returns a fresh
+            /// [`SelectorView`](::pocopine_sync_query::SelectorView).
+            ///
+            /// On a cache hit, `__user_fn` is NOT called — the cached
+            /// value is reused. On a cache miss, `__user_fn` runs
+            /// inside the selector's tracking frame so any
+            /// `QueryView::rows()` reads register as dependencies.
+            pub fn observe(
+                __pq_client: &::pocopine_sync_query::QueryClient,
+                #( #user_arg_idents : #user_arg_types ),*
+            ) -> ::pocopine_sync_query::SelectorView<#ret_type> {
+                // Hash hashable args (everything except the
+                // recognized client param). `DefaultHasher` is fine
+                // here — the hash is consumed only by an in-process
+                // HashMap lookup; it isn't exposed on the wire.
+                let mut __pq_hasher =
+                    ::std::collections::hash_map::DefaultHasher::new();
+                #(
+                    ::std::hash::Hash::hash(&#user_arg_idents, &mut __pq_hasher);
+                )*
+                let __pq_args_hash = ::std::hash::Hasher::finish(&__pq_hasher);
+
+                // Capture owned clones of args (and a clone of the
+                // client, if the user declared a client arg) into
+                // the `'static` `Fn` closure. Each rerun further
+                // clones them to pass into `__user_fn` (which takes
+                // args by value, matching the user-written
+                // signature).
+                #client_capture_let
+                #(
+                    let #captured_user_idents =
+                        ::core::clone::Clone::clone(&#user_arg_idents);
+                )*
+                let __pq_compute = move || -> #ret_type {
+                    __user_fn( #( #user_fn_call_args ),* )
+                };
+                __pq_client.observe_selector(SELECTOR_ID, __pq_args_hash, __pq_compute)
+            }
+
+            /// Original `#[query]` function body. Kept private — call
+            /// through [`observe`] so the cache + tracking machinery
+            /// runs.
+            fn __user_fn( #( #arg_idents : #arg_types ),* ) -> #ret_type #block
+        }
+    })
+}
+
+/// Detect whether a type is `QueryClient` by last path segment.
+/// Matches `QueryClient`, `pocopine_sync_query::QueryClient`, etc;
+/// does NOT match `&QueryClient` or `Rc<QueryClient>` (the macro's
+/// contract requires an owned client param, mirroring the
+/// generated compute closure's capture).
+fn is_query_client_type(ty: &Type) -> bool {
+    let Type::Path(p) = ty else { return false };
+    p.path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "QueryClient")
 }
