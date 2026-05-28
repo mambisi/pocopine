@@ -49,6 +49,16 @@ Proc-macro generated typed CRUD methods now cover `open`, `pull`,
 `use_server`, `retry_local`, and `merge_with`. SQL and persistence
 ownership stay with the app.
 
+The Query layer ([`sync-query-design.md`](./sync-query-design.md))
+sits beside CRUD, not on top of it: typed filter DSL, predicate-
+routed subscriptions, RFC 088 §C per-`(stream, params_hash)` live
+wakeups, and `#[query]` reactive selectors. CRUD owns writes, Query
+owns reads, and `.params_of` is the bridge that gives a CRUD-built
+source Query-grade live-wakeup precision. The canonical sync app
+uses both — see
+[`sync-crud-query-composition.md`](./sync-crud-query-composition.md)
+for the worked example.
+
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
 same PR.

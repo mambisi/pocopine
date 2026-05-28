@@ -210,6 +210,43 @@ use pocopine_sync::StreamParams;
 use serde_json::json;
 
 #[test]
+fn row_to_params_typed_agrees_with_value_form() {
+    // The whole reason `row_to_params_typed` exists: bundled stores
+    // (CRUD, SQLx) hold typed `&Row` at write time and shouldn't pay
+    // the serde round-trip just to compute the partition. The typed
+    // form MUST produce the same `StreamParams` as the Value form
+    // — otherwise the macro-generated `partition_for_topic` would
+    // hash to a different value than the server's typed projection
+    // and live wakeups would miss every audience.
+    let issue = sample_issue();
+    let typed = issues::row_to_params_typed(&issue);
+    let value_form = issues::row_to_params(&serde_json::to_value(&issue).unwrap())
+        .expect("value form succeeds for well-formed row");
+    assert_eq!(typed, value_form);
+}
+
+#[test]
+fn row_to_params_typed_skips_none_options_and_only_required_fields() {
+    // Same selection rules as the Value form: only
+    // `#[query_param(required)]` fields, `Option::None` skipped,
+    // `contains`-only fields excluded. assignee_id is `Option<String>`
+    // and NOT required, so it never participates.
+    let issue = Issue {
+        id: "i1".into(),
+        workspace_id: "W1".into(),
+        assignee_id: None,
+        title: "Auth bug".into(),
+        status: Status::Open,
+        priority: 5,
+    };
+    let params = issues::row_to_params_typed(&issue);
+    let expected: StreamParams = [("workspace_id".to_string(), json!("W1"))]
+        .into_iter()
+        .collect();
+    assert_eq!(params, expected);
+}
+
+#[test]
 fn row_to_params_includes_only_required_fields() {
     // Post-codex-review (P2.1): only `required`-flagged fields
     // partition the topic. Anything else would produce a hash on

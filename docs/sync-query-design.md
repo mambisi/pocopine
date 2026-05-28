@@ -32,7 +32,7 @@ crates/
 └── pocopine-sync-query-sqlite/ # OPTIONAL adapter (Phase 3.5)
 ```
 
-Independent crate boundary. `pocopine-sync-query` depends on `pocopine-sync` directly, not on `pocopine-sync-crud`. Apps that use Query don't pull in CRUD; apps that use CRUD don't pull in Query.
+Independent crate boundary. `pocopine-sync-query` depends on `pocopine-sync` directly, not on `pocopine-sync-crud`. The two are decoupled at the crate level, but apps frequently use both — Query for filtered reads, CRUD for typed-Draft writes, with `CrudResource::params_of(<resource>::row_to_params_typed)` bridging them so a CRUD-built source gets §C precise live wakeups for free. See [`sync-crud-query-composition.md`](./sync-crud-query-composition.md) for the canonical pattern.
 
 The proc-macro crate splits the same way as CRUD's does (binary boundary). Naming convention: `pocopine-<thing>-macros` matches the existing pattern.
 

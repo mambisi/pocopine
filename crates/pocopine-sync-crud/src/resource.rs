@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use pocopine_auth::RequestContext;
 use pocopine_sync::{
-    default_schema_version_one, MutationId, RowKey, RowVersion, SyncBoxFuture, SyncCollectionName,
-    SyncConflict, SyncError, SyncOp, SyncPullRequest, SyncPullResponse, SyncPushRequest,
-    SyncPushResponse, SyncRejectedMutation, SyncResult, SyncRow, SyncStreamName, SyncStreamSource,
+    default_schema_version_one, MutationId, RowKey, RowVersion, StreamParams, SyncBoxFuture,
+    SyncCollectionName, SyncConflict, SyncError, SyncOp, SyncPullRequest, SyncPullResponse,
+    SyncPushRequest, SyncPushResponse, SyncRejectedMutation, SyncResult, SyncRow, SyncStreamName,
+    SyncStreamSource,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -99,6 +100,18 @@ fn invoke_migrator_with_panic_guard(
     }
 }
 
+/// Type-erased projector from a canonical row into the RFC 088 §C
+/// `(stream, params_hash)` partition fields. Stored on
+/// [`CrudResource`] (and its transactional sibling); attached via
+/// [`CrudResource::params_of`] and consumed by the
+/// `SyncStreamSource::row_to_params` override the adapter installs.
+///
+/// Users supply a typed `Fn(&Row) -> StreamParams` — usually the
+/// macro-generated `<resource>::row_to_params_typed` — and the
+/// adapter handles the `Value` ↔ `Row` deserialize at the trait
+/// boundary.
+pub type CrudParamsFn<Row> = dyn Fn(&Row) -> StreamParams + Send + Sync + 'static;
+
 /// Builder returned by [`resource`].
 pub struct CrudResourceBuilder<S> {
     stream: SyncStreamName,
@@ -182,12 +195,13 @@ where
             id_of,
             version_of: NoRowVersion,
             mutation_log: MissingMutationLog,
+            params_of: None,
         }
     }
 }
 
 /// CRUD resource adapter that can be registered with `pocopine-sync`.
-pub struct CrudResource<S, IdOf, VersionOf = NoRowVersion, Log = MissingMutationLog> {
+pub struct CrudResource<S: CrudSource, IdOf, VersionOf = NoRowVersion, Log = MissingMutationLog> {
     stream: SyncStreamName,
     collection: SyncCollectionName,
     source: S,
@@ -197,6 +211,12 @@ pub struct CrudResource<S, IdOf, VersionOf = NoRowVersion, Log = MissingMutation
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
+    /// Optional RFC 088 §C row→partition projector. Attached via
+    /// [`Self::params_of`]; consumed by the
+    /// [`SyncStreamSource::row_to_params`] override below. When
+    /// `None`, the override falls back to the trait default (empty
+    /// `StreamParams` → bare-topic publish only).
+    params_of: Option<Arc<CrudParamsFn<S::Row>>>,
 }
 
 impl<S, IdOf, VersionOf, Log> CrudResource<S, IdOf, VersionOf, Log>
@@ -222,7 +242,53 @@ where
             id_of: self.id_of,
             version_of,
             mutation_log: self.mutation_log,
+            params_of: self.params_of,
         }
+    }
+
+    /// Attach an RFC 088 §C row → partition projector. Without this,
+    /// CRUD resources publish bare-topic live wakeups only (every
+    /// subscriber on the stream wakes for every accepted mutation
+    /// regardless of tenant). With it, the server projects each
+    /// accepted row into its `StreamParams`, hashes, and publishes
+    /// scoped per-`(stream, params_hash)` topics so only the
+    /// matching audience wakes.
+    ///
+    /// The natural argument is the macro-generated
+    /// `<resource>::row_to_params_typed`:
+    ///
+    /// ```ignore
+    /// #[query_resource(name = "issues", schema_version = 1)]
+    /// #[derive(Clone, Serialize, Deserialize)]
+    /// pub struct Issue {
+    ///     pub id: String,
+    ///     #[query_param(required)]
+    ///     pub workspace_id: String,
+    ///     // ... other fields ...
+    /// }
+    ///
+    /// let issues = resource("issues", IssueCrudSource::default())?
+    ///     .id(|r| r.id.clone())
+    ///     .params_of(issues::row_to_params_typed);
+    /// ```
+    ///
+    /// Hand-written projectors work too — anything with the shape
+    /// `Fn(&Row) -> StreamParams`. The closure runs once per
+    /// accepted-row inside the push handler's response loop; per-
+    /// row dedup by `(stream, params_hash)` ensures bulk pushes
+    /// don't fan out N redundant publishes.
+    ///
+    /// See `docs/sync-crud-query-composition.md` for the bigger
+    /// picture: CRUD owns writes (typed Draft/Row, idempotency log,
+    /// transaction binding); Query owns reads (filtered DSL,
+    /// selectors); `.params_of` is the bridge that gives a CRUD
+    /// source Query-grade live-wakeup precision.
+    pub fn params_of<F>(mut self, params_of: F) -> Self
+    where
+        F: Fn(&S::Row) -> StreamParams + Send + Sync + 'static,
+    {
+        self.params_of = Some(Arc::new(params_of));
+        self
     }
 }
 
@@ -250,6 +316,7 @@ where
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
+            params_of: self.params_of,
         }
     }
 
@@ -290,13 +357,14 @@ where
             version_of: self.version_of,
             mutation_log,
             transaction_runner,
+            params_of: self.params_of,
         }
     }
 }
 
 /// CRUD resource adapter that applies writes and idempotency log inserts in one
 /// app/database transaction.
-pub struct TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner> {
+pub struct TransactionalCrudResource<S: CrudSource, IdOf, VersionOf, Log, Runner> {
     stream: SyncStreamName,
     collection: SyncCollectionName,
     source: S,
@@ -307,6 +375,9 @@ pub struct TransactionalCrudResource<S, IdOf, VersionOf, Log, Runner> {
     version_of: VersionOf,
     mutation_log: Log,
     transaction_runner: Runner,
+    /// See [`CrudResource::params_of`]. Optional RFC 088 §C projector;
+    /// `None` means bare-topic publishes only.
+    params_of: Option<Arc<CrudParamsFn<S::Row>>>,
 }
 
 /// Marker used before a resource has an idempotency backend.
@@ -636,6 +707,25 @@ where
     /// working under any deployment.
     fn validate_push_params(&self, _params: &pocopine_sync::StreamParams) -> SyncResult<()> {
         Ok(())
+    }
+
+    /// RFC 088 §C row → partition projector. Delegates to the
+    /// closure attached via [`CrudResource::params_of`] (typically
+    /// `<resource>::row_to_params_typed` from `#[query_resource]`).
+    /// When no projector is attached, returns empty `StreamParams`
+    /// — the server then publishes only the bare stream topic.
+    fn row_to_params(&self, row: &Value) -> SyncResult<StreamParams> {
+        let Some(params_of) = self.params_of.as_ref() else {
+            return Ok(StreamParams::new());
+        };
+        let typed: S::Row = serde_json::from_value(row.clone()).map_err(|e| {
+            SyncError::client(format!(
+                "row_to_params: {} row didn't deserialize for params projection: {}",
+                self.stream.as_str(),
+                e,
+            ))
+        })?;
+        Ok(params_of(&typed))
     }
 
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
@@ -978,6 +1068,24 @@ where
         Ok(())
     }
 
+    /// RFC 088 §C row → partition projector. Delegates to the
+    /// closure attached via [`TransactionalCrudResource::params_of`].
+    /// When no projector is attached, returns empty `StreamParams`
+    /// — the server then publishes only the bare stream topic.
+    fn row_to_params(&self, row: &Value) -> SyncResult<StreamParams> {
+        let Some(params_of) = self.params_of.as_ref() else {
+            return Ok(StreamParams::new());
+        };
+        let typed: S::Row = serde_json::from_value(row.clone()).map_err(|e| {
+            SyncError::client(format!(
+                "row_to_params: {} row didn't deserialize for params projection: {}",
+                self.stream.as_str(),
+                e,
+            ))
+        })?;
+        Ok(params_of(&typed))
+    }
+
     fn migrate_payload<'a>(&'a self, from: u32, to: u32, value: Value) -> SyncBoxFuture<'a, Value> {
         let stream = self.stream.as_str().to_string();
         if let Some(migrate) = self.migrate_payload.clone() {
@@ -1014,6 +1122,20 @@ where
     Log: TransactionalCrudMutationLog<Runner::Tx, S::Row>,
     Runner: CrudTransactionRunner,
 {
+    /// Attach an RFC 088 §C row → partition projector. See
+    /// [`CrudResource::params_of`] for the rationale and the
+    /// recommended argument (`<resource>::row_to_params_typed` from
+    /// `#[query_resource]`). Transactional resources route the
+    /// projector through the same per-`(stream, params_hash)`
+    /// publish path as non-transactional ones.
+    pub fn params_of<F>(mut self, params_of: F) -> Self
+    where
+        F: Fn(&S::Row) -> StreamParams + Send + Sync + 'static,
+    {
+        self.params_of = Some(Arc::new(params_of));
+        self
+    }
+
     async fn pull_snapshot(
         &self,
         ctx: RequestContext,

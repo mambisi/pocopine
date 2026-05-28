@@ -629,6 +629,7 @@ fn expand_query_resource(
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params);
     let row_to_params_body = generate_row_to_params_body(&params);
+    let row_to_params_typed_body = generate_row_to_params_typed_body(&params);
     let partition_for_topic_body = generate_partition_for_topic_body(&params);
 
     // RFC 088 §C / code-review fix #10: per-(stream, params_hash)
@@ -808,6 +809,39 @@ fn expand_query_resource(
                     ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
                 #row_to_params_body
                 ::std::result::Result::Ok(params)
+            }
+
+            /// Typed sibling of [`row_to_params`] — projects a typed
+            /// `&Row` directly into `StreamParams` without the
+            /// `serde_json::Value` round-trip.
+            ///
+            /// This is what `CrudResource::params_of` consumes — the
+            /// CRUD adapter has `&Row` in hand at write time, so the
+            /// JSON form would only force a needless deserialize:
+            ///
+            /// ```ignore
+            /// let issues = resource("issues", IssueSource::default())?
+            ///     .id(|r| r.id.clone())
+            ///     .params_of(issues::row_to_params_typed);
+            /// ```
+            ///
+            /// Selection rules and skip behavior match
+            /// [`row_to_params`] verbatim — only `#[query_param(
+            /// required)]` fields contribute, `Option::None` is
+            /// skipped, `contains`-only fields are excluded.
+            ///
+            /// Per-field `serde_json::to_value` calls are infallible
+            /// for idiomatic field types (primitives, `String`,
+            /// small enums) — the function panics with a clear
+            /// message naming the failing field if a custom
+            /// `Serialize` impl returns an error.
+            pub fn row_to_params_typed(
+                row: &Row,
+            ) -> ::pocopine_sync_query::__private::pocopine_sync::StreamParams {
+                let mut params =
+                    ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
+                #row_to_params_typed_body
+                params
             }
 
             /// Project the caller's captured query params into a hash
@@ -1147,6 +1181,65 @@ fn generate_row_to_params_body(params: &[ParamDef]) -> TokenStream2 {
                     if !v.is_null() {
                         params.insert(#name_str.to_string(), v.clone());
                     }
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        #(#inserts)*
+    }
+}
+
+/// Generate the body of the **typed** `row_to_params_typed(row: &Row)
+/// -> StreamParams` function inside the generated module. Mirrors
+/// `generate_row_to_params_body` but reads directly off the typed
+/// `&Row` instead of a JSON `Value` — `CrudResource::params_of` plugs
+/// the typed projector in so its `SyncStreamSource::row_to_params`
+/// override doesn't pay the serialize-then-deserialize cost when it
+/// already holds the typed row.
+///
+/// `serde_json::to_value` IS called per field, but only on the
+/// `required` field's value (typically `String` or a small enum),
+/// not the whole row. For idiomatic field types (primitives, owned
+/// strings, lightweight enums) the serialize is infallible — we
+/// `.expect()` on the impossible-in-practice failure path with a
+/// clear panic message that names the field.
+fn generate_row_to_params_typed_body(params: &[ParamDef]) -> TokenStream2 {
+    let inserts: Vec<TokenStream2> = params
+        .iter()
+        .filter(|p| include_in_row_params(&p.caps))
+        .map(|param| {
+            let name = &param.name;
+            let name_str = ident_wire_key(name);
+            let field_access: TokenStream2 = quote! { row.#name };
+            if param.caps.optional {
+                quote! {
+                    if let ::std::option::Option::Some(inner) = &#field_access {
+                        let v = ::pocopine_sync_query::__private::serde_json::to_value(inner)
+                            .expect(concat!(
+                                "row_to_params_typed: field `",
+                                #name_str,
+                                "` must be serde_json-serializable — \
+                                 #[query_param(required)] field types are constrained to \
+                                 Serialize, and idiomatic primitive / String / small-enum \
+                                 fields never fail to serialize"
+                            ));
+                        params.insert(#name_str.to_string(), v);
+                    }
+                }
+            } else {
+                quote! {
+                    let v = ::pocopine_sync_query::__private::serde_json::to_value(&#field_access)
+                        .expect(concat!(
+                            "row_to_params_typed: field `",
+                            #name_str,
+                            "` must be serde_json-serializable — \
+                             #[query_param(required)] field types are constrained to \
+                             Serialize, and idiomatic primitive / String / small-enum \
+                             fields never fail to serialize"
+                        ));
+                    params.insert(#name_str.to_string(), v);
                 }
             }
         })

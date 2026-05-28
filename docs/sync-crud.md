@@ -14,6 +14,13 @@ The concrete macro API is documented in
 [`sync-crud-macro-contract.md`](./sync-crud-macro-contract.md). That file
 is the review target for generated server/client API shape.
 
+CRUD is the **write** half of the sync story. Filtered reads,
+reactive selectors, and RFC 088 §C precise live wakeups belong to
+`pocopine-sync-query`. The two compose via `CrudResource::params_of`
+— see
+[`sync-crud-query-composition.md`](./sync-crud-query-composition.md)
+for when to use one, the other, or both.
+
 ## Goal
 
 Most CRUD apps need the same sync behavior:
