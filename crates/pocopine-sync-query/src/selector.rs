@@ -269,9 +269,41 @@ impl<T: PartialEq + Clone + 'static> SelectorEntry<T> {
         }
         self.running.set(true);
 
+        // RAII guard: pops the tracking frame and clears `running`
+        // even if `compute` panics. Without this, a panic in user
+        // code would leak the frame onto SELECTOR_STACK forever
+        // (poisoning every later selector on this thread) and pin
+        // `running = true` (every future rerun would silently no-op
+        // at the line above's guard). The guard runs whether
+        // `compute` returns normally or unwinds.
+        struct RerunGuard<'a> {
+            running: &'a Cell<bool>,
+            frame_popped: bool,
+        }
+        impl Drop for RerunGuard<'_> {
+            fn drop(&mut self) {
+                if !self.frame_popped {
+                    // pop_frame panics on missing frame; use the
+                    // lower-level peek to avoid double-panic during
+                    // unwind. Pop iff a frame is actually on top.
+                    SELECTOR_STACK.with(|stack| {
+                        if let Ok(mut s) = stack.try_borrow_mut() {
+                            s.pop();
+                        }
+                    });
+                }
+                self.running.set(false);
+            }
+        }
+        let mut guard = RerunGuard {
+            running: &self.running,
+            frame_popped: false,
+        };
+
         push_frame();
         let new_output = (self.compute)();
         let frame = pop_frame();
+        guard.frame_popped = true;
 
         // Re-wire listeners. Drop old tokens FIRST so a same-upstream
         // listener is unregistered before its replacement registers
@@ -295,8 +327,13 @@ impl<T: PartialEq + Clone + 'static> SelectorEntry<T> {
         *self.keepers.borrow_mut() = new_keepers;
         *self.listener_tokens.borrow_mut() = new_tokens;
 
-        self.running.set(false);
-
+        // NB: `running` stays `true` through the listener-fire block
+        // below; the RerunGuard at the top of the fn resets it on
+        // exit (whether by return or unwind). Keeping it set during
+        // fire blocks re-entrant rerun() calls triggered by our own
+        // listeners — they hit the guard at the top of rerun and
+        // return cleanly. Other selectors' reruns are unaffected
+        // (they have their own `running` cells).
         let changed = {
             let cache = self.cached_output.borrow();
             cache.as_ref() != Some(&new_output)
@@ -321,12 +358,36 @@ impl<T: PartialEq + Clone + 'static> SelectorEntry<T> {
 
     /// Clone of the cached output. Callers must ensure the initial
     /// `rerun` has completed before calling (the
-    /// `QueryClient::observe_selector` entry point guarantees this).
+    /// `QueryClient::observe_selector` entry point guarantees this
+    /// in the common case).
+    ///
+    /// Panics if the cache is `None`. The only realistic trigger is
+    /// recursive self-observation: a selector's compute body calls
+    /// `observe_selector` with the same `(id, args)` before its
+    /// initial rerun completes, gets a `SelectorView` over the
+    /// just-inserted (but not-yet-populated) entry, and reads
+    /// `.value()`. The panic message names the condition so the
+    /// caller can break the cycle rather than chase a 'cache invariant
+    /// violated' error.
     pub(crate) fn cached(&self) -> T {
-        self.cached_output
-            .borrow()
-            .clone()
-            .expect("selector cache populated by initial rerun before observe returns")
+        if let Some(v) = self.cached_output.borrow().clone() {
+            return v;
+        }
+        if self.running.get() {
+            panic!(
+                "recursive self-observation of selector ({:#x}/{:#x}): cannot read \
+                 SelectorView::value() while the selector's initial rerun is still \
+                 in progress. A `#[query]` body must not call `observe()` for itself.",
+                self.id.as_u64(),
+                self.args_hash,
+            );
+        }
+        panic!(
+            "selector ({:#x}/{:#x}) cache was unexpectedly empty after initial \
+             rerun — framework invariant violated",
+            self.id.as_u64(),
+            self.args_hash,
+        );
     }
 }
 
@@ -401,8 +462,14 @@ impl<T: PartialEq + Clone + 'static> SelectorView<T> {
     /// how nested selectors compose. Outside any selector, the call
     /// is a plain cache read.
     pub fn value(&self) -> T {
-        let trackable: Rc<dyn AnyTrackable> = self.entry.clone();
-        record_read(trackable, Box::new(self.entry.clone()));
+        // Skip the keeper construction (Box alloc + Rc clones) when
+        // no tracking frame is active — the common case for ordinary
+        // component reads. Mirrors `QueryView::track_for_selector`'s
+        // fast path.
+        if currently_tracking() {
+            let trackable: Rc<dyn AnyTrackable> = self.entry.clone();
+            record_read(trackable, Box::new(self.entry.clone()));
+        }
         self.entry.cached()
     }
 

@@ -102,6 +102,93 @@ fn issue(id: &str, ws: &str, title: &str) -> Issue {
     }
 }
 
+// ---- Regression: compute() panic doesn't poison the selector -----
+//
+// If a selector's compute body panics, the RAII RerunGuard inside
+// rerun() must still: (1) pop the tracking frame so subsequent
+// reads on this thread don't accumulate in a stale frame, and (2)
+// reset `running` so future reruns aren't permanently no-op'd at
+// the running-guard check. Catch the panic via
+// std::panic::catch_unwind and verify a fresh selector on the same
+// thread observes normal mutation semantics.
+
+#[tokio::test]
+async fn compute_panic_does_not_poison_thread() {
+    LocalSet::new()
+        .run_until(async {
+            let client = QueryClient::without_driver();
+
+            // Selector A: compute panics on first run.
+            let panic_id = SelectorId::new(0xBADC0FFEE);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = client.observe_selector::<u32, _>(panic_id, 0, Box::new(()), || {
+                    panic!("intentional panic for the test")
+                });
+            }));
+            assert!(result.is_err(), "compute panic should propagate");
+
+            // Selector B: a normal selector on the same thread must
+            // work — if the guard didn't clean up, this would either
+            // panic from a poisoned frame or capture the wrong deps.
+            let normal_id = SelectorId::new(0xC0FFEE);
+            let client_for = client.clone();
+            let view = client.observe_selector(normal_id, 0, Box::new(()), move || {
+                let qv = client_for.observe(workspace_query("W1"));
+                qv.rows().len() as u32
+            });
+            assert_eq!(view.value(), 0);
+
+            // Mutate and verify the rerun fires — proves `running`
+            // was reset (otherwise B's listener-triggered rerun
+            // would no-op at the guard).
+            let ctx = StubContext::new();
+            client
+                .mutate::<EchoMutator>(issue("i1", "W1", "after panic"), &ctx)
+                .await
+                .expect("mutate ok");
+            assert_eq!(view.value(), 1, "selector reran after the unrelated panic");
+        })
+        .await;
+}
+
+// ---- Regression: selector tracks via QueryView::version() --------
+//
+// A selector body that reads `view.version()` (the documented
+// reactive integer-changes signal) must register the underlying
+// subscription as a dep. Same for `state()` / `shared_state()`.
+// Pre-fix, these methods bypassed track_for_selector, leaving the
+// selector with zero deps and never rerunning.
+
+#[tokio::test]
+async fn selector_tracks_through_version_call() {
+    LocalSet::new()
+        .run_until(async {
+            let client = QueryClient::without_driver();
+            let id = SelectorId::new(0xCEED);
+
+            let client_for = client.clone();
+            let view = client.observe_selector(id, 0, Box::new(()), move || {
+                let qv = client_for.observe(workspace_query("W1"));
+                qv.version() // version() must trigger track_for_selector
+            });
+
+            let initial = view.value();
+
+            let ctx = StubContext::new();
+            client
+                .mutate::<EchoMutator>(issue("i1", "W1", "x"), &ctx)
+                .await
+                .expect("mutate ok");
+
+            assert_ne!(
+                view.value(),
+                initial,
+                "selector picked up the version bump via version()"
+            );
+        })
+        .await;
+}
+
 // ---- 0. Hash-collision disambiguation -----------------------------
 //
 // Regression for the codex finding that `Hash` is not collision-free.

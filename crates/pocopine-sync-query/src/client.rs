@@ -563,32 +563,31 @@ impl QueryClient {
         let key = (id, args_hash);
 
         // Cache hit path. Walk the bucket; for each live `Weak`,
-        // check args equality. Dead `Weak`s are tolerated here —
-        // they get cleaned up by the entry's `Drop`.
-        if let Some(hit) = {
+        // check args equality AND that the entry's concrete type
+        // downcasts to the caller's `T`. Either failed dyn_eq or
+        // failed downcast means "not our entry — keep looking" (no
+        // panic).
+        //
+        // The downcast filter is the principled escape from FNV-1a
+        // 64-bit `SelectorId` collisions: if two `#[query]` fns ever
+        // happen to hash to the same id and one is queried first,
+        // the wrong-T entry is in the bucket. Filtering by downcast
+        // lets the right-T entry be found, OR — if absent — falls
+        // through to the cache-miss path that builds a fresh entry.
+        // Dead `Weak`s are tolerated here too; they get cleaned up
+        // by the entry's `Drop`.
+        if let Some(typed) = {
             let map = self.inner.selectors.borrow();
             map.get(&key).and_then(|bucket| {
                 bucket.iter().find_map(|w| {
                     let alive = w.upgrade()?;
-                    if alive.args().dyn_eq(&*args) {
-                        Some(alive)
-                    } else {
-                        None
+                    if !alive.args().dyn_eq(&*args) {
+                        return None;
                     }
+                    Rc::downcast::<SelectorEntry<T>>(alive.as_rc_any()).ok()
                 })
             })
         } {
-            // Same `(SelectorId, args)` MUST mean the same `T` —
-            // SelectorId encodes the fn's crate-qualified identity,
-            // which uniquely determines the return type. A failed
-            // downcast would mean two `#[query]` fns hashed to the
-            // same id with different signatures — framework
-            // invariant violation, not a user-recoverable error.
-            let typed: Rc<SelectorEntry<T>> = Rc::downcast::<SelectorEntry<T>>(hit.as_rc_any())
-                .expect(
-                    "(SelectorId, args) match across selectors with different T \
-                     — framework invariant violated",
-                );
             return SelectorView::from_entry(typed);
         }
 
@@ -1924,6 +1923,7 @@ impl<Row: 'static> QueryView<Row> {
 
     /// Borrow the per-query state.
     pub fn state(&self) -> std::cell::Ref<'_, QueryState<Row>> {
+        self.track_for_selector();
         self.handle.state()
     }
 
@@ -2064,12 +2064,14 @@ impl<Row: 'static> QueryView<Row> {
     /// (canonical or optimistic) so a reactive observer can track
     /// changes by reading this single integer.
     pub fn version(&self) -> u64 {
+        self.track_for_selector();
         self.state().version()
     }
 
     /// Borrow the shared state for custom reactive integration.
     /// Same `Rc<RefCell<...>>` the routing engine writes through.
     pub fn shared_state(&self) -> Rc<RefCell<QueryState<Row>>> {
+        self.track_for_selector();
         self.handle.shared_state()
     }
 

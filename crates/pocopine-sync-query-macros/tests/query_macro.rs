@@ -305,6 +305,21 @@ fn macro_handles_raw_identifier_args() {
     assert_eq!(view.value(), 42);
 }
 
+// The fn NAME itself is also a raw identifier (the macro must
+// strip `r#` before constructing the mangled `__pq_user_fn__…`
+// inner ident, or Ident::new panics during expansion on `#`).
+#[query]
+fn r#type(_client: QueryClient) -> u32 {
+    7
+}
+
+#[test]
+fn macro_handles_raw_identifier_fn_name() {
+    let client = QueryClient::without_driver();
+    let view = r#type::observe(&client);
+    assert_eq!(view.value(), 7);
+}
+
 // ---- Regression: user attrs propagate to the lifted body ----------
 //
 // Lint attrs on the original `#[query] fn` must follow the body when
