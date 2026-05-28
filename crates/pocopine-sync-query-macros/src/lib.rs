@@ -1107,7 +1107,18 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
     // `super::*` references in the body keep their original
     // resolution. The generated module's `observe()` calls it via
     // `super::<this_ident>`.
-    let inner_fn_ident = Ident::new(&format!("__pq_user_fn__{fn_name_str}"), fn_name.span());
+    //
+    // Strip any `r#` raw-ident prefix via `raw_ident_body`. Without
+    // this, `#[query] fn r#type(...)` would expand into
+    // `Ident::new("__pq_user_fn__r#type", …)`, which panics — `#`
+    // is not a valid identifier character. The raw form is unique
+    // among rustc-accepted fn names because keyword-collisioning
+    // names HAVE to be written `r#kw`, so `raw_ident_body("r#kw")`
+    // == "kw" is unambiguous in the surrounding mod scope.
+    let inner_fn_ident = Ident::new(
+        &format!("__pq_user_fn__{}", raw_ident_body(&fn_name)),
+        fn_name.span(),
+    );
 
     // Reconstruct each parameter for the inner fn, preserving any
     // `mut` binding the user wrote.
