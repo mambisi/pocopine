@@ -1218,10 +1218,16 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
 /// the call site in `expand_query` for the rationale.
 ///
 /// * `#[doc]` / `///`, `#[deprecated]` → module (public API surface).
-/// * `#[must_use]`, `#[track_caller]` → `observe()` (Rust rejects
-///   `#[must_use]` on modules, and these attrs fire against the
-///   call site that consumes the selector — `observe()` is the
-///   user-visible call site, not the module).
+/// * `#[must_use]` → `observe()` (Rust rejects `#[must_use]` on
+///   modules; the lint fires against the callsite of `observe()`,
+///   which is what the user intended).
+/// * `#[track_caller]` → BOTH `observe()` and the inner fn.
+///   `observe()` carries it so `Location::caller()` resolves to the
+///   user's call site at the first synchronous compute. The inner
+///   fn also carries it so panics inside the body report a
+///   meaningful location (the chain still goes through an
+///   anonymous compute closure, which is a documented limitation —
+///   `Location::caller()` doesn't propagate through closures).
 /// * `#[allow]` / `#[deny]` / `#[warn]` / `#[forbid]` / `#[expect]`,
 ///   `#[inline]` / `#[cold]` / `#[no_mangle]` → inner fn (body
 ///   audience).
@@ -1239,7 +1245,11 @@ fn partition_selector_attrs(
         let ident = attr.path().segments.last().map(|s| s.ident.to_string());
         match ident.as_deref() {
             Some("doc" | "deprecated") => module.push(attr),
-            Some("must_use" | "track_caller") => observe.push(attr),
+            Some("must_use") => observe.push(attr),
+            Some("track_caller") => {
+                observe.push(attr);
+                inner.push(attr);
+            }
             Some("cfg" | "cfg_attr") => {
                 module.push(attr);
                 observe.push(attr);
