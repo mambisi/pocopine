@@ -73,7 +73,7 @@ pub use state::QueryState;
 // The macro lives in its own crate (proc-macros must), but downstream
 // code follows the same one-stop-shop import path as
 // `pocopine-sync-crud`: `use pocopine_sync_query::query_resource;`.
-pub use pocopine_sync_query_macros::query_resource;
+pub use pocopine_sync_query_macros::{query, query_resource};
 
 // Re-export wire-level types from pocopine-sync that the macro emissions
 // and runtime touch directly. Users mostly don't see these.
@@ -94,4 +94,22 @@ pub mod __private {
     // dep — the macro should compile inside a workspace whose only
     // serde access is transitive through `pocopine-sync-query`).
     pub use serde;
+
+    /// FNV-1a 64-bit hash. `const fn` so the `#[query]` macro's
+    /// generated `const SELECTOR_ID` initializer evaluates it at the
+    /// downstream crate's compile time, producing a stable identity
+    /// derived from `module_path!() + "::" + fn_name`. Collisions
+    /// would require two `#[query]` fns sharing both the same module
+    /// path AND the same name — a user-level conflict that rustc
+    /// already catches.
+    pub const fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut i = 0;
+        while i < bytes.len() {
+            hash ^= bytes[i] as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            i += 1;
+        }
+        hash
+    }
 }
