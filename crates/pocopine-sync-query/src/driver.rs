@@ -1476,8 +1476,29 @@ impl LiveWakeup {
     ) -> Self {
         let (tx, rx) = futures::channel::mpsc::unbounded::<LiveWakeupEvent>();
         let live_tag = pocopine_sync::sync_stream_tag(stream_name.as_str());
-        let connect_result = pocopine_live::LiveClient::new()
-            .query_tag(live_tag.clone())
+        // RFC 088 §C: subscribe to BOTH topics during the rollout
+        // window —
+        //   * bare topic: matches every mutation on this stream
+        //     (back-compat with servers that don't override
+        //     row_to_params, and with rows whose row_to_params
+        //     returns empty).
+        //   * per-(stream, params_hash) topic: matches only the
+        //     audience whose params project to the same hash as
+        //     this subscription's params. When the server publishes
+        //     to the per-params topic, it ALSO publishes bare for
+        //     back-compat — so a single mutation lands in this
+        //     driver's queue TWICE. That's tolerated because /pull
+        //     is idempotent against the cursor: the second pull is
+        //     a no-op-on-cursor and the routing engine sees zero
+        //     new rows. See RFC 088 §C.4 for the dedup-by-mutation_
+        //     id follow-up.
+        let mut live_builder = pocopine_live::LiveClient::new().query_tag(live_tag.clone());
+        if !captured_params.is_empty() {
+            let params_hash =
+                pocopine_sync::stream_params_hash(stream_name.as_str(), &captured_params);
+            live_builder = live_builder.query_tag_with_params(live_tag.clone(), params_hash);
+        }
+        let connect_result = live_builder
             .with_credentials(with_credentials)
             .on_event({
                 let tx = tx.clone();

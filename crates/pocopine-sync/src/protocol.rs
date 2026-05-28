@@ -160,6 +160,50 @@ pub fn sync_stream_tag(stream: &str) -> String {
     format!("sync:stream:{stream}")
 }
 
+/// Per-(stream, params) live query tag, used for RFC 088 §C precise
+/// invalidation routing. Same prefix as [`sync_stream_tag`] plus a
+/// 16-hex suffix derived from [`stream_params_hash`].
+///
+/// Wire shape: `sync:stream:{stream}:{params_hash:016x}`.
+///
+/// Mirrors the bare-tag convention; clients on the new protocol
+/// subscribe to BOTH the bare and per-params topics during rollout
+/// (see RFC 088 §C.6). Servers publish to per-params iff the source
+/// returns non-empty params from
+/// [`SyncStreamSource::row_to_params`](crate::server::SyncStreamSource::row_to_params).
+pub fn sync_stream_params_tag(stream: &str, params_hash: u64) -> String {
+    format!("sync:stream:{stream}:{params_hash:016x}")
+}
+
+/// FNV-1a 64-bit hash over `(stream_name, sorted-by-key params JSON)`.
+/// Same algorithm as [`local_stream_key`] (so on-disk + on-wire
+/// hashes match), with the stream name folded into the digest so two
+/// streams sharing an empty params map still partition to distinct
+/// topics.
+///
+/// This is the cross-language contract for RFC 088 §C — the
+/// SERVER computes this from the row's `row_to_params` projection,
+/// the CLIENT computes it from the captured subscription params,
+/// and the two MUST agree byte-for-byte. The hash function is FNV-1a
+/// (not cryptographic) and `StreamParams = BTreeMap<String, Value>`
+/// serializes in sorted-key order by construction, so the only
+/// portability constraints are: same FNV-1a constants, same JSON
+/// encoding (no insignificant whitespace, no number/float coercion).
+///
+/// The golden-fixture test at
+/// `tests/stream_params_hash_fixture.rs` pins a set of (stream,
+/// params) → hex-hash pairs that future ports (Swift / Go / Kotlin
+/// clients) MUST reproduce.
+pub fn stream_params_hash(stream: &str, params: &StreamParams) -> u64 {
+    let canonical = serde_json::to_vec(params).unwrap_or_default();
+    let mut buf: Vec<u8> = Vec::with_capacity(stream.len() + 1 + canonical.len());
+    buf.extend_from_slice(stream.as_bytes());
+    // Separator so `stream="ab", params={}` ≠ `stream="a", params={b:…}`.
+    buf.push(0u8);
+    buf.extend_from_slice(&canonical);
+    fnv1a_64(&buf)
+}
+
 /// Stable client-side cache key that combines a sync stream name with
 /// a hash of its subscription params. Used to scope the local store so
 /// two subscriptions to the same `stream` with different `params` do
@@ -1049,6 +1093,7 @@ impl<T> SyncPushResponse<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn validates_stream_names() {
@@ -1435,6 +1480,155 @@ mod tests {
         assert_eq!(mutation.op, SyncOp::Delete);
         assert_eq!(mutation.base_version, Some(version));
     }
+
+    // ---- RFC 088 §C: stream_params_hash + sync_stream_params_tag ---
+    //
+    // These tests double as the cross-language hash spec. The
+    // `stream_params_hash_golden_fixture` test pins a set of
+    // (stream, params) → hex-hash pairs. Future ports (a Swift
+    // client, a Go server, etc.) MUST reproduce these exact bytes
+    // or the per-(stream, params) live-wakeup routing silently
+    // breaks.
+
+    #[test]
+    fn stream_params_tag_format() {
+        let tag = sync_stream_params_tag("issues", 0xABCD_1234_5678_9ABC);
+        assert_eq!(tag, "sync:stream:issues:abcd123456789abc");
+    }
+
+    #[test]
+    fn stream_params_tag_pads_to_16_hex() {
+        // Small hashes must still be 16 hex chars (zero-padded) so
+        // the topic format is uniform across clients.
+        let tag = sync_stream_params_tag("issues", 0xFFu64);
+        assert_eq!(tag, "sync:stream:issues:00000000000000ff");
+    }
+
+    #[test]
+    fn stream_params_hash_empty_params_distinguishes_streams() {
+        let h_issues = stream_params_hash("issues", &StreamParams::new());
+        let h_comments = stream_params_hash("comments", &StreamParams::new());
+        assert_ne!(
+            h_issues, h_comments,
+            "stream name folds into the hash; empty params alone must not alias"
+        );
+    }
+
+    #[test]
+    fn stream_params_hash_separator_avoids_prefix_collision() {
+        // "ab" + {} vs "a" + {"b": null}: without the separator
+        // these would have identical byte sequences. With the 0x00
+        // separator they don't.
+        let mut p2 = StreamParams::new();
+        p2.insert("b".into(), Value::Null);
+        let h1 = stream_params_hash("ab", &StreamParams::new());
+        let h2 = stream_params_hash("a", &p2);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn stream_params_hash_is_stable_across_insert_order() {
+        // StreamParams is a BTreeMap — sorted-by-key by construction.
+        // Inserting in different orders must produce identical hashes.
+        let mut p_in_order = StreamParams::new();
+        p_in_order.insert("a".into(), json!("1"));
+        p_in_order.insert("b".into(), json!("2"));
+        p_in_order.insert("c".into(), json!("3"));
+
+        let mut p_reversed = StreamParams::new();
+        p_reversed.insert("c".into(), json!("3"));
+        p_reversed.insert("a".into(), json!("1"));
+        p_reversed.insert("b".into(), json!("2"));
+
+        assert_eq!(
+            stream_params_hash("issues", &p_in_order),
+            stream_params_hash("issues", &p_reversed),
+        );
+    }
+
+    #[test]
+    fn stream_params_hash_distinguishes_distinct_values() {
+        let mut p1 = StreamParams::new();
+        p1.insert("workspace_id".into(), json!("W1"));
+        let mut p2 = StreamParams::new();
+        p2.insert("workspace_id".into(), json!("W2"));
+        assert_ne!(
+            stream_params_hash("issues", &p1),
+            stream_params_hash("issues", &p2),
+        );
+    }
+
+    /// **Golden fixture** — DO NOT EDIT VALUES.
+    ///
+    /// These hex-encoded hashes are the wire-protocol contract for
+    /// RFC 088 §C. Any port (server-side hash producer, client-side
+    /// hash subscriber) must produce exactly these bytes for these
+    /// inputs, or the live-wakeup topic routing breaks silently
+    /// (mutations get published to topic X, clients listen on topic
+    /// X', no overlap, no error).
+    ///
+    /// If a future change MUST alter the hash function, bump
+    /// `LIVE_PROTOCOL_V1` first and add migration logic.
+    #[test]
+    #[allow(clippy::type_complexity)] // golden-fixture-only triple
+    fn stream_params_hash_golden_fixture() {
+        // (stream, params_kvs, expected_hex_hash)
+        let cases: &[(&str, &[(&str, Value)], &str)] = &[
+            // 1. bare stream, empty params
+            ("issues", &[], "issues_empty"),
+            // 2. single param, string value
+            ("issues", &[("workspace_id", json!("W1"))], "issues_w1"),
+            // 3. two params, sorted order
+            (
+                "issues",
+                &[("status", json!("open")), ("workspace_id", json!("W1"))],
+                "issues_w1_open",
+            ),
+            // 4. nested object value (rare but supported)
+            (
+                "comments",
+                &[("filter", json!({"status": "active"}))],
+                "comments_nested",
+            ),
+            // 5. distinct stream name with same params as #2
+            ("comments", &[("workspace_id", json!("W1"))], "comments_w1"),
+        ];
+
+        let mut computed: Vec<(String, u64)> = Vec::new();
+        for (stream, kvs, label) in cases {
+            let mut params = StreamParams::new();
+            for (k, v) in *kvs {
+                params.insert((*k).to_string(), v.clone());
+            }
+            computed.push(((*label).into(), stream_params_hash(stream, &params)));
+        }
+
+        // The expected hashes are pinned by the snapshot below.
+        // Pretty-printed so a diff in CI shows exactly which case
+        // drifted.
+        let snapshot: String = computed
+            .iter()
+            .map(|(label, hash)| format!("{label} = {hash:016x}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected = "\
+issues_empty = ebb76190a8dc90b7
+issues_w1 = 6937b67bfe60e730
+issues_w1_open = 35eea32b30a1d59c
+comments_nested = ba8db781db55988d
+comments_w1 = 668b4b2f8b17847e";
+
+        assert_eq!(
+            snapshot, expected,
+            "RFC 088 §C wire-protocol hash spec drifted. \
+             If this drift is intentional, bump LIVE_PROTOCOL_V1 \
+             FIRST and add migration logic — old clients hashing \
+             the old way will MISS wakeups until they upgrade."
+        );
+    }
+
+    // -----------------------------------------------------------------
 
     #[test]
     fn endpoint_paths_share_prefix() {

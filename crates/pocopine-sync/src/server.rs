@@ -212,6 +212,34 @@ pub trait SyncStreamSource: Send + Sync + 'static {
         let stream = self.stream().as_str().to_string();
         Box::pin(async move { Err(SyncError::schema_migration(stream, from, to)) })
     }
+
+    /// Project a canonical row payload into the [`StreamParams`] that
+    /// identify which subscribers care about it (RFC 088 §C).
+    ///
+    /// The server hashes the returned params and publishes the
+    /// resulting invalidation to a per-(stream, params_hash) topic
+    /// so only clients whose subscription params match wake up.
+    /// Clients on the matching `(stream, params)` subscription
+    /// compute the SAME hash and listen on the SAME topic — see
+    /// [`crate::protocol::stream_params_hash`] for the contract.
+    ///
+    /// Default: empty params, equivalent to bare-topic publish only
+    /// (backwards-compatible). The `#[query_resource]` macro
+    /// auto-emits an override that projects each `#[query_param]`
+    /// field into the params map; sources written by hand can
+    /// override to opt into precise routing.
+    ///
+    /// The framework calls this AFTER the source's `push` returned
+    /// `accepted` and the row has been persisted, so it sees the
+    /// post-mutation row shape. A `None` return falls back to the
+    /// bare-topic publish path (no per-params routing).
+    ///
+    /// Errors propagate up to `invalidate_stream_with_row`, which
+    /// logs them via `tracing::warn!` and falls back to bare publish
+    /// — a malformed row must NOT block the canonical write.
+    fn row_to_params(&self, _row: &Value) -> SyncResult<crate::StreamParams> {
+        Ok(crate::StreamParams::new())
+    }
 }
 
 #[derive(Clone)]
@@ -279,6 +307,74 @@ impl SyncServer {
             .map_err(|err| SyncError::backend(err.to_string()))?;
         events
             .publish(draft)
+            .await
+            .map_err(|err| SyncError::backend(err.to_string()))?;
+        Ok(())
+    }
+
+    /// Publish a live wake-up scoped to the (stream, params_hash)
+    /// audience the row's params identify (RFC 088 §C).
+    ///
+    /// Always publishes to the bare topic too (backwards compat —
+    /// old clients only listen on the bare topic and still need to
+    /// receive every event). If the stream's source overrides
+    /// [`SyncStreamSource::row_to_params`] AND returns a non-empty
+    /// params map, ALSO publishes to the per-`(stream, params_hash)`
+    /// topic so new clients listening there wake up too.
+    ///
+    /// If `row_to_params` errors, the per-params publish is skipped
+    /// and a `tracing::warn!` is emitted — a malformed row MUST NOT
+    /// block the bare invalidation (which is the back-compat lifeline
+    /// for old clients).
+    ///
+    /// The framework's `/push` handler calls this once per accepted
+    /// row. Stream-wide invalidations from other code paths can keep
+    /// calling [`Self::invalidate_stream`] for the bare publish.
+    pub async fn invalidate_stream_with_row(&self, stream: &str, row: &Value) -> SyncResult<()> {
+        let Some(events) = self.inner.events.as_ref() else {
+            return Ok(());
+        };
+
+        // 1) Bare-topic publish (backwards compat).
+        let bare_tag = sync_stream_tag(stream);
+        let bare_topic = pocopine_live::query_tag_topic(&bare_tag)
+            .map_err(|err| SyncError::backend(err.to_string()))?;
+        let bare_draft = pocopine_live::query_invalidated(bare_topic, [bare_tag.clone()])
+            .map_err(|err| SyncError::backend(err.to_string()))?;
+        events
+            .publish(bare_draft)
+            .await
+            .map_err(|err| SyncError::backend(err.to_string()))?;
+
+        // 2) Per-params topic publish (precise routing).
+        let registered = self.stream(stream)?;
+        let params = match registered.source.row_to_params(row) {
+            Ok(p) => p,
+            Err(err) => {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = stream,
+                    error = %err,
+                    "RFC 088 §C: row_to_params failed; bare publish only",
+                );
+                return Ok(());
+            }
+        };
+        if params.is_empty() {
+            // Source doesn't override row_to_params, or this row's
+            // projection genuinely has no partition keys. Either way
+            // the bare publish already covers everyone — no per-
+            // params topic to add.
+            return Ok(());
+        }
+        let hash = crate::stream_params_hash(stream, &params);
+        let params_tag = crate::sync_stream_params_tag(stream, hash);
+        let params_topic = pocopine_live::query_tag_topic(&params_tag)
+            .map_err(|err| SyncError::backend(err.to_string()))?;
+        let params_draft = pocopine_live::query_invalidated(params_topic, [params_tag])
+            .map_err(|err| SyncError::backend(err.to_string()))?;
+        events
+            .publish(params_draft)
             .await
             .map_err(|err| SyncError::backend(err.to_string()))?;
         Ok(())
@@ -574,13 +670,35 @@ async fn push_handler(
             response.collection = Some(collection_name);
         }
         if !response.accepted.is_empty() {
-            if let Err(err) = sync.invalidate_stream(response.stream.as_str()).await {
-                tracing::warn!(
-                    target: "pocopine.log",
-                    error = %err,
-                    stream = response.stream.as_str(),
-                    "failed to publish sync stream invalidation after push"
-                );
+            // RFC 088 §C: publish per-row to BOTH the bare topic AND
+            // the per-(stream, params_hash) topic for each accepted
+            // row, so new clients on precise topics wake up while
+            // old clients on the bare topic keep working. The bare-
+            // topic publish would be redundant if we hit it once per
+            // row (vs once per stream), but `invalidate_stream_with_row`
+            // is currently shaped to bundle the bare publish per
+            // call. For pushes with many accepted rows hitting the
+            // SAME params_hash, this duplicates the bare publish —
+            // the event backend dedupes per topic and the receivers
+            // don't suffer (they only /pull once via their cursor).
+            //
+            // Sources that DON'T override `row_to_params` (every
+            // source today) get a single bare publish per row; the
+            // per-params publish is a no-op (empty params → early
+            // return inside `invalidate_stream_with_row`).
+            for row in &response.rows {
+                if let Err(err) = sync
+                    .invalidate_stream_with_row(response.stream.as_str(), &row.value)
+                    .await
+                {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        error = %err,
+                        stream = response.stream.as_str(),
+                        row_key = row.key.as_str(),
+                        "failed to publish sync stream invalidation after push"
+                    );
+                }
             }
         }
         Ok(response)
@@ -850,6 +968,169 @@ mod tests {
         posts.upsert("post_1", "hello".to_string()).unwrap();
         let sync = SyncServer::builder().public_stream(posts).build();
         finalize(sync)
+    }
+
+    // ---- RFC 088 §C: invalidate_stream_with_row dual publish -------
+
+    /// Test source: overrides `row_to_params` to project
+    /// `workspace_id` into the params map so we can assert the
+    /// per-params topic is published.
+    struct ParamsRoutedStream {
+        name: SyncStreamName,
+        collection: SyncCollectionName,
+    }
+    impl ParamsRoutedStream {
+        fn new() -> Self {
+            Self {
+                name: SyncStreamName::new("issues").unwrap(),
+                collection: SyncCollectionName::new("issues").unwrap(),
+            }
+        }
+    }
+    impl SyncStreamSource for ParamsRoutedStream {
+        fn stream(&self) -> &SyncStreamName {
+            &self.name
+        }
+        fn collection(&self) -> &SyncCollectionName {
+            &self.collection
+        }
+        fn pull(
+            &self,
+            _ctx: RequestContext,
+            _request: SyncPullRequest,
+        ) -> SyncBoxFuture<'_, SyncPullResponse<Value>> {
+            Box::pin(async move { Err(SyncError::Unsupported("test stream".into())) })
+        }
+        fn push(
+            &self,
+            _ctx: RequestContext,
+            _request: SyncPushRequest<Value>,
+        ) -> SyncBoxFuture<'_, SyncPushResponse<Value>> {
+            Box::pin(async move { Err(SyncError::Unsupported("test stream".into())) })
+        }
+        fn row_to_params(&self, row: &Value) -> SyncResult<crate::StreamParams> {
+            let mut params = crate::StreamParams::new();
+            if let Some(ws) = row.get("workspace_id") {
+                params.insert("workspace_id".into(), ws.clone());
+            }
+            Ok(params)
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidate_stream_with_row_publishes_to_both_topics() {
+        use pocopine_events::{MemoryEventBackend, ReplayRequest, Topic};
+        use std::sync::Arc;
+
+        let backend: SharedEventBackend = Arc::new(MemoryEventBackend::new());
+        let sync = SyncServer::builder()
+            .public_stream(ParamsRoutedStream::new())
+            .events(backend.clone())
+            .build();
+
+        let row = json!({"id": "i1", "workspace_id": "W1"});
+        sync.invalidate_stream_with_row("issues", &row)
+            .await
+            .unwrap();
+
+        // Expected topics: bare + per-(stream, params_hash).
+        let bare_tag = sync_stream_tag("issues");
+        let mut expected_params = crate::StreamParams::new();
+        expected_params.insert("workspace_id".into(), json!("W1"));
+        let hash = crate::stream_params_hash("issues", &expected_params);
+        let params_tag = crate::sync_stream_params_tag("issues", hash);
+        let bare_topic = pocopine_live::query_tag_topic(&bare_tag).unwrap();
+        let params_topic = pocopine_live::query_tag_topic(&params_tag).unwrap();
+
+        // Replay the recorded events on each topic; assert one each.
+        let replay = backend
+            .replay(ReplayRequest::new(vec![
+                bare_topic.clone(),
+                params_topic.clone(),
+            ]))
+            .await
+            .unwrap();
+        let by_topic: std::collections::HashMap<Topic, usize> =
+            replay
+                .events
+                .iter()
+                .fold(std::collections::HashMap::new(), |mut acc, env| {
+                    *acc.entry(env.topic.clone()).or_insert(0) += 1;
+                    acc
+                });
+        assert_eq!(by_topic.get(&bare_topic).copied(), Some(1), "bare publish");
+        assert_eq!(
+            by_topic.get(&params_topic).copied(),
+            Some(1),
+            "per-params publish"
+        );
+    }
+
+    /// When `row_to_params` returns empty params (the default impl,
+    /// or a source that opts out), only the bare topic is published.
+    /// Verifies the back-compat path stays clean.
+    struct DefaultRoutedStream {
+        name: SyncStreamName,
+        collection: SyncCollectionName,
+    }
+    impl DefaultRoutedStream {
+        fn new() -> Self {
+            Self {
+                name: SyncStreamName::new("comments").unwrap(),
+                collection: SyncCollectionName::new("comments").unwrap(),
+            }
+        }
+    }
+    impl SyncStreamSource for DefaultRoutedStream {
+        fn stream(&self) -> &SyncStreamName {
+            &self.name
+        }
+        fn collection(&self) -> &SyncCollectionName {
+            &self.collection
+        }
+        fn pull(
+            &self,
+            _ctx: RequestContext,
+            _request: SyncPullRequest,
+        ) -> SyncBoxFuture<'_, SyncPullResponse<Value>> {
+            Box::pin(async move { Err(SyncError::Unsupported("test stream".into())) })
+        }
+        fn push(
+            &self,
+            _ctx: RequestContext,
+            _request: SyncPushRequest<Value>,
+        ) -> SyncBoxFuture<'_, SyncPushResponse<Value>> {
+            Box::pin(async move { Err(SyncError::Unsupported("test stream".into())) })
+        }
+        // No override of row_to_params → trait default → empty params.
+    }
+
+    #[tokio::test]
+    async fn invalidate_stream_with_row_skips_per_params_when_empty() {
+        use pocopine_events::{MemoryEventBackend, ReplayRequest};
+        use std::sync::Arc;
+
+        let backend: SharedEventBackend = Arc::new(MemoryEventBackend::new());
+        let sync = SyncServer::builder()
+            .public_stream(DefaultRoutedStream::new())
+            .events(backend.clone())
+            .build();
+
+        let row = json!({"id": "c1"});
+        sync.invalidate_stream_with_row("comments", &row)
+            .await
+            .unwrap();
+
+        let bare_tag = sync_stream_tag("comments");
+        let bare_topic = pocopine_live::query_tag_topic(&bare_tag).unwrap();
+        let replay = backend
+            .replay(ReplayRequest::new(vec![bare_topic.clone()]))
+            .await
+            .unwrap();
+        // Bare publish: exactly one event. No per-params topic was
+        // published because row_to_params returned empty.
+        assert_eq!(replay.events.len(), 1);
+        assert_eq!(replay.events[0].topic, bare_topic);
     }
 
     fn router_with_guarded_posts_stream<P>(predicate: P) -> Router
