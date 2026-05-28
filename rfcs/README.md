@@ -90,3 +90,8 @@ Conventions:
 | 080 | [Heroku-style deploy contract (process graph + services)](./rfc-080-deploy-contract.md) | Draft |
 | 081 | [Component handle refs](./rfc-081-component-handle-refs.md) | Draft (Phase 1 landed) |
 | 082 | [Storage-agnostic file/object storage](./rfc-082-pocopine-storage.md) | Accepted |
+| 084 | [Typed slot props](./rfc-084-typed-slot-props.md) | Draft |
+| 086 | [`pocopine-sync-query`](./rfc-086-sync-query.md) | Draft |
+| 087 | [`pocopine-sync-query` driver lifecycle](./rfc-087-sync-query-driver.md) | Draft |
+| 088 | [`pocopine-sync-query` production parity](./rfc-088-sync-query-production-parity.md) | Draft |
+| 089 | [SPA router parity and nested outlets](./rfc-089-spa-router-parity.md) | Draft |
