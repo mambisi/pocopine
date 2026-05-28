@@ -285,6 +285,56 @@ fn partition_for_topic_returns_none_for_any_of_wrapper() {
     assert!(query.partition_hash().is_none());
 }
 
+// Regression for the codex finding (P2): the macro's comparator
+// detection MUST also recognize the `Range<T>` wire shape
+// (`{"from": ..., "to": ..., "inclusive": [_, _]}`). Without this,
+// a range-filtered required field would hash the wrapper object as
+// if it were a plain partition value, subscribing to a topic the
+// server never publishes.
+#[query_resource(name = "priced", schema_version = 1)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Priced {
+    pub id: String,
+    #[query_param(required)]
+    pub price: u32,
+}
+
+#[test]
+fn partition_for_topic_returns_none_for_range_wrapper() {
+    use priced::field;
+    let query = Priced::query().range(field::price, 10u32..100).build();
+    // Range filters can't partition the topic — the server's
+    // row_to_params projects a plain price value, but here the
+    // client's params have a range wrapper. Returning None lets the
+    // driver fall back to bare-topic only.
+    assert!(query.partition_hash().is_none());
+}
+
+// Regression for the codex finding (P2): a resource with NO
+// `required` fields must NOT subscribe to per-params topics — the
+// server's `invalidate_stream_with_row` short-circuits on empty
+// row_to_params, so any per-params subscription is dead.
+#[query_resource(name = "no_required", schema_version = 1)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NoRequiredResource {
+    pub id: String,
+    #[query_param]
+    pub flavor: String,
+}
+
+#[test]
+fn partition_for_topic_returns_none_when_no_required_fields_declared() {
+    let query: pocopine_sync_query::Query<NoRequiredResource> =
+        pocopine_sync_query::Query::builder(
+            pocopine_sync_query::SyncStreamName::new("no_required").unwrap(),
+        )
+        .with_partition_hash(no_required::partition_for_topic)
+        .build();
+    // Empty canonical projection → no per-params topic to subscribe
+    // to. Driver falls back to bare-topic only.
+    assert!(query.partition_hash().is_none());
+}
+
 #[test]
 fn row_to_params_skips_none_options() {
     // assignee_id: Option<String> with None → must be omitted from
