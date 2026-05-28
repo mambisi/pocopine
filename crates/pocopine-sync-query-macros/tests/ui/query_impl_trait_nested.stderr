@@ -1,0 +1,19 @@
+error: `#[query]` selectors cannot use argument-position `impl Trait` — not even nested (e.g. `Box<impl Trait>`, `Option<impl Trait>`). Argument-position `impl Trait` makes the fn generic over the call-site type, but the cache key only covers `(SelectorId, args_hash)`, so two concrete instantiations could alias each other's cached entries. Use a concrete type.
+  --> tests/ui/query_impl_trait_nested.rs:11:40
+   |
+11 | fn bad_nested(_client: QueryClient, b: Box<impl Hash + Clone + 'static>) -> u32 {
+   |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pocopine_sync_query::QueryClient`
+ --> tests/ui/query_impl_trait_nested.rs:6:5
+  |
+6 | use pocopine_sync_query::QueryClient;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::hash::Hash`
+ --> tests/ui/query_impl_trait_nested.rs:8:5
+  |
+8 | use std::hash::Hash;
+  |     ^^^^^^^^^^^^^^^

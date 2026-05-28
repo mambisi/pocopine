@@ -1,0 +1,13 @@
+error: `#[query]` selectors must be synchronous — the compute closure runs inside the reactive-rerun path
+ --> tests/ui/query_async_fn.rs:7:1
+  |
+7 | async fn bad_async(_client: QueryClient, ws: String) -> u32 {
+  | ^^^^^
+
+warning: unused import: `pocopine_sync_query::QueryClient`
+ --> tests/ui/query_async_fn.rs:3:5
+  |
+3 | use pocopine_sync_query::QueryClient;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

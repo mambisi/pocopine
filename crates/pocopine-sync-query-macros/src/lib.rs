@@ -1008,13 +1008,15 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
                         ));
                     }
                 };
-                if matches!(&*pt.ty, Type::ImplTrait(_)) {
+                if contains_impl_trait(&pt.ty) {
                     return Err(syn::Error::new_spanned(
                         &pt.ty,
                         "`#[query]` selectors cannot use argument-position `impl Trait` — \
-                         the cache key only covers `(SelectorId, args_hash)`, so two \
-                         instantiations could alias each other's entries. Use a concrete \
-                         type instead.",
+                         not even nested (e.g. `Box<impl Trait>`, `Option<impl Trait>`). \
+                         Argument-position `impl Trait` makes the fn generic over the \
+                         call-site type, but the cache key only covers \
+                         `(SelectorId, args_hash)`, so two concrete instantiations could \
+                         alias each other's cached entries. Use a concrete type.",
                     ));
                 }
                 arg_idents.push(ident);
@@ -1098,11 +1100,17 @@ fn expand_query(func: ItemFn) -> syn::Result<TokenStream2> {
         .collect();
 
     Ok(quote! {
+        // User attrs go on the inner fn — that's where the body
+        // lives, so function-scoped lint attrs (e.g.
+        // `#[allow(unused_variables)]`, `#[expect(…)]`) emitted by
+        // the user have to follow the body to keep their effect.
+        // Doc comments end up on a `#[doc(hidden)]` private fn,
+        // which is harmless (they aren't surfaced in rustdoc).
+        #(#user_attrs)*
         #[doc(hidden)]
         #[allow(non_snake_case, clippy::too_many_arguments)]
         fn #inner_fn_ident( #( #inner_fn_params ),* ) -> #ret_type #block
 
-        #(#user_attrs)*
         #[allow(non_camel_case_types, non_snake_case, dead_code)]
         #mod_vis mod #fn_name {
             // Bring the parent module's items into scope so `observe`
@@ -1178,4 +1186,34 @@ fn is_query_client_type(ty: &Type) -> bool {
         .segments
         .last()
         .is_some_and(|seg| seg.ident == "QueryClient")
+}
+
+/// Walk `ty` recursively and return `true` if any embedded type is
+/// argument-position `impl Trait`. Catches `Box<impl T>`,
+/// `Option<impl T>`, `(impl T, …)`, `&impl T`, etc. Rust desugars
+/// these to anonymous generics; with the selector cache key only
+/// covering `(SelectorId, args_hash)`, two concrete instantiations
+/// of the same `observe()` could alias their cached entries — that's
+/// the unsoundness the recursive check guards against.
+fn contains_impl_trait(ty: &Type) -> bool {
+    match ty {
+        Type::ImplTrait(_) => true,
+        Type::Reference(r) => contains_impl_trait(&r.elem),
+        Type::Slice(s) => contains_impl_trait(&s.elem),
+        Type::Array(a) => contains_impl_trait(&a.elem),
+        Type::Ptr(p) => contains_impl_trait(&p.elem),
+        Type::Paren(p) => contains_impl_trait(&p.elem),
+        Type::Group(g) => contains_impl_trait(&g.elem),
+        Type::Tuple(t) => t.elems.iter().any(contains_impl_trait),
+        Type::Path(p) => p.path.segments.iter().any(|seg| {
+            if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                args.args
+                    .iter()
+                    .any(|arg| matches!(arg, GenericArgument::Type(t) if contains_impl_trait(t)))
+            } else {
+                false
+            }
+        }),
+        _ => false,
+    }
 }
