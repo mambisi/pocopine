@@ -642,6 +642,96 @@ impl QueryClient {
     /// query-agnostic on the wire; routing happens client-side via
     /// predicate evaluation. See the wire/server contract in
     /// `pocopine-sync` and the cookbook.
+    /// RFC 090 Phase 3 — high-level client-side push that pairs with
+    /// `SourceResource::push` on the server. Use when you have a
+    /// typed `MutationPayload` (or any `Serialize` envelope) and one
+    /// optimistic `RowChange` to apply locally.
+    ///
+    /// Differs from [`Self::mutate`] in two ways:
+    /// 1. No `Mutator` trait required — callers build payload + change
+    ///    explicitly (the typed `Issue::create(draft)` API in Phase 4
+    ///    will be a thin wrapper over this method).
+    /// 2. No offline-replay queue. Network errors are surfaced to the
+    ///    caller as `Err(SyncError::Transport(...))` and the
+    ///    optimistic overlay is rolled back. Callers that need
+    ///    offline replay use `mutate` with a `Mutator` impl.
+    ///
+    /// Lifecycle:
+    /// 1. Apply optimistic locally — `change` is routed through every
+    ///    active subscription's predicate matcher; matching views
+    ///    fire `on_update` immediately.
+    /// 2. POST `/sync/v1/push` with one `ClientMutation<Value>`.
+    /// 3. Success → no rollback (the next `/pull` confirms canonical
+    ///    state). Failure → roll back the optimistic overlay.
+    ///
+    /// The caller is responsible for the `mutation_id`. Typically use
+    /// `pocopine_sync::ClientMutationDraft` and `.with_id()` to
+    /// derive one from a durable counter.
+    pub async fn push<P, Row>(
+        &self,
+        stream: SyncStreamName,
+        mutation_id: MutationId,
+        payload: P,
+        change: RowChange<Row>,
+        push_url: &str,
+    ) -> pocopine_sync::SyncResult<()>
+    where
+        P: serde::Serialize,
+        Row: Clone + serde::Serialize + 'static,
+    {
+        let payload_value = serde_json::to_value(&payload)
+            .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+
+        let wire_op = match &change {
+            RowChange::Upsert(_) => pocopine_sync::SyncOp::Upsert,
+            RowChange::Delete(_) => pocopine_sync::SyncOp::Delete,
+        };
+        let row_key = match &change {
+            RowChange::Upsert(row) => row_key_of(row),
+            RowChange::Delete(key) => Some(key.clone()),
+        };
+        let mut wire_mutation =
+            pocopine_sync::ClientMutation::new(mutation_id.clone(), wire_op, payload_value.clone());
+        wire_mutation.key = row_key;
+
+        // 1. Optimistic apply.
+        self.route_optimistic_changes::<Row>(
+            &stream,
+            &mutation_id,
+            &wire_mutation,
+            std::slice::from_ref(&change),
+        );
+
+        // 2. Wire push.
+        let request = pocopine_sync::SyncPushRequest::new(stream.clone(), [wire_mutation.clone()]);
+        let result = pocopine_core::fetch::call::<
+            pocopine_sync::SyncPushRequest<Value>,
+            pocopine_sync::SyncPushResponse<Value>,
+        >(push_url, &request)
+        .await;
+
+        match result {
+            Ok(_response) => {
+                // Server accepted (or returned rejected/conflicts).
+                // The /pull live wakeup will reconcile canonical
+                // state. Optimistic overlay stays in place until
+                // the next pull swaps it. The caller can inspect
+                // `_response` in a future API if they want
+                // per-mutation outcome details; the minimal Phase 3
+                // surface just acknowledges success.
+                Ok(())
+            }
+            Err(err) => {
+                // Roll back the optimistic overlay so the UI
+                // doesn't show the failed mutation.
+                Self::dequeue_pending_for_stream::<Row>(&self.inner, &stream, &mutation_id);
+                Err(pocopine_sync::SyncError::backend(format!(
+                    "push transport failed: {err}"
+                )))
+            }
+        }
+    }
+
     pub async fn mutate<M>(
         &self,
         payload: M::Payload,
