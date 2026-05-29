@@ -46,36 +46,20 @@ looks the way it does — the code itself tells you *what*.
 - [`live.md`](./live.md) — live invalidation tutorial: SSE streams,
   collection/query refresh callbacks, server topic policies, and the
   example/test files that must stay in sync with live API changes.
-- [`sync.md`](./sync.md) — sync tutorial: explicit `pocopine-sync`
-  extension setup, server shapes, cursor pulls, live wake-up wiring, and
-  the current memory-backed example.
-- [`sync-local-store-plan.md`](./sync-local-store-plan.md) — local-store
-  implementation plan and status: `SyncLocalStore`, durable client
-  identity, SQLite browser/native storage, and SQLx as a later
-  host/server adapter.
-- [`sync-local-first-roadmap.md`](./sync-local-first-roadmap.md) —
-  current roadmap for turning the shipped sync protocol, local store, and
-  SQLite backend into a database-agnostic local-first sync engine without
-  becoming a sync database.
-- [`sync-local-first-architecture-review.md`](./sync-local-first-architecture-review.md) —
-  architecture review against established local-first systems, with the
-  phase plan for the next resource-runtime slice.
-- [`sync-conflict-architecture.md`](./sync-conflict-architecture.md) —
-  deep dive on the sync layers, canonical-vs-rendered local state,
-  pending overlays, push outcomes, conflict resolution direction, and the
-  invariants future sync/resource authors must preserve.
-- [`sync-crud.md`](./sync-crud.md) — `pocopine-sync-crud` helper layer:
-  `CrudSource`, `ResourceId`, CRUD mutation payloads, write policies,
-  transaction binding, the non-macro runtime adapter, generated typed
-  CRUD methods, conservative conflict helpers, and the boundary that
-  keeps Pocopine out of ORM territory.
-- [`sync-crud-macro-contract.md`](./sync-crud-macro-contract.md) —
-  concrete generated CRUD macro API contract, including the server
-  resource module shape, client binding helpers, queued/online handling,
-  and conflict outcome semantics.
-- [`sync-sqlx.md`](./sync-sqlx.md) — host/server SQLx helpers for
-  transactional CRUD sync resources, including backend feature flags,
-  accepted-mutation schema, and the app-owned SQL boundary.
+- [`sync-crud-to-query-migration.md`](./sync-crud-to-query-migration.md) —
+  migration guide from the deleted `pocopine-sync-crud` to the unified
+  `pocopine-sync-query`: `Source` trait shape, `SourceResource` adapter,
+  typed `Issue::create/update/delete(...).optimistic(...).push(...)` API,
+  and the rename table (`save→update`, `remove→delete`,
+  `base_version→expected_version`, `params_of→partition_by`,
+  `version→version_field`). This is currently the entry point for the
+  new sync write API while the broader sync tutorial set is rewritten.
+- [`sync-query-selector-mechanism.md`](./sync-query-selector-mechanism.md) —
+  design + worked example for the `#[query]` selector layer: read
+  tracking, memoization, diff-suppressed listeners, refcount lifecycle,
+  and composition between selectors.
+- [`sync-query-selector-implementation.md`](./sync-query-selector-implementation.md) —
+  implementation plan for the selector runtime + macro (forthcoming PR).
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.

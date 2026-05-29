@@ -12,7 +12,7 @@
 //! every other observed query. Predicate evaluation is the routing key,
 //! not the calling context.
 //!
-//! See RFC 086 §5.3 and `docs/sync-query-design.md` §3.4 for design rationale.
+//! See RFC 086 §5.3 for design rationale.
 
 use std::pin::Pin;
 

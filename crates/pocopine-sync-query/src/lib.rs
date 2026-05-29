@@ -6,8 +6,8 @@
 //! reactive view; many queries per entity type").
 //!
 //! See [RFC 086](../rfcs/rfc-086-sync-query.md) for design rationale and
-//! [`docs/sync-query-design.md`](../docs/sync-query-design.md) for the
-//! implementation spec.
+//! [RFC 090](../rfcs/rfc-090-merge-crud-into-query.md) for the merge that
+//! folded `pocopine-sync-crud` into this crate.
 //!
 //! # Status
 //!
