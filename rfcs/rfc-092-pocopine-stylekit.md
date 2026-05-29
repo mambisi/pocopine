@@ -320,6 +320,40 @@ The issue's six open questions are answered by D1–D7 above:
 
 Milestones 2–5 constitute Milestone 1 of D9; 6–7 follow.
 
+## Post-Milestone-1 decision — Tailwind's fate (phased-plan step 7)
+
+Milestone 1 landed (crate, `@theme` parser, full file-browser-catalog
+registry, AST extraction via the shared `pocopine-template-parser`
+crate, CLI integration, and the file-browser port). Evidence from it:
+
+- The 250-class file-browser catalog compiles with **zero diagnostics**
+  and byte-stable output; the example now ships on `pkg/stylekit.css`.
+- The grammar parser survives Tailwind's full 3355-class corpus without
+  panicking.
+- Real gaps remain: no default colour palette (`slate-*`/`rose-*`), no
+  full Preflight, no container queries, `pp-bind:class` discovery is
+  best-effort, and attribute spans are derived rather than parser-true.
+
+Given that, the decision is **"both, with Stylekit as the default for
+new examples":**
+
+- **Keep Tailwind as opt-in fallback.** The `[…pocopine.tailwind]`
+  block and the bundled standalone CLI stay. Apps needing the full
+  Tailwind palette/plugins keep using it. Stylekit and Tailwind can
+  coexist (distinct output files), as file-browser demonstrates.
+- **Default new Pocopine examples to Stylekit.** New examples author
+  against the catalog and ship `pkg/stylekit.css`. This grows the
+  catalog through real usage (the inventory-driven method of D8/D9)
+  rather than speculative parity work.
+- **Do not drop Tailwind** until the catalog covers the palette + a
+  Preflight and at least one non-trivial additional example has ported
+  cleanly. Revisit in a follow-up once two more examples ship on
+  Stylekit.
+
+This keeps the migration reversible (the fallback is one config line)
+while committing the project's *new* surface to the framework-owned
+compiler.
+
 ## Non-goals (v1)
 
 * Full Tailwind compatibility.

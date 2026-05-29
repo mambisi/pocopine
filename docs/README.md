@@ -34,6 +34,10 @@ looks the way it does — the code itself tells you *what*.
 - [`browser-storage.md`](./browser-storage.md) — typed `localStorage`
   helpers for small browser preferences, plus the auth-token and SSR
   boundaries.
+- [`pine-stylekit.md`](./pine-stylekit.md) — the Pocopine-native
+  utility-CSS compiler (RFC 092): Tailwind-shaped class grammar,
+  `@theme` tokens, the generated utility catalog, diagnostics, and the
+  `pocopine build --stylekit` integration.
 - [`route-guards-and-loaders.md`](./route-guards-and-loaders.md) —
   client-side route guards, async loaders, fetch middleware, and the
   rejection-handler chain. Covers `ReturnTo` validation,

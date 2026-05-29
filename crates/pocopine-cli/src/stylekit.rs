@@ -134,9 +134,20 @@ fn collect_poco(dir: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
     Ok(())
 }
 
-/// `pocopine stylekit` (hidden debug verb): compile once, then dump CSS
-/// to stdout or write the configured output file.
-pub fn run_command(path: &Path, dump: bool) -> Result<()> {
+/// `pocopine stylekit` (hidden debug verb): print the catalog/metadata,
+/// or compile once and dump/write the stylesheet.
+pub fn run_command(path: &Path, dump: bool, docs: bool, metadata: bool) -> Result<()> {
+    if docs {
+        print!("{}", pocopine_stylekit::catalog::catalog().to_markdown());
+        return Ok(());
+    }
+    if metadata {
+        println!(
+            "{}",
+            pocopine_stylekit::catalog::catalog().to_metadata_json()
+        );
+        return Ok(());
+    }
     let project = path.canonicalize()?;
     let cfg = crate::config::load(path)?;
     let scfg = resolve(&cfg);
