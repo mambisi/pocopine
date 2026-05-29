@@ -12,30 +12,34 @@ worked example.
 
 ## What you build
 
-```
-                    (1) issues::query()
-                        .eq(workspace_id, "W1")
-                        .observe(&client)
-                                  │
-              ┌───────── wasm ────┼─── server ─────────┐
-              │                   │                     │
-   QueryView<Issue> ◀── /pull ────┼──── SourceResource  │
-              │                   │       │  ▲          │
-              │                   │       ▼  │          │
-              │                   │   Source<Row=Issue> │
-              │                   │       │             │
-              ▲                   │       └── DB        │
-              │                   │                     │
-   on_update fires ◀── live SSE ──┼── per-(stream, params_hash) topic
-              │                   │                     │
-   (2) Issue::create(id, draft)   │                     │
-       .optimistic(|p| …)         │                     │
-       (overlay) ─────────────────▶── /push ────────────▶
-              │                                          │
-              ▼                                          ▼
-       View updates                              MutationLog +
-       immediately                              Source::create
-       (no server roundtrip)
+```mermaid
+flowchart LR
+    subgraph wasm["wasm (browser)"]
+        Q["Issue::query()<br/>.eq(workspace_id, 'W1')<br/>.observe(&client)"]
+        V["QueryView&lt;Issue&gt;<br/>rows() / on_update()"]
+        C["Issue::create(id, draft)<br/>.optimistic(|p| …)<br/>.push_typed(...)"]
+        O[("pending<br/>overlay")]
+    end
+
+    subgraph server["server (host)"]
+        R["SourceResource"]
+        S["Source&lt;Row = Issue&gt;"]
+        L["MutationLog"]
+        DB[("database")]
+    end
+
+    Q -- "/sync/v1/pull" --> R
+    R --> S
+    S --> DB
+    R -- snapshot rows --> V
+
+    C --> O
+    O -- routed to matching views --> V
+    O -- "/sync/v1/push" --> R
+    R --> L
+    L -- "Reserved" --> S
+
+    R -- "live SSE per (stream, params_hash)" --> V
 ```
 
 Three pieces share one row type:
@@ -81,7 +85,7 @@ pub struct IssueDraft {
 
 What `#[query_resource]` emits:
 
-```
+```rust
 impl Issue {
     pub fn query() -> QueryBuilder<Self>             // entry to the DSL
     pub fn create(id, draft) -> TypedMutation<…>     // typed writes
@@ -245,15 +249,36 @@ async fn create_issue(client: &QueryClient, id: MutationId, draft: IssueDraft)
 
 What the client does:
 
-```
-1. Run the .optimistic(...) closure to build a tentative Issue.
-2. Route it through every active QueryView whose predicate matches
-   (workspace W1 + status="open"); each view's on_update fires.
-3. POST /sync/v1/push with the typed payload.
-4. Server: MutationLog::reserve_mutation → Source::create → response.
-5. On accepted: overlay stays until next /pull replaces it with canonical.
-   On rejected: RollbackGuard removes the overlay, on_update fires again.
-6. Live SSE wakes other clients on the same (issues, W1-hash) topic.
+```mermaid
+sequenceDiagram
+    participant App as caller
+    participant Client as QueryClient
+    participant View as QueryView (W1)
+    participant Server as SourceResource
+    participant Log as MutationLog
+    participant Source as Source::create
+    participant Other as other clients (W1)
+
+    App->>Client: Issue::create(id, draft).optimistic(build).push_typed(...)
+    Client->>Client: run build(&payload) → tentative Issue
+    Client->>View: route through pending overlay
+    View-->>App: on_update fires (UI updates instantly)
+
+    Client->>Server: POST /sync/v1/push
+    Server->>Log: reserve_mutation
+    Log-->>Server: Reserved
+    Server->>Source: create(ctx, id, draft)
+    Source-->>Server: canonical Issue
+
+    alt accepted
+        Server-->>Client: { accepted: [mutation_id] }
+        Note over View: overlay stays;<br/>next /pull replaces with canonical
+        Server->>Other: live SSE on (issues, W1-hash)
+    else rejected / conflict
+        Server-->>Client: { rejected: [...] }
+        Client->>View: RollbackGuard drops overlay
+        View-->>App: on_update fires (UI rolls back)
+    end
 ```
 
 `MutationId` should come from a durable client-side counter so retries
