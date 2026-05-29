@@ -8,6 +8,15 @@ publish = false
 [package.metadata.pocopine]
 port = 3005
 
+# RFC 092 — second Pine Stylekit port (issue #172). Stylekit is the
+# active compiler (index.html links /pkg/stylekit.css); it needs no
+# @theme here — colours come from the built-in Tailwind palette.
+[package.metadata.pocopine.stylekit]
+input = "app.css"
+output = "pkg/stylekit.css"
+src = "src"
+
+# Tailwind retained as a fallback during the experiment (RFC 092 D8).
 [package.metadata.pocopine.tailwind]
 input = "app.css"
 output = "pkg/tailwind.css"

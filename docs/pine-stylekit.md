@@ -11,8 +11,10 @@ class grammar is familiar, but the supported set is the [catalog
 below](#utility-catalog) — that catalog *is* the contract. An unknown
 class is a build error with a suggestion, not a silent miss.
 
-> Status: experimental (RFC 092, Milestone 1). The first ported example
-> is `examples/file-browser`. Tailwind remains available as a fallback.
+> Status: experimental (RFC 092, Milestone 2). Ported examples:
+> `examples/file-browser` and `examples/tailwind`. The built-in Tailwind
+> colour palette and Preflight ship; Tailwind remains available as a
+> fallback.
 
 ## Why not just Tailwind?
 
@@ -194,6 +196,7 @@ human catalog below is regenerated with `pocopine stylekit --docs`.
 | `p` | Spacing | — | `p-4` | p/px/py/pt/pb/pl/pr |
 | `m` | Spacing | — | `mx-auto` | m/mx/my/mt/mb/ml/mr (auto allowed) |
 | `gap` | Spacing | — | `gap-2.5` | flex/grid gap |
+| `space-y` | Spacing | — | `space-y-2` | space-y/space-x — margin between children |
 
 ### Sizing
 
@@ -210,7 +213,7 @@ human catalog below is regenerated with `pocopine stylekit --docs`.
 | `font` | Scale | — | `font-medium` | weight (medium/semibold/…) + family (sans/serif/mono) |
 | `leading` | Scale | yes | `leading-relaxed` | tight/snug/normal/relaxed/loose |
 | `tracking` | Scale | yes | `tracking-tight` | tighter…widest |
-| `underline` | None | — | `underline` | + underline-offset-{n}, uppercase, truncate |
+| `underline` | None | — | `underline` | + underline-offset-{n}, uppercase, truncate, tabular-nums |
 
 ### Color (token-backed)
 

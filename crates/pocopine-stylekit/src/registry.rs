@@ -112,6 +112,11 @@ impl Registry {
                 }
             }
         }
+        // `space-{x,y}` apply margins *between* children, not to the
+        // element itself — append the child-combinator tail.
+        if parsed.base.starts_with("space-y-") || parsed.base.starts_with("space-x-") {
+            selector.push_str(" > :not([hidden]) ~ :not([hidden])");
+        }
 
         out.css.push_str(
             &Rule {
@@ -141,6 +146,7 @@ impl Registry {
         //    claims the base wins; `None` means "not mine, keep trying".
         let families: &[fn(&str, &ThemeTokens) -> Resolved] = &[
             try_spacing,
+            try_space,
             try_sizing,
             try_inset,
             try_border,
@@ -274,6 +280,8 @@ fn static_utility(base: &str) -> Option<Decls> {
         "text-justify" => d("text-align", "justify"),
         "uppercase" => d("text-transform", "uppercase"),
         "lowercase" => d("text-transform", "lowercase"),
+        "tabular-nums" => d("font-variant-numeric", "tabular-nums"),
+        "normal-nums" => d("font-variant-numeric", "normal"),
         "capitalize" => d("text-transform", "capitalize"),
         "underline" => d("text-decoration-line", "underline"),
         "line-through" => d("text-decoration-line", "line-through"),
@@ -387,6 +395,24 @@ fn try_spacing(base: &str, _t: &ThemeTokens) -> Resolved {
         Some(v) => Ok(props.iter().map(|p| (p.to_string(), v.clone())).collect()),
         None => Err(Diagnostic::error(format!(
             "`{prefix}` expects a spacing value, got `{value}`"
+        ))),
+    })
+}
+
+/// `space-y-N` / `space-x-N` — margin between children. The child
+/// combinator selector is appended by `emit_into`.
+fn try_space(base: &str, _t: &ThemeTokens) -> Resolved {
+    let (prop, value) = if let Some(v) = base.strip_prefix("space-y-") {
+        ("margin-top", v)
+    } else if let Some(v) = base.strip_prefix("space-x-") {
+        ("margin-left", v)
+    } else {
+        return None;
+    };
+    Some(match spacing(value) {
+        Some(v) => Ok(decl(prop, &v)),
+        None => Err(Diagnostic::error(format!(
+            "`space` expects a spacing value, got `{value}`"
         ))),
     })
 }
@@ -948,6 +974,18 @@ mod tests {
         assert!(css("bg-surface/95").contains(
             "background-color: color-mix(in oklab, var(--color-surface) 95%, transparent);"
         ));
+    }
+
+    #[test]
+    fn space_between_and_numeric_variants() {
+        let y = css("space-y-5");
+        assert!(
+            y.starts_with(".space-y-5 > :not([hidden]) ~ :not([hidden]) {"),
+            "{y}"
+        );
+        assert!(y.contains("margin-top: calc(var(--spacing, 0.25rem) * 5);"));
+        assert!(css("space-x-2").contains("margin-left: calc(var(--spacing, 0.25rem) * 2);"));
+        assert!(css("tabular-nums").contains("font-variant-numeric: tabular-nums;"));
     }
 
     #[test]
