@@ -83,7 +83,7 @@ pub use state::QueryState;
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{
     query_from_pull_request, source, Conflict, RemoveResult, Source, SourceFuture, SourceId,
-    SourceParamsFn, SourceResource, SourceResourceBuilder, WriteResult,
+    SourceParamsFn, SourceResource, SourceResourceBuilder, SourceVersionFn, WriteResult,
     DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT,
 };
 

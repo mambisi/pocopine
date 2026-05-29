@@ -129,6 +129,20 @@ pub type SourceFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output 
 /// explicitly.
 pub type SourceParamsFn<Row> = dyn Fn(&Row) -> StreamParams + Send + Sync + 'static;
 
+/// Type-erased extractor that pulls the optimistic-concurrency
+/// version off a typed row. Stored on [`SourceResource`]; attached
+/// via [`SourceResource::version`]. When unset, pulled rows ship
+/// with `SyncRow::version = None` and Phase 2's `Source::save`
+/// `base_version` checks degrade to "no concurrency control."
+///
+/// Phase 2 will accept polyglot input types (numeric versions,
+/// `String`, `Option<String>`, etc.) via a `RowVersionValue`-style
+/// blanket impl. Phase 1 keeps it simple: the user returns an
+/// `Option<RowVersion>` directly. Mechanical to widen later
+/// without breaking the closure-shaped surface.
+pub type SourceVersionFn<Row> =
+    dyn Fn(&Row) -> SyncResult<Option<RowVersion>> + Send + Sync + 'static;
+
 /// Query-native server source. Replaces `CrudSource` in RFC 090's
 /// merged design.
 ///
@@ -341,6 +355,7 @@ impl<S: Source> SourceResourceBuilder<S> {
             max_snapshot_rows: self.max_snapshot_rows,
             schema_version: self.schema_version,
             id_of: Arc::new(id_of),
+            version_of: None,
             params_of: None,
         }
     }
@@ -356,6 +371,11 @@ pub struct SourceResource<S: Source, IdOf> {
     max_snapshot_rows: usize,
     schema_version: u32,
     id_of: Arc<IdOf>,
+    /// Row-version extractor for optimistic-concurrency. Set via
+    /// [`Self::version`]. When `None`, pulled rows ship with
+    /// `SyncRow::version = None` and Phase 2's `Source::save`
+    /// `base_version` checks degrade to "no concurrency control."
+    version_of: Option<Arc<SourceVersionFn<S::Row>>>,
     /// RFC 088 §C row → partition projector. Set via
     /// [`Self::params_of`]. When `None`, per-params publishes are
     /// disabled and the server publishes only the bare stream
@@ -368,6 +388,33 @@ where
     S: Source,
     IdOf: Fn(&S::Row) -> S::Id + Send + Sync + 'static,
 {
+    /// Attach a row-version extractor for optimistic concurrency.
+    /// Without it, pulled rows ship with `SyncRow::version = None`
+    /// and Phase 2's `Source::save` `base_version` checks have
+    /// nothing to compare against — concurrent writers can't be
+    /// detected.
+    ///
+    /// The closure returns `SyncResult<Option<RowVersion>>` so a
+    /// source can:
+    /// - return `Ok(None)` for rows with no meaningful version
+    ///   (e.g., immutable rows, server-only-write resources)
+    /// - return `Ok(Some(v))` for the canonical version token
+    /// - return `Err(...)` when version extraction itself fails
+    ///   (rare; usually means the row shape is corrupt)
+    ///
+    /// Most apps use a closure that maps an integer `version`
+    /// field to `RowVersion::new(v.to_string())?`. Phase 2 will
+    /// widen this to a polyglot `RowVersionValue`-style trait so
+    /// users can pass `|r| r.version` (numeric) or
+    /// `|r| r.etag.clone()` (string) directly.
+    pub fn version<F>(mut self, version_of: F) -> Self
+    where
+        F: Fn(&S::Row) -> SyncResult<Option<RowVersion>> + Send + Sync + 'static,
+    {
+        self.version_of = Some(Arc::new(version_of));
+        self
+    }
+
     /// Attach an RFC 088 §C row → partition projector. Until Phase 4
     /// auto-wires this from `#[query_resource]`, callers pass
     /// `<resource>::row_to_params_typed` explicitly.
@@ -417,9 +464,15 @@ where
         let Some(params_of) = self.params_of.as_ref() else {
             return Ok(StreamParams::new());
         };
+        // The row reaches `row_to_params` from the push-publish path
+        // (after `Source::create`/`save` already returned it); it's
+        // server-controlled state, not the client's request body.
+        // A deserialize failure here therefore signals a Source impl
+        // bug or schema drift, not bad client input — classify as
+        // `backend` so observability tools blame the right side.
         let typed: S::Row = serde_json::from_value(row.clone()).map_err(|e| {
-            SyncError::client(format!(
-                "row_to_params: {} row didn't deserialize: {}",
+            SyncError::backend(format!(
+                "row_to_params: {} row didn't deserialize for §C projection: {}",
                 self.stream.as_str(),
                 e
             ))
@@ -434,6 +487,7 @@ where
     ) -> pocopine_sync::SyncBoxFuture<'a, pocopine_sync::SyncPullResponse<Value>> {
         let source = self.source.clone();
         let id_of = self.id_of.clone();
+        let version_of = self.version_of.clone();
         let stream = self.stream.clone();
         let collection = self.collection.clone();
         let max_snapshot_rows = self.max_snapshot_rows;
@@ -446,26 +500,57 @@ where
             // Query reconstructed from the wire request. SQLx-style
             // impls translate `query.params()` to SQL filters; CRUD-
             // style fallbacks ignore the params and use `query.limit()`.
-            let query: Query<S::Row> = query_from_pull_request(&request);
+            //
+            // Clamp the query's `limit()` to `max_snapshot_rows`
+            // BEFORE calling `Source::list`. This is a defense in
+            // depth against pathological sources that ignore the
+            // limit altogether: even a buggy `list` impl that
+            // `SELECT *`s a 10M-row table sees a bounded `limit()`
+            // and can't allocate unbounded memory if it honors it
+            // at all. The post-call `rows.len()` check below is the
+            // belt-and-braces — it still catches sources that ALSO
+            // ignore the clamped value, but at least the memory
+            // ceiling is now visible from the contract.
+            let mut query: Query<S::Row> = query_from_pull_request(&request);
+            let effective_limit = query
+                .limit()
+                .map(|l| l.min(max_snapshot_rows as u32))
+                .unwrap_or(max_snapshot_rows as u32);
+            query.set_limit(effective_limit);
 
             let rows = source.list(ctx, &query).await?;
             if rows.len() > max_snapshot_rows {
                 return Err(SyncError::backend(format!(
-                    "Source returned {} rows, exceeding max snapshot row limit {}",
+                    "Source returned {} rows, exceeding max snapshot row limit {} \
+                     (the adapter clamped the query's limit to {} before calling list — \
+                     this source impl is ignoring `query.limit()` entirely)",
                     rows.len(),
-                    max_snapshot_rows
+                    max_snapshot_rows,
+                    effective_limit
                 )));
             }
 
             let mut sync_rows: Vec<SyncRow<Value>> = Vec::with_capacity(rows.len());
             for row in rows {
                 let key = (id_of)(&row).to_row_key()?;
+                // Extract the row's optimistic-concurrency version
+                // BEFORE serializing — the closure operates on the
+                // typed `&S::Row`, not the JSON Value. A `None`
+                // extractor means the source has opted out of
+                // version tracking (`SyncRow::version = None`,
+                // Phase 2's `base_version` checks degrade to
+                // "trust the client"). This is the fix for
+                // RFC 090 phase 1 code-review finding #1.
+                let version = match version_of.as_ref() {
+                    Some(extract) => (extract)(&row)?,
+                    None => None,
+                };
                 let value = serde_json::to_value(&row).map_err(|e| {
                     SyncError::backend(format!("Source row failed to serialize: {e}"))
                 })?;
                 sync_rows.push(SyncRow {
                     key,
-                    version: None,
+                    version,
                     value,
                     pending: false,
                     conflict: false,
