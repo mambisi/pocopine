@@ -231,7 +231,10 @@ async fn push_without_explicit_mutation_log_uses_in_memory_default() {
         ),
     )
     .await;
-    assert!(replay.is_ok(), "replay must succeed (short-circuit on prior)");
+    assert!(
+        replay.is_ok(),
+        "replay must succeed (short-circuit on prior)"
+    );
     assert_eq!(
         *source.create_calls.lock().unwrap(),
         1,

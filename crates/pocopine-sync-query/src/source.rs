@@ -81,9 +81,8 @@ pub type SourceFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output 
 /// the eager `Vec<Row>` so backends can yield rows lazily and the
 /// adapter can short-circuit at `query.limit()` instead of waiting
 /// on the full snapshot.
-pub type SourceStream<'a, Row> = std::pin::Pin<
-    Box<dyn futures::stream::Stream<Item = SyncResult<Row>> + Send + 'a>,
->;
+pub type SourceStream<'a, Row> =
+    std::pin::Pin<Box<dyn futures::stream::Stream<Item = SyncResult<Row>> + Send + 'a>>;
 
 /// Type-erased projector from a canonical row into the RFC 088 §C
 /// `(stream, params_hash)` partition fields. Stored on
