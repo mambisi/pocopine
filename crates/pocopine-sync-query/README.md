@@ -24,7 +24,9 @@ Three primitives, drawn from the consensus across Replicache/Zero, ElectricSQL, 
 2. **`Mutator`** — a transactional function that produces row changes; the engine evaluates each change against every active query's predicate and routes it to the views that match.
 3. **`QueryClient`** — a refcounted registry that owns one `QuerySubscription` per distinct `Query`, with its own state, queue, and lifecycle.
 
-Read [`docs/sync-query-design.md`](../../docs/sync-query-design.md) for the implementation spec.
+See RFC 086 (`rfcs/rfc-086-sync-query.md`) for the design rationale and
+RFC 090 (`rfcs/rfc-090-merge-crud-into-query.md`) for the merge that
+folded `pocopine-sync-crud` into this crate.
 
 ## What ships in this branch
 
@@ -199,19 +201,11 @@ RFC 088 §C (per-`(stream, params_hash)` topics) is also broker-agnostic — it 
 
 Full picture, broker comparison, and topic-cardinality scaling notes in [`docs/live.md` §8 "Production Backends"](../../docs/live.md#8-production-backends).
 
-## CRUD vs Query — which one?
+## Where did `pocopine-sync-crud` go?
 
-| You want to                                  | Use                  |
-| -------------------------------------------- | -------------------- |
-| Simple list + create/edit/delete of entities | `pocopine-sync-crud` |
-| Single shape per entity type                 | `pocopine-sync-crud` |
-| Filtered views by workspace / channel / tag  | `pocopine-sync-query`|
-| Multi-tenant SaaS with subscription dedup    | `pocopine-sync-query`|
-| Pagination + ordering                        | `pocopine-sync-query`|
-| Build a Linear-clone                         | `pocopine-sync-query`|
-
-Apps can use both. CRUD for `Settings`, Query for `Issues`.
-
-## Roadmap
-
-See [`docs/sync-query-design.md` §13](../../docs/sync-query-design.md) for the PR sequence.
+RFC 090 (merged) folded `pocopine-sync-crud` into this crate. The `Source`
+trait + `SourceResource` adapter cover both former CRUD and former Query
+use cases, with typed writes via the `#[query_resource(draft = ...)]`-
+emitted `Issue::create/update/delete(...).optimistic(...).push(...)` API.
+See [`docs/sync-crud-to-query-migration.md`](../../docs/sync-crud-to-query-migration.md)
+for the rename table and porting recipe.
