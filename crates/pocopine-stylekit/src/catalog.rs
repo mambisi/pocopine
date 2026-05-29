@@ -151,6 +151,7 @@ pub fn catalog() -> Catalog {
                         "m/mx/my/mt/mb/ml/mr (auto allowed)",
                     ),
                     fam("gap", Spacing, false, "gap-2.5", "flex/grid gap"),
+                    fam("space-y", Spacing, false, "space-y-2", "space-y/space-x — margin between children"),
                 ],
             },
             Group {
@@ -202,7 +203,7 @@ pub fn catalog() -> Catalog {
                         None,
                         false,
                         "underline",
-                        "+ underline-offset-{n}, uppercase, truncate",
+                        "+ underline-offset-{n}, uppercase, truncate, tabular-nums",
                     ),
                 ],
             },
