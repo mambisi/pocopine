@@ -25,6 +25,7 @@ mod dev;
 mod doctor;
 mod env;
 mod server;
+mod stylekit;
 mod tailwind;
 mod tools;
 
@@ -65,6 +66,7 @@ fn main() -> Result<()> {
         Cmd::Deploy(args) => deploy::run(&args),
         Cmd::Js(args) => run_js(args),
         Cmd::Env(args) => run_env(args),
+        Cmd::Stylekit(args) => stylekit::run_command(&args.path, args.dump),
     }
 }
 
@@ -150,6 +152,9 @@ fn run_build(args: args::BuildArgs) -> Result<()> {
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
     }
+    if stylekit::enabled(&cfg, args.stylekit) {
+        stylekit::run_once(&project, &cfg, args.release)?;
+    }
     Ok(())
 }
 
@@ -162,6 +167,9 @@ fn run_project(args: args::ServeArgs) -> Result<()> {
     build::configured_bins(&project, &cfg, args.release)?;
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
+    }
+    if stylekit::enabled(&cfg, args.stylekit) {
+        stylekit::run_once(&project, &cfg, args.release)?;
     }
     server::run_project(&args.path, &cfg, args.release, args.port)
 }

@@ -5669,6 +5669,7 @@ dependencies = [
  "pocopine-deploy-fly",
  "pocopine-deploy-railway",
  "pocopine-deploy-render",
+ "pocopine-stylekit",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

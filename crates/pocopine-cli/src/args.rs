@@ -32,6 +32,10 @@ pub enum Cmd {
     /// environment unchanged, so values you set here never leak into
     /// real prod from a Pocopine-managed code path.
     Env(EnvArgs),
+    /// Pine Stylekit utility-CSS compiler (RFC 092). Hidden debug verb:
+    /// compile once and print the stylesheet (or write it to --output).
+    #[command(hide = true)]
+    Stylekit(StylekitArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -42,6 +46,10 @@ pub struct BuildArgs {
     /// Build in release mode.
     #[arg(long)]
     pub release: bool,
+    /// Opt into the Pine Stylekit CSS stage even if the project has no
+    /// `[package.metadata.pocopine.stylekit]` block (RFC 092 D2).
+    #[arg(long)]
+    pub stylekit: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -59,6 +67,20 @@ pub struct ServeArgs {
     /// Build in release mode.
     #[arg(long)]
     pub release: bool,
+    /// Opt into the Pine Stylekit CSS stage (RFC 092 D2).
+    #[arg(long)]
+    pub stylekit: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct StylekitArgs {
+    /// Path to the project crate (defaults to current dir).
+    #[arg(long, default_value = ".")]
+    pub path: PathBuf,
+    /// Print the generated CSS to stdout instead of writing the output
+    /// file.
+    #[arg(long)]
+    pub dump: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
