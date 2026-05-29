@@ -46,10 +46,13 @@ pub struct BuildArgs {
     /// Build in release mode.
     #[arg(long)]
     pub release: bool,
-    /// Opt into the Pine Stylekit CSS stage even if the project has no
-    /// `[package.metadata.pocopine.stylekit]` block (RFC 092 D2).
+    /// Force the Pine Stylekit CSS stage on, even where it would
+    /// otherwise defer (e.g. a Tailwind-only project). On by default.
     #[arg(long)]
     pub stylekit: bool,
+    /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
+    #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
+    pub no_stylekit: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -67,9 +70,12 @@ pub struct ServeArgs {
     /// Build in release mode.
     #[arg(long)]
     pub release: bool,
-    /// Opt into the Pine Stylekit CSS stage (RFC 092 D2).
+    /// Force the Pine Stylekit CSS stage on. On by default.
     #[arg(long)]
     pub stylekit: bool,
+    /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
+    #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
+    pub no_stylekit: bool,
 }
 
 #[derive(Parser, Debug, Clone)]

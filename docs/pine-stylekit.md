@@ -11,10 +11,11 @@ class grammar is familiar, but the supported set is the [catalog
 below](#utility-catalog) — that catalog *is* the contract. An unknown
 class is a build error with a suggestion, not a silent miss.
 
-> Status: experimental (RFC 092, Milestone 2). Ported examples:
-> `examples/file-browser` and `examples/tailwind`. The built-in Tailwind
-> colour palette and Preflight ship; Tailwind remains available as a
-> fallback.
+> **Pine Stylekit is the recommended way to style Pocopine apps**, and
+> runs **by default** (RFC 092 step 7) — `pocopine build`/`run`/`dev`
+> compile it in-process with no setup. Tailwind remains supported as an
+> opt-in fallback. Ported examples: `examples/file-browser` and
+> `examples/tailwind`.
 
 ## Why not just Tailwind?
 
@@ -31,35 +32,38 @@ Stylekit instead:
 - **Owns its tokens.** Your `@theme` block is the single source of
   truth, emitted to `:root` so the stylesheet is self-contained.
 
-## Enabling it
+## Using it
 
-Add a Stylekit block to your project's `Cargo.toml`:
-
-```toml
-[package.metadata.pocopine.stylekit]
-input = "app.css"          # CSS holding your @theme tokens
-output = "pkg/stylekit.css" # generated stylesheet
-src = "src"                 # directory scanned for .poco files
-preflight = true            # prepend the base reset (set false to opt out)
-```
-
-The output is self-contained: a base reset (Preflight), your `@theme`
-tokens emitted to `:root`, then the utilities. Set `preflight = false`
-if your page brings its own reset.
-
-Then link the output in `index.html`:
+Stylekit runs by default — `pocopine build`/`run`/`dev` compile your
+CSS in-process (no external watcher). All you do is link the output and,
+if you want colours, declare tokens:
 
 ```html
 <link rel="stylesheet" href="/pkg/stylekit.css" />
 ```
 
-`pocopine build` / `run` / `dev` now compile CSS in-process — no
-external watcher. Or opt in ad-hoc without a config block:
+A project with no `app.css` is a silent no-op, so this is zero-config
+for apps that don't (yet) use utilities.
 
-```sh
-pocopine build --stylekit
-pocopine dev --stylekit
+To customize paths or the base reset, add a config block:
+
+```toml
+[package.metadata.pocopine.stylekit]
+input = "app.css"          # CSS holding your @theme tokens (default)
+output = "pkg/stylekit.css" # generated stylesheet (default)
+src = "src"                 # directory scanned for .poco files (default)
+preflight = true            # prepend the base reset (false to opt out)
+enabled = true              # set false to opt out of the default stage
 ```
+
+The output is self-contained: a base reset (Preflight), your `@theme`
+tokens emitted to `:root`, then the utilities.
+
+**Opting out.** Pass `--no-stylekit`, set `enabled = false`, or — to use
+Tailwind instead — add a `[package.metadata.pocopine.tailwind]` block
+with no `[stylekit]` block (a Tailwind-only project defers
+automatically). `--stylekit` forces the stage on where it would
+otherwise defer.
 
 `pocopine dev` recompiles on every source change and, on a compile
 error, keeps the last good stylesheet while printing the diagnostic
@@ -158,14 +162,14 @@ human catalog below is regenerated with `pocopine stylekit --docs`.
 ## Migrating from Tailwind
 
 1. Keep your `@theme` tokens; remove `@import "tailwindcss"` and
-   `@source`.
-2. Add the `[package.metadata.pocopine.stylekit]` block.
-3. Run `pocopine build --stylekit` and fix the diagnostics — anything
-   outside the catalog (unsupported families) is flagged. Tailwind's
-   default palette (`slate-*`, `rose-*`, …) is built in, so those keep
-   working; a `@theme` token of the same name overrides it.
-4. Point `index.html` at `pkg/stylekit.css`. Keep the Tailwind block to
-   A/B compare during the experiment.
+   `@source`. Remove the `[package.metadata.pocopine.tailwind]` block so
+   Stylekit (the default) stops deferring to it.
+2. Run `pocopine build` and fix the diagnostics — anything outside the
+   catalog (unsupported families) is flagged. Tailwind's default palette
+   (`slate-*`, `rose-*`, …) is built in, so those keep working; a
+   `@theme` token of the same name overrides it.
+3. Point `index.html` at `pkg/stylekit.css`. To A/B compare, keep the
+   Tailwind block and add `--stylekit` to force both.
 
 ## Utility catalog
 

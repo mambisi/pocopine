@@ -1,10 +1,12 @@
-//! Pine Stylekit build stage (RFC 092 D2/D6).
+//! Pine Stylekit build stage (RFC 092 D2/D6, step 7).
 //!
 //! Compiles utility CSS from a project's `.poco` sources in-process —
-//! no external watcher, no shelling out. Opt-in via `--stylekit` or a
-//! `[package.metadata.pocopine.stylekit]` block. Fails loud: on any
-//! error-severity diagnostic the build aborts and the stale stylesheet
-//! is left untouched rather than silently re-served.
+//! no external watcher, no shelling out. Runs **by default** (RFC 092
+//! step 7); opt out with `--no-stylekit` or `enabled = false`, and a
+//! Tailwind-only project (a `[tailwind]` block with no `[stylekit]`
+//! block) defers automatically. Fails loud: on any error-severity
+//! diagnostic the build aborts and the stale stylesheet is left
+//! untouched rather than silently re-served.
 
 use std::path::{Path, PathBuf};
 
@@ -13,14 +15,33 @@ use pocopine_stylekit::{compile_project, render, CompileOptions, ProjectCss, Sou
 
 use crate::config::{PocopineConfig, StylekitConfig};
 
-/// Whether the Stylekit stage should run: an explicit `--stylekit` flag
-/// or a configured `[…pocopine.stylekit]` block.
-pub fn enabled(cfg: &PocopineConfig, flag: bool) -> bool {
-    flag || cfg.stylekit.is_some()
+/// Whether the Stylekit stage should run (RFC 092 step 7 — on by
+/// default). Precedence: `--no-stylekit` off, `--stylekit` on, then the
+/// config block's `enabled`, else default on *unless* the project opted
+/// into Tailwind only (a `[tailwind]` block with no `[stylekit]` block).
+pub fn enabled(cfg: &PocopineConfig, force_on: bool, force_off: bool) -> bool {
+    if force_off {
+        return false;
+    }
+    if force_on {
+        return true;
+    }
+    match &cfg.stylekit {
+        Some(c) => c.enabled,
+        None => cfg.tailwind.is_none(),
+    }
 }
 
-/// Resolve the effective config (defaults when only `--stylekit` is
-/// passed with no config block).
+/// Whether Stylekit was *explicitly* requested (vs. defaulted on). When
+/// only defaulted, a missing input CSS is a silent skip rather than an
+/// error — config-less projects without an `app.css` just don't get a
+/// stylesheet.
+fn explicit(cfg: &PocopineConfig, force_on: bool) -> bool {
+    force_on || cfg.stylekit.is_some()
+}
+
+/// Resolve the effective config (defaults when Stylekit runs without a
+/// config block).
 fn resolve(cfg: &PocopineConfig) -> StylekitConfig {
     match &cfg.stylekit {
         Some(c) => StylekitConfig {
@@ -28,6 +49,7 @@ fn resolve(cfg: &PocopineConfig) -> StylekitConfig {
             output: c.output.clone(),
             src: c.src.clone(),
             preflight: c.preflight,
+            enabled: c.enabled,
         },
         None => StylekitConfig::default(),
     }
@@ -56,8 +78,21 @@ fn compile(project: &Path, scfg: &StylekitConfig) -> Result<(ProjectCss, Vec<Sou
 
 /// One-shot compile for `build` / `run` / dev startup. Renders every
 /// diagnostic; aborts the build (without writing) if any are errors.
-pub fn run_once(project: &Path, cfg: &PocopineConfig, _release: bool) -> Result<()> {
+///
+/// `force_on` is the `--stylekit` flag. When the stage is only
+/// defaulted on (not explicitly requested or configured) and the
+/// project has no input CSS, it's a silent no-op instead of an error —
+/// so config-less projects without an `app.css` aren't broken.
+pub fn run_once(
+    project: &Path,
+    cfg: &PocopineConfig,
+    force_on: bool,
+    _release: bool,
+) -> Result<()> {
     let scfg = resolve(cfg);
+    if !explicit(cfg, force_on) && !project.join(&scfg.input).exists() {
+        return Ok(());
+    }
     let (out, files) = compile(project, &scfg)?;
     report(&out, &files);
     if out.has_errors() {
@@ -82,6 +117,9 @@ pub fn run_once(project: &Path, cfg: &PocopineConfig, _release: bool) -> Result<
 /// with broken/partial output.
 pub fn recompile_quiet(project: &Path, cfg: &PocopineConfig) {
     let scfg = resolve(cfg);
+    if !project.join(&scfg.input).exists() {
+        return;
+    }
     match compile(project, &scfg) {
         Ok((out, files)) => {
             report(&out, &files);
@@ -175,4 +213,64 @@ pub fn run_command(path: &Path, dump: bool, docs: bool, metadata: bool) -> Resul
 #[allow(dead_code)]
 pub fn output_path(project: &Path, cfg: &PocopineConfig) -> PathBuf {
     project.join(resolve(cfg).output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{StylekitConfig, TailwindConfig};
+
+    #[test]
+    fn default_on_for_bare_project() {
+        // No CSS config at all → Stylekit runs (RFC 092 step 7).
+        assert!(enabled(&PocopineConfig::default(), false, false));
+    }
+
+    #[test]
+    fn tailwind_only_defers_but_flag_forces() {
+        let cfg = PocopineConfig {
+            tailwind: Some(TailwindConfig::default()),
+            ..Default::default()
+        };
+        assert!(!enabled(&cfg, false, false), "tailwind-only project defers");
+        assert!(enabled(&cfg, true, false), "--stylekit forces it on");
+    }
+
+    #[test]
+    fn config_enabled_flag_is_honored() {
+        let on = PocopineConfig {
+            stylekit: Some(StylekitConfig::default()),
+            ..Default::default()
+        };
+        assert!(enabled(&on, false, false));
+        let off = PocopineConfig {
+            stylekit: Some(StylekitConfig {
+                enabled: false,
+                ..StylekitConfig::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!enabled(&off, false, false));
+    }
+
+    #[test]
+    fn no_stylekit_flag_overrides_everything() {
+        let cfg = PocopineConfig {
+            stylekit: Some(StylekitConfig::default()),
+            ..Default::default()
+        };
+        assert!(!enabled(&cfg, false, true));
+    }
+
+    #[test]
+    fn explicit_when_configured_or_forced() {
+        let bare = PocopineConfig::default();
+        assert!(!explicit(&bare, false));
+        assert!(explicit(&bare, true));
+        let configured = PocopineConfig {
+            stylekit: Some(StylekitConfig::default()),
+            ..Default::default()
+        };
+        assert!(explicit(&configured, false));
+    }
 }
