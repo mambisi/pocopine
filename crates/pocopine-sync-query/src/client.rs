@@ -669,21 +669,48 @@ impl QueryClient {
                 let payload_value = serde_json::to_value(&payload)
                     .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
                 let mut wire = pocopine_sync::ClientMutation::new(
-                    mutation_id,
+                    mutation_id.clone(),
                     payload.sync_op(),
                     payload_value,
                 );
                 wire.key = wire_row_key;
                 let request = pocopine_sync::SyncPushRequest::new(stream, [wire]);
-                pocopine_core::fetch::call::<
+                let response = pocopine_core::fetch::call::<
                     pocopine_sync::SyncPushRequest<Value>,
                     pocopine_sync::SyncPushResponse<Value>,
                 >(push_url, &request)
                 .await
-                .map(|_| ())
                 .map_err(|e| {
                     pocopine_sync::SyncError::backend(format!("push transport failed: {e}"))
-                })
+                })?;
+
+                // Codex review P1: an HTTP-200 push response can
+                // still carry `rejected` / `conflicts` arrays for
+                // this mutation (stale update, version mismatch,
+                // schema-migration failure). Mirror the optimistic
+                // path's response inspection so a server rejection
+                // surfaces as `Err(...)` instead of a silent
+                // "succeeded" with the write actually dropped.
+                if response.rejected.iter().any(|r| r.mutation_id == mutation_id) {
+                    return Err(pocopine_sync::SyncError::backend(
+                        "server rejected the mutation",
+                    ));
+                }
+                if response.conflicts.iter().any(|c| c.mutation_id == mutation_id) {
+                    return Err(pocopine_sync::SyncError::backend(
+                        "server reported a conflict for this mutation",
+                    ));
+                }
+                if !response.accepted.iter().any(|id| id == &mutation_id) {
+                    // Server didn't mention our id at all. Treat as
+                    // transport-level failure — the next /pull will
+                    // reconcile if the write actually landed, but
+                    // until we see an accept we don't claim success.
+                    return Err(pocopine_sync::SyncError::backend(
+                        "server response did not include our mutation",
+                    ));
+                }
+                Ok(())
             }
         }
     }
