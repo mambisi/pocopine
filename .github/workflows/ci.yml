@@ -164,8 +164,6 @@ jobs:
           --exclude pocopine-storage-gcs
           --exclude pocopine-storage-s3
           --exclude pocopine-sync
-          --exclude pocopine-sync-crud
-          --exclude pocopine-sync-sqlx
           --exclude pocopine-sync-sqlite
           --exclude blog
           --exclude file-browser-example
@@ -279,22 +277,16 @@ jobs:
       # later in the workspace compile).
       # `--tests` skips doc-tests (a few example snippets reference deps
       # the workspace doesn't carry — they're not the contract here).
-      - name: sync CRUD macro host tests
-        run: cargo test -p pocopine-sync-crud-macros --tests
-        env:
-          CARGO_TARGET_DIR: target/sync-crud-macros-host
+      # RFC 090 Phase 6 deleted pocopine-sync-crud-macros and
+      # pocopine-sync-sqlx (CRUD-specific). Their CI steps were
+      # removed alongside the deletion; the Query-side macro tests
+      # cover the equivalent surface.
       - name: sync Query macro host tests
         run: cargo test -p pocopine-sync-query-macros --tests
         env:
           CARGO_TARGET_DIR: target/sync-query-macros-host
-      - name: SQLx sync helper tests
-        run: cargo test -p pocopine-sync-sqlx --features sqlite --tests
-      - name: SQLx sync backend feature checks
-        run: |
-          cargo check -p pocopine-sync-sqlx --features postgres
-          cargo check -p pocopine-sync-sqlx --features mysql
       - name: workspace host tests
-        run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-crud-macros --exclude pocopine-sync-query-macros --tests
+        run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-query-macros --tests
 
   observability-otlp:
     name: observability OTLP smoke

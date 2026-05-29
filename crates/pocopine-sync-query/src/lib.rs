@@ -57,12 +57,12 @@ pub mod selector;
 pub mod source;
 pub mod state;
 pub mod wire;
-// RFC 090 Phase 2a — mutation-lifecycle types (MutationLog,
-// MutationPayload, AcceptedMutation, WriteResult, RemoveResult,
-// Conflict, etc.) live here long-term. CRUD re-exports them under
-// old `Crud*` names through Phase 5. Host-only — same reason as
-// `source`: the log trait threads `pocopine_auth::RequestContext`.
-#[cfg(not(target_arch = "wasm32"))]
+// RFC 090 Phase 2a — mutation-lifecycle types. Pure-data items
+// (MutationPayload, TypedMutation, WriteResult, etc.) compile on
+// every target. Only the MutationLog trait + MemoryMutationLog
+// impl carry `pocopine_auth::RequestContext` and are inner-gated
+// to host. The macro-emitted typed write API on wasm reaches
+// MutationPayload/TypedMutation through this module.
 pub mod write;
 
 // Re-exports of the curated public API.
@@ -100,12 +100,15 @@ pub use source::{
 // `source.rs` (Phase 1); Phase 2a moves them to their long-term
 // home in `write.rs` and re-exports here. CRUD aliases these to
 // the old `Crud*` names for back-compat.
-#[cfg(not(target_arch = "wasm32"))]
+// Pure data types — always exported.
 pub use write::{
-    AcceptedMutation, Conflict, CreatePayload, DeletePayload, DeleteResult, MemoryMutationLog,
-    MemoryScopeFn, MutationLog, MutationPayload, MutationReservation, OptimisticRowFn,
-    TypedMutation, UpdatePayload, WriteResult,
+    AcceptedMutation, Conflict, CreatePayload, DeletePayload, DeleteResult, MutationPayload,
+    MutationReservation, OptimisticRowFn, TypedMutation, UpdatePayload, WriteResult,
 };
+
+// Host-only: the trait + impl depend on `pocopine_auth::RequestContext`.
+#[cfg(not(target_arch = "wasm32"))]
+pub use write::{MemoryMutationLog, MemoryScopeFn, MutationLog};
 
 // The macro lives in its own crate (proc-macros must), but downstream
 // code follows the same one-stop-shop import path as
