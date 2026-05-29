@@ -34,14 +34,12 @@
 //! `CrudMutationLog`, etc., so existing imports keep working
 //! through Phase 5.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
 
-#[cfg(not(target_arch = "wasm32"))]
-use pocopine_auth::RequestContext;
-#[cfg(not(target_arch = "wasm32"))]
-use pocopine_sync::SyncError;
-use pocopine_sync::{MutationId, RowKey, SyncOp, SyncResult};
+use pocopine_sync::{MutationId, RowKey, SyncOp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -330,155 +328,170 @@ pub enum MutationReservation {
 // The MutationLog trait threads `pocopine_auth::RequestContext`,
 // which is itself cfg-gated to non-wasm. Everything above this
 // fence is pure data + serde and compiles on every target.
-
-/// Idempotency log for sync-query mutations. Production
-/// implementations MUST scope lookups to the same authorization
-/// domain as the underlying `Source`, for example
-/// `(tenant_id, mutation_id)`.
-///
-/// # Atomic reservation
-///
-/// `reserve_mutation` is the **only** safe primitive for the push
-/// lifecycle: it atomically returns either `Reserved` (caller proceeds
-/// to apply the write and call `commit_reservation` once accepted)
-/// or `AlreadyAccepted(prior)` (caller short-circuits on the prior
-/// outcome). The Phase 1 `accepted_mutation` + `record_accepted_mutation`
-/// pair is kept for direct inspection but MUST NOT be used to drive
-/// idempotency from the push handler — a check-then-record sequence
-/// allows two concurrent retries to both run `Source::create`/`update`/
-/// `delete`.
-///
-/// SQLx-style production impls implement `reserve_mutation` as a
-/// `INSERT ... ON CONFLICT DO NOTHING RETURNING` (or equivalent) inside
-/// the same transaction as the source write, so the reservation and
-/// the row write commit atomically.
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait::async_trait]
-pub trait MutationLog<Row>: Send + Sync + 'static
-where
-    Row: Clone + Send + Sync + 'static,
-{
-    /// Atomic reserve-or-return-existing. The caller passes the wire
-    /// envelope of the incoming mutation. If no prior entry exists
-    /// for `(scope, mutation_id)`, the implementation MUST record
-    /// the envelope atomically and return `Reserved`. Otherwise it
-    /// returns `AlreadyAccepted(prior)` and the caller short-circuits.
-    async fn reserve_mutation(
-        &self,
-        ctx: &RequestContext,
-        candidate: AcceptedMutation,
-    ) -> SyncResult<MutationReservation>;
-
-    /// Optional non-atomic lookup. The push handler uses
-    /// `reserve_mutation`; this method is for replay/diagnostic
-    /// paths that just want to peek.
-    async fn accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        mutation_id: &MutationId,
-    ) -> SyncResult<Option<AcceptedMutation>>;
-}
-
-/// Function used by `MemoryMutationLog::with_scope_fn` to project an
-/// authorization scope (e.g. a tenant id) out of the per-request
-/// context.
-#[cfg(not(target_arch = "wasm32"))]
-pub type MemoryScopeFn = Arc<dyn Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static>;
-
-/// Process-local mutation log for tests and single-process demos.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone)]
-pub struct MemoryMutationLog<Row> {
-    accepted: Arc<Mutex<BTreeMap<(String, String), AcceptedMutation>>>,
-    scope: MemoryScopeFn,
-    _marker: std::marker::PhantomData<fn() -> Row>,
-}
+//
+// Review-of-review finding #15: the seven items below were
+// individually `#[cfg(not(target_arch = "wasm32"))]`-gated. Inlining
+// them into one cfg'd module + `pub use` collapses the gate to two
+// occurrences, so a new host-only item lands next to the rest
+// without copy-pasting the gate.
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<Row> std::fmt::Debug for MemoryMutationLog<Row> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MemoryMutationLog").finish_non_exhaustive()
-    }
-}
+pub use host::*;
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<Row> Default for MemoryMutationLog<Row> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+mod host {
+    use super::{AcceptedMutation, MutationReservation};
+    use crate::write::{Arc, BTreeMap, Mutex};
+    use pocopine_auth::RequestContext;
+    use pocopine_sync::{MutationId, SyncError, SyncResult};
 
-#[cfg(not(target_arch = "wasm32"))]
-impl<Row> MemoryMutationLog<Row> {
-    /// Build a single-scope memory log. Every accepted mutation
-    /// lives in one global keyspace; use
-    /// [`with_scope_fn`](Self::with_scope_fn) for multi-tenant tests.
-    pub fn new() -> Self {
-        Self {
-            accepted: Arc::new(Mutex::new(BTreeMap::new())),
-            scope: Arc::new(|_ctx| Ok(String::new())),
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    /// Build a memory log that derives its authorization scope from
-    /// the request context. Mirrors `pocopine_sync_sqlx::SqlxCrudMutationLog`'s
-    /// shape (which Phase 2b/sqlx migration will rename to drop the
-    /// `Crud` prefix) so tests can exercise the same scoping
-    /// boundary as production logs.
-    pub fn with_scope_fn<F>(scope: F) -> Self
+    /// Idempotency log for sync-query mutations. Production
+    /// implementations MUST scope lookups to the same authorization
+    /// domain as the underlying `Source`, for example
+    /// `(tenant_id, mutation_id)`.
+    ///
+    /// # Atomic reservation
+    ///
+    /// `reserve_mutation` is the **only** safe primitive for the push
+    /// lifecycle: it atomically returns either `Reserved` (caller proceeds
+    /// to apply the write and call `commit_reservation` once accepted)
+    /// or `AlreadyAccepted(prior)` (caller short-circuits on the prior
+    /// outcome). The Phase 1 `accepted_mutation` + `record_accepted_mutation`
+    /// pair is kept for direct inspection but MUST NOT be used to drive
+    /// idempotency from the push handler — a check-then-record sequence
+    /// allows two concurrent retries to both run `Source::create`/`update`/
+    /// `delete`.
+    ///
+    /// SQLx-style production impls implement `reserve_mutation` as a
+    /// `INSERT ... ON CONFLICT DO NOTHING RETURNING` (or equivalent) inside
+    /// the same transaction as the source write, so the reservation and
+    /// the row write commit atomically.
+    #[async_trait::async_trait]
+    pub trait MutationLog<Row>: Send + Sync + 'static
     where
-        F: Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static,
+        Row: Clone + Send + Sync + 'static,
     {
-        Self {
-            accepted: Arc::new(Mutex::new(BTreeMap::new())),
-            scope: Arc::new(scope),
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
+        /// Atomic reserve-or-return-existing. The caller passes the wire
+        /// envelope of the incoming mutation. If no prior entry exists
+        /// for `(scope, mutation_id)`, the implementation MUST record
+        /// the envelope atomically and return `Reserved`. Otherwise it
+        /// returns `AlreadyAccepted(prior)` and the caller short-circuits.
+        async fn reserve_mutation(
+            &self,
+            ctx: &RequestContext,
+            candidate: AcceptedMutation,
+        ) -> SyncResult<MutationReservation>;
 
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait::async_trait]
-impl<Row> MutationLog<Row> for MemoryMutationLog<Row>
-where
-    Row: Clone + Send + Sync + 'static,
-{
-    async fn reserve_mutation(
-        &self,
-        ctx: &RequestContext,
-        candidate: AcceptedMutation,
-    ) -> SyncResult<MutationReservation> {
-        let scope = (self.scope)(ctx)?;
-        // Single lock acquisition — the entire check + insert is
-        // atomic. Two concurrent retries with the same mutation_id
-        // queue on this mutex; the first wins the reservation, the
-        // second sees `AlreadyAccepted`. RFC 090 review finding #3.
-        let mut entries = self
-            .accepted
-            .lock()
-            .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
-        let key = (scope, candidate.mutation_id.as_str().to_string());
-        if let Some(existing) = entries.get(&key) {
-            return Ok(MutationReservation::AlreadyAccepted(existing.clone()));
-        }
-        entries.insert(key, candidate);
-        Ok(MutationReservation::Reserved)
+        /// Optional non-atomic lookup. The push handler uses
+        /// `reserve_mutation`; this method is for replay/diagnostic
+        /// paths that just want to peek.
+        async fn accepted_mutation(
+            &self,
+            ctx: &RequestContext,
+            mutation_id: &MutationId,
+        ) -> SyncResult<Option<AcceptedMutation>>;
     }
 
-    async fn accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        mutation_id: &MutationId,
-    ) -> SyncResult<Option<AcceptedMutation>> {
-        let scope = (self.scope)(ctx)?;
-        let accepted = self
-            .accepted
-            .lock()
-            .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
-        Ok(accepted
-            .get(&(scope, mutation_id.as_str().to_string()))
-            .cloned())
+    /// Function used by `MemoryMutationLog::with_scope_fn` to project an
+    /// authorization scope (e.g. a tenant id) out of the per-request
+    /// context.
+    pub type MemoryScopeFn =
+        Arc<dyn Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static>;
+
+    /// Process-local mutation log for tests and single-process demos.
+    #[derive(Clone)]
+    pub struct MemoryMutationLog<Row> {
+        accepted: Arc<Mutex<BTreeMap<(String, String), AcceptedMutation>>>,
+        scope: MemoryScopeFn,
+        _marker: std::marker::PhantomData<fn() -> Row>,
+    }
+
+    impl<Row> std::fmt::Debug for MemoryMutationLog<Row> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MemoryMutationLog").finish_non_exhaustive()
+        }
+    }
+
+    impl<Row> Default for MemoryMutationLog<Row> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl<Row> MemoryMutationLog<Row> {
+        /// Build a single-scope memory log. Every accepted mutation
+        /// lives in one global keyspace; use
+        /// [`with_scope_fn`](Self::with_scope_fn) for multi-tenant tests.
+        pub fn new() -> Self {
+            Self {
+                accepted: Arc::new(Mutex::new(BTreeMap::new())),
+                scope: Arc::new(|_ctx| Ok(String::new())),
+                _marker: std::marker::PhantomData,
+            }
+        }
+
+        /// Build a memory log that derives its authorization scope from
+        /// the request context. Mirrors production sqlx-shaped logs
+        /// (post-Phase-2b rename to drop the `Crud` prefix) so tests
+        /// can exercise the same scoping boundary as production.
+        pub fn with_scope_fn<F>(scope: F) -> Self
+        where
+            F: Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static,
+        {
+            Self {
+                accepted: Arc::new(Mutex::new(BTreeMap::new())),
+                scope: Arc::new(scope),
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<Row> MutationLog<Row> for MemoryMutationLog<Row>
+    where
+        Row: Clone + Send + Sync + 'static,
+    {
+        async fn reserve_mutation(
+            &self,
+            ctx: &RequestContext,
+            candidate: AcceptedMutation,
+        ) -> SyncResult<MutationReservation> {
+            let scope = (self.scope)(ctx)?;
+            // Single lock acquisition — the entire check + insert is
+            // atomic. No `.await` is held across the lock, so
+            // `std::sync::Mutex` is correct here (review-of-review #9
+            // flagged async-vs-sync-Mutex; clarified rather than
+            // pulling in `parking_lot`/`tokio::sync::Mutex` for a
+            // sync-bounded critical section). Two concurrent retries
+            // with the same mutation_id queue on this mutex; the
+            // first wins the reservation, the second sees
+            // `AlreadyAccepted`.
+            let mut entries = self
+                .accepted
+                .lock()
+                .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
+            let key = (scope, candidate.mutation_id.as_str().to_string());
+            if let Some(existing) = entries.get(&key) {
+                return Ok(MutationReservation::AlreadyAccepted(existing.clone()));
+            }
+            entries.insert(key, candidate);
+            Ok(MutationReservation::Reserved)
+        }
+
+        async fn accepted_mutation(
+            &self,
+            ctx: &RequestContext,
+            mutation_id: &MutationId,
+        ) -> SyncResult<Option<AcceptedMutation>> {
+            let scope = (self.scope)(ctx)?;
+            let accepted = self
+                .accepted
+                .lock()
+                .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
+            Ok(accepted
+                .get(&(scope, mutation_id.as_str().to_string()))
+                .cloned())
+        }
     }
 }
 
@@ -511,6 +524,14 @@ pub type OptimisticRowFn<Row, Id, Draft> =
 pub struct TypedMutation<Row, Id, Draft> {
     payload: MutationPayload<Id, Draft>,
     optimistic: Option<OptimisticRowFn<Row, Id, Draft>>,
+    /// Pre-computed wire row key. The macro fills this at construction
+    /// time via `RowKey::new(id.to_string())`, so the no-optimistic
+    /// push path can build a correctly-keyed wire envelope without
+    /// going through `SourceId` (which is host-only — wasm can't
+    /// reach it). Review-of-review finding #2: a non-String `Id` like
+    /// `i64` or `Uuid` previously produced `wire.key = None`
+    /// silently; the server then rejected the mutation.
+    wire_row_key: Option<RowKey>,
 }
 
 impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
@@ -520,7 +541,24 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
         Self {
             payload,
             optimistic: None,
+            wire_row_key: None,
         }
+    }
+
+    /// Attach the wire row key. Macro-emitted; computed from the
+    /// typed `Id` via `Display` + `RowKey::new(...).ok()` at
+    /// construction. Takes `Option<RowKey>` so callers (and the
+    /// macro) don't have to branch on `RowKey::new`'s validation
+    /// failure — a `None` here means "no key on the wire", which
+    /// matches the server-side "missing key" rejection.
+    pub fn with_wire_row_key(mut self, key: Option<RowKey>) -> Self {
+        self.wire_row_key = key;
+        self
+    }
+
+    /// Pre-computed wire row key, if attached.
+    pub fn wire_row_key(&self) -> Option<&RowKey> {
+        self.wire_row_key.as_ref()
     }
 
     /// Attach an optimistic-row builder. The closure runs BEFORE
@@ -543,7 +581,10 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
     }
 
     /// Consume into the underlying payload + optimistic closure.
-    /// `QueryClient::push_typed` (Phase 4 wire-up) calls this.
+    /// `QueryClient::push_typed` (Phase 4 wire-up) calls this. The
+    /// pre-computed wire row key lives on the builder itself; call
+    /// `wire_row_key()` BEFORE `into_parts()` to snapshot it (the
+    /// borrow is read-only).
     #[allow(clippy::type_complexity)]
     pub fn into_parts(
         self,
@@ -559,6 +600,7 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
 mod tests {
     use super::*;
     use http::{HeaderMap, Method};
+    use pocopine_auth::RequestContext;
 
     fn ctx() -> RequestContext {
         RequestContext::new(Method::POST, "/test".parse().unwrap(), HeaderMap::new())
@@ -576,7 +618,7 @@ mod tests {
     #[derive(Clone)]
     struct Row;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn memory_log_concurrent_reserves_yield_exactly_one_winner() {
         // RFC 090 review #3: the push lifecycle's atomicity hinges
         // on `reserve_mutation` being a single critical section.
@@ -585,6 +627,13 @@ mod tests {
         // implementation regresses to a check-then-insert split,
         // multiple will win and `Source::create` will be double-
         // applied under network retry storms.
+        //
+        // Review-of-review finding #3: the original `#[tokio::test]`
+        // defaulted to a single-threaded runtime, so the 16 tasks ran
+        // one at a time — never actually concurrent. A check-then-
+        // insert regression would still pass under that runtime. The
+        // multi_thread flavor makes the tasks race for the Mutex, so
+        // the test fails loud if the lock scope shrinks.
         use std::sync::Arc;
         let log = Arc::new(MemoryMutationLog::<Row>::new());
         let m = mutation("m_race");

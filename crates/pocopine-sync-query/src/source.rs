@@ -605,49 +605,26 @@ where
                 let mutation_id = mutation.id.clone();
                 let key = mutation.key.clone();
                 let op = mutation.op;
-                let base_version = mutation.base_version.clone();
-                // RFC 090 review #5: honor the sync framework's
-                // schema-migration outcome. `take_processing_payload`
-                // returns the MIGRATED value if migration ran
-                // successfully, or the original wire payload
-                // otherwise. The idempotency reservation uses the
-                // ORIGINAL wire payload (so retries of the same wire
-                // envelope hit the log regardless of whether/how the
-                // server migrated them).
+                let base_version = mutation.base_version.take();
                 let processing_payload = mutation.take_processing_payload();
                 let payload_value = mutation.payload;
 
-                // 1. Atomic reserve-or-return-existing.
-                // RFC 090 review #3: replaces check-then-record with
-                // a single primitive so concurrent retries can't both
-                // run Source::create/update/delete on the same
-                // mutation_id.
-                let candidate = AcceptedMutation::new(
-                    mutation_id.clone(),
-                    op,
-                    key.clone(),
-                    payload_value.clone(),
-                );
-                let reservation = mutation_log.reserve_mutation(&ctx, candidate).await?;
-                let reserved = match reservation {
-                    crate::write::MutationReservation::Reserved => true,
-                    crate::write::MutationReservation::AlreadyAccepted(prior) => {
-                        if prior.matches(op, key.as_ref(), &payload_value) {
-                            response.accepted.push(mutation_id);
-                        } else {
-                            response.rejected.push(SyncRejectedMutation {
-                                mutation_id,
-                                key,
-                                reason: "mutation id was already accepted with different contents"
-                                    .to_string(),
-                            });
-                        }
-                        continue;
-                    }
-                };
-                debug_assert!(reserved);
+                // RFC 090 review-of-review #1, #4: validate the
+                // payload BEFORE reserving in the log. A reservation
+                // recorded for a mutation that later fails validation
+                // becomes a permanent phantom — retries hit
+                // `AlreadyAccepted` and short-circuit "success"
+                // without ever running the source. By validating
+                // first, only known-valid mutations reach the log,
+                // so the reservation contract is "if it's in the
+                // log, the source either ran or is running."
+                //
+                // Validation order (each rejects + continues):
+                //   1. Migration outcome (Err → reject with reason)
+                //   2. Type deserialize (MutationPayload<Id, Draft>)
+                //   3. Op consistency (payload.sync_op() == wire op)
+                //   4. Key consistency (wire key == payload.id())
 
-                // 2. Decode the (possibly migrated) payload.
                 let processing_payload = match processing_payload {
                     Ok(value) => value,
                     Err(reason) => {
@@ -677,7 +654,10 @@ where
                     response.rejected.push(SyncRejectedMutation {
                         mutation_id,
                         key,
-                        reason: "Source payload does not match sync operation".to_string(),
+                        reason: format!(
+                            "Source payload op `{:?}` does not match wire op `{op:?}`",
+                            payload.sync_op()
+                        ),
                     });
                     continue;
                 }
@@ -692,7 +672,38 @@ where
                     continue;
                 }
 
-                // 3. Dispatch to the source.
+                // Atomic reserve-or-return-existing (RFC 090 review
+                // #3). Validation already passed; the reservation
+                // contract is now safe — only known-decodable
+                // mutations reach this point.
+                let candidate = AcceptedMutation::new(
+                    mutation_id.clone(),
+                    op,
+                    Some(expected_key.clone()),
+                    payload_value.clone(),
+                );
+                if let crate::write::MutationReservation::AlreadyAccepted(prior) =
+                    mutation_log.reserve_mutation(&ctx, candidate).await?
+                {
+                    if prior.matches(op, Some(&expected_key), &payload_value) {
+                        response.accepted.push(mutation_id);
+                    } else {
+                        // Genuine same-mutation-id conflict (client
+                        // changed semantics). Name what diverged
+                        // for diagnosability (review-of-review #12).
+                        let diff = describe_replay_diff(&prior, op, &expected_key, &payload_value);
+                        response.rejected.push(SyncRejectedMutation {
+                            mutation_id,
+                            key,
+                            reason: format!(
+                                "mutation id was already accepted with different contents ({diff})"
+                            ),
+                        });
+                    }
+                    continue;
+                }
+
+                // Dispatch to the source.
                 let outcome = apply_payload::<S>(
                     source.as_ref(),
                     ctx.clone(),
@@ -740,6 +751,34 @@ where
 
             Ok(response)
         })
+    }
+}
+
+/// Describe which field of an `AlreadyAccepted` prior reservation
+/// differs from the current candidate. Review-of-review finding #12:
+/// the previous error said "different contents" without saying which.
+/// This puts the diverging field in the rejection reason so users
+/// can debug.
+fn describe_replay_diff(
+    prior: &AcceptedMutation,
+    new_op: pocopine_sync::SyncOp,
+    new_key: &pocopine_sync::RowKey,
+    new_payload: &Value,
+) -> String {
+    let mut diffs: Vec<&'static str> = Vec::new();
+    if prior.op != new_op {
+        diffs.push("op");
+    }
+    if prior.key.as_ref() != Some(new_key) {
+        diffs.push("key");
+    }
+    if &prior.payload != new_payload {
+        diffs.push("payload");
+    }
+    if diffs.is_empty() {
+        "no detectable difference (treated as conflict defensively)".to_string()
+    } else {
+        format!("changed: {}", diffs.join(", "))
     }
 }
 
