@@ -388,35 +388,20 @@ impl IssueComposer {
 What the client does:
 
 ```mermaid
-sequenceDiagram
-    participant App as caller
-    participant Client as QueryClient
-    participant View as QueryView (W1)
-    participant Server as SourceResource
-    participant Log as MutationLog
-    participant Source as Source::create
-    participant Other as other clients (W1)
+flowchart TD
+    Start([".push_typed(...)"]) --> Build["run build(&payload)<br/>tentative Issue"]
+    Build --> Route["route through pending overlay<br/>QueryView (W1)"]
+    Route --> UIa(["on_update fires<br/>UI updates instantly"])
+    Route --> Wire["POST /sync/v1/push"]
+    Wire --> Reserve["MutationLog::reserve_mutation"]
+    Reserve --> Apply["Source::create(ctx, id, draft)"]
+    Apply --> Branch{server response}
 
-    App->>Client: Issue::create(id, draft).optimistic(build).push_typed(...)
-    Client->>Client: run build(&payload) → tentative Issue
-    Client->>View: route through pending overlay
-    View-->>App: on_update fires (UI updates instantly)
+    Branch -->|accepted| Stay["overlay stays<br/>next /pull replaces with canonical"]
+    Stay --> Live["live SSE on (issues, W1-hash)<br/>wakes other W1 clients"]
 
-    Client->>Server: POST /sync/v1/push
-    Server->>Log: reserve_mutation
-    Log-->>Server: Reserved
-    Server->>Source: create(ctx, id, draft)
-    Source-->>Server: canonical Issue
-
-    alt accepted
-        Server-->>Client: { accepted: [mutation_id] }
-        Note over View: overlay stays;<br/>next /pull replaces with canonical
-        Server->>Other: live SSE on (issues, W1-hash)
-    else rejected / conflict
-        Server-->>Client: { rejected: [...] }
-        Client->>View: RollbackGuard drops overlay
-        View-->>App: on_update fires (UI rolls back)
-    end
+    Branch -->|rejected / conflict| Roll["RollbackGuard drops overlay"]
+    Roll --> UIb(["on_update fires<br/>UI rolls back"])
 ```
 
 `MutationId` should come from a durable client-side counter so retries
