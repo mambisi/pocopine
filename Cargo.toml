@@ -33,6 +33,7 @@ members = [
     "crates/pocopine-storage-azure",
     "crates/pocopine-storage-gcs",
     "crates/pocopine-storage-s3",
+    "crates/pocopine-stylekit",
     "crates/pocopine-sync",
     # RFC 090 Phase 6: pocopine-sync-crud + pocopine-sync-crud-macros +
     # pocopine-sync-sqlx (CRUD-specific) deleted. The Source/MutationLog
@@ -108,6 +109,7 @@ pocopine-storage = { path = "crates/pocopine-storage", version = "0.1.0" }
 pocopine-storage-azure = { path = "crates/pocopine-storage-azure", version = "0.1.0" }
 pocopine-storage-gcs = { path = "crates/pocopine-storage-gcs", version = "0.1.0" }
 pocopine-storage-s3 = { path = "crates/pocopine-storage-s3", version = "0.1.0" }
+pocopine-stylekit = { path = "crates/pocopine-stylekit", version = "0.1.0" }
 pocopine-sync = { path = "crates/pocopine-sync", version = "0.1.0" }
 pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.1.0" }
 pocopine-sync-query = { path = "crates/pocopine-sync-query", version = "0.1.0" }
