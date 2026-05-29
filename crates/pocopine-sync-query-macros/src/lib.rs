@@ -663,50 +663,92 @@ fn expand_query_resource(
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params);
     let row_to_params_body = generate_row_to_params_body(&params);
+    let row_to_params_typed_body = generate_row_to_params_typed_body(&params);
+
+    // Auto-wiring sugar: when the row has a literal `id` field and an
+    // optional `version` field, the macro emits a `resource(impl_)`
+    // convenience constructor that pre-wires `.id(...)`,
+    // `.version_field(...)` (if `version` exists), and `.partition_by`.
+    // User opts out of any default by chaining the matching builder
+    // method on the result.
+    let id_field =
+        find_named_struct_field(&item, "id").map(|f| (f.ident.clone().unwrap(), f.ty.clone()));
+    let version_field_ident =
+        find_named_struct_field(&item, "version").map(|f| f.ident.clone().unwrap());
+    let resource_fn = generate_resource_fn(&row_ident, id_field, version_field_ident);
 
     // RFC 090 Phase 4: emit typed write methods only when the
     // user opted in via `draft = MyDraft`. Without it, `#typed_writes`
     // is empty and `impl Row { ... }` carries only `query()`.
     let typed_writes = if writes_enabled {
         quote! {
-            /// RFC 090 Phase 4: typed `create` mutation. Returns a
-            /// [`pocopine_sync_query::TypedMutation`] builder you can
-            /// optionally annotate with `.optimistic(closure)` and
-            /// then `.push(&client, mutation_id, push_url)`.
+            /// Typed `create` mutation. Returns a
+            /// [`pocopine_sync_query::TypedMutation`] pre-wired with
+            /// a default optimistic overlay computed via
+            /// `Self::from((id, draft))` — so a bare
+            /// `Issue::create(id, draft).push(&qc).await` already
+            /// renders the new row in matching views immediately.
             ///
-            /// `Id` defaults to `String` (override with
-            /// `#[query_resource(..., id = MyId)]`).
+            /// **Bound:** `Self: From<(Id, Draft)>`. Implement
+            /// `From<(Id, Draft)> for Row` once per resource (or
+            /// derive a converter — usually a 5-line impl that fills
+            /// server-controlled fields with defaults). Override the
+            /// default by chaining `.optimistic(custom_closure)`
+            /// before `.push(&qc)`; opt out entirely with
+            /// `.no_optimistic()`.
             pub fn create(
                 id: #id_ty,
                 draft: #draft_ty,
-            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty>
+            where
+                Self: ::core::convert::From<(#id_ty, #draft_ty)> + 'static,
+                #id_ty: ::core::clone::Clone + 'static,
+                #draft_ty: ::core::clone::Clone + 'static,
+            {
                 let __wire_key = ::pocopine_sync_query::__private::pocopine_sync::RowKey::new(
                     ::std::string::ToString::to_string(&id),
                 )
                 .ok();
                 let __wire_stream = ::pocopine_sync_query::__private::pocopine_sync::SyncStreamName::new(#name_lit).ok();
+                let __id_for_optimistic = ::core::clone::Clone::clone(&id);
+                let __draft_for_optimistic = ::core::clone::Clone::clone(&draft);
                 ::pocopine_sync_query::TypedMutation::new(
                     ::pocopine_sync_query::MutationPayload::create(id, draft),
                 )
                 .with_wire_row_key(__wire_key)
                 .with_wire_stream(__wire_stream)
+                .optimistic(move |_payload| {
+                    <Self as ::core::convert::From<(#id_ty, #draft_ty)>>::from(
+                        (__id_for_optimistic, __draft_for_optimistic),
+                    )
+                })
             }
 
-            /// RFC 090 Phase 4: typed `update` mutation. Pass an
+            /// Typed `update` mutation. Same auto-optimistic via
+            /// `From<(Id, Draft)>` as [`Self::create`]. Pass an
             /// optional `expected_version` for optimistic-concurrency
-            /// (None = unconditional update).
+            /// (None = unconditional update). Override the optimistic
+            /// closure with `.optimistic(...)` or opt out with
+            /// `.no_optimistic()`.
             pub fn update(
                 id: #id_ty,
                 draft: #draft_ty,
                 expected_version: ::std::option::Option<
                     ::pocopine_sync_query::__private::pocopine_sync::RowVersion,
                 >,
-            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty>
+            where
+                Self: ::core::convert::From<(#id_ty, #draft_ty)> + 'static,
+                #id_ty: ::core::clone::Clone + 'static,
+                #draft_ty: ::core::clone::Clone + 'static,
+            {
                 let __wire_key = ::pocopine_sync_query::__private::pocopine_sync::RowKey::new(
                     ::std::string::ToString::to_string(&id),
                 )
                 .ok();
                 let __wire_stream = ::pocopine_sync_query::__private::pocopine_sync::SyncStreamName::new(#name_lit).ok();
+                let __id_for_optimistic = ::core::clone::Clone::clone(&id);
+                let __draft_for_optimistic = ::core::clone::Clone::clone(&draft);
                 let mut payload =
                     ::pocopine_sync_query::write::UpdatePayload::new(id, draft);
                 payload.expected_version = expected_version;
@@ -715,10 +757,18 @@ fn expand_query_resource(
                 )
                 .with_wire_row_key(__wire_key)
                 .with_wire_stream(__wire_stream)
+                .optimistic(move |_payload| {
+                    <Self as ::core::convert::From<(#id_ty, #draft_ty)>>::from(
+                        (__id_for_optimistic, __draft_for_optimistic),
+                    )
+                })
             }
 
-            /// RFC 090 Phase 4: typed `delete` mutation. Pass an
-            /// optional `expected_version` for optimistic-concurrency.
+            /// Typed `delete` mutation. No `From` bound — delete's
+            /// optimistic shape is a row removal keyed on the id;
+            /// the framework derives it from `wire_row_key`. Pass
+            /// an optional `expected_version` for optimistic
+            /// concurrency.
             pub fn delete(
                 id: #id_ty,
                 expected_version: ::std::option::Option<
@@ -965,6 +1015,21 @@ fn expand_query_resource(
                     ),
                 )
             }
+
+            /// Typed sibling of [`row_to_params`] — reads `&Row` directly
+            /// instead of `&serde_json::Value`. The macro-emitted
+            /// `resource(impl_)` convenience wires this into
+            /// `SourceResource::partition_by(...)` automatically.
+            pub fn row_to_params_typed(
+                row: &Row,
+            ) -> ::pocopine_sync_query::__private::pocopine_sync::StreamParams {
+                let mut params =
+                    ::pocopine_sync_query::__private::pocopine_sync::StreamParams::new();
+                #row_to_params_typed_body
+                params
+            }
+
+            #resource_fn
         }
     })
 }
@@ -1223,31 +1288,155 @@ fn generate_matches_body(params: &[ParamDef]) -> TokenStream2 {
     }
 }
 
+/// Typed sibling of `generate_row_to_params_body` below. Reads each
+/// required field off `&row` (typed) instead of `row.get(...)`
+/// (`&Value`). Same field-selection rules — only `required`-flagged
+/// fields contribute. Used by the macro-emitted `row_to_params_typed`
+/// that `SourceResource::partition_by(...)` consumes directly.
+fn generate_row_to_params_typed_body(params: &[ParamDef]) -> TokenStream2 {
+    let inserts: Vec<TokenStream2> = params
+        .iter()
+        .filter(|p| include_in_row_params(&p.caps))
+        .map(|param| {
+            let name = &param.name;
+            let name_str = ident_wire_key(name);
+            if param.caps.optional {
+                quote! {
+                    if let ::std::option::Option::Some(__v) = &row.#name {
+                        if let ::std::result::Result::Ok(__as_value) =
+                            ::pocopine_sync_query::__private::serde_json::to_value(__v)
+                        {
+                            if !__as_value.is_null() {
+                                params.insert(#name_str.to_string(), __as_value);
+                            }
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    if let ::std::result::Result::Ok(__as_value) =
+                        ::pocopine_sync_query::__private::serde_json::to_value(&row.#name)
+                    {
+                        if !__as_value.is_null() {
+                            params.insert(#name_str.to_string(), __as_value);
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        #(#inserts)*
+    }
+}
+
+/// Find a struct field by its literal Rust ident name. Returns the
+/// field's `Type` (the declared `field: T`) when present. Used by
+/// the macro to detect a conventionally-named `id` or `version`
+/// field for the `resource(impl_)` convenience wiring.
+fn find_named_struct_field<'a>(item: &'a ItemStruct, name: &str) -> Option<&'a syn::Field> {
+    let fields = match &item.fields {
+        Fields::Named(named) => named,
+        _ => return None,
+    };
+    fields
+        .named
+        .iter()
+        .find(|f| f.ident.as_ref().is_some_and(|i| i == name))
+}
+
+/// Generate the macro-emitted `resource<S>(impl_: S) -> SourceResource<…>`
+/// convenience constructor, pre-wired with `.id(...)`,
+/// `.version_field(...)` (when a `version` field exists), and
+/// `.partition_by(row_to_params_typed)`. Emitted only when the row
+/// has a literal `id` field; without it, the macro emits nothing
+/// and the user must call `source(name, impl_).id(...)` directly.
+fn generate_resource_fn(
+    row_ident: &Ident,
+    id_field: Option<(Ident, syn::Type)>,
+    version_field_ident: Option<Ident>,
+) -> TokenStream2 {
+    let Some((id_field, id_field_ty)) = id_field else {
+        return quote! {};
+    };
+
+    let version_chain = match version_field_ident {
+        Some(v) => quote! {
+            .version_field(|row: &super::#row_ident| {
+                let __raw = ::std::string::ToString::to_string(&row.#v);
+                ::pocopine_sync_query::__private::pocopine_sync::RowVersion::new(__raw)
+                    .map(::std::option::Option::Some)
+            })
+        },
+        None => quote! {},
+    };
+
+    quote! {
+        /// Macro-emitted `SourceResource` builder pre-wired from
+        /// `#[query_resource]` metadata: `.id(...)` (from the row's
+        /// `id` field), `.version_field(...)` (from the row's
+        /// `version` field if present), and `.partition_by(...)`
+        /// (from `row_to_params_typed`).
+        ///
+        /// Drops 3–4 lines of boilerplate per resource. Override any
+        /// default by chaining the matching builder method on the
+        /// returned value:
+        ///
+        /// ```ignore
+        /// let resource = issues::resource(IssueStore::new(db))
+        ///     .mutation_log(MemoryMutationLog::with_scope_fn(|ctx| {
+        ///         Ok(ctx.tenant_id()?.to_string())
+        ///     }));
+        /// ```
+        pub fn resource<S>(
+            impl_: S,
+        ) -> ::pocopine_sync_query::source::SourceResource<
+            S,
+            impl ::core::ops::Fn(&super::#row_ident) -> #id_field_ty
+                + ::core::marker::Send
+                + ::core::marker::Sync
+                + 'static,
+        >
+        where
+            S: ::pocopine_sync_query::source::Source<
+                Row = super::#row_ident,
+                Id = #id_field_ty,
+            >,
+        {
+            // `Source<Id = T>` is bound to the row's `id` field
+            // type, so the closure's return matches S::Id without
+            // any conversion. Users with a different id type (e.g.
+            // a newtype around String) either change the row's `id`
+            // field to match OR drop the convenience and call
+            // `source(NAME, impl_).id(custom_projector)` directly.
+            ::pocopine_sync_query::source::source(NAME, impl_)
+                .expect("hardcoded resource name passed validation at macro expansion")
+                .id(|row: &super::#row_ident| ::core::clone::Clone::clone(&row.#id_field))
+                #version_chain
+                .partition_by(row_to_params_typed)
+        }
+    }
+}
+
 /// Generate the body of the `row_to_params(row: &Value) ->
 /// SyncResult<StreamParams>` function inside the generated module
 /// (see RFC 088 §C). Iterates the same `#[query_param]` fields the
 /// matches() body iterates, but:
 ///
-/// 1. **Skips contains-only fields.** A field whose only emitted
+/// 1. Skips contains-only fields. A field whose only emitted
 ///    comparator is `FieldContains` (substring search) can't
-///    partition the topic space — a `.contains(field::title,
-///    "auth")?` filter matches an unbounded set of row values, so
-///    including the row's title in the params map would generate a
-///    distinct topic per row and defeat the fanout-reduction goal.
-///    Fields that ALSO carry `range`/`required`/or-are-non-String
-///    stay in the map.
-///
-/// 2. **Drops `None` from `Option<T>` fields.** Inserting a JSON
-///    null into params would partition `Option::None` rows into a
-///    distinct topic — almost always not what the user wants. The
-///    routing engine's predicate evaluator (matches() body) already
-///    handles `None` symmetry.
-///
-/// 3. **Uses each field's wire-key** (raw-ident-stripped) so the
-///    emitted topic keys match `serde_json::to_value(row)`'s field
-///    names. If the user later adds `#[serde(rename = "…")]`, the
-///    macro doesn't currently follow it — same limitation as the
-///    existing matches() body and the existing macro tests.
+///    partition the topic space — including the row's title in
+///    the params map would generate a distinct topic per row and
+///    defeat the fanout-reduction goal. Fields that ALSO carry
+///    `range`/`required`/or-are-non-String stay in the map.
+/// 2. Drops `None` from `Option<T>` fields. Inserting a JSON null
+///    into params would partition `Option::None` rows into a
+///    distinct topic — almost always not what the user wants.
+/// 3. Uses each field's wire-key (raw-ident-stripped) so the
+///    emitted topic keys match `serde_json::to_value(row)`'s
+///    field names. `#[serde(rename = "…")]` is not currently
+///    followed (same limitation as `matches()`).
 fn generate_row_to_params_body(params: &[ParamDef]) -> TokenStream2 {
     let inserts: Vec<TokenStream2> = params
         .iter()

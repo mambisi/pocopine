@@ -455,6 +455,18 @@ pub struct TaskDraft {
     pub title: String,
 }
 
+// Required by the macro-emitted `Task::create / update` for the
+// auto-optimistic overlay (default = Self::from((id, draft))).
+impl From<(String, TaskDraft)> for Task {
+    fn from((id, draft): (String, TaskDraft)) -> Self {
+        Self {
+            id,
+            workspace_id: draft.workspace_id,
+            title: draft.title,
+        }
+    }
+}
+
 #[test]
 fn create_emits_typed_builder() {
     use pocopine_sync_query::MutationPayload;
@@ -548,4 +560,135 @@ fn wire_shape_is_flat() {
             "draft": {"workspace_id": "W1", "title": "Hello"}
         })
     );
+}
+
+#[test]
+fn create_attaches_default_optimistic_from_from_impl() {
+    // The macro pre-wires `.optimistic(|_| Self::from((id, draft)))`
+    // on `Task::create` because Task: From<(String, TaskDraft)>.
+    let m = Task::create(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "from default".to_string(),
+        },
+    );
+    let (payload, opt) = m.into_parts();
+    let row = opt.expect("auto-optimistic should be attached")(&payload);
+    assert_eq!(row.id, "t1");
+    assert_eq!(row.workspace_id, "W1");
+    assert_eq!(row.title, "from default");
+}
+
+#[test]
+fn no_optimistic_clears_default() {
+    // `.no_optimistic()` clears the auto-default. The mutation still
+    // pushes correctly; the view just won't update until /pull confirms.
+    let m = Task::create(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "no-overlay".to_string(),
+        },
+    )
+    .no_optimistic();
+    let (_payload, opt) = m.into_parts();
+    assert!(
+        opt.is_none(),
+        "no_optimistic must clear the default closure"
+    );
+}
+
+#[test]
+fn tasks_resource_convenience_compiles_with_stub_source() {
+    // The macro-emitted `tasks::resource(impl_)` pre-wires `.id`
+    // (from the row's `id` field) and `.partition_by` (from
+    // `row_to_params_typed`). This stub Source carries no `version`
+    // field on the row, so `version_field` is not pre-wired.
+    use pocopine_auth::RequestContext;
+    use pocopine_sync_query::source::{
+        DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
+    };
+    use pocopine_sync_query::Query;
+
+    pub struct TaskStore;
+
+    impl Source for TaskStore {
+        type Id = String;
+        type Row = Task;
+        type Draft = TaskDraft;
+        type Context = ();
+
+        fn extract_context<'a>(
+            &'a self,
+            _ctx: RequestContext,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<Self::Context>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn list_stream<'a>(
+            &'a self,
+            _ctx: (),
+            _query: &'a Query<Self::Row>,
+        ) -> SourceStream<'a, Self::Row> {
+            Box::pin(futures::stream::iter(::std::iter::empty()))
+        }
+        fn get<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<Option<Self::Row>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn create<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+            _draft: Self::Draft,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<Self::Row>> {
+            Box::pin(async { Err(pocopine_sync::SyncError::unsupported("stub")) })
+        }
+        fn update<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+            _draft: Self::Draft,
+            _expected_version: Option<pocopine_sync::RowVersion>,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<WriteResult<Self::Row>>> {
+            Box::pin(async { Err(pocopine_sync::SyncError::unsupported("stub")) })
+        }
+        fn delete<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+            _expected_version: Option<pocopine_sync::RowVersion>,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<DeleteResult<Self::Row>>> {
+            Box::pin(async { Err(pocopine_sync::SyncError::unsupported("stub")) })
+        }
+    }
+
+    // The actual test — `tasks::resource(impl_)` returns a
+    // SourceResource with id + partition_by pre-wired. We can then
+    // chain `.mutation_log(...)` (and override defaults if needed).
+    let _resource = tasks::resource(TaskStore)
+        .mutation_log(pocopine_sync_query::write::MemoryMutationLog::<Task>::new());
+}
+
+#[test]
+fn explicit_optimistic_overrides_default() {
+    let m = Task::create(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "default".to_string(),
+        },
+    )
+    .optimistic(|_| Task {
+        id: "explicit_t1".to_string(),
+        workspace_id: "explicit_W1".to_string(),
+        title: "explicit override".to_string(),
+    });
+    let (payload, opt) = m.into_parts();
+    let row = opt.unwrap()(&payload);
+    assert_eq!(row.id, "explicit_t1");
+    assert_eq!(row.title, "explicit override");
 }
