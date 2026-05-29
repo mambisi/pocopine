@@ -29,3 +29,7 @@ trybuild = "1"
 # emitted `tasks::resource(...)` convenience compiles only on host.
 pocopine-auth = { workspace = true }
 futures = "0.3"
+# Required by the `Source::mutation_log` integration test that
+# impls MutationLog directly on a store.
+async-trait = "0.1"
+http = { workspace = true }

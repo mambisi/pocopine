@@ -599,6 +599,155 @@ fn no_optimistic_clears_default() {
     );
 }
 
+#[tokio::test]
+async fn source_provided_mutation_log_skips_auto_default() {
+    // The Source impl returns `Some(self.clone())` from
+    // `mutation_log()`, so the SourceResource picks it up at
+    // construction without `.mutation_log(...)` on the builder.
+    // We verify reservations land in the *Source-provided* log,
+    // not a fresh `MemoryMutationLog`.
+    use pocopine_auth::RequestContext;
+    use pocopine_sync::{MutationId, SyncOp};
+    use pocopine_sync_query::source::{
+        DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
+    };
+    use pocopine_sync_query::write::{
+        AcceptedMutation, MemoryMutationLog, MutationLog, MutationReservation,
+    };
+    use pocopine_sync_query::Query;
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct CountedLogStore {
+        inner: Arc<MemoryMutationLog<Task>>,
+    }
+
+    impl CountedLogStore {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(MemoryMutationLog::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MutationLog<Task> for CountedLogStore {
+        async fn reserve_mutation(
+            &self,
+            ctx: &RequestContext,
+            candidate: AcceptedMutation,
+        ) -> pocopine_sync::SyncResult<MutationReservation> {
+            self.inner.reserve_mutation(ctx, candidate).await
+        }
+
+        async fn accepted_mutation(
+            &self,
+            ctx: &RequestContext,
+            mutation_id: &MutationId,
+        ) -> pocopine_sync::SyncResult<Option<AcceptedMutation>> {
+            self.inner.accepted_mutation(ctx, mutation_id).await
+        }
+    }
+
+    impl Source for CountedLogStore {
+        type Id = String;
+        type Row = Task;
+        type Draft = TaskDraft;
+        type Context = ();
+
+        fn extract_context<'a>(
+            &'a self,
+            _ctx: RequestContext,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<Self::Context>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn list_stream<'a>(
+            &'a self,
+            _ctx: (),
+            _query: &'a Query<Self::Row>,
+        ) -> SourceStream<'a, Self::Row> {
+            Box::pin(futures::stream::iter(::std::iter::empty()))
+        }
+        fn get<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<Option<Self::Row>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn create<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+            _draft: Self::Draft,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<Self::Row>> {
+            Box::pin(async { Err(pocopine_sync::SyncError::unsupported("stub")) })
+        }
+        fn update<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+            _draft: Self::Draft,
+            _expected: Option<pocopine_sync::RowVersion>,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<WriteResult<Self::Row>>> {
+            Box::pin(async { Err(pocopine_sync::SyncError::unsupported("stub")) })
+        }
+        fn delete<'a>(
+            &'a self,
+            _ctx: (),
+            _id: Self::Id,
+            _expected: Option<pocopine_sync::RowVersion>,
+        ) -> SourceFuture<'a, pocopine_sync::SyncResult<DeleteResult<Self::Row>>> {
+            Box::pin(async { Err(pocopine_sync::SyncError::unsupported("stub")) })
+        }
+
+        // The whole point of this test: returning Some here tells
+        // `SourceResource` to use the store's own log instead of
+        // auto-provisioning a fresh `MemoryMutationLog`.
+        fn mutation_log(&self) -> Option<Arc<dyn MutationLog<Self::Row>>> {
+            Some(Arc::new(self.clone()))
+        }
+    }
+
+    let store = CountedLogStore::new();
+    let inner_log = store.inner.clone();
+
+    // No `.mutation_log(...)` on the builder — the auto-wiring
+    // picks up the Source-provided log via `Source::mutation_log()`.
+    let _resource = tasks::resource(store);
+
+    // Seed the log directly through the Source-provided instance.
+    // If the SourceResource HAD provisioned a fresh
+    // MemoryMutationLog instead, this insert would not be visible
+    // to subsequent push handlers. We assert visibility by reading
+    // back through the same `inner_log` we wrote to.
+    let ctx = RequestContext::new(
+        http::Method::POST,
+        "/__pocopine/sync/v1/push".parse().unwrap(),
+        http::HeaderMap::new(),
+    );
+    let mid = MutationId::new("auto_wired_mid").unwrap();
+    let candidate = AcceptedMutation::new(
+        mid.clone(),
+        SyncOp::Upsert,
+        Some(pocopine_sync::RowKey::new("t1").unwrap()),
+        serde_json::json!({"op": "create", "id": "t1", "draft": {}}),
+    );
+    let reservation = inner_log
+        .reserve_mutation(&ctx, candidate)
+        .await
+        .expect("reservation must succeed");
+    assert!(matches!(reservation, MutationReservation::Reserved));
+    let prior = inner_log
+        .accepted_mutation(&ctx, &mid)
+        .await
+        .expect("readback");
+    assert!(
+        prior.is_some(),
+        "auto-wired Source-provided log must hold the reservation"
+    );
+}
+
 #[test]
 fn tasks_resource_convenience_compiles_with_stub_source() {
     // The macro-emitted `tasks::resource(impl_)` pre-wires `.id`

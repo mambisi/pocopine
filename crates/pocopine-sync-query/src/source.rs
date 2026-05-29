@@ -245,6 +245,30 @@ pub trait Source: Send + Sync + 'static {
         id: Self::Id,
         expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>>;
+
+    /// Provide an idempotency log keyed on this Source's writes.
+    /// Default: `None` — `SourceResource` auto-provisions an
+    /// in-memory log and emits a one-shot dev warning on first push.
+    ///
+    /// Production impls return `Some(...)` so the same backing store
+    /// that handles `create`/`update`/`delete` ALSO handles
+    /// `reserve_mutation` — that's the only way `Source::create` and
+    /// the mutation-id reservation commit in the same transaction.
+    /// Typical shape:
+    ///
+    /// ```ignore
+    /// // Self: Clone + MutationLog<Self::Row>
+    /// fn mutation_log(&self) -> Option<Arc<dyn MutationLog<Self::Row>>> {
+    ///     Some(Arc::new(self.clone()))
+    /// }
+    /// ```
+    ///
+    /// The builder's `.mutation_log(custom)` still wins over this
+    /// when set — use the builder override when the log is hosted by
+    /// a different backend (separate DB, scoped wrapper, …).
+    fn mutation_log(&self) -> Option<Arc<dyn MutationLog<Self::Row>>> {
+        None
+    }
 }
 
 /// Reconstruct a `Query<Row>` from a wire `SyncPullRequest`. The
@@ -342,6 +366,24 @@ impl<S: Source> SourceResourceBuilder<S> {
     where
         IdOf: Fn(&S::Row) -> S::Id + Send + Sync + 'static,
     {
+        // Resolve mutation_log priority at construction time:
+        //   1. `.mutation_log(custom)` (set later on the builder) → that
+        //   2. `Source::mutation_log()` returning Some       → trait-provided
+        //   3. neither                                       → MemoryMutationLog + warn
+        //
+        // The `Source::mutation_log()` lookup happens HERE (before
+        // the user has a chance to call `.mutation_log(...)`) and
+        // is overridden when the user does call it. Three-state
+        // provenance tracks which path supplied the log so the
+        // first-push warn only fires for case 3.
+        let (mutation_log, mutation_log_provenance) = match self.source.mutation_log() {
+            Some(log) => (log, MutationLogProvenance::SourceProvided),
+            None => (
+                Arc::new(crate::write::MemoryMutationLog::<S::Row>::new())
+                    as Arc<dyn MutationLog<S::Row>>,
+                MutationLogProvenance::AutoDefault,
+            ),
+        };
         SourceResource {
             stream: self.stream,
             collection: self.collection,
@@ -351,18 +393,25 @@ impl<S: Source> SourceResourceBuilder<S> {
             id_of: Arc::new(id_of),
             version_of: None,
             params_of: None,
-            // T2.2: provision an in-memory log by default so the
-            // builder accepts `/push` without an explicit
-            // `.mutation_log(...)` call. The user-visible warning
-            // about the default fires once on first push (see the
-            // `mutation_log_default_warned` cell + push handler).
-            // `.mutation_log(...)` replaces it AND sets the
-            // explicit flag, which silences the warn.
-            mutation_log: Arc::new(crate::write::MemoryMutationLog::<S::Row>::new()),
-            mutation_log_explicit: false,
+            mutation_log,
+            mutation_log_provenance,
             mutation_log_default_warned: Arc::new(std::sync::OnceLock::new()),
         }
     }
+}
+
+/// Tracks how `SourceResource` got its `mutation_log`. Drives the
+/// first-push warning: only the `AutoDefault` case fires, because
+/// the trait method's `Some(...)` return and the builder's explicit
+/// override are both deliberate user choices.
+#[derive(Clone, Copy, Debug)]
+enum MutationLogProvenance {
+    /// `.mutation_log(custom)` called on the builder.
+    BuilderExplicit,
+    /// `Source::mutation_log()` returned `Some(...)`.
+    SourceProvided,
+    /// Neither — falling back to `MemoryMutationLog` (warn).
+    AutoDefault,
 }
 
 /// `SyncStreamSource` adapter wrapping a `Source` impl. Phase 1
@@ -385,16 +434,15 @@ pub struct SourceResource<S: Source, IdOf> {
     /// disabled and the server publishes only the bare stream
     /// topic. Phase 4 will auto-wire this from `#[query_resource]`.
     params_of: Option<Arc<SourceParamsFn<S::Row>>>,
-    /// Idempotency log for push mutations. Defaults to
-    /// `MemoryMutationLog::new()` at construction time (T2.2);
-    /// `.mutation_log(...)` replaces it. Production apps SHOULD
-    /// attach a scoped + durable log — see the warning emitted on
-    /// first push when this is still the implicit default.
+    /// Idempotency log for push mutations. Resolved at construction
+    /// in priority order: `.mutation_log(custom)` (builder),
+    /// `Source::mutation_log()` (trait default method), or
+    /// `MemoryMutationLog::new()` (auto-default + warn).
     mutation_log: Arc<dyn MutationLog<S::Row>>,
-    /// Whether `.mutation_log(...)` was called explicitly. When
-    /// `false`, push emits a one-shot `tracing::warn!` so the
-    /// default-in-memory log is visible in dev logs.
-    mutation_log_explicit: bool,
+    /// Which path supplied `mutation_log`. The first-push warning
+    /// fires only when `AutoDefault` — both the builder override
+    /// and the trait method are user-deliberate choices.
+    mutation_log_provenance: MutationLogProvenance,
     /// One-shot latch for the dev warning. `Arc` so cloning the
     /// resource doesn't re-fire; `OnceLock` for thread-safe
     /// single-call semantics.
@@ -466,7 +514,7 @@ where
         Log: MutationLog<S::Row>,
     {
         self.mutation_log = Arc::new(log);
-        self.mutation_log_explicit = true;
+        self.mutation_log_provenance = MutationLogProvenance::BuilderExplicit;
         self
     }
 }
@@ -676,7 +724,7 @@ where
         let id_of = self.id_of.clone();
         let version_of = self.version_of.clone();
         let mutation_log = self.mutation_log.clone();
-        let mutation_log_explicit = self.mutation_log_explicit;
+        let mutation_log_provenance = self.mutation_log_provenance;
         let mutation_log_default_warned = self.mutation_log_default_warned.clone();
         let stream = self.stream.clone();
         let collection = self.collection.clone();
@@ -685,20 +733,24 @@ where
                 return Err(SyncError::UnknownStream(request.stream.to_string()));
             }
 
-            // T2.2: emit a one-shot dev warning when the implicit
-            // in-memory mutation log is in use. Production deployments
-            // should attach a durable + scoped log via
-            // `.mutation_log(...)` so idempotency survives process
-            // restarts and aligns with the tenant boundary.
-            if !mutation_log_explicit {
+            // T2.2 + Source::mutation_log() integration: emit a
+            // one-shot dev warning ONLY when neither the builder
+            // override nor the trait method supplied a log — i.e.
+            // we're using the auto-default MemoryMutationLog.
+            // Production deployments should either override the
+            // trait default to return Some(self) (when the store
+            // also impls MutationLog) or call `.mutation_log(...)`
+            // on the builder.
+            if matches!(mutation_log_provenance, MutationLogProvenance::AutoDefault) {
                 mutation_log_default_warned.get_or_init(|| {
                     tracing::warn!(
                         target: "pocopine.log",
                         stream = %stream,
                         "SourceResource using the default in-memory MutationLog. \
                          Replays after process restart will be lost. Production: \
-                         call .mutation_log(MemoryMutationLog::with_scope_fn(...)) \
-                         on the builder, or attach a durable backend."
+                         override `Source::mutation_log()` to return `Some(self)` \
+                         (when the store impls MutationLog), or call \
+                         `.mutation_log(...)` on the builder with a durable backend."
                     );
                 });
             }
