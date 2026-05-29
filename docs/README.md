@@ -50,14 +50,15 @@ looks the way it does — the code itself tells you *what*.
 - [`live.md`](./live.md) — live invalidation tutorial: SSE streams,
   collection/query refresh callbacks, server topic policies, and the
   example/test files that must stay in sync with live API changes.
-- [`sync-crud-to-query-migration.md`](./sync-crud-to-query-migration.md) —
-  migration guide from the deleted `pocopine-sync-crud` to the unified
-  `pocopine-sync-query`: `Source` trait shape, `SourceResource` adapter,
-  typed `Issue::create/update/delete(...).optimistic(...).push(...)` API,
-  and the rename table (`save→update`, `remove→delete`,
-  `base_version→expected_version`, `params_of→partition_by`,
-  `version→version_field`). This is currently the entry point for the
-  new sync write API while the broader sync tutorial set is rewritten.
+- [`sync.md`](./sync.md) — sync tutorial: build a workspace-scoped issue
+  tracker end-to-end with `#[query_resource]`, a `Source` impl,
+  reactive `QueryView`, and typed writes with optimistic overlays.
+- [`sync-server.md`](./sync-server.md) — host contract: `Source` trait,
+  `SourceResource` builder, `MutationLog` idempotency invariant,
+  `partition_by` for live wake-up precision, schema migration ordering.
+- [`sync-client.md`](./sync-client.md) — wasm runtime: `QueryClient`,
+  the `Query<Row>` DSL, `QueryView` reactive surface, typed writes,
+  pending overlay vs canonical, live wake-up config.
 - [`sync-query-selector-mechanism.md`](./sync-query-selector-mechanism.md) —
   design + worked example for the `#[query]` selector layer: read
   tracking, memoization, diff-suppressed listeners, refcount lifecycle,
