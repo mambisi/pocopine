@@ -19,7 +19,7 @@ fn query_builder_constructs_typed_query() {
     let q: Query<()> = Query::builder(stream.clone())
         .raw_param("workspace_id", serde_json::json!("W1"))
         .raw_param("status", serde_json::json!({"in": ["open"]}))
-        .order_by("created_at", Order::Desc)
+        .order_by_raw("created_at", Order::Desc)
         .limit(50)
         .build();
 

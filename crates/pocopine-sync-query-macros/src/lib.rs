@@ -684,10 +684,12 @@ fn expand_query_resource(
                     ::std::string::ToString::to_string(&id),
                 )
                 .ok();
+                let __wire_stream = ::pocopine_sync_query::__private::pocopine_sync::SyncStreamName::new(#name_lit).ok();
                 ::pocopine_sync_query::TypedMutation::new(
                     ::pocopine_sync_query::MutationPayload::create(id, draft),
                 )
                 .with_wire_row_key(__wire_key)
+                .with_wire_stream(__wire_stream)
             }
 
             /// RFC 090 Phase 4: typed `update` mutation. Pass an
@@ -704,6 +706,7 @@ fn expand_query_resource(
                     ::std::string::ToString::to_string(&id),
                 )
                 .ok();
+                let __wire_stream = ::pocopine_sync_query::__private::pocopine_sync::SyncStreamName::new(#name_lit).ok();
                 let mut payload =
                     ::pocopine_sync_query::write::UpdatePayload::new(id, draft);
                 payload.expected_version = expected_version;
@@ -711,6 +714,7 @@ fn expand_query_resource(
                     ::pocopine_sync_query::MutationPayload::Update(payload),
                 )
                 .with_wire_row_key(__wire_key)
+                .with_wire_stream(__wire_stream)
             }
 
             /// RFC 090 Phase 4: typed `delete` mutation. Pass an
@@ -725,12 +729,14 @@ fn expand_query_resource(
                     ::std::string::ToString::to_string(&id),
                 )
                 .ok();
+                let __wire_stream = ::pocopine_sync_query::__private::pocopine_sync::SyncStreamName::new(#name_lit).ok();
                 let mut payload = ::pocopine_sync_query::write::DeletePayload::new(id);
                 payload.expected_version = expected_version;
                 ::pocopine_sync_query::TypedMutation::new(
                     ::pocopine_sync_query::MutationPayload::Delete(payload),
                 )
                 .with_wire_row_key(__wire_key)
+                .with_wire_stream(__wire_stream)
             }
         }
     } else {
@@ -982,10 +988,12 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
             );
             let inner = &param.inner_ty;
 
-            // Always emit FieldEq + FieldInSet. Inner type is T (after
-            // unwrapping any Option<T>), so `.eq(field::assignee_id,
-            // "alice")` on a `Option<String>` field still typechecks
-            // with `&str → String` via `Into<M::Value>`.
+            // Always emit FieldEq + FieldInSet + FieldOrder. Inner
+            // type is T (after unwrapping any Option<T>), so
+            // `.eq(field::assignee_id, "alice")` on a `Option<String>`
+            // field still typechecks with `&str → String` via
+            // `Into<M::Value>`. `FieldOrder` is unconditional —
+            // sorting is orthogonal to the filter capability set.
             let mut trait_impls = vec![
                 quote! {
                     impl ::pocopine_sync_query::FieldEq for #marker_ident {
@@ -996,6 +1004,11 @@ fn generate_field_markers(params: &[ParamDef]) -> Vec<TokenStream2> {
                 quote! {
                     impl ::pocopine_sync_query::FieldInSet for #marker_ident {
                         type Item = #inner;
+                        const NAME: &'static str = #name_str;
+                    }
+                },
+                quote! {
+                    impl ::pocopine_sync_query::FieldOrder for #marker_ident {
                         const NAME: &'static str = #name_str;
                     }
                 },

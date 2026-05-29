@@ -1740,6 +1740,59 @@ fn mutation_id_from_value(mutation: &ClientMutation<Value>) -> MutationId {
     mutation.id.clone()
 }
 
+// ---- Tier 1: TypedMutation::push convenience ---------------------
+// Inherent methods on the macro-emitted builder so the call site
+// reads `Issue::create(...).optimistic(...).push(&qc).await` instead
+// of threading stream + mutation id + push url at every call. The
+// methods live in client.rs (not write.rs) because they need access
+// to `QueryClient::endpoint()` + the private `build_push_url`
+// helper; impl blocks can split across files inside the same crate.
+
+impl<Row, Id, Draft> crate::write::TypedMutation<Row, Id, Draft>
+where
+    Row: Clone + serde::Serialize + 'static,
+    Id: serde::Serialize + Clone + 'static,
+    Draft: serde::Serialize + Clone + 'static,
+{
+    /// Push this typed mutation through `client`. Auto-generates a
+    /// UUIDv7-backed `MutationId` and resolves the push URL from the
+    /// client's configured endpoint.
+    ///
+    /// **Idempotency caveat:** because the mutation id is generated
+    /// fresh on each call, a manual retry after this future returns
+    /// `Err(_)` produces a different logical mutation on the server.
+    /// For retry-safe pushes (durable replay across reloads), use
+    /// [`Self::push_with_id`] with an id you've persisted somewhere
+    /// stable, or rely on the in-flight overlay store the framework
+    /// keeps for the offline-replay path in `mutate()`.
+    pub async fn push(self, client: &QueryClient) -> pocopine_sync::SyncResult<MutationId> {
+        let id = MutationId::uuid();
+        self.push_with_id(client, id).await
+    }
+
+    /// Push with an explicit mutation id. Use when you've persisted
+    /// the id to a durable counter so retries collapse to the same
+    /// logical write at the `MutationLog`.
+    pub async fn push_with_id(
+        self,
+        client: &QueryClient,
+        mutation_id: MutationId,
+    ) -> pocopine_sync::SyncResult<MutationId> {
+        let stream = self.wire_stream().cloned().ok_or_else(|| {
+            pocopine_sync::SyncError::client(
+                "TypedMutation has no wire_stream; the macro-emitted constructors fill it \
+                 automatically — hand-built `TypedMutation`s must call \
+                 `.with_wire_stream(Some(...))` or use `QueryClient::push_typed` directly",
+            )
+        })?;
+        let url = build_push_url(client.endpoint());
+        client
+            .push_typed(stream, mutation_id.clone(), self, &url)
+            .await?;
+        Ok(mutation_id)
+    }
+}
+
 /// Crate-internal route used by [`AnyMutator::replay_hydrated`] to
 /// reconcile canonical changes through the same path as a successful
 /// `mutate()` call. Necessary because the trait can't reach the
@@ -2106,6 +2159,17 @@ pub struct QueryView<Row: 'static> {
     handle: QueryHandle<Row>,
 }
 
+impl<Row: 'static> Clone for QueryView<Row> {
+    /// Bumps the subscription's refcount; both clones address the
+    /// same underlying state. `into_signal()` and selector bridges
+    /// rely on this.
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+        }
+    }
+}
+
 impl<Row: 'static> QueryView<Row> {
     /// Underlying query identity.
     pub fn query(&self) -> &Query<Row> {
@@ -2299,6 +2363,33 @@ impl<Row: 'static> QueryView<Row> {
             subscription: self.handle.subscription.clone(),
             id,
         }
+    }
+
+    /// Bridge this view into a `Signal<Vec<Row>>`. The returned signal
+    /// is initialised to `self.rows()`, subscribes a hidden setter to
+    /// `on_update`, and carries a drop-guard so the underlying
+    /// subscription is released when the last `Signal` clone drops.
+    ///
+    /// Use this when you want the view to plug into pocopine's
+    /// general reactive graph (effects, components, derived
+    /// selectors) the same way any `Signal<T>` does — `.get()`
+    /// subscribes the current effect; mutations trigger re-runs;
+    /// dropping the last reader cleans up the on-update listener
+    /// without any explicit token bookkeeping.
+    pub fn into_signal(self) -> pocopine_core::Signal<Vec<Row>>
+    where
+        Row: Clone + serde::Serialize,
+    {
+        let initial = self.rows();
+        let (sig, set) = pocopine_core::signal(initial);
+        let view_for_cb = self.clone();
+        let token = self.on_update(move || {
+            set.set_force(view_for_cb.rows());
+        });
+        // The guard owns the view + the on-update token; when the
+        // last `Signal` clone drops, the guard's `Rc` count hits zero
+        // and the token's `Drop` unregisters the listener.
+        sig.with_drop_guard((self, token))
     }
 }
 

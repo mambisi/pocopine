@@ -77,7 +77,7 @@ pub use mutator::{
 };
 pub use plugin::{query_client_plugin, QueryClientPlugin};
 pub use predicate::{
-    contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldRange,
+    contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldOrder, FieldRange,
 };
 pub use query::{MatchFn, Order, OrderBy, PartitionHashFn, Query, QueryBuilder, QueryKey};
 pub use selector::{AnyArgs, AnyTrackable, SelectorId, SelectorView, TrackToken};

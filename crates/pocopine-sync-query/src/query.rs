@@ -274,8 +274,25 @@ impl<Row> QueryBuilder<Row> {
         self
     }
 
-    /// Set the ordering.
-    pub fn order_by(mut self, field: impl Into<String>, direction: Order) -> Self {
+    /// Set the ordering using a macro-emitted field marker
+    /// (`.order_by(Issue::field::created_at, Order::Desc)`).
+    ///
+    /// Same shape as `.eq` / `.range` / `.contains` — the marker
+    /// carries the wire key as a `const`, so typos become build
+    /// errors instead of "field not found" responses at runtime.
+    pub fn order_by<M>(self, _field: M, direction: Order) -> Self
+    where
+        M: crate::FieldOrder,
+    {
+        self.order_by_raw(<M as crate::FieldOrder>::NAME, direction)
+    }
+
+    /// Untyped ordering escape hatch. Accepts an arbitrary wire key
+    /// string. Prefer [`Self::order_by`] when the macro emits a
+    /// field marker; reach for this when sorting by a synthesized
+    /// or server-only column (e.g. `"created_at"` on a row that
+    /// doesn't expose `created_at` to the client predicate).
+    pub fn order_by_raw(mut self, field: impl Into<String>, direction: Order) -> Self {
         self.order_by = Some(OrderBy {
             field: field.into(),
             direction,
@@ -465,6 +482,42 @@ impl<Row> QueryBuilder<Row> {
     {
         client.observe(self.build())
     }
+
+    /// Component-scope sugar: subscribe to this query, bridge the
+    /// view into a reactive signal, and copy `view.rows()` into a
+    /// field on the current component on every update.
+    ///
+    /// Call from inside a component handler (`on_mount`, etc.). The
+    /// component type `C` is resolved via `pocopine_core::this::<C>()`;
+    /// `project` returns the `Vec<Row>` slot the rows write into.
+    /// The effect is registered with the surrounding scope's
+    /// unmount, so the subscription tears down automatically when
+    /// the component unmounts — no token bookkeeping needed.
+    ///
+    /// ```ignore
+    /// pub fn on_mount(&mut self) {
+    ///     let qc = self.plugin::<Rc<QueryClient>>();
+    ///     Issue::query()
+    ///         .eq(issues::field::workspace_id, &self.workspace_id)
+    ///         .order_by(issues::field::created_at, Order::Desc)
+    ///         .bind::<Self, _>(&qc, |s: &mut Self| &mut s.rows);
+    /// }
+    /// ```
+    pub fn bind<C, F>(self, client: &crate::QueryClient, project: F)
+    where
+        Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
+        C: 'static,
+        F: Fn(&mut C) -> &mut Vec<Row> + 'static,
+    {
+        let this = pocopine_core::this::<C>();
+        let signal = self.observe(client).into_signal();
+        pocopine_core::effect_scoped(move || {
+            let snap = signal.get();
+            this.update(|c: &mut C| {
+                *project(c) = snap;
+            });
+        });
+    }
 }
 
 /// FNV-1a 64-bit. Inline because we don't want a hash-crate dep for the
@@ -515,10 +568,10 @@ mod tests {
     #[test]
     fn order_changes_key() {
         let q1: Query<()> = Query::builder(stream())
-            .order_by("created_at", Order::Asc)
+            .order_by_raw("created_at", Order::Asc)
             .build();
         let q2: Query<()> = Query::builder(stream())
-            .order_by("created_at", Order::Desc)
+            .order_by_raw("created_at", Order::Desc)
             .build();
         assert_ne!(q1.key(), q2.key());
     }
