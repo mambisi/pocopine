@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Pine Stylekit — Pocopine-native utility-CSS compiler: Tailwind-shaped class grammar, typed utility registry, deterministic CSS output, and .poco-aware diagnostics. Build-time only; no browser runtime."
 
 [dependencies]
+pocopine-template-parser = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 strsim = { workspace = true }

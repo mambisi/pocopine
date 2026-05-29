@@ -43,7 +43,13 @@ use syn::{
 // RFC 050 — compile-time `.poco` template parser + diagnostic
 // renderer. Both host-only (proc-macro crate), invisible to wasm.
 mod diagnostics;
-mod template_parser;
+// RFC 050 parser now lives in the shared `pocopine-template-parser`
+// crate so non-macro build tooling (pocopine-stylekit) can reuse it.
+// Re-export under the historical path so in-crate
+// `crate::template_parser::…` references keep resolving unchanged.
+mod template_parser {
+    pub use pocopine_template_parser::*;
+}
 // RFC 049 — `#[slot]` helper-attribute parsing + marker-trait
 // emission. Inert helper consumed by `#[component]`.
 mod slot;
