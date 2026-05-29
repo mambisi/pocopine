@@ -2360,12 +2360,13 @@ impl<Row: 'static> QueryView<Row> {
     /// ```ignore
     /// let view = Issues::query().eq(field::workspace_id, w1).observe(&qc);
     /// let scope = pocopine_core::current_scope_id().unwrap();
-    /// let _token = view.on_update(move || {
-    ///     pocopine_core::scope::notify(scope, "issues_view");
+    /// let token = view.on_update(move || {
+    ///     pocopine_core::trigger(scope, "issues_view");
     /// });
     /// pocopine_core::effect(move || {
     ///     pocopine_core::track(scope, "issues_view");
-    ///     render_view(&view.rows());
+    ///     let _ = &token;                 // keep alive with the effect
+    ///     /* read view.rows() and copy into reactive component state */
     /// });
     /// ```
     pub fn on_update<F>(&self, callback: F) -> UpdateToken<Row>

@@ -3,18 +3,18 @@
 What you use in wasm to subscribe to queries, render rows, and push
 typed mutations.
 
-```mermaid
-flowchart LR
-    Client["QueryClient<br/><i>one per app, installed via plugin</i>"]
-    View["QueryView&lt;Row&gt;<br/>rows() / version() /<br/>on_update(callback)"]
-    Raw["push(payload, change)<br/><i>raw, untyped</i>"]
-    Typed["push_typed(TypedMutation)<br/><i>macro-emitted</i>"]
-    Opt[".optimistic(closure)"]
-
-    Client -- "observe(Query&lt;Row&gt;)" --> View
-    Client --> Raw
-    Client --> Typed
-    Typed --> Opt
+```text
+   QueryClient                  ← one per app, installed via plugin
+     │
+     ├── observe(Query<Row>) ──▶ QueryView<Row>      ← reactive read
+     │                              ├── rows()
+     │                              ├── version()
+     │                              └── on_update(callback)
+     │
+     ├── push(payload, change) ──▶ raw write (untyped)
+     │
+     └── push_typed(TypedMutation) ──▶ macro-emitted write
+                                       └── .optimistic(closure)
 ```
 
 The tutorial in [`sync.md`](./sync.md) walks the end-to-end flow. This
@@ -162,7 +162,7 @@ care about updates.
 
 `QueryView` is an external reactive source — it doesn't live in the
 component's reactive graph by default. Bridge it via the
-`scope::notify` / `effect` + `track` pair documented on
+`trigger` / `effect` + `track` pair documented on
 [`QueryView::on_update`](../crates/pocopine-sync-query/src/client.rs):
 
 ```rust
@@ -202,7 +202,7 @@ impl IssueList {
         let scope = pocopine_core::current_scope_id()
             .expect("on_mount runs inside a component scope");
         let token = view.on_update(move || {
-            pocopine_core::scope::notify(scope, "issues_view");
+            pocopine_core::trigger(scope, "issues_view");
         });
 
         // Effect: react to either initial mount or any notify, copy
@@ -255,7 +255,7 @@ The flow:
 
 1. `on_mount` runs in the component's scope.
 2. `self.plugin::<Rc<QueryClient>>()` resolves the app-installed client.
-3. `view.on_update(...)` fires `scope::notify(scope, "issues_view")` on
+3. `view.on_update(...)` fires `trigger(scope, "issues_view")` on
    every state change in the view.
 4. `effect + track(scope, "issues_view")` re-runs whenever that key is
    notified, copying `view.rows()` into `self.rows`.
@@ -382,21 +382,34 @@ impl IssueComposer {
 ### What `.optimistic(...)` does
 
 ```mermaid
-flowchart TD
-    Start([".push_typed(...)"]) --> Build["build(&payload) → Issue"]
-    Build --> Route["route through QueryView<br/>pending overlay"]
-    Route --> UIa(["on_update fires<br/>UI updates instantly"])
-    Route --> Wire["POST /sync/v1/push"]
-    Wire --> Server["take_processing_payload<br/>reserve_mutation<br/>Source::create"]
-    Server --> Branch{outcome}
+sequenceDiagram
+    participant App as caller
+    participant Client as QueryClient
+    participant View as QueryView
+    participant Server as SourceResource
 
-    Branch -->|accepted| Stay["overlay stays<br/>next /pull replaces with canonical"]
+    App->>Client: Issue::create(id, draft).optimistic(build).push_typed(...)
+    Client->>Client: build(&payload) → Issue
+    Client->>View: route through pending overlay
+    View-->>App: on_update fires (instant)
 
-    Branch -->|rejected / conflict| Roll1["RollbackGuard removes overlay"]
-    Roll1 --> Err1(["on_update fires<br/>caller gets SyncError"])
+    Client->>Server: POST /sync/v1/push
+    Server->>Server: take_processing_payload
+    Server->>Server: reserve_mutation
+    Server->>Server: Source::create
 
-    Branch -->|transport error| Roll2["RollbackGuard removes overlay"]
-    Roll2 --> Err2(["on_update fires<br/>caller gets SyncError"])
+    alt Accepted
+        Server-->>Client: { accepted: [...] }
+        Note over View: overlay stays; next /pull replaces with canonical
+    else Rejected / conflict
+        Server-->>Client: { rejected: [...] }
+        Client->>View: RollbackGuard removes overlay
+        View-->>App: on_update fires; caller gets SyncError
+    else Transport error
+        Server--xClient: network error
+        Client->>View: RollbackGuard removes overlay
+        View-->>App: on_update fires; caller gets SyncError
+    end
 ```
 
 Without `.optimistic(...)`, `push_typed` skips the local routing engine
@@ -435,12 +448,16 @@ The framework's pending-overlay store persists the in-flight mutation
 
 ## Pending overlay vs canonical
 
-```mermaid
-flowchart TD
-    Pull["/pull"] -->|server-authoritative| Canon[("Canonical rows")]
-    Opt[".optimistic(closure)"] -->|client-tentative| Pending[("Pending overlays")]
-    Canon -- merged on read --> View["QueryView::rows()"]
-    Pending -- supersedes canonical<br/>by row key --> View
+```text
+Canonical rows   ◀── /pull                  (server-authoritative)
+   │   │   │
+   │   │   │  merged on read
+   ▼   ▼   ▼
+Pending overlays ◀── .optimistic(closure)   (client-tentative)
+   │
+   │  supersedes canonical by row key
+   ▼
+QueryView::rows()
 ```
 
 `rows()` returns the merged view. A pending overlay supersedes a
