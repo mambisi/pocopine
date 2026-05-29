@@ -1,5 +1,0 @@
-error: `#[pocopine_sync_crud::resource]` does not support generic `CrudSource` impls yet
- --> tests/ui/resource_generic_impl.rs:8:5
-  |
-8 | impl<T: Send + Sync + 'static> pocopine_sync_crud::CrudSource for Customers<T> {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

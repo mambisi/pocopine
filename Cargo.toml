@@ -34,12 +34,15 @@ members = [
     "crates/pocopine-storage-gcs",
     "crates/pocopine-storage-s3",
     "crates/pocopine-sync",
-    "crates/pocopine-sync-crud",
-    "crates/pocopine-sync-crud-macros",
+    # RFC 090 Phase 6: pocopine-sync-crud + pocopine-sync-crud-macros +
+    # pocopine-sync-sqlx (CRUD-specific) deleted. The Source/MutationLog
+    # types in pocopine_sync_query::write supersede them; the macro-
+    # emitted typed write API replaces hand-built CrudMutationPayload.
+    # See docs/sync-crud-to-query-migration.md (Phase 5) for the
+    # migration path.
     "crates/pocopine-sync-indexdb",
     "crates/pocopine-sync-query",
     "crates/pocopine-sync-query-macros",
-    "crates/pocopine-sync-sqlx",
     "crates/pocopine-sync-sqlite",
     "crates/pocopine-ts-rs",
     "crates/pocopine-ts-rs-macros",
@@ -106,12 +109,9 @@ pocopine-storage-azure = { path = "crates/pocopine-storage-azure", version = "0.
 pocopine-storage-gcs = { path = "crates/pocopine-storage-gcs", version = "0.1.0" }
 pocopine-storage-s3 = { path = "crates/pocopine-storage-s3", version = "0.1.0" }
 pocopine-sync = { path = "crates/pocopine-sync", version = "0.1.0" }
-pocopine-sync-crud = { path = "crates/pocopine-sync-crud", version = "0.1.0" }
-pocopine-sync-crud-macros = { path = "crates/pocopine-sync-crud-macros", version = "0.1.0" }
 pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.1.0" }
 pocopine-sync-query = { path = "crates/pocopine-sync-query", version = "0.1.0" }
 pocopine-sync-query-macros = { path = "crates/pocopine-sync-query-macros", version = "0.1.0" }
-pocopine-sync-sqlx = { path = "crates/pocopine-sync-sqlx", version = "0.1.0" }
 pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.1.0" }
 pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.1.0" }
 pine-richtext = { path = "crates/pine-richtext", version = "0.1.0" }

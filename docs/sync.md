@@ -37,17 +37,15 @@ WASM + OPFS implementation. The browser adapter uses an embedded SQLite
 worker and serializes operations through a page-local gate because the
 underlying SQLite WASM worker is singleton-shaped.
 
-The CRUD helper layer is documented in [`sync-crud.md`](./sync-crud.md).
-It lives in `pocopine-sync-crud`, not `pocopine-db`: the crate starts
-with the `CrudSource` trait, `ResourceId` identity boundary, CRUD
-mutation payloads, write-policy types, transaction binding contract, and
-non-macro `resource(...).id(...).mutation_log(...)` sync-stream adapter.
-Its transaction runner contract gives database adapters a tested
-begin/commit/rollback shape without turning Pocopine into an ORM.
-Proc-macro generated typed CRUD methods now cover `open`, `pull`,
-`view`, `create`, `save`, `remove`, and the first conflict helpers:
-`use_server`, `retry_local`, and `merge_with`. SQL and persistence
-ownership stay with the app.
+The read-and-write layer is `pocopine-sync-query`, documented in
+[`sync-query-design.md`](./sync-query-design.md). The crate exposes
+the `Source` trait for server-side rows (Query-aware `list`,
+typed `create` / `update` / `delete` with `MutationLog` idempotency),
+the `Query<Row>` typed DSL for filtered subscriptions, and
+`#[query_resource(name = ..., draft = ...)]` for the macro-emitted
+typed write API. (RFC 090 retired the older `pocopine-sync-crud`
+helper crate; the migration guide lives at
+[`sync-crud-to-query-migration.md`](./sync-crud-to-query-migration.md).)
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the

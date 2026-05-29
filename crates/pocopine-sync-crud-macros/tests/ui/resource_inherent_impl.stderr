@@ -1,5 +1,0 @@
-error: `#[pocopine_sync_crud::resource]` must be attached to an impl of `CrudSource`
- --> tests/ui/resource_inherent_impl.rs:4:1
-  |
-4 | impl Customers {}
-  | ^^^^

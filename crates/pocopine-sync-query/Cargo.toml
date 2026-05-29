@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Query-centric local-first data layer for Pocopine sync. Parallel to `pocopine-sync-crud`; recommended for filtered multi-tenant apps."
+description = "Query-centric local-first data layer for Pocopine sync. Filtered subscriptions, predicate-routed mutations, reactive selectors, typed writes."
 
 [dependencies]
 pocopine-core = { workspace = true }
