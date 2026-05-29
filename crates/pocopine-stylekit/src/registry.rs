@@ -520,47 +520,72 @@ fn try_rounded(base: &str, _t: &ThemeTokens) -> Resolved {
     Some(Ok(decl("border-radius", &value)))
 }
 
-fn try_shadow(base: &str, tokens: &ThemeTokens) -> Resolved {
-    if base == "shadow" {
-        return Some(Ok(decl(
-            "box-shadow",
-            "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
-        )));
-    }
-    let name = base.strip_prefix("shadow-")?;
-    let preset = match name {
-        "none" => Some("none"),
-        "sm" => Some("0 1px 2px 0 rgb(0 0 0 / 0.05)"),
-        "md" => Some("0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)"),
-        "lg" => Some("0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)"),
-        "xl" => Some("0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)"),
-        "2xl" => Some("0 25px 50px -12px rgb(0 0 0 / 0.25)"),
-        _ => None,
-    };
-    if let Some(v) = preset {
-        return Some(Ok(decl("box-shadow", v)));
-    }
-    // Token-backed: shadow-card → var(--shadow-card).
-    if tokens.var_for("shadow", name).is_some() {
-        return Some(Ok(decl("box-shadow", &format!("var(--shadow-{name})"))));
-    }
-    Some(Err(Diagnostic::error(format!(
-        "`--shadow-{name}` is not a defined token"
-    ))))
+/// Composable `box-shadow` chain (RFC 092 M2). Every shadow/ring
+/// utility sets *only* its own layer var and emits this identical
+/// `box-shadow`, so `shadow-xl ring-1` on one element render *both*
+/// (mirrors Tailwind's `--tw-shadow`/`--tw-ring-shadow` layering).
+/// Unset layers fall back to a transparent shadow.
+const SHADOW_CHAIN: &str = "var(--pp-ring-shadow, 0 0 #0000), var(--pp-shadow, 0 0 #0000)";
+
+fn shadow_decls(layer_var: &str, value: &str) -> Decls {
+    vec![
+        (layer_var.to_string(), value.to_string()),
+        ("box-shadow".to_string(), SHADOW_CHAIN.to_string()),
+    ]
 }
 
-/// `ring` / `ring-{n}` widths and `ring-{color}`.
+/// Default value of a named shadow scale (Tailwind v4). `None` = not a
+/// preset name.
+fn shadow_scale(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "2xs" => "0 1px rgb(0 0 0 / 0.05)",
+        "xs" => "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "sm" => "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
+        "md" => "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
+        "lg" => "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        "xl" => "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)",
+        "2xl" => "0 25px 50px -12px rgb(0 0 0 / 0.25)",
+        "inner" => "inset 0 2px 4px 0 rgb(0 0 0 / 0.05)",
+        _ => return None,
+    })
+}
+
+/// `shadow` / `shadow-{scale}` / `shadow-{token}`. Token-driven, and
+/// emitted through the composable chain so it coexists with `ring-*`.
+fn try_shadow(base: &str, tokens: &ThemeTokens) -> Resolved {
+    let value = if base == "shadow" {
+        "var(--shadow, 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1))".to_string()
+    } else {
+        let name = base.strip_prefix("shadow-")?;
+        if name == "none" {
+            "0 0 #0000".to_string()
+        } else if let Some(fallback) = shadow_scale(name) {
+            format!("var(--shadow-{name}, {fallback})")
+        } else if tokens.var_for("shadow", name).is_some() {
+            format!("var(--shadow-{name})")
+        } else {
+            return Some(Err(Diagnostic::error(format!(
+                "`--shadow-{name}` is not a defined token"
+            ))));
+        }
+    };
+    Some(Ok(shadow_decls("--pp-shadow", &value)))
+}
+
+/// `ring` / `ring-{n}` widths and `ring-{color}`. Widths feed the
+/// composable chain (so a ring layers over a shadow); the colour form
+/// just sets the ring-colour variable.
 fn try_ring(base: &str, tokens: &ThemeTokens) -> Resolved {
     if base == "ring" {
-        return Some(Ok(decl(
-            "box-shadow",
+        return Some(Ok(shadow_decls(
+            "--pp-ring-shadow",
             "0 0 0 3px var(--pp-ring-color, currentcolor)",
         )));
     }
     let name = base.strip_prefix("ring-")?;
     if let Ok(n) = name.parse::<u32>() {
-        return Some(Ok(decl(
-            "box-shadow",
+        return Some(Ok(shadow_decls(
+            "--pp-ring-shadow",
             &format!("0 0 0 {n}px var(--pp-ring-color, currentcolor)"),
         )));
     }
@@ -610,9 +635,11 @@ fn try_font(base: &str, _t: &ThemeTokens) -> Resolved {
     Some(Ok(decl(pair.0, pair.1)))
 }
 
+/// Token-driven like `text-*`: references `--leading-{name}` with the
+/// default scale as fallback.
 fn try_leading(base: &str, _t: &ThemeTokens) -> Resolved {
     let name = base.strip_prefix("leading-")?;
-    let v = match name {
+    let fallback = match name {
         "tight" => "1.25",
         "snug" => "1.375",
         "normal" => "1.5",
@@ -624,12 +651,17 @@ fn try_leading(base: &str, _t: &ThemeTokens) -> Resolved {
             ))))
         }
     };
-    Some(Ok(decl("line-height", v)))
+    Some(Ok(decl(
+        "line-height",
+        &format!("var(--leading-{name}, {fallback})"),
+    )))
 }
 
+/// Token-driven like `text-*`: references `--tracking-{name}` with the
+/// default scale as fallback.
 fn try_tracking(base: &str, _t: &ThemeTokens) -> Resolved {
     let name = base.strip_prefix("tracking-")?;
-    let v = match name {
+    let fallback = match name {
         "tighter" => "-0.05em",
         "tight" => "-0.025em",
         "normal" => "0em",
@@ -642,7 +674,10 @@ fn try_tracking(base: &str, _t: &ThemeTokens) -> Resolved {
             ))))
         }
     };
-    Some(Ok(decl("letter-spacing", v)))
+    Some(Ok(decl(
+        "letter-spacing",
+        &format!("var(--tracking-{name}, {fallback})"),
+    )))
 }
 
 fn try_underline_offset(base: &str, _t: &ThemeTokens) -> Resolved {
@@ -1042,9 +1077,27 @@ mod tests {
         assert!(css("rounded-md").contains("border-radius: var(--radius-md, 0.375rem);"));
         assert!(css("rounded-full").contains("border-radius: 9999px;"));
         assert!(css("rounded").contains("border-radius: var(--radius, 0.25rem);"));
-        assert!(css("shadow-card").contains("box-shadow: var(--shadow-card);"));
-        assert!(css("ring-2").contains("box-shadow: 0 0 0 2px var(--pp-ring-color, currentcolor);"));
+        // Token-driven shadow scale, emitted through the composable chain.
+        assert!(css("shadow-xl").contains("--pp-shadow: var(--shadow-xl, 0 20px 25px"));
+        assert!(css("shadow-card").contains("--pp-shadow: var(--shadow-card);"));
+        assert!(css("ring-2")
+            .contains("--pp-ring-shadow: 0 0 0 2px var(--pp-ring-color, currentcolor);"));
         assert!(css("ring-accent").contains("--pp-ring-color: var(--color-accent);"));
+    }
+
+    #[test]
+    fn shadow_and_ring_compose() {
+        // Both utilities emit the *same* box-shadow chain and set only
+        // their own layer var, so on one element both render.
+        let chain = "box-shadow: var(--pp-ring-shadow, 0 0 #0000), var(--pp-shadow, 0 0 #0000);";
+        assert!(css("shadow-xl").contains(chain), "shadow chain");
+        assert!(css("ring-1").contains(chain), "ring chain");
+    }
+
+    #[test]
+    fn leading_tracking_token_driven() {
+        assert!(css("leading-relaxed").contains("line-height: var(--leading-relaxed, 1.625);"));
+        assert!(css("tracking-widest").contains("letter-spacing: var(--tracking-widest, 0.1em);"));
     }
 
     #[test]
