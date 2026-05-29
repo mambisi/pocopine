@@ -101,6 +101,23 @@ impl ThemeTokens {
     pub fn to_manifest_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_default()
     }
+
+    /// Emit the tokens as a `:root { --name: value; }` block so the
+    /// generated stylesheet is self-contained — utilities reference
+    /// these via `var(--…)`, and unlike Tailwind's `@theme` (a non-
+    /// standard at-rule), `:root` custom properties are real CSS the
+    /// browser applies. Deterministic via `BTreeMap` ordering.
+    pub fn to_root_css(&self) -> String {
+        if self.tokens.is_empty() {
+            return String::new();
+        }
+        let mut s = String::from(":root {\n");
+        for (key, value) in &self.tokens {
+            s.push_str(&format!("  --{key}: {value};\n"));
+        }
+        s.push_str("}\n");
+        s
+    }
 }
 
 /// Replace `/* … */` block comments with spaces, preserving newlines so
