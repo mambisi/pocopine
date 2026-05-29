@@ -22,6 +22,50 @@ pub struct PocopineConfig {
     /// the Tailwind standalone CLI alongside `wasm-pack` - one-shot
     /// on `build`/`run`, watch mode on `dev`.
     pub tailwind: Option<TailwindConfig>,
+    /// Opt into Pine Stylekit (RFC 092). When present — or when
+    /// `--stylekit` is passed — `pocopine-cli` compiles utility CSS
+    /// from `.poco` sources in-process, no external watcher.
+    pub stylekit: Option<StylekitConfig>,
+}
+
+/// `[package.metadata.pocopine.stylekit]` - configure the in-process
+/// Pine Stylekit compiler (RFC 092). All fields optional.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct StylekitConfig {
+    /// Entry CSS holding the `@theme` token block. Defaults to
+    /// `app.css` at the project root.
+    #[serde(default = "default_sk_input")]
+    pub input: String,
+    /// Output stylesheet path. Defaults to `pkg/stylekit.css` so it
+    /// sits alongside the wasm bundle.
+    #[serde(default = "default_sk_output")]
+    pub output: String,
+    /// Directory scanned for `.poco` sources. Defaults to `src`.
+    #[serde(default = "default_sk_src")]
+    pub src: String,
+}
+
+impl Default for StylekitConfig {
+    fn default() -> Self {
+        Self {
+            input: default_sk_input(),
+            output: default_sk_output(),
+            src: default_sk_src(),
+        }
+    }
+}
+
+fn default_sk_input() -> String {
+    "app.css".into()
+}
+
+fn default_sk_output() -> String {
+    "pkg/stylekit.css".into()
+}
+
+fn default_sk_src() -> String {
+    "src".into()
 }
 
 /// `[package.metadata.pocopine.tailwind]` - configure the bundled

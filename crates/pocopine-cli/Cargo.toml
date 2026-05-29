@@ -17,6 +17,7 @@ tiny_http = "0.12"
 notify = "6"
 anyhow = "1"
 pocopine-client-codegen = { workspace = true }
+pocopine-stylekit = { workspace = true }
 pocopine-deploy = { workspace = true }
 pocopine-deploy-fly = { workspace = true }
 pocopine-deploy-railway = { workspace = true }

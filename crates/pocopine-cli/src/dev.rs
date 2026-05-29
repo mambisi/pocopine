@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use notify::{Config, ErrorKind, Event, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::args::ServeArgs;
-use crate::{build, client_modules, config, env, server, tailwind};
+use crate::{build, client_modules, config, env, server, stylekit, tailwind};
 
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CHANGE_QUIET_WINDOW: Duration = Duration::from_millis(350);
@@ -47,6 +47,13 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
         children.tailwind = Some(tailwind::spawn_watch(&project, tw)?);
+    }
+    // Pine Stylekit runs in-process (RFC 092 D2) — no watcher child.
+    // The initial compile fails loud; later recompiles ride the src
+    // watch tick below.
+    let stylekit_on = stylekit::enabled(&cfg, args.stylekit);
+    if stylekit_on {
+        stylekit::run_once(&project, &cfg, args.release)?;
     }
 
     // Start the serving side. In bin mode the child owns its ports + routes.
@@ -116,6 +123,14 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     if let Err(e) = client_modules::build(&project, args.release) {
                         eprintln!("client module build failed: {e:#}");
                     }
+                }
+
+                // `.poco` edits land in src/ (already watched) and force
+                // a wasm rebuild; recompile CSS on the same tick so the
+                // stylesheet tracks template changes. Never aborts the
+                // dev loop — errors keep the last good stylesheet.
+                if stylekit_on && pending.wasm {
+                    stylekit::recompile_quiet(&project, &cfg);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}

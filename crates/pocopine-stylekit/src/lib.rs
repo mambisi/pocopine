@@ -27,11 +27,15 @@ pub mod diagnostics;
 pub mod emit;
 pub mod extract;
 pub mod parse;
+pub mod project;
 pub mod registry;
+pub mod render;
 pub mod tokens;
 
 pub use diagnostics::{Diagnostic, Severity, Span};
+pub use project::{compile_project, ProjectCss, SourceFile};
 pub use registry::{CssType, Registry};
+pub use render::render;
 pub use tokens::ThemeTokens;
 
 /// Behavior knobs that vary build vs. dev and the porting experiment.
