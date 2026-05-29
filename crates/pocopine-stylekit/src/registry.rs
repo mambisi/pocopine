@@ -489,23 +489,35 @@ fn try_border(base: &str, tokens: &ThemeTokens) -> Resolved {
     Some(resolve_color_value("border-color", name, tokens, base))
 }
 
+/// `rounded` / `rounded-{scale}`. Token-driven like the spacing base
+/// and `text-*`: the named scale references the user-definable
+/// `--radius-{scale}` theme token, with Tailwind's default value as the
+/// literal fallback. `none`/`full` are non-token specials.
 fn try_rounded(base: &str, _t: &ThemeTokens) -> Resolved {
     if base == "rounded" {
-        return Some(Ok(decl("border-radius", "0.25rem")));
+        return Some(Ok(decl("border-radius", "var(--radius, 0.25rem)")));
     }
     let name = base.strip_prefix("rounded-")?;
-    let v = match name {
-        "none" => "0px",
-        "sm" => "0.125rem",
-        "md" => "0.375rem",
-        "lg" => "0.5rem",
-        "xl" => "0.75rem",
-        "2xl" => "1rem",
-        "3xl" => "1.5rem",
-        "full" => "9999px",
+    let value = match name {
+        "none" => "0px".to_string(),
+        "full" => "9999px".to_string(),
+        "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" => {
+            let fallback = match name {
+                "xs" => "0.125rem",
+                "sm" => "0.25rem",
+                "md" => "0.375rem",
+                "lg" => "0.5rem",
+                "xl" => "0.75rem",
+                "2xl" => "1rem",
+                "3xl" => "1.5rem",
+                "4xl" => "2rem",
+                _ => unreachable!(),
+            };
+            format!("var(--radius-{name}, {fallback})")
+        }
         _ => return Some(Err(Diagnostic::error(format!("unknown radius `{name}`")))),
     };
-    Some(Ok(decl("border-radius", v)))
+    Some(Ok(decl("border-radius", &value)))
 }
 
 fn try_shadow(base: &str, tokens: &ThemeTokens) -> Resolved {
@@ -1027,8 +1039,9 @@ mod tests {
 
     #[test]
     fn rounded_shadow_ring() {
-        assert!(css("rounded-md").contains("border-radius: 0.375rem;"));
+        assert!(css("rounded-md").contains("border-radius: var(--radius-md, 0.375rem);"));
         assert!(css("rounded-full").contains("border-radius: 9999px;"));
+        assert!(css("rounded").contains("border-radius: var(--radius, 0.25rem);"));
         assert!(css("shadow-card").contains("box-shadow: var(--shadow-card);"));
         assert!(css("ring-2").contains("box-shadow: 0 0 0 2px var(--pp-ring-color, currentcolor);"));
         assert!(css("ring-accent").contains("--pp-ring-color: var(--color-accent);"));
