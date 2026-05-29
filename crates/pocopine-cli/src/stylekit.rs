@@ -27,6 +27,7 @@ fn resolve(cfg: &PocopineConfig) -> StylekitConfig {
             input: c.input.clone(),
             output: c.output.clone(),
             src: c.src.clone(),
+            preflight: c.preflight,
         },
         None => StylekitConfig::default(),
     }
@@ -45,7 +46,11 @@ fn compile(project: &Path, scfg: &StylekitConfig) -> Result<(ProjectCss, Vec<Sou
         .with_context(|| format!("scan .poco sources under {}", src_dir.display()))?;
     files.sort_by(|a, b| a.path.cmp(&b.path)); // deterministic file order
 
-    let out = compile_project(&theme_css, &files, CompileOptions::default());
+    let options = CompileOptions {
+        preflight: scfg.preflight,
+        ..Default::default()
+    };
+    let out = compile_project(&theme_css, &files, options);
     Ok((out, files))
 }
 

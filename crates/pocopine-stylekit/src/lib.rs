@@ -41,11 +41,24 @@ pub use render::render;
 pub use tokens::ThemeTokens;
 
 /// Behavior knobs that vary build vs. dev and the porting experiment.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CompileOptions {
     /// Downgrade unknown-utility errors to warnings (RFC 092 D5,
     /// `--stylekit-compat=warn`). Default `false` — errors are hard.
     pub compat_warn: bool,
+    /// Prepend the base reset (Preflight) to the project stylesheet
+    /// (M2-B). Default `true`; disable for pages that bring their own
+    /// reset.
+    pub preflight: bool,
+}
+
+impl Default for CompileOptions {
+    fn default() -> Self {
+        Self {
+            compat_warn: false,
+            preflight: true,
+        }
+    }
 }
 
 /// The result of compiling a set of used classes against the registry

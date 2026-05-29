@@ -38,7 +38,12 @@ Add a Stylekit block to your project's `Cargo.toml`:
 input = "app.css"          # CSS holding your @theme tokens
 output = "pkg/stylekit.css" # generated stylesheet
 src = "src"                 # directory scanned for .poco files
+preflight = true            # prepend the base reset (set false to opt out)
 ```
+
+The output is self-contained: a base reset (Preflight), your `@theme`
+tokens emitted to `:root`, then the utilities. Set `preflight = false`
+if your page brings its own reset.
 
 Then link the output in `index.html`:
 
