@@ -3,20 +3,18 @@
 What you use in wasm to subscribe to queries, render rows, and push
 typed mutations.
 
-```
-   QueryClient                  ← one per app
-     │
-     ├── observe(Query<Row>) ──▶ QueryView<Row>      ← reactive read
-     │                              │
-     │                              ├── rows()
-     │                              ├── version()
-     │                              └── on_update(callback)
-     │
-     ├── push(payload, change) ──▶ raw write (untyped)
-     │
-     └── push_typed(TypedMutation) ──▶ macro-emitted write
-                                       │
-                                       └── .optimistic(closure)
+```mermaid
+flowchart LR
+    Client["QueryClient<br/><i>one per app</i>"]
+    View["QueryView&lt;Row&gt;<br/>rows() / version() /<br/>on_update(callback)"]
+    Raw["push(payload, change)<br/><i>raw, untyped</i>"]
+    Typed["push_typed(TypedMutation)<br/><i>macro-emitted</i>"]
+    Opt[".optimistic(closure)"]
+
+    Client -- "observe(Query&lt;Row&gt;)" --> View
+    Client --> Raw
+    Client --> Typed
+    Typed --> Opt
 ```
 
 The tutorial in [`sync.md`](./sync.md) walks the end-to-end flow. This
@@ -173,23 +171,33 @@ client.push_typed(
 
 ### What `.optimistic(...)` does
 
-```
-Issue::create(id, draft).optimistic(build).push_typed(...)
-        │
-        ▼  client side
-   1. build(&payload) → Issue
-   2. route through every matching QueryView's pending overlay
-        │
-   3. POST /sync/v1/push
-        │
-        ▼  server side
-   4. take_processing_payload → reserve_mutation → Source::create
-        │
-        ▼  client side
-   5a. Accepted → overlay stays; next /pull replaces with canonical.
-   5b. Rejected/conflict → RollbackGuard removes overlay;
-       on_update fires; caller gets SyncError.
-   5c. Transport error → same as rejected.
+```mermaid
+sequenceDiagram
+    participant App as caller
+    participant Client as QueryClient
+    participant View as QueryView
+    participant Server as SourceResource
+
+    App->>Client: Issue::create(id, draft).optimistic(build).push_typed(...)
+    Client->>Client: build(&payload) → Issue
+    Client->>View: route through pending overlay
+    View-->>App: on_update fires (instant)
+
+    Client->>Server: POST /sync/v1/push
+    Server->>Server: take_processing_payload<br/>reserve_mutation<br/>Source::create
+
+    alt Accepted
+        Server-->>Client: { accepted: [...] }
+        Note over View: overlay stays;<br/>next /pull replaces with canonical
+    else Rejected / conflict
+        Server-->>Client: { rejected: [...] }
+        Client->>View: RollbackGuard removes overlay
+        View-->>App: on_update fires; caller gets SyncError
+    else Transport error
+        Server--xClient: network error
+        Client->>View: RollbackGuard removes overlay
+        View-->>App: on_update fires; caller gets SyncError
+    end
 ```
 
 Without `.optimistic(...)`, `push_typed` skips the local routing engine
@@ -218,15 +226,12 @@ The framework's [pending-overlay store] persists the in-flight mutation
 
 ## Pending overlay vs canonical
 
-```
-Canonical rows   ◀── /pull        (server-authoritative)
-   ┃   ┃   ┃
-   │   │   │  merged on read
-   ▼   ▼   ▼
-Pending overlays ◀── optimistic    (client-tentative)
-   │
-   ▼
-QueryView::rows()
+```mermaid
+flowchart TD
+    Pull["/pull"] -->|server-authoritative| Canon[("Canonical rows")]
+    Opt[".optimistic(closure)"] -->|client-tentative| Pending[("Pending overlays")]
+    Canon -- merged on read --> View["QueryView::rows()"]
+    Pending -- supersedes canonical<br/>by row key --> View
 ```
 
 `rows()` returns the merged view. A pending overlay supersedes a

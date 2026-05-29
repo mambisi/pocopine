@@ -2,20 +2,20 @@
 
 What you implement on the host so a sync resource works:
 
-```
-   Source<Row, Id, Draft>           ← your code: DB I/O
-            │
-            ▼
-   SourceResource<S, IdOf>          ← framework wrapper
-            ├── version_field?      ← optimistic concurrency
-            ├── partition_by?       ← live wake-up precision
-            └── mutation_log        ← idempotency + atomicity
-            │
-            ▼
-   HTTP endpoints                    ← framework provides
-       /sync/v1/pull
-       /sync/v1/push
-       live SSE per (stream, params_hash)
+```mermaid
+flowchart TD
+    Code["Source&lt;Row, Id, Draft&gt;<br/><i>your code: DB I/O</i>"]
+    Res["SourceResource&lt;S, IdOf&gt;<br/><i>framework wrapper</i>"]
+    VF[["version_field<br/><i>OCC, optional</i>"]]
+    PB[["partition_by<br/><i>live precision, optional</i>"]]
+    ML[["mutation_log<br/><i>idempotency, required</i>"]]
+    Endp["HTTP endpoints<br/>/sync/v1/pull, /sync/v1/push,<br/>live SSE per (stream, params_hash)"]
+
+    Code --> Res
+    Res -.-> VF
+    Res -.-> PB
+    Res --> ML
+    Res --> Endp
 ```
 
 The tutorial in [`sync.md`](./sync.md) shows the full flow. This doc is
@@ -219,20 +219,18 @@ The `#[query_resource]`-emitted `row_to_params` extracts the
 accepted mutation, the framework hashes those params and publishes to
 the topic `(stream, params_hash)`:
 
-```
-mutation accepted: Issue { workspace_id: "W1", … }
-        │
-        ▼
-row_to_params → StreamParams { workspace_id: "W1" }
-        │
-        ▼
-params_hash(W1) = 0xabc…
-        │
-        ▼
-SSE topic: (issues, 0xabc…)
-        │
-        ▼
-W1 subscribers wake; W2 subscribers stay silent.
+```mermaid
+flowchart LR
+    M["mutation accepted<br/>Issue { workspace_id: 'W1', … }"]
+    P["row_to_params<br/>StreamParams { workspace_id: 'W1' }"]
+    H["params_hash(W1) = 0xabc…"]
+    T["SSE topic<br/>(issues, 0xabc…)"]
+    W1["W1 subscribers<br/><b>wake</b>"]
+    W2["W2 subscribers<br/><i>stay silent</i>"]
+
+    M --> P --> H --> T
+    T --> W1
+    T -. no match .-> W2
 ```
 
 If the resource has zero `required` fields (`HAS_PER_PARAMS_LIVE_ROUTING
@@ -255,11 +253,16 @@ Two knobs:
 
 This means the order at the server is:
 
-```
-   take_processing_payload   → validation, op match, key match
-   reserve_mutation          → atomic, only for valid mutations
-   Source::{create,update,delete}
-   response (accepted / rejected / conflicts)
+```mermaid
+flowchart TD
+    Start([POST /sync/v1/push]) --> V["take_processing_payload<br/>validation, op match, key match"]
+    V -->|invalid| Reject["reject mutation<br/>(mutation_id slot NOT burned)"]
+    V -->|valid| R["reserve_mutation<br/><i>atomic</i>"]
+    R -->|Reserved| Apply["Source::{create, update, delete}"]
+    R -->|AlreadyAccepted| Replay["return prior outcome"]
+    Apply --> Resp([response: accepted / rejected / conflicts])
+    Replay --> Resp
+    Reject --> Resp
 ```
 
 Reserving BEFORE validation would leak the mutation id slot on
