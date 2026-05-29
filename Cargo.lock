@@ -5981,6 +5981,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-stylekit"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strsim",
+ "tracing",
+]
+
+[[package]]
 name = "pocopine-sync"
 version = "0.1.0"
 dependencies = [
