@@ -1,5 +1,0 @@
-error: schema_version must be >= 1 (schema versions start at 1)
- --> tests/ui/resource_schema_version_zero.rs:3:69
-  |
-3 | #[pocopine_sync_crud::resource(name = "customers", schema_version = 0)]
-  |                                                                     ^
