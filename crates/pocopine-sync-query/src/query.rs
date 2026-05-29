@@ -124,6 +124,20 @@ impl<Row> Query<Row> {
         self.limit
     }
 
+    /// Override the row cap in place. Used by the host-side
+    /// `SourceResource` adapter to clamp the wire-supplied limit
+    /// to its configured `max_snapshot_rows` before handing the
+    /// query to `Source::list` — a defense in depth so a
+    /// pathological source can't allocate unbounded memory by
+    /// ignoring `query.limit()`.
+    ///
+    /// `pub(crate)` because this only makes sense at the
+    /// trait-boundary translation layer; user code constructs
+    /// queries via the typed DSL.
+    pub(crate) fn set_limit(&mut self, limit: u32) {
+        self.limit = Some(limit);
+    }
+
     /// Stable canonical identity. Two queries with the same stream, params,
     /// order, and limit yield equal `QueryKey`s and (in the runtime) share
     /// one underlying subscription.

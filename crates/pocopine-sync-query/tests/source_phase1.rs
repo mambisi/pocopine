@@ -310,6 +310,86 @@ async fn unfiltered_pull_returns_everything() {
     assert_eq!(all.rows.len(), 3);
 }
 
+#[tokio::test]
+async fn version_extractor_populates_sync_row_version() {
+    // Code-review finding #1: without `.version()`, pulled rows ship
+    // with version=None and Phase 2's `Source::save` base_version
+    // check becomes meaningless. This test wires a version extractor
+    // and asserts each pulled row carries the extracted version on
+    // the wire.
+    use pocopine_sync::RowVersion;
+
+    pocopine_server::__reset_for_test();
+    let sync = SyncServer::builder()
+        .public_stream(
+            build_source(STREAM, IssuesSource::seeded())
+                .expect("stream name")
+                .id(|r: &Issue| r.id.clone())
+                // Synthetic version derived from the title length —
+                // not meaningful semantically, just deterministic so
+                // the assertion below can predict the expected
+                // string.
+                .version(|r: &Issue| {
+                    Ok(Some(
+                        RowVersion::new(r.title.len().to_string()).expect("valid version"),
+                    ))
+                }),
+        )
+        .build();
+    let app = Server::new(pocopine_server::axum::Router::new())
+        .plugin(sync_server_plugin(sync))
+        .try_finalize()
+        .expect("server finalizes");
+
+    let response = pull(&app, Some("W1")).await;
+    assert_eq!(response.rows.len(), 2);
+    for row in &response.rows {
+        let title = row.value.get("title").and_then(|v| v.as_str()).unwrap();
+        let version = row
+            .version
+            .as_ref()
+            .expect("version extractor ran")
+            .as_str();
+        assert_eq!(version, title.len().to_string());
+    }
+}
+
+#[tokio::test]
+async fn limit_clamped_to_max_snapshot_rows_before_calling_source() {
+    // Code-review finding #3: a buggy Source::list that ignores
+    // query.limit() could allocate unbounded memory. Defense in
+    // depth: the adapter clamps query.limit() to max_snapshot_rows
+    // BEFORE calling list. This test asserts the source SEES the
+    // clamped value (and so a well-behaved source can't even ask
+    // for more than the cap).
+    pocopine_server::__reset_for_test();
+    let source = IssuesSource::seeded();
+    let observed = source.observed.clone();
+    let sync = SyncServer::builder()
+        .public_stream(
+            build_source(STREAM, source)
+                .expect("stream name")
+                .max_snapshot_rows(2)
+                .expect("nonzero max")
+                .id(|r: &Issue| r.id.clone()),
+        )
+        .build();
+    let app = Server::new(pocopine_server::axum::Router::new())
+        .plugin(sync_server_plugin(sync))
+        .try_finalize()
+        .expect("server finalizes");
+
+    // Pull with no explicit wire-limit → the adapter substitutes
+    // the configured cap.
+    let _ = pull(&app, None).await;
+    let observed = observed.lock().unwrap();
+    assert_eq!(
+        observed.last().expect("source.list ran").1,
+        Some(2),
+        "adapter must clamp query.limit() to the configured cap"
+    );
+}
+
 #[test]
 fn query_reconstruction_smoke_test() {
     // Pure unit-level check on the wire→Query function — covers
