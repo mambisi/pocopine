@@ -27,6 +27,7 @@ pub mod catalog;
 pub mod diagnostics;
 pub mod emit;
 pub mod extract;
+pub mod palette;
 pub mod parse;
 pub mod project;
 pub mod registry;

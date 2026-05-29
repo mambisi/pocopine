@@ -214,7 +214,7 @@ pub fn catalog() -> Catalog {
                         Color,
                         true,
                         "bg-surface",
-                        "any --color-* token; transparent/white/black/current",
+                        "any --color-* token, Tailwind palette (bg-slate-700), transparent/white/black/current",
                     ),
                     fam(
                         "text",
