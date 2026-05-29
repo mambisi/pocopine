@@ -668,17 +668,29 @@ impl QueryClient {
                     .await
             }
             None => {
-                // No optimistic — skip the routing engine and POST
-                // directly. Subscriptions don't see the mutation
-                // until the server's live wakeup triggers the next
-                // /pull.
+                // No optimistic. Skip the routing engine but still
+                // build the wire envelope correctly: SourceResource::push
+                // requires the wire `op` to match the payload's
+                // `sync_op()` AND the wire `key` to match the
+                // payload's id (RFC 090 review #6). Without these,
+                // every typed delete (and any typed call without an
+                // optimistic) would be rejected by the server before
+                // the Source ever ran.
                 let payload_value = serde_json::to_value(&payload)
                     .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
-                let wire = pocopine_sync::ClientMutation::new(
+                let key_str = serde_json::to_value(payload.id())
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string));
+                let row_key = match key_str {
+                    Some(s) => pocopine_sync::RowKey::new(s).ok(),
+                    None => None,
+                };
+                let mut wire = pocopine_sync::ClientMutation::new(
                     mutation_id,
-                    pocopine_sync::SyncOp::Upsert,
+                    payload.sync_op(),
                     payload_value,
                 );
+                wire.key = row_key;
                 let request = pocopine_sync::SyncPushRequest::new(stream, [wire]);
                 pocopine_core::fetch::call::<
                     pocopine_sync::SyncPushRequest<Value>,
@@ -762,15 +774,45 @@ impl QueryClient {
         .await;
 
         match result {
-            Ok(_response) => {
-                // Server accepted (or returned rejected/conflicts).
-                // The /pull live wakeup will reconcile canonical
-                // state. Optimistic overlay stays in place until
-                // the next pull swaps it. The caller can inspect
-                // `_response` in a future API if they want
-                // per-mutation outcome details; the minimal Phase 3
-                // surface just acknowledges success.
-                Ok(())
+            Ok(response) => {
+                // RFC 090 review #4: HTTP 200 doesn't mean the
+                // server accepted the mutation. SourceResource
+                // returns 200 with `rejected` / `conflicts` arrays
+                // populated when the server short-circuits (bad
+                // payload, version mismatch, etc.). The live
+                // wakeup only fires for ACCEPTED mutations, so a
+                // rejected/conflicted push leaves the optimistic
+                // overlay alive indefinitely unless we roll it
+                // back here.
+                let mutation_id_accepted = response.accepted.iter().any(|id| id == &mutation_id);
+                let mutation_id_rejected = response
+                    .rejected
+                    .iter()
+                    .any(|r| r.mutation_id == mutation_id)
+                    || response
+                        .conflicts
+                        .iter()
+                        .any(|c| c.mutation_id == mutation_id);
+                if mutation_id_accepted {
+                    // Success — overlay stays in place until the
+                    // next /pull swaps it for canonical.
+                    Ok(())
+                } else if mutation_id_rejected {
+                    // Roll back so the UI doesn't show a failed
+                    // mutation.
+                    Self::dequeue_pending_for_stream::<Row>(&self.inner, &stream, &mutation_id);
+                    Err(pocopine_sync::SyncError::backend(
+                        "server rejected the mutation; optimistic overlay rolled back",
+                    ))
+                } else {
+                    // The server didn't mention our mutation id at
+                    // all. Treat as a transport-level failure and
+                    // roll back defensively.
+                    Self::dequeue_pending_for_stream::<Row>(&self.inner, &stream, &mutation_id);
+                    Err(pocopine_sync::SyncError::backend(
+                        "server response did not include our mutation; rolled back",
+                    ))
+                }
             }
             Err(err) => {
                 // Roll back the optimistic overlay so the UI

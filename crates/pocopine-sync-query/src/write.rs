@@ -37,8 +37,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(target_arch = "wasm32"))]
 use pocopine_auth::RequestContext;
-use pocopine_sync::{MutationId, RowKey, SyncError, SyncOp, SyncResult};
+#[cfg(not(target_arch = "wasm32"))]
+use pocopine_sync::SyncError;
+use pocopine_sync::{MutationId, RowKey, SyncOp, SyncResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -323,42 +326,67 @@ pub enum MutationReservation {
     AlreadyAccepted(AcceptedMutation),
 }
 
+// ---- Host-only items below ---------------------------------------
+// The MutationLog trait threads `pocopine_auth::RequestContext`,
+// which is itself cfg-gated to non-wasm. Everything above this
+// fence is pure data + serde and compiles on every target.
+
 /// Idempotency log for sync-query mutations. Production
 /// implementations MUST scope lookups to the same authorization
 /// domain as the underlying `Source`, for example
 /// `(tenant_id, mutation_id)`.
 ///
-/// Mirrors `pocopine_sync_crud::CrudMutationLog` byte-for-byte —
-/// only the trait name changes (drops the `Crud` prefix). The CRUD
-/// crate re-exports this trait under the old name.
+/// # Atomic reservation
+///
+/// `reserve_mutation` is the **only** safe primitive for the push
+/// lifecycle: it atomically returns either `Reserved` (caller proceeds
+/// to apply the write and call `commit_reservation` once accepted)
+/// or `AlreadyAccepted(prior)` (caller short-circuits on the prior
+/// outcome). The Phase 1 `accepted_mutation` + `record_accepted_mutation`
+/// pair is kept for direct inspection but MUST NOT be used to drive
+/// idempotency from the push handler — a check-then-record sequence
+/// allows two concurrent retries to both run `Source::create`/`update`/
+/// `delete`.
+///
+/// SQLx-style production impls implement `reserve_mutation` as a
+/// `INSERT ... ON CONFLICT DO NOTHING RETURNING` (or equivalent) inside
+/// the same transaction as the source write, so the reservation and
+/// the row write commit atomically.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait::async_trait]
 pub trait MutationLog<Row>: Send + Sync + 'static
 where
     Row: Clone + Send + Sync + 'static,
 {
+    /// Atomic reserve-or-return-existing. The caller passes the wire
+    /// envelope of the incoming mutation. If no prior entry exists
+    /// for `(scope, mutation_id)`, the implementation MUST record
+    /// the envelope atomically and return `Reserved`. Otherwise it
+    /// returns `AlreadyAccepted(prior)` and the caller short-circuits.
+    async fn reserve_mutation(
+        &self,
+        ctx: &RequestContext,
+        candidate: AcceptedMutation,
+    ) -> SyncResult<MutationReservation>;
+
+    /// Optional non-atomic lookup. The push handler uses
+    /// `reserve_mutation`; this method is for replay/diagnostic
+    /// paths that just want to peek.
     async fn accepted_mutation(
         &self,
         ctx: &RequestContext,
         mutation_id: &MutationId,
     ) -> SyncResult<Option<AcceptedMutation>>;
-
-    async fn record_accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        accepted: AcceptedMutation,
-    ) -> SyncResult<()>;
 }
 
 /// Function used by `MemoryMutationLog::with_scope_fn` to project an
 /// authorization scope (e.g. a tenant id) out of the per-request
 /// context.
+#[cfg(not(target_arch = "wasm32"))]
 pub type MemoryScopeFn = Arc<dyn Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static>;
 
 /// Process-local mutation log for tests and single-process demos.
-///
-/// The default constructor uses one global scope. Multi-tenant
-/// production resources should use [`MemoryMutationLog::with_scope_fn`]
-/// to derive the authorization scope from the request context.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct MemoryMutationLog<Row> {
     accepted: Arc<Mutex<BTreeMap<(String, String), AcceptedMutation>>>,
@@ -366,18 +394,21 @@ pub struct MemoryMutationLog<Row> {
     _marker: std::marker::PhantomData<fn() -> Row>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<Row> std::fmt::Debug for MemoryMutationLog<Row> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MemoryMutationLog").finish_non_exhaustive()
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<Row> Default for MemoryMutationLog<Row> {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<Row> MemoryMutationLog<Row> {
     /// Build a single-scope memory log. Every accepted mutation
     /// lives in one global keyspace; use
@@ -407,11 +438,34 @@ impl<Row> MemoryMutationLog<Row> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait::async_trait]
 impl<Row> MutationLog<Row> for MemoryMutationLog<Row>
 where
     Row: Clone + Send + Sync + 'static,
 {
+    async fn reserve_mutation(
+        &self,
+        ctx: &RequestContext,
+        candidate: AcceptedMutation,
+    ) -> SyncResult<MutationReservation> {
+        let scope = (self.scope)(ctx)?;
+        // Single lock acquisition — the entire check + insert is
+        // atomic. Two concurrent retries with the same mutation_id
+        // queue on this mutex; the first wins the reservation, the
+        // second sees `AlreadyAccepted`. RFC 090 review finding #3.
+        let mut entries = self
+            .accepted
+            .lock()
+            .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
+        let key = (scope, candidate.mutation_id.as_str().to_string());
+        if let Some(existing) = entries.get(&key) {
+            return Ok(MutationReservation::AlreadyAccepted(existing.clone()));
+        }
+        entries.insert(key, candidate);
+        Ok(MutationReservation::Reserved)
+    }
+
     async fn accepted_mutation(
         &self,
         ctx: &RequestContext,
@@ -425,20 +479,6 @@ where
         Ok(accepted
             .get(&(scope, mutation_id.as_str().to_string()))
             .cloned())
-    }
-
-    async fn record_accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        accepted: AcceptedMutation,
-    ) -> SyncResult<()> {
-        let scope = (self.scope)(ctx)?;
-        let mut entries = self
-            .accepted
-            .lock()
-            .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
-        entries.insert((scope, accepted.mutation_id.as_str().to_string()), accepted);
-        Ok(())
     }
 }
 
@@ -515,7 +555,7 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use http::{HeaderMap, Method};
@@ -537,12 +577,52 @@ mod tests {
     struct Row;
 
     #[tokio::test]
-    async fn memory_log_records_and_retrieves() {
+    async fn memory_log_concurrent_reserves_yield_exactly_one_winner() {
+        // RFC 090 review #3: the push lifecycle's atomicity hinges
+        // on `reserve_mutation` being a single critical section.
+        // Spawn 16 concurrent reservations of the same mutation_id
+        // and assert exactly one comes back `Reserved`. If the
+        // implementation regresses to a check-then-insert split,
+        // multiple will win and `Source::create` will be double-
+        // applied under network retry storms.
+        use std::sync::Arc;
+        let log = Arc::new(MemoryMutationLog::<Row>::new());
+        let m = mutation("m_race");
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let log = log.clone();
+            let m = m.clone();
+            handles.push(tokio::spawn(async move {
+                log.reserve_mutation(&ctx(), m).await.unwrap()
+            }));
+        }
+        let mut wins = 0;
+        for h in handles {
+            match h.await.unwrap() {
+                MutationReservation::Reserved => wins += 1,
+                MutationReservation::AlreadyAccepted(_) => {}
+            }
+        }
+        assert_eq!(
+            wins, 1,
+            "exactly one concurrent reserve_mutation must win the reservation"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_log_reserves_and_short_circuits_replays() {
         let log: MemoryMutationLog<Row> = MemoryMutationLog::new();
         let m = mutation("m1");
-        log.record_accepted_mutation(&ctx(), m.clone())
-            .await
-            .unwrap();
+        // First reserve wins.
+        let r1 = log.reserve_mutation(&ctx(), m.clone()).await.unwrap();
+        assert!(matches!(r1, MutationReservation::Reserved));
+        // Replay returns the prior accepted entry, atomically.
+        let r2 = log.reserve_mutation(&ctx(), m.clone()).await.unwrap();
+        match r2 {
+            MutationReservation::AlreadyAccepted(prior) => assert_eq!(prior, m),
+            _ => panic!("expected AlreadyAccepted"),
+        }
+        // Diagnostic peek still works.
         let found = log.accepted_mutation(&ctx(), &m.mutation_id).await.unwrap();
         assert_eq!(found, Some(m));
     }
@@ -571,10 +651,10 @@ mod tests {
         let ctx_b = RequestContext::new(Method::POST, "/t".parse().unwrap(), tenant_b_headers);
 
         let m = mutation("m1");
-        log.record_accepted_mutation(&ctx_a, m.clone())
-            .await
-            .unwrap();
-        // Tenant A sees the mutation, tenant B does not.
+        let r = log.reserve_mutation(&ctx_a, m.clone()).await.unwrap();
+        assert!(matches!(r, MutationReservation::Reserved));
+        // Tenant A sees the mutation, tenant B does not — and tenant
+        // B's reservation succeeds because it's a separate scope.
         assert_eq!(
             log.accepted_mutation(&ctx_a, &m.mutation_id).await.unwrap(),
             Some(m.clone())

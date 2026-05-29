@@ -601,31 +601,66 @@ where
             let mut response = pocopine_sync::SyncPushResponse::new(stream.clone());
             response.collection = Some(collection.clone());
 
-            for mutation in request.mutations {
+            for mut mutation in request.mutations {
                 let mutation_id = mutation.id.clone();
                 let key = mutation.key.clone();
                 let op = mutation.op;
-                let base_version = mutation.base_version;
+                let base_version = mutation.base_version.clone();
+                // RFC 090 review #5: honor the sync framework's
+                // schema-migration outcome. `take_processing_payload`
+                // returns the MIGRATED value if migration ran
+                // successfully, or the original wire payload
+                // otherwise. The idempotency reservation uses the
+                // ORIGINAL wire payload (so retries of the same wire
+                // envelope hit the log regardless of whether/how the
+                // server migrated them).
+                let processing_payload = mutation.take_processing_payload();
                 let payload_value = mutation.payload;
 
-                // 1. Idempotency check.
-                if let Some(accepted) = mutation_log.accepted_mutation(&ctx, &mutation_id).await? {
-                    if accepted.matches(op, key.as_ref(), &payload_value) {
-                        response.accepted.push(mutation_id);
-                    } else {
+                // 1. Atomic reserve-or-return-existing.
+                // RFC 090 review #3: replaces check-then-record with
+                // a single primitive so concurrent retries can't both
+                // run Source::create/update/delete on the same
+                // mutation_id.
+                let candidate = AcceptedMutation::new(
+                    mutation_id.clone(),
+                    op,
+                    key.clone(),
+                    payload_value.clone(),
+                );
+                let reservation = mutation_log.reserve_mutation(&ctx, candidate).await?;
+                let reserved = match reservation {
+                    crate::write::MutationReservation::Reserved => true,
+                    crate::write::MutationReservation::AlreadyAccepted(prior) => {
+                        if prior.matches(op, key.as_ref(), &payload_value) {
+                            response.accepted.push(mutation_id);
+                        } else {
+                            response.rejected.push(SyncRejectedMutation {
+                                mutation_id,
+                                key,
+                                reason: "mutation id was already accepted with different contents"
+                                    .to_string(),
+                            });
+                        }
+                        continue;
+                    }
+                };
+                debug_assert!(reserved);
+
+                // 2. Decode the (possibly migrated) payload.
+                let processing_payload = match processing_payload {
+                    Ok(value) => value,
+                    Err(reason) => {
                         response.rejected.push(SyncRejectedMutation {
                             mutation_id,
                             key,
-                            reason: "mutation id was already accepted with different contents"
-                                .to_string(),
+                            reason,
                         });
+                        continue;
                     }
-                    continue;
-                }
-
-                // 2. Decode wire payload.
+                };
                 let payload = match serde_json::from_value::<MutationPayload<S::Id, S::Draft>>(
-                    payload_value.clone(),
+                    processing_payload,
                 ) {
                     Ok(p) => p,
                     Err(err) => {
@@ -668,20 +703,10 @@ where
                 )
                 .await?;
 
-                // 4-5. Record + surface.
+                // 4-5. Surface outcome. Reservation was atomic at
+                // step 1; no separate record step needed.
                 match outcome {
                     SourceApplyOutcome::Accepted { mutation_id, row } => {
-                        mutation_log
-                            .record_accepted_mutation(
-                                &ctx,
-                                AcceptedMutation::new(
-                                    mutation_id.clone(),
-                                    op,
-                                    Some(expected_key.clone()),
-                                    payload_value,
-                                ),
-                            )
-                            .await?;
                         response.accepted.push(mutation_id);
                         if let Some(row) = row {
                             response.rows.push(row_to_value_with_version(
