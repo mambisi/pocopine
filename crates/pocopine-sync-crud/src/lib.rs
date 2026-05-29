@@ -1,9 +1,32 @@
 //! Typed CRUD contracts for Pocopine sync.
 //!
+//! # ⚠️ DEPRECATED: use `pocopine-sync-query` instead.
+//!
+//! RFC 090 retires this crate. Every primitive here either moved to
+//! `pocopine_sync_query::write` (mutation log, idempotency log,
+//! conflict types, write outcomes) or has a `Source`-based
+//! replacement (`pocopine_sync_query::source::Source` replaces
+//! `CrudSource`; `SourceResource` replaces `CrudResource`; the
+//! macro-emitted typed write API from `#[query_resource(draft = …)]`
+//! replaces hand-built `CrudMutationPayload::create(...).into_sync_draft()`).
+//!
+//! The next release deletes this crate. New code should NOT depend
+//! on it. Existing code should migrate per RFC 090's migration guide:
+//! [`docs/sync-crud-to-query-migration.md`].
+//!
+//! # Original notes
+//!
 //! `pocopine-sync-crud` is an explicit extension crate. It provides the
 //! resource identity, mutation payload, write-policy, and transaction-binding
 //! contracts that a later proc macro will target. It does not generate SQL and
 //! it is not an ORM.
+#![deprecated(
+    note = "RFC 090: use `pocopine-sync-query` instead. \
+            The mutation log, write outcomes, and conflict types moved to \
+            `pocopine_sync_query::write`. The CrudSource trait was replaced by \
+            `pocopine_sync_query::source::Source`. See `docs/sync-crud-to-query-migration.md`. \
+            This crate will be deleted in the next release."
+)]
 
 pub use pocopine_sync_crud_macros::resource;
 
