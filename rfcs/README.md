@@ -95,3 +95,5 @@ Conventions:
 | 087 | [`pocopine-sync-query` driver lifecycle](./rfc-087-sync-query-driver.md) | Draft |
 | 088 | [`pocopine-sync-query` production parity](./rfc-088-sync-query-production-parity.md) | Draft |
 | 089 | [SPA router parity and nested outlets](./rfc-089-spa-router-parity.md) | Draft |
+| 090 | [Form state and validation](./rfc-090-form-state-and-validation.md) | Draft |
+| 091 | [Store state ownership and durable app state](./rfc-091-store-state-ownership.md) | Draft |

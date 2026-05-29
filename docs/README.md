@@ -9,6 +9,10 @@ looks the way it does — the code itself tells you *what*.
   the JS `Proxy` bridge, and everything we want to bolt on next.
 - [`poco/`](./poco/) — the `.poco` template format (HTML + directives),
   paired with sibling `.rs` + `.css` files. No mixed-language SFCs.
+- [`recipes/`](./recipes/) — applied implementation recipes for using
+  Pocopine primitives in real app structure.
+- [`issue-drafts/`](./issue-drafts/) — issue-ready proposal text kept
+  local until we are ready to publish it on GitHub.
 - [`client-modules.md`](./client-modules.md) — optional typed
   `.client.ts` modules, npm package imports, node_modules ownership,
   package-manager selection, and dev-watch behavior.

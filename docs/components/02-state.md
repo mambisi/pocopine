@@ -13,6 +13,15 @@ answering a single question.
 If none of the four fits, the state probably doesn't belong where
 you're trying to put it. Check again before inventing a fifth pattern.
 
+For larger app structure, see:
+
+- [RFC 091](../../rfcs/rfc-091-store-state-ownership.md) for the
+  store ownership contract,
+- [`docs/recipes/state-ownership.md`](../recipes/state-ownership.md)
+  for the decision checklist,
+- [`docs/recipes/form-state.md`](../recipes/form-state.md) for
+  keeping form drafts local.
+
 ---
 
 ## 1. Local state
