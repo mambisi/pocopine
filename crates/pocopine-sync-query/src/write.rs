@@ -442,6 +442,79 @@ where
     }
 }
 
+/// Builder for typed mutations emitted by `#[query_resource]`
+/// (RFC 090 Phase 4). Wraps a `MutationPayload<Id, Draft>` plus an
+/// optional optimistic-row closure, then drives `QueryClient::push`
+/// on `.push(&client, mutation_id, push_url)`.
+///
+/// Users get this builder by calling the macro-emitted typed
+/// methods on a `#[query_resource]` row:
+///
+/// ```ignore
+/// // The macro emits these on `impl Issue`:
+/// let outcome = Issue::create("i1".to_string(), draft)
+///     .optimistic(|payload| Issue { /* build from payload */ })
+///     .push(&client, mutation_id, "/sync/v1/push")
+///     .await?;
+/// ```
+///
+/// The `Row` type parameter is what subscriptions render. `Draft`
+/// is the editable shape (Phase 2b's `UpdatePayload<Id, Draft>`
+/// for `update`, etc.). The optimistic closure receives a
+/// `&MutationPayload<Id, Draft>` and returns the typed `Row` to
+/// route through matching subscriptions.
+/// Type-erased optimistic-row builder. Boxed so `TypedMutation` can
+/// hold the closure without leaking its concrete type.
+pub type OptimisticRowFn<Row, Id, Draft> =
+    Box<dyn FnOnce(&MutationPayload<Id, Draft>) -> Row + 'static>;
+
+pub struct TypedMutation<Row, Id, Draft> {
+    payload: MutationPayload<Id, Draft>,
+    optimistic: Option<OptimisticRowFn<Row, Id, Draft>>,
+}
+
+impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
+    /// Wrap a payload. Macro-emitted; users normally call
+    /// `Issue::create(id, draft)` etc.
+    pub fn new(payload: MutationPayload<Id, Draft>) -> Self {
+        Self {
+            payload,
+            optimistic: None,
+        }
+    }
+
+    /// Attach an optimistic-row builder. The closure runs BEFORE
+    /// the wire push and the resulting `Row` is routed through
+    /// every matching `QueryView`'s pending overlay. Without this,
+    /// the mutation only becomes visible after the server confirms
+    /// it (next `/pull`).
+    pub fn optimistic<F>(mut self, build: F) -> Self
+    where
+        F: FnOnce(&MutationPayload<Id, Draft>) -> Row + 'static,
+    {
+        self.optimistic = Some(Box::new(build));
+        self
+    }
+
+    /// Get the underlying payload (for advanced cases that need the
+    /// envelope directly).
+    pub fn payload(&self) -> &MutationPayload<Id, Draft> {
+        &self.payload
+    }
+
+    /// Consume into the underlying payload + optimistic closure.
+    /// `QueryClient::push_typed` (Phase 4 wire-up) calls this.
+    #[allow(clippy::type_complexity)]
+    pub fn into_parts(
+        self,
+    ) -> (
+        MutationPayload<Id, Draft>,
+        Option<OptimisticRowFn<Row, Id, Draft>>,
+    ) {
+        (self.payload, self.optimistic)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

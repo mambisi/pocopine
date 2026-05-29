@@ -642,6 +642,57 @@ impl QueryClient {
     /// query-agnostic on the wire; routing happens client-side via
     /// predicate evaluation. See the wire/server contract in
     /// `pocopine-sync` and the cookbook.
+    /// RFC 090 Phase 4 — push a typed mutation built by the macro-
+    /// emitted `Issue::create(...)` / `update(...)` / `delete(...)`
+    /// methods. Thin wrapper around [`Self::push`] that destructures
+    /// the [`crate::write::TypedMutation`] builder, runs the
+    /// optimistic-row closure (if any), and forwards.
+    pub async fn push_typed<Row, Id, Draft>(
+        &self,
+        stream: SyncStreamName,
+        mutation_id: MutationId,
+        mutation: crate::write::TypedMutation<Row, Id, Draft>,
+        push_url: &str,
+    ) -> pocopine_sync::SyncResult<()>
+    where
+        Row: Clone + serde::Serialize + 'static,
+        Id: serde::Serialize + Clone + 'static,
+        Draft: serde::Serialize + Clone + 'static,
+    {
+        let (payload, optimistic_closure) = mutation.into_parts();
+        match optimistic_closure {
+            Some(build) => {
+                let row = build(&payload);
+                let change = RowChange::Upsert(row);
+                self.push(stream, mutation_id, payload, change, push_url)
+                    .await
+            }
+            None => {
+                // No optimistic — skip the routing engine and POST
+                // directly. Subscriptions don't see the mutation
+                // until the server's live wakeup triggers the next
+                // /pull.
+                let payload_value = serde_json::to_value(&payload)
+                    .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
+                let wire = pocopine_sync::ClientMutation::new(
+                    mutation_id,
+                    pocopine_sync::SyncOp::Upsert,
+                    payload_value,
+                );
+                let request = pocopine_sync::SyncPushRequest::new(stream, [wire]);
+                pocopine_core::fetch::call::<
+                    pocopine_sync::SyncPushRequest<Value>,
+                    pocopine_sync::SyncPushResponse<Value>,
+                >(push_url, &request)
+                .await
+                .map(|_| ())
+                .map_err(|e| {
+                    pocopine_sync::SyncError::backend(format!("push transport failed: {e}"))
+                })
+            }
+        }
+    }
+
     /// RFC 090 Phase 3 — high-level client-side push that pairs with
     /// `SourceResource::push` on the server. Use when you have a
     /// typed `MutationPayload` (or any `Serialize` envelope) and one
