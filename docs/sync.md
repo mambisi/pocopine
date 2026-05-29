@@ -2,57 +2,43 @@
 
 End-to-end tutorial for `pocopine-sync-query`. By the end you have a
 reactive, filtered, mutation-routed issue tracker scoped per workspace
-with optimistic writes and live wake-ups.
+with optimistic writes and live wake-ups — in roughly 40 lines of
+component code.
 
-For the server-side trait surface (Source, MutationLog, SourceResource)
-read [`sync-server.md`](./sync-server.md). For the client-side runtime
-(QueryClient, Query DSL, QueryView, typed writes) read
-[`sync-client.md`](./sync-client.md). This doc reuses both ends in one
-worked example.
+This doc reads top-to-bottom and assumes nothing. Server contract
+detail in [`sync-server.md`](./sync-server.md); client runtime detail
+in [`sync-client.md`](./sync-client.md).
 
 ## What you build
 
-```mermaid
-flowchart LR
-    subgraph wasm["wasm (browser)"]
-        Q["Issue::query()<br/>.eq(workspace_id, 'W1')<br/>.observe(&client)"]
-        V["QueryView&lt;Issue&gt;<br/>rows() / on_update()"]
-        C["Issue::create(id, draft)<br/>.optimistic(|p| …)<br/>.push_typed(...)"]
-        O[("pending<br/>overlay")]
-    end
+```text
+   server                                    wasm (browser)
+   ──────                                    ──────────────
+   Source<Issue>                             #[component] IssueList
+      │ list_stream / create / update         │
+      ▼                                      Issue::query()
+   SourceResource ─── /pull / /push ────▶     .eq(field::workspace_id, …)
+      │ live SSE per (stream, params_hash)    .bind(&qc, |s| &mut s.rows)
+      ▼                                      │
+   server plugin                              ▼
+                                            ◀── pp-for="row in rows"
 
-    subgraph server["server (host)"]
-        R["SourceResource"]
-        S["Source&lt;Row = Issue&gt;"]
-        L["MutationLog"]
-        DB[("database")]
-    end
-
-    Q -- "/sync/v1/pull" --> R
-    R --> S
-    S --> DB
-    R -- snapshot rows --> V
-
-    C --> O
-    O -- routed to matching views --> V
-    O -- "/sync/v1/push" --> R
-    R --> L
-    L -- "Reserved" --> S
-
-    R -- "live SSE per (stream, params_hash)" --> V
+                          Issue::create(id, draft)
+                              .optimistic(|p| …)
+                              .push(&qc).await?
 ```
 
 Three pieces share one row type:
 
-| Layer       | Crate                          | Role                                         |
-|-------------|--------------------------------|----------------------------------------------|
-| Server      | `pocopine-sync-query` (host)   | `Source` trait → `SourceResource` endpoint   |
-| Wire        | `pocopine-sync`                | `/sync/v1/pull`, `/sync/v1/push`, SSE topics |
-| Client      | `pocopine-sync-query` (wasm)   | `QueryClient` + `QueryView<Row>`             |
+| Layer       | Crate                       | Role                                              |
+|-------------|-----------------------------|---------------------------------------------------|
+| Server      | `pocopine-sync-query` host  | `Source` trait → `SourceResource` → server plugin |
+| Wire        | `pocopine-sync`             | `/sync/v1/{open,pull,push}`, SSE wake-ups         |
+| Client      | `pocopine-sync-query` wasm  | `QueryClient` plugin + `Query<Row>` DSL           |
 
 ## Step 1 — Shared row + draft
 
-Declared once, used by both ends.
+One file, used by both ends.
 
 ```rust
 // crates/myapp-shared/src/issue.rs
@@ -64,6 +50,7 @@ use serde::{Deserialize, Serialize};
 pub struct Issue {
     pub id: String,
     pub version: String,
+    pub created_at: String,
 
     #[query_param(required)]
     pub workspace_id: String,
@@ -83,113 +70,149 @@ pub struct IssueDraft {
 }
 ```
 
-What `#[query_resource]` emits:
+`#[query_resource]` emits a lot:
 
 ```rust
 impl Issue {
-    pub fn query() -> QueryBuilder<Self>             // entry to the DSL
-    pub fn create(id, draft) -> TypedMutation<…>     // typed writes
-    pub fn update(id, draft, expected) -> Typed…
-    pub fn delete(id, expected) -> TypedMutation<…>
+    pub fn query() -> QueryBuilder<Self>           // DSL entry
+    pub fn create(id, draft)        -> TypedMutation<…>
+    pub fn update(id, draft, expected_version: Option<RowVersion>) -> TypedMutation<…>
+    pub fn delete(id, expected_version: Option<RowVersion>)        -> TypedMutation<…>
 }
 
-pub mod issues {                                     // resource module
+pub mod issues {                                  // resource module
     pub const NAME: &str = "issues";
     pub const SCHEMA_VERSION: u32 = 1;
-    pub const HAS_PER_PARAMS_LIVE_ROUTING: bool;     // true → has `required` field
-    pub fn matches(q, row) -> bool;
-    pub fn row_to_params(row) -> StreamParams;       // server live wake-up projector
-    pub fn partition_for_topic(p) -> Option<u64>;    // client subscribe hash
-    pub mod field { /* one marker per #[query_param] */ }
+    pub fn row_to_params(row) -> StreamParams;    // server live wake-up projector
+    pub fn partition_for_topic(p) -> Option<u64>; // client subscribe hash
+    pub mod field { /* one typed marker per #[query_param] */ }
 }
 ```
 
-`#[query_param(required)]` marks `workspace_id` as a **tenant gate**:
-predicates without it are rejected and every subscription is partitioned
-by its value. Bare `#[query_param]` is filterable but optional.
+`#[query_param(required)]` on `workspace_id` makes it a **tenant gate**:
+predicates without it are rejected, and every subscription is
+partitioned per-value for precise live wake-ups (W1 mutations don't
+wake W2 subscribers). Bare `#[query_param]` is filterable but optional.
 
-## Step 2 — Server: implement `Source` + mount
+## Step 2 — Server: `Source` + mount
+
+Three things in one file: a typed request context, a `Source` impl,
+and the mount.
+
+### Typed request context
+
+The `Source` trait's `type Context` lets you extract everything you
+need from a request once, then operate on a strongly-typed handle
+inside every storage method. Skip `RequestContext` plumbing entirely.
 
 ```rust
 // crates/myapp-server/src/issues.rs
-use async_trait::async_trait;
-use myapp_shared::issue::Issue;
-use pocopine_auth::RequestContext;
-use pocopine_sync::{RowVersion, SyncResult};
-use pocopine_sync_query::{
-    DeleteResult, MemoryMutationLog, Query, Source, SourceResource, WriteResult, source,
+#[derive(Clone)]
+pub struct WorkspaceCtx {
+    pub workspace_id: String,
+    pub user_id: String,
+}
+
+impl WorkspaceCtx {
+    fn extract(ctx: &RequestContext, db: &Db) -> SyncResult<Self> {
+        let user_id = ctx.user.id_string()
+            .ok_or_else(|| SyncError::auth("unauthenticated"))?;
+        let workspace_id = ctx.header_str("x-workspace-id")
+            .ok_or_else(|| SyncError::client("missing x-workspace-id"))?
+            .to_string();
+        // Real impl would call db.assert_member(user_id, workspace_id) here.
+        Ok(Self { workspace_id, user_id })
+    }
+}
+```
+
+### The `Source` impl
+
+```rust
+use pocopine_sync_query::source::{
+    DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
 };
 
-pub struct IssueStore { /* db handle */ }
+pub struct IssueStore { pub db: Db }
 
-#[async_trait]
 impl Source for IssueStore {
     type Id = String;
     type Row = Issue;
     type Draft = myapp_shared::issue::IssueDraft;
+    type Context = WorkspaceCtx;
 
-    async fn list(&self, ctx: RequestContext, q: &Query<Issue>) -> SyncResult<Vec<Issue>> {
-        // `q.params()` exposes the typed filter; backends can push it
-        // down to SQL. The framework re-applies `q.matches()` on the
-        // result so naive impls can return more than necessary.
-        self.db_list(&ctx, q.params()).await
+    fn extract_context<'a>(
+        &'a self,
+        ctx: RequestContext,
+    ) -> SourceFuture<'a, SyncResult<Self::Context>> {
+        let db = self.db.clone();
+        Box::pin(async move { WorkspaceCtx::extract(&ctx, &db) })
     }
 
-    async fn get(&self, ctx: RequestContext, id: String) -> SyncResult<Option<Issue>> {
-        self.db_get(&ctx, &id).await
+    fn list_stream<'a>(
+        &'a self,
+        ctx: WorkspaceCtx,
+        query: &'a Query<Issue>,
+    ) -> SourceStream<'a, Issue> {
+        // `query.params()` exposes typed filters; push them into SQL.
+        // `query.limit()` is already clamped by the adapter.
+        Box::pin(self.db.fetch_issues(ctx, query.params(), query.limit()))
     }
 
-    async fn create(&self, ctx: RequestContext, id: String, draft: IssueDraft)
-        -> SyncResult<Issue>
+    fn get<'a>(&'a self, ctx: WorkspaceCtx, id: String)
+        -> SourceFuture<'a, SyncResult<Option<Issue>>>
     {
-        self.db_insert(&ctx, id, draft).await
+        let db = self.db.clone();
+        Box::pin(async move { db.get_issue(&ctx, &id).await })
     }
 
-    async fn update(
-        &self,
-        ctx: RequestContext,
-        id: String,
-        draft: IssueDraft,
-        expected_version: Option<RowVersion>,
-    ) -> SyncResult<WriteResult<Issue>> {
-        self.db_update(&ctx, id, draft, expected_version).await
+    fn create<'a>(&'a self, ctx: WorkspaceCtx, id: String, draft: IssueDraft)
+        -> SourceFuture<'a, SyncResult<Issue>>
+    {
+        let db = self.db.clone();
+        Box::pin(async move { db.insert_issue(&ctx, id, draft).await })
     }
 
-    async fn delete(
-        &self,
-        ctx: RequestContext,
-        id: String,
+    fn update<'a>(
+        &'a self, ctx: WorkspaceCtx,
+        id: String, draft: IssueDraft,
         expected_version: Option<RowVersion>,
-    ) -> SyncResult<DeleteResult<Issue>> {
-        self.db_delete(&ctx, id, expected_version).await
+    ) -> SourceFuture<'a, SyncResult<WriteResult<Issue>>> {
+        let db = self.db.clone();
+        Box::pin(async move { db.update_issue(&ctx, id, draft, expected_version).await })
+    }
+
+    fn delete<'a>(
+        &'a self, ctx: WorkspaceCtx,
+        id: String, expected_version: Option<RowVersion>,
+    ) -> SourceFuture<'a, SyncResult<DeleteResult<Issue>>> {
+        let db = self.db.clone();
+        Box::pin(async move { db.delete_issue(&ctx, id, expected_version).await })
     }
 }
 ```
 
-Wire it to a `SourceResource`:
+The `Source::Context` extractor runs once per request. Auth failures
+in `extract_context` short-circuit before any storage method runs.
+
+### Mount on the `Server`
 
 ```rust
-pub fn issues_resource(store: IssueStore) -> SyncResult<SourceResource<IssueStore, _>> {
-    let resource = source("issues", store)?
-        .id(|row: &Issue| row.id.clone())
-        .version_field(|row| Ok(Some(RowVersion::new(&row.version)?)))
-        .partition_by(myapp_shared::issue::issues::row_to_params)
-        .mutation_log(MemoryMutationLog::<Issue>::with_scope_fn(|ctx| {
-            // scope mutation idempotency per tenant
-            Ok(ctx.tenant_id()?.to_string())
-        }));
-    Ok(resource)
-}
-```
-
-Mount it on the `Server`:
-
-```rust
+use myapp_shared::issue::issues;
 use pocopine_server::Server;
-use pocopine_sync::{SyncServer, sync_server_plugin};
+use pocopine_sync::{sync_server_plugin, SyncServer};
+use pocopine_sync_query::source;
 
 let sync = SyncServer::builder()
-    .guarded_stream_with(issues_resource(store)?, WorkspaceGuard::new(...))
+    .public_stream(
+        source("issues", IssueStore { db })?
+            .id(|row: &Issue| row.id.clone())
+            .version_field(|row| Ok(Some(RowVersion::new(&row.version)?)))
+            .partition_by(issues::row_to_params)
+            .mutation_log(MemoryMutationLog::<Issue>::with_scope_fn(|ctx| {
+                Ok(ctx.tenant_id()?.to_string())
+            })),
+    )
     .events(Arc::new(live_backend()))
     .build();
 
@@ -199,14 +222,14 @@ let server = Server::builder()
     .build();
 ```
 
-`public_stream` / `guarded_stream` / `guarded_stream_with` are the three
-registration shapes — see
-[sync-server.md §Mount points](./sync-server.md#mount-points-registering-a-resource-on-the-server)
-for the full picture.
+`.mutation_log(...)` is technically optional — omit it and the
+builder defaults to an in-memory log + emits a one-shot
+`tracing::warn!`. Don't omit it in production.
 
-## Step 3 — Client: install + render in a component
+## Step 3 — Client: install + render
 
-Install the client plugin once at app startup:
+The plugin gives every `#[component]` access to one shared
+`QueryClient`:
 
 ```rust
 // crates/myapp-wasm/src/lib.rs
@@ -223,8 +246,7 @@ pub fn start() {
 }
 ```
 
-Then a component requests `Rc<QueryClient>` via `self.plugin::<...>()`,
-subscribes in `on_mount`, and binds the rows to a `.poco` template:
+A list component subscribes in one chain:
 
 ```rust
 // crates/myapp-wasm/src/IssueList.rs
@@ -237,41 +259,19 @@ use myapp_shared::issue::{Issue, issues};
 #[component(style = "issue_list.css")]
 pub struct IssueList {
     #[prop] pub workspace_id: String,
-
     pub rows: Vec<Issue>,
-    pub loading: bool,
-    pub error: String,
 }
 
 #[handlers]
 impl IssueList {
     pub fn on_mount(&mut self) {
-        self.loading = true;
-
         let qc = self.plugin::<Rc<QueryClient>>();
-        let view = Issue::query()
+        Issue::query()
             .eq(issues::field::workspace_id, &self.workspace_id)
             .eq(issues::field::status, "open")
-            .order_by("created_at", Order::Desc)
+            .order_by(issues::field::created_at, Order::Desc)
             .limit(50)
-            .observe(&qc);
-
-        let scope = pocopine_core::current_scope_id().unwrap();
-        let token = view.on_update(move || {
-            pocopine_core::trigger(scope, "issues_view");
-        });
-
-        let this = pocopine::this::<Self>();
-        pocopine_core::effect(move || {
-            pocopine_core::track(scope, "issues_view");
-            let rows = view.rows();
-            let _ = &token;          // keep token alive with the effect
-            this.update(|s: &mut Self| {
-                s.loading = false;
-                s.error.clear();
-                s.rows = rows;
-            });
-        });
+            .bind::<Self, _>(&qc, |s: &mut Self| &mut s.rows);
     }
 }
 ```
@@ -284,10 +284,6 @@ impl IssueList {
     <span class="count" pp-text="rows.length"></span>
   </header>
 
-  <p pp-show="loading" class="empty">Loading…</p>
-  <p pp-show="error" class="error" pp-text="error"></p>
-  <p pp-show="!loading && !rows.length && !error" class="empty">No open issues.</p>
-
   <ol class="issues__list" pp-show="rows.length">
     <template pp-for="row in rows" pp-key="row.id">
       <li class="issue">
@@ -299,26 +295,21 @@ impl IssueList {
 </section>
 ```
 
-`Issue::query()` pre-fills the stream name. The `field::*` markers are
-type-checked at compile time. Passing an integer to
-`field::workspace_id` is a build error, not a runtime mismatch.
+`.bind(&qc, projector)` does the whole bridge: observe the query,
+collect rows into a `Signal`, run an effect-scoped sync that writes
+into the component field, tear everything down on unmount. Field
+markers (`issues::field::workspace_id`) are typed: passing the wrong
+shape is a build error.
 
-The `on_update` → `trigger` → `effect + track` triangle is the
-canonical bridge from any external reactive source (QueryView, custom
-signals, etc.) into the component's reactive graph — once `rows` is on
-the component, the template treats it like any other reactive field.
+## Step 4 — Client: typed write
 
-## Step 4 — Client: typed write with optimistic overlay
-
-Same component pattern; the handler runs the write and the framework
-re-renders the template when the optimistic overlay or the rejection
-roll-back arrives.
+Same component pattern; one chained call for the whole optimistic
++ wire push.
 
 ```rust
 // crates/myapp-wasm/src/IssueComposer.rs
 use std::rc::Rc;
 use pocopine::prelude::*;
-use pocopine_sync::{MutationId, SyncStreamName};
 use pocopine_sync_query::QueryClient;
 use myapp_shared::issue::{Issue, IssueDraft};
 
@@ -346,26 +337,23 @@ impl IssueComposer {
             title: std::mem::take(&mut self.title),
         };
 
-        let mutation = Issue::create(row_id.clone(), draft)
+        let result = Issue::create(row_id.clone(), draft)
             .optimistic({
                 let row_id = row_id.clone();
                 move |payload| Issue {
                     id: row_id.clone(),
                     version: String::new(),
+                    created_at: String::new(),
                     workspace_id: payload.draft().workspace_id.clone(),
                     status: payload.draft().status.clone(),
                     title: payload.draft().title.clone(),
                 }
-            });
-
-        let id = MutationId::new(uuid::Uuid::now_v7().to_string()).unwrap();
-        let result = qc.push_typed(
-            SyncStreamName::new("issues").unwrap(),
-            id, mutation, "/sync/v1/push",
-        ).await;
+            })
+            .push(&qc)
+            .await;
 
         match result {
-            Ok(()) => self.saving = false,
+            Ok(_mutation_id) => self.saving = false,
             Err(err) => { self.saving = false; self.error = err.to_string(); }
         }
     }
@@ -375,72 +363,56 @@ impl IssueComposer {
 ```html
 <!-- IssueComposer.poco -->
 <form class="composer" pp-on:submit.prevent="create">
-  <label>
-    <span>Title</span>
-    <input type="text" pp-model="title" autocomplete="off" />
-  </label>
+  <label><span>Title</span><input pp-model="title" autocomplete="off" /></label>
   <p pp-show="error" class="error" pp-text="error"></p>
   <button type="submit" pp-show="!saving">Create</button>
   <button type="button" disabled pp-show="saving">Working…</button>
 </form>
 ```
 
-What the client does:
+What `.push(&qc)` does:
 
-```mermaid
-sequenceDiagram
-    participant App as caller
-    participant Client as QueryClient
-    participant View as QueryView (W1)
-    participant Server as SourceResource
-    participant Log as MutationLog
-    participant Source as Source::create
-    participant Other as other clients (W1)
-
-    App->>Client: Issue::create(id, draft).optimistic(build).push_typed(...)
-    Client->>Client: run build(&payload) → tentative Issue
-    Client->>View: route through pending overlay
-    View-->>App: on_update fires (UI updates instantly)
-
-    Client->>Server: POST /sync/v1/push
-    Server->>Log: reserve_mutation
-    Log-->>Server: Reserved
-    Server->>Source: create(ctx, id, draft)
-    Source-->>Server: canonical Issue
-
-    alt accepted
-        Server-->>Client: { accepted: [mutation_id] }
-        Note over View: overlay stays; next /pull replaces with canonical
-        Server->>Other: live SSE on (issues, W1-hash)
-    else rejected / conflict
-        Server-->>Client: { rejected: [...] }
-        Client->>View: RollbackGuard drops overlay
-        View-->>App: on_update fires (UI rolls back)
-    end
+```text
+1. Builds the optimistic Issue via the closure.
+2. Routes it through every active QueryView whose predicate matches
+   (workspace W1 + status="open"); each view's bound component
+   re-renders the new row.
+3. POSTs /sync/v1/push with the typed envelope. Stream name +
+   push URL come from the macro + QueryClient endpoint; the
+   MutationId is a fresh UUIDv7.
+4. Server: extract_context → reserve_mutation → Source::create.
+5. Accepted → overlay stays until next /pull replaces it with
+   canonical. Rejected → overlay rolls back, on_update fires,
+   caller gets Err(SyncError).
+6. Live SSE fans the canonical row out to other clients on
+   (issues, W1-hash).
 ```
 
-`MutationId` should come from a durable client-side counter so retries
-across reloads collapse to the same logical write.
+For retries that need to collapse to the same logical write (durable
+counter, deterministic test id), use `.push_with_id(&qc, id)` instead
+and own the id yourself.
 
 ## Step 5 — Live wake-ups
 
-Server publishes to topics shaped by the resource's
-`row_to_params` projector. With `workspace_id` as the required param,
-every accepted mutation on workspace W1 wakes only W1 subscribers — W2
-clients stay silent.
+Server publishes to topics shaped by the `row_to_params` projector
+you registered via `.partition_by(issues::row_to_params)`. With
+`workspace_id` as the required param, every accepted mutation on W1
+wakes only W1 subscribers — W2 clients stay silent.
 
-Live wake-up is on by default. Server side: install `live_plugin(...)`
-alongside `sync_server_plugin(...)` and pass the same backend via
-`.events(...)` on the `SyncServerBuilder` (see Step 2). Client side:
-nothing to do — `query_client_plugin()` opens an SSE stream per active
-`(stream, params_hash)` topic and re-pulls the matching subscription.
+Client side: nothing to do. `query_client_plugin()` opens one SSE
+stream per `(stream, params_hash)` topic and re-pulls the matching
+subscription on each event.
 
-Disable it (offline-only, tests):
+Disable for offline-only flows or tests:
 
 ```rust
+use pocopine_sync_query::QueryClientConfig;
+use std::time::Duration;
+
 app.plugin(
     query_client_plugin().config(QueryClientConfig {
         disable_live: true,
+        poll_interval: Some(Duration::from_secs(5)),
         ..Default::default()
     })
 );
@@ -448,7 +420,12 @@ app.plugin(
 
 ## Where to next
 
-- **Server contract:** [`sync-server.md`](./sync-server.md)
-- **Client API:** [`sync-client.md`](./sync-client.md)
-- **Selectors (derived queries):**
-  [`sync-query-selector-mechanism.md`](./sync-query-selector-mechanism.md)
+- **Server contract:** [`sync-server.md`](./sync-server.md) — full
+  `Source` trait, `SourceResource` builder, `MutationLog` invariants,
+  `partition_by`, schema migration ordering.
+- **Client API:** [`sync-client.md`](./sync-client.md) — `Query<Row>`
+  DSL reference, `QueryView` raw surface, manual signal bridge,
+  pending overlay vs canonical.
+- **Selectors:**
+  [`sync-query-selector-mechanism.md`](./sync-query-selector-mechanism.md) —
+  derived queries with the `#[query]` macro.
