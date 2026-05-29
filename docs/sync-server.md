@@ -209,7 +209,34 @@ once.
 
 ## `SourceResource` builder
 
-Chain order:
+For most `#[query_resource]`-decorated rows the macro emits a
+zero-boilerplate convenience constructor:
+
+```rust
+use myapp_shared::issue::issues;
+
+let resource = issues::resource(IssueStore::new(db))
+    .mutation_log(MemoryMutationLog::with_scope_fn(|ctx| {
+        Ok(ctx.tenant_id()?.to_string())
+    }));
+```
+
+`issues::resource(impl_)` pre-wires three things from the macro
+metadata:
+
+| Auto-wired         | Source                                                 |
+|--------------------|--------------------------------------------------------|
+| `.id(closure)`     | reads `&row.id` (literal field named `id`)              |
+| `.version_field`   | reads `&row.version` if the row has one (optional)      |
+| `.partition_by`    | `row_to_params_typed` — the typed `RFC 088 §C` projector |
+
+Override any default by chaining the matching setter on the
+returned `SourceResource` — e.g. `.id(custom)` for a non-`id`-named
+field, `.partition_by(custom)` for a non-standard projector.
+
+The full chain remains available if you don't have a
+`#[query_resource]` row, or want explicit control over every
+default:
 
 ```rust
 let resource = source("issues", IssueStore::new(db))?       // 1. name + Source
@@ -218,7 +245,7 @@ let resource = source("issues", IssueStore::new(db))?       // 1. name + Source
     .id(|row: &Issue| row.id.clone())                        // 2. id projector
     .version_field(|row|                                     //    optional: OCC
         Ok(Some(RowVersion::new(&row.version)?)))
-    .partition_by(issues::row_to_params)                     //    optional: live
+    .partition_by(issues::row_to_params_typed)               //    optional: live
     .mutation_log(MemoryMutationLog::with_scope_fn(|ctx| {   //    optional: see note
         Ok(ctx.tenant_id()?.to_string())
     }));
@@ -317,11 +344,13 @@ typed-context view of it.
 
 ## `partition_by` and live wake-ups
 
+Auto-wired by `issues::resource(impl_)`; the manual form is:
+
 ```rust
-.partition_by(issues::row_to_params)
+.partition_by(issues::row_to_params_typed)
 ```
 
-The `#[query_resource]`-emitted `row_to_params` extracts the
+The `#[query_resource]`-emitted `row_to_params_typed` extracts the
 **required** fields from a row into typed `StreamParams`. On every
 accepted mutation the framework hashes those params and publishes to
 the topic `(stream, params_hash)`:

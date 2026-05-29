@@ -226,23 +226,63 @@ Issue::update(id, draft, expected_version: Option<…>)   -> TypedMutation
 Issue::delete(id, expected_version: Option<…>)          -> TypedMutation
 ```
 
+### One-time `From<(Id, Draft)>` impl
+
+`Issue::create` and `Issue::update` use `Self::from((id, draft))` to
+build the default optimistic overlay. Declare the conversion once
+near the row struct (in shared code, alongside the row + draft
+definitions):
+
+```rust
+impl From<(String, IssueDraft)> for Issue {
+    fn from((id, draft): (String, IssueDraft)) -> Self {
+        Self {
+            id,
+            version: String::new(),       // server-controlled
+            created_at: String::new(),    // server-controlled
+            workspace_id: draft.workspace_id,
+            status: draft.status,
+            title: draft.title,
+        }
+    }
+}
+```
+
+Without this impl, `Issue::create(...)` fails to compile (clear bound
+error). Server-controlled fields use `Default` (`String::new()`,
+`None`, etc.); the rest comes from the draft.
+
 ### Pushing — the one-line form
 
 ```rust
-let mutation_id = Issue::create(row_id, draft)
-    .optimistic(|p| Issue { /* … */ })
-    .push(&qc)
-    .await?;
+let mutation_id = Issue::create(row_id, draft).push(&qc).await?;
 ```
 
 `.push(&qc)`:
 
+- Builds the optimistic Row via `Self::from((id.clone(), draft.clone()))`.
+- Routes it through every matching `QueryView` (pending overlay).
 - Generates a fresh UUIDv7-backed `MutationId` automatically.
 - Resolves the push URL from `qc.endpoint()`.
-- Reads the stream name from the macro-emitted `Issue::create(...)`
-  builder.
+- Reads the stream name from the macro-emitted `Issue::create(...)` builder.
 - Inspects the server response: `accepted` → `Ok(id)`;
   `rejected` / `conflicts` / "id not in accepted" → `Err(...)`.
+
+### Override / opt out
+
+```rust
+// Custom optimistic — predicts a server-computed field explicitly.
+Issue::create(row_id, draft)
+    .optimistic(|p| Issue { /* custom shape */ })
+    .push(&qc).await?;
+
+// No overlay — server confirms before the view updates.
+Issue::create(row_id, draft).server_only().push(&qc).await?;
+```
+
+Use `.server_only()` when the optimistic shape is hard to predict
+(server-assigned fields beyond id/version) or when a brief flicker
+is better than showing a rolled-back row.
 
 ### Retry-safe writes — `push_with_id`
 
@@ -292,9 +332,9 @@ sequenceDiagram
     end
 ```
 
-Without `.optimistic(...)`, `.push(&qc)` skips the local routing
-engine and just POSTs the wire envelope. The view updates on the
-next `/pull`. Either branch surfaces server-side rejections as
+With `.server_only()`, `.push(&qc)` skips the local routing engine
+and just POSTs the wire envelope. The view updates on the next
+`/pull`. Either branch surfaces server-side rejections as
 `Err(SyncError::...)`.
 
 ### Lower-level `push` (advanced)

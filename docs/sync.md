@@ -68,6 +68,24 @@ pub struct IssueDraft {
     pub status: String,
     pub title: String,
 }
+
+// One-time conversion that the macro-emitted `Issue::create` /
+// `Issue::update` use as the default optimistic overlay. Server-
+// controlled fields (version, created_at) get sensible defaults;
+// the rest comes from the draft. Override per-call with
+// `.optimistic(custom)` or opt out with `.server_only()`.
+impl From<(String, IssueDraft)> for Issue {
+    fn from((id, draft): (String, IssueDraft)) -> Self {
+        Self {
+            id,
+            version: String::new(),
+            created_at: String::new(),
+            workspace_id: draft.workspace_id,
+            status: draft.status,
+            title: draft.title,
+        }
+    }
+}
 ```
 
 `#[query_resource]` emits a lot:
@@ -75,7 +93,7 @@ pub struct IssueDraft {
 ```rust
 impl Issue {
     pub fn query() -> QueryBuilder<Self>           // DSL entry
-    pub fn create(id, draft)        -> TypedMutation<…>
+    pub fn create(id, draft)        -> TypedMutation<…>  // requires From<(Id, Draft)>
     pub fn update(id, draft, expected_version: Option<RowVersion>) -> TypedMutation<…>
     pub fn delete(id, expected_version: Option<RowVersion>)        -> TypedMutation<…>
 }
@@ -83,7 +101,9 @@ impl Issue {
 pub mod issues {                                  // resource module
     pub const NAME: &str = "issues";
     pub const SCHEMA_VERSION: u32 = 1;
-    pub fn row_to_params(row) -> StreamParams;    // server live wake-up projector
+    pub fn resource<S: Source<Row = Issue, Id = String>>(impl_: S) -> SourceResource<S, _>;
+    pub fn row_to_params(row) -> StreamParams;    // server live wake-up projector (Value)
+    pub fn row_to_params_typed(row) -> StreamParams;   // typed sibling, used by partition_by
     pub fn partition_for_topic(p) -> Option<u64>; // client subscribe hash
     pub mod field { /* one typed marker per #[query_param] */ }
 }
@@ -201,14 +221,10 @@ in `extract_context` short-circuit before any storage method runs.
 use myapp_shared::issue::issues;
 use pocopine_server::Server;
 use pocopine_sync::{sync_server_plugin, SyncServer};
-use pocopine_sync_query::source;
 
 let sync = SyncServer::builder()
     .public_stream(
-        source("issues", IssueStore { db })?
-            .id(|row: &Issue| row.id.clone())
-            .version_field(|row| Ok(Some(RowVersion::new(&row.version)?)))
-            .partition_by(issues::row_to_params)
+        issues::resource(IssueStore { db })
             .mutation_log(MemoryMutationLog::<Issue>::with_scope_fn(|ctx| {
                 Ok(ctx.tenant_id()?.to_string())
             })),
@@ -221,6 +237,13 @@ let server = Server::builder()
     .plugin(live_plugin(live_backend()))
     .build();
 ```
+
+`issues::resource(impl_)` is the macro-emitted convenience that
+pre-wires `.id` (from the row's `id` field), `.version_field` (from
+the row's `version` field), and `.partition_by` (from
+`row_to_params_typed`). Override any default by chaining the matching
+builder method on the result (e.g. `.id(custom_projector)` to use a
+non-`id`-named field).
 
 `.mutation_log(...)` is technically optional — omit it and the
 builder defaults to an in-memory log + emits a one-shot
@@ -337,28 +360,21 @@ impl IssueComposer {
             title: std::mem::take(&mut self.title),
         };
 
-        let result = Issue::create(row_id.clone(), draft)
-            .optimistic({
-                let row_id = row_id.clone();
-                move |payload| Issue {
-                    id: row_id.clone(),
-                    version: String::new(),
-                    created_at: String::new(),
-                    workspace_id: payload.draft().workspace_id.clone(),
-                    status: payload.draft().status.clone(),
-                    title: payload.draft().title.clone(),
-                }
-            })
-            .push(&qc)
-            .await;
-
-        match result {
+        match Issue::create(row_id, draft).push(&qc).await {
             Ok(_mutation_id) => self.saving = false,
             Err(err) => { self.saving = false; self.error = err.to_string(); }
         }
     }
 }
 ```
+
+`Issue::create(id, draft).push(&qc)` reads the `From<(String,
+IssueDraft)> for Issue` impl declared back in Step 1 to build the
+optimistic Row automatically. No per-call closure. Override with
+`.optimistic(custom)` before `.push(&qc)` when a write needs a
+non-default overlay (server-side computed fields you predict
+explicitly); skip the overlay entirely with `.server_only()` for
+"only render after server confirms" writes.
 
 ```html
 <!-- IssueComposer.poco -->
@@ -373,7 +389,8 @@ impl IssueComposer {
 What `.push(&qc)` does:
 
 ```text
-1. Builds the optimistic Issue via the closure.
+1. Builds the optimistic Issue via Self::from((id, draft))
+   (the impl from Step 1).
 2. Routes it through every active QueryView whose predicate matches
    (workspace W1 + status="open"); each view's bound component
    re-renders the new row.
@@ -394,10 +411,11 @@ and own the id yourself.
 
 ## Step 5 — Live wake-ups
 
-Server publishes to topics shaped by the `row_to_params` projector
-you registered via `.partition_by(issues::row_to_params)`. With
-`workspace_id` as the required param, every accepted mutation on W1
-wakes only W1 subscribers — W2 clients stay silent.
+Server publishes to topics shaped by the `row_to_params_typed`
+projector that `issues::resource(...)` auto-wired into
+`.partition_by(...)` in Step 2. With `workspace_id` as the required
+param, every accepted mutation on W1 wakes only W1 subscribers — W2
+clients stay silent.
 
 Client side: nothing to do. `query_client_plugin()` opens one SSE
 stream per `(stream, params_hash)` topic and re-pulls the matching
