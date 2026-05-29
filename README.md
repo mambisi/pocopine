@@ -284,11 +284,38 @@ decisions are in [`rfcs/`](./rfcs):
 | 006 | [`pp-teleport` dialogs / popovers / portals](./rfcs/rfc-006-pp-teleport.md) |
 | 007 | [`pp-for` keyed iteration](./rfcs/rfc-007-pp-for-keys.md) |
 
-## Styling with Tailwind / DaisyUI
+## Styling
 
-Tailwind v4 is a first-class option — opt in via `Cargo.toml` and
-`pocopine-cli` downloads the standalone Rust binary on first run,
-then spawns it alongside `wasm-pack`:
+**Pine Stylekit is the recommended way to style Pocopine apps** — a
+native utility-CSS compiler with Tailwind-shaped classes, compiled
+in-process at build time (no external watcher, no Node). It runs **by
+default**: write utility classes in your `.poco` templates, declare any
+colours in an `@theme` block, link `/pkg/stylekit.css`, and
+`pocopine build`/`dev` does the rest. It parses `.poco` with the real
+compiler (not text scanning), fails loud on typos with source spans, and
+ships Tailwind's default palette + a Preflight. See
+[`docs/pine-stylekit.md`](./docs/pine-stylekit.md).
+
+```html
+<!-- index.html -->
+<link rel="stylesheet" href="/pkg/stylekit.css" />
+```
+
+```css
+/* app.css — only needed if you use custom colours */
+@theme {
+  --color-surface: #ffffff;
+  --color-accent: oklch(0.54 0.13 252);
+}
+```
+
+### Tailwind / DaisyUI (fallback)
+
+Prefer Tailwind? It stays a first-class option — add a
+`[package.metadata.pocopine.tailwind]` block (with no `[stylekit]`
+block) and Stylekit defers to it. `pocopine-cli` downloads the
+standalone Rust binary on first run, then spawns it alongside
+`wasm-pack`:
 
 ```toml
 [package.metadata.pocopine.tailwind]

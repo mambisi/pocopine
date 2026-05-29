@@ -22,9 +22,10 @@ pub struct PocopineConfig {
     /// the Tailwind standalone CLI alongside `wasm-pack` - one-shot
     /// on `build`/`run`, watch mode on `dev`.
     pub tailwind: Option<TailwindConfig>,
-    /// Opt into Pine Stylekit (RFC 092). When present — or when
-    /// `--stylekit` is passed — `pocopine-cli` compiles utility CSS
-    /// from `.poco` sources in-process, no external watcher.
+    /// Pine Stylekit (RFC 092). Runs by default; this block customizes
+    /// it (input/output/preflight) or opts out via `enabled = false`.
+    /// A project with a `[tailwind]` block but no `[stylekit]` block
+    /// defers to Tailwind instead.
     pub stylekit: Option<StylekitConfig>,
 }
 
@@ -48,6 +49,10 @@ pub struct StylekitConfig {
     /// `preflight = false` for pages that bring their own reset.
     #[serde(default = "default_sk_preflight")]
     pub preflight: bool,
+    /// Whether the stage runs. Defaults to `true`; set `enabled = false`
+    /// to keep this config block but opt out of the now-default stage.
+    #[serde(default = "default_sk_enabled")]
+    pub enabled: bool,
 }
 
 impl Default for StylekitConfig {
@@ -57,6 +62,7 @@ impl Default for StylekitConfig {
             output: default_sk_output(),
             src: default_sk_src(),
             preflight: default_sk_preflight(),
+            enabled: default_sk_enabled(),
         }
     }
 }
@@ -66,6 +72,10 @@ fn default_sk_input() -> String {
 }
 
 fn default_sk_preflight() -> bool {
+    true
+}
+
+fn default_sk_enabled() -> bool {
     true
 }
 

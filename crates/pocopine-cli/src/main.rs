@@ -154,8 +154,8 @@ fn run_build(args: args::BuildArgs) -> Result<()> {
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
     }
-    if stylekit::enabled(&cfg, args.stylekit) {
-        stylekit::run_once(&project, &cfg, args.release)?;
+    if stylekit::enabled(&cfg, args.stylekit, args.no_stylekit) {
+        stylekit::run_once(&project, &cfg, args.stylekit, args.release)?;
     }
     Ok(())
 }
@@ -170,8 +170,8 @@ fn run_project(args: args::ServeArgs) -> Result<()> {
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
     }
-    if stylekit::enabled(&cfg, args.stylekit) {
-        stylekit::run_once(&project, &cfg, args.release)?;
+    if stylekit::enabled(&cfg, args.stylekit, args.no_stylekit) {
+        stylekit::run_once(&project, &cfg, args.stylekit, args.release)?;
     }
     server::run_project(&args.path, &cfg, args.release, args.port)
 }

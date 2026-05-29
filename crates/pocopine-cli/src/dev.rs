@@ -51,9 +51,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     // Pine Stylekit runs in-process (RFC 092 D2) — no watcher child.
     // The initial compile fails loud; later recompiles ride the src
     // watch tick below.
-    let stylekit_on = stylekit::enabled(&cfg, args.stylekit);
+    let stylekit_on = stylekit::enabled(&cfg, args.stylekit, args.no_stylekit);
     if stylekit_on {
-        stylekit::run_once(&project, &cfg, args.release)?;
+        stylekit::run_once(&project, &cfg, args.stylekit, args.release)?;
     }
 
     // Start the serving side. In bin mode the child owns its ports + routes.
