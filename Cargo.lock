@@ -6058,7 +6058,9 @@ dependencies = [
 name = "pocopine-sync-query-macros"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "futures",
+ "http 1.4.0",
  "pocopine-auth",
  "pocopine-core",
  "pocopine-sync",
