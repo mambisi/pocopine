@@ -66,7 +66,9 @@ fn main() -> Result<()> {
         Cmd::Deploy(args) => deploy::run(&args),
         Cmd::Js(args) => run_js(args),
         Cmd::Env(args) => run_env(args),
-        Cmd::Stylekit(args) => stylekit::run_command(&args.path, args.dump),
+        Cmd::Stylekit(args) => {
+            stylekit::run_command(&args.path, args.dump, args.docs, args.metadata)
+        }
     }
 }
 

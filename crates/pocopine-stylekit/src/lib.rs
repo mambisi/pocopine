@@ -23,6 +23,7 @@
 //! coverage and `.poco` [`extract`]ion are seams to be filled under the
 //! phased plan in RFC 092 §10.
 
+pub mod catalog;
 pub mod diagnostics;
 pub mod emit;
 pub mod extract;

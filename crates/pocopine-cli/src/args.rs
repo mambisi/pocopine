@@ -81,6 +81,14 @@ pub struct StylekitArgs {
     /// file.
     #[arg(long)]
     pub dump: bool,
+    /// Print the utility catalog as Markdown (regenerates the docs
+    /// table) and exit. Does not compile the project.
+    #[arg(long)]
+    pub docs: bool,
+    /// Print LSP/autocomplete metadata as JSON and exit. Does not
+    /// compile the project.
+    #[arg(long)]
+    pub metadata: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
