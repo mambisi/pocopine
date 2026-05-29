@@ -9,6 +9,17 @@ publish = false
 bin = "server"
 port = 3024
 
+# RFC 092 — Pine Stylekit is the active CSS compiler for this example
+# (index.html links /pkg/stylekit.css). It reads the @theme tokens from
+# app.css and ignores the Tailwind @import/@source directives.
+[package.metadata.pocopine.stylekit]
+input = "app.css"
+output = "pkg/stylekit.css"
+src = "src"
+
+# Tailwind retained as a fallback during the experiment (RFC 092 D8):
+# `pocopine build` still emits pkg/tailwind.css; switch index.html back
+# to it to compare.
 [package.metadata.pocopine.tailwind]
 input = "app.css"
 output = "pkg/tailwind.css"
