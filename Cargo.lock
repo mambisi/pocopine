@@ -6111,6 +6111,7 @@ dependencies = [
  "pocopine-server",
  "pocopine-sync",
  "pocopine-sync-crud-macros",
+ "pocopine-sync-query",
  "serde",
  "serde_json",
  "tokio",

@@ -4,70 +4,16 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::ResourceId;
 
-/// Conflict returned by an app-owned CRUD source.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CrudConflict<Row> {
-    pub server_row: Option<Row>,
-    pub reason: String,
-}
-
-impl<Row> CrudConflict<Row> {
-    pub fn stale(server_row: Option<Row>) -> Self {
-        Self {
-            server_row,
-            reason: "base version is stale".to_string(),
-        }
-    }
-
-    pub fn new(server_row: Option<Row>, reason: impl Into<String>) -> Self {
-        Self {
-            server_row,
-            reason: reason.into(),
-        }
-    }
-}
-
-/// Result of an app-owned create/save write.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CrudWriteResult<Row> {
-    Applied(Row),
-    Conflict(CrudConflict<Row>),
-}
-
-impl<Row> CrudWriteResult<Row> {
-    pub fn applied(row: Row) -> Self {
-        Self::Applied(row)
-    }
-
-    pub fn conflict(server_row: Option<Row>, reason: impl Into<String>) -> Self {
-        Self::Conflict(CrudConflict::new(server_row, reason))
-    }
-
-    pub fn stale(server_row: Option<Row>) -> Self {
-        Self::Conflict(CrudConflict::stale(server_row))
-    }
-}
-
-/// Result of an app-owned remove write.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CrudRemoveResult<Row> {
-    Applied,
-    Conflict(CrudConflict<Row>),
-}
-
-impl<Row> CrudRemoveResult<Row> {
-    pub fn applied() -> Self {
-        Self::Applied
-    }
-
-    pub fn conflict(server_row: Option<Row>, reason: impl Into<String>) -> Self {
-        Self::Conflict(CrudConflict::new(server_row, reason))
-    }
-
-    pub fn stale(server_row: Option<Row>) -> Self {
-        Self::Conflict(CrudConflict::stale(server_row))
-    }
-}
+// RFC 090 Phase 2a — `CrudConflict`, `CrudWriteResult`, and
+// `CrudRemoveResult` moved to `pocopine_sync_query::write`. The
+// `pub use ... as Crud*` aliases here keep existing CRUD imports
+// (`pocopine_sync_crud::CrudConflict`, `CrudWriteResult`, etc.) and
+// `==` comparisons working byte-for-byte. The canonical types live
+// in sync-query; Phase 6 deletes CRUD entirely and downstream code
+// drops the `Crud` prefix.
+pub use pocopine_sync_query::write::{
+    Conflict as CrudConflict, RemoveResult as CrudRemoveResult, WriteResult as CrudWriteResult,
+};
 
 /// Server-side CRUD source contract.
 ///

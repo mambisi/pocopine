@@ -20,6 +20,11 @@ wasm-bindgen = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-trait = "0.1"
 pocopine-auth = { workspace = true }
+# RFC 090 Phase 2a — the mutation-lifecycle types (MutationLog,
+# MutationPayload, WriteResult, etc.) moved to pocopine-sync-query.
+# CRUD now re-exports them under the old `Crud*` names for
+# back-compat through Phase 5; Phase 6 deletes CRUD entirely.
+pocopine-sync-query = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

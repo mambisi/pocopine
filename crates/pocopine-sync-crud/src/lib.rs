@@ -36,6 +36,14 @@ pub use resource::{
     MissingMutationLog, NoRowVersion, RowVersionValue, TransactionalCrudMutationLog,
     TransactionalCrudResource, DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
 };
+// RFC 090 Phase 2a — `Crud*` lifecycle types (Conflict, WriteResult,
+// RemoveResult, MutationLog, AcceptedMutation, etc.) are now type
+// aliases for the canonical types in `pocopine_sync_query::write`.
+// External code that imports `pocopine_sync_crud::Crud*` keeps
+// working byte-for-byte. The re-exports in `resource::*` and
+// `source::*` above pick up the aliases automatically — no change
+// needed here. This comment marks the migration boundary for Phase
+// 5 deprecation notes and Phase 6 deletion.
 pub use row::optimistic_row;
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{
