@@ -383,26 +383,11 @@ impl QueryClient {
     /// builds use `wasm_bindgen_futures::spawn_local` and have no
     /// equivalent constraint. If you only want the routing engine
     /// — no spawned drivers — use [`without_driver`](Self::without_driver).
-    pub fn new() -> Self {
-        Self::with_config(QueryClientConfig::default())
-    }
-
-    /// Build a client targeting a custom endpoint prefix. Useful for
-    /// tests against a router mounted at a different path. The
-    /// other config knobs stay at their defaults.
-    pub fn with_endpoint(endpoint: String) -> Self {
-        let cfg = QueryClientConfig {
-            endpoint,
-            ..QueryClientConfig::default()
-        };
-        Self::with_config(cfg)
-    }
-
-    /// Build a client with a fully-specified [`QueryClientConfig`].
-    /// The driver is spawned on the first [`observe`](Self::observe)
-    /// for each subscription — see [`Self::new`] for the native
-    /// LocalSet requirement.
-    pub fn with_config(config: QueryClientConfig) -> Self {
+    /// Crate-internal constructor used by [`QueryClientPlugin::into_client`].
+    /// User-facing app code installs `query_client_plugin()` via
+    /// `App::plugin`; tests bypass the plugin via
+    /// [`QueryClient::without_driver`] when no live driver is needed.
+    pub(crate) fn from_config(config: QueryClientConfig) -> Self {
         let endpoint = config.endpoint.clone();
         Self {
             inner: Rc::new(QueryClientInner {
@@ -1842,11 +1827,6 @@ fn collect_subscriptions_on_stream_inner<Row: 'static>(
         .collect()
 }
 
-impl Default for QueryClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 // (Routing engine downcasts via `collect_subscriptions_on_stream`,
 // which uses `Rc::downcast::<QuerySubscription<Row>>` via the
@@ -2474,6 +2454,7 @@ fn release_inner(inner: &QueryClientInner, key: RegistryKey) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query_client_plugin;
 
     fn issues_query(workspace: &str) -> Query<()> {
         Query::builder(SyncStreamName::new("issues").unwrap())
@@ -2483,13 +2464,13 @@ mod tests {
 
     #[test]
     fn fresh_client_has_no_subscriptions() {
-        let client = QueryClient::new();
+        let client = query_client_plugin().into_client();
         assert_eq!(client.active_subscription_count(), 0);
     }
 
     #[test]
     fn subscribe_registers_and_returns_handle() {
-        let client = QueryClient::new();
+        let client = query_client_plugin().into_client();
         let q = issues_query("W1");
         let handle = client.subscribe::<()>(q.clone());
         assert_eq!(client.active_subscription_count(), 1);
@@ -2499,7 +2480,7 @@ mod tests {
 
     #[test]
     fn two_handles_to_same_query_share_subscription() {
-        let client = QueryClient::new();
+        let client = query_client_plugin().into_client();
         let q = issues_query("W1");
         let h1 = client.subscribe::<()>(q.clone());
         let h2 = client.subscribe::<()>(q.clone());
@@ -2510,7 +2491,7 @@ mod tests {
 
     #[test]
     fn distinct_queries_get_distinct_subscriptions() {
-        let client = QueryClient::new();
+        let client = query_client_plugin().into_client();
         let q1 = issues_query("W1");
         let q2 = issues_query("W2");
         let _h1 = client.subscribe::<()>(q1);
@@ -2520,7 +2501,7 @@ mod tests {
 
     #[test]
     fn drop_last_handle_removes_subscription() {
-        let client = QueryClient::new();
+        let client = query_client_plugin().into_client();
         let q = issues_query("W1");
         let h1 = client.subscribe::<()>(q.clone());
         let h2 = client.subscribe::<()>(q.clone());
@@ -2534,7 +2515,7 @@ mod tests {
 
     #[test]
     fn handle_borrows_state_through_refcell() {
-        let client = QueryClient::new();
+        let client = query_client_plugin().into_client();
         let q = issues_query("W1");
         let h = client.subscribe::<()>(q);
         let state = h.state();

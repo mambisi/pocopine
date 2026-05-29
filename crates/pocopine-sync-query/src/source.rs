@@ -314,7 +314,16 @@ impl<S: Source> SourceResourceBuilder<S> {
             id_of: Arc::new(id_of),
             version_of: None,
             params_of: None,
-            mutation_log: None,
+            // T2.2: provision an in-memory log by default so the
+            // builder accepts `/push` without an explicit
+            // `.mutation_log(...)` call. The user-visible warning
+            // about the default fires once on first push (see the
+            // `mutation_log_default_warned` cell + push handler).
+            // `.mutation_log(...)` replaces it AND sets the
+            // explicit flag, which silences the warn.
+            mutation_log: Arc::new(crate::write::MemoryMutationLog::<S::Row>::new()),
+            mutation_log_explicit: false,
+            mutation_log_default_warned: Arc::new(std::sync::OnceLock::new()),
         }
     }
 }
@@ -339,15 +348,20 @@ pub struct SourceResource<S: Source, IdOf> {
     /// disabled and the server publishes only the bare stream
     /// topic. Phase 4 will auto-wire this from `#[query_resource]`.
     params_of: Option<Arc<SourceParamsFn<S::Row>>>,
-    /// Idempotency log for push mutations. Set via
-    /// [`Self::mutation_log`] (RFC 090 Phase 2b). When `None`,
-    /// `push` rejects with an `unsupported` error — the adapter
-    /// won't perform writes without an idempotency boundary because
-    /// a retry without dedup would run `Source::create`/`save`
-    /// twice on the same mutation_id, double-applying writes
-    /// under client retries. Apps that genuinely want non-
-    /// idempotent push should attach a no-op log explicitly.
-    mutation_log: Option<Arc<dyn MutationLog<S::Row>>>,
+    /// Idempotency log for push mutations. Defaults to
+    /// `MemoryMutationLog::new()` at construction time (T2.2);
+    /// `.mutation_log(...)` replaces it. Production apps SHOULD
+    /// attach a scoped + durable log — see the warning emitted on
+    /// first push when this is still the implicit default.
+    mutation_log: Arc<dyn MutationLog<S::Row>>,
+    /// Whether `.mutation_log(...)` was called explicitly. When
+    /// `false`, push emits a one-shot `tracing::warn!` so the
+    /// default-in-memory log is visible in dev logs.
+    mutation_log_explicit: bool,
+    /// One-shot latch for the dev warning. `Arc` so cloning the
+    /// resource doesn't re-fire; `OnceLock` for thread-safe
+    /// single-call semantics.
+    mutation_log_default_warned: Arc<std::sync::OnceLock<()>>,
 }
 
 impl<S, IdOf> SourceResource<S, IdOf>
@@ -414,7 +428,8 @@ where
     where
         Log: MutationLog<S::Row>,
     {
-        self.mutation_log = Some(Arc::new(log));
+        self.mutation_log = Arc::new(log);
+        self.mutation_log_explicit = true;
         self
     }
 }
@@ -582,6 +597,8 @@ where
         let id_of = self.id_of.clone();
         let version_of = self.version_of.clone();
         let mutation_log = self.mutation_log.clone();
+        let mutation_log_explicit = self.mutation_log_explicit;
+        let mutation_log_default_warned = self.mutation_log_default_warned.clone();
         let stream = self.stream.clone();
         let collection = self.collection.clone();
         Box::pin(async move {
@@ -589,14 +606,23 @@ where
                 return Err(SyncError::UnknownStream(request.stream.to_string()));
             }
 
-            let Some(mutation_log) = mutation_log else {
-                return Err(SyncError::unsupported(
-                    "Source push requires .mutation_log(...) on the builder. \
-                     For tests use MemoryMutationLog::new(); for production pair \
-                     with a scoped backend so idempotency aligns with your \
-                     tenant authorization domain.",
-                ));
-            };
+            // T2.2: emit a one-shot dev warning when the implicit
+            // in-memory mutation log is in use. Production deployments
+            // should attach a durable + scoped log via
+            // `.mutation_log(...)` so idempotency survives process
+            // restarts and aligns with the tenant boundary.
+            if !mutation_log_explicit {
+                mutation_log_default_warned.get_or_init(|| {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = %stream,
+                        "SourceResource using the default in-memory MutationLog. \
+                         Replays after process restart will be lost. Production: \
+                         call .mutation_log(MemoryMutationLog::with_scope_fn(...)) \
+                         on the builder, or attach a durable backend."
+                    );
+                });
+            }
 
             let mut response = pocopine_sync::SyncPushResponse::new(stream.clone());
             response.collection = Some(collection.clone());

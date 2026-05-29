@@ -1608,7 +1608,7 @@ where
 /// Spawn the driver on the host's `tokio::task::LocalSet`. Panics
 /// if no LocalSet is active — host tests must wrap their body in
 /// `LocalSet::new().run_until(async { ... }).await`. This is
-/// documented on [`QueryClient::with_config`](crate::QueryClient::with_config)
+/// documented on [`query_client_plugin`](crate::query_client_plugin)
 /// because the panic location otherwise points deep into tokio.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn_driver<F>(fut: F)

@@ -30,7 +30,8 @@ use pocopine_sync::{
     SyncResult, SyncRow, SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
 };
 use pocopine_sync_query::{
-    Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient, QueryClientConfig, RowChange,
+    query_client_plugin, Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient,
+    QueryClientConfig, RowChange,
 };
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};
@@ -210,7 +211,7 @@ async fn open_then_pull_populates_canonical_rows() {
                 }
             });
 
-            let client = QueryClient::with_config(test_config());
+            let client = query_client_plugin().config(test_config()).into_client();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle_ticks(3).await;
 
@@ -280,7 +281,7 @@ async fn schema_drift_resets_state_and_repopulates() {
                 }
             });
 
-            let client = Rc::new(QueryClient::with_config(test_config()));
+            let client = Rc::new(query_client_plugin().config(test_config()).into_client());
             // First observe → loads v1.
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle_ticks(3).await;
@@ -329,7 +330,7 @@ async fn cancellation_via_handle_drop_exits_driver() {
                 }
             });
 
-            let client = QueryClient::with_config(test_config());
+            let client = query_client_plugin().config(test_config()).into_client();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle_ticks(3).await;
             let initial_count = *pull_calls.borrow();
@@ -372,7 +373,7 @@ async fn offline_replay_redrives_apply_remote_with_same_mutation_id() {
             PENDING_MODE.with(|m| *m.borrow_mut() = PendingMode::Offline);
             PENDING_REMOTE_HITS.with(|h| h.borrow_mut().clear());
 
-            let client = QueryClient::with_config(test_config());
+            let client = query_client_plugin().config(test_config()).into_client();
             let ctx = StubContext::new();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle_ticks(2).await;

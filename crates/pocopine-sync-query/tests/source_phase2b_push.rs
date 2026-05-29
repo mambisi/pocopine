@@ -176,7 +176,14 @@ async fn push(
 }
 
 #[tokio::test]
-async fn push_without_mutation_log_rejects_with_clear_error() {
+async fn push_without_explicit_mutation_log_uses_in_memory_default() {
+    // T2.2: omitting `.mutation_log(...)` no longer hard-rejects
+    // push. The builder defaults to `MemoryMutationLog::new()` and
+    // the first push emits a one-shot `tracing::warn!` noting that
+    // the implicit log won't survive restart. We assert the
+    // behaviour (push succeeds, source ran) here; tracing-side
+    // assertion lives in the observability test suite where a
+    // collector is installed.
     let source = IssuesSource::default();
     let app = build_app(source.clone(), /* with_log */ false);
 
@@ -192,16 +199,35 @@ async fn push_without_mutation_log_rejects_with_clear_error() {
         ),
     )
     .await;
-    assert!(result.is_err(), "push must fail without mutation log");
-    let err = result.unwrap_err();
     assert!(
-        err.contains("mutation_log"),
-        "error should name the missing builder method, got: {err}"
+        result.is_ok(),
+        "push must succeed under the default in-memory log; got {result:?}"
     );
     assert_eq!(
         *source.create_calls.lock().unwrap(),
-        0,
-        "source.create must not run when push is unsupported"
+        1,
+        "source.create must run exactly once"
+    );
+
+    // Replay the same mutation id and confirm idempotency still
+    // holds via the default log — i.e. it's a real log, not a no-op.
+    let replay = push(
+        &app,
+        "m_first",
+        MutationPayload::create(
+            "i1".into(),
+            IssueDraft {
+                workspace_id: "W1".into(),
+                title: "Auth bug".into(),
+            },
+        ),
+    )
+    .await;
+    assert!(replay.is_ok(), "replay must succeed (short-circuit on prior)");
+    assert_eq!(
+        *source.create_calls.lock().unwrap(),
+        1,
+        "source.create must NOT run twice — default log dedupes"
     );
 }
 

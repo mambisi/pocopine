@@ -27,7 +27,8 @@ use pocopine_sync::{
     SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
 };
 use pocopine_sync_query::{
-    Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient, QueryClientConfig, RowChange,
+    query_client_plugin, Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient,
+    QueryClientConfig, RowChange,
 };
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};
@@ -240,7 +241,7 @@ async fn hydrate_populates_canonical_rows_then_pull_refreshes() {
                 .unwrap();
 
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
-            let client = QueryClient::with_config(test_config_with_store(store_handle));
+            let client = query_client_plugin().config(test_config_with_store(store_handle)).into_client();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
             // After settle, both cached + /pull rows should be visible.
@@ -317,7 +318,7 @@ async fn hydrate_shows_cached_rows_before_pull_lands() {
                 .unwrap();
 
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
-            let client = QueryClient::with_config(test_config_with_store(store_handle));
+            let client = query_client_plugin().config(test_config_with_store(store_handle)).into_client();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
 
             // After 1-2 ticks the hydrate phase has populated the
@@ -388,7 +389,7 @@ async fn schema_drift_wipes_persisted_state_and_repopulates() {
             assert_eq!(pre.application_schema_version, Some(1));
 
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
-            let client = QueryClient::with_config(test_config_with_store(store_handle));
+            let client = query_client_plugin().config(test_config_with_store(store_handle)).into_client();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle(5).await;
 
@@ -433,7 +434,7 @@ async fn pending_mutation_persists_and_replays_on_hydrate() {
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
 
             // ── Session 1 ────────────────────────────────────────
-            let client1 = QueryClient::with_config(test_config_with_store(store_handle.clone()));
+            let client1 = query_client_plugin().config(test_config_with_store(store_handle.clone())).into_client();
             client1.register_mutator::<FlakyCreate>();
             let view1 = client1.observe(
                 Issue::query()
@@ -487,7 +488,7 @@ async fn pending_mutation_persists_and_replays_on_hydrate() {
             FLAKY_MODE.with(|m| *m.borrow_mut() = FlakyMode::Online);
             let pre_hits = FLAKY_HITS.with(|h| h.borrow().len());
 
-            let client2 = QueryClient::with_config(test_config_with_store(store_handle.clone()));
+            let client2 = query_client_plugin().config(test_config_with_store(store_handle.clone())).into_client();
             client2.register_mutator::<FlakyCreate>();
             let view2 = client2.observe(
                 Issue::query()
@@ -557,7 +558,7 @@ async fn distinct_params_persist_to_distinct_compartments() {
 
             let store = Rc::new(MemoryLocalStore::new());
             let store_handle: Rc<dyn SyncLocalStore> = store.clone();
-            let client = QueryClient::with_config(test_config_with_store(store_handle));
+            let client = query_client_plugin().config(test_config_with_store(store_handle)).into_client();
 
             let _view_a = client.observe(
                 Issue::query()
@@ -645,7 +646,7 @@ async fn no_local_store_keeps_in_memory_only_behavior() {
             });
 
             // No `with_local_store` — backwards-compat path.
-            let client = QueryClient::new();
+            let client = query_client_plugin().into_client();
             let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
             settle(3).await;
             assert_eq!(view.rows().len(), 1);

@@ -56,7 +56,7 @@ impl QueryClientPlugin {
     /// Build the runtime client without installing. Useful for tests
     /// and host-side bench harnesses that don't run a full `App`.
     pub fn into_client(self) -> QueryClient {
-        QueryClient::with_config(self.config)
+        QueryClient::from_config(self.config)
     }
 }
 
