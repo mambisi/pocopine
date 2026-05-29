@@ -618,11 +618,26 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
     /// every matching `QueryView`'s pending overlay. Without this,
     /// the mutation only becomes visible after the server confirms
     /// it (next `/pull`).
+    ///
+    /// Replaces any default optimistic closure attached by the
+    /// macro-emitted `Issue::create / update` (which auto-wire
+    /// `Self::from((id, draft))` via `From<(Id, Draft)>`).
     pub fn optimistic<F>(mut self, build: F) -> Self
     where
         F: FnOnce(&MutationPayload<Id, Draft>) -> Row + 'static,
     {
         self.optimistic = Some(Box::new(build));
+        self
+    }
+
+    /// Force this mutation to push WITHOUT an optimistic overlay.
+    /// Clears any default optimistic closure the macro attached.
+    ///
+    /// Use when you want a server-confirmed-only write — the view
+    /// only updates after the next `/pull` (or live SSE wake-up)
+    /// brings the canonical row down.
+    pub fn no_optimistic(mut self) -> Self {
+        self.optimistic = None;
         self
     }
 
