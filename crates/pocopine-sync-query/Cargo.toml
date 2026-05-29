@@ -53,4 +53,9 @@ pocopine-live = { workspace = true }
 http = { workspace = true }
 http-body-util = "0.1"
 pocopine-server = { workspace = true }
+# Review-of-review #3: the concurrency test in `write.rs` uses
+# `#[tokio::test(flavor = "multi_thread")]` so reservations actually
+# race. Adding the feature only as a dev-dep avoids inflating the
+# runtime binary on hosts that don't need a multi-thread scheduler.
+tokio = { version = "1", features = ["rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }

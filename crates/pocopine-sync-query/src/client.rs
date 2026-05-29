@@ -659,6 +659,7 @@ impl QueryClient {
         Id: serde::Serialize + Clone + 'static,
         Draft: serde::Serialize + Clone + 'static,
     {
+        let wire_row_key = mutation.wire_row_key().cloned();
         let (payload, optimistic_closure) = mutation.into_parts();
         match optimistic_closure {
             Some(build) => {
@@ -672,25 +673,22 @@ impl QueryClient {
                 // build the wire envelope correctly: SourceResource::push
                 // requires the wire `op` to match the payload's
                 // `sync_op()` AND the wire `key` to match the
-                // payload's id (RFC 090 review #6). Without these,
-                // every typed delete (and any typed call without an
-                // optimistic) would be rejected by the server before
-                // the Source ever ran.
+                // payload's id. Review-of-review #2/#8: the macro
+                // pre-computes the wire key from `id.to_string()` at
+                // construction, so non-String ids (i64, Uuid, …) flow
+                // through correctly. Falling back to None for hand-
+                // built `TypedMutation`s without `with_wire_row_key`
+                // matches the server-side "missing key" rejection,
+                // surfacing the omission instead of silently shipping
+                // a mismatched mutation.
                 let payload_value = serde_json::to_value(&payload)
                     .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
-                let key_str = serde_json::to_value(payload.id())
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_string));
-                let row_key = match key_str {
-                    Some(s) => pocopine_sync::RowKey::new(s).ok(),
-                    None => None,
-                };
                 let mut wire = pocopine_sync::ClientMutation::new(
                     mutation_id,
                     payload.sync_op(),
                     payload_value,
                 );
-                wire.key = row_key;
+                wire.key = wire_row_key;
                 let request = pocopine_sync::SyncPushRequest::new(stream, [wire]);
                 pocopine_core::fetch::call::<
                     pocopine_sync::SyncPushRequest<Value>,
@@ -765,7 +763,21 @@ impl QueryClient {
             std::slice::from_ref(&change),
         );
 
-        // 2. Wire push.
+        // 2. Arm a rollback guard BEFORE the await. Review-of-review
+        // finding #10: the previous version had three separate
+        // `dequeue_pending_for_stream` calls along the error paths,
+        // each easy to forget when a new branch is added (and to
+        // skip if the future is dropped mid-await). The guard
+        // unconditionally rolls back on Drop; only the accepted-
+        // success path calls `disarm()`.
+        let guard: RollbackGuard<'_, Row> = RollbackGuard {
+            client: Some(self),
+            stream: stream.clone(),
+            mutation_id: mutation_id.clone(),
+            _row: std::marker::PhantomData,
+        };
+
+        // 3. Wire push.
         let request = pocopine_sync::SyncPushRequest::new(stream.clone(), [wire_mutation.clone()]);
         let result = pocopine_core::fetch::call::<
             pocopine_sync::SyncPushRequest<Value>,
@@ -782,10 +794,10 @@ impl QueryClient {
                 // payload, version mismatch, etc.). The live
                 // wakeup only fires for ACCEPTED mutations, so a
                 // rejected/conflicted push leaves the optimistic
-                // overlay alive indefinitely unless we roll it
-                // back here.
+                // overlay alive indefinitely unless the guard
+                // rolls it back.
                 let mutation_id_accepted = response.accepted.iter().any(|id| id == &mutation_id);
-                let mutation_id_rejected = response
+                let mutation_id_rejected_or_conflicted = response
                     .rejected
                     .iter()
                     .any(|r| r.mutation_id == mutation_id)
@@ -796,28 +808,24 @@ impl QueryClient {
                 if mutation_id_accepted {
                     // Success — overlay stays in place until the
                     // next /pull swaps it for canonical.
+                    guard.disarm();
                     Ok(())
-                } else if mutation_id_rejected {
-                    // Roll back so the UI doesn't show a failed
-                    // mutation.
-                    Self::dequeue_pending_for_stream::<Row>(&self.inner, &stream, &mutation_id);
+                } else if mutation_id_rejected_or_conflicted {
+                    // Guard rolls back on drop.
                     Err(pocopine_sync::SyncError::backend(
                         "server rejected the mutation; optimistic overlay rolled back",
                     ))
                 } else {
                     // The server didn't mention our mutation id at
-                    // all. Treat as a transport-level failure and
-                    // roll back defensively.
-                    Self::dequeue_pending_for_stream::<Row>(&self.inner, &stream, &mutation_id);
+                    // all. Treat as a transport-level failure;
+                    // guard rolls back defensively.
                     Err(pocopine_sync::SyncError::backend(
                         "server response did not include our mutation; rolled back",
                     ))
                 }
             }
             Err(err) => {
-                // Roll back the optimistic overlay so the UI
-                // doesn't show the failed mutation.
-                Self::dequeue_pending_for_stream::<Row>(&self.inner, &stream, &mutation_id);
+                // Guard rolls back on drop.
                 Err(pocopine_sync::SyncError::backend(format!(
                     "push transport failed: {err}"
                 )))

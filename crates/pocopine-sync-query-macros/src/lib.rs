@@ -680,9 +680,14 @@ fn expand_query_resource(
                 id: #id_ty,
                 draft: #draft_ty,
             ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+                let __wire_key = ::pocopine_sync_query::__private::pocopine_sync::RowKey::new(
+                    ::std::string::ToString::to_string(&id),
+                )
+                .ok();
                 ::pocopine_sync_query::TypedMutation::new(
                     ::pocopine_sync_query::MutationPayload::create(id, draft),
                 )
+                .with_wire_row_key(__wire_key)
             }
 
             /// RFC 090 Phase 4: typed `update` mutation. Pass an
@@ -695,12 +700,17 @@ fn expand_query_resource(
                     ::pocopine_sync_query::__private::pocopine_sync::RowVersion,
                 >,
             ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+                let __wire_key = ::pocopine_sync_query::__private::pocopine_sync::RowKey::new(
+                    ::std::string::ToString::to_string(&id),
+                )
+                .ok();
                 let mut payload =
                     ::pocopine_sync_query::write::UpdatePayload::new(id, draft);
                 payload.expected_version = expected_version;
                 ::pocopine_sync_query::TypedMutation::new(
                     ::pocopine_sync_query::MutationPayload::Update(payload),
                 )
+                .with_wire_row_key(__wire_key)
             }
 
             /// RFC 090 Phase 4: typed `delete` mutation. Pass an
@@ -711,11 +721,16 @@ fn expand_query_resource(
                     ::pocopine_sync_query::__private::pocopine_sync::RowVersion,
                 >,
             ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+                let __wire_key = ::pocopine_sync_query::__private::pocopine_sync::RowKey::new(
+                    ::std::string::ToString::to_string(&id),
+                )
+                .ok();
                 let mut payload = ::pocopine_sync_query::write::DeletePayload::new(id);
                 payload.expected_version = expected_version;
                 ::pocopine_sync_query::TypedMutation::new(
                     ::pocopine_sync_query::MutationPayload::Delete(payload),
                 )
+                .with_wire_row_key(__wire_key)
             }
         }
     } else {
