@@ -4,9 +4,9 @@
 //! compiler can reject `w-[red]` as a type error and `bg-surafce` as an
 //! unknown-token error — both with spans. Coverage is inventory-driven:
 //! the families and scales here are exactly what the `examples/`
-//! (file-browser first, RFC 092 D8) actually use. Tailwind's default
-//! colour palette and unused families are deliberately out of scope for
-//! Milestone 1 — an unknown class is a *diagnostic*, not a silent miss.
+//! actually use. Colours fall back to the built-in Tailwind palette
+//! ([`crate::palette`], M2) when no `@theme` token matches; an unknown
+//! class is still a *diagnostic*, not a silent miss.
 
 use crate::diagnostics::{suggest, Diagnostic, Span};
 use crate::emit::{escape_selector, Rule};
@@ -692,9 +692,14 @@ fn resolve_color_value(
         "current" => "currentColor".to_string(),
         "white" => "#ffffff".to_string(),
         "black" => "#000000".to_string(),
+        // User `@theme` tokens win (override); the built-in Tailwind
+        // palette is the fallback before erroring.
         _ => match tokens.var_for("color", name) {
             Some(var) => var,
-            None => return Err(unknown_token(base, "color", name, tokens)),
+            None => match crate::palette::lookup(name) {
+                Some(value) => value.to_string(),
+                None => return Err(unknown_token(base, "color", name, tokens)),
+            },
         },
     };
 
@@ -943,6 +948,25 @@ mod tests {
         assert!(css("bg-surface/95").contains(
             "background-color: color-mix(in oklab, var(--color-surface) 95%, transparent);"
         ));
+    }
+
+    #[test]
+    fn default_palette_colors() {
+        // Built-in Tailwind palette resolves without a @theme entry.
+        let slate = css("bg-slate-700");
+        assert!(slate.contains("background-color: oklch("), "{slate}");
+        assert!(css("text-red-500").contains("color: oklch("));
+        assert!(css("ring-sky-500").contains("--pp-ring-color: oklch("));
+        // Alpha modifier wraps the palette value too.
+        assert!(css("bg-slate-900/50").contains("color-mix(in oklab, oklch("));
+        // A @theme token of the same name overrides the palette.
+        let mut t = palette();
+        t.insert("color-red-500", "#ff0000");
+        assert!(run("text-red-500", &t)
+            .css
+            .contains("color: var(--color-red-500);"));
+        // Out-of-range shade is still an error.
+        assert!(run("bg-slate-1234", &palette()).has_errors());
     }
 
     #[test]

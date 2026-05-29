@@ -154,9 +154,9 @@ human catalog below is regenerated with `pocopine stylekit --docs`.
    `@source`.
 2. Add the `[package.metadata.pocopine.stylekit]` block.
 3. Run `pocopine build --stylekit` and fix the diagnostics — anything
-   outside the catalog (e.g. Tailwind's default `slate-*`/`rose-*`
-   palette, or unsupported families) is flagged. Add the colours to
-   `@theme`, or keep them in authored component CSS.
+   outside the catalog (unsupported families) is flagged. Tailwind's
+   default palette (`slate-*`, `rose-*`, …) is built in, so those keep
+   working; a `@theme` token of the same name overrides it.
 4. Point `index.html` at `pkg/stylekit.css`. Keep the Tailwind block to
    A/B compare during the experiment.
 
@@ -211,7 +211,7 @@ human catalog below is regenerated with `pocopine stylekit --docs`.
 
 | Utility | Value | Arbitrary | Example | Notes |
 |---------|-------|-----------|---------|-------|
-| `bg` | Color | yes | `bg-surface` | any --color-* token; transparent/white/black/current |
+| `bg` | Color | yes | `bg-surface` | any --color-* token, Tailwind palette (bg-slate-700), transparent/white/black/current |
 | `text` | Color | — | `text-ink-50` | color when not a size/align keyword |
 | `border` | Color | — | `border-line` | color when not a width/style keyword |
 | `ring` | Color | — | `ring-accent` | ring-{n} width, ring-{color} colour |
