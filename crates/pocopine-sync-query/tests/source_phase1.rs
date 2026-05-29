@@ -27,7 +27,7 @@ use pocopine_sync::{
     SyncStreamName, SYNC_PULL_PATH,
 };
 use pocopine_sync_query::source::{
-    query_from_pull_request, source as build_source, RemoveResult, Source, SourceFuture,
+    query_from_pull_request, source as build_source, DeleteResult, Source, SourceFuture,
     WriteResult,
 };
 use pocopine_sync_query::Query;
@@ -162,22 +162,22 @@ impl Source for IssuesSource {
         })
     }
 
-    fn save<'a>(
+    fn update<'a>(
         &'a self,
         _ctx: RequestContext,
         _id: Self::Id,
         _draft: Self::Draft,
-        _base_version: Option<pocopine_sync::RowVersion>,
+        _expected_version: Option<pocopine_sync::RowVersion>,
     ) -> SourceFuture<'a, SyncResult<WriteResult<Self::Row>>> {
         Box::pin(async move { Err(pocopine_sync::SyncError::unsupported("Phase 1 stub: save")) })
     }
 
-    fn remove<'a>(
+    fn delete<'a>(
         &'a self,
         _ctx: RequestContext,
         _id: Self::Id,
-        _base_version: Option<pocopine_sync::RowVersion>,
-    ) -> SourceFuture<'a, SyncResult<RemoveResult<Self::Row>>> {
+        _expected_version: Option<pocopine_sync::RowVersion>,
+    ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {
         Box::pin(async move {
             Err(pocopine_sync::SyncError::unsupported(
                 "Phase 1 stub: remove",
@@ -329,7 +329,7 @@ async fn version_extractor_populates_sync_row_version() {
                 // not meaningful semantically, just deterministic so
                 // the assertion below can predict the expected
                 // string.
-                .version(|r: &Issue| {
+                .version_field(|r: &Issue| {
                     Ok(Some(
                         RowVersion::new(r.title.len().to_string()).expect("valid version"),
                     ))

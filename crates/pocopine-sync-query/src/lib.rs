@@ -102,8 +102,8 @@ pub use source::{
 // the old `Crud*` names for back-compat.
 #[cfg(not(target_arch = "wasm32"))]
 pub use write::{
-    AcceptedMutation, Conflict, MemoryMutationLog, MemoryScopeFn, MutationLog, MutationReservation,
-    RemoveResult, WriteResult,
+    AcceptedMutation, Conflict, CreatePayload, DeletePayload, DeleteResult, MemoryMutationLog,
+    MemoryScopeFn, MutationLog, MutationPayload, MutationReservation, UpdatePayload, WriteResult,
 };
 
 // The macro lives in its own crate (proc-macros must), but downstream
