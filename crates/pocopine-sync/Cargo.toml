@@ -12,7 +12,7 @@ pocopine-live = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
 tracing = { workspace = true }
-uuid = { version = "1", features = ["v4", "js"] }
+uuid = { version = "1", features = ["v4", "v7", "js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-events = { workspace = true }

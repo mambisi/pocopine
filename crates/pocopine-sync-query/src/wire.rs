@@ -108,7 +108,7 @@ mod tests {
     fn issues_query() -> Query<()> {
         Query::builder(SyncStreamName::new("issues").unwrap())
             .raw_param("workspace_id", serde_json::json!("W1"))
-            .order_by("created_at", Order::Desc)
+            .order_by_raw("created_at", Order::Desc)
             .limit(50)
             .build()
     }

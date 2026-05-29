@@ -9,6 +9,7 @@
 //! exactly as they do for proxy-based scopes — they share the effect
 //! engine, just not the key type.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -16,9 +17,19 @@ use crate::reactive::{next_signal_id, track_signal, trigger_signal, SignalId};
 
 /// Read handle for a reactive cell. Clone freely; all clones see the same
 /// value and share the same id.
+///
+/// Optionally carries a **drop guard** — a type-erased payload that
+/// lives as long as any `Signal` clone exists, and drops with the
+/// last one. Used by bridges that wrap an external reactive source
+/// (e.g. `QueryView::into_signal()`) — the bridge stows the source
+/// handle + the on-update subscription token inside the guard so the
+/// subscription is automatically torn down when the last reader of
+/// the signal disappears. `signal()` constructs guard-less signals;
+/// attach one via [`Signal::with_drop_guard`].
 pub struct Signal<T> {
     id: SignalId,
     cell: Rc<RefCell<T>>,
+    drop_guard: Option<Rc<dyn Any>>,
 }
 
 impl<T> Clone for Signal<T> {
@@ -26,6 +37,7 @@ impl<T> Clone for Signal<T> {
         Signal {
             id: self.id,
             cell: self.cell.clone(),
+            drop_guard: self.drop_guard.clone(),
         }
     }
 }
@@ -71,6 +83,7 @@ pub fn signal<T: 'static>(initial: T) -> (Signal<T>, Setter<T>) {
         Signal {
             id,
             cell: cell.clone(),
+            drop_guard: None,
         },
         Setter { id, cell },
     )
@@ -103,6 +116,20 @@ impl<T: 'static> Signal<T> {
     /// integration tests. Not part of the public reactive surface.
     pub fn id(&self) -> SignalId {
         self.id
+    }
+
+    /// Attach a type-erased payload whose lifetime is bound to the
+    /// signal — it drops with the last `Signal` clone. Used by
+    /// bridges like `QueryView::into_signal()` to keep the external
+    /// source + its on-update subscription alive for exactly as long
+    /// as any reader of the signal.
+    ///
+    /// Calling this on a signal that already has a guard replaces
+    /// it; the previous guard drops immediately (if no other clone
+    /// is still holding it).
+    pub fn with_drop_guard<G: 'static>(mut self, guard: G) -> Self {
+        self.drop_guard = Some(Rc::new(guard));
+        self
     }
 }
 
@@ -197,6 +224,7 @@ impl<T: 'static> RwSignal<T> {
             Signal {
                 id: self.id,
                 cell: self.cell.clone(),
+                drop_guard: None,
             },
             Setter {
                 id: self.id,

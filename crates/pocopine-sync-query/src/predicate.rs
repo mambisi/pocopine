@@ -77,6 +77,16 @@ pub trait FieldContains: sealed::Sealed {
     const NAME: &'static str;
 }
 
+/// Field marker that can appear in `.order_by(field, Order::Desc)`.
+/// Auto-emitted for every `#[query_param]` field — sorting is
+/// orthogonal to the filter capability set (`Eq` / `Range` /
+/// `Contains` etc.), so any declared field is eligible. The wire
+/// key matches `FieldEq::NAME` byte-for-byte.
+pub trait FieldOrder: sealed::Sealed {
+    /// Wire param key for this field (same as `FieldEq::NAME`).
+    const NAME: &'static str;
+}
+
 /// Sealed-trait gate marker. Macro-generated field markers
 /// (`__Field_<name>`) impl this `unsafe trait` so they pass the seal
 /// on the public comparator traits above. **Do not impl this directly.**

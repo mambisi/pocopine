@@ -161,6 +161,23 @@ opaque_string_type!(
     "mutation id",
     "Client-generated mutation idempotency key."
 );
+
+impl MutationId {
+    /// Generate a UUIDv7-backed mutation id. The default constructor
+    /// used by `TypedMutation::push(&qc)` and any other framework
+    /// auto-id path.
+    ///
+    /// UUIDv7 is time-ordered (the leading 48 bits are an ms-resolution
+    /// Unix timestamp), so mutation logs and offline replay queues keep
+    /// their insertion order without an extra sort key. The string form
+    /// (`xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx`) is always 36 bytes —
+    /// well under `MutationId`'s opaque-string length cap — so the
+    /// `unwrap` below is infallible.
+    pub fn uuid() -> Self {
+        Self::new(uuid::Uuid::now_v7().to_string()).expect("UUIDv7 is always a valid MutationId")
+    }
+}
+
 opaque_string_type!(
     SyncDeviceId,
     "device id",

@@ -67,7 +67,7 @@ fn builder_constructs_typed_query() {
         .contains(field::title, "auth")
         .unwrap()
         .range(field::priority, 1u32..=10)
-        .order_by("priority", Order::Asc)
+        .order_by(field::priority, Order::Asc)
         .limit(50)
         .build();
 

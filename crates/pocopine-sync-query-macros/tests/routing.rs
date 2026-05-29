@@ -438,7 +438,7 @@ async fn rollback_notifies_observers() {
 fn builder_supports_order_and_limit() {
     let q = Issue::query()
         .eq(issues::field::workspace_id, "W1")
-        .order_by("status", Order::Asc)
+        .order_by(issues::field::status, Order::Asc)
         .limit(10)
         .build();
     assert!(q.order_by().is_some());
@@ -452,7 +452,7 @@ async fn rows_applied_order_by_and_limit() {
     let view = client.observe::<Issue>(
         Issue::query()
             .eq(issues::field::workspace_id, "W1")
-            .order_by("title", Order::Desc)
+            .order_by_raw("title", Order::Desc)
             .limit(2)
             .build(),
     );

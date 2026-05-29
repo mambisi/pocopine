@@ -76,6 +76,23 @@ impl<Row> WriteResult<Row> {
     pub fn stale(server_row: Option<Row>) -> Self {
         Self::Conflict(Conflict::stale(server_row))
     }
+
+    /// Convert to a standard `Result` for `?`-chaining. `Applied(row)`
+    /// becomes `Ok(row)`; `Conflict(c)` becomes `Err(c)`.
+    pub fn into_result(self) -> Result<Row, Conflict<Row>> {
+        match self {
+            Self::Applied(row) => Ok(row),
+            Self::Conflict(c) => Err(c),
+        }
+    }
+
+    /// Borrowing variant for matchers that don't want to consume self.
+    pub fn as_result(&self) -> Result<&Row, &Conflict<Row>> {
+        match self {
+            Self::Applied(row) => Ok(row),
+            Self::Conflict(c) => Err(c),
+        }
+    }
 }
 
 /// Outcome of an optimistic-concurrency `delete`.
@@ -96,6 +113,23 @@ impl<Row> DeleteResult<Row> {
 
     pub fn stale(server_row: Option<Row>) -> Self {
         Self::Conflict(Conflict::stale(server_row))
+    }
+
+    /// Convert to a standard `Result` for `?`-chaining. `Applied`
+    /// becomes `Ok(())`; `Conflict(c)` becomes `Err(c)`.
+    pub fn into_result(self) -> Result<(), Conflict<Row>> {
+        match self {
+            Self::Applied => Ok(()),
+            Self::Conflict(c) => Err(c),
+        }
+    }
+
+    /// Borrowing variant.
+    pub fn as_result(&self) -> Result<(), &Conflict<Row>> {
+        match self {
+            Self::Applied => Ok(()),
+            Self::Conflict(c) => Err(c),
+        }
     }
 }
 
@@ -528,10 +562,12 @@ pub struct TypedMutation<Row, Id, Draft> {
     /// time via `RowKey::new(id.to_string())`, so the no-optimistic
     /// push path can build a correctly-keyed wire envelope without
     /// going through `SourceId` (which is host-only — wasm can't
-    /// reach it). Review-of-review finding #2: a non-String `Id` like
-    /// `i64` or `Uuid` previously produced `wire.key = None`
-    /// silently; the server then rejected the mutation.
+    /// reach it).
     wire_row_key: Option<RowKey>,
+    /// Wire stream name. The macro fills this from `#[query_resource(
+    /// name = "...")]` so `TypedMutation::push(&qc)` can route without
+    /// the caller naming the stream again.
+    wire_stream: Option<pocopine_sync::SyncStreamName>,
 }
 
 impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
@@ -542,6 +578,7 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
             payload,
             optimistic: None,
             wire_row_key: None,
+            wire_stream: None,
         }
     }
 
@@ -559,6 +596,21 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
     /// Pre-computed wire row key, if attached.
     pub fn wire_row_key(&self) -> Option<&RowKey> {
         self.wire_row_key.as_ref()
+    }
+
+    /// Attach the wire stream name. Macro-emitted from the
+    /// `#[query_resource(name = "...")]` literal so
+    /// `TypedMutation::push(&qc)` can route without the caller naming
+    /// the stream again. Hand-built `TypedMutation`s either set this
+    /// or must call `QueryClient::push_typed` with an explicit stream.
+    pub fn with_wire_stream(mut self, stream: Option<pocopine_sync::SyncStreamName>) -> Self {
+        self.wire_stream = stream;
+        self
+    }
+
+    /// Pre-computed wire stream name, if attached.
+    pub fn wire_stream(&self) -> Option<&pocopine_sync::SyncStreamName> {
+        self.wire_stream.as_ref()
     }
 
     /// Attach an optimistic-row builder. The closure runs BEFORE
