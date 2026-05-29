@@ -133,7 +133,11 @@ impl<Row> Query<Row> {
     ///
     /// `pub(crate)` because this only makes sense at the
     /// trait-boundary translation layer; user code constructs
-    /// queries via the typed DSL.
+    /// queries via the typed DSL. Host-only because the only
+    /// caller (`SourceResource::pull`) is itself host-gated, and
+    /// wasm-side clippy would otherwise flag the method as
+    /// dead code under `-D warnings`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_limit(&mut self, limit: u32) {
         self.limit = Some(limit);
     }

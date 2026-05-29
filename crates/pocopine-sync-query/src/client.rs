@@ -691,12 +691,20 @@ impl QueryClient {
                 // path's response inspection so a server rejection
                 // surfaces as `Err(...)` instead of a silent
                 // "succeeded" with the write actually dropped.
-                if response.rejected.iter().any(|r| r.mutation_id == mutation_id) {
+                if response
+                    .rejected
+                    .iter()
+                    .any(|r| r.mutation_id == mutation_id)
+                {
                     return Err(pocopine_sync::SyncError::backend(
                         "server rejected the mutation",
                     ));
                 }
-                if response.conflicts.iter().any(|c| c.mutation_id == mutation_id) {
+                if response
+                    .conflicts
+                    .iter()
+                    .any(|c| c.mutation_id == mutation_id)
+                {
                     return Err(pocopine_sync::SyncError::backend(
                         "server reported a conflict for this mutation",
                     ));
@@ -1853,7 +1861,6 @@ fn collect_subscriptions_on_stream_inner<Row: 'static>(
         .filter_map(|(_, sub)| Rc::downcast::<QuerySubscription<Row>>(sub.clone().as_rc_any()).ok())
         .collect()
 }
-
 
 // (Routing engine downcasts via `collect_subscriptions_on_stream`,
 // which uses `Rc::downcast::<QuerySubscription<Row>>` via the
