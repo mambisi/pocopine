@@ -44,6 +44,10 @@ pub struct StylekitConfig {
     /// Directory scanned for `.poco` sources. Defaults to `src`.
     #[serde(default = "default_sk_src")]
     pub src: String,
+    /// Prepend the base reset (Preflight). Defaults to `true`; set
+    /// `preflight = false` for pages that bring their own reset.
+    #[serde(default = "default_sk_preflight")]
+    pub preflight: bool,
 }
 
 impl Default for StylekitConfig {
@@ -52,12 +56,17 @@ impl Default for StylekitConfig {
             input: default_sk_input(),
             output: default_sk_output(),
             src: default_sk_src(),
+            preflight: default_sk_preflight(),
         }
     }
 }
 
 fn default_sk_input() -> String {
     "app.css".into()
+}
+
+fn default_sk_preflight() -> bool {
+    true
 }
 
 fn default_sk_output() -> String {
