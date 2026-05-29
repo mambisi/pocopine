@@ -57,7 +57,10 @@ owns reads, and `.params_of` is the bridge that gives a CRUD-built
 source Query-grade live-wakeup precision. The canonical sync app
 uses both — see
 [`sync-crud-query-composition.md`](./sync-crud-query-composition.md)
-for the worked example.
+for the worked example, or
+[`sync-crud-query-tutorial.md`](./sync-crud-query-tutorial.md) for a
+step-by-step walkthrough that builds a multi-workspace issue tracker
+with SQLite + IndexedDB.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the

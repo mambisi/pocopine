@@ -220,6 +220,9 @@ filtered reads and want typed-Draft writes + idempotency. Steps:
 
 ## Related
 
+- [`sync-crud-query-tutorial.md`](./sync-crud-query-tutorial.md) —
+  full step-by-step build of a SQLite-backed multi-workspace issue
+  tracker using this pattern
 - [`sync.md`](./sync.md) — sync protocol, stream registration, live
   wakeup, server plugin
 - [`sync-crud.md`](./sync-crud.md) — CRUD design, `CrudSource` API,
