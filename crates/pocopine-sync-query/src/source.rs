@@ -56,66 +56,15 @@ impl SourceId for String {
     }
 }
 
-/// Outcome of an optimistic-concurrency `save`.
-///
-/// Mirrors `pocopine_sync_crud::CrudWriteResult` byte-for-byte —
-/// applications can switch the import path without touching the
-/// match arms. The two types stay structurally identical through
-/// Phase 5; Phase 6 deletes the CRUD copy.
-#[derive(Debug, Clone)]
-pub enum WriteResult<Row> {
-    /// The write applied. `row` is the canonical post-write state.
-    Applied(Row),
-    /// The base_version check failed. `Conflict` carries the
-    /// server-visible row (if any) so the framework can surface it
-    /// to the client for merge / overwrite / discard handling.
-    Conflict(Conflict<Row>),
-}
-
-impl<Row> WriteResult<Row> {
-    pub fn applied(row: Row) -> Self {
-        Self::Applied(row)
-    }
-
-    pub fn stale(server_row: Option<Row>) -> Self {
-        Self::Conflict(Conflict {
-            server_row,
-            reason: "base_version stale".to_string(),
-        })
-    }
-}
-
-/// Outcome of an optimistic-concurrency `remove`.
-#[derive(Debug, Clone)]
-pub enum RemoveResult<Row> {
-    Applied,
-    Conflict(Conflict<Row>),
-}
-
-impl<Row> RemoveResult<Row> {
-    pub fn applied() -> Self {
-        Self::Applied
-    }
-
-    pub fn stale(server_row: Option<Row>) -> Self {
-        Self::Conflict(Conflict {
-            server_row,
-            reason: "base_version stale".to_string(),
-        })
-    }
-}
-
-/// Server-visible state at the moment a conflict was detected.
-#[derive(Debug, Clone)]
-pub struct Conflict<Row> {
-    /// The row as the server sees it. `None` when the conflict
-    /// arises from a missing row (e.g. a stale save against a deleted
-    /// id).
-    pub server_row: Option<Row>,
-    /// Human-readable reason. The framework forwards this verbatim
-    /// to the client; sources should make it diagnostic.
-    pub reason: String,
-}
+// RFC 090 Phase 2a — `WriteResult`/`RemoveResult`/`Conflict` were
+// briefly defined here in Phase 1 because they appear in `Source`
+// method signatures. Phase 2a moved them to `crate::write` (their
+// long-term home alongside the mutation log + idempotency
+// infrastructure). The `pub use` here keeps the Phase 1 public
+// surface working — code that wrote
+// `use pocopine_sync_query::source::{WriteResult, Conflict, RemoveResult};`
+// keeps compiling.
+pub use crate::write::{Conflict, RemoveResult, WriteResult};
 
 /// Boxed async-trait future. Sources don't need to name this — the
 /// `#[async_trait]` macro generates the right wrappers automatically.

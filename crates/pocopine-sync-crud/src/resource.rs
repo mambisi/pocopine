@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use pocopine_auth::RequestContext;
 use pocopine_sync::{
@@ -416,63 +415,21 @@ where
     }
 }
 
-/// Accepted mutation entry stored by a [`CrudMutationLog`].
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CrudAcceptedMutation {
-    pub mutation_id: MutationId,
-    pub op: SyncOp,
-    pub key: Option<RowKey>,
-    pub payload: Value,
-}
-
-impl CrudAcceptedMutation {
-    pub fn new(mutation_id: MutationId, op: SyncOp, key: Option<RowKey>, payload: Value) -> Self {
-        Self {
-            mutation_id,
-            op,
-            key,
-            payload,
-        }
-    }
-
-    fn matches(&self, op: SyncOp, key: Option<&RowKey>, payload: &Value) -> bool {
-        self.op == op && self.key.as_ref() == key && self.payload == *payload
-    }
-}
-
-/// Result of reserving an accepted mutation id inside a transaction.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CrudMutationReservation {
-    /// The caller reserved this mutation id and should continue applying the
-    /// source write in the same transaction.
-    Reserved,
-    /// The mutation id already exists in the accepted log.
-    AlreadyAccepted(CrudAcceptedMutation),
-}
-
-/// Idempotency log for CRUD mutations.
-///
-/// Production implementations must scope lookups to the same authorization
-/// domain as the underlying source, for example `(tenant_id, mutation_id)`.
-/// The adapter intentionally does not return cached rows on dedupe hits; it
-/// only acknowledges exact replay of the same accepted mutation.
-#[async_trait::async_trait]
-pub trait CrudMutationLog<Row>: Send + Sync + 'static
-where
-    Row: Clone + Send + Sync + 'static,
-{
-    async fn accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        mutation_id: &MutationId,
-    ) -> SyncResult<Option<CrudAcceptedMutation>>;
-
-    async fn record_accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        accepted: CrudAcceptedMutation,
-    ) -> SyncResult<()>;
-}
+// RFC 090 Phase 2a — the idempotency-log surface
+// (CrudAcceptedMutation, CrudMutationReservation, CrudMutationLog,
+// MemoryCrudMutationLog, MemoryCrudScopeFn) moved to
+// `pocopine_sync_query::write`. The aliases below keep every
+// existing CRUD import working byte-for-byte through Phase 5; Phase
+// 6 deletes CRUD entirely.
+//
+// `TransactionalCrudMutationLog` stays defined here for now — it
+// references CRUD's transaction-binding contract which Phase 2b
+// will tackle once the sqlx adapter side has been audited.
+pub use pocopine_sync_query::write::{
+    AcceptedMutation as CrudAcceptedMutation, MemoryMutationLog as MemoryCrudMutationLog,
+    MemoryScopeFn as MemoryCrudScopeFn, MutationLog as CrudMutationLog,
+    MutationReservation as CrudMutationReservation,
+};
 
 /// Transaction-aware idempotency log for CRUD mutations.
 ///
@@ -495,106 +452,6 @@ where
         ctx: &RequestContext,
         accepted: CrudAcceptedMutation,
     ) -> SyncResult<CrudMutationReservation>;
-}
-
-/// Function used by `MemoryCrudMutationLog::with_scope_fn` to project an
-/// authorization scope (e.g. a tenant id) out of the per-request context.
-pub type MemoryCrudScopeFn =
-    Arc<dyn Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static>;
-
-/// Process-local mutation log for tests and single-process demos.
-///
-/// The default constructor uses one global scope — accepted mutations across
-/// every tenant share one keyspace. Multi-tenant resources should use
-/// [`MemoryCrudMutationLog::with_scope_fn`] to derive the authorization scope
-/// from the request context; this mirrors `SqlxCrudMutationLog`'s scoping
-/// model so the same boundary that protects production logs is what the tests
-/// exercise.
-#[derive(Clone)]
-pub struct MemoryCrudMutationLog<Row> {
-    accepted: Arc<Mutex<BTreeMap<(String, String), CrudAcceptedMutation>>>,
-    scope: MemoryCrudScopeFn,
-    _marker: std::marker::PhantomData<fn() -> Row>,
-}
-
-impl<Row> std::fmt::Debug for MemoryCrudMutationLog<Row> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MemoryCrudMutationLog")
-            .finish_non_exhaustive()
-    }
-}
-
-impl<Row> Default for MemoryCrudMutationLog<Row> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<Row> MemoryCrudMutationLog<Row> {
-    /// Build a single-scope memory log. Every accepted mutation lives in one
-    /// global keyspace; use [`with_scope_fn`](Self::with_scope_fn) for
-    /// multi-tenant tests.
-    pub fn new() -> Self {
-        Self {
-            accepted: Arc::new(Mutex::new(BTreeMap::new())),
-            scope: Arc::new(|_ctx| Ok(String::new())),
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    /// Build a memory log that derives its authorization scope from the
-    /// request context — the same shape as
-    /// [`SqlxCrudMutationLog::new`](https://docs.rs/pocopine-sync-sqlx).
-    ///
-    /// The scope function is invoked on every `accepted_mutation` lookup and
-    /// every `record_accepted_mutation`. Returning an error from the function
-    /// fails the log call (typically surfaced as `SyncError::Unauthorized`
-    /// from the request handler).
-    pub fn with_scope_fn<F>(scope: F) -> Self
-    where
-        F: Fn(&RequestContext) -> SyncResult<String> + Send + Sync + 'static,
-    {
-        Self {
-            accepted: Arc::new(Mutex::new(BTreeMap::new())),
-            scope: Arc::new(scope),
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<Row> CrudMutationLog<Row> for MemoryCrudMutationLog<Row>
-where
-    Row: Clone + Send + Sync + 'static,
-{
-    async fn accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        mutation_id: &MutationId,
-    ) -> SyncResult<Option<CrudAcceptedMutation>> {
-        let scope = (self.scope)(ctx)?;
-        let accepted = self
-            .accepted
-            .lock()
-            .map_err(|_| SyncError::backend("memory CRUD mutation log lock poisoned"))?;
-        Ok(accepted
-            .get(&(scope, mutation_id.as_str().to_string()))
-            .cloned())
-    }
-
-    async fn record_accepted_mutation(
-        &self,
-        ctx: &RequestContext,
-        accepted: CrudAcceptedMutation,
-    ) -> SyncResult<()> {
-        let scope = (self.scope)(ctx)?;
-        let mut entries = self
-            .accepted
-            .lock()
-            .map_err(|_| SyncError::backend("memory CRUD mutation log lock poisoned"))?;
-        entries.insert((scope, accepted.mutation_id.as_str().to_string()), accepted);
-        Ok(())
-    }
 }
 
 impl<S, IdOf, VersionOf, Log> SyncStreamSource for CrudResource<S, IdOf, VersionOf, Log>
@@ -1418,6 +1275,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
     use http::{HeaderMap, Method, Uri};

@@ -57,6 +57,13 @@ pub mod selector;
 pub mod source;
 pub mod state;
 pub mod wire;
+// RFC 090 Phase 2a — mutation-lifecycle types (MutationLog,
+// MutationPayload, AcceptedMutation, WriteResult, RemoveResult,
+// Conflict, etc.) live here long-term. CRUD re-exports them under
+// old `Crud*` names through Phase 5. Host-only — same reason as
+// `source`: the log trait threads `pocopine_auth::RequestContext`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod write;
 
 // Re-exports of the curated public API.
 pub use client::{QueryClient, QueryHandle, QuerySubscription, QueryView, UpdateToken};
@@ -82,9 +89,21 @@ pub use state::QueryState;
 // new direction. See `rfcs/rfc-090-merge-crud-into-query.md`.
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{
-    query_from_pull_request, source, Conflict, RemoveResult, Source, SourceFuture, SourceId,
-    SourceParamsFn, SourceResource, SourceResourceBuilder, SourceVersionFn, WriteResult,
-    DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT,
+    query_from_pull_request, source, Source, SourceFuture, SourceId, SourceParamsFn,
+    SourceResource, SourceResourceBuilder, SourceVersionFn, DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT,
+};
+
+// RFC 090 Phase 2a — mutation lifecycle types at the crate root so
+// users write `use pocopine_sync_query::{WriteResult, MutationLog,
+// MemoryMutationLog};` without thinking about the internal module
+// split. WriteResult/RemoveResult/Conflict were briefly in
+// `source.rs` (Phase 1); Phase 2a moves them to their long-term
+// home in `write.rs` and re-exports here. CRUD aliases these to
+// the old `Crud*` names for back-compat.
+#[cfg(not(target_arch = "wasm32"))]
+pub use write::{
+    AcceptedMutation, Conflict, MemoryMutationLog, MemoryScopeFn, MutationLog, MutationReservation,
+    RemoveResult, WriteResult,
 };
 
 // The macro lives in its own crate (proc-macros must), but downstream
