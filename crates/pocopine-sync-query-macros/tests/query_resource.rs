@@ -581,8 +581,8 @@ fn create_attaches_default_optimistic_from_from_impl() {
 }
 
 #[test]
-fn no_optimistic_clears_default() {
-    // `.no_optimistic()` clears the auto-default. The mutation still
+fn server_only_clears_default() {
+    // `.server_only()` clears the auto-default. The mutation still
     // pushes correctly; the view just won't update until /pull confirms.
     let m = Task::create(
         "t1".to_string(),
@@ -591,11 +591,11 @@ fn no_optimistic_clears_default() {
             title: "no-overlay".to_string(),
         },
     )
-    .no_optimistic();
+    .server_only();
     let (_payload, opt) = m.into_parts();
     assert!(
         opt.is_none(),
-        "no_optimistic must clear the default closure"
+        "server_only must clear the default closure"
     );
 }
 
