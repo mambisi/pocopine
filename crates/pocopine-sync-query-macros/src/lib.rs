@@ -695,7 +695,7 @@ fn expand_query_resource(
             /// server-controlled fields with defaults). Override the
             /// default by chaining `.optimistic(custom_closure)`
             /// before `.push(&qc)`; opt out entirely with
-            /// `.no_optimistic()`.
+            /// `.server_only()`.
             pub fn create(
                 id: #id_ty,
                 draft: #draft_ty,
@@ -729,7 +729,7 @@ fn expand_query_resource(
             /// optional `expected_version` for optimistic-concurrency
             /// (None = unconditional update). Override the optimistic
             /// closure with `.optimistic(...)` or opt out with
-            /// `.no_optimistic()`.
+            /// `.server_only()`.
             pub fn update(
                 id: #id_ty,
                 draft: #draft_ty,

@@ -630,13 +630,16 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
         self
     }
 
-    /// Force this mutation to push WITHOUT an optimistic overlay.
+    /// Make this mutation server-only — push the wire envelope and
+    /// wait for the server to confirm before the view updates.
     /// Clears any default optimistic closure the macro attached.
     ///
-    /// Use when you want a server-confirmed-only write — the view
-    /// only updates after the next `/pull` (or live SSE wake-up)
-    /// brings the canonical row down.
-    pub fn no_optimistic(mut self) -> Self {
+    /// The view only updates after the next `/pull` (or live SSE
+    /// wake-up) brings the canonical row down. Use when the optimistic
+    /// shape is hard to predict (server-assigned fields beyond `id` +
+    /// `version`) or when showing a brief flicker is better than
+    /// showing a rolled-back row.
+    pub fn server_only(mut self) -> Self {
         self.optimistic = None;
         self
     }
