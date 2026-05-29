@@ -29,7 +29,7 @@ use pocopine_sync::{
     SyncStreamName, SYNC_PUSH_PATH,
 };
 use pocopine_sync_query::source::{
-    source as build_source, DeleteResult, Source, SourceFuture, WriteResult,
+    source as build_source, DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
 };
 use pocopine_sync_query::write::{MemoryMutationLog, MutationPayload};
 use pocopine_sync_query::{Query, QueryClient, RowChange};
@@ -62,19 +62,27 @@ impl Source for IssuesSource {
     type Id = String;
     type Row = Issue;
     type Draft = IssueDraft;
+    type Context = ();
 
-    fn list<'a>(
+    fn extract_context<'a>(
         &'a self,
         _ctx: RequestContext,
+    ) -> SourceFuture<'a, SyncResult<Self::Context>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn list_stream<'a>(
+        &'a self,
+        _ctx: Self::Context,
         _query: &'a Query<Self::Row>,
-    ) -> SourceFuture<'a, SyncResult<Vec<Self::Row>>> {
-        let rows = self.rows.lock().unwrap().values().cloned().collect();
-        Box::pin(async move { Ok(rows) })
+    ) -> SourceStream<'a, Self::Row> {
+        let rows: Vec<Self::Row> = self.rows.lock().unwrap().values().cloned().collect();
+        Box::pin(futures::stream::iter(rows.into_iter().map(Ok)))
     }
 
     fn get<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         id: Self::Id,
     ) -> SourceFuture<'a, SyncResult<Option<Self::Row>>> {
         let row = self.rows.lock().unwrap().get(&id).cloned();
@@ -83,7 +91,7 @@ impl Source for IssuesSource {
 
     fn create<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         id: Self::Id,
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>> {
@@ -99,7 +107,7 @@ impl Source for IssuesSource {
 
     fn update<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         _id: Self::Id,
         _draft: Self::Draft,
         _expected_version: Option<RowVersion>,
@@ -109,7 +117,7 @@ impl Source for IssuesSource {
 
     fn delete<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         _id: Self::Id,
         _expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {

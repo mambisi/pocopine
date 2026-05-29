@@ -28,7 +28,7 @@ use pocopine_sync::{
 };
 use pocopine_sync_query::source::{
     query_from_pull_request, source as build_source, DeleteResult, Source, SourceFuture,
-    WriteResult,
+    SourceStream, WriteResult,
 };
 use pocopine_sync_query::Query;
 use serde::{Deserialize, Serialize};
@@ -96,12 +96,20 @@ impl Source for IssuesSource {
     type Id = String;
     type Row = Issue;
     type Draft = IssueDraft;
+    type Context = ();
 
-    fn list<'a>(
+    fn extract_context<'a>(
         &'a self,
         _ctx: RequestContext,
+    ) -> SourceFuture<'a, SyncResult<Self::Context>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn list_stream<'a>(
+        &'a self,
+        _ctx: (),
         query: &'a Query<Self::Row>,
-    ) -> SourceFuture<'a, SyncResult<Vec<Self::Row>>> {
+    ) -> SourceStream<'a, Self::Row> {
         // Record what the source saw — instrumentation for the
         // integration test, not part of the production pattern.
         self.observed
@@ -109,10 +117,6 @@ impl Source for IssuesSource {
             .unwrap()
             .push((query.params().clone(), query.limit()));
 
-        // The whole point of Phase 1: this filter runs HERE
-        // (= "in storage"), not after the wire round-trip. In a
-        // real SQLx source, the params drive a WHERE clause; here
-        // we Vec::filter. The shape is the same.
         let workspace_filter = query
             .params()
             .get("workspace_id")
@@ -121,23 +125,21 @@ impl Source for IssuesSource {
         let limit = query.limit().unwrap_or(u32::MAX) as usize;
 
         let rows = self.rows.lock().unwrap().clone();
-        Box::pin(async move {
-            let filtered = rows
-                .into_iter()
-                .filter(|r| {
-                    workspace_filter
-                        .as_deref()
-                        .is_none_or(|w| r.workspace_id == w)
-                })
-                .take(limit)
-                .collect();
-            Ok(filtered)
-        })
+        let filtered: Vec<Self::Row> = rows
+            .into_iter()
+            .filter(|r| {
+                workspace_filter
+                    .as_deref()
+                    .is_none_or(|w| r.workspace_id == w)
+            })
+            .take(limit)
+            .collect();
+        Box::pin(futures::stream::iter(filtered.into_iter().map(Ok)))
     }
 
     fn get<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         id: Self::Id,
     ) -> SourceFuture<'a, SyncResult<Option<Self::Row>>> {
         let rows = self.rows.lock().unwrap().clone();
@@ -146,7 +148,7 @@ impl Source for IssuesSource {
 
     fn create<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         id: Self::Id,
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>> {
@@ -164,7 +166,7 @@ impl Source for IssuesSource {
 
     fn update<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         _id: Self::Id,
         _draft: Self::Draft,
         _expected_version: Option<pocopine_sync::RowVersion>,
@@ -174,7 +176,7 @@ impl Source for IssuesSource {
 
     fn delete<'a>(
         &'a self,
-        _ctx: RequestContext,
+        _ctx: (),
         _id: Self::Id,
         _expected_version: Option<pocopine_sync::RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {

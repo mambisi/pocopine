@@ -77,6 +77,14 @@ pub use crate::write::{Conflict, DeleteResult, WriteResult};
 /// `#[async_trait]` macro generates the right wrappers automatically.
 pub type SourceFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
+/// Boxed stream returned by `Source::list_stream`. T3.2: replaces
+/// the eager `Vec<Row>` so backends can yield rows lazily and the
+/// adapter can short-circuit at `query.limit()` instead of waiting
+/// on the full snapshot.
+pub type SourceStream<'a, Row> = std::pin::Pin<
+    Box<dyn futures::stream::Stream<Item = SyncResult<Row>> + Send + 'a>,
+>;
+
 /// Type-erased projector from a canonical row into the RFC 088 §C
 /// `(stream, params_hash)` partition fields. Stored on
 /// [`SourceResource`]; attached via [`SourceResource::params_of`].
@@ -155,26 +163,56 @@ pub trait Source: Send + Sync + 'static {
     type Id: SourceId;
     type Row: Clone + Serialize + DeserializeOwned + Send + Sync + 'static;
     type Draft: Clone + Serialize + DeserializeOwned + Send + Sync + 'static;
+    /// Per-request authorization context. T3.1: the trait owns the
+    /// typed shape (`{ tenant_id, user_id, roles }`, etc.) so every
+    /// method takes a strongly-typed handle instead of unwrapping
+    /// fields from a raw `RequestContext` over and over. Sources
+    /// that just want the raw context set `type Context = RequestContext`
+    /// and return it unchanged from `extract_context`.
+    ///
+    /// `Clone` is required because a single push request can carry
+    /// many mutations; the adapter extracts once and clones into
+    /// each `create/update/delete` dispatch. Most realistic Context
+    /// types (typed tenant ids, user info enums) are cheap to clone.
+    type Context: Clone + Send + Sync + 'static;
 
-    /// Snapshot pull. The query is server-reconstructed from the
-    /// wire `SyncPullRequest`'s `params`, `order_by`, and `limit`
-    /// fields. Implementations SHOULD honor `query.params()` and
-    /// `query.limit()`; the default behavior is "ignore the query
-    /// shape and return up to `limit` rows", which preserves
-    /// `CrudSource::list(ctx, limit)` semantics for incremental
-    /// migration.
-    fn list<'a>(
+    /// Extract the typed `Self::Context` from the per-request
+    /// `RequestContext`. Called once per request entry inside the
+    /// `SourceResource` adapter, BEFORE any list/get/create/update/
+    /// delete dispatch. Reject unauthorized requests here by
+    /// returning `SyncError::auth(...)` — the wrapper short-circuits
+    /// without invoking the storage methods.
+    fn extract_context<'a>(
         &'a self,
         ctx: pocopine_auth::RequestContext,
+    ) -> SourceFuture<'a, SyncResult<Self::Context>>;
+
+    /// Snapshot pull as a row stream. The query is server-
+    /// reconstructed from the wire `SyncPullRequest`'s `params`,
+    /// `order_by`, and `limit` fields. Implementations SHOULD honor
+    /// `query.params()` and `query.limit()` — the adapter clamps the
+    /// limit before calling and short-circuits the stream when the
+    /// cap is reached, so a source that ignores the limit just wastes
+    /// I/O on rows the framework drops.
+    ///
+    /// T3.2: the streaming shape replaces the previous eager `Vec<Row>`
+    /// return so SQLx / IndexedDB / Firestore impls can yield rows
+    /// lazily (`sqlx::query.fetch(...)`) and the snapshot pull responds
+    /// in O(limit) memory instead of O(full table). Sources that
+    /// already have a `Vec<Row>` in hand wrap it with
+    /// `futures::stream::iter(vec.into_iter().map(Ok)).boxed()`.
+    fn list_stream<'a>(
+        &'a self,
+        ctx: Self::Context,
         query: &'a Query<Self::Row>,
-    ) -> SourceFuture<'a, SyncResult<Vec<Self::Row>>>;
+    ) -> SourceStream<'a, Self::Row>;
 
     /// Point lookup. Returns `None` for missing rows AND for rows the
     /// caller cannot see — the source decides whether to leak
     /// existence.
     fn get<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: Self::Context,
         id: Self::Id,
     ) -> SourceFuture<'a, SyncResult<Option<Self::Row>>>;
 
@@ -183,7 +221,7 @@ pub trait Source: Send + Sync + 'static {
     /// client-supplied fields.
     fn create<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: Self::Context,
         id: Self::Id,
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>>;
@@ -195,7 +233,7 @@ pub trait Source: Send + Sync + 'static {
     /// the versions differ.
     fn update<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: Self::Context,
         id: Self::Id,
         draft: Self::Draft,
         expected_version: Option<RowVersion>,
@@ -204,7 +242,7 @@ pub trait Source: Send + Sync + 'static {
     /// Delete an existing row. Same concurrency contract as `update`.
     fn delete<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: Self::Context,
         id: Self::Id,
         expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>>;
@@ -525,14 +563,43 @@ where
                 .unwrap_or(max_snapshot_rows as u32);
             query.set_limit(effective_limit);
 
-            let rows = source.list(ctx, &query).await?;
-            if rows.len() > max_snapshot_rows {
+            // T3.1: extract the typed Source::Context once per
+            // request; downstream calls operate on the strongly-
+            // typed value, not on the raw RequestContext.
+            let source_ctx = source.extract_context(ctx).await?;
+            // T3.2: stream-collect up to max_snapshot_rows. The
+            // adapter breaks out of the stream as soon as the cap
+            // is reached, so a source that yields lazily (sqlx
+            // `fetch`, IndexedDB cursor, etc.) only does I/O for
+            // the rows that actually ship. A source that materialises
+            // a `Vec<Row>` and wraps it in `futures::stream::iter`
+            // gets the same correctness behaviour with no streaming
+            // benefit, which is the right escape hatch.
+            let mut row_stream = source.list_stream(source_ctx, &query);
+            let mut rows: Vec<S::Row> = Vec::new();
+            let mut overshoot = false;
+            {
+                use futures::stream::StreamExt;
+                while let Some(row) = row_stream.next().await {
+                    let row = row?;
+                    if rows.len() >= max_snapshot_rows {
+                        overshoot = true;
+                        break;
+                    }
+                    rows.push(row);
+                }
+            }
+            // `row_stream` drops here — any backend resources held
+            // open for unread rows release cleanly.
+            drop(row_stream);
+            if overshoot {
                 return Err(SyncError::backend(format!(
-                    "Source returned {} rows, exceeding max snapshot row limit {} \
-                     (the adapter clamped the query's limit to {} before calling list — \
-                     this source impl is ignoring `query.limit()` entirely)",
-                    rows.len(),
+                    "Source yielded more than the max snapshot row limit ({}) for \
+                     stream `{}` — the adapter clamped the query's limit to {} \
+                     before calling list_stream; this source impl is ignoring \
+                     `query.limit()` entirely",
                     max_snapshot_rows,
+                    stream.as_str(),
                     effective_limit
                 )));
             }
@@ -623,6 +690,13 @@ where
                     );
                 });
             }
+
+            // T3.1: typed Source::Context extracted once for the
+            // whole batch. Reservation log still uses the raw
+            // RequestContext for scope projection — its scoping
+            // semantics belong to the idempotency boundary, not
+            // the source's authorization model.
+            let source_ctx = source.extract_context(ctx.clone()).await?;
 
             let mut response = pocopine_sync::SyncPushResponse::new(stream.clone());
             response.collection = Some(collection.clone());
@@ -732,7 +806,7 @@ where
                 // Dispatch to the source.
                 let outcome = apply_payload::<S>(
                     source.as_ref(),
-                    ctx.clone(),
+                    source_ctx.clone(),
                     mutation_id.clone(),
                     expected_key.clone(),
                     base_version,
@@ -826,7 +900,7 @@ enum SourceApplyOutcome<Row> {
 
 async fn apply_payload<S: Source>(
     source: &S,
-    ctx: pocopine_auth::RequestContext,
+    ctx: S::Context,
     mutation_id: pocopine_sync::MutationId,
     key: pocopine_sync::RowKey,
     base_version: Option<RowVersion>,
@@ -948,12 +1022,20 @@ mod tests {
         type Id = String;
         type Row = Issue;
         type Draft = IssueDraft;
+        type Context = ();
 
-        fn list<'a>(
+        fn extract_context<'a>(
             &'a self,
             _ctx: pocopine_auth::RequestContext,
+        ) -> SourceFuture<'a, SyncResult<Self::Context>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn list_stream<'a>(
+            &'a self,
+            _ctx: (),
             query: &'a Query<Self::Row>,
-        ) -> SourceFuture<'a, SyncResult<Vec<Self::Row>>> {
+        ) -> SourceStream<'a, Self::Row> {
             // The test below asserts the query reached us with the
             // expected wire params — proves the wire reconstruction
             // works end-to-end. We return rows tagged with whatever
@@ -965,17 +1047,16 @@ mod tests {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Box::pin(async move {
-                Ok(vec![Issue {
-                    id: "stub_1".into(),
-                    workspace_id: ws,
-                }])
-            })
+            let rows = vec![Issue {
+                id: "stub_1".into(),
+                workspace_id: ws,
+            }];
+            Box::pin(futures::stream::iter(rows.into_iter().map(Ok)))
         }
 
         fn get<'a>(
             &'a self,
-            _ctx: pocopine_auth::RequestContext,
+            _ctx: (),
             _id: Self::Id,
         ) -> SourceFuture<'a, SyncResult<Option<Self::Row>>> {
             Box::pin(async move { Ok(None) })
@@ -983,7 +1064,7 @@ mod tests {
 
         fn create<'a>(
             &'a self,
-            _ctx: pocopine_auth::RequestContext,
+            _ctx: (),
             _id: Self::Id,
             _draft: Self::Draft,
         ) -> SourceFuture<'a, SyncResult<Self::Row>> {
@@ -992,7 +1073,7 @@ mod tests {
 
         fn update<'a>(
             &'a self,
-            _ctx: pocopine_auth::RequestContext,
+            _ctx: (),
             _id: Self::Id,
             _draft: Self::Draft,
             _expected_version: Option<RowVersion>,
@@ -1002,7 +1083,7 @@ mod tests {
 
         fn delete<'a>(
             &'a self,
-            _ctx: pocopine_auth::RequestContext,
+            _ctx: (),
             _id: Self::Id,
             _expected_version: Option<RowVersion>,
         ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {
@@ -1065,7 +1146,17 @@ mod tests {
         let query: Query<Issue> = query_from_pull_request(&request);
 
         let ctx = test_ctx();
-        let rows = source.list(ctx, &query).await.expect("stub list");
+        let source_ctx = source.extract_context(ctx).await.expect("extract_context");
+        let rows: Vec<Issue> = {
+            use futures::stream::StreamExt;
+            source
+                .list_stream(source_ctx, &query)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<SyncResult<Vec<_>>>()
+                .expect("stub list_stream")
+        };
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].workspace_id, "W42");
     }
