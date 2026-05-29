@@ -2,20 +2,20 @@
 
 What you implement on the host so a sync resource works:
 
-```mermaid
-flowchart TD
-    Code["Source&lt;Row, Id, Draft&gt;<br/><i>your code: DB I/O</i>"]
-    Res["SourceResource&lt;S, IdOf&gt;<br/><i>framework wrapper</i>"]
-    VF[["version_field<br/><i>OCC, optional</i>"]]
-    PB[["partition_by<br/><i>live precision, optional</i>"]]
-    ML[["mutation_log<br/><i>idempotency, required</i>"]]
-    Endp["HTTP endpoints<br/>/sync/v1/pull, /sync/v1/push,<br/>live SSE per (stream, params_hash)"]
-
-    Code --> Res
-    Res -.-> VF
-    Res -.-> PB
-    Res --> ML
-    Res --> Endp
+```text
+   Source<Row, Id, Draft>           ← your code: DB I/O
+            │
+            ▼
+   SourceResource<S, IdOf>          ← framework wrapper
+            ├── version_field?      ← optimistic concurrency
+            ├── partition_by?       ← live wake-up precision
+            └── mutation_log        ← idempotency + atomicity
+            │
+            ▼
+   HTTP endpoints                   ← framework provides
+       /__pocopine/sync/v1/pull
+       /__pocopine/sync/v1/push
+       live SSE per (stream, params_hash)
 ```
 
 The tutorial in [`sync.md`](./sync.md) shows the full flow. This doc is
@@ -219,18 +219,20 @@ The `#[query_resource]`-emitted `row_to_params` extracts the
 accepted mutation, the framework hashes those params and publishes to
 the topic `(stream, params_hash)`:
 
-```mermaid
-flowchart LR
-    M["mutation accepted<br/>Issue { workspace_id: 'W1', … }"]
-    P["row_to_params<br/>StreamParams { workspace_id: 'W1' }"]
-    H["params_hash(W1) = 0xabc…"]
-    T["SSE topic<br/>(issues, 0xabc…)"]
-    W1["W1 subscribers<br/><b>wake</b>"]
-    W2["W2 subscribers<br/><i>stay silent</i>"]
-
-    M --> P --> H --> T
-    T --> W1
-    T -. no match .-> W2
+```text
+mutation accepted: Issue { workspace_id: "W1", … }
+        │
+        ▼
+row_to_params → StreamParams { workspace_id: "W1" }
+        │
+        ▼
+params_hash(W1) = 0xabc…
+        │
+        ▼
+SSE topic: (issues, 0xabc…)
+        │
+        ├──▶ W1 subscribers wake
+        └──✗ W2 subscribers stay silent
 ```
 
 If the resource has zero `required` fields (`HAS_PER_PARAMS_LIVE_ROUTING
