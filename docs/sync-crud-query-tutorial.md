@@ -449,14 +449,47 @@ the standard `self.plugin::<T>()` accessor.
 
 ## 6. A component that subscribes + pushes
 
-This is where CRUD and Query both show up at once.
+This is where CRUD and Query both show up at once. The component
+carries **two** pieces of sync state side by side:
+
+- `QueryView<Issue>` — the filtered, reactive **read** handle. This
+  is what the template renders.
+- `CollectionState<Issue>` — the **write-side bookkeeping** the
+  `SyncClient` needs: local mutation queue, pending overlay, cursor
+  for confirmation pulls. Doesn't drive the UI directly.
+
+```
+                         ┌─────────────────────────────┐
+                         │       IssueList             │
+                         │                             │
+   reads ◄── view.rows() │  view:    QueryView<Issue> ─┼──► /sync/v1/pull
+                         │                             │      filtered by
+                         │                             │      workspace_id
+                         │                             │
+   writes ── push ─────► │  writes:  CollectionState   ─┼──► /sync/v1/push
+                         │           <Issue>           │
+                         └─────────────────────────────┘
+                                  one canonical store on the wire;
+                                  two client-side handles onto it
+```
+
+Why two fields? `QueryView` and `CollectionState` are independent
+client-side caches today — `QueryView` subscribes through the query
+driver (one pull per `(stream, params)`), `CollectionState` carries
+the SyncClient's mutation queue. A future `#[resource]`-macro release
+will collapse the write side into the same Query subscription; until
+then the two coexist. The wire side is unified — both pull from one
+canonical row store on the server.
 
 ```rust
 // issues-browser/src/components/issue_list.rs
 use pocopine::prelude::*;
+use pocopine_sync::{ClientMutationDraft, CollectionState, SyncClient, SyncRow};
 use pocopine_sync_query::{QueryClient, QueryView};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
+
+use pocopine_sync_crud::CrudMutationPayload;
 
 use issues::{field, Issue, IssueDraft, Status, STREAM};
 
@@ -467,26 +500,54 @@ pub struct IssueList {
     draft_title: String,
     rows: Vec<Issue>,
     status: String,
+
+    /// Write-side bookkeeping for the SyncClient: local mutation
+    /// queue, pending overlay, cursor. Not rendered directly — the
+    /// UI reads come from `view`.
+    writes: CollectionState<Issue>,
+
+    /// Filtered reactive read handle. Holds the §C subscription
+    /// alive; drops on component teardown.
     #[serde(skip)]
     view: Option<Rc<QueryView<Issue>>>,
+    next_local_id: u64,
 }
 
 #[handlers]
 impl IssueList {
     pub fn on_mount(&mut self) {
-        // Hardcode workspace for the tutorial; in a real app you'd
-        // read this from the URL / auth context / app state.
+        // Hardcode the workspace for the tutorial; in a real app
+        // you'd read it from the URL / auth context / app state.
         self.workspace = "W1".to_string();
-        self.subscribe();
+        self.open_writes();
+        self.subscribe_reads();
     }
 
-    fn subscribe(&mut self) {
+    /// Wire up the write-side: SyncClient opens the stream against
+    /// our `writes` field, which gives us the local mutation queue
+    /// and the cursor used to confirm pushes.
+    fn open_writes(&mut self) {
+        let result = self
+            .plugin::<SyncClient>()
+            .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.writes)
+            .stream(STREAM)
+            .and_then(|collection| collection.open());
+        if let Err(err) = result {
+            self.status = format!("sync open failed: {err}");
+        }
+    }
+
+    /// Wire up the read-side: a typed Query subscribed to this
+    /// workspace, status ∈ {Open, InProgress}. The §C `partition_hash`
+    /// (from `#[query_resource]`'s `partition_for_topic`) subscribes
+    /// the SSE stream to `query:sync:stream:issues:<W1-hash>`.
+    fn subscribe_reads(&mut self) {
         let client = self.plugin::<Rc<QueryClient>>().clone();
 
         // The typed DSL. `field::workspace_id` is a zero-sized
-        // marker the macro emits; the `.eq()` call is compile-time
-        // checked against the field's declared type (String here).
-        // Drop the workspace_id filter and the macro-generated
+        // marker the macro emits; `.eq()` is compile-time checked
+        // against the field's declared type (String here). Drop
+        // the workspace_id filter and the macro-generated
         // `matches()` predicate rejects every row — required-field
         // gating prevents accidental cross-tenant leaks.
         let query = Issue::query()
@@ -496,16 +557,14 @@ impl IssueList {
             .build();
 
         // .observe() returns a `QueryView<Row>` — the reactive
-        // handle. Drop it and the subscription unregisters; hold
-        // it on `self` to keep it alive.
+        // handle. Drop it and the subscription unregisters; we
+        // park it on `self.view` to keep it alive.
         let view = Rc::new(client.observe(query));
-
-        // Initial paint.
         self.rows = view.rows();
 
-        // Wire the listener. Fires whenever the canonical or pending
-        // overlays change. `view.rows()` returns the merged result
-        // (server-confirmed + optimistic).
+        // Re-render whenever canonical or pending overlays change.
+        // `view.rows()` returns the merged result (server-confirmed
+        // + optimistic) every time it's called.
         let handle = pocopine::this::<Self>();
         let view_clone = view.clone();
         view.on_update(move || {
@@ -515,56 +574,98 @@ impl IssueList {
         });
 
         self.view = Some(view);
-        self.status = format!("subscribed to {} (workspace={})", STREAM, self.workspace);
+        self.status = format!("subscribed to {STREAM} (workspace={})", self.workspace);
     }
 
     pub fn on_create_clicked(&mut self) {
-        // CRUD push. `ClientMutationDraft::upsert` is the wire-level
-        // builder; a higher-level typed API will land with the
-        // `#[resource]` proc-macro (planned).
+        let title = std::mem::take(&mut self.draft_title);
+        if title.trim().is_empty() {
+            self.status = "title required".to_string();
+            return;
+        }
+
+        self.next_local_id = self.next_local_id.saturating_add(1);
+        let id = format!("issue_local_{}", self.next_local_id);
         let draft = IssueDraft {
             workspace_id: self.workspace.clone(),
             status: Status::Open,
-            title: std::mem::take(&mut self.draft_title),
+            title: title.clone(),
             body: String::new(),
         };
-        let id = format!("issue_{}", uuid::Uuid::new_v4());
 
-        let payload = pocopine_sync_crud::CrudMutationPayload::create(id.clone(), draft);
-        let mutation = payload
-            .into_sync_draft()
-            .expect("draft serializes")
-            .key(id.clone())
-            .expect("row key");
+        // Two pieces of mutation state to construct:
+        //
+        //   1. The wire envelope — `CrudMutationPayload::create(id,
+        //      draft)`. The server's `CrudResource` decodes this
+        //      shape and dispatches to `IssuesSource::create`. Note
+        //      the payload is generic over `<Id, Draft>`, NOT `Row`
+        //      — the row id and the editable fields, not the full
+        //      stored row.
+        //
+        //   2. The optimistic row — a placeholder `Issue` that
+        //      paints immediately while the server confirms. The
+        //      version starts at 0; the server's `create` sets it
+        //      to 1 and the canonical row replaces this one when
+        //      the response arrives.
+        let result = (|| -> pocopine_sync::SyncResult<()> {
+            let mutation = CrudMutationPayload::create(id.clone(), draft)
+                .into_sync_draft()?
+                .key(id.clone())?;
+            let optimistic = SyncRow::new(
+                id.clone(),
+                Issue {
+                    id: id.clone(),
+                    workspace_id: self.workspace.clone(),
+                    status: Status::Open,
+                    title,
+                    body: String::new(),
+                    version: 0,
+                },
+            )?;
 
-        // Hand off to the sync client. It writes to the local
-        // store, optimistically applies to the pending overlay,
-        // and POSTs to /sync/v1/push in the background. When the
-        // server's response arrives, the row swaps from pending
-        // to canonical and the live wakeup brings any other
-        // tabs in the same workspace up to date.
-        self.plugin::<pocopine_sync::SyncClient>()
-            .collection(pocopine::this::<Self>(), |s: &mut Self| {
-                // CRUD writes don't currently route through a
-                // typed CollectionState on Query-only views — the
-                // local mutation queue is on the sync client side.
-                // This callback returns the rendered view's
-                // backing state for optimistic overlay purposes.
-                // For pure-Query apps with no per-resource state,
-                // the upcoming #[resource] macro will hide this.
-                unreachable!("placeholder — see note below");
-            });
+            // Hand off to SyncClient.
+            //
+            //   1. The mutation lands in `writes`'s local queue
+            //      (durable across reloads via IndexedDbLocalStore).
+            //   2. The optimistic Issue lands in the pending overlay.
+            //      The Query routing engine evaluates the macro-
+            //      generated `matches()` predicate against the row
+            //      — `workspace_id == "W1"` AND status ∈ {Open,
+            //      InProgress} both hold, so `view.rows()` returns
+            //      the new issue and the listener fires.
+            //   3. POST /sync/v1/push runs in the background. The
+            //      response either confirms (row moves from pending
+            //      → canonical) or conflicts (handled by your
+            //      `CrudSource::save`'s base_version logic).
+            //   4. The server publishes to
+            //      `query:sync:stream:issues:<W1-hash>`. Other tabs
+            //      subscribed to this workspace wake and pull;
+            //      tabs in W2 stay silent.
+            //
+            // `push_with_generated_id` has two generics: M (the
+            // wire payload, here `CrudMutationPayload<String,
+            // IssueDraft>`) and T (the optimistic row type, here
+            // `Issue` matching `CollectionState<Issue>`).
+            self.plugin::<SyncClient>()
+                .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.writes)
+                .stream(STREAM)
+                .and_then(|c| c.push_with_generated_id(mutation, Some(optimistic)))
+        })();
+
+        if let Err(err) = result {
+            self.status = format!("push failed: {err}");
+        }
     }
 }
 ```
 
-> The "placeholder" at the end is the one rough edge today. The
-> CRUD typed client API (`Resource<C>::create(...)`) ships with the
-> `#[resource]` proc-macro that's currently in design. Until then,
-> the pattern is "use `ClientMutationDraft::upsert` directly and
-> hand off to `SyncClient::collection(...).push(draft)`". See
-> [`examples/sync`](../examples/sync/) for the full hand-wired
-> shape.
+The two fields don't double-store rows. `CollectionState<Issue>`
+holds the local mutation queue + pending overlay for writes;
+`QueryView<Issue>` holds the filtered subscription state for reads.
+Both pull canonical rows from the same server-side store. The
+"two handles, one truth" shape is the honest version of CRUD+Query
+composition today — once the `#[resource]` macro lands, the write
+field collapses into the same `QueryView` and you'll only see one.
 
 The component file (`issue_list.poco`) is conventional Pocopine:
 
