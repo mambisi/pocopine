@@ -576,14 +576,28 @@ where
             // gets the same correctness behaviour with no streaming
             // benefit, which is the right escape hatch.
             let mut row_stream = source.list_stream(source_ctx, &query);
-            let mut rows: Vec<S::Row> = Vec::new();
-            let mut overshoot = false;
+            // Codex review P2: the cap is `effective_limit`, NOT
+            // `max_snapshot_rows`. A `.limit(10)` pull must not
+            // ship more than 10 rows even if the source ignores
+            // `query.limit()`. The previous loop only kicked in
+            // at `max_snapshot_rows` (e.g. 1000), so a buggy
+            // source could let a `.limit(10)` request return up
+            // to 1000 rows in violation of the client contract.
+            let cap = effective_limit as usize;
+            let mut rows: Vec<S::Row> = Vec::with_capacity(cap.min(1024));
+            let mut source_overyielded = false;
             {
                 use futures::stream::StreamExt;
                 while let Some(row) = row_stream.next().await {
                     let row = row?;
-                    if rows.len() >= max_snapshot_rows {
-                        overshoot = true;
+                    if rows.len() >= cap {
+                        // We have the requested limit. Source's
+                        // extra yields are wasted I/O — break,
+                        // drop the stream, log it. Soft warning
+                        // (not a hard error) since streaming
+                        // already prevents the memory blow-up the
+                        // old hard limit was guarding against.
+                        source_overyielded = true;
                         break;
                     }
                     rows.push(row);
@@ -592,16 +606,15 @@ where
             // `row_stream` drops here — any backend resources held
             // open for unread rows release cleanly.
             drop(row_stream);
-            if overshoot {
-                return Err(SyncError::backend(format!(
-                    "Source yielded more than the max snapshot row limit ({}) for \
-                     stream `{}` — the adapter clamped the query's limit to {} \
-                     before calling list_stream; this source impl is ignoring \
-                     `query.limit()` entirely",
-                    max_snapshot_rows,
-                    stream.as_str(),
-                    effective_limit
-                )));
+            if source_overyielded {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = %stream,
+                    limit = cap,
+                    "Source yielded more rows than `query.limit()` (cap = {cap}) for \
+                     stream `{stream}` — extra rows dropped. Tighten the source's \
+                     `list_stream` to honor `query.limit()` exactly to avoid wasted I/O.",
+                );
             }
 
             let mut sync_rows: Vec<SyncRow<Value>> = Vec::with_capacity(rows.len());
