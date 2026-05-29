@@ -557,12 +557,21 @@ fn try_ring(base: &str, tokens: &ThemeTokens) -> Resolved {
 }
 
 /// `text-{color}` and named font sizes (align handled statically).
+///
+/// Named sizes are token-driven like the spacing base (RFC 092 D4): the
+/// utility references the user-definable `--text-{size}` /
+/// `--text-{size}--line-height` theme tokens, with the default scale as
+/// the literal fallback. This matches Tailwind's mechanism and lets a
+/// `@theme` rescale typography without touching the registry.
 fn try_text(base: &str, tokens: &ThemeTokens) -> Resolved {
     let name = base.strip_prefix("text-")?;
     if let Some((fs, lh)) = font_size(name) {
         return Some(Ok(vec![
-            ("font-size".into(), fs.into()),
-            ("line-height".into(), lh.into()),
+            ("font-size".into(), format!("var(--text-{name}, {fs})")),
+            (
+                "line-height".into(),
+                format!("var(--text-{name}--line-height, {lh})"),
+            ),
         ]));
     }
     Some(resolve_color_value("color", name, tokens, base))
@@ -1031,6 +1040,19 @@ mod tests {
         assert!(css("z-10").contains("z-index: 10;"));
         assert!(css("duration-200").contains("transition-duration: 200ms;"));
         assert!(css("scale-95").contains("transform: scale(0.95);"));
+    }
+
+    #[test]
+    fn named_text_size_is_token_driven() {
+        // Like the spacing base, named sizes reference user-definable
+        // theme tokens with the default scale as the fallback.
+        let c = css("text-sm");
+        assert!(c.contains("font-size: var(--text-sm, 0.875rem);"), "{c}");
+        assert!(
+            c.contains("line-height: var(--text-sm--line-height, 1.25rem);"),
+            "{c}"
+        );
+        assert!(css("text-2xl").contains("font-size: var(--text-2xl, 1.5rem);"));
     }
 
     #[test]
