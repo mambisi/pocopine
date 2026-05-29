@@ -593,10 +593,7 @@ fn server_only_clears_default() {
     )
     .server_only();
     let (_payload, opt) = m.into_parts();
-    assert!(
-        opt.is_none(),
-        "server_only must clear the default closure"
-    );
+    assert!(opt.is_none(), "server_only must clear the default closure");
 }
 
 #[tokio::test]
