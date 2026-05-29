@@ -201,11 +201,16 @@ RFC 088 §C (per-`(stream, params_hash)` topics) is also broker-agnostic — it 
 
 Full picture, broker comparison, and topic-cardinality scaling notes in [`docs/live.md` §8 "Production Backends"](../../docs/live.md#8-production-backends).
 
-## Where did `pocopine-sync-crud` go?
+## Docs
 
-RFC 090 (merged) folded `pocopine-sync-crud` into this crate. The `Source`
-trait + `SourceResource` adapter cover both former CRUD and former Query
-use cases, with typed writes via the `#[query_resource(draft = ...)]`-
-emitted `Issue::create/update/delete(...).optimistic(...).push(...)` API.
-See [`docs/sync-crud-to-query-migration.md`](../../docs/sync-crud-to-query-migration.md)
-for the rename table and porting recipe.
+- [`docs/sync.md`](../../docs/sync.md) — end-to-end tutorial.
+- [`docs/sync-server.md`](../../docs/sync-server.md) — `Source` /
+  `SourceResource` / `MutationLog` contract reference.
+- [`docs/sync-client.md`](../../docs/sync-client.md) — `QueryClient` /
+  `Query<Row>` DSL / typed writes reference.
+
+RFC 090 (merged) folded `pocopine-sync-crud` into this crate. The
+`Source` trait + `SourceResource` adapter cover both former CRUD and
+former Query use cases, with typed writes via the
+`#[query_resource(draft = ...)]`-emitted
+`Issue::create/update/delete(...).optimistic(...).push_typed(...)` API.
