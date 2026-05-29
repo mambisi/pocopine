@@ -382,32 +382,21 @@ impl IssueComposer {
 ### What `.optimistic(...)` does
 
 ```mermaid
-sequenceDiagram
-    participant App as caller
-    participant Client as QueryClient
-    participant View as QueryView
-    participant Server as SourceResource
+flowchart TD
+    Start([".push_typed(...)"]) --> Build["build(&payload) → Issue"]
+    Build --> Route["route through QueryView<br/>pending overlay"]
+    Route --> UIa(["on_update fires<br/>UI updates instantly"])
+    Route --> Wire["POST /sync/v1/push"]
+    Wire --> Server["take_processing_payload<br/>reserve_mutation<br/>Source::create"]
+    Server --> Branch{outcome}
 
-    App->>Client: Issue::create(id, draft).optimistic(build).push_typed(...)
-    Client->>Client: build(&payload) → Issue
-    Client->>View: route through pending overlay
-    View-->>App: on_update fires (instant)
+    Branch -->|accepted| Stay["overlay stays<br/>next /pull replaces with canonical"]
 
-    Client->>Server: POST /sync/v1/push
-    Server->>Server: take_processing_payload<br/>reserve_mutation<br/>Source::create
+    Branch -->|rejected / conflict| Roll1["RollbackGuard removes overlay"]
+    Roll1 --> Err1(["on_update fires<br/>caller gets SyncError"])
 
-    alt Accepted
-        Server-->>Client: { accepted: [...] }
-        Note over View: overlay stays;<br/>next /pull replaces with canonical
-    else Rejected / conflict
-        Server-->>Client: { rejected: [...] }
-        Client->>View: RollbackGuard removes overlay
-        View-->>App: on_update fires; caller gets SyncError
-    else Transport error
-        Server--xClient: network error
-        Client->>View: RollbackGuard removes overlay
-        View-->>App: on_update fires; caller gets SyncError
-    end
+    Branch -->|transport error| Roll2["RollbackGuard removes overlay"]
+    Roll2 --> Err2(["on_update fires<br/>caller gets SyncError"])
 ```
 
 Without `.optimistic(...)`, `push_typed` skips the local routing engine
