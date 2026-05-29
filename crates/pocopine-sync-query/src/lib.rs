@@ -103,7 +103,8 @@ pub use source::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use write::{
     AcceptedMutation, Conflict, CreatePayload, DeletePayload, DeleteResult, MemoryMutationLog,
-    MemoryScopeFn, MutationLog, MutationPayload, MutationReservation, UpdatePayload, WriteResult,
+    MemoryScopeFn, MutationLog, MutationPayload, MutationReservation, OptimisticRowFn,
+    TypedMutation, UpdatePayload, WriteResult,
 };
 
 // The macro lives in its own crate (proc-macros must), but downstream

@@ -86,12 +86,20 @@ struct ParamDef {
 struct QueryResourceArgs {
     name: LitStr,
     schema_version: u32,
+    /// RFC 090 Phase 4: explicit Id type for the macro-emitted
+    /// typed write methods. Defaults to `String` if not specified.
+    id_type: Option<syn::Type>,
+    /// RFC 090 Phase 4: explicit Draft type. Defaults to the
+    /// `<RowName>Draft` convention.
+    draft_type: Option<syn::Type>,
 }
 
 impl Parse for QueryResourceArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut name = None;
         let mut schema_version: Option<u32> = None;
+        let mut id_type: Option<syn::Type> = None;
+        let mut draft_type: Option<syn::Type> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -102,6 +110,18 @@ impl Parse for QueryResourceArgs {
                 }
                 input.parse::<Token![=]>()?;
                 name = Some(input.parse()?);
+            } else if key == "id" {
+                if id_type.is_some() {
+                    return Err(syn::Error::new(key.span(), "duplicate `id`"));
+                }
+                input.parse::<Token![=]>()?;
+                id_type = Some(input.parse()?);
+            } else if key == "draft" {
+                if draft_type.is_some() {
+                    return Err(syn::Error::new(key.span(), "duplicate `draft`"));
+                }
+                input.parse::<Token![=]>()?;
+                draft_type = Some(input.parse()?);
             } else if key == "schema_version" {
                 if schema_version.is_some() {
                     return Err(syn::Error::new(key.span(), "duplicate `schema_version`"));
@@ -146,7 +166,8 @@ impl Parse for QueryResourceArgs {
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name = \"...\"` or `schema_version = N`",
+                    "expected one of: `name = \"...\"`, `schema_version = N`, \
+                     `id = Type`, `draft = Type`",
                 ));
             }
 
@@ -164,6 +185,8 @@ impl Parse for QueryResourceArgs {
         Ok(Self {
             name,
             schema_version,
+            id_type,
+            draft_type,
         })
     }
 }
@@ -605,6 +628,17 @@ fn expand_query_resource(
     let name_lit = args.name;
     let schema_version = args.schema_version;
 
+    // RFC 090 Phase 4: typed write methods are opt-in via an
+    // explicit `draft = MyDraft` attribute. Without it, the macro
+    // doesn't emit `create`/`update`/`delete` — users who only
+    // want filtered reads aren't forced to declare a Draft type.
+    // `Id` defaults to `String` when writes are enabled.
+    let writes_enabled = args.draft_type.is_some();
+    let id_ty: syn::Type = args
+        .id_type
+        .unwrap_or_else(|| syn::parse_quote! { ::std::string::String });
+    let draft_ty: syn::Type = args.draft_type.unwrap_or_else(|| syn::parse_quote! { () });
+
     let params = extract_field_params(&item)?;
     strip_query_param_attrs(&mut item);
 
@@ -629,6 +663,64 @@ fn expand_query_resource(
     let field_markers = generate_field_markers(&params);
     let matches_body = generate_matches_body(&params);
     let row_to_params_body = generate_row_to_params_body(&params);
+
+    // RFC 090 Phase 4: emit typed write methods only when the
+    // user opted in via `draft = MyDraft`. Without it, `#typed_writes`
+    // is empty and `impl Row { ... }` carries only `query()`.
+    let typed_writes = if writes_enabled {
+        quote! {
+            /// RFC 090 Phase 4: typed `create` mutation. Returns a
+            /// [`pocopine_sync_query::TypedMutation`] builder you can
+            /// optionally annotate with `.optimistic(closure)` and
+            /// then `.push(&client, mutation_id, push_url)`.
+            ///
+            /// `Id` defaults to `String` (override with
+            /// `#[query_resource(..., id = MyId)]`).
+            pub fn create(
+                id: #id_ty,
+                draft: #draft_ty,
+            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+                ::pocopine_sync_query::TypedMutation::new(
+                    ::pocopine_sync_query::MutationPayload::create(id, draft),
+                )
+            }
+
+            /// RFC 090 Phase 4: typed `update` mutation. Pass an
+            /// optional `expected_version` for optimistic-concurrency
+            /// (None = unconditional update).
+            pub fn update(
+                id: #id_ty,
+                draft: #draft_ty,
+                expected_version: ::std::option::Option<
+                    ::pocopine_sync_query::__private::pocopine_sync::RowVersion,
+                >,
+            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+                let mut payload =
+                    ::pocopine_sync_query::write::UpdatePayload::new(id, draft);
+                payload.expected_version = expected_version;
+                ::pocopine_sync_query::TypedMutation::new(
+                    ::pocopine_sync_query::MutationPayload::Update(payload),
+                )
+            }
+
+            /// RFC 090 Phase 4: typed `delete` mutation. Pass an
+            /// optional `expected_version` for optimistic-concurrency.
+            pub fn delete(
+                id: #id_ty,
+                expected_version: ::std::option::Option<
+                    ::pocopine_sync_query::__private::pocopine_sync::RowVersion,
+                >,
+            ) -> ::pocopine_sync_query::TypedMutation<Self, #id_ty, #draft_ty> {
+                let mut payload = ::pocopine_sync_query::write::DeletePayload::new(id);
+                payload.expected_version = expected_version;
+                ::pocopine_sync_query::TypedMutation::new(
+                    ::pocopine_sync_query::MutationPayload::Delete(payload),
+                )
+            }
+        }
+    } else {
+        proc_macro2::TokenStream::new()
+    };
     let partition_for_topic_body = generate_partition_for_topic_body(&params);
 
     // RFC 088 §C / code-review fix #10: per-(stream, params_hash)
@@ -701,6 +793,8 @@ fn expand_query_resource(
                     .with_matches(#module_ident::matches)
                     .with_partition_hash(#module_ident::partition_for_topic)
             }
+
+            #typed_writes
         }
 
         pub mod #module_ident {

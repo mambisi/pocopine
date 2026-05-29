@@ -436,3 +436,116 @@ fn row_to_params_skips_unrelated_fields_that_dont_deserialize() {
         Some(Some("W1"))
     );
 }
+
+// ---- RFC 090 Phase 4: typed write codegen ------------------------
+
+#[query_resource(name = "tasks", schema_version = 1, draft = TaskDraft)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Task {
+    pub id: String,
+    #[query_param(required)]
+    pub workspace_id: String,
+    #[query_param]
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskDraft {
+    pub workspace_id: String,
+    pub title: String,
+}
+
+#[test]
+fn create_emits_typed_builder() {
+    use pocopine_sync_query::MutationPayload;
+    let m = Task::create(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "Wire up auth".to_string(),
+        },
+    );
+    match m.payload() {
+        MutationPayload::Create(p) => {
+            assert_eq!(p.id, "t1");
+            assert_eq!(p.draft.title, "Wire up auth");
+        }
+        _ => panic!("expected Create"),
+    }
+}
+
+#[test]
+fn update_carries_expected_version() {
+    use pocopine_sync::RowVersion;
+    use pocopine_sync_query::MutationPayload;
+    let v = RowVersion::new("7").unwrap();
+    let m = Task::update(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "Edited".to_string(),
+        },
+        Some(v),
+    );
+    match m.payload() {
+        MutationPayload::Update(p) => {
+            assert_eq!(p.expected_version.as_ref().unwrap().as_str(), "7");
+        }
+        _ => panic!("expected Update"),
+    }
+}
+
+#[test]
+fn delete_without_expected_version() {
+    use pocopine_sync_query::MutationPayload;
+    let m = Task::delete("t1".to_string(), None);
+    match m.payload() {
+        MutationPayload::Delete(p) => {
+            assert_eq!(p.id, "t1");
+            assert!(p.expected_version.is_none());
+        }
+        _ => panic!("expected Delete"),
+    }
+}
+
+#[test]
+fn optimistic_closure_attaches_and_runs() {
+    let m = Task::create(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "Hello".to_string(),
+        },
+    )
+    .optimistic(|p| match p {
+        pocopine_sync_query::MutationPayload::Create(p) => Task {
+            id: p.id.clone(),
+            workspace_id: p.draft.workspace_id.clone(),
+            title: p.draft.title.clone(),
+        },
+        _ => unreachable!(),
+    });
+    let (payload, opt) = m.into_parts();
+    let row = opt.expect("optimistic attached")(&payload);
+    assert_eq!(row.title, "Hello");
+}
+
+#[test]
+fn wire_shape_is_flat() {
+    let m = Task::create(
+        "t1".to_string(),
+        TaskDraft {
+            workspace_id: "W1".to_string(),
+            title: "Hello".to_string(),
+        },
+    );
+    let wire = serde_json::to_value(m.payload()).unwrap();
+    assert_eq!(
+        wire,
+        serde_json::json!({
+            "op": "create",
+            "id": "t1",
+            "draft": {"workspace_id": "W1", "title": "Hello"}
+        })
+    );
+}
