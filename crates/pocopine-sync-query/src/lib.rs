@@ -49,6 +49,12 @@ pub mod plugin;
 pub mod predicate;
 pub mod query;
 pub mod selector;
+// `source` is host-only — the trait threads `pocopine_auth::RequestContext`
+// through every method, and `pocopine-auth` is cfg-gated to non-wasm.
+// Browser code doesn't need a Source trait; it only needs the typed
+// query DSL + QueryClient runtime, which live in the modules above.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod source;
 pub mod state;
 pub mod wire;
 
@@ -69,6 +75,17 @@ pub use predicate::{
 pub use query::{MatchFn, Order, OrderBy, PartitionHashFn, Query, QueryBuilder, QueryKey};
 pub use selector::{AnyArgs, AnyTrackable, SelectorId, SelectorView, TrackToken};
 pub use state::QueryState;
+
+// RFC 090 Phase 1 — Query-native server source. The crate also
+// continues to expose CRUD-shaped registration through
+// `pocopine-sync-crud` for back-compat; the `Source` trait is the
+// new direction. See `rfcs/rfc-090-merge-crud-into-query.md`.
+#[cfg(not(target_arch = "wasm32"))]
+pub use source::{
+    query_from_pull_request, source, Conflict, RemoveResult, Source, SourceFuture, SourceId,
+    SourceParamsFn, SourceResource, SourceResourceBuilder, WriteResult,
+    DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT,
+};
 
 // The macro lives in its own crate (proc-macros must), but downstream
 // code follows the same one-stop-shop import path as
