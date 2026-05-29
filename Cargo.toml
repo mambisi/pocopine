@@ -45,6 +45,7 @@ members = [
     "crates/pocopine-sync-query",
     "crates/pocopine-sync-query-macros",
     "crates/pocopine-sync-sqlite",
+    "crates/pocopine-template-parser",
     "crates/pocopine-ts-rs",
     "crates/pocopine-ts-rs-macros",
     "examples/blog",
@@ -115,6 +116,7 @@ pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.1.
 pocopine-sync-query = { path = "crates/pocopine-sync-query", version = "0.1.0" }
 pocopine-sync-query-macros = { path = "crates/pocopine-sync-query-macros", version = "0.1.0" }
 pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.1.0" }
+pocopine-template-parser = { path = "crates/pocopine-template-parser", version = "0.1.0" }
 pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.1.0" }
 pine-richtext = { path = "crates/pine-richtext", version = "0.1.0" }
 wasm-bindgen = "0.2"

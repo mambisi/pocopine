@@ -1,0 +1,11 @@
+[package]
+name = "pocopine-template-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host-only .poco template parser (html5ever-based) shared by pocopine-macros (#[component] expansion) and pocopine-stylekit (utility extraction). Never linked into wasm output."
+
+[dependencies]
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"

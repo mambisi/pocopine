@@ -5859,10 +5859,9 @@ version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "cron",
- "html5ever",
- "markup5ever_rcdom",
  "pocopine-client-codegen",
  "pocopine-expr",
+ "pocopine-template-parser",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5984,6 +5983,7 @@ dependencies = [
 name = "pocopine-stylekit"
 version = "0.1.0"
 dependencies = [
+ "pocopine-template-parser",
  "serde",
  "serde_json",
  "strsim",
@@ -6083,6 +6083,14 @@ dependencies = [
  "tempfile",
  "wasm-bindgen",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "pocopine-template-parser"
+version = "0.1.0"
+dependencies = [
+ "html5ever",
+ "markup5ever_rcdom",
 ]
 
 [[package]]
