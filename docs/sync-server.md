@@ -281,6 +281,130 @@ Use `SyncError::backend(msg)` for unrecoverable storage failures and
 `SyncError::client(msg)` for caller mistakes (bad id format, missing
 required field, etc.).
 
+## Mount points: registering a resource on the server
+
+`SourceResource` implements `pocopine_sync::SyncStreamSource`, so it
+plugs straight into the existing sync server builder. Three install
+shapes — pick the right one for your auth model:
+
+```mermaid
+flowchart TD
+    Resource["SourceResource&lt;S, IdOf&gt;"]
+    Public["SyncServerBuilder::public_stream(resource)"]
+    Guarded["SyncServerBuilder::guarded_stream(resource, predicate)"]
+    GuardedWith["SyncServerBuilder::guarded_stream_with(resource, guard)"]
+    Server["SyncServer"]
+    Plugin["sync_server_plugin(sync) → ServerPlugin"]
+    HTTP["/__pocopine/sync/v1/{open,pull,push}<br/>+ live SSE per (stream, params_hash)"]
+
+    Resource --> Public
+    Resource --> Guarded
+    Resource --> GuardedWith
+    Public --> Server
+    Guarded --> Server
+    GuardedWith --> Server
+    Server --> Plugin
+    Plugin --> HTTP
+```
+
+### 1. Public stream (no auth gate)
+
+```rust
+use pocopine_sync::{SyncServer, sync_server_plugin};
+
+let sync = SyncServer::builder()
+    .public_stream(issues_resource(store)?)
+    .events(Arc::new(live_backend()))     // bridges to pocopine-live SSE
+    .build();
+```
+
+### 2. Predicate-guarded stream (sync auth predicate)
+
+```rust
+use pocopine_auth::Predicate;
+
+let sync = SyncServer::builder()
+    .guarded_stream(
+        issues_resource(store)?,
+        Predicate::authenticated(),       // anything Predicate-shaped
+    )
+    .events(Arc::new(live_backend()))
+    .build();
+```
+
+The predicate is evaluated against the `RequestContext` on every
+`/open`, `/pull`, and `/push`. Use this for "any signed-in user" type
+gates that don't need async DB lookups.
+
+### 3. Async-context guard (for DB / external auth)
+
+```rust
+use async_trait::async_trait;
+use pocopine_sync::SyncStreamGuard;
+
+struct WorkspaceMembershipGuard { db: Db }
+
+#[async_trait]
+impl SyncStreamGuard for WorkspaceMembershipGuard {
+    async fn check(&self, ctx: &RequestContext) -> SyncResult<()> {
+        let workspace_id = ctx.path_param("workspace_id")?;
+        self.db.assert_member(ctx.user_id()?, workspace_id).await?;
+        Ok(())
+    }
+}
+
+let sync = SyncServer::builder()
+    .guarded_stream_with(
+        issues_resource(store)?,
+        WorkspaceMembershipGuard { db },
+    )
+    .events(Arc::new(live_backend()))
+    .build();
+```
+
+### Install on the `Server`
+
+```rust
+use pocopine_server::Server;
+
+let server = Server::builder()
+    .plugin(sync_server_plugin(sync))     // mounts /open, /pull, /push
+    .plugin(live_plugin(live_backend()))  // if you use SSE wake-ups
+    .build();
+```
+
+The sync server plugin mounts these routes for every registered stream:
+
+| Route                              | Method | Used by                    |
+|------------------------------------|--------|----------------------------|
+| `/__pocopine/sync/v1/open`         | POST   | First subscription open    |
+| `/__pocopine/sync/v1/pull`         | POST   | Snapshot + incremental pull |
+| `/__pocopine/sync/v1/push`         | POST   | Typed + raw client writes  |
+| `/__pocopine/live/v1/...`          | GET    | SSE wake-up (via live plugin) |
+
+The client's `QueryClient` posts to these paths by default. If you need
+to mount them under a different prefix (multi-tenant routing,
+microservice path-stripping), set
+`query_client_plugin().endpoint("/your/prefix")` to match.
+
+### Multiple resources
+
+`SyncServerBuilder` accepts one resource per `stream` name. Chain
+multiple registrations on the same builder:
+
+```rust
+let sync = SyncServer::builder()
+    .guarded_stream_with(issues_resource(store.clone())?,    WorkspaceGuard::new(store.clone()))
+    .guarded_stream_with(comments_resource(store.clone())?,  WorkspaceGuard::new(store.clone()))
+    .guarded_stream_with(projects_resource(store.clone())?,  WorkspaceGuard::new(store.clone()))
+    .events(Arc::new(live_backend()))
+    .build();
+```
+
+Each `#[query_resource(name = "...")]` becomes its own stream — clients
+subscribe to them independently. They can share a `RequestContext`
+guard pattern (as above) without sharing state.
+
 ## See also
 
 - Tutorial: [`sync.md`](./sync.md)
