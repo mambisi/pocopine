@@ -12,7 +12,7 @@ use crate::ResourceId;
 // in sync-query; Phase 6 deletes CRUD entirely and downstream code
 // drops the `Crud` prefix.
 pub use pocopine_sync_query::write::{
-    Conflict as CrudConflict, RemoveResult as CrudRemoveResult, WriteResult as CrudWriteResult,
+    Conflict as CrudConflict, DeleteResult as CrudRemoveResult, WriteResult as CrudWriteResult,
 };
 
 /// Server-side CRUD source contract.

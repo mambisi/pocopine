@@ -39,6 +39,7 @@ use std::sync::{Arc, Mutex};
 
 use pocopine_auth::RequestContext;
 use pocopine_sync::{MutationId, RowKey, SyncError, SyncOp, SyncResult};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Outcome of an optimistic-concurrency `save`.
@@ -76,20 +77,18 @@ impl<Row> WriteResult<Row> {
     }
 }
 
-/// Outcome of an optimistic-concurrency `remove`.
+/// Outcome of an optimistic-concurrency `delete`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RemoveResult<Row> {
+pub enum DeleteResult<Row> {
     Applied,
     Conflict(Conflict<Row>),
 }
 
-impl<Row> RemoveResult<Row> {
+impl<Row> DeleteResult<Row> {
     pub fn applied() -> Self {
         Self::Applied
     }
 
-    /// Construct a conflict with an explicit reason. Mirrors
-    /// `CrudRemoveResult::conflict`.
     pub fn conflict(server_row: Option<Row>, reason: impl Into<String>) -> Self {
         Self::Conflict(Conflict::new(server_row, reason))
     }
@@ -131,14 +130,159 @@ impl<Row> Conflict<Row> {
     }
 }
 
-// MutationPayload + Create/Save/RemovePayload deferred to Phase 2c.
-// CRUD's `CrudMutationPayload` uses a `#[serde(tag = "op", content =
-// "payload", ...)]` wire shape that this module's first cut didn't
-// match. Phase 2c will reconcile the wire shape and move the
-// envelope here; until then, CRUD users keep using
-// `pocopine_sync_crud::CrudMutationPayload` and new `Source` users
-// hand-construct mutations or wait for Phase 4's macro-emitted
-// typed writes.
+/// Payload for a `create` mutation. Mirrors
+/// `pocopine_sync_crud::CreatePayload` byte-for-byte; CRUD's version
+/// is now a `pub use` alias of this type.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Id: Serialize, Draft: Serialize",
+    deserialize = "Id: Deserialize<'de>, Draft: Deserialize<'de>"
+))]
+pub struct CreatePayload<Id, Draft> {
+    pub id: Id,
+    pub draft: Draft,
+}
+
+impl<Id, Draft> CreatePayload<Id, Draft> {
+    pub fn new(id: Id, draft: Draft) -> Self {
+        Self { id, draft }
+    }
+}
+
+/// Payload for an `update` mutation. The `expected_version` carries
+/// the client's optimistic-concurrency token (the version the client
+/// observed on its last pull). The server fails the update if the
+/// stored row's version differs.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Id: Serialize, Draft: Serialize",
+    deserialize = "Id: Deserialize<'de>, Draft: Deserialize<'de>"
+))]
+pub struct UpdatePayload<Id, Draft> {
+    pub id: Id,
+    pub draft: Draft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<pocopine_sync::RowVersion>,
+}
+
+impl<Id, Draft> UpdatePayload<Id, Draft> {
+    pub fn new(id: Id, draft: Draft) -> Self {
+        Self {
+            id,
+            draft,
+            expected_version: None,
+        }
+    }
+
+    pub fn with_expected_version(mut self, version: pocopine_sync::RowVersion) -> Self {
+        self.expected_version = Some(version);
+        self
+    }
+}
+
+/// Payload for a `delete` mutation. Same optimistic-concurrency
+/// contract as [`UpdatePayload`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(bound(serialize = "Id: Serialize", deserialize = "Id: Deserialize<'de>"))]
+pub struct DeletePayload<Id> {
+    pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<pocopine_sync::RowVersion>,
+}
+
+impl<Id> DeletePayload<Id> {
+    pub fn new(id: Id) -> Self {
+        Self {
+            id,
+            expected_version: None,
+        }
+    }
+
+    pub fn with_expected_version(mut self, version: pocopine_sync::RowVersion) -> Self {
+        self.expected_version = Some(version);
+        self
+    }
+}
+
+/// Unified mutation envelope. Flat wire shape — no nested `payload`
+/// wrapper:
+///
+/// ```json
+/// {"op": "create", "id": "...", "draft": {...}}
+/// {"op": "update", "id": "...", "draft": {...}, "expected_version": "..."}
+/// {"op": "delete", "id": "...", "expected_version": "..."}
+/// ```
+///
+/// Easier for non-Rust clients (one less level of nesting), and
+/// `expected_version` is named for what it does instead of CRUD's
+/// older `base_version`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+#[serde(bound(
+    serialize = "Id: Serialize, Draft: Serialize",
+    deserialize = "Id: Deserialize<'de>, Draft: Deserialize<'de>"
+))]
+pub enum MutationPayload<Id, Draft> {
+    Create(CreatePayload<Id, Draft>),
+    Update(UpdatePayload<Id, Draft>),
+    Delete(DeletePayload<Id>),
+}
+
+impl<Id, Draft> MutationPayload<Id, Draft> {
+    pub fn create(id: Id, draft: Draft) -> Self {
+        Self::Create(CreatePayload::new(id, draft))
+    }
+
+    pub fn update(id: Id, draft: Draft) -> Self {
+        Self::Update(UpdatePayload::new(id, draft))
+    }
+
+    pub fn delete(id: Id) -> Self {
+        Self::Delete(DeletePayload::new(id))
+    }
+
+    pub fn id(&self) -> &Id {
+        match self {
+            Self::Create(p) => &p.id,
+            Self::Update(p) => &p.id,
+            Self::Delete(p) => &p.id,
+        }
+    }
+
+    pub fn expected_version(&self) -> Option<&pocopine_sync::RowVersion> {
+        match self {
+            Self::Create(_) => None,
+            Self::Update(p) => p.expected_version.as_ref(),
+            Self::Delete(p) => p.expected_version.as_ref(),
+        }
+    }
+
+    /// Wire-level `SyncOp` for this payload.
+    pub fn sync_op(&self) -> SyncOp {
+        match self {
+            Self::Create(_) | Self::Update(_) => SyncOp::Upsert,
+            Self::Delete(_) => SyncOp::Delete,
+        }
+    }
+}
+
+impl<Id, Draft> From<CreatePayload<Id, Draft>> for MutationPayload<Id, Draft> {
+    fn from(payload: CreatePayload<Id, Draft>) -> Self {
+        Self::Create(payload)
+    }
+}
+
+impl<Id, Draft> From<UpdatePayload<Id, Draft>> for MutationPayload<Id, Draft> {
+    fn from(payload: UpdatePayload<Id, Draft>) -> Self {
+        Self::Update(payload)
+    }
+}
+
+impl<Id, Draft> From<DeletePayload<Id>> for MutationPayload<Id, Draft> {
+    fn from(payload: DeletePayload<Id>) -> Self {
+        Self::Delete(payload)
+    }
+}
 
 /// Accepted-mutation log entry. Mirrors
 /// `pocopine_sync_crud::CrudAcceptedMutation`.

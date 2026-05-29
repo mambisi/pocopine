@@ -51,6 +51,16 @@ impl<Id> RemovePayload<Id> {
 }
 
 /// Unified CRUD mutation payload sent through the sync push protocol.
+///
+/// RFC 090 Phase 2b: the wire shape (`#[serde(tag = "op", content =
+/// "payload")]`) is byte-for-byte identical to
+/// `pocopine_sync_query::write::MutationPayload`. The TYPES stay
+/// independent — Phase 6 deletes this whole crate (including this
+/// type) when CRUD is removed. Until then, CRUD users keep using
+/// `CrudMutationPayload`; new Source users use the canonical
+/// `MutationPayload`. Clients on either side serialize compatible
+/// bytes, so a CRUD client can push to a Source-backed server and
+/// vice versa during the transition.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", content = "payload", rename_all = "snake_case")]
 #[serde(bound(
@@ -138,52 +148,73 @@ mod tests {
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     struct Draft {
-        title: String,
+        name: String,
     }
 
     #[test]
-    fn crud_payload_maps_create_to_upsert_draft() {
+    fn create_payload_round_trips_json() {
         let payload = CrudMutationPayload::create(
-            "post_1".to_string(),
+            "id1".to_string(),
             Draft {
-                title: "hello".to_string(),
+                name: "A".to_string(),
             },
         );
-
-        let draft = payload.into_sync_draft().unwrap();
-
-        assert_eq!(draft.op, SyncOp::Upsert);
-        assert_eq!(draft.key.unwrap().as_str(), "post_1");
-        assert!(draft.base_version.is_none());
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "op": "create",
+                "payload": {"id": "id1", "draft": {"name": "A"}}
+            })
+        );
+        let round_trip: CrudMutationPayload<String, Draft> = serde_json::from_value(json).unwrap();
+        assert_eq!(round_trip, payload);
     }
 
     #[test]
-    fn crud_payload_maps_save_base_version() {
-        let base_version = RowVersion::new("row_1").unwrap();
-        let payload = CrudMutationPayload::save(
-            "post_1".to_string(),
+    fn crud_and_sync_query_envelopes_have_intentionally_different_wire_shapes() {
+        // RFC 090 Phase 2b: CrudMutationPayload kept its older
+        // nested-payload wire shape (`{"op": "create", "payload":
+        // {...}}`). The new sync-query `MutationPayload` uses a
+        // cleaner flat shape (`{"op": "create", "id": ..., "draft":
+        // ...}`) and renames Save → Update / Remove → Delete. The
+        // two are NOT cross-deserializable on purpose — clients
+        // hitting a Source-backed server use the new envelope,
+        // clients hitting a CRUD-backed server use the old one.
+        // Phase 6 deletes CRUD and the old shape with it.
+        use pocopine_sync_query::write::MutationPayload;
+
+        let crud = CrudMutationPayload::create(
+            "id1".to_string(),
             Draft {
-                title: "updated".to_string(),
+                name: "A".to_string(),
+            },
+        );
+        let canonical: MutationPayload<String, Draft> = MutationPayload::create(
+            "id1".to_string(),
+            Draft {
+                name: "A".to_string(),
             },
         );
 
-        let draft = payload
-            .into_sync_draft_with_base_version(Some(base_version.clone()))
-            .unwrap();
-
-        assert_eq!(draft.op, SyncOp::Upsert);
-        assert_eq!(draft.key.unwrap().as_str(), "post_1");
-        assert_eq!(draft.base_version, Some(base_version));
-    }
-
-    #[test]
-    fn crud_payload_maps_remove_to_delete_draft() {
-        let payload: CrudMutationPayload<String, Draft> =
-            CrudMutationPayload::remove("post_1".to_string());
-
-        let draft = payload.into_sync_draft().unwrap();
-
-        assert_eq!(draft.op, SyncOp::Delete);
-        assert_eq!(draft.key.unwrap().as_str(), "post_1");
+        let crud_wire = serde_json::to_value(&crud).unwrap();
+        let canonical_wire = serde_json::to_value(&canonical).unwrap();
+        assert_eq!(
+            crud_wire,
+            serde_json::json!({
+                "op": "create",
+                "payload": {"id": "id1", "draft": {"name": "A"}}
+            }),
+            "CRUD keeps the legacy nested wire shape"
+        );
+        assert_eq!(
+            canonical_wire,
+            serde_json::json!({
+                "op": "create",
+                "id": "id1",
+                "draft": {"name": "A"}
+            }),
+            "Source uses the flat wire shape"
+        );
     }
 }

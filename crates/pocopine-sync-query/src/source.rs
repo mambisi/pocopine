@@ -32,19 +32,26 @@
 use std::sync::Arc;
 
 use pocopine_sync::{
-    RowVersion, StreamParams, SyncCollectionName, SyncError, SyncResult, SyncRow, SyncStreamName,
+    RowVersion, StreamParams, SyncCollectionName, SyncError, SyncOp, SyncRejectedMutation,
+    SyncResult, SyncRow, SyncStreamName,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::query::Query;
+use crate::write::{AcceptedMutation, MutationLog, MutationPayload};
 
 /// Identity boundary for `Source` rows. Mirrors
 /// `pocopine_sync_crud::ResourceId` — Query reuses the same contract
 /// so a `Source` and a `CrudSource` impl can share the same `Id`
 /// type in apps that adopt Source incrementally.
-pub trait SourceId: Clone + Send + Sync + 'static {
+///
+/// The `Serialize + DeserializeOwned` bounds let `Source::push`
+/// decode the wire mutation payload (`MutationPayload<Id, Draft>`)
+/// directly. Phase 1 only required `to_row_key`; Phase 2b widens to
+/// the full identity contract now that push lands.
+pub trait SourceId: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     /// Project this id into a sync row key. Used by the adapter to
     /// fill the `key` field on `SyncRow<Value>` envelopes.
     fn to_row_key(&self) -> SyncResult<pocopine_sync::RowKey>;
@@ -56,15 +63,15 @@ impl SourceId for String {
     }
 }
 
-// RFC 090 Phase 2a — `WriteResult`/`RemoveResult`/`Conflict` were
+// RFC 090 Phase 2a — `WriteResult`/`DeleteResult`/`Conflict` were
 // briefly defined here in Phase 1 because they appear in `Source`
 // method signatures. Phase 2a moved them to `crate::write` (their
 // long-term home alongside the mutation log + idempotency
 // infrastructure). The `pub use` here keeps the Phase 1 public
 // surface working — code that wrote
-// `use pocopine_sync_query::source::{WriteResult, Conflict, RemoveResult};`
+// `use pocopine_sync_query::source::{WriteResult, Conflict, DeleteResult};`
 // keeps compiling.
-pub use crate::write::{Conflict, RemoveResult, WriteResult};
+pub use crate::write::{Conflict, DeleteResult, WriteResult};
 
 /// Boxed async-trait future. Sources don't need to name this — the
 /// `#[async_trait]` macro generates the right wrappers automatically.
@@ -181,25 +188,26 @@ pub trait Source: Send + Sync + 'static {
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>>;
 
-    /// Save an existing row. `base_version` is the optimistic-
-    /// concurrency token the client read before editing. Source MUST
-    /// compare it against the stored row's version in the same DB
-    /// operation as the write.
-    fn save<'a>(
+    /// Update an existing row. `expected_version` is the optimistic-
+    /// concurrency token the client observed before editing. Source
+    /// MUST compare it against the stored row's version in the same
+    /// DB operation as the write. Return `WriteResult::Conflict` if
+    /// the versions differ.
+    fn update<'a>(
         &'a self,
         ctx: pocopine_auth::RequestContext,
         id: Self::Id,
         draft: Self::Draft,
-        base_version: Option<RowVersion>,
+        expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<WriteResult<Self::Row>>>;
 
-    /// Remove an existing row. Same concurrency contract as `save`.
-    fn remove<'a>(
+    /// Delete an existing row. Same concurrency contract as `update`.
+    fn delete<'a>(
         &'a self,
         ctx: pocopine_auth::RequestContext,
         id: Self::Id,
-        base_version: Option<RowVersion>,
-    ) -> SourceFuture<'a, SyncResult<RemoveResult<Self::Row>>>;
+        expected_version: Option<RowVersion>,
+    ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>>;
 }
 
 /// Reconstruct a `Query<Row>` from a wire `SyncPullRequest`. The
@@ -306,6 +314,7 @@ impl<S: Source> SourceResourceBuilder<S> {
             id_of: Arc::new(id_of),
             version_of: None,
             params_of: None,
+            mutation_log: None,
         }
     }
 }
@@ -330,6 +339,15 @@ pub struct SourceResource<S: Source, IdOf> {
     /// disabled and the server publishes only the bare stream
     /// topic. Phase 4 will auto-wire this from `#[query_resource]`.
     params_of: Option<Arc<SourceParamsFn<S::Row>>>,
+    /// Idempotency log for push mutations. Set via
+    /// [`Self::mutation_log`] (RFC 090 Phase 2b). When `None`,
+    /// `push` rejects with an `unsupported` error — the adapter
+    /// won't perform writes without an idempotency boundary because
+    /// a retry without dedup would run `Source::create`/`save`
+    /// twice on the same mutation_id, double-applying writes
+    /// under client retries. Apps that genuinely want non-
+    /// idempotent push should attach a no-op log explicitly.
+    mutation_log: Option<Arc<dyn MutationLog<S::Row>>>,
 }
 
 impl<S, IdOf> SourceResource<S, IdOf>
@@ -337,41 +355,66 @@ where
     S: Source,
     IdOf: Fn(&S::Row) -> S::Id + Send + Sync + 'static,
 {
-    /// Attach a row-version extractor for optimistic concurrency.
-    /// Without it, pulled rows ship with `SyncRow::version = None`
-    /// and Phase 2's `Source::save` `base_version` checks have
-    /// nothing to compare against — concurrent writers can't be
-    /// detected.
+    /// Extract the optimistic-concurrency version from a row.
+    /// Without this, pulled rows ship `SyncRow::version = None` and
+    /// `Source::update`'s `expected_version` check has nothing to
+    /// compare against — concurrent writers go undetected.
     ///
-    /// The closure returns `SyncResult<Option<RowVersion>>` so a
-    /// source can:
-    /// - return `Ok(None)` for rows with no meaningful version
-    ///   (e.g., immutable rows, server-only-write resources)
-    /// - return `Ok(Some(v))` for the canonical version token
-    /// - return `Err(...)` when version extraction itself fails
-    ///   (rare; usually means the row shape is corrupt)
+    /// The closure returns `SyncResult<Option<RowVersion>>`:
+    /// - `Ok(None)` for rows with no meaningful version
+    /// - `Ok(Some(v))` for the canonical version token
+    /// - `Err(...)` when extraction itself fails (corrupt row shape)
     ///
-    /// Most apps use a closure that maps an integer `version`
-    /// field to `RowVersion::new(v.to_string())?`. Phase 2 will
-    /// widen this to a polyglot `RowVersionValue`-style trait so
-    /// users can pass `|r| r.version` (numeric) or
-    /// `|r| r.etag.clone()` (string) directly.
-    pub fn version<F>(mut self, version_of: F) -> Self
+    /// Most apps map an integer `version` field:
+    /// `.version_field(|r| Ok(Some(RowVersion::new(r.version.to_string())?)))`.
+    pub fn version_field<F>(mut self, extract: F) -> Self
     where
         F: Fn(&S::Row) -> SyncResult<Option<RowVersion>> + Send + Sync + 'static,
     {
-        self.version_of = Some(Arc::new(version_of));
+        self.version_of = Some(Arc::new(extract));
         self
     }
 
-    /// Attach an RFC 088 §C row → partition projector. Until Phase 4
-    /// auto-wires this from `#[query_resource]`, callers pass
-    /// `<resource>::row_to_params_typed` explicitly.
-    pub fn params_of<F>(mut self, params_of: F) -> Self
+    /// Partition rows for RFC 088 §C precise live wakeups: the
+    /// closure projects a row into the `StreamParams` that identify
+    /// its tenant/partition. Without this, the server publishes
+    /// only the bare stream topic (every subscriber wakes for every
+    /// row).
+    ///
+    /// Phase 4 will auto-wire this from `#[query_resource]`'s
+    /// macro-emitted `row_to_params_typed`. Until then, pass the
+    /// macro output explicitly:
+    ///
+    /// ```ignore
+    /// source("issues", IssueSource::default())?
+    ///     .id(|r| r.id.clone())
+    ///     .partition_by(issues::row_to_params_typed);
+    /// ```
+    pub fn partition_by<F>(mut self, projector: F) -> Self
     where
         F: Fn(&S::Row) -> StreamParams + Send + Sync + 'static,
     {
-        self.params_of = Some(Arc::new(params_of));
+        self.params_of = Some(Arc::new(projector));
+        self
+    }
+
+    /// Attach an idempotency log for the push lifecycle (RFC 090
+    /// Phase 2b). Without it, `push` rejects with `unsupported`
+    /// because a client retry of the same `mutation_id` would
+    /// otherwise run `Source::create`/`save`/`remove` twice and
+    /// double-apply writes.
+    ///
+    /// For tests and single-process demos, pass
+    /// `MemoryMutationLog::new()`. For production, pair with a
+    /// scoped backend (`MemoryMutationLog::with_scope_fn(...)` or
+    /// the sqlx-backed log in `pocopine-sync-sqlx`) so the
+    /// idempotency boundary aligns with your tenant authorization
+    /// scope.
+    pub fn mutation_log<Log>(mut self, log: Log) -> Self
+    where
+        Log: MutationLog<S::Row>,
+    {
+        self.mutation_log = Some(Arc::new(log));
         self
     }
 }
@@ -512,25 +555,274 @@ where
         })
     }
 
-    /// Phase 1 push: best-effort dispatch to `Source::create` based
-    /// on the wire op. **NO IDEMPOTENCY** — a retry of the same
-    /// mutation_id runs the source method again, which is incorrect
-    /// for production. Phase 2 adds the mutation log that fixes this.
-    /// For the canonical filtered-list demonstration this is fine.
+    /// RFC 090 Phase 2b push lifecycle.
+    ///
+    /// For each mutation in the request:
+    ///   1. Consult `MutationLog::accepted_mutation` for idempotency.
+    ///      A previously-accepted replay with matching wire envelope
+    ///      returns `accepted` directly (no Source call). A replay
+    ///      with different contents is rejected.
+    ///   2. Decode the wire payload as `MutationPayload<S::Id,
+    ///      S::Draft>` and validate it against the wire op.
+    ///   3. Dispatch to `Source::create` / `save` / `remove`.
+    ///   4. On `Accepted`, record in the mutation log and return
+    ///      the canonical row.
+    ///   5. On `Conflict`, surface a `SyncConflict` carrying the
+    ///      server-visible row.
+    ///
+    /// Without a `.mutation_log(...)` attachment, push returns
+    /// `unsupported` — see the field doc on `mutation_log` for
+    /// rationale.
     fn push<'a>(
         &'a self,
-        _ctx: pocopine_auth::RequestContext,
-        _request: pocopine_sync::SyncPushRequest<Value>,
+        ctx: pocopine_auth::RequestContext,
+        request: pocopine_sync::SyncPushRequest<Value>,
     ) -> pocopine_sync::SyncBoxFuture<'a, pocopine_sync::SyncPushResponse<Value>> {
+        let source = self.source.clone();
+        let id_of = self.id_of.clone();
+        let version_of = self.version_of.clone();
+        let mutation_log = self.mutation_log.clone();
+        let stream = self.stream.clone();
+        let collection = self.collection.clone();
         Box::pin(async move {
-            Err(SyncError::unsupported(
-                "Source push is intentionally unimplemented in Phase 1 of RFC 090 \
-                 (the mutation log + create/save/remove dispatch land in Phase 2). \
-                 For production writes use `pocopine_sync_crud::resource(...)` until \
-                 Phase 2 ships.",
-            ))
+            if request.stream != stream {
+                return Err(SyncError::UnknownStream(request.stream.to_string()));
+            }
+
+            let Some(mutation_log) = mutation_log else {
+                return Err(SyncError::unsupported(
+                    "Source push requires .mutation_log(...) on the builder. \
+                     For tests use MemoryMutationLog::new(); for production pair \
+                     with a scoped backend so idempotency aligns with your \
+                     tenant authorization domain.",
+                ));
+            };
+
+            let mut response = pocopine_sync::SyncPushResponse::new(stream.clone());
+            response.collection = Some(collection.clone());
+
+            for mutation in request.mutations {
+                let mutation_id = mutation.id.clone();
+                let key = mutation.key.clone();
+                let op = mutation.op;
+                let base_version = mutation.base_version;
+                let payload_value = mutation.payload;
+
+                // 1. Idempotency check.
+                if let Some(accepted) = mutation_log.accepted_mutation(&ctx, &mutation_id).await? {
+                    if accepted.matches(op, key.as_ref(), &payload_value) {
+                        response.accepted.push(mutation_id);
+                    } else {
+                        response.rejected.push(SyncRejectedMutation {
+                            mutation_id,
+                            key,
+                            reason: "mutation id was already accepted with different contents"
+                                .to_string(),
+                        });
+                    }
+                    continue;
+                }
+
+                // 2. Decode wire payload.
+                let payload = match serde_json::from_value::<MutationPayload<S::Id, S::Draft>>(
+                    payload_value.clone(),
+                ) {
+                    Ok(p) => p,
+                    Err(err) => {
+                        response.rejected.push(SyncRejectedMutation {
+                            mutation_id,
+                            key,
+                            reason: format!("invalid Source mutation payload: {err}"),
+                        });
+                        continue;
+                    }
+                };
+
+                if payload.sync_op() != op {
+                    response.rejected.push(SyncRejectedMutation {
+                        mutation_id,
+                        key,
+                        reason: "Source payload does not match sync operation".to_string(),
+                    });
+                    continue;
+                }
+
+                let expected_key = payload.id().to_row_key()?;
+                if key.as_ref() != Some(&expected_key) {
+                    response.rejected.push(SyncRejectedMutation {
+                        mutation_id,
+                        key,
+                        reason: "Source mutation row key does not match payload id".to_string(),
+                    });
+                    continue;
+                }
+
+                // 3. Dispatch to the source.
+                let outcome = apply_payload::<S>(
+                    source.as_ref(),
+                    ctx.clone(),
+                    mutation_id.clone(),
+                    expected_key.clone(),
+                    base_version,
+                    payload,
+                )
+                .await?;
+
+                // 4-5. Record + surface.
+                match outcome {
+                    SourceApplyOutcome::Accepted { mutation_id, row } => {
+                        mutation_log
+                            .record_accepted_mutation(
+                                &ctx,
+                                AcceptedMutation::new(
+                                    mutation_id.clone(),
+                                    op,
+                                    Some(expected_key.clone()),
+                                    payload_value,
+                                ),
+                            )
+                            .await?;
+                        response.accepted.push(mutation_id);
+                        if let Some(row) = row {
+                            response.rows.push(row_to_value_with_version(
+                                row,
+                                expected_key,
+                                version_of.as_deref(),
+                            )?);
+                        }
+                    }
+                    SourceApplyOutcome::Rejected(rejected) => response.rejected.push(rejected),
+                    SourceApplyOutcome::Conflict {
+                        mutation_id,
+                        key,
+                        conflict,
+                    } => {
+                        response.conflicts.push(pocopine_sync::SyncConflict {
+                            mutation_id,
+                            key,
+                            server_row: conflict
+                                .server_row
+                                .map(|row| {
+                                    let key = (id_of)(&row).to_row_key()?;
+                                    row_to_value_with_version(row, key, version_of.as_deref())
+                                })
+                                .transpose()?,
+                            reason: conflict.reason,
+                        });
+                    }
+                }
+            }
+
+            Ok(response)
         })
     }
+}
+
+/// Outcome of one mutation's dispatch to `Source::create/save/remove`.
+/// Internal — the `push` method translates these into wire response
+/// variants.
+enum SourceApplyOutcome<Row> {
+    Accepted {
+        mutation_id: pocopine_sync::MutationId,
+        row: Option<Row>,
+    },
+    Rejected(SyncRejectedMutation),
+    Conflict {
+        mutation_id: pocopine_sync::MutationId,
+        key: Option<pocopine_sync::RowKey>,
+        conflict: Conflict<Row>,
+    },
+}
+
+async fn apply_payload<S: Source>(
+    source: &S,
+    ctx: pocopine_auth::RequestContext,
+    mutation_id: pocopine_sync::MutationId,
+    key: pocopine_sync::RowKey,
+    base_version: Option<RowVersion>,
+    payload: MutationPayload<S::Id, S::Draft>,
+) -> SyncResult<SourceApplyOutcome<S::Row>> {
+    match payload {
+        MutationPayload::Create(p) => {
+            if base_version.is_some() {
+                return Ok(SourceApplyOutcome::Rejected(SyncRejectedMutation {
+                    mutation_id,
+                    key: Some(key),
+                    reason: "create does not accept a base row version".to_string(),
+                }));
+            }
+            let row = source.create(ctx, p.id, p.draft).await?;
+            Ok(SourceApplyOutcome::Accepted {
+                mutation_id,
+                row: Some(row),
+            })
+        }
+        MutationPayload::Update(p) => {
+            // Payload-carried expected_version takes precedence over
+            // the wire envelope's base_version. They should agree
+            // (the typed builder fills both) but if they diverge
+            // the payload wins — it's the typed contract the source
+            // understands.
+            let version = p.expected_version.clone().or(base_version);
+            let outcome = source.update(ctx, p.id, p.draft, version).await?;
+            match outcome {
+                WriteResult::Applied(row) => Ok(SourceApplyOutcome::Accepted {
+                    mutation_id,
+                    row: Some(row),
+                }),
+                WriteResult::Conflict(conflict) => Ok(SourceApplyOutcome::Conflict {
+                    mutation_id,
+                    key: Some(key),
+                    conflict,
+                }),
+            }
+        }
+        MutationPayload::Delete(p) => {
+            let version = p.expected_version.clone().or(base_version);
+            let outcome = source.delete(ctx, p.id, version).await?;
+            match outcome {
+                DeleteResult::Applied => Ok(SourceApplyOutcome::Accepted {
+                    mutation_id,
+                    row: None,
+                }),
+                DeleteResult::Conflict(conflict) => Ok(SourceApplyOutcome::Conflict {
+                    mutation_id,
+                    key: Some(key),
+                    conflict,
+                }),
+            }
+        }
+    }
+}
+
+fn row_to_value_with_version<Row>(
+    row: Row,
+    key: pocopine_sync::RowKey,
+    version_of: Option<&SourceVersionFn<Row>>,
+) -> SyncResult<SyncRow<Value>>
+where
+    Row: Serialize,
+{
+    let version = match version_of {
+        Some(extract) => (extract)(&row)?,
+        None => None,
+    };
+    let value = serde_json::to_value(&row)
+        .map_err(|e| SyncError::backend(format!("Source row failed to serialize: {e}")))?;
+    Ok(SyncRow {
+        key,
+        version,
+        value,
+        pending: false,
+        conflict: false,
+    })
+}
+
+// Unused-variable silencer: `SyncOp` is imported for the push impl
+// even when the source tests don't reference it directly.
+#[allow(dead_code)]
+fn _suppress_unused() {
+    let _ = SyncOp::Upsert;
 }
 
 #[cfg(test)]
@@ -608,23 +900,23 @@ mod tests {
             Box::pin(async move { Err(SyncError::unsupported("test stub: create")) })
         }
 
-        fn save<'a>(
+        fn update<'a>(
             &'a self,
             _ctx: pocopine_auth::RequestContext,
             _id: Self::Id,
             _draft: Self::Draft,
-            _base_version: Option<RowVersion>,
+            _expected_version: Option<RowVersion>,
         ) -> SourceFuture<'a, SyncResult<WriteResult<Self::Row>>> {
-            Box::pin(async move { Err(SyncError::unsupported("test stub: save")) })
+            Box::pin(async move { Err(SyncError::unsupported("stub: update")) })
         }
 
-        fn remove<'a>(
+        fn delete<'a>(
             &'a self,
             _ctx: pocopine_auth::RequestContext,
             _id: Self::Id,
-            _base_version: Option<RowVersion>,
-        ) -> SourceFuture<'a, SyncResult<RemoveResult<Self::Row>>> {
-            Box::pin(async move { Err(SyncError::unsupported("test stub: remove")) })
+            _expected_version: Option<RowVersion>,
+        ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {
+            Box::pin(async move { Err(SyncError::unsupported("stub: delete")) })
         }
     }
 
