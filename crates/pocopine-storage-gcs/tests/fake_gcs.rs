@@ -851,3 +851,44 @@ async fn compose_upload_verifies_streaming_sha256_against_fake_gcs() -> StorageR
     assert_eq!(object.checksum, Some(expected));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compose_buffers_large_inline_tail_in_metadata_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "compose-tail").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    // 500 KiB stays below the 1 MiB component size, so it is buffered entirely
+    // in the inline (base64) tail — well over the 256 KiB non-tail metadata
+    // bound. inspect + complete must still read the session metadata.
+    let total = 500 * 1024usize;
+    let session = initiate_large_checked(
+        &backend,
+        "files/tail.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, total))
+        .await?;
+
+    let inspected = backend.inspect_upload(&ctx(), session.id.clone()).await?;
+    assert_eq!(inspected.next_offset, Some(total as u64));
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total as u64);
+    assert_eq!(
+        object_bytes(&clients.storage, backend.bucket(), "files/tail.bin").await,
+        pattern_bytes(0, total).to_vec()
+    );
+    Ok(())
+}

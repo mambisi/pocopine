@@ -231,8 +231,19 @@ impl GcsStorageBackend {
         session: &UploadSessionId,
     ) -> StorageResult<GcsObjectBytes> {
         let key = self.layout.session_meta_key(session);
-        self.get_object_bytes_with_limit(&key, MAX_SESSION_METADATA_BYTES)
+        self.get_object_bytes_with_limit(&key, self.session_metadata_read_limit())
             .await
+    }
+
+    /// Read cap for `session.json`. Native compose sessions buffer their tail
+    /// inline (base64), so the cap must accommodate one component plus the
+    /// fixed metadata, well above the bare [`MAX_SESSION_METADATA_BYTES`] used
+    /// for the non-tail fields. Derived from the backend's absolute size cap so
+    /// it is an upper bound for every session's `component_size_for(max_bytes)`.
+    fn session_metadata_read_limit(&self) -> u64 {
+        component_size_for(self.max_proxy_upload_bytes)
+            .saturating_mul(2)
+            .saturating_add(MAX_SESSION_METADATA_BYTES)
     }
 
     async fn create_session(
@@ -537,8 +548,13 @@ impl GcsStorageBackend {
 
     // --- native compose helpers ----------------------------------------------
 
-    /// Write one component object (each written exactly once; rewriting the same
-    /// index with the same bytes on a retry is an idempotent overwrite).
+    /// Write one component object.
+    ///
+    /// Uses a create-only precondition (`if_generation_match: 0`) so a concurrent
+    /// or retried attempt at the same index can never clobber a component another
+    /// worker already recorded. A component's content is deterministic for its
+    /// index (it covers a fixed, append-only byte range), so an already-present
+    /// object is correct — adopt its generation instead of overwriting it.
     async fn write_component(
         &self,
         session: &UploadSessionId,
@@ -547,14 +563,51 @@ impl GcsStorageBackend {
     ) -> StorageResult<GcsComponent> {
         let key = self.layout.session_component_key(session, index);
         let size = bytes.len() as u64;
-        let written = self
-            .put_object_bytes(&key, bytes, Some("application/octet-stream"), None)
-            .await?;
+        let generation = match self
+            .put_object_bytes(&key, bytes, Some("application/octet-stream"), Some(0))
+            .await
+        {
+            Ok(written) => written.generation_match,
+            Err(StorageError::PolicyRejected { .. }) => match self.get_object_attrs(&key).await? {
+                Some(attrs) => attrs.generation,
+                None => {
+                    return Err(StorageError::backend(
+                        "GCS component vanished after a create-only conflict".to_string(),
+                    ))
+                }
+            },
+            Err(err) => return Err(err),
+        };
         Ok(GcsComponent {
             key,
             size,
-            generation: written.generation_match,
+            generation,
         })
+    }
+
+    /// Best-effort deletion of every component object for a session.
+    ///
+    /// Component indices are contiguous from 0 (sequential, append-only), so this
+    /// also removes components written just before a crash but not yet recorded
+    /// in the session metadata. Stops at the first missing index.
+    async fn delete_component_chain(&self, session: &UploadSessionId) {
+        let mut index = 0u32;
+        loop {
+            let key = self.layout.session_component_key(session, index);
+            match self.delete_object(&key).await {
+                Ok(()) => index += 1,
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// Return a session that reached `Completing` back to `Open` after a
+    /// recoverable completion failure, so the caller can retry or abort from a
+    /// valid state instead of being stranded. Best-effort.
+    async fn reopen_session(&self, session: &UploadSessionId, stored: &mut StoredUploadSession) {
+        stored.public.status = UploadSessionStatus::Open;
+        stored.completion_object_key = None;
+        let _ = self.write_session(session, stored).await;
     }
 
     /// Assemble the recorded components into the destination object, stamping the
@@ -616,13 +669,6 @@ impl GcsStorageBackend {
             hasher.update(&chunk);
         }
         Ok(hasher.finalize())
-    }
-
-    /// Best-effort deletion of a session's component objects.
-    async fn delete_components(&self, components: &[GcsComponent]) {
-        for component in components {
-            let _ = self.delete_object_if_exists(&component.key).await;
-        }
     }
 
     async fn delete_object(&self, key: &str) -> StorageResult<()> {
@@ -824,13 +870,10 @@ impl GcsStorageBackend {
                         generation_match: attrs.generation,
                     }
                 } else {
-                    let components = stored
-                        .native
-                        .compose()
-                        .expect("compose state")
-                        .components
-                        .clone();
-                    self.delete_components(&components).await;
+                    // Foreign object at the destination (the session is still
+                    // Open here): clean up our components and reject without
+                    // overwriting it.
+                    self.delete_component_chain(session).await;
                     return Err(StorageError::policy_rejected(format!(
                         "GCS object key already exists: {object_key}"
                     )));
@@ -885,13 +928,10 @@ impl GcsStorageBackend {
                                 }
                             }
                             _ => {
-                                let components = stored
-                                    .native
-                                    .compose()
-                                    .expect("compose state")
-                                    .components
-                                    .clone();
-                                self.delete_components(&components).await;
+                                self.delete_component_chain(session).await;
+                                // The session reached Completing; reopen it so the
+                                // owner can abort or retry rather than be stranded.
+                                self.reopen_session(session, &mut stored).await;
                                 return Err(StorageError::policy_rejected(format!(
                                     "GCS object key already exists: {object_key}"
                                 )));
@@ -929,6 +969,9 @@ impl GcsStorageBackend {
                                 );
                                 delete_err
                             })?;
+                            // Reopen so the client can retry with a correct
+                            // checksum (components remain for re-compose).
+                            self.reopen_session(session, &mut stored).await;
                             return Err(err);
                         }
                     }
@@ -946,17 +989,13 @@ impl GcsStorageBackend {
         stored.public.status = UploadSessionStatus::Complete;
         stored.public.next_offset = Some(total);
         stored.object = Some(object.clone());
-        let components = stored
-            .native
-            .compose()
-            .map(|state| state.components.clone())
-            .unwrap_or_default();
         if let Some(state) = stored.native.compose_mut() {
             state.pending_tail = Vec::new();
         }
         self.write_session(session, &mut stored).await?;
-        // Component objects are temporary; remove them after the object is live.
-        self.delete_components(&components).await;
+        // Component objects are temporary; remove them now the final object is
+        // live (the compose copied their bytes into it).
+        self.delete_component_chain(session).await;
         Ok(object)
     }
 
@@ -1288,18 +1327,10 @@ impl StorageBackend for GcsStorageBackend {
                             session: session.to_string(),
                         });
                     }
-                    // Remove native component objects so they do not linger.
-                    if let Some(state) = stored.native.compose() {
-                        self.delete_components(&state.components).await;
-                        // The next, not-yet-recorded component index may have been
-                        // written just before a crash; clean it up too.
-                        let _ = self
-                            .delete_object_if_exists(
-                                &self
-                                    .layout
-                                    .session_component_key(&session, state.next_index),
-                            )
-                            .await;
+                    // Remove every component object (including any written just
+                    // before a crash but not yet recorded) so none linger.
+                    if stored.native.compose().is_some() {
+                        self.delete_component_chain(&session).await;
                     }
                 }
                 AbortSessionRead::Missing => {}
