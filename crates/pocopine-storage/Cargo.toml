@@ -43,6 +43,11 @@ tower = { version = "0.5", features = ["util"] }
 name = "upload"
 harness = false
 
+# Provider-write amplification: legacy O(n^2) rewrite vs native O(n) strategies.
+[[bench]]
+name = "amplification"
+harness = false
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
