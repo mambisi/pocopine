@@ -564,18 +564,31 @@ impl GcsStorageBackend {
         let key = self.layout.session_component_key(session, index);
         let size = bytes.len() as u64;
         let generation = match self
-            .put_object_bytes(&key, bytes, Some("application/octet-stream"), Some(0))
+            .put_object_bytes(
+                &key,
+                bytes.clone(),
+                Some("application/octet-stream"),
+                Some(0),
+            )
             .await
         {
             Ok(written) => written.generation_match,
-            Err(StorageError::PolicyRejected { .. }) => match self.get_object_attrs(&key).await? {
-                Some(attrs) => attrs.generation,
-                None => {
-                    return Err(StorageError::backend(
-                        "GCS component vanished after a create-only conflict".to_string(),
-                    ))
+            Err(StorageError::PolicyRejected { .. }) => {
+                // A component already exists at this index (a retry or a
+                // concurrent worker). Adopt it only if its bytes match what this
+                // append intends to write; otherwise the index is being reused
+                // for different content and must not be silently accepted.
+                let existing = self.get_object_bytes_with_limit(&key, size).await?;
+                if existing.truncated
+                    || existing.bytes.len() as u64 != size
+                    || existing.bytes.as_slice() != bytes.as_ref()
+                {
+                    return Err(StorageError::conflict(
+                        "GCS upload component already exists with different bytes",
+                    ));
                 }
-            },
+                existing.generation_match
+            }
             Err(err) => return Err(err),
         };
         Ok(GcsComponent {
