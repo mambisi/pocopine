@@ -28,8 +28,17 @@ pub(crate) fn is_head_object_not_found(err: &SdkError<HeadObjectError>) -> bool 
 }
 
 pub(crate) fn is_put_precondition_failed(err: &SdkError<PutObjectError>) -> bool {
+    is_precondition_failed(err)
+}
+
+/// True when an S3 operation failed its `If-None-Match: *` precondition because
+/// the destination key already exists (HTTP 412).
+pub(crate) fn is_precondition_failed<E>(err: &SdkError<E>) -> bool
+where
+    E: ProvideErrorMetadata,
+{
     err.as_service_error()
-        .and_then(|err| err.meta().code())
+        .and_then(ProvideErrorMetadata::code)
         .is_some_and(|code| code == "PreconditionFailed")
 }
 

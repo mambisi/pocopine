@@ -473,6 +473,57 @@ async fn multipart_upload_verifies_streaming_sha256_against_minio() -> StorageRe
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multipart_missing_required_checksum_is_rejected_and_retryable() -> StorageResult<()> {
+    let client = minio_client().await;
+    let bucket = create_bucket(&client, "mp-reqsum").await;
+    let backend = S3StorageBackend::new(client.clone(), bucket.clone())?;
+    let total = 6 * 1024 * 1024usize;
+    let data = pattern_bytes(0, total);
+    let expected = ObjectChecksum {
+        algorithm: ChecksumAlgorithm::Sha256,
+        value: pocopine_crypto::sha256_hex(&data),
+    };
+
+    let session = initiate_checked(
+        &backend,
+        "files/reqsum.bin",
+        total as u64,
+        ChecksumPolicy::Required(ChecksumAlgorithm::Sha256),
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, data)
+        .await?;
+
+    // Missing the required checksum is rejected before the object is assembled,
+    // so the session stays open and a follow-up completion with the correct
+    // checksum still succeeds.
+    let rejected = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await;
+    assert!(matches!(rejected, Err(StorageError::PolicyRejected { .. })));
+    assert!(!object_exists(&client, &bucket, "files/reqsum.bin").await);
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: Some(expected.clone()),
+            },
+        )
+        .await?;
+    assert_eq!(object.checksum, Some(expected));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_part_upload_verifies_crc32c_against_minio() -> StorageResult<()> {
     let client = minio_client().await;
     let bucket = create_bucket(&client, "sp-crc").await;

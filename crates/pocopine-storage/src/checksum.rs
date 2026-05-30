@@ -33,6 +33,37 @@ impl StreamingChecksum {
     }
 }
 
+/// Cheaply reject a checksum that can never validate, before any expensive
+/// finalize work (e.g. assembling a multipart object).
+///
+/// Catches a missing required checksum or a disallowed/ mismatched algorithm
+/// without hashing. The actual value comparison still happens later.
+pub fn precheck_checksum(
+    policy: &ChecksumPolicy,
+    provided: Option<&ObjectChecksum>,
+) -> StorageResult<()> {
+    match policy {
+        ChecksumPolicy::None => Ok(()),
+        ChecksumPolicy::Optional(allowed) => match provided {
+            Some(checksum) if !allowed.contains(&checksum.algorithm) => Err(
+                StorageError::policy_rejected("checksum algorithm is not allowed"),
+            ),
+            _ => Ok(()),
+        },
+        ChecksumPolicy::Required(algorithm) => {
+            let provided = provided.ok_or_else(|| {
+                StorageError::policy_rejected("required upload checksum is missing")
+            })?;
+            if provided.algorithm != *algorithm {
+                return Err(StorageError::policy_rejected(
+                    "required upload checksum algorithm does not match policy",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// The checksum algorithm a completed upload must hash, if any.
 ///
 /// Returns `None` when no verification is needed (no policy, or an `Optional`

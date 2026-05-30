@@ -8,8 +8,8 @@ use pocopine_storage::backend_common::{
     UploadSessionLockCleanup, UploadSessionLockRegistry,
 };
 use pocopine_storage::checksum::{
-    checksum_algorithm_to_compute, ensure_supported_checksum_policy, validate_complete_checksum,
-    validate_complete_checksum_precomputed, StreamingChecksum,
+    checksum_algorithm_to_compute, ensure_supported_checksum_policy, precheck_checksum,
+    validate_complete_checksum, validate_complete_checksum_precomputed, StreamingChecksum,
 };
 use pocopine_storage::{
     ChecksumAlgorithm, CompleteUpload, InitiateUpload, ObjectChecksum, ObjectRef, StorageBackend,
@@ -22,7 +22,7 @@ use crate::layout::{S3KeyLayout, DEFAULT_INTERNAL_PREFIX};
 use crate::state::{NativeUploadState, S3CompletedPart, S3MultipartState, StoredUploadSession};
 use crate::util::{
     ensure_completable, is_get_object_not_found, is_head_object_not_found, is_no_such_upload,
-    is_put_precondition_failed, normalize_etag, s3_error,
+    is_precondition_failed, is_put_precondition_failed, normalize_etag, s3_error,
 };
 
 const DEFAULT_BACKEND_NAME: &str = "s3";
@@ -377,11 +377,18 @@ impl S3StorageBackend {
             .ok_or_else(|| StorageError::backend("S3 upload part returned no etag".to_string()))
     }
 
+    /// Assemble the final object from its parts.
+    ///
+    /// Uses `If-None-Match: *` so completion atomically refuses to overwrite an
+    /// existing destination key (no TOCTOU window). `first_attempt` distinguishes
+    /// a genuine collision (reject) from our own already-finalized object on a
+    /// retry (recover the ETag — idempotent).
     async fn complete_multipart(
         &self,
         object_key: &str,
         upload_id: &str,
         parts: &[S3CompletedPart],
+        first_attempt: bool,
     ) -> StorageResult<Option<String>> {
         let completed_parts: Vec<CompletedPart> = parts
             .iter()
@@ -401,14 +408,29 @@ impl S3StorageBackend {
             .bucket(&self.layout.bucket)
             .key(object_key)
             .upload_id(upload_id)
+            .if_none_match("*")
             .multipart_upload(completed)
             .send()
             .await
         {
             Ok(output) => Ok(output.e_tag().map(|etag| normalize_etag(etag.to_string()))),
-            // A prior completion already finalized the object (idempotent retry
-            // after a crash before the session metadata was updated): recover the
-            // existing object's ETag instead of failing.
+            // The destination key already exists. On the first attempt that is a
+            // foreign collision (reject); on a retry it is our own prior
+            // completion (recover the ETag).
+            Err(err) if is_precondition_failed(&err) => {
+                if first_attempt {
+                    Err(StorageError::policy_rejected(format!(
+                        "S3 object key already exists: {object_key}"
+                    )))
+                } else {
+                    match self.head_object(object_key).await? {
+                        Some(info) => Ok(info.etag),
+                        None => Err(s3_error("complete multipart upload", err)),
+                    }
+                }
+            }
+            // The upload id was consumed by a prior completion (crash before the
+            // session metadata was updated): recover the existing object's ETag.
             Err(err) if is_no_such_upload(&err) => match self.head_object(object_key).await? {
                 Some(info) => Ok(info.etag),
                 None => Err(s3_error("complete multipart upload", err)),
@@ -552,26 +574,19 @@ impl S3StorageBackend {
         offset: u64,
         bytes: Bytes,
     ) -> StorageResult<UploadSession> {
-        // Take the buffered tail out of the session so it can be prepended to the
-        // incoming chunk without an extra copy; it is rewritten below.
-        let tail = {
+        // Copy the buffered tail to prepend to the incoming chunk. The copy
+        // (bounded by one part) leaves the tail durable in `stored` so the lazy
+        // `ensure_upload_id` write below still persists it; the tail is only
+        // replaced by the remainder in the single atomic write at the end.
+        let (flushed, tail) = {
             let state = stored
                 .native
-                .multipart_mut()
+                .multipart()
                 .expect("append_multipart called for a non-multipart session");
-            std::mem::take(&mut state.pending_tail)
+            (state.flushed_len(), state.pending_tail.clone())
         };
-        let flushed = stored
-            .native
-            .multipart()
-            .expect("multipart state")
-            .flushed_len();
         let expected = flushed + tail.len() as u64;
         if expected != offset {
-            // Restore the tail we took before bailing so `stored` is unchanged.
-            if let Some(state) = stored.native.multipart_mut() {
-                state.pending_tail = tail;
-            }
             tracing::debug!(
                 target: "pocopine.log",
                 event_name = "pocopine.storage.offset_mismatch",
@@ -584,9 +599,6 @@ impl S3StorageBackend {
         let new_offset = checked_new_offset(offset, bytes.len())?;
         ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
         if bytes.is_empty() {
-            if let Some(state) = stored.native.multipart_mut() {
-                state.pending_tail = tail;
-            }
             return Ok(stored.public);
         }
 
@@ -658,17 +670,22 @@ impl S3StorageBackend {
             }
         }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
+        // Reject a missing-required or disallowed-algorithm checksum up front, so
+        // a config error never assembles (and then deletes) the object.
+        precheck_checksum(&stored.checksum_policy, request.checksum.as_ref())?;
 
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-        // On the first completion attempt the destination key has not been
-        // written yet (multipart parts live in the upload, not at the key). If an
-        // object already exists there it is a foreign collision, so reject rather
-        // than overwrite — matching the single-part `put_completed_object` guard.
-        // Retries (status `Completing`) skip this: the key may exist from our own
-        // prior completion and is reconciled by the idempotent-completion path.
-        if stored.public.status == UploadSessionStatus::Open
-            && self.head_object(&object_key).await?.is_some()
-        {
+        // `Completing` means a prior completion attempt got at least as far as
+        // finalizing the object, so a retry must treat an existing key as ours.
+        let first_attempt = stored.public.status == UploadSessionStatus::Open;
+        // Defense in depth against overwriting a foreign object:
+        //  - this preflight HEAD catches a pre-existing key and works on every
+        //    S3-compatible store (including emulators that ignore the condition);
+        //  - `CompleteMultipartUpload` additionally uses `If-None-Match: *` to
+        //    close the TOCTOU window on real S3.
+        // Retries (status `Completing`) skip the preflight: the key may exist
+        // from our own prior completion and is reconciled idempotently.
+        if first_attempt && self.head_object(&object_key).await?.is_some() {
             return Err(StorageError::policy_rejected(format!(
                 "S3 object key already exists: {object_key}"
             )));
@@ -737,7 +754,7 @@ impl S3StorageBackend {
                 )
             };
             let etag = self
-                .complete_multipart(&object_key, &upload_id, &parts)
+                .complete_multipart(&object_key, &upload_id, &parts, first_attempt)
                 .await?;
 
             // Validate the checksum by streaming the finished object (only when a
