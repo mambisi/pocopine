@@ -16,7 +16,6 @@ use pocopine_server::axum::http::{
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
 use pocopine_server::axum::routing::{get, head, options, patch, post};
 use pocopine_server::{Server, ServerPlugin};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -1678,16 +1677,10 @@ fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
 /// cookies and replay them via the `Cookie` header. We hash with a domain
 /// separator so a leaked digest is not usable as a "blind hash" elsewhere.
 fn hash_anonymous_binding(raw: &str) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = pocopine_crypto::Hasher::new(pocopine_crypto::Algorithm::Sha256);
     hasher.update(b"pocopine.storage.anon.v1\0");
     hasher.update(raw.as_bytes());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
+    hasher.finalize_hex()
 }
 
 fn require_bound_actor(ctx: &StorageContext) -> StorageResult<()> {

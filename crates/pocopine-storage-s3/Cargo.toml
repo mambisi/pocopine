@@ -12,13 +12,15 @@ bytes = "1"
 pocopine-storage = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
 time = { version = "0.3", features = ["serde"] }
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# `io-util` powers the streaming checksum read-back (`ByteStream::into_async_read`)
+# so checksum verification never buffers the whole object.
+tokio = { version = "1", default-features = false, features = ["io-util", "sync"] }
 tracing = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pocopine-crypto = { workspace = true }
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["minio"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

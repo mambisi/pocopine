@@ -513,7 +513,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "md-5",
+ "md-5 0.11.0",
  "pin-project-lite",
  "sha1",
  "sha2 0.11.0",
@@ -4532,6 +4532,16 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
@@ -5713,6 +5723,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-crypto"
+version = "0.1.0"
+dependencies = [
+ "crc32c",
+ "md-5 0.10.6",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "pocopine-deploy"
 version = "0.1.0"
 dependencies = [
@@ -5903,10 +5922,10 @@ dependencies = [
  "js-sys",
  "pocopine",
  "pocopine-core",
+ "pocopine-crypto",
  "pocopine-server",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "time",
  "tokio",
@@ -5968,10 +5987,10 @@ version = "0.1.0"
 dependencies = [
  "aws-sdk-s3",
  "bytes",
+ "pocopine-crypto",
  "pocopine-storage",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "testcontainers",
  "testcontainers-modules",
  "time",

@@ -490,14 +490,6 @@ impl UploadPolicy {
                 ));
             }
         }
-        if matches!(
-            self.checksum,
-            ChecksumPolicy::Required(ChecksumAlgorithm::Crc32c | ChecksumAlgorithm::Md5)
-        ) {
-            return Err(StorageError::unsupported(
-                "only sha256 checksum verification is implemented in pocopine-storage PR 1",
-            ));
-        }
         if let (Some(min), Some(preferred)) = (self.min_part_size, self.preferred_chunk_size) {
             if min > preferred {
                 return Err(StorageError::policy_rejected(
