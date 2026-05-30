@@ -751,75 +751,84 @@ impl S3StorageBackend {
                 .await?;
             (etag, checksum)
         } else {
-            // Multipart path. `Completing` means a prior attempt already reached
-            // the finalize stage, so a retry must treat an existing key as
-            // potentially ours.
-            let first_attempt = stored.public.status == UploadSessionStatus::Open;
-            // Defense in depth against overwriting a foreign object: this preflight
-            // HEAD works on every store (including emulators that ignore the
-            // condition), and `CompleteMultipartUpload` additionally uses
-            // `If-None-Match: *` to close the TOCTOU window on real S3. Retries
-            // skip the preflight; the key may exist from our own prior completion.
-            if first_attempt && self.head_object(&object_key).await?.is_some() {
-                // Abort the now-orphaned provider upload before reporting so its
-                // parts do not linger and accrue storage cost.
-                let _ = self.abort_multipart_session(&stored).await;
-                return Err(StorageError::policy_rejected(format!(
-                    "S3 object key already exists: {object_key}"
-                )));
-            }
-            if stored.public.status == UploadSessionStatus::Open
-                || stored.public.next_offset != Some(total)
-            {
-                stored.public.status = UploadSessionStatus::Completing;
-                stored.public.next_offset = Some(total);
-                self.write_session(session, &stored).await?;
-            }
+            // Multipart path.
+            // HEAD on every attempt (not just the first). This is the only
+            // overwrite guard that works on stores which ignore `If-None-Match`
+            // on `CompleteMultipartUpload`, and it distinguishes our own
+            // already-finalized object (adopt idempotently) from a foreign object
+            // that won the key (reject). The `If-None-Match: *` on completion is
+            // an additional atomic guard for the HEAD→complete window on real S3.
+            let existing_etag = match self.head_object(&object_key).await? {
+                Some(info) if info.owner_session.as_deref() == Some(session.as_str()) => {
+                    Some(info.etag)
+                }
+                Some(_) => {
+                    // Foreign object at the destination: abort our orphaned upload
+                    // (best effort) and reject rather than overwrite it.
+                    let _ = self.abort_multipart_session(&stored).await;
+                    return Err(StorageError::policy_rejected(format!(
+                        "S3 object key already exists: {object_key}"
+                    )));
+                }
+                None => None,
+            };
 
-            // Flush the final remainder as the last part (exempt from the
-            // minimum-size rule), then assemble the object.
-            let tail = stored
-                .native
-                .multipart()
-                .expect("multipart state")
-                .pending_tail
-                .clone();
-            if !tail.is_empty() {
-                let tail_len = tail.len() as u64;
-                let upload_id = stored
-                    .native
-                    .multipart()
-                    .and_then(|state| state.upload_id.clone())
-                    .expect("multipart upload id");
-                let number = stored
+            let etag = if let Some(etag) = existing_etag {
+                // A prior attempt already finalized this object; reuse it.
+                etag
+            } else {
+                if stored.public.status == UploadSessionStatus::Open
+                    || stored.public.next_offset != Some(total)
+                {
+                    stored.public.status = UploadSessionStatus::Completing;
+                    stored.public.next_offset = Some(total);
+                    self.write_session(session, &stored).await?;
+                }
+
+                // Flush the final remainder as the last part (exempt from the
+                // minimum-size rule), then assemble the object.
+                let tail = stored
                     .native
                     .multipart()
                     .expect("multipart state")
-                    .next_part_number;
-                let etag = self
-                    .upload_part(&object_key, &upload_id, number, Bytes::from(tail))
-                    .await?;
-                if let Some(state) = stored.native.multipart_mut() {
-                    state.parts.push(S3CompletedPart {
-                        number,
-                        etag,
-                        size: tail_len,
-                    });
-                    state.next_part_number = number + 1;
-                    state.pending_tail = Vec::new();
+                    .pending_tail
+                    .clone();
+                if !tail.is_empty() {
+                    let tail_len = tail.len() as u64;
+                    let upload_id = stored
+                        .native
+                        .multipart()
+                        .and_then(|state| state.upload_id.clone())
+                        .expect("multipart upload id");
+                    let number = stored
+                        .native
+                        .multipart()
+                        .expect("multipart state")
+                        .next_part_number;
+                    let etag = self
+                        .upload_part(&object_key, &upload_id, number, Bytes::from(tail))
+                        .await?;
+                    if let Some(state) = stored.native.multipart_mut() {
+                        state.parts.push(S3CompletedPart {
+                            number,
+                            etag,
+                            size: tail_len,
+                        });
+                        state.next_part_number = number + 1;
+                        state.pending_tail = Vec::new();
+                    }
+                    self.write_session(session, &stored).await?;
                 }
-                self.write_session(session, &stored).await?;
-            }
-            let (upload_id, parts) = {
-                let state = stored.native.multipart().expect("multipart state");
-                (
-                    state.upload_id.clone().expect("multipart upload id"),
-                    state.parts.clone(),
-                )
+                let (upload_id, parts) = {
+                    let state = stored.native.multipart().expect("multipart state");
+                    (
+                        state.upload_id.clone().expect("multipart upload id"),
+                        state.parts.clone(),
+                    )
+                };
+                self.complete_multipart(&object_key, &upload_id, &parts, session)
+                    .await?
             };
-            let etag = self
-                .complete_multipart(&object_key, &upload_id, &parts, session)
-                .await?;
 
             // Validate the checksum by streaming the finished object (only when a
             // checksum was actually supplied; the default path never hashes).
@@ -843,9 +852,20 @@ impl S3StorageBackend {
                     ) {
                         Ok(checksum) => checksum,
                         Err(err) => {
-                            // The object is live but failed verification: remove
-                            // it so a bad upload is not observable.
-                            let _ = self.delete_object(&object_key).await;
+                            // The object is live but failed verification: remove it
+                            // so a bad upload is never observable. If the delete
+                            // itself fails, surface that — leaving a checksum-invalid
+                            // object live is more severe than the rejection.
+                            self.delete_object(&object_key).await.map_err(|delete_err| {
+                                tracing::error!(
+                                    target: "pocopine.log",
+                                    event_name = "pocopine.storage.s3_invalid_object_cleanup_failed",
+                                    object_key = %object_key,
+                                    checksum_error = %err,
+                                    delete_error = %delete_err,
+                                );
+                                delete_err
+                            })?;
                             return Err(err);
                         }
                     }
