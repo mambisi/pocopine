@@ -48,11 +48,34 @@ const MAX_SESSION_METADATA_BYTES: u64 = 256 * 1024;
 /// underscores.
 const SESSION_OWNER_META_KEY: &str = "pocopine_upload_session";
 
-/// Deterministic, fixed-width block id for a block index. Azure requires every
-/// block id in a blob to be the same (pre-base64) length, and the id is stable
-/// per index so a retried `PATCH` re-stages the same block.
-fn block_id(index: u64) -> Vec<u8> {
-    format!("{index:016x}").into_bytes()
+/// Azure allows at most 50,000 committed blocks per blob. Blocks are sized so the
+/// count never exceeds this for an upload up to the backend's size cap.
+const AZURE_MAX_BLOCKS: u64 = 50_000;
+
+/// Floor for a coalesced block, to bound the block count and per-append churn.
+const MIN_BLOCK_SIZE: u64 = 1024 * 1024;
+
+/// Session-isolated, fixed-width block id for a block index.
+///
+/// Azure block ids must be <= 64 base64 bytes and equal-length within a single
+/// commit. A 96-bit token derived from the session id namespaces the (otherwise
+/// per-blob) uncommitted block space so a different upload targeting the same
+/// destination key can never contribute blocks to our commit. The id is stable
+/// per (session, index) so a retried `PATCH` re-stages the same block.
+fn block_id(session: &UploadSessionId, index: u64) -> Vec<u8> {
+    let token = &pocopine_crypto::sha256_hex(session.as_str().as_bytes())[..24];
+    format!("{token}{index:012x}").into_bytes()
+}
+
+/// Block size for a session whose maximum object size is `max_bytes`. Scaled
+/// (rounded to a whole MiB) so the block count stays within [`AZURE_MAX_BLOCKS`];
+/// never below [`MIN_BLOCK_SIZE`]. For the default 64 MiB cap this is 1 MiB.
+fn block_size_for(max_bytes: u64) -> u64 {
+    let by_count = max_bytes
+        .div_ceil(AZURE_MAX_BLOCKS)
+        .div_ceil(MIN_BLOCK_SIZE)
+        * MIN_BLOCK_SIZE;
+    by_count.max(MIN_BLOCK_SIZE)
 }
 
 #[derive(Clone, Debug)]
@@ -217,8 +240,17 @@ impl AzureBlobStorageBackend {
         session: &UploadSessionId,
     ) -> StorageResult<AzureObjectBytes> {
         let key = self.layout.session_meta_key(session);
-        self.get_object_bytes_with_limit(&key, MAX_SESSION_METADATA_BYTES)
+        self.get_object_bytes_with_limit(&key, self.session_metadata_read_limit())
             .await
+    }
+
+    /// Read cap for `session.json`. Native block sessions buffer their tail inline
+    /// (base64), so the cap must accommodate one block plus the fixed metadata,
+    /// above the bare [`MAX_SESSION_METADATA_BYTES`] used for the non-tail fields.
+    fn session_metadata_read_limit(&self) -> u64 {
+        block_size_for(self.max_proxy_upload_bytes)
+            .saturating_mul(2)
+            .saturating_add(MAX_SESSION_METADATA_BYTES)
     }
 
     async fn create_session(
@@ -699,8 +731,14 @@ impl AzureBlobStorageBackend {
 
     /// Stage one block (`Put Block`). Re-staging the same index overwrites the
     /// uncommitted block, so retries are idempotent.
-    async fn stage_block(&self, object_key: &str, index: u64, bytes: Bytes) -> StorageResult<()> {
-        let id = block_id(index);
+    async fn stage_block(
+        &self,
+        object_key: &str,
+        session: &UploadSessionId,
+        index: u64,
+        bytes: Bytes,
+    ) -> StorageResult<()> {
+        let id = block_id(session, index);
         let len = bytes.len() as u64;
         let content: RequestContent<Bytes, NoFormat> = bytes.into();
         self.container
@@ -723,7 +761,7 @@ impl AzureBlobStorageBackend {
         no_overwrite: bool,
     ) -> StorageResult<AzureObjectWrite> {
         let blocklist = BlockLookupList {
-            latest: Some((0..count).map(block_id).collect()),
+            latest: Some((0..count).map(|index| block_id(session, index)).collect()),
             ..Default::default()
         };
         let mut options = BlockBlobClientCommitBlockListOptions {
@@ -861,14 +899,34 @@ impl AzureBlobStorageBackend {
         if bytes.is_empty() {
             return Ok(stored.public);
         }
-        let index = stored.native.block().expect("block state").next_index;
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-        // Stage the block first; the index is only recorded once the metadata
-        // write below lands, so a crash leaves the durable offset unchanged and a
-        // retry re-stages the same (idempotent) block.
-        self.stage_block(&object_key, index, bytes).await?;
+
+        // Coalesce sub-block chunks so the committed block count stays within
+        // Azure's 50,000-block limit. The tail is durable in `stored` until the
+        // single atomic metadata write below.
+        let tail =
+            std::mem::take(&mut stored.native.block_mut().expect("block state").pending_tail);
+        let combined: Bytes = if tail.is_empty() {
+            bytes
+        } else {
+            let mut combined = tail;
+            combined.extend_from_slice(&bytes);
+            Bytes::from(combined)
+        };
+        let block_size = block_size_for(stored.max_bytes) as usize;
+        let mut pos = 0usize;
+        while combined.len() - pos >= block_size {
+            let index = stored.native.block().expect("block state").next_index;
+            let part = combined.slice(pos..pos + block_size);
+            self.stage_block(&object_key, session, index, part).await?;
+            if let Some(state) = stored.native.block_mut() {
+                state.next_index = index + 1;
+                state.flushed_len += block_size as u64;
+            }
+            pos += block_size;
+        }
         if let Some(state) = stored.native.block_mut() {
-            state.next_index = index + 1;
+            state.pending_tail = combined.slice(pos..).to_vec();
         }
         stored.public.next_offset = Some(new_offset);
         self.write_session(session, &mut stored).await?;
@@ -892,17 +950,12 @@ impl AzureBlobStorageBackend {
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
 
-        let (written, checksum) = match self
+        // complete_with_blocks owns session-state changes on failure: it reopens
+        // for pre-commit errors, and terminally aborts on a post-commit checksum
+        // mismatch (the consumed blocks cannot be re-committed).
+        let (written, checksum) = self
             .complete_with_blocks(session, &mut stored, &object_key, provided_checksum)
-            .await
-        {
-            Ok(pair) => pair,
-            Err(err) => {
-                self.reopen_if_object_absent(session, &mut stored, &object_key)
-                    .await;
-                return Err(err);
-            }
-        };
+            .await?;
 
         let object = self.object_ref(&stored, total, written, checksum);
         stored.public.status = UploadSessionStatus::Complete;
@@ -925,7 +978,6 @@ impl AzureBlobStorageBackend {
         // committing, while the session is still resumable.
         precheck_checksum(&stored.checksum_policy, provided_checksum.as_ref())?;
         let total = stored.public.next_offset.unwrap_or(0);
-        let count = stored.native.block().expect("block state").next_index;
 
         // HEAD on every attempt: adopt our own already-committed blob (matched by
         // the ownership marker), reject a foreign one. `If-None-Match: *` on the
@@ -937,6 +989,8 @@ impl AzureBlobStorageBackend {
                     version_id: attrs.version_id,
                 }
             } else {
+                // Foreign blob (session still Open here): reject without
+                // overwriting.
                 return Err(StorageError::policy_rejected(format!(
                     "Azure blob key already exists: {object_key}"
                 )));
@@ -951,6 +1005,37 @@ impl AzureBlobStorageBackend {
                 stored.completion_object_key = Some(object_key.to_string());
                 self.write_session(session, stored).await?;
             }
+            // Flush the final remainder as the last block. Failures here are
+            // pre-commit (blocks not yet consumed), so reopen for retry.
+            let tail = stored
+                .native
+                .block()
+                .expect("block state")
+                .pending_tail
+                .clone();
+            if !tail.is_empty() {
+                let index = stored.native.block().expect("block state").next_index;
+                let tail_len = tail.len() as u64;
+                if let Err(err) = self
+                    .stage_block(object_key, session, index, Bytes::from(tail))
+                    .await
+                {
+                    self.reopen_if_object_absent(session, stored, object_key)
+                        .await;
+                    return Err(err);
+                }
+                if let Some(state) = stored.native.block_mut() {
+                    state.next_index = index + 1;
+                    state.flushed_len += tail_len;
+                    state.pending_tail = Vec::new();
+                }
+                if let Err(err) = self.write_session(session, stored).await {
+                    self.reopen_if_object_absent(session, stored, object_key)
+                        .await;
+                    return Err(err);
+                }
+            }
+            let count = stored.native.block().expect("block state").next_index;
             match self
                 .commit_block_list(
                     object_key,
@@ -964,30 +1049,49 @@ impl AzureBlobStorageBackend {
                 Ok(written) => written,
                 Err(StorageError::Conflict { .. }) => {
                     // A blob appeared at the key during completion; adopt it only
-                    // if it is ours.
-                    match self.get_object_attrs(object_key).await? {
-                        Some(attrs) if attrs.owner_session.as_deref() == Some(session.as_str()) => {
+                    // if it is ours, otherwise reject and reopen for the owner.
+                    match self.get_object_attrs(object_key).await {
+                        Ok(Some(attrs))
+                            if attrs.owner_session.as_deref() == Some(session.as_str()) =>
+                        {
                             AzureObjectWrite {
                                 etag: attrs.etag,
                                 version_id: attrs.version_id,
                             }
                         }
-                        _ => {
+                        Ok(_) => {
+                            self.reopen_if_object_absent(session, stored, object_key)
+                                .await;
                             return Err(StorageError::policy_rejected(format!(
                                 "Azure blob key already exists: {object_key}"
-                            )))
+                            )));
+                        }
+                        Err(err) => {
+                            self.reopen_if_object_absent(session, stored, object_key)
+                                .await;
+                            return Err(err);
                         }
                     }
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    // Commit failed without consuming the blocks; reopen unless our
+                    // blob is actually live (a lost response), in which case a
+                    // retry adopts it.
+                    self.reopen_if_object_absent(session, stored, object_key)
+                        .await;
+                    return Err(err);
+                }
             }
         };
 
+        // Validate the checksum by streaming the committed blob.
         let checksum = match checksum_algorithm_to_compute(
             &stored.checksum_policy,
             provided_checksum.as_ref(),
         ) {
             Some(algorithm) => {
+                // A transient read failure leaves the blob live and the session
+                // Completing, so a retry adopts and re-verifies it.
                 let computed = self.stream_object_checksum(object_key, algorithm).await?;
                 match validate_complete_checksum_precomputed(
                     &stored.checksum_policy,
@@ -996,18 +1100,14 @@ impl AzureBlobStorageBackend {
                 ) {
                     Ok(checksum) => checksum,
                     Err(err) => {
-                        // Remove the committed-but-invalid blob; surface a delete
-                        // failure (a live invalid object is worse).
-                        self.delete_object(object_key).await.map_err(|delete_err| {
-                            tracing::error!(
-                                target: "pocopine.log",
-                                event_name = "pocopine.storage.azure_invalid_object_cleanup_failed",
-                                object_key = %object_key,
-                                checksum_error = %err,
-                                delete_error = %delete_err,
-                            );
-                            delete_err
-                        })?;
+                        // The bytes do not match the supplied checksum. The blocks
+                        // were already consumed by the commit, so this upload cannot
+                        // be re-committed: delete the invalid blob and mark the
+                        // session terminally aborted (the client must re-initiate)
+                        // rather than reopening it to a state that cannot succeed.
+                        let _ = self.delete_object(object_key).await;
+                        stored.public.status = UploadSessionStatus::Aborted;
+                        let _ = self.write_session(session, stored).await;
                         return Err(err);
                     }
                 }

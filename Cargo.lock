@@ -5972,6 +5972,7 @@ dependencies = [
  "futures-util",
  "hmac 0.12.1",
  "percent-encoding",
+ "pocopine-codec",
  "pocopine-crypto",
  "pocopine-storage",
  "reqwest 0.13.4",

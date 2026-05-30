@@ -35,18 +35,30 @@ pub(crate) enum NativeUploadState {
     /// Legacy staged-object rewrite (download → extend → re-upload per append).
     #[default]
     LegacyProxy,
-    /// Native block blob: each `PATCH` stages one block (`Put Block`), and
-    /// completion assembles them with `Put Block List`. No bytes are re-written.
+    /// Native block blob: sub-block `PATCH` chunks are coalesced into a bounded
+    /// tail and flushed as blocks (`Put Block`); completion assembles them with
+    /// `Put Block List`. No bytes are re-written.
     Block(AzureBlockState),
 }
 
-/// Block-blob bookkeeping for one session. Block ids are derived from the index,
-/// so only the count of staged blocks is tracked.
+/// Block-blob bookkeeping for one session. Block ids are derived from the index
+/// (and the session id), so only counts/lengths are tracked.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AzureBlockState {
     /// Number of blocks staged so far; the next block uses index `next_index`.
     #[serde(default)]
     pub(crate) next_index: u64,
+    /// Total bytes already flushed to staged blocks (excludes the pending tail).
+    #[serde(default)]
+    pub(crate) flushed_len: u64,
+    /// Bytes received but not yet flushed to a block (smaller than one block,
+    /// except the final remainder at completion). Base64 inline in the metadata.
+    #[serde(
+        default,
+        with = "pocopine_codec::base64_bytes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub(crate) pending_tail: Vec<u8>,
 }
 
 impl NativeUploadState {

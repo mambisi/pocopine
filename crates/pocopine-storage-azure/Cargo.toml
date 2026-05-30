@@ -11,6 +11,8 @@ azure_core = "1"
 azure_storage_blob = "1"
 bytes = "1"
 futures-util = "0.3"
+pocopine-codec = { workspace = true }
+pocopine-crypto = { workspace = true }
 pocopine-storage = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
