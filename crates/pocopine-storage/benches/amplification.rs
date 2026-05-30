@@ -61,22 +61,31 @@ fn gcs_legacy_rewrite(total: usize, chunk: usize) -> Sink {
     sink
 }
 
-/// S3 native multipart: coalesce sub-part chunks, flush each full part once.
+/// S3 native multipart: coalesce sub-part chunks into >=5 MiB parts, flushing
+/// each part's bytes to the provider exactly once via `UploadPart`.
+///
+/// Only the unflushed remainder is buffered (bounded by one part), tracked by
+/// length with no front-shifting, so the model reflects the real cost: every
+/// payload byte is written once. (The real backend additionally rewrites a small
+/// base64 tail in the session metadata per append; that churn is bounded by the
+/// part size and disappears once the client sends part-sized chunks, so it is
+/// not modeled here.)
 fn s3_native_multipart(total: usize, chunk: usize) -> Sink {
     let mut sink = Sink::default();
-    let mut tail: Vec<u8> = Vec::with_capacity(S3_PART + chunk);
+    let part = vec![0xA5u8; S3_PART];
+    let mut pending = 0usize;
     let mut offset = 0;
     while offset < total {
         let n = chunk.min(total - offset);
-        tail.resize(tail.len() + n, 0xA5);
-        while tail.len() >= S3_PART {
-            sink.write(&tail[..S3_PART]); // UploadPart
-            tail.drain(..S3_PART);
+        pending += n;
+        while pending >= S3_PART {
+            sink.write(&part); // UploadPart: one full part, written once
+            pending -= S3_PART;
         }
         offset += n;
     }
-    if !tail.is_empty() {
-        sink.write(&tail); // final part
+    if pending > 0 {
+        sink.write(&part[..pending]); // final part
     }
     sink
 }
