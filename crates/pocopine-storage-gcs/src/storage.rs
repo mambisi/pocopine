@@ -650,12 +650,18 @@ impl GcsStorageBackend {
         stored: &mut StoredUploadSession,
         object_key: &str,
     ) {
-        if let Ok(Some(attrs)) = self.get_object_attrs(object_key).await {
-            if attrs.owner_session.as_deref() == Some(session.as_str()) {
-                return;
-            }
+        // Reopen only when the HEAD *definitively* shows the object is absent or
+        // foreign. An indeterminate lookup (transient/backend error) must keep the
+        // session `Completing`: a live owned object might exist, and reopening
+        // would let a later append change the bytes a retry then adopts.
+        let absent_or_foreign = match self.get_object_attrs(object_key).await {
+            Ok(None) => true,
+            Ok(Some(attrs)) => attrs.owner_session.as_deref() != Some(session.as_str()),
+            Err(_) => false,
+        };
+        if absent_or_foreign {
+            self.reopen_session(session, stored).await;
         }
-        self.reopen_session(session, stored).await;
     }
 
     /// Assemble the recorded components into the destination object, stamping the
