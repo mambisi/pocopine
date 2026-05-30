@@ -32,10 +32,16 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
 http-body-util = "0.1"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 tower = { version = "0.5", features = ["util"] }
+
+# Upload hot-path throughput benchmark (in-memory backend; host only).
+[[bench]]
+name = "upload"
+harness = false
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
