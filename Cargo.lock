@@ -5704,6 +5704,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-codec"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pocopine-core"
 version = "0.1.0"
 dependencies = [
@@ -5970,6 +5979,8 @@ dependencies = [
  "google-cloud-gax",
  "google-cloud-storage",
  "percent-encoding",
+ "pocopine-codec",
+ "pocopine-crypto",
  "pocopine-storage",
  "reqwest 0.13.4",
  "serde",
@@ -5986,8 +5997,8 @@ name = "pocopine-storage-s3"
 version = "0.1.0"
 dependencies = [
  "aws-sdk-s3",
- "base64",
  "bytes",
+ "pocopine-codec",
  "pocopine-crypto",
  "pocopine-storage",
  "serde",

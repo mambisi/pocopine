@@ -82,6 +82,15 @@ impl GcsKeyLayout {
     pub(crate) fn session_bytes_key(&self, session: &UploadSessionId) -> String {
         format!("{}/{}/bytes.tmp", self.internal_prefix, session.as_str())
     }
+
+    /// Key for one native-compose component object.
+    pub(crate) fn session_component_key(&self, session: &UploadSessionId, index: u32) -> String {
+        format!(
+            "{}/{}/components/comp-{index:05}",
+            self.internal_prefix,
+            session.as_str()
+        )
+    }
 }
 
 fn normalize_object_prefix(prefix: String) -> StorageResult<Option<String>> {

@@ -64,25 +64,12 @@ pub(crate) struct S3MultipartState {
     /// atomic `PutObject`. A crash can never leave the tail and metadata
     /// describing different states (which would corrupt the object around a part
     /// boundary on resume).
-    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        with = "pocopine_codec::base64_bytes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub(crate) pending_tail: Vec<u8>,
-}
-
-mod base64_bytes {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine as _;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&STANDARD.encode(bytes))
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Vec<u8>, D::Error> {
-        let encoded = String::deserialize(deserializer)?;
-        STANDARD.decode(encoded).map_err(serde::de::Error::custom)
-    }
 }
 
 /// One uploaded multipart part.
