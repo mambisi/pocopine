@@ -1105,9 +1105,33 @@ impl AzureBlobStorageBackend {
                         // be re-committed: delete the invalid blob and mark the
                         // session terminally aborted (the client must re-initiate)
                         // rather than reopening it to a state that cannot succeed.
-                        let _ = self.delete_object(object_key).await;
+                        //
+                        // Surface a failure of either cleanup step — a live invalid
+                        // blob, or a session left `Completing` with consumed blocks,
+                        // is more severe than the checksum rejection.
+                        self.delete_object(object_key).await.map_err(|delete_err| {
+                            tracing::error!(
+                                target: "pocopine.log",
+                                event_name = "pocopine.storage.azure_invalid_object_cleanup_failed",
+                                object_key = %object_key,
+                                checksum_error = %err,
+                                delete_error = %delete_err,
+                            );
+                            delete_err
+                        })?;
                         stored.public.status = UploadSessionStatus::Aborted;
-                        let _ = self.write_session(session, stored).await;
+                        self.write_session(session, stored)
+                            .await
+                            .map_err(|write_err| {
+                                tracing::error!(
+                                    target: "pocopine.log",
+                                    event_name = "pocopine.storage.azure_abort_persist_failed",
+                                    object_key = %object_key,
+                                    checksum_error = %err,
+                                    write_error = %write_err,
+                                );
+                                write_err
+                            })?;
                         return Err(err);
                     }
                 }
