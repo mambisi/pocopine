@@ -457,9 +457,14 @@ impl S3StorageBackend {
             .await
         {
             Ok(output) => Ok(output.e_tag().map(|etag| normalize_etag(etag.to_string()))),
-            Err(err) if is_precondition_failed(&err) => Err(StorageError::policy_rejected(
-                format!("S3 object key already exists: {object_key}"),
-            )),
+            Err(err) if is_precondition_failed(&err) => {
+                // A foreign object won the race; our upload is still active, so
+                // abort it to avoid leaking parts before reporting the collision.
+                let _ = self.abort_multipart(object_key, upload_id).await;
+                Err(StorageError::policy_rejected(format!(
+                    "S3 object key already exists: {object_key}"
+                )))
+            }
             Err(err) if is_no_such_upload(&err) => {
                 match self.head_object(object_key).await? {
                     // Adopt the existing object only if it was stamped by this
@@ -716,38 +721,25 @@ impl S3StorageBackend {
         precheck_checksum(&stored.checksum_policy, request.checksum.as_ref())?;
 
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-        // `Completing` means a prior completion attempt got at least as far as
-        // finalizing the object, so a retry must treat an existing key as ours.
-        let first_attempt = stored.public.status == UploadSessionStatus::Open;
-        // Defense in depth against overwriting a foreign object:
-        //  - this preflight HEAD catches a pre-existing key and works on every
-        //    S3-compatible store (including emulators that ignore the condition);
-        //  - `CompleteMultipartUpload` additionally uses `If-None-Match: *` to
-        //    close the TOCTOU window on real S3.
-        // Retries (status `Completing`) skip the preflight: the key may exist
-        // from our own prior completion and is reconciled idempotently.
-        if first_attempt && self.head_object(&object_key).await?.is_some() {
-            return Err(StorageError::policy_rejected(format!(
-                "S3 object key already exists: {object_key}"
-            )));
-        }
-        if stored.public.status == UploadSessionStatus::Open
-            || stored.public.next_offset != Some(total)
-        {
-            stored.public.status = UploadSessionStatus::Completing;
-            stored.public.next_offset = Some(total);
-            self.write_session(session, &stored).await?;
-        }
-
-        let (has_upload_id, tail) = {
-            let state = stored.native.multipart().expect("multipart state");
-            (state.upload_id.is_some(), state.pending_tail.clone())
-        };
+        let has_upload_id = stored
+            .native
+            .multipart()
+            .expect("multipart state")
+            .upload_id
+            .is_some();
 
         let (etag, checksum) = if !has_upload_id {
-            // Whole object fits within one part (or is empty): a single direct
-            // PUT, no multipart overhead. We already have the bytes, so validate
-            // the checksum directly.
+            // Single direct-PUT path: the whole object fits in the buffered tail
+            // (or is empty). It is atomic — `put_completed_object` refuses to
+            // overwrite an existing key — and the checksum is validated before any
+            // state change, so a rejected checksum leaves the session open and
+            // resumable rather than stranded in `Completing`.
+            let tail = stored
+                .native
+                .multipart()
+                .expect("multipart state")
+                .pending_tail
+                .clone();
             let checksum =
                 validate_complete_checksum(&stored.checksum_policy, &tail, request.checksum)?;
             let etag = self
@@ -759,8 +751,39 @@ impl S3StorageBackend {
                 .await?;
             (etag, checksum)
         } else {
-            // Flush the final remainder as the last part (the last part is exempt
-            // from the minimum-size rule), then assemble the object.
+            // Multipart path. `Completing` means a prior attempt already reached
+            // the finalize stage, so a retry must treat an existing key as
+            // potentially ours.
+            let first_attempt = stored.public.status == UploadSessionStatus::Open;
+            // Defense in depth against overwriting a foreign object: this preflight
+            // HEAD works on every store (including emulators that ignore the
+            // condition), and `CompleteMultipartUpload` additionally uses
+            // `If-None-Match: *` to close the TOCTOU window on real S3. Retries
+            // skip the preflight; the key may exist from our own prior completion.
+            if first_attempt && self.head_object(&object_key).await?.is_some() {
+                // Abort the now-orphaned provider upload before reporting so its
+                // parts do not linger and accrue storage cost.
+                let _ = self.abort_multipart_session(&stored).await;
+                return Err(StorageError::policy_rejected(format!(
+                    "S3 object key already exists: {object_key}"
+                )));
+            }
+            if stored.public.status == UploadSessionStatus::Open
+                || stored.public.next_offset != Some(total)
+            {
+                stored.public.status = UploadSessionStatus::Completing;
+                stored.public.next_offset = Some(total);
+                self.write_session(session, &stored).await?;
+            }
+
+            // Flush the final remainder as the last part (exempt from the
+            // minimum-size rule), then assemble the object.
+            let tail = stored
+                .native
+                .multipart()
+                .expect("multipart state")
+                .pending_tail
+                .clone();
             if !tail.is_empty() {
                 let tail_len = tail.len() as u64;
                 let upload_id = stored
