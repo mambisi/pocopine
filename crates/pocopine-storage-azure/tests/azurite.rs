@@ -17,9 +17,9 @@ use bytes::Bytes;
 use hmac::{Hmac, Mac};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use pocopine_storage::{
-    CompleteUpload, InitiateUpload, PrincipalRef, SafeObjectKey, StorageActor, StorageBackend,
-    StorageContext, StorageError, StorageKey, StorageResult, UploadPolicy, UploadSession,
-    UploadSessionStatus, UploadStrategy,
+    ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum,
+    PrincipalRef, SafeObjectKey, StorageActor, StorageBackend, StorageContext, StorageError,
+    StorageKey, StorageResult, UploadPolicy, UploadSession, UploadSessionStatus, UploadStrategy,
 };
 use pocopine_storage_azure::AzureBlobStorageBackend;
 use sha2::Sha256;
@@ -445,22 +445,35 @@ async fn duplicate_append_retry_after_staged_write_advances_metadata() -> Storag
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn append_refreshes_staged_etag_after_truncating_rogue_bytes() -> StorageResult<()> {
+async fn rogue_staged_object_does_not_corrupt_native_upload() -> StorageResult<()> {
     let container = create_container("truncate-append").await;
     let backend = AzureBlobStorageBackend::new(container.client())?;
     let session = initiate(&backend, Some(6)).await?;
+    // Native block sessions stage blocks against the destination blob; the legacy
+    // `bytes.tmp` staging object is not part of the protocol, so a rogue one must
+    // not affect the committed result.
     let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
 
     backend
         .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"abc"))
         .await?;
     put_object(&container, bytes_key.clone(), b"abcjunk").await;
-
     let updated = backend
         .append_upload_bytes(&ctx(), session.id.clone(), 3, Bytes::from_static(b"def"))
         .await?;
     assert_eq!(updated.next_offset, Some(6));
-    assert_eq!(object_bytes(&container, &bytes_key).await, b"abcdef");
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, 6);
+    assert_eq!(object_bytes(&container, "files/hello.txt").await, b"abcdef");
     Ok(())
 }
 
@@ -503,15 +516,15 @@ async fn non_system_actor_cannot_abort_corrupt_upload_metadata() -> StorageResul
     let backend = AzureBlobStorageBackend::new(container.client())?;
     let session = initiate(&backend, Some(5)).await?;
     let meta_key = session_object_key(&backend, &session, "session.json");
-    let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
     put_object(&container, meta_key.clone(), b"{not-json").await;
 
     let rejected = backend
         .abort_upload(&principal_ctx("tenant-b"), session.id.clone())
         .await;
     assert!(matches!(rejected, Err(StorageError::Forbidden { .. })));
+    // The refused abort left the (corrupt) session metadata in place. Native
+    // sessions have no separate `bytes.tmp` staging object to check.
     assert!(blob_exists(&container, &meta_key).await);
-    assert!(blob_exists(&container, &bytes_key).await);
 
     backend.abort_upload(&ctx(), session.id).await?;
     Ok(())
@@ -585,5 +598,199 @@ async fn initiate_rejects_policy_above_proxy_cap_for_streaming_upload() -> Stora
         rejected,
         Err(StorageError::PayloadTooLarge { limit: 8 })
     ));
+    Ok(())
+}
+
+fn large_policy() -> StorageResult<UploadPolicy> {
+    let mut policy = UploadPolicy::new("azure")?
+        .max_bytes(32 * 1024 * 1024)
+        .preferred_chunk_size(1024 * 1024);
+    policy.expires_after = Duration::from_secs(60 * 60);
+    Ok(policy)
+}
+
+async fn initiate_large_checked(
+    backend: &AzureBlobStorageBackend,
+    key: &str,
+    size: u64,
+    checksum: ChecksumPolicy,
+) -> StorageResult<UploadSession> {
+    let mut policy = large_policy()?;
+    policy.checksum = checksum;
+    backend
+        .initiate_upload(
+            &ctx(),
+            InitiateUpload {
+                scope: "files".to_string(),
+                storage_key: StorageKey::new(SafeObjectKey::parse(key)?),
+                file_name: "large.bin".to_string(),
+                size: Some(size),
+                content_type: Some("application/octet-stream".to_string()),
+                metadata: BTreeMap::new(),
+                requested_strategy: UploadStrategy::Auto,
+                policy,
+            },
+        )
+        .await
+}
+
+fn pattern_bytes(start: usize, len: usize) -> Bytes {
+    let mut buf = Vec::with_capacity(len);
+    for i in 0..len {
+        buf.push(((start + i) % 251) as u8);
+    }
+    Bytes::from(buf)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn block_upload_assembles_multiple_blocks_against_azurite() -> StorageResult<()> {
+    let container = create_container("blocks").await;
+    let backend = AzureBlobStorageBackend::new(container.client())?;
+    let chunk = 1024 * 1024usize;
+    let total = 4 * chunk;
+    let session = initiate_large_checked(
+        &backend,
+        "files/large.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+
+    let mut offset = 0u64;
+    for index in 0..4 {
+        let updated = backend
+            .append_upload_bytes(
+                &ctx(),
+                session.id.clone(),
+                offset,
+                pattern_bytes(index * chunk, chunk),
+            )
+            .await?;
+        offset += chunk as u64;
+        assert_eq!(updated.next_offset, Some(offset));
+    }
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total as u64);
+    assert_eq!(
+        object_bytes(&container, "files/large.bin").await,
+        pattern_bytes(0, total).to_vec()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn block_completion_is_idempotent_against_azurite() -> StorageResult<()> {
+    let container = create_container("block-idem").await;
+    let backend = AzureBlobStorageBackend::new(container.client())?;
+    let total = 3 * 1024 * 1024usize;
+    let session = initiate_large_checked(
+        &backend,
+        "files/large.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, total))
+        .await?;
+
+    let first = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await?;
+    let second = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(first, second);
+    assert_eq!(first.size, total as u64);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn block_upload_verifies_streaming_sha256_against_azurite() -> StorageResult<()> {
+    let container = create_container("block-sha").await;
+    let backend = AzureBlobStorageBackend::new(container.client())?;
+    let total = 3 * 1024 * 1024usize;
+    let data = pattern_bytes(0, total);
+    let expected = ObjectChecksum {
+        algorithm: ChecksumAlgorithm::Sha256,
+        value: pocopine_crypto::sha256_hex(&data),
+    };
+    let session = initiate_large_checked(
+        &backend,
+        "files/checked.bin",
+        total as u64,
+        ChecksumPolicy::Required(ChecksumAlgorithm::Sha256),
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, data)
+        .await?;
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: Some(expected.clone()),
+            },
+        )
+        .await?;
+    assert_eq!(object.checksum, Some(expected));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn block_complete_does_not_overwrite_existing_object_key() -> StorageResult<()> {
+    let container = create_container("block-collision").await;
+    put_object(&container, "files/large.bin", b"existing").await;
+
+    let backend = AzureBlobStorageBackend::new(container.client())?;
+    let total = 2 * 1024 * 1024usize;
+    let session = initiate_large_checked(
+        &backend,
+        "files/large.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, total))
+        .await?;
+
+    let rejected = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await;
+    assert!(matches!(rejected, Err(StorageError::PolicyRejected { .. })));
+    assert_eq!(
+        object_bytes(&container, "files/large.bin").await,
+        b"existing"
+    );
     Ok(())
 }
