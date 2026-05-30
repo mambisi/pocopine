@@ -171,31 +171,6 @@ impl S3StorageBackend {
         }
     }
 
-    /// Read the persisted tail buffer for a native multipart session.
-    ///
-    /// The tail is always smaller than one part, so this read is bounded; it is
-    /// not a full-object read.
-    async fn read_tail(
-        &self,
-        session: &UploadSessionId,
-        expected_len: u64,
-    ) -> StorageResult<Vec<u8>> {
-        let tail = self.get_staged_bytes(session).await?;
-        if tail.len() as u64 != expected_len {
-            // Metadata and the staged tail disagree (e.g. a crash between the S3
-            // write and the metadata write). Trust the persisted object; the
-            // client re-sends from the metadata offset and we converge.
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.s3_tail_len_mismatch",
-                session = %session,
-                metadata = expected_len,
-                staged = tail.len(),
-            );
-        }
-        Ok(tail)
-    }
-
     async fn reconcile_staged_bytes(
         &self,
         session: &UploadSessionId,
@@ -577,15 +552,26 @@ impl S3StorageBackend {
         offset: u64,
         bytes: Bytes,
     ) -> StorageResult<UploadSession> {
-        let (flushed, tail_len) = {
+        // Take the buffered tail out of the session so it can be prepended to the
+        // incoming chunk without an extra copy; it is rewritten below.
+        let tail = {
             let state = stored
                 .native
-                .multipart()
+                .multipart_mut()
                 .expect("append_multipart called for a non-multipart session");
-            (state.flushed_len(), state.pending_tail_len)
+            std::mem::take(&mut state.pending_tail)
         };
-        let expected = flushed + tail_len;
+        let flushed = stored
+            .native
+            .multipart()
+            .expect("multipart state")
+            .flushed_len();
+        let expected = flushed + tail.len() as u64;
         if expected != offset {
+            // Restore the tail we took before bailing so `stored` is unchanged.
+            if let Some(state) = stored.native.multipart_mut() {
+                state.pending_tail = tail;
+            }
             tracing::debug!(
                 target: "pocopine.log",
                 event_name = "pocopine.storage.offset_mismatch",
@@ -598,23 +584,31 @@ impl S3StorageBackend {
         let new_offset = checked_new_offset(offset, bytes.len())?;
         ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
         if bytes.is_empty() {
+            if let Some(state) = stored.native.multipart_mut() {
+                state.pending_tail = tail;
+            }
             return Ok(stored.public);
         }
 
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
 
-        // Combine the persisted tail (bounded by one part) with the incoming
+        // Combine the buffered tail (bounded by one part) with the incoming
         // chunk. When the tail is empty we slice the incoming `Bytes` directly,
         // avoiding any copy.
-        let combined: Bytes = if tail_len > 0 {
-            let mut tail = self.read_tail(session, tail_len).await?;
-            tail.extend_from_slice(&bytes);
-            Bytes::from(tail)
-        } else {
+        let combined: Bytes = if tail.is_empty() {
             bytes
+        } else {
+            let mut combined = tail;
+            combined.extend_from_slice(&bytes);
+            Bytes::from(combined)
         };
 
-        // Flush every full-size part; the remainder becomes the new tail.
+        // Flush every full-size part; the remainder becomes the new tail. Parts
+        // are uploaded to S3 first, then the resulting state (parts + remainder
+        // tail) is persisted in a single atomic write at the end. A crash before
+        // that write leaves the durable metadata unchanged, so the client simply
+        // re-sends from the old offset and we recompute the same parts (uploading
+        // a part is idempotent — the same part number overwrites).
         let part_size = S3_MIN_PART_SIZE as usize;
         let mut pos = 0usize;
         while combined.len() - pos >= part_size {
@@ -641,18 +635,8 @@ impl S3StorageBackend {
             pos += part_size;
         }
 
-        let remainder = combined.slice(pos..);
-        let remainder_len = remainder.len() as u64;
-        if remainder.is_empty() {
-            if tail_len > 0 {
-                self.delete_object(&self.layout.session_bytes_key(session))
-                    .await?;
-            }
-        } else {
-            self.put_staged_bytes(session, remainder.to_vec()).await?;
-        }
         if let Some(state) = stored.native.multipart_mut() {
-            state.pending_tail_len = remainder_len;
+            state.pending_tail = combined.slice(pos..).to_vec();
         }
         stored.public.next_offset = Some(new_offset);
         self.write_session(session, &stored).await?;
@@ -676,6 +660,19 @@ impl S3StorageBackend {
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
 
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
+        // On the first completion attempt the destination key has not been
+        // written yet (multipart parts live in the upload, not at the key). If an
+        // object already exists there it is a foreign collision, so reject rather
+        // than overwrite — matching the single-part `put_completed_object` guard.
+        // Retries (status `Completing`) skip this: the key may exist from our own
+        // prior completion and is reconciled by the idempotent-completion path.
+        if stored.public.status == UploadSessionStatus::Open
+            && self.head_object(&object_key).await?.is_some()
+        {
+            return Err(StorageError::policy_rejected(format!(
+                "S3 object key already exists: {object_key}"
+            )));
+        }
         if stored.public.status == UploadSessionStatus::Open
             || stored.public.next_offset != Some(total)
         {
@@ -684,26 +681,21 @@ impl S3StorageBackend {
             self.write_session(session, &stored).await?;
         }
 
-        let (has_upload_id, tail_len) = {
+        let (has_upload_id, tail) = {
             let state = stored.native.multipart().expect("multipart state");
-            (state.upload_id.is_some(), state.pending_tail_len)
+            (state.upload_id.is_some(), state.pending_tail.clone())
         };
 
         let (etag, checksum) = if !has_upload_id {
             // Whole object fits within one part (or is empty): a single direct
             // PUT, no multipart overhead. We already have the bytes, so validate
             // the checksum directly.
-            let bytes = if tail_len > 0 {
-                self.read_tail(session, tail_len).await?
-            } else {
-                Vec::new()
-            };
             let checksum =
-                validate_complete_checksum(&stored.checksum_policy, &bytes, request.checksum)?;
+                validate_complete_checksum(&stored.checksum_policy, &tail, request.checksum)?;
             let etag = self
                 .put_completed_object(
                     &object_key,
-                    Bytes::from(bytes),
+                    Bytes::from(tail),
                     stored.public.content_type.as_deref(),
                 )
                 .await?;
@@ -711,7 +703,8 @@ impl S3StorageBackend {
         } else {
             // Flush the final remainder as the last part (the last part is exempt
             // from the minimum-size rule), then assemble the object.
-            if tail_len > 0 {
+            if !tail.is_empty() {
+                let tail_len = tail.len() as u64;
                 let upload_id = stored
                     .native
                     .multipart()
@@ -722,7 +715,6 @@ impl S3StorageBackend {
                     .multipart()
                     .expect("multipart state")
                     .next_part_number;
-                let tail = self.read_tail(session, tail_len).await?;
                 let etag = self
                     .upload_part(&object_key, &upload_id, number, Bytes::from(tail))
                     .await?;
@@ -733,7 +725,7 @@ impl S3StorageBackend {
                         size: tail_len,
                     });
                     state.next_part_number = number + 1;
-                    state.pending_tail_len = 0;
+                    state.pending_tail = Vec::new();
                 }
                 self.write_session(session, &stored).await?;
             }
@@ -790,9 +782,12 @@ impl S3StorageBackend {
         stored.public.status = UploadSessionStatus::Complete;
         stored.public.next_offset = Some(total);
         stored.object = Some(object.clone());
-        stored.cleanup_pending = true;
+        // Native sessions buffer the tail inline in the metadata, so there is no
+        // separate staged object to delete.
+        if let Some(state) = stored.native.multipart_mut() {
+            state.pending_tail = Vec::new();
+        }
         self.write_session(session, &stored).await?;
-        self.cleanup_staged_bytes(session, &mut stored).await?;
         Ok(object)
     }
 
@@ -935,7 +930,7 @@ impl StorageBackend for S3StorageBackend {
                     upload_id: None,
                     parts: Vec::new(),
                     next_part_number: 1,
-                    pending_tail_len: 0,
+                    pending_tail: Vec::new(),
                 }),
             };
             // No staged `bytes.tmp` is created up front; native sessions only
@@ -988,7 +983,7 @@ impl StorageBackend for S3StorageBackend {
             ensure_owner(&ctx.actor, &stored.owner)?;
             self.persist_expired_if_needed(&session, &stored).await?;
             let committed_offset = match stored.native.multipart() {
-                Some(state) => state.flushed_len() + state.pending_tail_len,
+                Some(state) => state.committed_len(),
                 None => self
                     .reconcile_staged_bytes(&session, stored.public.next_offset.unwrap_or(0))
                     .await?

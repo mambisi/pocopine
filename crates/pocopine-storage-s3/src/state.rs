@@ -55,11 +55,34 @@ pub(crate) struct S3MultipartState {
     /// Next part number to assign (S3 part numbers are 1-based).
     #[serde(default)]
     pub(crate) next_part_number: i32,
-    /// Bytes currently buffered in `bytes.tmp` that have not yet been flushed to
-    /// a part. Always smaller than one part (the S3 5 MiB minimum), except just
-    /// before completion when the final remainder becomes the last part.
-    #[serde(default)]
-    pub(crate) pending_tail_len: u64,
+    /// Bytes received but not yet flushed to a part. Always smaller than one
+    /// part (the S3 5 MiB minimum), except just before completion when the final
+    /// remainder becomes the last part.
+    ///
+    /// Stored inline (base64) in the session metadata rather than a separate
+    /// object, so the tail and the part bookkeeping are persisted in a single
+    /// atomic `PutObject`. A crash can never leave the tail and metadata
+    /// describing different states (which would corrupt the object around a part
+    /// boundary on resume).
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub(crate) pending_tail: Vec<u8>,
+}
+
+mod base64_bytes {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u8>, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        STANDARD.decode(encoded).map_err(serde::de::Error::custom)
+    }
 }
 
 /// One uploaded multipart part.
@@ -90,5 +113,10 @@ impl S3MultipartState {
     /// Total bytes already committed to provider parts (excludes the pending tail).
     pub(crate) fn flushed_len(&self) -> u64 {
         self.parts.iter().map(|part| part.size).sum()
+    }
+
+    /// Total bytes accepted so far (flushed parts plus the buffered tail).
+    pub(crate) fn committed_len(&self) -> u64 {
+        self.flushed_len() + self.pending_tail.len() as u64
     }
 }

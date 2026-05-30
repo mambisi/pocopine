@@ -8,6 +8,7 @@ description = "S3-compatible backend adapter for pocopine-storage."
 
 [dependencies]
 aws-sdk-s3 = "1"
+base64 = "0.22"
 bytes = "1"
 pocopine-storage = { workspace = true }
 serde = { workspace = true }

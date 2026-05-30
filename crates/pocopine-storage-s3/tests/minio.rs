@@ -557,3 +557,42 @@ async fn complete_does_not_overwrite_existing_object_key() -> StorageResult<()> 
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multipart_complete_does_not_overwrite_existing_object_key() -> StorageResult<()> {
+    let client = minio_client().await;
+    let bucket = create_bucket(&client, "mp-collision").await;
+    client
+        .put_object()
+        .bucket(&bucket)
+        .key("files/large.bin")
+        .body(ByteStream::from_static(b"existing"))
+        .send()
+        .await
+        .expect("seed existing object");
+
+    let backend = S3StorageBackend::new(client.clone(), bucket.clone())?;
+    let total = 6 * 1024 * 1024usize;
+    let session = initiate_large(&backend, Some(total as u64)).await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, total))
+        .await?;
+
+    // The multipart completion path must also refuse to clobber an existing key
+    // (CompleteMultipartUpload would otherwise overwrite it).
+    let rejected = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await;
+    assert!(matches!(rejected, Err(StorageError::PolicyRejected { .. })));
+    assert_eq!(
+        object_bytes(&client, &bucket, "files/large.bin").await,
+        b"existing"
+    );
+    Ok(())
+}
