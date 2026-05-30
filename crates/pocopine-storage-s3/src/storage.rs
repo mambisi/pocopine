@@ -42,6 +42,13 @@ const S3_MAX_PARTS: u64 = 10_000;
 /// Read granularity for the streaming checksum read-back.
 const CHECKSUM_READ_CHUNK: usize = 256 * 1024;
 
+/// Object user-metadata key stamped at `CreateMultipartUpload` with the upload
+/// session id. It proves ownership when reconciling an existing key after S3
+/// reports `NoSuchUpload` (which can mean either "we already completed" or "the
+/// upload was aborted/expired"). Only an object carrying our session id is
+/// adopted on recovery.
+const SESSION_OWNER_META_KEY: &str = "pocopine-upload-session";
+
 /// Part size to coalesce to for a session whose maximum object size is
 /// `max_bytes`.
 ///
@@ -75,6 +82,8 @@ pub struct S3StorageBackend {
 
 struct HeadObjectInfo {
     etag: Option<String>,
+    /// Value of the [`SESSION_OWNER_META_KEY`] user-metadata entry, if present.
+    owner_session: Option<String>,
 }
 
 impl std::fmt::Debug for S3StorageBackend {
@@ -337,9 +346,15 @@ impl S3StorageBackend {
             .send()
             .await
         {
-            Ok(output) => Ok(Some(HeadObjectInfo {
-                etag: output.e_tag.map(normalize_etag),
-            })),
+            Ok(output) => {
+                let owner_session = output
+                    .metadata()
+                    .and_then(|metadata| metadata.get(SESSION_OWNER_META_KEY).cloned());
+                Ok(Some(HeadObjectInfo {
+                    etag: output.e_tag.map(normalize_etag),
+                    owner_session,
+                }))
+            }
             Err(err) if is_head_object_not_found(&err) => Ok(None),
             Err(err) => Err(s3_error("head object", err)),
         }
@@ -351,12 +366,16 @@ impl S3StorageBackend {
         &self,
         object_key: &str,
         content_type: Option<&str>,
+        session: &UploadSessionId,
     ) -> StorageResult<String> {
         let mut request = self
             .client
             .create_multipart_upload()
             .bucket(&self.layout.bucket)
-            .key(object_key);
+            .key(object_key)
+            // Stamp ownership so the final object can be attributed to this
+            // session when reconciling `NoSuchUpload` on a retry.
+            .metadata(SESSION_OWNER_META_KEY, session.as_str());
         if let Some(content_type) = content_type {
             request = request.content_type(content_type);
         }
@@ -398,19 +417,21 @@ impl S3StorageBackend {
     /// Assemble the final object from its parts.
     ///
     /// Uses `If-None-Match: *` so completion atomically refuses to overwrite an
-    /// existing destination key (no TOCTOU window) on real S3. The two failure
-    /// modes are distinct and unambiguous:
+    /// existing destination key (no TOCTOU window) on real S3. Failure modes:
     ///   - `412 PreconditionFailed`: the key exists but *our* multipart upload was
     ///     not consumed, so the object was created by someone else — always
     ///     reject, never adopt it.
-    ///   - `NoSuchUpload`: our upload id was consumed by a prior completion (a
-    ///     crash before the session metadata was updated), so the existing object
-    ///     is ours — recover its ETag idempotently.
+    ///   - `NoSuchUpload`: the upload id is gone. This is ambiguous — either a
+    ///     prior completion consumed it (object is ours) or it was aborted/expired
+    ///     (any object at the key is foreign). We disambiguate via the
+    ///     [`SESSION_OWNER_META_KEY`] marker stamped at create time: adopt the key
+    ///     only when it carries this session's id, otherwise the upload is gone.
     async fn complete_multipart(
         &self,
         object_key: &str,
         upload_id: &str,
         parts: &[S3CompletedPart],
+        session: &UploadSessionId,
     ) -> StorageResult<Option<String>> {
         let completed_parts: Vec<CompletedPart> = parts
             .iter()
@@ -439,10 +460,19 @@ impl S3StorageBackend {
             Err(err) if is_precondition_failed(&err) => Err(StorageError::policy_rejected(
                 format!("S3 object key already exists: {object_key}"),
             )),
-            Err(err) if is_no_such_upload(&err) => match self.head_object(object_key).await? {
-                Some(info) => Ok(info.etag),
-                None => Err(s3_error("complete multipart upload", err)),
-            },
+            Err(err) if is_no_such_upload(&err) => {
+                match self.head_object(object_key).await? {
+                    // Adopt the existing object only if it was stamped by this
+                    // session; a foreign object (or none) means this upload was
+                    // aborted/expired and can no longer be completed.
+                    Some(info) if info.owner_session.as_deref() == Some(session.as_str()) => {
+                        Ok(info.etag)
+                    }
+                    _ => Err(StorageError::UploadClosed {
+                        session: session.to_string(),
+                    }),
+                }
+            }
             Err(err) => Err(s3_error("complete multipart upload", err)),
         }
     }
@@ -507,7 +537,7 @@ impl S3StorageBackend {
             }
         }
         let upload_id = self
-            .create_multipart(object_key, stored.public.content_type.as_deref())
+            .create_multipart(object_key, stored.public.content_type.as_deref(), session)
             .await?;
         if let Some(state) = stored.native.multipart_mut() {
             state.upload_id = Some(upload_id.clone());
@@ -765,7 +795,7 @@ impl S3StorageBackend {
                 )
             };
             let etag = self
-                .complete_multipart(&object_key, &upload_id, &parts)
+                .complete_multipart(&object_key, &upload_id, &parts, session)
                 .await?;
 
             // Validate the checksum by streaming the finished object (only when a
