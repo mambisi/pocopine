@@ -578,7 +578,19 @@ impl GcsStorageBackend {
                 // concurrent worker). Adopt it only if its bytes match what this
                 // append intends to write; otherwise the index is being reused
                 // for different content and must not be silently accepted.
-                let existing = self.get_object_bytes_with_limit(&key, size).await?;
+                let existing = match self.get_object_bytes_with_limit(&key, size).await {
+                    Ok(existing) => existing,
+                    // The conflicting component was removed between the create-only
+                    // PUT and this read (a concurrent race on an internal key). This
+                    // is a write conflict, not a missing user session — don't leak a
+                    // 404 for the session.
+                    Err(StorageError::UnknownUploadSession { .. }) => {
+                        return Err(StorageError::conflict(
+                            "GCS upload component changed during a concurrent write",
+                        ))
+                    }
+                    Err(err) => return Err(err),
+                };
                 if existing.truncated
                     || existing.bytes.len() as u64 != size
                     || existing.bytes.as_slice() != bytes.as_ref()
@@ -871,131 +883,19 @@ impl GcsStorageBackend {
                 .await?;
             (written, checksum)
         } else {
-            // HEAD on every attempt: adopt our own already-composed object
-            // (matched by the ownership marker), reject a foreign one. Works on
-            // stores that ignore compose preconditions; `if_generation_match: 0`
-            // closes the TOCTOU window on real GCS.
-            let written = if let Some(attrs) = self.get_object_attrs(&object_key).await? {
-                if attrs.owner_session.as_deref() == Some(session.as_str()) {
-                    GcsObjectWrite {
-                        etag: attrs.etag,
-                        generation: attrs.generation.map(|generation| generation.to_string()),
-                        generation_match: attrs.generation,
-                    }
-                } else {
-                    // Foreign object at the destination (the session is still
-                    // Open here): clean up our components and reject without
-                    // overwriting it.
-                    self.delete_component_chain(session).await;
-                    return Err(StorageError::policy_rejected(format!(
-                        "GCS object key already exists: {object_key}"
-                    )));
+            // Finalize via components/compose. Any failure after the session is
+            // marked `Completing` reopens it so the owner can retry or abort
+            // rather than be stranded (the reopen is a no-op while still `Open`).
+            match self
+                .complete_with_components(session, &mut stored, &object_key, provided_checksum)
+                .await
+            {
+                Ok(pair) => pair,
+                Err(err) => {
+                    self.reopen_session(session, &mut stored).await;
+                    return Err(err);
                 }
-            } else {
-                if stored.public.status == UploadSessionStatus::Open
-                    || stored.public.next_offset != Some(total)
-                    || stored.completion_object_key.as_deref() != Some(object_key.as_str())
-                {
-                    stored.public.status = UploadSessionStatus::Completing;
-                    stored.public.next_offset = Some(total);
-                    stored.completion_object_key = Some(object_key.clone());
-                    self.write_session(session, &mut stored).await?;
-                }
-                // Flush the final remainder as the last component, then compose.
-                let tail = stored
-                    .native
-                    .compose()
-                    .expect("compose state")
-                    .pending_tail
-                    .clone();
-                if !tail.is_empty() {
-                    let index = stored.native.compose().expect("compose state").next_index;
-                    let component = self
-                        .write_component(session, index, Bytes::from(tail))
-                        .await?;
-                    if let Some(state) = stored.native.compose_mut() {
-                        state.components.push(component);
-                        state.next_index = index + 1;
-                        state.pending_tail = Vec::new();
-                    }
-                    self.write_session(session, &mut stored).await?;
-                }
-                match self
-                    .compose_components(session, &stored, &object_key, Some(0))
-                    .await
-                {
-                    Ok(written) => written,
-                    Err(StorageError::PolicyRejected { .. }) => {
-                        // An object appeared at the key during completion; adopt it
-                        // only if it is ours, otherwise reject (and clean up).
-                        match self.get_object_attrs(&object_key).await? {
-                            Some(attrs)
-                                if attrs.owner_session.as_deref() == Some(session.as_str()) =>
-                            {
-                                GcsObjectWrite {
-                                    etag: attrs.etag,
-                                    generation: attrs
-                                        .generation
-                                        .map(|generation| generation.to_string()),
-                                    generation_match: attrs.generation,
-                                }
-                            }
-                            _ => {
-                                self.delete_component_chain(session).await;
-                                // The session reached Completing; reopen it so the
-                                // owner can abort or retry rather than be stranded.
-                                self.reopen_session(session, &mut stored).await;
-                                return Err(StorageError::policy_rejected(format!(
-                                    "GCS object key already exists: {object_key}"
-                                )));
-                            }
-                        }
-                    }
-                    Err(err) => return Err(err),
-                }
-            };
-
-            // Validate the checksum by streaming the composed object (only when a
-            // checksum was supplied; the default path never hashes).
-            let checksum = match checksum_algorithm_to_compute(
-                &stored.checksum_policy,
-                provided_checksum.as_ref(),
-            ) {
-                Some(algorithm) => {
-                    let computed = self.stream_object_checksum(&object_key, algorithm).await?;
-                    match validate_complete_checksum_precomputed(
-                        &stored.checksum_policy,
-                        Some(computed),
-                        provided_checksum,
-                    ) {
-                        Ok(checksum) => checksum,
-                        Err(err) => {
-                            // Remove the composed-but-invalid object; surface a
-                            // delete failure (a live invalid object is worse).
-                            self.delete_object(&object_key).await.map_err(|delete_err| {
-                                tracing::error!(
-                                    target: "pocopine.log",
-                                    event_name = "pocopine.storage.gcs_invalid_object_cleanup_failed",
-                                    object_key = %object_key,
-                                    checksum_error = %err,
-                                    delete_error = %delete_err,
-                                );
-                                delete_err
-                            })?;
-                            // Reopen so the client can retry with a correct
-                            // checksum (components remain for re-compose).
-                            self.reopen_session(session, &mut stored).await;
-                            return Err(err);
-                        }
-                    }
-                }
-                None => validate_complete_checksum_precomputed(
-                    &stored.checksum_policy,
-                    None,
-                    provided_checksum,
-                )?,
-            };
-            (written, checksum)
+            }
         };
 
         let object = self.object_ref(&stored, total, written, checksum);
@@ -1010,6 +910,132 @@ impl GcsStorageBackend {
         // live (the compose copied their bytes into it).
         self.delete_component_chain(session).await;
         Ok(object)
+    }
+
+    /// Finalize a session that has flushed components. The caller wraps this so
+    /// any error reopens the (possibly `Completing`) session.
+    async fn complete_with_components(
+        &self,
+        session: &UploadSessionId,
+        stored: &mut StoredUploadSession,
+        object_key: &str,
+        provided_checksum: Option<ObjectChecksum>,
+    ) -> StorageResult<(GcsObjectWrite, Option<ObjectChecksum>)> {
+        let total = stored.public.next_offset.unwrap_or(0);
+        // HEAD on every attempt: adopt our own already-composed object (matched by
+        // the ownership marker), reject a foreign one. Works on stores that ignore
+        // compose preconditions; `if_generation_match: 0` closes the TOCTOU window
+        // on real GCS.
+        let written = if let Some(attrs) = self.get_object_attrs(object_key).await? {
+            if attrs.owner_session.as_deref() == Some(session.as_str()) {
+                GcsObjectWrite {
+                    etag: attrs.etag,
+                    generation: attrs.generation.map(|generation| generation.to_string()),
+                    generation_match: attrs.generation,
+                }
+            } else {
+                self.delete_component_chain(session).await;
+                return Err(StorageError::policy_rejected(format!(
+                    "GCS object key already exists: {object_key}"
+                )));
+            }
+        } else {
+            if stored.public.status == UploadSessionStatus::Open
+                || stored.public.next_offset != Some(total)
+                || stored.completion_object_key.as_deref() != Some(object_key)
+            {
+                stored.public.status = UploadSessionStatus::Completing;
+                stored.public.next_offset = Some(total);
+                stored.completion_object_key = Some(object_key.to_string());
+                self.write_session(session, stored).await?;
+            }
+            // Flush the final remainder as the last component, then compose.
+            let tail = stored
+                .native
+                .compose()
+                .expect("compose state")
+                .pending_tail
+                .clone();
+            if !tail.is_empty() {
+                let index = stored.native.compose().expect("compose state").next_index;
+                let component = self
+                    .write_component(session, index, Bytes::from(tail))
+                    .await?;
+                if let Some(state) = stored.native.compose_mut() {
+                    state.components.push(component);
+                    state.next_index = index + 1;
+                    state.pending_tail = Vec::new();
+                }
+                self.write_session(session, stored).await?;
+            }
+            match self
+                .compose_components(session, stored, object_key, Some(0))
+                .await
+            {
+                Ok(written) => written,
+                Err(StorageError::PolicyRejected { .. }) => {
+                    // An object appeared at the key during completion; adopt it
+                    // only if it is ours, otherwise clean up and reject.
+                    match self.get_object_attrs(object_key).await? {
+                        Some(attrs) if attrs.owner_session.as_deref() == Some(session.as_str()) => {
+                            GcsObjectWrite {
+                                etag: attrs.etag,
+                                generation: attrs
+                                    .generation
+                                    .map(|generation| generation.to_string()),
+                                generation_match: attrs.generation,
+                            }
+                        }
+                        _ => {
+                            self.delete_component_chain(session).await;
+                            return Err(StorageError::policy_rejected(format!(
+                                "GCS object key already exists: {object_key}"
+                            )));
+                        }
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        };
+
+        // Validate the checksum by streaming the composed object (only when a
+        // checksum was supplied; the default path never hashes).
+        let checksum = match checksum_algorithm_to_compute(
+            &stored.checksum_policy,
+            provided_checksum.as_ref(),
+        ) {
+            Some(algorithm) => {
+                let computed = self.stream_object_checksum(object_key, algorithm).await?;
+                match validate_complete_checksum_precomputed(
+                    &stored.checksum_policy,
+                    Some(computed),
+                    provided_checksum,
+                ) {
+                    Ok(checksum) => checksum,
+                    Err(err) => {
+                        // Remove the composed-but-invalid object; surface a
+                        // delete failure (a live invalid object is worse).
+                        self.delete_object(object_key).await.map_err(|delete_err| {
+                            tracing::error!(
+                                target: "pocopine.log",
+                                event_name = "pocopine.storage.gcs_invalid_object_cleanup_failed",
+                                object_key = %object_key,
+                                checksum_error = %err,
+                                delete_error = %delete_err,
+                            );
+                            delete_err
+                        })?;
+                        return Err(err);
+                    }
+                }
+            }
+            None => validate_complete_checksum_precomputed(
+                &stored.checksum_policy,
+                None,
+                provided_checksum,
+            )?,
+        };
+        Ok((written, checksum))
     }
 
     // --- legacy staged-object rewrite flow (pre-compose sessions) -------------
