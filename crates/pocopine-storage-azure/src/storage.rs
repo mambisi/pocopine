@@ -1108,17 +1108,21 @@ impl AzureBlobStorageBackend {
                         //
                         // Surface a failure of either cleanup step — a live invalid
                         // blob, or a session left `Completing` with consumed blocks,
-                        // is more severe than the checksum rejection.
-                        self.delete_object(object_key).await.map_err(|delete_err| {
-                            tracing::error!(
-                                target: "pocopine.log",
-                                event_name = "pocopine.storage.azure_invalid_object_cleanup_failed",
-                                object_key = %object_key,
-                                checksum_error = %err,
-                                delete_error = %delete_err,
-                            );
-                            delete_err
-                        })?;
+                        // is more severe than the checksum rejection. An
+                        // already-absent blob (a retry after a prior cleanup) is
+                        // fine and must still advance to the abort write.
+                        self.delete_object_if_exists(object_key)
+                            .await
+                            .map_err(|delete_err| {
+                                tracing::error!(
+                                    target: "pocopine.log",
+                                    event_name = "pocopine.storage.azure_invalid_object_cleanup_failed",
+                                    object_key = %object_key,
+                                    checksum_error = %err,
+                                    delete_error = %delete_err,
+                                );
+                                delete_err
+                            })?;
                         stored.public.status = UploadSessionStatus::Aborted;
                         self.write_session(session, stored)
                             .await
