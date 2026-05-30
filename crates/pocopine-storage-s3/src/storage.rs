@@ -33,8 +33,26 @@ const DEFAULT_MAX_PROXY_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 /// bounded tail buffer until they reach it.
 const S3_MIN_PART_SIZE: u64 = 5 * 1024 * 1024;
 
+/// S3 maximum size of a single part (5 GiB).
+const S3_MAX_PART_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+
+/// S3 maximum number of parts in one multipart upload.
+const S3_MAX_PARTS: u64 = 10_000;
+
 /// Read granularity for the streaming checksum read-back.
 const CHECKSUM_READ_CHUNK: usize = 256 * 1024;
+
+/// Part size to coalesce to for a session whose maximum object size is
+/// `max_bytes`.
+///
+/// Scales up from the 5 MiB floor (rounded to a whole MiB) so the worst-case
+/// object stays within S3's 10,000-part limit, and never exceeds the 5 GiB
+/// per-part ceiling. For the default 64 MiB cap this is exactly 5 MiB.
+fn part_size_for(max_bytes: u64) -> u64 {
+    const MIB: u64 = 1024 * 1024;
+    let by_part_count = max_bytes.div_ceil(S3_MAX_PARTS).div_ceil(MIB) * MIB;
+    by_part_count.clamp(S3_MIN_PART_SIZE, S3_MAX_PART_SIZE)
+}
 
 /// Storage backend backed by an S3-compatible object store.
 ///
@@ -380,15 +398,19 @@ impl S3StorageBackend {
     /// Assemble the final object from its parts.
     ///
     /// Uses `If-None-Match: *` so completion atomically refuses to overwrite an
-    /// existing destination key (no TOCTOU window). `first_attempt` distinguishes
-    /// a genuine collision (reject) from our own already-finalized object on a
-    /// retry (recover the ETag — idempotent).
+    /// existing destination key (no TOCTOU window) on real S3. The two failure
+    /// modes are distinct and unambiguous:
+    ///   - `412 PreconditionFailed`: the key exists but *our* multipart upload was
+    ///     not consumed, so the object was created by someone else — always
+    ///     reject, never adopt it.
+    ///   - `NoSuchUpload`: our upload id was consumed by a prior completion (a
+    ///     crash before the session metadata was updated), so the existing object
+    ///     is ours — recover its ETag idempotently.
     async fn complete_multipart(
         &self,
         object_key: &str,
         upload_id: &str,
         parts: &[S3CompletedPart],
-        first_attempt: bool,
     ) -> StorageResult<Option<String>> {
         let completed_parts: Vec<CompletedPart> = parts
             .iter()
@@ -414,23 +436,9 @@ impl S3StorageBackend {
             .await
         {
             Ok(output) => Ok(output.e_tag().map(|etag| normalize_etag(etag.to_string()))),
-            // The destination key already exists. On the first attempt that is a
-            // foreign collision (reject); on a retry it is our own prior
-            // completion (recover the ETag).
-            Err(err) if is_precondition_failed(&err) => {
-                if first_attempt {
-                    Err(StorageError::policy_rejected(format!(
-                        "S3 object key already exists: {object_key}"
-                    )))
-                } else {
-                    match self.head_object(object_key).await? {
-                        Some(info) => Ok(info.etag),
-                        None => Err(s3_error("complete multipart upload", err)),
-                    }
-                }
-            }
-            // The upload id was consumed by a prior completion (crash before the
-            // session metadata was updated): recover the existing object's ETag.
+            Err(err) if is_precondition_failed(&err) => Err(StorageError::policy_rejected(
+                format!("S3 object key already exists: {object_key}"),
+            )),
             Err(err) if is_no_such_upload(&err) => match self.head_object(object_key).await? {
                 Some(info) => Ok(info.etag),
                 None => Err(s3_error("complete multipart upload", err)),
@@ -621,7 +629,10 @@ impl S3StorageBackend {
         // that write leaves the durable metadata unchanged, so the client simply
         // re-sends from the old offset and we recompute the same parts (uploading
         // a part is idempotent — the same part number overwrites).
-        let part_size = S3_MIN_PART_SIZE as usize;
+        //
+        // `part_size` is derived from the (fixed) session max so it is stable
+        // across appends and resumes, and large uploads stay under the part cap.
+        let part_size = part_size_for(stored.max_bytes) as usize;
         let mut pos = 0usize;
         while combined.len() - pos >= part_size {
             let upload_id = self
@@ -640,7 +651,7 @@ impl S3StorageBackend {
                 state.parts.push(S3CompletedPart {
                     number,
                     etag,
-                    size: S3_MIN_PART_SIZE,
+                    size: part_size as u64,
                 });
                 state.next_part_number = number + 1;
             }
@@ -754,7 +765,7 @@ impl S3StorageBackend {
                 )
             };
             let etag = self
-                .complete_multipart(&object_key, &upload_id, &parts, first_attempt)
+                .complete_multipart(&object_key, &upload_id, &parts)
                 .await?;
 
             // Validate the checksum by streaming the finished object (only when a
@@ -1105,5 +1116,35 @@ impl StorageBackend for S3StorageBackend {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{part_size_for, S3_MAX_PARTS, S3_MAX_PART_SIZE, S3_MIN_PART_SIZE};
+
+    #[test]
+    fn part_size_stays_at_floor_for_small_caps() {
+        // The default 64 MiB cap (and anything that fits in <=10k 5 MiB parts)
+        // uses the 5 MiB floor unchanged.
+        assert_eq!(part_size_for(64 * 1024 * 1024), S3_MIN_PART_SIZE);
+        assert_eq!(
+            part_size_for(S3_MIN_PART_SIZE * S3_MAX_PARTS),
+            S3_MIN_PART_SIZE
+        );
+    }
+
+    #[test]
+    fn part_size_scales_to_stay_under_part_cap() {
+        let max_bytes = 200 * 1024 * 1024 * 1024; // 200 GiB
+        let part = part_size_for(max_bytes);
+        assert!(part > S3_MIN_PART_SIZE);
+        assert!(part.is_multiple_of(1024 * 1024), "rounded to a whole MiB");
+        assert!(max_bytes.div_ceil(part) <= S3_MAX_PARTS);
+    }
+
+    #[test]
+    fn part_size_never_exceeds_provider_max() {
+        assert_eq!(part_size_for(u64::MAX), S3_MAX_PART_SIZE);
     }
 }
