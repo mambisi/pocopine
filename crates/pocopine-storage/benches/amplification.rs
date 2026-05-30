@@ -15,6 +15,9 @@
 //!   is uploaded exactly once via `UploadPart`. O(n).
 //! - `gcs_native_compose` (current GCS): each chunk is one component written
 //!   once; the final object is a server-side compose (no client re-upload). O(n).
+//! - `azure_native_blocks` (current Azure): sub-block chunks are coalesced and
+//!   each block's bytes are uploaded once via `Put Block`; `Put Block List` is a
+//!   metadata-only commit (no client re-upload). O(n).
 //!
 //! Run: `cargo bench -p pocopine-storage --bench amplification`.
 
@@ -24,6 +27,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 
 const CHUNK: usize = 1024 * 1024; // 1 MiB PATCH chunks
 const S3_PART: usize = 5 * 1024 * 1024; // S3 minimum part size
+const AZURE_BLOCK: usize = 1024 * 1024; // Azure block size for the default 64 MiB cap
 const MIB: f64 = 1024.0 * 1024.0;
 
 /// Counts bytes written and folds them so the compiler cannot elide the copy.
@@ -103,6 +107,29 @@ fn gcs_native_compose(total: usize, chunk: usize) -> Sink {
     sink
 }
 
+/// Azure native block blob: coalesce sub-block chunks into fixed-size blocks,
+/// each uploaded once via `Put Block`. `Put Block List` commits the order
+/// server-side, so no payload is re-uploaded.
+fn azure_native_blocks(total: usize, chunk: usize) -> Sink {
+    let mut sink = Sink::default();
+    let block = vec![0xA5u8; AZURE_BLOCK];
+    let mut pending = 0usize;
+    let mut offset = 0;
+    while offset < total {
+        let n = chunk.min(total - offset);
+        pending += n;
+        while pending >= AZURE_BLOCK {
+            sink.write(&block); // Put Block: one full block, written once
+            pending -= AZURE_BLOCK;
+        }
+        offset += n;
+    }
+    if pending > 0 {
+        sink.write(&block[..pending]); // final block
+    }
+    sink
+}
+
 fn amplification(c: &mut Criterion) {
     let totals = [4 * 1024 * 1024usize, 16 * 1024 * 1024, 64 * 1024 * 1024];
 
@@ -112,20 +139,22 @@ fn amplification(c: &mut Criterion) {
         CHUNK / 1024
     );
     eprintln!(
-        "{:>10}  {:>16}  {:>16}  {:>16}  {:>10}",
-        "upload", "gcs_legacy O(n^2)", "s3_multipart O(n)", "gcs_compose O(n)", "legacy x"
+        "{:>9}  {:>15}  {:>13}  {:>13}  {:>13}  {:>9}",
+        "upload", "legacy O(n^2)", "s3 O(n)", "gcs O(n)", "azure O(n)", "legacy x"
     );
     for &total in &totals {
         let legacy = gcs_legacy_rewrite(total, CHUNK).written;
         let s3 = s3_native_multipart(total, CHUNK).written;
         let gcs = gcs_native_compose(total, CHUNK).written;
+        let azure = azure_native_blocks(total, CHUNK).written;
         eprintln!(
-            "{:>7} MiB  {:>12.1} MiB  {:>12.1} MiB  {:>12.1} MiB  {:>9.1}x",
+            "{:>5} MiB  {:>11.1} MiB  {:>9.1} MiB  {:>9.1} MiB  {:>9.1} MiB  {:>8.1}x",
             total / 1024 / 1024,
             legacy as f64 / MIB,
             s3 as f64 / MIB,
             gcs as f64 / MIB,
-            legacy as f64 / gcs as f64,
+            azure as f64 / MIB,
+            legacy as f64 / azure as f64,
         );
     }
     eprintln!();
@@ -148,6 +177,11 @@ fn amplification(c: &mut Criterion) {
             BenchmarkId::new("gcs_native_compose", mib),
             &total,
             |b, &t| b.iter(|| black_box(gcs_native_compose(t, CHUNK).fold)),
+        );
+        group.bench_with_input(
+            BenchmarkId::new("azure_native_blocks", mib),
+            &total,
+            |b, &t| b.iter(|| black_box(azure_native_blocks(t, CHUNK).fold)),
         );
     }
     group.finish();
