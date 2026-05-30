@@ -635,6 +635,29 @@ impl GcsStorageBackend {
         let _ = self.write_session(session, stored).await;
     }
 
+    /// Reopen a failed completion ONLY when no live object owned by this session
+    /// exists at the destination.
+    ///
+    /// If compose already produced our object (e.g. a later checksum-stream error,
+    /// or a lost compose response), reopening would let a subsequent append change
+    /// the committed bytes while a retry still adopts the already-live object —
+    /// serving stale data. In that case the session stays `Completing` and a retry
+    /// adopts-and-finishes idempotently. Reopening is safe only when the object is
+    /// absent (compose never landed) or foreign (never ours to serve).
+    async fn reopen_if_object_absent(
+        &self,
+        session: &UploadSessionId,
+        stored: &mut StoredUploadSession,
+        object_key: &str,
+    ) {
+        if let Ok(Some(attrs)) = self.get_object_attrs(object_key).await {
+            if attrs.owner_session.as_deref() == Some(session.as_str()) {
+                return;
+            }
+        }
+        self.reopen_session(session, stored).await;
+    }
+
     /// Assemble the recorded components into the destination object, stamping the
     /// owning session so a crashed retry can recognize its own object.
     async fn compose_components(
@@ -892,7 +915,8 @@ impl GcsStorageBackend {
             {
                 Ok(pair) => pair,
                 Err(err) => {
-                    self.reopen_session(session, &mut stored).await;
+                    self.reopen_if_object_absent(session, &mut stored, &object_key)
+                        .await;
                     return Err(err);
                 }
             }
