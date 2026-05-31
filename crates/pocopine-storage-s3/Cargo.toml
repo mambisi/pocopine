@@ -8,17 +8,34 @@ description = "S3-compatible backend adapter for pocopine-storage."
 
 [dependencies]
 aws-sdk-s3 = "1"
+# `PayloadSigningOverride::UnsignedPayload` + an interceptor let a streamed
+# `UploadPart` skip payload signing (the body is not known before signing).
+aws-runtime = "1"
+# `http-body-1-x` exposes `SdkBody::from_body_1_x`, used to wrap a streamed part
+# body (an axum `UploadBody`) into an S3 `ByteStream` without buffering.
+aws-smithy-runtime-api = "1"
+aws-smithy-types = { version = "1", features = ["http-body-1-x"] }
 bytes = "1"
+futures-util = { version = "0.3", default-features = false }
+http-body = "1"
+http-body-util = "0.1"
+pocopine-codec = { workspace = true }
 pocopine-storage = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
 time = { version = "0.3", features = ["serde"] }
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# `io-util` powers the streaming checksum read-back (`ByteStream::into_async_read`)
+# so checksum verification never buffers the whole object; `rt` lets the part
+# upload spawn a task that pumps the request body into the provider stream.
+tokio = { version = "1", default-features = false, features = ["io-util", "rt", "sync"] }
+# `ReceiverStream` bridges the `Send`-only request body to the `Send + Sync`
+# stream the S3 `ByteStream` body requires.
+tokio-stream = "0.1"
 tracing = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pocopine-crypto = { workspace = true }
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["minio"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
