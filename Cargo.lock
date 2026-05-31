@@ -513,7 +513,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "md-5",
+ "md-5 0.11.0",
  "pin-project-lite",
  "sha1",
  "sha2 0.11.0",
@@ -1625,17 +1625,20 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
+ "futures",
  "is-terminal",
  "itertools 0.10.5",
  "num-traits",
  "once_cell",
  "oorandom",
  "plotters",
+ "rayon",
  "regex",
  "serde",
  "serde_derive",
  "serde_json",
  "tinytemplate",
+ "tokio",
  "walkdir",
 ]
 
@@ -1672,6 +1675,16 @@ version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-deque"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+dependencies = [
+ "crossbeam-epoch",
  "crossbeam-utils",
 ]
 
@@ -4532,6 +4545,16 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
@@ -5694,6 +5717,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-codec"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pocopine-core"
 version = "0.1.0"
 dependencies = [
@@ -5710,6 +5742,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "pocopine-crypto"
+version = "0.1.0"
+dependencies = [
+ "crc32c",
+ "md-5 0.10.6",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -5899,14 +5940,17 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bytes",
+ "criterion",
+ "futures-core",
+ "futures-util",
  "http-body-util",
  "js-sys",
  "pocopine",
  "pocopine-core",
+ "pocopine-crypto",
  "pocopine-server",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "time",
  "tokio",
@@ -5930,6 +5974,8 @@ dependencies = [
  "futures-util",
  "hmac 0.12.1",
  "percent-encoding",
+ "pocopine-codec",
+ "pocopine-crypto",
  "pocopine-storage",
  "reqwest 0.13.4",
  "serde",
@@ -5951,6 +5997,8 @@ dependencies = [
  "google-cloud-gax",
  "google-cloud-storage",
  "percent-encoding",
+ "pocopine-codec",
+ "pocopine-crypto",
  "pocopine-storage",
  "reqwest 0.13.4",
  "serde",
@@ -5966,16 +6014,24 @@ dependencies = [
 name = "pocopine-storage-s3"
 version = "0.1.0"
 dependencies = [
+ "aws-runtime",
  "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "bytes",
+ "futures-util",
+ "http-body 1.0.1",
+ "http-body-util",
+ "pocopine-codec",
+ "pocopine-crypto",
  "pocopine-storage",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "testcontainers",
  "testcontainers-modules",
  "time",
  "tokio",
+ "tokio-stream",
  "tracing",
  "uuid",
 ]
@@ -6555,6 +6611,26 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "reactive_graph"
