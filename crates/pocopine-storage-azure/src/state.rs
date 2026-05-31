@@ -19,8 +19,69 @@ pub(crate) struct StoredUploadSession {
     pub(crate) completion_object_key: Option<String>,
     #[serde(default)]
     pub(crate) cleanup_pending: bool,
+    /// Transfer mechanism. Sessions written before native block-blob support
+    /// omit this field and deserialize as [`NativeUploadState::LegacyProxy`], so
+    /// in-flight uploads from an older build keep the staged-object rewrite path.
+    #[serde(default)]
+    pub(crate) native: NativeUploadState,
     #[serde(skip)]
     pub(crate) meta_etag: Option<String>,
+}
+
+/// Backend transfer mechanism for an upload session.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NativeUploadState {
+    /// Legacy staged-object rewrite (download → extend → re-upload per append).
+    #[default]
+    LegacyProxy,
+    /// Native block blob: sub-block `PATCH` chunks are coalesced into a bounded
+    /// tail and flushed as blocks (`Put Block`); completion assembles them with
+    /// `Put Block List`. No bytes are re-written.
+    Block(AzureBlockState),
+}
+
+/// Block-blob bookkeeping for one session. Block ids are derived from the index
+/// (and the session id), so only counts/lengths are tracked.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AzureBlockState {
+    /// Number of blocks staged so far; the next block uses index `next_index`.
+    #[serde(default)]
+    pub(crate) next_index: u64,
+    /// Total bytes already flushed to staged blocks (excludes the pending tail).
+    #[serde(default)]
+    pub(crate) flushed_len: u64,
+    /// Bytes received but not yet flushed to a block (smaller than one block,
+    /// except the final remainder at completion). Base64 inline in the metadata.
+    #[serde(
+        default,
+        with = "pocopine_codec::base64_bytes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub(crate) pending_tail: Vec<u8>,
+}
+
+impl NativeUploadState {
+    pub(crate) fn block(&self) -> Option<&AzureBlockState> {
+        match self {
+            NativeUploadState::Block(state) => Some(state),
+            NativeUploadState::LegacyProxy => None,
+        }
+    }
+
+    pub(crate) fn block_mut(&mut self) -> Option<&mut AzureBlockState> {
+        match self {
+            NativeUploadState::Block(state) => Some(state),
+            NativeUploadState::LegacyProxy => None,
+        }
+    }
+}
+
+/// Full object attributes including the ownership marker in custom metadata.
+pub(crate) struct AzureObjectAttrs {
+    pub(crate) etag: Option<String>,
+    pub(crate) version_id: Option<String>,
+    pub(crate) owner_session: Option<String>,
 }
 
 pub(crate) struct AzureObjectBytes {
@@ -115,6 +176,7 @@ mod tests {
             object: None,
             completion_object_key: None,
             cleanup_pending: false,
+            native: NativeUploadState::default(),
             meta_etag: None,
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
