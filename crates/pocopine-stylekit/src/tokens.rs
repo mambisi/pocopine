@@ -142,6 +142,98 @@ fn strip_block_comments(css: &str) -> String {
     out
 }
 
+/// The input CSS with `@theme { … }` blocks and the Tailwind-only
+/// `@import`/`@source` at-statements removed — i.e. the author's
+/// hand-written rules (component classes, `@media`, `[data-theme]`
+/// overrides, `@keyframes`, …). Emitted verbatim after the compiled
+/// utilities so apps can mix tokens + utilities + custom CSS in one file.
+pub fn non_theme_css(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut i = 0;
+    while i < css.len() {
+        let rest = &css[i..];
+        // Copy comments verbatim — never match `@theme`/`@import` inside
+        // them (a comment mentioning `@theme` must not strip real CSS).
+        if rest.starts_with("/*") {
+            let end = rest.find("*/").map(|p| p + 2).unwrap_or(rest.len());
+            out.push_str(&rest[..end]);
+            i += end;
+            continue;
+        }
+        if rest.starts_with("@theme") {
+            if let Some(open) = rest.find('{') {
+                let rb = rest.as_bytes();
+                let mut depth = 1i32;
+                let mut j = open + 1;
+                while j < rest.len() {
+                    match rb[j] {
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                j += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                i += j;
+                continue;
+            }
+        }
+        if rest.starts_with("@import") || rest.starts_with("@source") {
+            if let Some(semi) = rest.find(';') {
+                i += semi + 1;
+                continue;
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out.trim().to_string()
+}
+
+/// True if the CSS has an `@theme {` whose block is never closed. Both
+/// `non_theme_css` and `theme_blocks` skip from the unmatched `{` to EOF,
+/// silently dropping every rule after it — so the caller surfaces a
+/// warning rather than letting author CSS vanish without a signal.
+pub fn has_unterminated_theme(css: &str) -> bool {
+    let s = strip_block_comments(css);
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = s[i..].find("@theme") {
+        let at = i + rel;
+        let Some(orel) = s[at..].find('{') else {
+            return false; // `@theme` with no `{` — not a block, not our case
+        };
+        let mut depth = 1i32;
+        let mut j = at + orel + 1;
+        let mut closed = false;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        closed = true;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        if !closed {
+            return true;
+        }
+        i = j + 1;
+    }
+    false
+}
+
 /// Yield the inner text of each `@theme { … }` block (comment-stripped
 /// input). Brace-depth aware so nested `{ }` don't end the block early.
 fn theme_blocks(css: &str) -> Vec<&str> {

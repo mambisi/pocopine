@@ -50,6 +50,10 @@ pub struct CompileOptions {
     /// (M2-B). Default `true`; disable for pages that bring their own
     /// reset.
     pub preflight: bool,
+    /// Class names defined as real rules in the author's CSS (the
+    /// non-`@theme` passthrough). These are valid component classes, not
+    /// utilities — the compiler skips them instead of erroring.
+    pub known_classes: std::collections::BTreeSet<String>,
 }
 
 impl Default for CompileOptions {
@@ -57,6 +61,7 @@ impl Default for CompileOptions {
         Self {
             compat_warn: false,
             preflight: true,
+            known_classes: std::collections::BTreeSet::new(),
         }
     }
 }

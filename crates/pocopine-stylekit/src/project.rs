@@ -65,7 +65,75 @@ button, [type=button], [type=reset], [type=submit] { cursor: pointer; }
 :disabled { cursor: default; }
 ol, ul, menu { list-style: none; }
 table { border-collapse: collapse; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
+@keyframes pulse { 50% { opacity: 0.5; } }
+@keyframes bounce { 0%, 100% { transform: translateY(-25%); animation-timing-function: cubic-bezier(0.8, 0, 1, 1); } 50% { transform: none; animation-timing-function: cubic-bezier(0, 0, 0.2, 1); } }
 ";
+
+/// Collect class names defined as real rules in the author's CSS — every
+/// `.ident` that appears in a *selector*. Comments, string literals, and
+/// declaration blocks (`{ … }`) are skipped, so a `.foo` mentioned in a
+/// comment or inside `content: ".foo"` / `url(...)` is NOT mistaken for a
+/// component class (which would make the compiler silently drop the real
+/// utility of the same name).
+fn defined_classes(css: &str) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    let bytes = css.as_bytes();
+    let mut i = 0;
+    let mut depth = 0i32; // brace depth — `.ident` only counts at selector level
+    while i < bytes.len() {
+        match bytes[i] {
+            // Skip block comments.
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i < bytes.len() && !(bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/')) {
+                    i += 1;
+                }
+                i += 2;
+            }
+            // Skip string literals (handles `content: ".x"`, `url("…")`).
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'.' if depth == 0 => {
+                let start = i + 1;
+                if start < bytes.len()
+                    && (bytes[start].is_ascii_alphabetic()
+                        || bytes[start] == b'_'
+                        || bytes[start] == b'-')
+                {
+                    let mut j = start;
+                    while j < bytes.len()
+                        && (bytes[j].is_ascii_alphanumeric()
+                            || bytes[j] == b'-'
+                            || bytes[j] == b'_')
+                    {
+                        j += 1;
+                    }
+                    set.insert(css[start..j].to_string());
+                    i = j;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    set
+}
 
 /// Compile a project: `theme_css` is the app CSS holding `@theme`
 /// tokens; `files` are the `.poco` sources to scan. Output is
@@ -78,10 +146,25 @@ pub fn compile_project(
 ) -> ProjectCss {
     let tokens = ThemeTokens::from_css(theme_css);
     let root_css = tokens.to_root_css();
+    // Author's hand-written CSS (component classes, @media, [data-theme]
+    // overrides, @keyframes) — emitted verbatim alongside the utilities.
+    let passthrough = crate::tokens::non_theme_css(theme_css);
     let preflight = if options.preflight { PREFLIGHT } else { "" };
+    // Class names the author defined in that CSS are valid component
+    // classes — register them so the compiler skips (not errors on) them.
+    let mut options = options;
+    options.known_classes = defined_classes(&passthrough);
     let compiler = Compiler::new(tokens, options);
 
     let mut diagnostics = Vec::new();
+    // An unterminated `@theme {` makes both the token reader and the
+    // passthrough skip to EOF, silently dropping everything after it —
+    // warn so the author sees a signal instead of vanished CSS.
+    if crate::tokens::has_unterminated_theme(theme_css) {
+        diagnostics.push(Diagnostic::warning(
+            "unterminated `@theme {` block (missing `}`) — CSS after it was dropped",
+        ));
+    }
     // Dedup by class literal; BTreeMap keeps emission order stable.
     let mut unique: BTreeMap<String, UsedClass> = BTreeMap::new();
 
@@ -98,7 +181,10 @@ pub fn compile_project(
     diagnostics.append(&mut compiled.diagnostics);
 
     ProjectCss {
-        css: format!("{HEADER}{preflight}{root_css}{}", compiled.css),
+        css: format!(
+            "{HEADER}{preflight}{root_css}{}\n{passthrough}\n",
+            compiled.css
+        ),
         diagnostics,
         files: files.iter().map(|f| f.path.clone()).collect(),
     }
@@ -153,6 +239,81 @@ mod tests {
         );
         assert!(!off.css.contains("box-sizing"));
         assert!(off.css.contains(".flex {"));
+    }
+
+    #[test]
+    fn passes_through_custom_css_and_registers_its_classes() {
+        // app.css mixes @theme tokens with hand-written component CSS.
+        // A comment mentioning `@theme` must NOT strip the rule below it.
+        let theme = "\
+@theme { --color-surface: #fff; }
+/* component classes — overrides @theme nowhere, just a mention */
+.cfe-card { padding: 1rem; }
+[data-theme=\"dark\"] { --color-surface: #111; }
+@media (min-width: 1024px) { .cfe-card { padding: 2rem; } }";
+        let files = vec![SourceFile {
+            path: "a.poco".into(),
+            // `cfe-card` is author-defined (not a utility) → no error;
+            // `flex` is a real utility → emitted.
+            source: r#"<div class="cfe-card flex"></div>"#.into(),
+        }];
+        let out = compile_project(theme, &files, CompileOptions::default());
+        assert!(!out.has_errors(), "{:?}", out.diagnostics);
+        // Custom rules + dark override + media query survive verbatim.
+        assert!(out.css.contains(".cfe-card { padding: 1rem; }"));
+        assert!(out.css.contains("[data-theme=\"dark\"]"));
+        assert!(out.css.contains("@media (min-width: 1024px)"));
+        // The utility still compiled.
+        assert!(out.css.contains(".flex {"));
+    }
+
+    #[test]
+    fn class_mention_in_comment_or_string_is_not_a_known_class() {
+        // A `.flex` mentioned in a comment / string / url() must NOT be
+        // registered as a component class — else the real `.flex` utility
+        // is silently dropped (no rule, no error).
+        let theme = "\
+@theme { --color-surface: #fff; }
+/* prefer .flex for layout; see .grid too */
+.card { padding: 1rem; background: url(\".sprite.png\"); content: \".inline\"; }";
+        let files = vec![SourceFile {
+            path: "a.poco".into(),
+            source: r#"<div class="flex grid inline"></div>"#.into(),
+        }];
+        let out = compile_project(theme, &files, CompileOptions::default());
+        assert!(!out.has_errors(), "{:?}", out.diagnostics);
+        // The utilities mentioned only in the comment/string still emit.
+        assert!(out.css.contains(".flex {"), "flex dropped");
+        assert!(out.css.contains(".grid {"), "grid dropped");
+        assert!(out.css.contains(".inline {"), "inline dropped");
+        // The real component class is still recognised (no "unknown utility").
+        assert!(out.css.contains(".card { padding: 1rem;"));
+    }
+
+    #[test]
+    fn unterminated_theme_block_warns() {
+        // Missing `}` on the @theme block — the rest is dropped, but a
+        // warning must surface (not silent).
+        let theme = "@theme { --color-surface: #fff;\n.card { padding: 1rem; }";
+        let files = vec![SourceFile {
+            path: "a.poco".into(),
+            source: r#"<div class="flex"></div>"#.into(),
+        }];
+        let out = compile_project(theme, &files, CompileOptions::default());
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Warning && d.message.contains("unterminated")));
+        // Well-formed @theme produces no such warning.
+        let ok = compile_project(
+            "@theme { --color-surface: #fff; }",
+            &files,
+            CompileOptions::default(),
+        );
+        assert!(!ok
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unterminated")));
     }
 
     #[test]
