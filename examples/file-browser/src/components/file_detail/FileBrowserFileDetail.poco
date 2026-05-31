@@ -1,0 +1,258 @@
+<root class="contents">
+  <aside class="cfe-detail">
+    <div class="cfe-detail-inner flex h-full min-h-0 flex-col bg-surface">
+      <header class="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-line px-4">
+        <div class="flex min-w-0 items-center gap-2">
+          <pine-icon name="file" size="16" class="shrink-0 text-ink-50"></pine-icon>
+          <span class="truncate text-[13px] font-semibold text-ink-100" pp-text="$store.storage.detail.name || 'Details'"></span>
+        </div>
+        <button class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100"
+                type="button"
+                aria-label="Close details"
+                @click="close_detail">
+          <pine-icon name="x" size="16"></pine-icon>
+        </button>
+      </header>
+
+      <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <!-- empty state: no file selected (e.g. after switching connection) -->
+        <div class="flex h-full flex-col items-center justify-center gap-2 px-6 py-12 text-center"
+             pp-show="!$store.storage.detail.key && !$store.storage.detail_loading">
+          <span class="inline-flex size-12 items-center justify-center rounded-2xl bg-ink-10 text-ink-50">
+            <pine-icon name="file" size="22"></pine-icon>
+          </span>
+          <p class="text-[13px] font-medium text-ink-70">No file selected</p>
+          <p class="text-[12px] text-ink-50">Select a file from the list to see its preview and details.</p>
+        </div>
+
+        <div pp-show="$store.storage.detail.key || $store.storage.detail_loading">
+        <!-- ── preview ── -->
+        <!-- Each preview is mounted via pp-if (not pp-show) so only the
+             matching element exists in the DOM — a hidden element with a
+             :src would still fetch the URL, which for a non-previewable
+             object (e.g. a .zip in an <iframe>) triggers a download. -->
+        <div class="mb-4 overflow-hidden rounded-lg border border-line bg-surface-2">
+          <header class="flex items-center justify-between gap-2 border-b border-line bg-surface px-3 py-1.5">
+            <span class="text-[11px] font-medium uppercase tracking-[0.04em] text-ink-50">Preview</span>
+            <div class="flex items-center gap-0.5">
+              <button class="inline-flex size-7 items-center justify-center rounded-md text-ink-60 transition hover:bg-ink-10 hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      type="button"
+                      aria-label="Expand preview"
+                      :disabled="$store.storage.detail.preview_kind == 'none'"
+                      @click="open_lightbox">
+                <pine-icon name="maximize" size="15"></pine-icon>
+              </button>
+              <a class="inline-flex size-7 items-center justify-center rounded-md text-ink-60 transition hover:bg-ink-10 hover:text-ink-100"
+                 :href="$store.storage.detail.download_url"
+                 download
+                 aria-label="Download file">
+                <pine-icon name="download" size="15"></pine-icon>
+              </a>
+            </div>
+          </header>
+
+          <div class="relative flex min-h-40 items-center justify-center overflow-hidden">
+            <template pp-if="$store.storage.detail_loading">
+              <span class="inline-flex size-6 animate-spin rounded-full border-2 border-ink-20 border-t-accent"
+                    aria-hidden="true"></span>
+            </template>
+
+          <template pp-if="!$store.storage.detail_loading && $store.storage.detail.preview_kind == 'image'">
+            <img class="max-h-80 w-full object-contain"
+                 :src="$store.storage.detail.download_url"
+                 :alt="$store.storage.detail.name" />
+          </template>
+
+          <template pp-if="!$store.storage.detail_loading && ($store.storage.detail.preview_kind == 'pdf' || $store.storage.detail.preview_kind == 'text')">
+            <iframe class="h-80 w-full border-0"
+                    :src="$store.storage.detail.download_url"
+                    :title="$store.storage.detail.name"></iframe>
+          </template>
+
+          <template pp-if="!$store.storage.detail_loading && $store.storage.detail.preview_kind == 'video'">
+            <video class="max-h-80 w-full"
+                   :src="$store.storage.detail.download_url"
+                   controls></video>
+          </template>
+
+          <template pp-if="!$store.storage.detail_loading && $store.storage.detail.preview_kind == 'audio'">
+            <audio class="w-full px-3"
+                   :src="$store.storage.detail.download_url"
+                   controls></audio>
+          </template>
+
+          <template pp-if="!$store.storage.detail_loading && $store.storage.detail.preview_kind == 'none'">
+            <div class="flex flex-col items-center gap-2 px-4 py-8 text-center">
+              <pine-icon name="file" size="32" class="text-ink-40"></pine-icon>
+              <span class="text-[12px] text-ink-50">No preview available</span>
+              <a class="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1.5 text-[12px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100"
+                 :href="$store.storage.detail.download_url"
+                 target="_blank"
+                 rel="noopener">
+                <pine-icon name="external-link" size="13"></pine-icon>
+                <span>Open</span>
+              </a>
+            </div>
+          </template>
+          </div>
+        </div>
+
+        <p class="mb-3 flex items-center gap-1.5 rounded-md border border-danger-line bg-danger-soft px-2.5 py-1.5 text-[12px] text-danger-strong"
+           pp-show="$store.storage.detail_error">
+          <pine-icon name="alert-circle" size="14"></pine-icon>
+          <span pp-text="$store.storage.detail_error"></span>
+        </p>
+
+        <!-- ── attributes ── -->
+        <dl class="cfe-detail-attrs">
+          <dt>Name</dt>
+          <dd>
+            <a class="cfe-link"
+               :href="$store.storage.detail.download_url"
+               target="_blank"
+               rel="noopener"
+               pp-text="$store.storage.detail.name"></a>
+          </dd>
+
+          <dt>Size</dt>
+          <dd pp-text="$store.storage.detail.size_label"></dd>
+
+          <dt>Type</dt>
+          <dd class="font-mono text-[12px]" pp-text="$store.storage.detail.content_type || '—'"></dd>
+
+          <template pp-if="$store.storage.detail.created_label">
+            <dt>Created</dt>
+            <dd pp-text="$store.storage.detail.created_label"></dd>
+          </template>
+
+          <dt>Updated</dt>
+          <dd pp-text="$store.storage.detail.updated_label || '—'"></dd>
+        </dl>
+
+        <!-- ── collapsible sections ── -->
+        <pine-accordion-root class="cfe-detail-accordion mt-4 block"
+                             type="multiple"
+                             pp-model:values="sections">
+          <pine-accordion-item value="location" class="border-t border-line">
+            <pine-accordion-trigger class="flex w-full items-center justify-between py-2.5 text-left text-[12px] font-semibold text-ink-100">
+              <span>File location</span>
+              <pine-icon name="chevron-right" size="15" class="cfe-accordion-chevron text-ink-50"></pine-icon>
+            </pine-accordion-trigger>
+            <pine-accordion-content>
+              <div class="pb-3">
+                <div class="cfe-detail-label">Storage location</div>
+                <button class="cfe-copy-row"
+                        type="button"
+                        title="Click to copy file location"
+                        @click="copy_text($store.storage.detail.storage_location)">
+                  <span class="min-w-0 truncate" pp-text="$store.storage.detail.storage_location"></span>
+                  <pine-icon :name="copied != '' && copied == $store.storage.detail.storage_location ? 'check' : 'copy'" size="14" class="shrink-0 text-ink-50"></pine-icon>
+                </button>
+
+                <div class="cfe-detail-label mt-3">Download URL</div>
+                <button class="cfe-copy-row"
+                        type="button"
+                        title="Click to copy download URL"
+                        @click="copy_text($store.storage.detail.download_url)">
+                  <span class="min-w-0 truncate" pp-text="$store.storage.detail.download_url"></span>
+                  <pine-icon :name="copied != '' && copied == $store.storage.detail.download_url ? 'check' : 'copy'" size="14" class="shrink-0 text-ink-50"></pine-icon>
+                </button>
+              </div>
+            </pine-accordion-content>
+          </pine-accordion-item>
+
+          <pine-accordion-item value="metadata" class="border-t border-line">
+            <pine-accordion-trigger class="flex w-full items-center justify-between py-2.5 text-left text-[12px] font-semibold text-ink-100">
+              <span>Other metadata</span>
+              <pine-icon name="chevron-right" size="15" class="cfe-accordion-chevron text-ink-50"></pine-icon>
+            </pine-accordion-trigger>
+            <pine-accordion-content>
+              <div class="pb-3">
+                <dl class="cfe-detail-attrs" pp-show="$store.storage.detail.metadata.length">
+                  <template pp-for="meta in $store.storage.detail.metadata" pp-key="meta.key">
+                    <dt class="break-all" pp-text="meta.key"></dt>
+                    <dd class="break-all" pp-text="meta.value"></dd>
+                  </template>
+                </dl>
+                <p class="text-[12px] text-ink-50" pp-show="!$store.storage.detail.metadata.length">No metadata found</p>
+              </div>
+            </pine-accordion-content>
+          </pine-accordion-item>
+        </pine-accordion-root>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── fullscreen preview lightbox ── -->
+  <pine-dialog-root pp-model:open="lightbox_open">
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content class="cfe-lightbox"
+                           @keydown.arrow-left="detail_prev"
+                           @keydown.arrow-right="detail_next">
+        <header class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line px-4">
+          <span class="min-w-0 truncate text-[13px] font-semibold text-ink-100" pp-text="$store.storage.detail.name"></span>
+          <div class="flex shrink-0 items-center gap-2">
+            <span class="font-mono text-[11.5px] text-ink-50" pp-text="$store.storage.detail.content_type"></span>
+            <a class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100"
+               :href="$store.storage.detail.download_url"
+               target="_blank"
+               rel="noopener"
+               aria-label="Open in new tab">
+              <pine-icon name="external-link" size="15"></pine-icon>
+            </a>
+            <pine-dialog-close pp-as>
+              <button class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100"
+                      type="button"
+                      aria-label="Close preview">
+                <pine-icon name="x" size="16"></pine-icon>
+              </button>
+            </pine-dialog-close>
+          </div>
+        </header>
+
+        <div class="cfe-lightbox-stage relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-ink-10 p-3">
+          <template pp-if="$store.storage.detail.preview_kind == 'image'">
+            <img class="max-h-full max-w-full object-contain"
+                 :src="$store.storage.detail.download_url"
+                 :alt="$store.storage.detail.name" />
+          </template>
+          <template pp-if="$store.storage.detail.preview_kind == 'pdf' || $store.storage.detail.preview_kind == 'text'">
+            <iframe class="h-full w-full border-0 bg-surface"
+                    :src="$store.storage.detail.download_url"
+                    :title="$store.storage.detail.name"></iframe>
+          </template>
+          <template pp-if="$store.storage.detail.preview_kind == 'video'">
+            <video class="max-h-full max-w-full" :src="$store.storage.detail.download_url" controls></video>
+          </template>
+          <template pp-if="$store.storage.detail.preview_kind == 'audio'">
+            <audio class="w-[min(90%,32rem)]" :src="$store.storage.detail.download_url" controls></audio>
+          </template>
+          <template pp-if="$store.storage.detail.preview_kind == 'none'">
+            <div class="flex flex-col items-center gap-2 text-center text-ink-50">
+              <pine-icon name="file" size="40" class="text-ink-40"></pine-icon>
+              <span class="text-[13px]">No preview available</span>
+            </div>
+          </template>
+
+          <!-- prev / next -->
+          <button class="absolute left-3 top-1/2 inline-flex size-10 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface/85 text-ink-70 backdrop-blur-sm transition hover:bg-surface hover:text-ink-100 disabled:cursor-default disabled:opacity-0"
+                  type="button"
+                  aria-label="Previous file"
+                  :disabled="!$store.storage.detail_has_prev"
+                  @click="detail_prev">
+            <pine-icon name="chevron-left" size="20"></pine-icon>
+          </button>
+          <button class="absolute right-3 top-1/2 inline-flex size-10 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface/85 text-ink-70 backdrop-blur-sm transition hover:bg-surface hover:text-ink-100 disabled:cursor-default disabled:opacity-0"
+                  type="button"
+                  aria-label="Next file"
+                  :disabled="!$store.storage.detail_has_next"
+                  @click="detail_next">
+            <pine-icon name="chevron-right" size="20"></pine-icon>
+          </button>
+        </div>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</root>

@@ -1,0 +1,245 @@
+<root class="contents">
+  <pine-dialog-root pp-model:open="open">
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content>
+        <form pp-on:submit.prevent="save_connection">
+          <header class="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
+            <div>
+              <pine-dialog-title>
+                <span pp-text="connection_dialog_title"></span>
+              </pine-dialog-title>
+              <pine-dialog-description>
+                <span pp-text="connection_dialog_description"></span>
+              </pine-dialog-description>
+            </div>
+            <pine-dialog-close pp-as>
+              <button class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-50"
+                      type="button"
+                      aria-label="Close"
+                      :disabled="saving_connection">
+                <pine-icon name="x" size="16"></pine-icon>
+              </button>
+            </pine-dialog-close>
+          </header>
+
+          <div class="space-y-4 px-5 py-5">
+            <div class="inline-grid rounded-md border border-line bg-surface-2 p-1 sm:grid-cols-2">
+              <button class="inline-flex h-8 items-center justify-center gap-1.5 rounded px-3 text-[12.5px] font-medium text-ink-60 transition hover:text-ink-100 data-[active=true]:bg-surface data-[active=true]:text-ink-100 data-[active=true]:shadow-card"
+                      type="button"
+                      :data-active="connection_provider == 's3'"
+                      @click="use_minio_defaults">
+                <pine-icon name="server" size="14"></pine-icon>
+                <span>S3</span>
+              </button>
+              <button class="inline-flex h-8 items-center justify-center gap-1.5 rounded px-3 text-[12.5px] font-medium text-ink-60 transition hover:text-ink-100 data-[active=true]:bg-surface data-[active=true]:text-ink-100 data-[active=true]:shadow-card"
+                      type="button"
+                      :data-active="connection_provider == 'gcs'"
+                      @click="use_gcs_defaults">
+                <pine-icon name="cloud" size="14"></pine-icon>
+                <span>GCS</span>
+              </button>
+            </div>
+
+            <div class="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-[12.5px] text-ink-60"
+                 pp-show="loading_connection">
+              <span class="inline-flex size-4 animate-spin rounded-full border-2 border-ink-20 border-t-accent"
+                    aria-hidden="true"></span>
+              <span>Loading connection</span>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+              <label class="block">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Name</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="text"
+                       pp-model="connection_name"
+                       :disabled="loading_connection"
+                       autocomplete="off" />
+              </label>
+              <label class="block">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Bucket</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="text"
+                       pp-model="connection_bucket"
+                       :disabled="loading_connection"
+                       required
+                       autocomplete="off" />
+              </label>
+              <label class="block sm:col-span-2">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Endpoint URL</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="url"
+                       pp-model="connection_endpoint_url"
+                       :disabled="loading_connection"
+                       placeholder="https://storage.googleapis.com" />
+              </label>
+              <label class="block" pp-show="connection_provider == 's3'">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Region</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="text"
+                       pp-model="connection_region"
+                       :disabled="loading_connection || connection_provider != 's3'"
+                       required />
+              </label>
+              <label class="block" pp-show="connection_provider == 'gcs'">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Project ID</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="text"
+                       pp-model="connection_project_id"
+                       :disabled="loading_connection"
+                       autocomplete="off"
+                       placeholder="my-gcp-project" />
+              </label>
+              <label class="block">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Root prefix</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="text"
+                       pp-model="connection_root_prefix"
+                       :disabled="loading_connection"
+                       placeholder="team-a/" />
+              </label>
+              <label class="block" pp-show="connection_provider == 's3'">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Access key</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="text"
+                       pp-model="connection_access_key_id"
+                       :disabled="loading_connection || connection_provider != 's3'"
+                       required
+                       autocomplete="off" />
+              </label>
+              <label class="block" pp-show="connection_provider == 's3'">
+                <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Secret key</span>
+                <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                       type="password"
+                       pp-model="connection_secret_access_key"
+                       :disabled="loading_connection || connection_provider != 's3'"
+                       placeholder="Required for new connection"
+                       autocomplete="new-password" />
+              </label>
+              <label class="flex items-center gap-2 text-[12.5px] text-ink-70" pp-show="connection_provider == 's3'">
+                <input class="size-4 rounded border-line text-accent"
+                       type="checkbox"
+                       :disabled="loading_connection || connection_provider != 's3'"
+                       pp-model="connection_force_path_style" />
+                <span>Path-style endpoint</span>
+              </label>
+              <label class="flex items-center gap-2 text-[12.5px] text-ink-70" pp-show="connection_provider == 's3'">
+                <input class="size-4 rounded border-line text-accent"
+                       type="checkbox"
+                       :disabled="loading_connection || connection_provider != 's3'"
+                       pp-model="connection_create_bucket" />
+                <span>Create bucket if missing</span>
+              </label>
+              <label class="flex items-center gap-2 text-[12.5px] text-ink-70" pp-show="connection_provider == 'gcs'">
+                <input class="size-4 rounded border-line text-accent"
+                       type="checkbox"
+                       :checked="connection_use_emulator"
+                       :disabled="loading_connection"
+                       @click="toggle_gcs_emulator" />
+                <span>Use emulator endpoint</span>
+              </label>
+              <div class="sm:col-span-2" pp-show="connection_provider == 'gcs'">
+                <div class="mb-1.5 flex items-center justify-between gap-3">
+                  <span class="block text-[12px] font-medium text-ink-70">Authentication</span>
+                  <span class="inline-flex items-center gap-1 rounded-full border border-line bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-ink-50"
+                        pp-show="connection_gcs_has_service_account_json && connection_gcs_auth_mode == 'service_account_json'">
+                    <pine-icon name="key" size="12"></pine-icon>
+                    <span pp-text="connection_gcs_service_account_hint"></span>
+                  </span>
+                </div>
+                <div class="flex w-full rounded-md border border-line bg-surface-2 p-1">
+                  <button class="inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded px-3 text-[12.5px] font-medium text-ink-60 transition hover:text-ink-100 data-[active=true]:bg-surface data-[active=true]:text-ink-100 data-[active=true]:shadow-card"
+                          type="button"
+                          :disabled="loading_connection"
+                          :data-active="connection_gcs_auth_mode == 'application_default'"
+                          @click="set_gcs_auth_mode('application_default')">
+                    <pine-icon name="cloud" size="14"></pine-icon>
+                    <span>ADC</span>
+                  </button>
+                  <button class="inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded px-3 text-[12.5px] font-medium text-ink-60 transition hover:text-ink-100 data-[active=true]:bg-surface data-[active=true]:text-ink-100 data-[active=true]:shadow-card"
+                          type="button"
+                          :disabled="loading_connection"
+                          :data-active="connection_gcs_auth_mode == 'service_account_json'"
+                          @click="set_gcs_auth_mode('service_account_json')">
+                    <pine-icon name="key" size="14"></pine-icon>
+                    <span>Service JSON</span>
+                  </button>
+                  <button class="inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded px-3 text-[12.5px] font-medium text-ink-60 transition hover:text-ink-100 data-[active=true]:bg-surface data-[active=true]:text-ink-100 data-[active=true]:shadow-card"
+                          type="button"
+                          :disabled="loading_connection"
+                          :data-active="connection_gcs_auth_mode == 'anonymous'"
+                          @click="set_gcs_auth_mode('anonymous')">
+                    <pine-icon name="world" size="14"></pine-icon>
+                    <span>Anonymous</span>
+                  </button>
+                </div>
+              </div>
+              <div class="sm:col-span-2" pp-show="connection_provider == 'gcs' && connection_gcs_auth_mode == 'service_account_json'">
+                <div class="mb-1.5 flex items-center justify-between gap-3">
+                  <span class="block text-[12px] font-medium text-ink-70">Service account JSON</span>
+                  <span class="text-[11px] font-medium text-ink-50" pp-show="connection_gcs_has_service_account_json">Leave blank to keep saved key</span>
+                </div>
+                <label class="block rounded-md border border-line bg-surface-2 focus-within:border-line-strong focus-within:ring-2 focus-within:ring-accent-soft">
+                  <span class="flex items-center gap-2 border-b border-line px-3 py-2 text-[11.5px] text-ink-50">
+                    <pine-icon name="lock" size="13"></pine-icon>
+                    <span pp-show="!connection_gcs_has_service_account_json">Local credential</span>
+                    <span pp-show="connection_gcs_has_service_account_json">Replace saved credential</span>
+                  </span>
+                  <textarea class="block min-h-36 w-full resize-y border-0 bg-transparent px-3 py-2 font-mono text-[12px] leading-5 text-ink-100 outline-none placeholder:text-ink-40"
+                            pp-model="connection_gcs_service_account_json"
+                            :disabled="loading_connection"
+                            @input="sync_gcs_service_account_json($event)"
+                            spellcheck="false"
+                            autocomplete="off"
+                            placeholder="{&quot;type&quot;:&quot;service_account&quot;,&quot;project_id&quot;:&quot;...&quot;}"></textarea>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <p class="mx-5 mb-4 rounded-md border border-danger-line bg-danger-soft px-3 py-2 text-[13px] text-danger-strong"
+             pp-show="modal_error"
+             pp-text="modal_error"></p>
+
+          <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface-2 px-5 py-4">
+            <button class="inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-50"
+                    type="button"
+                    pp-show="connection_provider == 's3'"
+                    :disabled="loading_connection || saving_connection"
+                    @click="use_minio_defaults">
+              <pine-icon name="server" size="15"></pine-icon>
+              <span>MinIO defaults</span>
+            </button>
+            <button class="inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-50"
+                    type="button"
+                    pp-show="connection_provider == 'gcs'"
+                    :disabled="loading_connection || saving_connection"
+                    @click="use_gcs_defaults">
+              <pine-icon name="cloud" size="15"></pine-icon>
+              <span>GCS defaults</span>
+            </button>
+            <div class="flex items-center gap-2">
+              <pine-dialog-close pp-as>
+                <button class="inline-flex h-9 items-center rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-50"
+                        type="button"
+                        :disabled="saving_connection">Cancel</button>
+              </pine-dialog-close>
+              <button class="inline-flex h-9 items-center gap-1.5 rounded-md border-0 bg-inverse px-3.5 text-[13px] font-medium text-inverse-fg hover:bg-inverse-strong disabled:cursor-wait disabled:opacity-60"
+                      type="submit"
+                      :disabled="saving_connection || loading_connection">
+                <span pp-show="!saving_connection">
+                  <pine-icon name="check" size="15"></pine-icon>
+                </span>
+                <span class="inline-flex size-4 animate-spin rounded-full border-2 border-inverse-fg/35 border-t-inverse-fg"
+                      pp-show="saving_connection"
+                      aria-hidden="true"></span>
+                <span>Save connection</span>
+              </button>
+            </div>
+          </footer>
+        </form>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</root>

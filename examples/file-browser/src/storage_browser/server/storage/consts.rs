@@ -1,0 +1,11 @@
+pub(crate) const CONFIG_ENV: &str = "POCOPINE_STORAGE_BROWSER_CONFIG";
+pub(crate) const DEFAULT_REGION: &str = "us-east-1";
+pub(crate) const UPLOAD_BACKEND: &str = "storage_browser";
+pub(crate) const UPLOAD_SCOPE: &str = "storage-browser";
+pub(crate) const MIB: u64 = 1024 * 1024;
+pub(crate) const DEFAULT_CHUNK_BYTES: u64 = 1024 * 1024;
+pub(crate) const DIRECT_UPLOAD_LIMIT_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const MIN_UPLOAD_LIMIT_BYTES: u64 = MIB;
+pub(crate) const MAX_UPLOAD_LIMIT_BYTES: u64 = 1024 * MIB;
+pub(crate) const MIN_CHUNK_BYTES: u64 = MIB;
+pub(crate) const MAX_CHUNK_BYTES: u64 = 64 * MIB;

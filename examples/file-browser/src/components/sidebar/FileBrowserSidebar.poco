@@ -1,47 +1,100 @@
-<root class="flex shrink-0 flex-col border-b border-line bg-surface px-3 py-4 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
-  <nav class="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible" aria-label="Workspace">
-    <a class="inline-flex h-9 shrink-0 items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100 lg:shrink lg:flex-none" href="#">
-      <pine-icon name="home" size="17"></pine-icon>
-      <span>Home</span>
-    </a>
-    <a class="inline-flex h-9 shrink-0 items-center gap-2.5 rounded-md bg-ink-10 px-3 text-[13px] font-semibold text-ink-100 lg:shrink lg:flex-none" href="#" aria-current="page">
-      <pine-icon name="folder" size="17"></pine-icon>
-      <span>All files</span>
-    </a>
-    <button class="inline-flex h-9 shrink-0 cursor-not-allowed items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-ink-50 lg:shrink lg:flex-none" type="button" disabled>
-      <pine-icon name="clock" size="17"></pine-icon>
-      <span>Recents</span>
+<root class="flex shrink-0 flex-col border-b border-line bg-surface px-2 py-2 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:min-h-0 lg:overflow-hidden lg:border-b-0 lg:border-r lg:px-2 lg:py-2">
+  <!-- Mobile: compact connection trigger + add + theme, expands the list -->
+  <div class="flex items-center gap-2 px-2 lg:hidden">
+    <button class="cfe-conn-trigger flex min-w-0 flex-1 items-center gap-2.5 rounded-md border border-line bg-surface px-2.5 py-2 text-left text-[13px] text-ink-100 hover:bg-ink-10"
+            type="button"
+            :data-expanded="connections_expanded"
+            aria-label="Switch connection"
+            @click="toggle_connections">
+      <pine-icon :name="$store.storage.selected_provider_label == 'GCS' ? 'cloud' : 'bucket'"
+                 size="17"
+                 class="shrink-0 text-ink-50"></pine-icon>
+      <span class="min-w-0 flex-1 truncate font-medium" pp-text="$store.storage.selected_connection_name || 'Select connection'"></span>
+      <pine-icon name="chevron-right" size="15" class="cfe-conn-chevron shrink-0 text-ink-50"></pine-icon>
     </button>
-    <button class="inline-flex h-9 shrink-0 cursor-not-allowed items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-ink-50 lg:shrink lg:flex-none" type="button" disabled>
-      <pine-icon name="star" size="17"></pine-icon>
-      <span>Starred</span>
+    <button class="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink-70 hover:bg-ink-10 hover:text-ink-100"
+            type="button"
+            aria-label="Add connection"
+            @click="open_connection_modal">
+      <pine-icon name="plus" size="16"></pine-icon>
     </button>
-    <button class="inline-flex h-9 shrink-0 cursor-not-allowed items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-ink-50 lg:shrink lg:flex-none" type="button" disabled>
-      <pine-icon name="share" size="17"></pine-icon>
-      <span>Shared</span>
-    </button>
-    <button class="inline-flex h-9 shrink-0 cursor-not-allowed items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-ink-50 lg:shrink lg:flex-none" type="button" disabled>
-      <pine-icon name="trash" size="17"></pine-icon>
-      <span>Deleted</span>
-    </button>
-  </nav>
-
-  <div class="hidden lg:mt-auto lg:block lg:pt-6">
-    <div class="rounded-lg border border-line bg-surface-2 p-3.5">
-      <div class="flex items-center gap-2 text-[12px] font-medium uppercase tracking-[0.04em] text-ink-50">
-        <pine-icon name="database" size="14"></pine-icon>
-        <span>Storage</span>
-      </div>
-      <div class="mt-2.5 flex items-baseline justify-between text-[13px]">
-        <span class="font-medium text-ink-100" pp-text="$store.files.total_size_label"></span>
-        <span class="font-mono text-[11px] text-ink-50">of <span pp-text="$store.files.storage_quota_label"></span></span>
-      </div>
-      <pine-progress-root :value="$store.files.storage_percent" max="100"
-                          class="mt-2 block h-1.5 overflow-hidden rounded-full bg-ink-10"
-                          aria-label="Storage used">
-        <pine-progress-indicator class="block h-full min-w-[2px] rounded-full bg-accent transition-[width] duration-300"></pine-progress-indicator>
-      </pine-progress-root>
-      <p class="mt-3 text-[11.5px] leading-relaxed text-ink-60">Resumable uploads survive tab refresh and network blips.</p>
-    </div>
   </div>
+
+  <!-- Desktop: full Connections header -->
+  <div class="hidden items-center justify-between gap-2 px-2 lg:flex lg:shrink-0">
+    <div class="min-w-0">
+      <div class="text-[12px] font-semibold uppercase tracking-[0.04em] text-ink-50">Connections</div>
+      <div class="mt-0.5 text-[13px] font-medium text-ink-100" pp-text="$store.storage.connection_count_label"></div>
+    </div>
+    <button class="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-ink-70 hover:bg-ink-10 hover:text-ink-100"
+            type="button"
+            aria-label="Add connection"
+            @click="open_connection_modal">
+      <pine-icon name="plus" size="15"></pine-icon>
+    </button>
+  </div>
+
+  <div class="cfe-conn-list mt-2 space-y-1.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1"
+       :data-expanded="connections_expanded"
+       pp-show="!$store.storage.connections_empty">
+    <template pp-for="connection in $store.storage.connections" pp-key="connection.id">
+      <div class="group grid grid-cols-[minmax(0,1fr)_2rem] items-center rounded-md px-2 text-ink-70 transition hover:bg-ink-10 hover:text-ink-100 data-[active=true]:bg-ink-10 data-[active=true]:text-ink-100"
+           :data-active="connection.id == $store.storage.selected_connection_id">
+        <button class="flex min-w-0 items-center gap-2.5 rounded-md bg-transparent py-2 text-left text-[13px] data-[active=true]:font-semibold"
+                type="button"
+                :data-active="connection.id == $store.storage.selected_connection_id"
+                @click="select_connection(connection.id)">
+          <span class="relative inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-accent-soft text-accent-strong" aria-hidden="true">
+            <pine-icon :name="connection.icon" size="17"></pine-icon>
+            <img class="storage-provider-badge rounded-sm border border-surface bg-surface shadow-card"
+                 pp-show="connection.favicon_url"
+                 :src="connection.favicon_url"
+                 alt=""
+                 referrerpolicy="no-referrer" />
+          </span>
+          <span class="min-w-0">
+            <span class="block truncate" pp-text="connection.name"></span>
+            <span class="mt-0.5 block truncate font-mono text-[10.5px] font-normal text-ink-50" pp-text="connection.bucket"></span>
+          </span>
+        </button>
+        <pine-dropdown-menu-root>
+          <pine-dropdown-menu-trigger class="inline-flex size-8 items-center justify-center rounded-md text-ink-40 opacity-0 transition hover:bg-ink-20 hover:text-ink-100 focus:opacity-100 data-[active=true]:opacity-100 data-[active=true]:text-ink-70 group-hover:opacity-100"
+                                      :data-active="connection.id == $store.storage.selected_connection_id"
+                                      :aria-label="'Connection actions for ' + connection.name">
+            <pine-icon name="dots-vertical" size="15"></pine-icon>
+          </pine-dropdown-menu-trigger>
+          <pine-dropdown-menu-portal>
+            <pine-dropdown-menu-content side="right" align="start" side_offset="6">
+              <pine-dropdown-menu-item @click="reconnect_connection(connection.id)">
+                <pine-icon name="rotate" size="15"></pine-icon>
+                <span>Reconnect</span>
+              </pine-dropdown-menu-item>
+              <pine-dropdown-menu-item @click="edit_connection(connection.id)">
+                <pine-icon name="pencil" size="15"></pine-icon>
+                <span>Edit</span>
+              </pine-dropdown-menu-item>
+              <pine-dropdown-menu-item @click="open_config_dialog">
+                <pine-icon name="settings" size="15"></pine-icon>
+                <span>Config</span>
+              </pine-dropdown-menu-item>
+              <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+              <pine-dropdown-menu-item class="danger" @click="delete_connection(connection.id)">
+                <pine-icon name="trash" size="15"></pine-icon>
+                <span>Delete</span>
+              </pine-dropdown-menu-item>
+            </pine-dropdown-menu-content>
+          </pine-dropdown-menu-portal>
+        </pine-dropdown-menu-root>
+      </div>
+    </template>
+  </div>
+
+  <button class="mt-2 flex items-center gap-2.5 rounded-md border border-dashed border-line-strong bg-surface-2 px-2 py-2 text-left text-[13px] text-ink-60 hover:border-ink-50 hover:bg-surface hover:text-ink-100"
+          type="button"
+          pp-show="$store.storage.connections_empty"
+          @click="open_connection_modal">
+    <pine-icon name="plug" size="17"></pine-icon>
+    <span>Add an S3 or GCS connection</span>
+  </button>
+
 </root>
