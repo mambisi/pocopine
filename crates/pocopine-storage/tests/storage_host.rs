@@ -1070,12 +1070,15 @@ async fn optional_sha256_checksum_is_verified_when_present() -> StorageResult<()
 }
 
 #[test]
-fn required_unsupported_checksum_algorithms_fail_configuration() -> StorageResult<()> {
-    let mut checksum_policy = policy("memory")?;
-    checksum_policy.checksum = ChecksumPolicy::Required(ChecksumAlgorithm::Md5);
-    let builder = StorageServer::builder().backend("memory", MemoryStorageBackend::new())?;
-    let rejected = builder.public_scope("avatars", checksum_policy);
-    assert!(matches!(rejected, Err(StorageError::Unsupported { .. })));
+fn md5_and_crc32c_checksum_policies_are_now_supported() -> StorageResult<()> {
+    // pocopine-crypto backs all three algorithms, so configuring a scope with a
+    // required MD5 or CRC32C checksum no longer fails as unsupported.
+    for algorithm in [ChecksumAlgorithm::Md5, ChecksumAlgorithm::Crc32c] {
+        let mut checksum_policy = policy("memory")?;
+        checksum_policy.checksum = ChecksumPolicy::Required(algorithm);
+        let builder = StorageServer::builder().backend("memory", MemoryStorageBackend::new())?;
+        assert!(builder.public_scope("avatars", checksum_policy).is_ok());
+    }
     Ok(())
 }
 
@@ -1582,7 +1585,7 @@ where
             Request::builder()
                 .method("PATCH")
                 .uri(format!(
-                    "/__pocopine/storage/v1/uploads/{}/bytes",
+                    "/__pocopine/storage/v1/uploads/{}",
                     session.as_str()
                 ))
                 .header("Upload-Offset", offset.to_string())

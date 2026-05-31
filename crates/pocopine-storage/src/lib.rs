@@ -34,15 +34,15 @@ pub use client::{BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTr
 pub use client::{__reset_browser_transport_for_test, __set_browser_transport_for_test};
 pub use error::{StorageError, StorageResult};
 pub use protocol::{
-    AnonymousUploadBinding, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload,
-    CompleteUploadRequest, InitiateUpload, InitiateUploadRequest, MetadataSchema, ObjectChecksum,
-    ObjectMetadata, ObjectOwnerRef, ObjectRef, ObjectVisibility, PrincipalRef, SafeObjectKey,
-    SignedRead, StorageBackendName, StorageKey, StorageResponse, TransferPlan, UploadIntent,
-    UploadPhase, UploadPolicy, UploadPolicyDescriptor, UploadProgress, UploadSession,
-    UploadSessionId, UploadSessionStatus, UploadStrategy, UploadTarget, UploadedPartStatus,
-    UploadedPartView, MAX_STORAGE_TOKEN_LEN, STORAGE_ANON_COOKIE, STORAGE_ENDPOINT_PREFIX,
-    STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX, STORAGE_UPLOADS_PATH,
-    STORAGE_UPLOADS_PREFIX,
+    plan_parts, AnonymousUploadBinding, BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy,
+    CompleteUpload, CompleteUploadRequest, InitiateUpload, InitiateUploadRequest, MetadataSchema,
+    ObjectChecksum, ObjectMetadata, ObjectOwnerRef, ObjectRef, ObjectVisibility, PartSpec,
+    PrincipalRef, SafeObjectKey, SignedRead, StorageBackendName, StorageKey, StorageResponse,
+    TransferPlan, UploadIntent, UploadPhase, UploadPolicy, UploadPolicyDescriptor, UploadProgress,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, UploadTarget,
+    UploadedPartStatus, UploadedPartView, MAX_STORAGE_TOKEN_LEN, STORAGE_ANON_COOKIE,
+    STORAGE_ENDPOINT_PREFIX, STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX,
+    STORAGE_TUS_ENDPOINT_PREFIX, STORAGE_UPLOADS_PATH, STORAGE_UPLOADS_PREFIX,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,5 +56,5 @@ pub use server::{
     storage_server_plugin, storage_tus_server_plugin, StorageActor, StorageBackend,
     StorageBoxFuture, StorageContext, StorageGuardFuture, StorageKeyFuture, StorageKeyResolver,
     StorageScope, StorageScopeBuilder, StorageScopeGuard, StorageServer, StorageServerBuilder,
-    StorageServerPlugin, StorageTusServerPlugin,
+    StorageServerPlugin, StorageTusServerPlugin, UploadBody, UploadByteStream,
 };

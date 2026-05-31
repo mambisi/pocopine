@@ -334,6 +334,71 @@ pub enum UploadStrategy {
     Multipart,
 }
 
+/// The upload mechanisms a storage backend supports, advertised so the server
+/// can negotiate a requested [`UploadStrategy`] against what the backend can
+/// actually do (see [`crate::backend_common::select_upload_mode`]).
+///
+/// Backends that do not override `StorageBackend::capabilities()` advertise the
+/// [`Default`] — sequential proxy only — so adding a new capability never
+/// silently changes an existing backend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct BackendCapabilities {
+    /// Ordered `PATCH`-chunk proxy uploads streamed through the server.
+    pub sequential_proxy: bool,
+    /// Server-mediated provider-native multipart (parts assembled server-side).
+    pub native_multipart: bool,
+    /// The whole object accepted in a single request.
+    pub single_request: bool,
+    /// Signed direct-to-provider part URLs (the browser uploads bypass the
+    /// server). Opt-in per scope via the upload policy.
+    pub signed_direct: bool,
+}
+
+impl Default for BackendCapabilities {
+    fn default() -> Self {
+        Self {
+            sequential_proxy: true,
+            native_multipart: false,
+            single_request: false,
+            signed_direct: false,
+        }
+    }
+}
+
+impl BackendCapabilities {
+    /// A backend that only supports sequential proxy uploads (the default).
+    pub fn sequential_only() -> Self {
+        Self::default()
+    }
+
+    /// Advertise server-mediated native multipart (the by-number `upload_part`
+    /// path) in addition to whatever is already set. Builder helper so external
+    /// backend crates can opt into a capability without naming every field of
+    /// this `#[non_exhaustive]` struct.
+    pub fn with_native_multipart(mut self) -> Self {
+        self.native_multipart = true;
+        self
+    }
+
+    /// The strategies a client may request against a backend with these
+    /// capabilities, used to populate the scope descriptor so capability
+    /// discovery matches what `initiate_upload` actually accepts.
+    pub fn strategies(&self) -> Vec<UploadStrategy> {
+        let mut strategies = Vec::new();
+        if self.sequential_proxy {
+            strategies.push(UploadStrategy::Sequential);
+        }
+        if self.native_multipart {
+            strategies.push(UploadStrategy::Multipart);
+        }
+        if self.single_request {
+            strategies.push(UploadStrategy::SingleRequest);
+        }
+        strategies
+    }
+}
+
 /// Public upload session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -490,14 +555,6 @@ impl UploadPolicy {
                 ));
             }
         }
-        if matches!(
-            self.checksum,
-            ChecksumPolicy::Required(ChecksumAlgorithm::Crc32c | ChecksumAlgorithm::Md5)
-        ) {
-            return Err(StorageError::unsupported(
-                "only sha256 checksum verification is implemented in pocopine-storage PR 1",
-            ));
-        }
         if let (Some(min), Some(preferred)) = (self.min_part_size, self.preferred_chunk_size) {
             if min > preferred {
                 return Err(StorageError::policy_rejected(
@@ -563,7 +620,11 @@ impl UploadPolicy {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn descriptor(&self, scope: &str) -> UploadPolicyDescriptor {
+    pub(crate) fn descriptor(
+        &self,
+        scope: &str,
+        strategies: Vec<UploadStrategy>,
+    ) -> UploadPolicyDescriptor {
         UploadPolicyDescriptor {
             protocol: STORAGE_PROTOCOL_V1.to_string(),
             scope: scope.to_string(),
@@ -574,7 +635,7 @@ impl UploadPolicy {
             supports_progress: true,
             supports_abort: true,
             supports_batch: false,
-            strategies: vec![UploadStrategy::Sequential],
+            strategies,
             preferred_chunk_size: self.preferred_chunk_size,
             min_part_size: self.min_part_size,
             max_part_size: self.max_part_size,
@@ -765,6 +826,86 @@ pub struct TransferPlan {
     pub resumable: bool,
 }
 
+/// Absolute ceiling on the number of parts a multipart upload may plan, applied
+/// when the plan advertises no `max_parts`. Above every provider's real limit
+/// (S3 10k, GCS 32, Azure 50k) yet far below `u32::MAX`, so an untrusted or
+/// corrupted plan can never drive an unbounded allocation or overflow a part
+/// number.
+const MAX_MULTIPART_PARTS: u64 = 100_000;
+
+/// One planned multipart part: its 1-based number and byte range in the source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PartSpec {
+    pub number: u32,
+    pub offset: u64,
+    pub len: u64,
+}
+
+/// The part size a client should use for a multipart upload under `plan`: the
+/// preferred size (or `max_part_size` as a fallback) clamped into `[min, max]`.
+/// The native backends advertise `preferred == max == part_size`, so this
+/// reproduces the exact part size the server's completion enforces.
+///
+/// Fails loud rather than guessing: a plan that advertises no part size at all
+/// is rejected, so a misconfigured backend surfaces immediately instead of the
+/// client silently slicing at some default and having every part rejected.
+fn multipart_part_size(plan: &TransferPlan) -> StorageResult<u64> {
+    let preferred = plan
+        .preferred_part_size
+        .or(plan.max_part_size)
+        .ok_or_else(|| {
+            StorageError::policy_rejected("multipart upload plan advertises no part size")
+        })?;
+    let min = plan.min_part_size.unwrap_or(1).max(1);
+    let max = plan.max_part_size.unwrap_or(u64::MAX).max(min);
+    Ok(preferred.max(1).clamp(min, max))
+}
+
+/// Lay out a multipart upload of `size` bytes against a session's
+/// [`TransferPlan`]: parts of `multipart_part_size(plan)` each, the last the
+/// remainder, numbered from 1. A zero-byte upload plans no parts (the server
+/// completes it as an empty object).
+///
+/// This is the shared, target-neutral sizing the browser client uses to drive
+/// the by-number part endpoint — kept here (not in the wasm client) so host
+/// tests cover it and it stays in lock-step with the backends' part layout.
+/// Rejects (rather than allocating/overflowing on) an upload that would need
+/// more parts than the plan's `max_parts` — or [`MAX_MULTIPART_PARTS`] when the
+/// plan sets none — so an untrusted plan can't drive an unbounded `Vec` or a
+/// part-number overflow.
+pub fn plan_parts(size: u64, plan: &TransferPlan) -> StorageResult<Vec<PartSpec>> {
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    let part_size = multipart_part_size(plan)?;
+    let count = size.div_ceil(part_size);
+    let max_parts = plan
+        .max_parts
+        .map_or(MAX_MULTIPART_PARTS, u64::from)
+        .min(MAX_MULTIPART_PARTS);
+    if count > max_parts {
+        return Err(StorageError::policy_rejected(format!(
+            "upload of {size} bytes needs {count} parts, exceeding the {max_parts}-part limit"
+        )));
+    }
+    // `count <= max_parts <= MAX_MULTIPART_PARTS`, so the capacity is bounded and
+    // the 1-based `number` (`u32`) cannot overflow.
+    let mut parts = Vec::with_capacity(count as usize);
+    let mut offset = 0u64;
+    let mut number = 1u32;
+    while offset < size {
+        let len = part_size.min(size - offset);
+        parts.push(PartSpec {
+            number,
+            offset,
+            len,
+        });
+        offset += len;
+        number += 1;
+    }
+    Ok(parts)
+}
+
 /// Browser-safe multipart part view.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UploadedPartView {
@@ -894,4 +1035,126 @@ pub(crate) fn file_extension(file_name: &str) -> Option<&str> {
     file_name
         .rsplit_once('.')
         .and_then(|(_, extension)| (!extension.is_empty()).then_some(extension))
+}
+
+#[cfg(test)]
+mod plan_parts_tests {
+    use super::*;
+
+    fn plan(preferred: u64, min: u64, max: u64, max_parts: Option<u32>) -> TransferPlan {
+        TransferPlan {
+            min_part_size: Some(min),
+            preferred_part_size: Some(preferred),
+            max_part_size: Some(max),
+            max_parts,
+            max_concurrent_parts: 4,
+            resumable: true,
+        }
+    }
+
+    #[test]
+    fn empty_upload_plans_no_parts() {
+        assert!(plan_parts(0, &plan(5, 5, 5, Some(10))).unwrap().is_empty());
+    }
+
+    #[test]
+    fn exact_multiple_splits_into_equal_parts() {
+        let parts = plan_parts(15, &plan(5, 5, 5, Some(10))).unwrap();
+        assert_eq!(
+            parts,
+            vec![
+                PartSpec {
+                    number: 1,
+                    offset: 0,
+                    len: 5
+                },
+                PartSpec {
+                    number: 2,
+                    offset: 5,
+                    len: 5
+                },
+                PartSpec {
+                    number: 3,
+                    offset: 10,
+                    len: 5
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn remainder_is_the_last_part() {
+        let parts = plan_parts(12, &plan(5, 5, 5, Some(10))).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(
+            parts[2],
+            PartSpec {
+                number: 3,
+                offset: 10,
+                len: 2
+            }
+        );
+        // total length covers the whole object exactly, contiguously
+        assert_eq!(parts.iter().map(|p| p.len).sum::<u64>(), 12);
+        let mut next = 0;
+        for p in &parts {
+            assert_eq!(p.offset, next);
+            next += p.len;
+        }
+    }
+
+    #[test]
+    fn single_part_when_smaller_than_part_size() {
+        let parts = plan_parts(3, &plan(5, 5, 5, Some(10))).unwrap();
+        assert_eq!(
+            parts,
+            vec![PartSpec {
+                number: 1,
+                offset: 0,
+                len: 3
+            }]
+        );
+    }
+
+    #[test]
+    fn preferred_is_clamped_into_min_max() {
+        // preferred below min → clamps up to min (4)
+        assert_eq!(multipart_part_size(&plan(1, 4, 16, None)).unwrap(), 4);
+        // preferred above max → clamps down to max (8)
+        assert_eq!(multipart_part_size(&plan(64, 4, 8, None)).unwrap(), 8);
+    }
+
+    #[test]
+    fn exceeding_max_parts_is_rejected() {
+        // 100 bytes / 5-byte parts = 20 parts, over a 10-part cap
+        let err = plan_parts(100, &plan(5, 5, 5, Some(10))).unwrap_err();
+        assert!(matches!(err, StorageError::PolicyRejected { .. }));
+    }
+
+    #[test]
+    fn plan_with_no_part_size_is_rejected_not_guessed() {
+        let no_size = TransferPlan {
+            min_part_size: None,
+            preferred_part_size: None,
+            max_part_size: None,
+            max_parts: None,
+            max_concurrent_parts: 4,
+            resumable: true,
+        };
+        // A non-empty upload must fail loud rather than slice at a guessed size.
+        assert!(matches!(
+            plan_parts(10, &no_size),
+            Err(StorageError::PolicyRejected { .. })
+        ));
+        // An empty upload still needs no parts and never consults the size.
+        assert!(plan_parts(0, &no_size).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unbounded_plan_is_capped_not_allocated() {
+        // No max_parts + a tiny part size against a huge size would otherwise try
+        // to allocate ~size parts; the absolute cap rejects it instead.
+        let err = plan_parts(u64::MAX, &plan(1, 1, 1, None)).unwrap_err();
+        assert!(matches!(err, StorageError::PolicyRejected { .. }));
+    }
 }

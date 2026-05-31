@@ -2,21 +2,23 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
+use futures_core::Stream;
+use futures_util::TryStreamExt;
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_server::auth::{Decision, DenyReason, Predicate, RequestContext};
 use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::extract::{Path, State};
 use pocopine_server::axum::http::{
-    header::{CACHE_CONTROL, SET_COOKIE, VARY},
+    header::{CACHE_CONTROL, CONTENT_LENGTH, SET_COOKIE, VARY},
     HeaderMap, HeaderValue, Request, StatusCode,
 };
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
-use pocopine_server::axum::routing::{get, head, options, patch, post};
+use pocopine_server::axum::routing::{get, head, options, post};
 use pocopine_server::{Server, ServerPlugin};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -29,6 +31,9 @@ use crate::{
 
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JSON_CONTROL_BYTES: usize = 64 * 1024;
+/// Request header carrying the 1-based multipart part number on a part `PUT`,
+/// the multipart twin of the sequential path's `Upload-Offset`.
+const UPLOAD_PART_HEADER: &str = "Upload-Part";
 const STORAGE_COOKIE_PATH: &str = "/__pocopine/storage";
 const TUS_PROTOCOL_VERSION: &str = "1.0.0";
 const TUS_UPLOADS_ROUTE: &str = "/__pocopine/storage/tus/v1/:scope/uploads";
@@ -207,9 +212,116 @@ impl StorageKeyResolver for GeneratedStorageKeyResolver {
     }
 }
 
+/// A streaming request body for a multipart part upload.
+///
+/// Wraps the inbound axum [`Body`] together with the part's declared
+/// `Content-Length` so a backend can forward it straight to the provider's part
+/// API (`UploadPart` / resumable chunk / `Put Block`) without buffering the
+/// whole part in memory — peak memory stays O(1) per part regardless of part
+/// size. Consume it with [`UploadBody::into_byte_stream`].
+pub struct UploadBody {
+    inner: Body,
+    content_length: Option<u64>,
+}
+
+impl UploadBody {
+    /// Wrap an axum body with the part's declared length (from the request
+    /// `Content-Length`, when present).
+    pub fn new(inner: Body, content_length: Option<u64>) -> Self {
+        Self {
+            inner,
+            content_length,
+        }
+    }
+
+    /// Build an `UploadBody` from bytes already held in memory, with the content
+    /// length set to the buffer length. Convenient for tests and for callers that
+    /// drive `upload_part` directly without an HTTP request.
+    pub fn from_bytes(bytes: Bytes) -> Self {
+        let content_length = bytes.len() as u64;
+        Self {
+            inner: Body::from(bytes),
+            content_length: Some(content_length),
+        }
+    }
+
+    /// The part's declared length, if the client sent `Content-Length`.
+    ///
+    /// S3 `UploadPart` requires a known length, so a backend that maps parts
+    /// onto S3 should reject a part with no declared length rather than buffer
+    /// it to discover the size.
+    pub fn content_length(&self) -> Option<u64> {
+        self.content_length
+    }
+
+    /// Consume into a provider-agnostic byte stream that yields the part's
+    /// bytes without buffering. Feed it to `reqwest::Body::wrap_stream`, an S3
+    /// `ByteStream` (via `http_body`), or an Azure block body.
+    pub fn into_byte_stream(self) -> UploadByteStream {
+        let mapped = TryStreamExt::map_err(self.inner.into_data_stream(), std::io::Error::other);
+        UploadByteStream {
+            inner: Box::pin(mapped),
+        }
+    }
+
+    /// Collect the part into memory, rejecting once more than `max_bytes` have
+    /// arrived (defends against a body that exceeds its declared
+    /// `Content-Length`). For backends whose provider unit is a single bounded
+    /// object/block (GCS compose components, Azure blocks) rather than a true
+    /// streamed part (S3 `UploadPart`); peak memory is therefore one capped part
+    /// per concurrent upload, matching the sequential path's per-chunk profile.
+    pub async fn collect_capped(self, max_bytes: u64) -> StorageResult<Bytes> {
+        use futures_util::StreamExt as _;
+        let cap = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        let mut stream = self.into_byte_stream();
+        let mut buffer: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|err| StorageError::client(format!("read part body: {err}")))?;
+            if buffer.len().saturating_add(chunk.len()) > cap {
+                return Err(StorageError::payload_too_large(max_bytes));
+            }
+            buffer.extend_from_slice(&chunk);
+        }
+        Ok(Bytes::from(buffer))
+    }
+}
+
+impl std::fmt::Debug for UploadBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadBody")
+            .field("content_length", &self.content_length)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `Send` byte stream of an [`UploadBody`]'s part data, yielding
+/// `Result<Bytes, std::io::Error>` items. Returned by
+/// [`UploadBody::into_byte_stream`] so backends can stream a part to the
+/// provider without depending on axum.
+pub struct UploadByteStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+}
+
+impl Stream for UploadByteStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
 /// Server-side backend contract for storage engines.
 pub trait StorageBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
+
+    /// The upload mechanisms this backend supports. Drives strategy negotiation
+    /// in [`crate::backend_common::select_upload_mode`]. The default advertises
+    /// sequential proxy only, so a backend opts into more capabilities
+    /// explicitly.
+    fn capabilities(&self) -> crate::BackendCapabilities {
+        crate::BackendCapabilities::default()
+    }
 
     fn initiate_upload<'a>(
         &'a self,
@@ -237,6 +349,29 @@ pub trait StorageBackend: Send + Sync + 'static {
         offset: u64,
         bytes: Bytes,
     ) -> StorageBoxFuture<'a, UploadSession>;
+
+    /// Stream one numbered part straight to the provider's native multipart
+    /// primitive without buffering it (server-mediated multipart proxy).
+    ///
+    /// Parts may arrive out of order and concurrently; `number` is the 1-based
+    /// part index the client assigned. The default rejects the call as
+    /// unsupported, so only backends that advertise
+    /// [`BackendCapabilities::native_multipart`](crate::BackendCapabilities)
+    /// need to override it; sequential-only backends keep using
+    /// [`StorageBackend::append_upload_bytes`].
+    fn upload_part<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        _session: UploadSessionId,
+        _number: u32,
+        _body: UploadBody,
+    ) -> StorageBoxFuture<'a, UploadSession> {
+        Box::pin(async move {
+            Err(StorageError::unsupported(
+                "storage backend does not support multipart part uploads",
+            ))
+        })
+    }
 
     fn complete_upload<'a>(
         &'a self,
@@ -388,7 +523,14 @@ impl StorageServer {
             .authorize_read(ctx)
             .await
             .map_err(storage_auth_error)?;
-        Ok(scope_registration.policy.descriptor(scope))
+        // Advertise exactly the strategies the scope's backend can satisfy, so
+        // capability discovery matches what `initiate_upload` will accept (e.g.
+        // an S3-backed scope surfaces multipart, an in-memory one does not).
+        let strategies = self
+            .backend(scope_registration.policy.backend.as_str())
+            .map(|backend| backend.capabilities().strategies())
+            .unwrap_or_else(|_| crate::BackendCapabilities::default().strategies());
+        Ok(scope_registration.policy.descriptor(scope, strategies))
     }
 
     pub async fn initiate_upload(
@@ -407,14 +549,9 @@ impl StorageServer {
             .map_err(storage_auth_error)?;
         scope.policy.validate_initiate(&request)?;
 
-        if matches!(
-            request.requested_strategy,
-            UploadStrategy::SingleRequest | UploadStrategy::Multipart
-        ) {
-            return Err(StorageError::unsupported(
-                "only sequential proxy uploads are implemented in pocopine-storage PR 1",
-            ));
-        }
+        // Strategy is negotiated against the backend's advertised capabilities in
+        // its `initiate_upload` (via `select_upload_mode`); the server no longer
+        // hardcodes which strategies are supported.
 
         let intent = UploadIntent {
             scope: request.scope.clone(),
@@ -492,6 +629,23 @@ impl StorageServer {
         backend
             .append_upload_bytes(&ctx, session, offset, bytes)
             .await
+    }
+
+    pub async fn upload_part(
+        &self,
+        ctx: StorageContext,
+        session: UploadSessionId,
+        number: u32,
+        body: UploadBody,
+    ) -> StorageResult<UploadSession> {
+        require_bound_actor(&ctx)?;
+        let (backend, upload) = self.backend_for_session(&ctx, session.clone()).await?;
+        let scope = self.scope(&upload.scope)?;
+        scope
+            .authorize_write(ctx.clone())
+            .await
+            .map_err(storage_auth_error)?;
+        backend.upload_part(&ctx, session, number, body).await
     }
 
     pub async fn complete_upload(
@@ -752,14 +906,18 @@ impl ServerPlugin for StorageServerPlugin {
                 post(initiate_handler).with_state(storage.clone()),
             )
             .route(
+                // The session is the one mutable resource; the method (+ an
+                // `Upload-*` header) selects the operation:
+                //   PATCH + Upload-Offset → sequential append
+                //   PUT   + Upload-Part   → multipart part
+                //   GET → inspect · DELETE → abort
+                // `complete` is the lone action sub-path below.
                 "/__pocopine/storage/v1/uploads/:session",
                 get(inspect_handler)
+                    .patch(bytes_handler)
+                    .put(part_handler)
                     .delete(abort_handler)
                     .with_state(storage.clone()),
-            )
-            .route(
-                "/__pocopine/storage/v1/uploads/:session/bytes",
-                patch(bytes_handler).with_state(storage.clone()),
             )
             .route(
                 "/__pocopine/storage/v1/uploads/:session/complete",
@@ -882,6 +1040,79 @@ async fn bytes_handler(
             )
         }
         Err(err) => storage_response::<UploadSession>(Err(err), None),
+    }
+}
+
+async fn part_handler(
+    State(storage): State<StorageServer>,
+    Path(session): Path<String>,
+    request: Request<Body>,
+) -> Response {
+    match bytes_request(request, &storage).await {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            // The 1-based part number rides in the `Upload-Part` header — the
+            // multipart twin of the sequential path's `Upload-Offset`. A `PUT` to
+            // the session with no `Upload-Part` is not a valid part request.
+            let number = match request.headers.get(UPLOAD_PART_HEADER) {
+                Some(value) => match value
+                    .to_str()
+                    .ok()
+                    .and_then(|raw| parse_part_number(raw).ok())
+                {
+                    Some(number) => number,
+                    None => {
+                        return storage_response::<UploadSession>(
+                            Err(StorageError::invalid_value(UPLOAD_PART_HEADER, "<invalid>")),
+                            set_cookie,
+                        );
+                    }
+                },
+                None => {
+                    return storage_response::<UploadSession>(
+                        Err(StorageError::invalid_value(UPLOAD_PART_HEADER, "<missing>")),
+                        set_cookie,
+                    );
+                }
+            };
+            // Parse Content-Length up front: it is the only place the part's
+            // size is known without draining the stream, and S3 `UploadPart`
+            // needs it. A malformed header is rejected rather than ignored so a
+            // backend never silently streams an unbounded part.
+            let content_length = match request.headers.get(CONTENT_LENGTH) {
+                Some(value) => match value.to_str().ok().and_then(|raw| raw.parse::<u64>().ok()) {
+                    Some(parsed) => Some(parsed),
+                    None => {
+                        return storage_response::<UploadSession>(
+                            Err(StorageError::invalid_value("Content-Length", "<invalid>")),
+                            set_cookie,
+                        );
+                    }
+                },
+                None => None,
+            };
+            storage_response(
+                async {
+                    let session = UploadSessionId::new(session)?;
+                    let body = UploadBody::new(request.body, content_length);
+                    storage
+                        .upload_part(request.ctx, session, number, body)
+                        .await
+                }
+                .await,
+                set_cookie,
+            )
+        }
+        Err(err) => storage_response::<UploadSession>(Err(err), None),
+    }
+}
+
+/// Parse a 1-based multipart part number from the `Upload-Part` header value,
+/// rejecting non-numeric values and zero through the storage error envelope.
+fn parse_part_number(raw: &str) -> StorageResult<u32> {
+    match raw.parse::<u32>() {
+        Ok(number) if number >= 1 => Ok(number),
+        _ => Err(StorageError::invalid_value(UPLOAD_PART_HEADER, raw)),
     }
 }
 
@@ -1678,16 +1909,10 @@ fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
 /// cookies and replay them via the `Cookie` header. We hash with a domain
 /// separator so a leaked digest is not usable as a "blind hash" elsewhere.
 fn hash_anonymous_binding(raw: &str) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = pocopine_crypto::Hasher::new(pocopine_crypto::Algorithm::Sha256);
     hasher.update(b"pocopine.storage.anon.v1\0");
     hasher.update(raw.as_bytes());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
+    hasher.finalize_hex()
 }
 
 fn require_bound_actor(ctx: &StorageContext) -> StorageResult<()> {
