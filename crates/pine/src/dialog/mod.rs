@@ -29,6 +29,44 @@
 //!   </pine-dialog-portal>
 //! </pine-dialog-root>
 //! ```
+//!
+//! ## Centering
+//!
+//! Dialog content uses the `fade-scale` transition by default. That
+//! transition animates the rendered `.pine-dialog-content` element's
+//! `transform`, so avoid centering the same element with
+//! `transform: translate(-50%, -50%)`.
+//!
+//! The `scope` and `panel` custom-element hosts default to
+//! `display: contents`, so the most robust pattern is to center the
+//! rendered portal root and let the rendered panel keep its
+//! transform for animation:
+//!
+//! ```css
+//! .pine-dialog-portal {
+//!   position: fixed;
+//!   inset: 0;
+//!   display: flex;
+//!   align-items: center;
+//!   justify-content: center;
+//!   padding: 2rem 1rem;
+//!   pointer-events: none;
+//! }
+//!
+//! .pine-dialog-overlay {
+//!   position: absolute;
+//!   inset: 0;
+//!   pointer-events: auto;
+//! }
+//!
+//! .pine-dialog-content {
+//!   position: relative;
+//!   pointer-events: auto;
+//!   width: min(calc(100vw - 2rem), 28rem);
+//!   max-height: calc(100vh - 4rem);
+//!   overflow: auto;
+//! }
+//! ```
 
 use crate::overlay;
 use pocopine::prelude::*;

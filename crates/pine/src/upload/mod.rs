@@ -71,6 +71,8 @@
 //! </pine-upload-root>
 //! ```
 
+use std::collections::BTreeMap;
+
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 #[cfg(target_arch = "wasm32")]
@@ -84,7 +86,7 @@ use std::{cell::RefCell, collections::HashMap};
 
 use pocopine_storage::ObjectVisibility;
 #[cfg(target_arch = "wasm32")]
-use pocopine_storage::{ObjectRef, StorageClient, UploadPhase, UploadProgress};
+use pocopine_storage::{ObjectRef, StorageClient, UploadPhase, UploadProgress, UploadStrategy};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{AbortController, DragEvent, File, FileList};
 
@@ -201,6 +203,23 @@ pub struct PineUploadRoot {
     /// resume of the same file metadata.
     #[prop]
     pub auto_resume: bool,
+    /// Requested upload strategy. Defaults to `multipart` (native, parallel
+    /// part uploads — fastest for large objects). Other values: `sequential`
+    /// (offset-resumable PATCH proxy), `single` (one request), or `auto`/empty
+    /// to let the server pick. The chosen backend must advertise the requested
+    /// mode (e.g. S3/GCS/Azure support multipart) or the upload errors.
+    #[prop]
+    pub strategy: String,
+    /// Advisory PATCH chunk size in bytes. `0` keeps the default.
+    /// The JSON `StorageClient` path negotiates the chunk size with
+    /// the server, so this is not currently applied client-side.
+    #[prop]
+    pub chunk_size: u64,
+    /// String metadata forwarded to the upload initiation request.
+    /// Apps can use this to bind uploads to the current connection,
+    /// folder, tenant, or other server-side routing context.
+    #[prop]
+    pub metadata: BTreeMap<String, String>,
 
     /// The queue. Authors iterate with
     /// `<template pp-for="file in files">`.
@@ -247,6 +266,9 @@ impl Default for PineUploadRoot {
             max_size_bytes: 0,
             disabled: false,
             auto_resume: true,
+            strategy: "multipart".to_string(),
+            chunk_size: 0,
+            metadata: BTreeMap::new(),
             files: Vec::new(),
             busy: false,
             state: "empty".to_string(),
@@ -597,6 +619,8 @@ impl PineUploadRoot {
         };
         let scope_name = normalized_scope(&self.scope);
         let auto_resume = self.auto_resume;
+        let strategy = upload_strategy(&self.strategy);
+        let metadata = self.metadata.clone();
         let progress_handle = this::<Self>();
         let signal = controller.signal();
 
@@ -613,7 +637,7 @@ impl PineUploadRoot {
         let name_for_dispatch = file_name.clone();
         dispatch!(
             async move {
-                client
+                let mut upload = client
                     .scope(scope_name)
                     .upload(file)
                     .auto_resume(auto_resume)
@@ -623,9 +647,14 @@ impl PineUploadRoot {
                         progress_handle.update(|state| {
                             state.apply_progress(&id, progress);
                         });
-                    })
-                    .send()
-                    .await
+                    });
+                if let Some(strategy) = strategy {
+                    upload = upload.strategy(strategy);
+                }
+                for (key, value) in metadata {
+                    upload = upload.metadata(key, value);
+                }
+                upload.send().await
             }
             .await,
             |s, result| {
@@ -893,6 +922,19 @@ fn accept_allows(accept: &str, name: &str) -> bool {
         }
     }
     false
+}
+
+/// Map the `strategy` prop to a concrete [`UploadStrategy`] request, or
+/// `None` to leave the builder's default (`Auto`, server-negotiated). Unknown
+/// values fall back to `None` rather than erroring.
+#[cfg(target_arch = "wasm32")]
+fn upload_strategy(value: &str) -> Option<UploadStrategy> {
+    match value.trim() {
+        "multipart" => Some(UploadStrategy::Multipart),
+        "sequential" => Some(UploadStrategy::Sequential),
+        "single" | "single-request" => Some(UploadStrategy::SingleRequest),
+        _ => None,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

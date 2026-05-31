@@ -17,6 +17,13 @@ impl TailwindChild {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+
+    pub(crate) fn poll(&mut self) -> Result<Option<String>> {
+        let Some(status) = self.child.try_wait().context("poll tailwindcss --watch")? else {
+            return Ok(None);
+        };
+        Ok(Some(format!("tailwindcss watcher exited with {status}")))
+    }
 }
 
 /// Run Tailwind once (used by `build` and `run`). `release` enables

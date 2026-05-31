@@ -208,10 +208,10 @@ fn matches_shortcut(ev: &KeyboardEvent, spec: &ShortcutMatch) -> bool {
             return false;
         }
     }
-    if spec.needs_shift && !ev.shift_key() {
+    if spec.needs_shift != ev.shift_key() {
         return false;
     }
-    if spec.needs_alt && !ev.alt_key() {
+    if spec.needs_alt != ev.alt_key() {
         return false;
     }
     true

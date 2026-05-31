@@ -59,16 +59,10 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     // Start the serving side. In bin mode the child owns its ports + routes.
     // In static mode the CLI owns the socket and runs on a background thread.
     server::check_configured_port_available(&cfg)?;
-    match cfg.bin.as_deref() {
-        Some(bin) => children.bins.push(server::spawn_bin_with_env(
-            &project,
-            bin,
-            args.release,
-            server::BinRole::Server,
-            true,
-            &dev_env,
-        )?),
-        None => {
+    if cfg.bin.is_some() || cfg.worker_bin.is_some() {
+        spawn_configured_bins(&mut children, &project, &cfg, args.release, &dev_env)?;
+    } else {
+        {
             let serve_path = project.clone();
             let port = args.port;
             thread::spawn(move || {
@@ -78,17 +72,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             });
         }
     }
-    if let Some(worker) = cfg.worker_bin.as_deref() {
-        server::validate_worker_backend_for_separate_process(true)?;
-        children.bins.push(server::spawn_bin_with_env(
-            &project,
-            worker,
-            args.release,
-            server::BinRole::Worker,
-            true,
-            &dev_env,
-        )?);
-    }
     println!(
         "👀 watching {} and package files ({watcher_label})",
         src_dir.display()
@@ -96,6 +79,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     loop {
         if let Some(message) = server::poll_children(&mut children.bins)? {
+            break Err(anyhow!("{message}"));
+        }
+        if let Some(message) = children.poll_tailwind()? {
             break Err(anyhow!("{message}"));
         }
         match rx.recv_timeout(CHILD_POLL_INTERVAL) {
@@ -114,6 +100,24 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     println!("↻ rebuilding wasm…");
                     if let Err(e) = build::wasm(&project, args.release) {
                         eprintln!("build failed: {e:#}");
+                        continue;
+                    }
+                }
+
+                if pending.server {
+                    println!("↻ rebuilding server bin…");
+                    if let Err(e) = build::configured_bins(&project, &cfg, args.release) {
+                        eprintln!("server build failed: {e:#}");
+                        continue;
+                    }
+                    if let Err(e) = restart_configured_bins(
+                        &mut children,
+                        &project,
+                        &cfg,
+                        args.release,
+                        &dev_env,
+                    ) {
+                        eprintln!("server restart failed: {e:#}");
                         continue;
                     }
                 }
@@ -137,6 +141,50 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             Err(RecvTimeoutError::Disconnected) => break Ok(()),
         }
     }
+}
+
+fn spawn_configured_bins(
+    children: &mut DevChildren,
+    project: &Path,
+    cfg: &config::PocopineConfig,
+    release: bool,
+    dev_env: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    if let Some(bin) = cfg.bin.as_deref() {
+        children.bins.push(server::spawn_bin_with_env(
+            project,
+            bin,
+            release,
+            server::BinRole::Server,
+            true,
+            dev_env,
+        )?);
+    }
+    if let Some(worker) = cfg.worker_bin.as_deref() {
+        server::validate_worker_backend_for_separate_process(true)?;
+        children.bins.push(server::spawn_bin_with_env(
+            project,
+            worker,
+            release,
+            server::BinRole::Worker,
+            true,
+            dev_env,
+        )?);
+    }
+    Ok(())
+}
+
+fn restart_configured_bins(
+    children: &mut DevChildren,
+    project: &Path,
+    cfg: &config::PocopineConfig,
+    release: bool,
+    dev_env: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    for child in children.bins.drain(..) {
+        child.kill();
+    }
+    spawn_configured_bins(children, project, cfg, release, dev_env)
 }
 
 fn coalesce_changes(rx: &Receiver<Change>, first: Change) -> Change {
@@ -272,9 +320,19 @@ impl Drop for DevChildren {
     }
 }
 
+impl DevChildren {
+    fn poll_tailwind(&mut self) -> Result<Option<String>> {
+        let Some(child) = self.tailwind.as_mut() else {
+            return Ok(None);
+        };
+        child.poll()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Change {
     wasm: bool,
+    server: bool,
     client: bool,
     install: bool,
 }
@@ -309,6 +367,7 @@ impl Change {
             }
             return Some(Self {
                 wasm: true,
+                server: is_rust_source_path(path),
                 ..Self::default()
             });
         }
@@ -335,9 +394,16 @@ impl Change {
 
     fn merge(&mut self, other: Self) {
         self.wasm |= other.wasm;
+        self.server |= other.server;
         self.client |= other.client;
         self.install |= other.install;
     }
+}
+
+fn is_rust_source_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
 }
 
 fn is_client_module_path(path: &Path) -> bool {
@@ -394,9 +460,21 @@ mod tests {
     }
 
     #[test]
-    fn rust_source_rebuilds_only_wasm() {
+    fn rust_source_rebuilds_wasm_and_server_bin() {
         assert_eq!(
             Change::from_path(&project(), &project().join("src/lib.rs")),
+            Some(Change {
+                wasm: true,
+                server: true,
+                ..Change::default()
+            })
+        );
+    }
+
+    #[test]
+    fn poco_templates_rebuild_wasm_without_server_bin() {
+        assert_eq!(
+            Change::from_path(&project(), &project().join("src/App.poco")),
             Some(Change {
                 wasm: true,
                 ..Change::default()

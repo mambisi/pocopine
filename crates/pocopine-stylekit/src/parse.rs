@@ -65,25 +65,35 @@ pub fn parse_class(input: &str) -> Result<ParsedClass, Diagnostic> {
     // Tailwind v4 `(--var)` CSS-variable shorthand. `bg-(--brand)` is
     // sugar for `bg-[var(--brand)]`; `text-(length:--x)` keeps the type
     // hint as `[length:var(--x)]`.
-    let (mut base, mut arbitrary) =
-        if let Some(open) = rest.find('[').filter(|_| rest.ends_with(']')) {
-            let inner = &rest[open + 1..rest.len() - 1];
-            // Drop the connecting '-' before '[' from the base, if any.
-            let base = rest[..open].strip_suffix('-').unwrap_or(&rest[..open]);
-            (base.to_string(), Some(inner.to_string()))
-        } else if let Some(open) = rest.rfind('(').filter(|_| rest.ends_with(')')) {
-            let inner = &rest[open + 1..rest.len() - 1];
-            match var_shorthand(inner) {
-                Some(value) => {
-                    let base = rest[..open].strip_suffix('-').unwrap_or(&rest[..open]);
-                    (base.to_string(), Some(value))
-                }
-                // Not a `(--var)` form — leave it for the registry to reject.
-                None => (rest.to_string(), None),
+    let (mut base, mut arbitrary) = if let Some(open) = rest.find('[') {
+        // Only treat `[…]` as the trailing arbitrary value when its
+        // matching close is the final char. If the bracket closes earlier
+        // there is a trailing modifier (`text-[16px]/[1.5]`), so leave the
+        // whole slug for the specialised resolver (`try_text`) to parse the
+        // value bracket + `/` itself — peeling greedily here would splice
+        // `]/[` into the value (`font-size: 16px]/[1.5`, invalid CSS).
+        match matching_bracket(rest, open) {
+            Some(close) if close == rest.len() - 1 => {
+                let inner = &rest[open + 1..close];
+                // Drop the connecting '-' before '[' from the base, if any.
+                let base = rest[..open].strip_suffix('-').unwrap_or(&rest[..open]);
+                (base.to_string(), Some(inner.to_string()))
             }
-        } else {
-            (rest.to_string(), None)
-        };
+            _ => (rest.to_string(), None),
+        }
+    } else if let Some(open) = rest.rfind('(').filter(|_| rest.ends_with(')')) {
+        let inner = &rest[open + 1..rest.len() - 1];
+        match var_shorthand(inner) {
+            Some(value) => {
+                let base = rest[..open].strip_suffix('-').unwrap_or(&rest[..open]);
+                (base.to_string(), Some(value))
+            }
+            // Not a `(--var)` form — leave it for the registry to reject.
+            None => (rest.to_string(), None),
+        }
+    } else {
+        (rest.to_string(), None)
+    };
 
     // `color/[alpha]` / `color/(--a)` — the bracket is the *opacity
     // modifier's* value, not a base arbitrary, so the peel above left a
@@ -128,6 +138,25 @@ fn top_level_colon(s: &str) -> Option<usize> {
     None
 }
 
+/// Index of the `]` that closes the `[` at `open`, tracking nested
+/// `[` / `(` depth. Returns `None` if the bracket is unbalanced.
+fn matching_bracket(s: &str, open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, b) in s.bytes().enumerate().skip(open) {
+        match b {
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +195,25 @@ mod tests {
         let c = p("grid-cols-[minmax(0,1fr)_80px]");
         assert_eq!(c.base, "grid-cols");
         assert_eq!(c.arbitrary.as_deref(), Some("minmax(0,1fr)_80px"));
+    }
+
+    #[test]
+    fn bracketed_value_with_bracketed_modifier_is_left_whole() {
+        // `text-[16px]/[1.5]` — the first `[` closes before the end (there's a
+        // `/[1.5]` line-height modifier), so the greedy peel must NOT fire;
+        // the whole slug is handed to the resolver to split itself.
+        let c = p("text-[16px]/[1.5]");
+        assert_eq!(c.base, "text-[16px]/[1.5]");
+        assert_eq!(c.arbitrary, None);
+    }
+
+    #[test]
+    fn bracketed_alpha_modifier_on_named_color_still_folds() {
+        // `bg-red-500/[0.5]` — the only `[` is the alpha modifier and spans to
+        // the end, so it peels + folds into the base for the colour resolver.
+        let c = p("bg-red-500/[0.5]");
+        assert_eq!(c.base, "bg-red-500/0.5");
+        assert_eq!(c.arbitrary, None);
     }
 
     #[test]

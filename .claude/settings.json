@@ -3,7 +3,11 @@
     "allow": [
       "Bash(cargo metadata *)",
       "Bash(twiggy *)",
-      "Bash(gh search *)"
+      "Bash(gh search *)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo check *)"
     ]
   }
 }

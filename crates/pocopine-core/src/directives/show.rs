@@ -5,6 +5,7 @@
 //! enter / leave class sequence runs at the right moment; the
 //! `display: none` is deferred until the leave animation completes.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, HtmlElement};
@@ -36,13 +37,25 @@ pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue
     };
     let el_for_track = el.clone();
     let proxy_owned = proxy.clone();
+    // The first effect run is the initial mount. Apply the display
+    // state directly — no enter/leave transition. Without this guard an
+    // element that starts hidden runs the LEAVE sequence on its first
+    // paint (visible → fade/slide out → `display: none`), the
+    // "flash on refresh". Mirrors Alpine's `x-show` + `x-transition`,
+    // which never animates the initial render (no implicit `appear`).
+    let initial = Cell::new(true);
     let id = effect(move || {
         with_current_el(&el_for_track.clone(), || {
             let truthy = !evaluator(&proxy_owned).is_falsy();
             let style = html_el.style();
+            let first_run = initial.replace(false);
             if truthy {
                 let _ = style.remove_property("display");
-                transition::enter_subtree(html_el.as_ref(), || {});
+                if !first_run {
+                    transition::enter_subtree(html_el.as_ref(), || {});
+                }
+            } else if first_run {
+                let _ = style.set_property("display", "none");
             } else {
                 let style_for_leave = style.clone();
                 transition::leave_subtree(html_el.as_ref(), move || {

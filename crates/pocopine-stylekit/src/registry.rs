@@ -140,6 +140,7 @@ impl Registry {
             || sd.starts_with("divide-")
             || sd == "divide-x"
             || sd == "divide-y"
+            || sd == "divide"
         {
             selector.push_str(" > :not([hidden]) ~ :not([hidden])");
         }
@@ -2722,9 +2723,106 @@ fn font_size(name: &str) -> Option<(&'static str, &'static str)> {
 
 // ── arbitrary values ────────────────────────────────────────────────
 
-/// Resolve `base-[value]`. The `_`-for-space convention is normalised.
+/// Insert the whitespace CSS requires around `+` `-` `*` `/` operators
+/// inside `calc()` / `min()` / `max()` / `clamp()`:
+/// `calc(100vh-3.5rem)` → `calc(100vh - 3.5rem)`.
+///
+/// Authors can't type the spaces inside a class attribute (a space would
+/// split the class into two), and CSS *rejects* an unspaced `+`/`-` in
+/// `calc()` outright — the whole declaration is dropped — so without this
+/// pass `h-[calc(100vh-3.5rem)]` silently produces no height at all. Mirrors
+/// Tailwind's math-operator normalisation.
+///
+/// Operators inside a `var(--custom-prop)` name (or any non-math function
+/// such as `url()`) are left untouched: a paren is classified by the
+/// identifier in front of it, and only math-function descendants get the
+/// operator spacing.
+fn normalize_math(value: &str) -> String {
+    // Fast path — only the four math functions need operator spacing.
+    if !["calc(", "min(", "max(", "clamp("]
+        .iter()
+        .any(|f| value.contains(f))
+    {
+        return value.to_string();
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Ctx {
+        Math,
+        /// Inside `var()` / `env()` / `url()` / … — leave operators alone.
+        Opaque,
+    }
+
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len() + 8);
+    let mut stack: Vec<Ctx> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '(' {
+            // Classify by the identifier immediately preceding the paren.
+            let ident_end = out.len();
+            let ident_start = out
+                .as_bytes()
+                .iter()
+                .rposition(|b| !(b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_'))
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let ctx = match &out[ident_start..ident_end] {
+                "calc" | "min" | "max" | "clamp" => Ctx::Math,
+                // Bare grouping paren inherits its parent's context.
+                "" => stack.last().copied().unwrap_or(Ctx::Opaque),
+                // Named non-math function (var, env, url, theme, …).
+                _ => Ctx::Opaque,
+            };
+            stack.push(ctx);
+            out.push('(');
+            i += 1;
+            continue;
+        }
+        if c == ')' {
+            stack.pop();
+            out.push(')');
+            i += 1;
+            continue;
+        }
+        if stack.last().copied() == Some(Ctx::Math) && matches!(c, '+' | '-' | '*' | '/') {
+            let prev = out.trim_end().bytes().last();
+            // `*` / `/` are always binary; `+` / `-` only when they follow a
+            // completed value (digit, unit letter, `%`, `)` or `.`).
+            let value_end = matches!(prev, Some(b) if b.is_ascii_alphanumeric() || matches!(b, b')' | b'%' | b'.'));
+            // Guard scientific notation: a `-`/`+` right after `e`/`E` that
+            // itself follows a digit is an exponent sign, not an operator.
+            let exponent = matches!(c, '+' | '-') && matches!(prev, Some(b'e' | b'E')) && {
+                let t = out.trim_end();
+                let tb = t.as_bytes();
+                tb.len() >= 2 && tb[tb.len() - 2].is_ascii_digit()
+            };
+            if (matches!(c, '*' | '/') || value_end) && !exponent {
+                while out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push(' ');
+                out.push(c);
+                out.push(' ');
+                i += 1;
+                while i < bytes.len() && bytes[i] == b' ' {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// Resolve `base-[value]`. The `_`-for-space convention is normalised, and
+/// `calc()`/`min()`/`max()`/`clamp()` operator spacing is repaired (see
+/// [`normalize_math`]).
 fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
-    let v = value.replace('_', " ");
+    let v = normalize_math(&value.replace('_', " "));
     let typed = |ty: CssType, prop: &str| {
         if ty.accepts(value) {
             Ok(decl(prop, &v))
@@ -2780,6 +2878,39 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
         _ => (None, v.clone()),
     };
     let is_color = hint == Some("color") || (hint.is_none() && CssType::Color.accepts(&vv));
+    // Border width / colour by side (`border-[2px]`, `border-[#abc]`,
+    // `border-x-[1px]`, `border-t-[#fff]`, …). Width vs colour is chosen by
+    // `is_color`, the same way `ring`/`outline` disambiguate.
+    {
+        let kind = if is_color { "color" } else { "width" };
+        let sides: &[&str] = match base {
+            "border" => &["border"],
+            "border-x" => &["border-left", "border-right"],
+            "border-y" => &["border-top", "border-bottom"],
+            "border-t" => &["border-top"],
+            "border-r" => &["border-right"],
+            "border-b" => &["border-bottom"],
+            "border-l" => &["border-left"],
+            "border-s" => &["border-inline-start"],
+            "border-e" => &["border-inline-end"],
+            _ => &[],
+        };
+        if !sides.is_empty() {
+            return Ok(sides
+                .iter()
+                .map(|s| (format!("{s}-{kind}"), vv.clone()))
+                .collect());
+        }
+    }
+    // `divide-x-[2px]` / `divide-y-[3px]` widths and `divide-[#abc]` colour —
+    // applied *between* children by the `emit_into` child-combinator tail
+    // (keyed on the `divide-*` base), exactly like the scale-value forms.
+    match base {
+        "divide-x" => return Ok(decl("border-left-width", &vv)),
+        "divide-y" => return Ok(decl("border-top-width", &vv)),
+        "divide" if is_color => return Ok(decl("border-color", &vv)),
+        _ => {}
+    }
     // Families that take either a length or a colour (`ring-[3px]` vs
     // `ring-[#fff]`, `outline-[2px]` vs `outline-[red]`).
     match base {
@@ -2881,6 +3012,34 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
         "grid-cols" => Ok(decl("grid-template-columns", &v)),
         "grid-rows" => Ok(decl("grid-template-rows", &v)),
         "transition" => Ok(decl("transition-property", &v)),
+        // transition timing — value used verbatim (already carries its unit /
+        // function, e.g. `300ms`, `cubic-bezier(…)`).
+        "duration" => Ok(decl("transition-duration", &v)),
+        "delay" => Ok(decl("transition-delay", &v)),
+        "ease" => Ok(decl("transition-timing-function", &v)),
+        // plain numeric / keyword families.
+        "z" => Ok(decl("z-index", &v)),
+        "order" => Ok(decl("order", &v)),
+        "opacity" => Ok(decl("opacity", &v)),
+        "columns" => Ok(decl("columns", &v)),
+        "outline-offset" => Ok(decl("outline-offset", &v)),
+        // transforms compose through the `--pp-*` chain so they stack with
+        // sibling transforms, exactly like `translate-x` (the arbitrary value
+        // is used verbatim — `1.05`, `3deg`, …).
+        "scale" => Ok({
+            let mut d = transform_decls("--pp-scale-x", &v);
+            d.insert(0, ("--pp-scale-y".to_string(), v.clone()));
+            d
+        }),
+        "scale-x" => Ok(transform_decls("--pp-scale-x", &v)),
+        "scale-y" => Ok(transform_decls("--pp-scale-y", &v)),
+        "scale-z" => Ok(transform_decls("--pp-scale-z", &v)),
+        "rotate" => Ok(transform_decls("--pp-rotate", &v)),
+        "rotate-x" => Ok(transform_decls("--pp-rotate-x", &v)),
+        "rotate-y" => Ok(transform_decls("--pp-rotate-y", &v)),
+        "rotate-z" => Ok(transform_decls("--pp-rotate-z", &v)),
+        "skew-x" => Ok(transform_decls("--pp-skew-x", &v)),
+        "skew-y" => Ok(transform_decls("--pp-skew-y", &v)),
         "top" => Ok(decl("top", &v)),
         "left" => Ok(decl("left", &v)),
         "right" => Ok(decl("right", &v)),
@@ -3289,6 +3448,71 @@ mod tests {
             &mut out,
         );
         out
+    }
+
+    #[test]
+    fn math_spacing_repairs_unspaced_calc_minus() {
+        // The bug: CSS drops `calc(100vh-3.5rem)` (unspaced `-` is invalid),
+        // so `h-[calc(100vh-3.5rem)]` produced no height at all.
+        assert_eq!(normalize_math("calc(100vh-3.5rem)"), "calc(100vh - 3.5rem)");
+    }
+
+    #[test]
+    fn math_spacing_leaves_var_custom_property_names_intact() {
+        // The `-` inside `--color-line` is part of the identifier, not an
+        // operator — only the top-level subtraction gets spaced.
+        assert_eq!(
+            normalize_math("calc(var(--color-line)-2px)"),
+            "calc(var(--color-line) - 2px)"
+        );
+    }
+
+    #[test]
+    fn math_spacing_handles_nested_min_calc() {
+        assert_eq!(
+            normalize_math("min(calc(100vw-2rem),380px)"),
+            "min(calc(100vw - 2rem),380px)"
+        );
+        assert_eq!(
+            normalize_math("calc(min(100vh-2rem,720px)-2.75rem)"),
+            "calc(min(100vh - 2rem,720px) - 2.75rem)"
+        );
+    }
+
+    #[test]
+    fn math_spacing_is_idempotent_and_collapses_extra_spaces() {
+        assert_eq!(
+            normalize_math("calc(100vh  -  3.5rem)"),
+            "calc(100vh - 3.5rem)"
+        );
+    }
+
+    #[test]
+    fn math_spacing_keeps_unary_and_exponent_signs() {
+        // Leading unary minus and `2px - -3px` stay as written.
+        assert_eq!(normalize_math("calc(-3px + 2px)"), "calc(-3px + 2px)");
+        assert_eq!(normalize_math("calc(2px - -3px)"), "calc(2px - -3px)");
+        // `1e-3` exponent is not an operator.
+        assert_eq!(normalize_math("calc(1e-3px * 2)"), "calc(1e-3px * 2)");
+    }
+
+    #[test]
+    fn math_spacing_ignores_values_without_math_functions() {
+        // A bare `var()` / token with hyphens must not be touched.
+        assert_eq!(normalize_math("var(--a-b)"), "var(--a-b)");
+        assert_eq!(normalize_math("200px"), "200px");
+        assert_eq!(normalize_math("minmax(0,1fr)"), "minmax(0,1fr)");
+    }
+
+    #[test]
+    fn height_arbitrary_calc_emits_spaced_operator() {
+        // End-to-end: the sidebar's `h-[calc(100vh-3.5rem)]`.
+        let out = run("h-[calc(100vh-3.5rem)]", &palette());
+        assert!(
+            out.css.contains("height: calc(100vh - 3.5rem)"),
+            "expected spaced calc, got: {}",
+            out.css
+        );
     }
 
     fn palette() -> ThemeTokens {
@@ -3871,10 +4095,63 @@ mod tests {
     #[test]
     fn arbitrary_values() {
         assert!(css("text-[13px]").contains("font-size: 13px;"));
-        assert!(css("h-[calc(100vh-3.5rem)]").contains("height: calc(100vh-3.5rem);"));
+        // calc() operators are spaced so the value is valid CSS — an unspaced
+        // `-` is rejected by the browser and the whole declaration is dropped.
+        assert!(css("h-[calc(100vh-3.5rem)]").contains("height: calc(100vh - 3.5rem);"));
         assert!(css("grid-cols-[minmax(0,1fr)_80px]")
             .contains("grid-template-columns: minmax(0,1fr) 80px;"));
         assert!(css("tracking-[0.04em]").contains("letter-spacing: 0.04em;"));
+    }
+
+    #[test]
+    fn arbitrary_transition_and_numeric_families() {
+        assert!(css("duration-[300ms]").contains("transition-duration: 300ms;"));
+        assert!(css("delay-[150ms]").contains("transition-delay: 150ms;"));
+        assert!(css("ease-[cubic-bezier(0.4,0,0.2,1)]")
+            .contains("transition-timing-function: cubic-bezier(0.4,0,0.2,1);"));
+        assert!(css("z-[60]").contains("z-index: 60;"));
+        assert!(css("order-[2]").contains("order: 2;"));
+        assert!(css("opacity-[0.42]").contains("opacity: 0.42;"));
+        assert!(css("columns-[3]").contains("columns: 3;"));
+        assert!(css("outline-offset-[3px]").contains("outline-offset: 3px;"));
+    }
+
+    #[test]
+    fn arbitrary_border_width_and_color() {
+        assert!(css("border-[2px]").contains("border-width: 2px;"));
+        assert!(css("border-[#abc]").contains("border-color: #abc;"));
+        let bx = css("border-x-[1px]");
+        assert!(bx.contains("border-left-width: 1px;"));
+        assert!(bx.contains("border-right-width: 1px;"));
+        assert!(css("border-t-[#fff]").contains("border-top-color: #fff;"));
+    }
+
+    #[test]
+    fn arbitrary_divide_applies_to_children() {
+        let d = css("divide-x-[2px]");
+        assert!(d.contains("border-left-width: 2px;"), "{d}");
+        // divide-* targets the between-children combinator, not the element.
+        assert!(d.contains("> :not([hidden]) ~ :not([hidden])"), "{d}");
+    }
+
+    #[test]
+    fn arbitrary_transforms_compose_through_chain() {
+        let s = css("scale-[1.05]");
+        assert!(s.contains("--pp-scale-x: 1.05;"), "{s}");
+        assert!(s.contains("--pp-scale-y: 1.05;"), "{s}");
+        assert!(s.contains("transform: translate("), "{s}");
+        assert!(css("rotate-[3deg]").contains("--pp-rotate: 3deg;"));
+        assert!(css("skew-x-[4deg]").contains("--pp-skew-x: 4deg;"));
+    }
+
+    #[test]
+    fn text_size_with_bracketed_leading_is_not_mangled() {
+        // Regression: `text-[16px]/[1.5]` used to splice the `]/[` slug into
+        // the value (`font-size: 16px]/[1.5`). Both parts must parse cleanly.
+        let c = css("text-[16px]/[1.5]");
+        assert!(c.contains("font-size: 16px;"), "{c}");
+        assert!(c.contains("line-height: 1.5;"), "{c}");
+        assert!(!c.contains("16px]"), "value still mangled: {c}");
     }
 
     #[test]
