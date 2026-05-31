@@ -34,6 +34,10 @@ looks the way it does — the code itself tells you *what*.
 - [`browser-storage.md`](./browser-storage.md) — typed `localStorage`
   helpers for small browser preferences, plus the auth-token and SSR
   boundaries.
+- [`storage-uploads.md`](./storage-uploads.md) — object-storage upload
+  architecture (#176): the server-mediated, proxy-like path that streams
+  bytes once into S3/GCS/Azure native multipart, capability negotiation,
+  race-free completion, concurrency fencing, and the crash-recovery model.
 - [`pine-stylekit.md`](./pine-stylekit.md) — the Pocopine-native
   utility-CSS compiler (RFC 092): Tailwind-shaped class grammar,
   `@theme` tokens, the generated utility catalog, diagnostics, and the
