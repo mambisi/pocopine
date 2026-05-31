@@ -25,8 +25,10 @@ pub fn escape_selector(class: &str) -> String {
 /// A single CSS declaration block to emit.
 #[derive(Debug, Clone)]
 pub struct Rule {
-    /// Escaped, fully-qualified selector (already includes the leading
-    /// `.` and any pseudo-class suffix).
+    /// The complete, escaped selector — `render` emits it verbatim. It
+    /// already includes the class's leading `.`, any pseudo suffix, and
+    /// any ancestor/sibling combinator prefix (so conditioned variants
+    /// like `.group:hover .foo` render correctly).
     pub selector: String,
     /// `property: value` pairs, in declaration order.
     pub declarations: Vec<(String, String)>,
@@ -43,7 +45,7 @@ impl Rule {
             .iter()
             .map(|(p, v)| format!("  {p}: {v};\n"))
             .collect();
-        let rule = format!(".{} {{\n{body}}}\n", self.selector);
+        let rule = format!("{} {{\n{body}}}\n", self.selector);
         match &self.at_rule {
             Some(at) => format!("{at} {{\n{}}}\n", indent(&rule)),
             None => rule,
@@ -68,7 +70,7 @@ mod tests {
     #[test]
     fn renders_simple_rule() {
         let r = Rule {
-            selector: "flex".into(),
+            selector: ".flex".into(),
             declarations: vec![("display".into(), "flex".into())],
             at_rule: None,
         };
