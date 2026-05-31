@@ -1,0 +1,89 @@
+name: tailwind-conformance
+
+# Watch Tailwind upstream and keep the **living coverage issue**
+# (label `tailwind-coverage`, never closed) up to date. On each run the
+# conformance script diffs Tailwind's family inventory against a pinned
+# baseline, probes Pine Stylekit for per-family coverage, and rewrites
+# the issue body with a gap checklist. See
+# scripts/check-tailwind-conformance.mjs + RFC 092 D3.
+#
+# This job never blocks normal CI — it runs weekly + on demand. A
+# failure means "Tailwind moved; review the diff and re-baseline", not
+# "the build is broken".
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — Tailwind ships irregularly; weekly is plenty.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      sub_issues:
+        description: 'Also open one tracking issue per gap family'
+        type: boolean
+        default: false
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/check-tailwind-conformance.mjs'
+      - 'crates/pocopine-stylekit/tests/fixtures/tailwind-*.txt'
+      - 'crates/pocopine-stylekit/tests/tailwind_conformance.rs'
+      - '.github/workflows/tailwind-conformance.yml'
+
+concurrency:
+  group: tailwind-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # PR validation: hermetic, read-only. Checks the pinned baseline so a
+  # fixture/script change can't silently break the tooling, and fails if
+  # the committed baseline is somehow behind its own fixtures.
+  validate:
+    if: github.event_name == 'pull_request'
+    name: validate (pinned, read-only)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: tailwind-conformance
+      - name: Conformance (pinned baseline)
+        run: |
+          VERSION="$(tr -d '[:space:]' < crates/pocopine-stylekit/tests/fixtures/tailwind-version.txt)"
+          node scripts/check-tailwind-conformance.mjs --version "$VERSION" --check
+
+  # Scheduled / manual: check the LATEST published Tailwind and refresh
+  # the living coverage issue. Needs issue-write.
+  living-issue:
+    if: github.event_name != 'pull_request'
+    name: update living coverage issue
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: tailwind-conformance
+      - name: Update living coverage issue
+        run: |
+          node scripts/check-tailwind-conformance.mjs --issue --check \
+            ${{ inputs.sub_issues && '--sub-issues' || '' }}
