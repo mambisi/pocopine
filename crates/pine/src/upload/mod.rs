@@ -1,4 +1,4 @@
-// Host-side compile lacks the `web_sys::File` / `UploadClient`
+// Host-side compile lacks the `web_sys::File` / `StorageClient`
 // paths that drive the queue, so several helpers fall back to
 // dead code there. They're still part of the wasm execution
 // graph, so allow dead_code at the module level rather than
@@ -14,9 +14,12 @@
 //!   (`files: Vec<UploadFile>`), the hidden `<input type="file">`,
 //!   validation against `accept` / `max-files` / `max-size-bytes`,
 //!   the drag-over signal, and per-file lifecycle through
-//!   [`pocopine_storage::UploadClient`]. Emits `pp:upload:complete`
-//!   and `pp:upload:error` per file plus `pp:upload:all-complete`
-//!   when the queue drains without errors. Provides its Handle.
+//!   [`pocopine_storage::StorageClient`] (the JSON upload path that
+//!   negotiates sequential vs. multipart and returns an
+//!   [`pocopine_storage::ObjectRef`]). Emits `pp:upload:complete`
+//!   (carrying the stored object) and `pp:upload:error` per file
+//!   plus `pp:upload:all-complete` when the queue drains without
+//!   errors. Provides its Handle.
 //! - **Trigger** (`pine-upload-trigger`) — `<button>` that opens
 //!   the Root's file picker.
 //! - **Dropzone** (`pine-upload-dropzone`) — drag-drop surface that
@@ -41,7 +44,7 @@
 //!
 //! ```html
 //! <pine-upload-root scope="files" accept="image/*,application/pdf"
-//!                   multiple auto-resume chunk-size="1048576"
+//!                   multiple auto-resume
 //!                   @pp:upload:complete="refresh_files">
 //!   <template pp-slot="default" pp-let="upload">
 //!     <pine-upload-dropzone>
@@ -79,8 +82,9 @@ use web_sys::{Event, HtmlElement, HtmlInputElement};
 #[cfg(target_arch = "wasm32")]
 use std::{cell::RefCell, collections::HashMap};
 
+use pocopine_storage::ObjectVisibility;
 #[cfg(target_arch = "wasm32")]
-use pocopine_storage::{UploadClient, UploadPhase, UploadProgress};
+use pocopine_storage::{ObjectRef, StorageClient, UploadPhase, UploadProgress};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{AbortController, DragEvent, File, FileList};
 
@@ -131,17 +135,24 @@ pub struct UploadFile {
     pub bytes_sent: u64,
     pub bytes_total: u64,
     pub error: String,
-    /// Server-issued resumable URL once known; for app-level use.
-    pub upload_url: String,
+    /// The stored object's key once the upload completes; empty
+    /// until then. For app-level use (referencing the object after
+    /// upload).
+    pub key: String,
 }
 
-/// Detail payload emitted with `pp:upload:complete` per file.
+/// Detail payload emitted with `pp:upload:complete` per file — the
+/// stored [`ObjectRef`](pocopine_storage::ObjectRef) the server
+/// assembled, alongside the queue identity of the file.
 #[derive(Clone, Debug, Serialize)]
 pub struct PineUploadComplete {
     pub file_id: String,
     pub file_name: String,
-    pub upload_url: String,
-    pub bytes_uploaded: u64,
+    pub key: String,
+    pub size: u64,
+    pub etag: Option<String>,
+    pub content_type: Option<String>,
+    pub visibility: ObjectVisibility,
 }
 
 /// Detail payload emitted with `pp:upload:error` per file.
@@ -190,10 +201,6 @@ pub struct PineUploadRoot {
     /// resume of the same file metadata.
     #[prop]
     pub auto_resume: bool,
-    /// PATCH chunk size in bytes. `0` keeps the upload client
-    /// default.
-    #[prop]
-    pub chunk_size: u64,
 
     /// The queue. Authors iterate with
     /// `<template pp-for="file in files">`.
@@ -240,7 +247,6 @@ impl Default for PineUploadRoot {
             max_size_bytes: 0,
             disabled: false,
             auto_resume: true,
-            chunk_size: 0,
             files: Vec::new(),
             busy: false,
             state: "empty".to_string(),
@@ -488,7 +494,7 @@ impl PineUploadRoot {
             bytes_sent: 0,
             bytes_total: size,
             error: String::new(),
-            upload_url: String::new(),
+            key: String::new(),
         };
 
         if let Err(msg) = self.validate(&name, size) {
@@ -577,8 +583,8 @@ impl PineUploadRoot {
 
     #[cfg(target_arch = "wasm32")]
     fn start_upload(&mut self, scope_id: ScopeId, file_id: String, file_name: String, file: File) {
-        let Some(client) = self.plugins().get::<UploadClient>() else {
-            self.finish_item_failure(&file_id, &file_name, "upload plugin is not installed");
+        let Some(client) = self.plugins().get::<StorageClient>() else {
+            self.finish_item_failure(&file_id, &file_name, "storage plugin is not installed");
             return;
         };
         let Ok(controller) = AbortController::new() else {
@@ -591,7 +597,6 @@ impl PineUploadRoot {
         };
         let scope_name = normalized_scope(&self.scope);
         let auto_resume = self.auto_resume;
-        let chunk_size = self.chunk_size;
         let progress_handle = this::<Self>();
         let signal = controller.signal();
 
@@ -608,7 +613,7 @@ impl PineUploadRoot {
         let name_for_dispatch = file_name.clone();
         dispatch!(
             async move {
-                let mut upload = client
+                client
                     .scope(scope_name)
                     .upload(file)
                     .auto_resume(auto_resume)
@@ -618,25 +623,17 @@ impl PineUploadRoot {
                         progress_handle.update(|state| {
                             state.apply_progress(&id, progress);
                         });
-                    });
-                if chunk_size > 0 {
-                    upload = upload.chunk_size(chunk_size);
-                }
-                upload.send().await
+                    })
+                    .send()
+                    .await
             }
             .await,
             |s, result| {
                 clear_abort_for(scope_id, &id_for_dispatch);
                 let canceled = matches!(&result, Err(err) if is_canceled(err));
                 match result {
-                    Ok(upload) => {
-                        s.complete_item(
-                            scope_id,
-                            &id_for_dispatch,
-                            &name_for_dispatch,
-                            &upload.upload_url,
-                            upload.bytes_uploaded,
-                        );
+                    Ok(object) => {
+                        s.complete_item(scope_id, &id_for_dispatch, &name_for_dispatch, &object);
                     }
                     Err(err) => {
                         if canceled {
@@ -662,16 +659,15 @@ impl PineUploadRoot {
         scope_id: ScopeId,
         file_id: &str,
         file_name: &str,
-        upload_url: &str,
-        bytes_uploaded: u64,
+        object: &ObjectRef,
     ) {
         if let Some(file) = self.files.iter_mut().find(|f| f.id == file_id) {
             file.status = "done".to_string();
             file.progress = 100.0;
             file.progress_label = "100%".to_string();
-            file.bytes_sent = bytes_uploaded;
-            file.bytes_total = file.bytes_total.max(bytes_uploaded);
-            file.upload_url = upload_url.to_string();
+            file.bytes_sent = object.size;
+            file.bytes_total = file.bytes_total.max(object.size);
+            file.key = object.key.clone();
             file.error.clear();
         }
         forget_file(Some(scope_id), file_id);
@@ -681,8 +677,11 @@ impl PineUploadRoot {
             PineUploadComplete {
                 file_id: file_id.to_string(),
                 file_name: file_name.to_string(),
-                upload_url: upload_url.to_string(),
-                bytes_uploaded,
+                key: object.key.clone(),
+                size: object.size,
+                etag: object.etag.clone(),
+                content_type: object.content_type.clone(),
+                visibility: object.visibility,
             },
         );
     }
@@ -914,7 +913,7 @@ fn is_canceled(err: &impl ToString) -> bool {
 
 fn user_upload_error_message(message: &str) -> &'static str {
     let normalized = message.to_ascii_lowercase();
-    if normalized.contains("upload plugin is not installed")
+    if normalized.contains("plugin is not installed")
         || normalized.contains("abort controller")
         || normalized.contains("file handle lost")
     {

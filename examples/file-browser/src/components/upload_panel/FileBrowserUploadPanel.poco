@@ -2,7 +2,6 @@
   <pine-upload-root scope="files"
                     auto-resume
                     multiple
-                    chunk-size="1048576"
                     max-size-bytes="536870912"
                     class="block"
                     @pp:upload:complete="upload_complete"
