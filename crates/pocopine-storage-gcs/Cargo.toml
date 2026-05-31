@@ -11,6 +11,7 @@ bytes = "1"
 google-cloud-storage = "1"
 google-cloud-gax = "1"
 percent-encoding = "2"
+pocopine-codec = { workspace = true }
 pocopine-storage = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 serde = { workspace = true }
@@ -22,5 +23,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 google-cloud-auth = "1"
+pocopine-crypto = { workspace = true }
 testcontainers = { version = "0.23", features = ["http_wait"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
