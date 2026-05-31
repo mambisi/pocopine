@@ -1,27 +1,23 @@
-<root class="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-4 border-b border-line bg-surface/95 px-4 backdrop-blur-md sm:px-6">
-  <div class="flex items-center gap-2.5">
-    <span class="inline-flex size-7 items-center justify-center rounded-md bg-ink-100 text-surface" aria-hidden="true">
-      <pine-icon name="folder" size="16"></pine-icon>
-    </span>
-    <span class="text-[15px] font-semibold tracking-tight text-ink-100">Pocopine Files</span>
-  </div>
+<root class="sticky top-0 z-20 border-b border-line bg-surface/95 px-4 backdrop-blur-md sm:px-6">
+  <div class="relative flex h-14 items-center justify-center">
+    <div class="absolute left-0 flex min-w-0 items-center gap-2.5">
+      <span class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface-2" aria-hidden="true">
+        <img class="size-[18px]" src="/icon-mark.svg" alt="" />
+      </span>
+      <span class="hidden truncate text-[15px] font-semibold tracking-normal text-ink-100 md:inline">Cloud File Explorer</span>
+    </div>
 
-  <div class="relative ml-auto hidden w-full max-w-md md:block">
-    <span class="pointer-events-none absolute inset-y-0 left-3 z-10 flex items-center text-ink-50">
-      <pine-icon name="search" size="16"></pine-icon>
-    </span>
-    <pine-input pp-model:value="query"
-                placeholder="Search files and folders"
-                aria-label="Search"
-                class="block h-9 w-full rounded-md border border-line bg-surface-2 pl-9 pr-3 text-[13px] text-ink-100 placeholder:text-ink-50 focus:border-line-strong focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent-soft"></pine-input>
-  </div>
+    <div class="mx-auto w-full max-w-xl pl-12 pr-12 sm:pr-32 md:px-0">
+      <file-browser-storage-command></file-browser-storage-command>
+    </div>
 
-  <div class="ml-auto flex items-center gap-2 md:ml-2">
-    <button class="hidden size-9 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100 sm:inline-flex" type="button" aria-label="Notifications" disabled>
-      <pine-icon name="clock" size="18"></pine-icon>
-    </button>
-    <pine-avatar-root class="inline-flex size-9 items-center justify-center rounded-full bg-accent text-[12px] font-semibold text-surface ring-2 ring-surface" aria-label="Account">
-      <pine-avatar-fallback class="inline-flex size-full items-center justify-center">ZM</pine-avatar-fallback>
-    </pine-avatar-root>
+    <div class="absolute right-0 flex items-center">
+      <button class="inline-flex size-9 items-center justify-center rounded-md border border-line bg-surface text-ink-70 hover:bg-ink-10 hover:text-ink-100"
+              type="button"
+              :aria-label="dark ? 'Switch to light mode' : 'Switch to dark mode'"
+              @click="toggle_theme">
+        <pine-icon :name="dark ? 'sun' : 'moon'" size="18"></pine-icon>
+      </button>
+    </div>
   </div>
 </root>

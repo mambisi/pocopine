@@ -2236,16 +2236,27 @@ dependencies = [
 name = "file-browser-example"
 version = "0.1.0"
 dependencies = [
+ "aws-sdk-s3",
+ "bytes",
+ "google-cloud-auth",
+ "google-cloud-storage",
+ "percent-encoding",
  "pine",
  "pine-icons",
  "pocopine",
  "pocopine-logging",
  "pocopine-server",
  "pocopine-storage",
+ "pocopine-storage-gcs",
+ "pocopine-storage-s3",
+ "reqwest 0.13.4",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
+ "uuid",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

@@ -1,121 +1,59 @@
 <root class="block">
-  <pine-upload-root scope="files"
-                    auto-resume
-                    multiple
-                    max-size-bytes="536870912"
-                    class="block"
-                    @pp:upload:complete="upload_complete"
-                    @pp:upload:error="upload_failed">
-
-    <template pp-slot="default" pp-let="upload">
-
-      <header class="flex flex-wrap items-end justify-between gap-3">
-        <div class="min-w-0">
-          <h1 class="text-[24px] font-semibold tracking-tight text-ink-100">All files</h1>
-          <p class="mt-1 text-[13px] text-ink-60">
-            <span pp-text="$store.files.file_count_label"></span><span class="mx-1.5 text-ink-40">·</span><span pp-text="$store.files.total_size_label"></span>
-          </p>
-        </div>
-        <div class="flex items-center gap-2">
-          <button class="inline-flex h-9 items-center justify-center rounded-md border border-line bg-surface px-2.5 text-[13px] font-medium text-ink-70 shadow-card transition hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-60" type="button" aria-label="Refresh" @click="refresh" :disabled="$store.files.loading">
-            <pine-icon name="refresh" size="16"></pine-icon>
-          </button>
-          <pine-upload-trigger class="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border-0 bg-ink-100 px-3.5 text-[13px] font-medium text-surface shadow-card transition hover:bg-ink-80 data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-50">
-            <pine-icon name="upload" size="15"></pine-icon>
-            <span>Upload files</span>
-          </pine-upload-trigger>
-        </div>
-      </header>
-
-      <pine-upload-dropzone class="mt-4 block w-full cursor-pointer rounded-[12px] border border-dashed border-line-strong bg-surface px-5 py-4 shadow-card outline-none transition-[background,border-color,box-shadow] hover:border-ink-50 hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent data-[dragover=true]:border-solid data-[dragover=true]:border-accent data-[dragover=true]:bg-accent-soft data-[dragover=true]:shadow-[var(--shadow-ring-accent)] data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60"
-                            pp-show="upload.files_empty">
-        <div class="pointer-events-none flex flex-wrap items-center gap-3 text-[13px] text-ink-70 sm:flex-nowrap">
-          <span class="inline-flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-ink-10 text-ink-60">
-            <pine-icon name="cloud" size="20"></pine-icon>
-          </span>
-          <div class="min-w-0 flex-1">
-            <div class="font-medium tracking-tight text-ink-100">Drop files anywhere to upload</div>
-            <div class="mt-0.5 text-[12px] text-ink-60">PDF · DOCX · PNG · JPG · ZIP — up to 512 MB each</div>
-          </div>
-          <span class="hidden shrink-0 font-mono text-[11px] uppercase tracking-[0.04em] text-ink-50 sm:inline">or press Upload</span>
-        </div>
-      </pine-upload-dropzone>
-
-      <div class="mt-4 overflow-hidden rounded-[12px] border border-line bg-surface shadow-card" pp-show="!upload.files_empty">
-        <div class="flex items-start justify-between gap-3 border-b border-line px-5 py-3.5">
-          <div class="flex min-w-0 items-start gap-3">
-            <span class="inline-flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-soft text-accent-strong">
-              <pine-icon name="cloud" size="18"></pine-icon>
+  <header class="flex flex-wrap items-end justify-between gap-3">
+    <div class="min-w-0">
+      <div class="mb-1 flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-ink-60">
+        <template pp-for="crumb in $store.storage.breadcrumbs" pp-key="crumb.prefix">
+          <span class="inline-flex items-center gap-1.5">
+            <button class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-ink-10 hover:text-ink-100 data-[current=true]:text-ink-100"
+                    type="button"
+                    :data-current="crumb.prefix == $store.storage.current_prefix"
+                    @click="open_prefix(crumb.prefix)">
+              <span pp-text="crumb.label"></span>
+            </button>
+            <span class="inline-flex" pp-show="crumb.prefix != $store.storage.current_prefix">
+              <pine-icon name="chevron-right" size="13"></pine-icon>
             </span>
-            <div class="min-w-0">
-              <div class="text-[13.5px] font-medium tracking-tight text-ink-100" pp-text="upload.status_label"></div>
-              <div class="mt-0.5 font-mono text-[11px] text-ink-50">
-                <span pp-text="upload.file_count_label"></span><span class="mx-1.5 text-ink-40">·</span><span pp-text="upload.total_size_label"></span>
-              </div>
-            </div>
-          </div>
-          <pine-upload-clear class="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-[12.5px] font-medium text-ink-100 underline decoration-line-strong decoration-1 underline-offset-[3px] hover:decoration-ink-80 disabled:cursor-not-allowed disabled:opacity-40">Clear all</pine-upload-clear>
-        </div>
-        <div class="px-5 pt-3">
-          <pine-progress-root :value="upload.progress" max="100"
-                              class="block h-1 overflow-hidden rounded-full bg-ink-10"
-                              aria-label="Overall upload progress">
-            <pine-progress-indicator class="block h-full rounded-full bg-accent transition-[width] duration-200"></pine-progress-indicator>
-          </pine-progress-root>
-        </div>
-        <div class="mt-1">
-          <template pp-for="file in upload.files" pp-key="file.id">
-            <pine-upload-item :id="file.id"
-                              class="flex items-center gap-3 px-5 py-2.5 transition-colors data-[status=error]:bg-danger-soft hover:bg-surface-2">
-              <span class="relative flex h-9 w-7 shrink-0 items-end justify-center rounded-[4px] bg-thumb-default pb-0.5 font-mono text-[8.5px] font-medium uppercase tracking-[0.05em] text-surface data-[extension=pdf]:bg-thumb-pdf data-[extension=png]:bg-thumb-img data-[extension=jpg]:bg-thumb-img data-[extension=jpeg]:bg-thumb-img data-[extension=gif]:bg-thumb-img data-[extension=webp]:bg-thumb-img data-[extension=svg]:bg-thumb-img data-[extension=zip]:bg-thumb-archive data-[extension=tar]:bg-thumb-archive data-[extension=gz]:bg-thumb-archive data-[extension=doc]:bg-thumb-doc data-[extension=docx]:bg-thumb-doc"
-                    :data-extension="file.extension"
-                    aria-hidden="true">
-                <span pp-text="file.thumb_label"></span>
-              </span>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-baseline gap-2.5 text-[13px]">
-                  <span class="min-w-0 flex-1 truncate font-medium text-ink-100" pp-text="file.name"></span>
-                  <span class="shrink-0 font-mono text-[11px] text-ink-50" pp-text="file.size_label"></span>
-                </div>
-                <div class="mt-1 flex items-center gap-2.5 text-[11px] text-ink-60" pp-show="file.status == 'uploading'">
-                  <pine-progress-root :value="file.progress" max="100"
-                                      class="block h-[3px] flex-1 overflow-hidden rounded-full bg-ink-10"
-                                      :aria-label="'Uploading ' + file.name">
-                    <pine-progress-indicator class="block h-full rounded-full bg-accent transition-[width] duration-200"></pine-progress-indicator>
-                  </pine-progress-root>
-                  <span class="w-8 text-right font-mono" pp-text="file.progress_label"></span>
-                </div>
-                <div class="mt-1 text-[11px] text-ink-50" pp-show="file.status == 'queued'">Waiting…</div>
-                <div class="mt-1 text-[11px]" pp-show="file.status == 'done'">
-                  <span class="inline-flex items-center gap-1 rounded-full bg-success-soft px-1.5 py-0.5 font-medium text-success-strong">
-                    <pine-icon name="check" size="11"></pine-icon>
-                    <span>Uploaded</span>
-                  </span>
-                </div>
-                <div class="mt-1 text-[11px] text-ink-50" pp-show="file.status == 'canceled'">Canceled</div>
-                <div class="mt-1 text-[11px]" pp-show="file.status == 'error'">
-                  <span class="inline-flex items-center gap-1 font-medium text-danger">
-                    <pine-icon name="alert-circle" size="11"></pine-icon>
-                    <span pp-text="file.error || 'Upload failed'"></span>
-                  </span>
-                </div>
-              </div>
-              <div class="flex shrink-0 items-center gap-0.5">
-                <pine-upload-item-cancel class="size-7 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-70 hover:bg-ink-10 hover:text-ink-100" aria-label="Cancel" pp-show="file.status == 'uploading'">
-                  <pine-icon name="x" size="14"></pine-icon>
-                </pine-upload-item-cancel>
-                <pine-upload-item-retry class="size-7 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-70 hover:bg-ink-10 hover:text-ink-100" aria-label="Retry" pp-show="file.status == 'error' || file.status == 'canceled'">
-                  <pine-icon name="refresh" size="14"></pine-icon>
-                </pine-upload-item-retry>
-                <pine-upload-item-remove class="size-7 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-70 hover:bg-ink-10 hover:text-danger" aria-label="Remove">
-                  <pine-icon name="trash" size="14"></pine-icon>
-                </pine-upload-item-remove>
-              </div>
-            </pine-upload-item>
-          </template>
-        </div>
+          </span>
+        </template>
       </div>
+      <h1 class="text-[24px] font-semibold tracking-tight text-ink-100" pp-text="$store.storage.path_title"></h1>
+      <div class="mt-1 flex min-w-0 items-center gap-1.5 text-[13px] text-ink-60">
+        <img class="size-4 shrink-0 rounded-sm"
+             pp-show="$store.storage.selected_connection_favicon_url"
+             :src="$store.storage.selected_connection_favicon_url"
+             alt=""
+             referrerpolicy="no-referrer" />
+        <span class="truncate" pp-text="$store.storage.path_meta"></span>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 shadow-card transition hover:bg-ink-10 hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              :disabled="!$store.storage.selected_connection_id"
+              @click="open_new_folder_dialog">
+        <pine-icon name="folder-plus" size="15"></pine-icon>
+        <span>New Folder</span>
+      </button>
+      <button class="inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 shadow-card transition hover:bg-ink-10 hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              :disabled="!$store.storage.selected_connection_id"
+              @click="open_upload_dock">
+        <pine-icon name="upload" size="15"></pine-icon>
+        <span>Upload</span>
+      </button>
+      <button class="inline-flex h-9 items-center justify-center rounded-md border border-line bg-surface px-2.5 text-[13px] font-medium text-ink-70 shadow-card transition hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-60"
+              type="button"
+              aria-label="Refresh"
+              @click="refresh"
+              :disabled="$store.storage.loading_entries">
+        <span pp-show="!$store.storage.loading_entries">
+          <pine-icon name="refresh" size="16"></pine-icon>
+        </span>
+        <span class="inline-flex size-4 animate-spin rounded-full border-2 border-ink-20 border-t-accent"
+              pp-show="$store.storage.loading_entries"
+              aria-hidden="true"></span>
+      </button>
+    </div>
+  </header>
 
-    </template>
-  </pine-upload-root>
 </root>

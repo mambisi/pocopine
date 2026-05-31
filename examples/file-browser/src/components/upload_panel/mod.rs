@@ -1,51 +1,37 @@
-//! `<file-browser-upload-panel>` — wraps the Pine upload compound,
-//! exposes the dropzone + active queue, and refreshes the
-//! [`crate::FileBrowserStore`] file list whenever an upload completes
-//! or fails so the row appears (or stays gone) immediately.
+//! `<file-browser-upload-panel>` — path header and folder/upload actions.
 
-use pine::{
-    PineProgressIndicator, PineProgressRoot, PineUploadClear, PineUploadDropzone, PineUploadItem,
-    PineUploadItemCancel, PineUploadItemRemove, PineUploadItemRetry, PineUploadRoot,
-    PineUploadTrigger,
-};
 use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::FileBrowserStore;
+use crate::{components::upload_dock::request_upload_picker, StorageBrowserStore};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "FileBrowserUploadPanel.poco",
     role = "panel",
     display = "contents",
-    uses = [
-        PineIcon,
-        PineProgressRoot,
-        PineProgressIndicator,
-        PineUploadRoot,
-        PineUploadTrigger,
-        PineUploadDropzone,
-        PineUploadItem,
-        PineUploadItemCancel,
-        PineUploadItemRetry,
-        PineUploadItemRemove,
-        PineUploadClear,
-    ]
+    uses = [PineIcon]
 )]
 pub struct FileBrowserUploadPanel {}
 
 #[handlers]
 impl FileBrowserUploadPanel {
-    pub fn upload_complete(&mut self) {
-        pocopine::store::<FileBrowserStore>().update(FileBrowserStore::refresh);
-    }
-
-    pub fn upload_failed(&mut self) {
-        pocopine::store::<FileBrowserStore>().update(FileBrowserStore::refresh);
-    }
-
     pub fn refresh(&mut self) {
-        pocopine::store::<FileBrowserStore>().update(FileBrowserStore::refresh);
+        pocopine::store::<StorageBrowserStore>().update(StorageBrowserStore::refresh);
+    }
+
+    pub fn open_upload_dock(&mut self) {
+        pocopine::store::<StorageBrowserStore>().update(StorageBrowserStore::open_upload_dock);
+        request_upload_picker();
+    }
+
+    pub fn open_new_folder_dialog(&mut self) {
+        pocopine::store::<StorageBrowserStore>()
+            .update(StorageBrowserStore::open_new_folder_dialog);
+    }
+
+    pub fn open_prefix(&mut self, prefix: String) {
+        pocopine::store::<StorageBrowserStore>().update(move |s| s.open_prefix(prefix));
     }
 }

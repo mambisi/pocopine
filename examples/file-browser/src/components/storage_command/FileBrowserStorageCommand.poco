@@ -1,0 +1,50 @@
+<root class="contents">
+  <button class="inline-flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-line bg-surface-2 px-3 text-left text-[13px] text-ink-60 shadow-card transition hover:border-line-strong hover:bg-surface hover:text-ink-100 focus:outline-none focus:ring-2 focus:ring-accent-soft"
+          type="button"
+          @click="open_command">
+    <pine-icon name="search" size="16"></pine-icon>
+    <span class="min-w-0 flex-1 truncate">Find files in all buckets</span>
+    <span class="hidden shrink-0 rounded border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-normal text-ink-50 sm:inline">Cmd K</span>
+  </button>
+
+  <pine-command-root shortcut="Mod+k" pp-model:open="open">
+    <pine-command-portal>
+      <pine-command-overlay class="fixed inset-0 z-50 bg-[oklch(0.18_0.02_285/0.45)] backdrop-blur-sm"></pine-command-overlay>
+      <pine-command-content class="fixed inset-x-4 top-24 z-50 mx-auto flex max-h-96 max-w-2xl flex-col overflow-hidden rounded-lg border border-line bg-surface text-ink-100 shadow-2xl">
+        <pine-command-input class="h-12 w-full border-0 border-b border-line bg-surface px-4 text-[15px] text-ink-100 outline-none placeholder:text-ink-50"
+                            placeholder="Find files in all buckets"></pine-command-input>
+        <pine-command-list class="min-h-0 max-h-80 overflow-y-auto p-1.5">
+          <template pp-for="entry in entries" pp-key="entry.id">
+            <pine-command-item class="flex min-h-12 cursor-pointer items-center justify-between gap-3 rounded-md px-2.5 py-2 outline-none hover:bg-ink-10 data-[highlighted=true]:bg-ink-10"
+                               :value="entry.command_value"
+                               @pp:command:select="open_command_result(entry.connection_id, entry.prefix, entry.name)">
+              <span class="flex min-w-0 items-center gap-2.5">
+                <span class="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-accent-soft text-accent-strong">
+                  <pine-icon name="file" size="16"></pine-icon>
+                </span>
+                <span class="block min-w-0">
+                  <strong class="block truncate text-[13px] font-semibold text-ink-100"
+                          pp-text="entry.name"></strong>
+                  <small class="mt-0.5 block truncate text-[11.5px] text-ink-50"
+                         pp-text="entry.location_label"></small>
+                </span>
+              </span>
+              <span class="shrink-0 rounded-md border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] leading-4 text-ink-50"
+                    pp-text="entry.size_label"></span>
+            </pine-command-item>
+          </template>
+          <pine-command-empty class="px-4 py-5 text-center text-[13px] text-ink-50">
+            <span class="inline-flex items-center justify-center gap-2"
+                  pp-show="loading">
+              <span class="inline-flex size-4 animate-spin rounded-full border-2 border-ink-20 border-t-accent"
+                    aria-hidden="true"></span>
+              <span>Loading objects...</span>
+            </span>
+            <span pp-show="!loading && !error">No matching objects across buckets.</span>
+            <span pp-show="error" pp-text="error"></span>
+          </pine-command-empty>
+        </pine-command-list>
+      </pine-command-content>
+    </pine-command-portal>
+  </pine-command-root>
+</root>

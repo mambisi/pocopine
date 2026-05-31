@@ -1,0 +1,48 @@
+<root class="cfe-size-control block"
+      :data-disabled="disabled"
+      role="group"
+      :aria-label="label">
+  <div class="mb-2 flex items-center justify-between gap-3 px-0.5">
+    <span class="text-[12px] font-medium text-ink-70" pp-text="label"></span>
+    <span class="font-mono text-[12px] font-semibold text-ink-100" pp-text="value_label"></span>
+  </div>
+
+  <div class="cfe-size-control-track" :style="range_style">
+    <input class="cfe-size-control-range"
+           type="range"
+           :min="range_min"
+           :max="range_max"
+           step="1"
+           pp-model.number="value"
+           :style="range_style"
+           :disabled="disabled"
+           :aria-label="label" />
+
+    <div class="cfe-size-control-pill" aria-hidden="false">
+      <input class="cfe-size-control-number"
+             type="number"
+             :min="amount_min"
+             :max="amount_max"
+             :step="amount_step"
+             pp-model.number="amount"
+             :disabled="disabled"
+             :aria-label="label" />
+      <span class="cfe-size-control-divider" aria-hidden="true"></span>
+      <select class="cfe-size-control-unit"
+              pp-model="unit"
+              :disabled="disabled"
+              aria-label="Unit">
+        <option value="MB">MB</option>
+        <option value="GB" :disabled="gb_disabled">GB</option>
+      </select>
+      <span class="cfe-size-control-grip" aria-hidden="true">
+        <pine-icon name="grip-vertical" size="15"></pine-icon>
+      </span>
+    </div>
+  </div>
+
+  <div class="mt-1 flex items-center justify-between font-mono text-[10.5px] text-ink-50">
+    <span pp-text="min_label"></span>
+    <span pp-text="max_label"></span>
+  </div>
+</root>

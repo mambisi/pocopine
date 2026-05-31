@@ -1,0 +1,83 @@
+<root class="contents">
+  <pine-dialog-root pp-model:open="open">
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content>
+        <form pp-on:submit.prevent="save_config">
+          <header class="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
+            <div>
+              <pine-dialog-title>CFE config</pine-dialog-title>
+              <pine-dialog-description>Local Cloud File Explorer settings</pine-dialog-description>
+            </div>
+            <pine-dialog-close pp-as>
+              <button class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-50"
+                      type="button"
+                      aria-label="Close"
+                      :disabled="saving_config">
+                <pine-icon name="x" size="16"></pine-icon>
+              </button>
+            </pine-dialog-close>
+          </header>
+
+          <div class="space-y-4 px-5 py-5">
+            <div class="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-[12.5px] text-ink-60"
+                 pp-show="loading_config">
+              <span class="inline-flex size-4 animate-spin rounded-full border-2 border-ink-20 border-t-accent"
+                    aria-hidden="true"></span>
+              <span>Loading config</span>
+            </div>
+
+            <label class="block">
+              <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Config file</span>
+              <input class="block h-9 w-full truncate rounded-md border border-line bg-surface-2 px-3 font-mono text-[12px] text-ink-70 outline-none"
+                     type="text"
+                     pp-model="config_path"
+                     readonly />
+            </label>
+
+            <div class="grid gap-4">
+              <file-browser-size-control label="Upload cap"
+                                         min="1"
+                                         max="1024"
+                                         pp-model:value="upload_max_mib"
+                                         :disabled="loading_config || saving_config"></file-browser-size-control>
+
+              <file-browser-size-control label="Chunk size"
+                                         min="1"
+                                         :max="preferred_chunk_max_mib"
+                                         pp-model:value="preferred_chunk_mib"
+                                         :disabled="loading_config || saving_config"></file-browser-size-control>
+            </div>
+          </div>
+
+          <p class="mx-5 mb-4 rounded-md border border-success-line bg-success-soft px-3 py-2 text-[13px] text-success-strong"
+             pp-show="config_status"
+             pp-text="config_status"></p>
+
+          <p class="mx-5 mb-4 rounded-md border border-danger-line bg-danger-soft px-3 py-2 text-[13px] text-danger-strong"
+             pp-show="config_error"
+             pp-text="config_error"></p>
+
+          <footer class="flex flex-wrap items-center justify-end gap-2 border-t border-line bg-surface-2 px-5 py-4">
+            <pine-dialog-close pp-as>
+              <button class="inline-flex h-9 items-center rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100 disabled:cursor-wait disabled:opacity-50"
+                      type="button"
+                      :disabled="saving_config">Cancel</button>
+            </pine-dialog-close>
+            <button class="inline-flex h-9 items-center gap-1.5 rounded-md border-0 bg-inverse px-3.5 text-[13px] font-medium text-inverse-fg hover:bg-inverse-strong disabled:cursor-wait disabled:opacity-60"
+                    type="submit"
+                    :disabled="saving_config || loading_config">
+              <span pp-show="!saving_config">
+                <pine-icon name="check" size="15"></pine-icon>
+              </span>
+              <span class="inline-flex size-4 animate-spin rounded-full border-2 border-inverse-fg/35 border-t-inverse-fg"
+                    pp-show="saving_config"
+                    aria-hidden="true"></span>
+              <span>Save config</span>
+            </button>
+          </footer>
+        </form>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</root>

@@ -9,20 +9,13 @@ publish = false
 bin = "server"
 port = 3024
 
-# RFC 092 — Pine Stylekit is the active CSS compiler for this example
+# RFC 092 — Pine Stylekit is the CSS compiler for this example
 # (index.html links /pkg/stylekit.css). It reads the @theme tokens from
-# app.css and ignores the Tailwind @import/@source directives.
+# app.css + the utility classes in src/**/*.poco. Tailwind is not used.
 [package.metadata.pocopine.stylekit]
 input = "app.css"
 output = "pkg/stylekit.css"
 src = "src"
-
-# Tailwind retained as a fallback during the experiment (RFC 092 D8):
-# `pocopine build` still emits pkg/tailwind.css; switch index.html back
-# to it to compare.
-[package.metadata.pocopine.tailwind]
-input = "app.css"
-output = "pkg/tailwind.css"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -36,12 +29,23 @@ required-features = []
 pine = { path = "../../crates/pine" }
 pine-icons = { path = "../../crates/pine-icons" }
 pocopine = { path = "../../crates/pocopine" }
-pocopine-storage = { workspace = true }
+pocopine-storage = { path = "../../crates/pocopine-storage" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
+web-sys = { version = "0.3", features = ["Clipboard", "Document", "Event", "EventTarget", "HtmlInputElement", "HtmlTextAreaElement", "InputEvent", "KeyboardEvent", "Navigator", "Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+aws-sdk-s3 = "1"
+bytes = "1"
+google-cloud-auth = "1"
+google-cloud-storage = "1"
+percent-encoding = "2"
 pocopine-logging = { workspace = true }
 pocopine-server = { workspace = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs"] }
+pocopine-storage-gcs = { path = "../../crates/pocopine-storage-gcs" }
+pocopine-storage-s3 = { path = "../../crates/pocopine-storage-s3" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+uuid = { version = "1", features = ["v4"] }

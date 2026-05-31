@@ -1,0 +1,64 @@
+<root>
+  <pine-dialog-root pp-model:open="open">
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content>
+        <form pp-on:submit.prevent="create_folder">
+          <header class="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
+            <div>
+              <pine-dialog-title>New folder</pine-dialog-title>
+              <pine-dialog-description>Create a folder in the current prefix.</pine-dialog-description>
+            </div>
+            <pine-dialog-close pp-as>
+              <button class="inline-flex size-8 items-center justify-center rounded-md text-ink-60 hover:bg-ink-10 hover:text-ink-100"
+                      type="button"
+                      aria-label="Close"
+                      :disabled="creating"
+                      @click="close">
+                <pine-icon name="x" size="16"></pine-icon>
+              </button>
+            </pine-dialog-close>
+          </header>
+
+          <div class="px-5 py-5">
+            <label class="block">
+              <span class="mb-1.5 block text-[12px] font-medium text-ink-70">Folder name</span>
+              <input class="block h-9 w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-ink-100 outline-none focus:border-line-strong focus:ring-2 focus:ring-accent-soft"
+                     type="text"
+                     pp-model="folder_name"
+                     :disabled="creating"
+                     autocomplete="off"
+                     autofocus />
+            </label>
+            <p class="mt-2 text-[12px] text-ink-50">
+              <span pp-text="$store.storage.current_prefix_label"></span>
+            </p>
+            <p class="mt-3 rounded-md border border-danger-line bg-danger-soft px-3 py-2 text-[13px] text-danger-strong"
+               pp-show="error"
+               pp-text="error"></p>
+          </div>
+
+          <footer class="flex items-center justify-end gap-2 border-t border-line bg-surface-2 px-5 py-4">
+            <pine-dialog-close pp-as>
+              <button class="inline-flex h-9 items-center rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink-70 hover:bg-ink-10 hover:text-ink-100"
+                      type="button"
+                      :disabled="creating"
+                      @click="close">Cancel</button>
+            </pine-dialog-close>
+            <button class="inline-flex h-9 items-center gap-1.5 rounded-md border-0 bg-inverse px-3.5 text-[13px] font-medium text-inverse-fg hover:bg-inverse-strong disabled:cursor-wait disabled:opacity-60"
+                    type="submit"
+                    :disabled="creating">
+              <span pp-show="!creating">
+                <pine-icon name="folder" size="15"></pine-icon>
+              </span>
+              <span class="inline-flex size-4 animate-spin rounded-full border-2 border-inverse-fg/35 border-t-inverse-fg"
+                    pp-show="creating"
+                    aria-hidden="true"></span>
+              <span>Create folder</span>
+            </button>
+          </footer>
+        </form>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</root>

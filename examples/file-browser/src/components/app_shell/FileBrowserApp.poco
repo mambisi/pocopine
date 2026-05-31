@@ -1,17 +1,14 @@
 <root class="flex min-h-screen flex-col bg-bg text-ink-100 antialiased">
   <file-browser-top-bar></file-browser-top-bar>
 
-  <div class="flex flex-1 flex-col lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
+  <div class="cfe-shell flex flex-1 flex-col lg:grid"
+       :data-detail="$store.storage.detail_open">
     <file-browser-sidebar></file-browser-sidebar>
 
     <main class="min-w-0 px-4 py-5 sm:px-7 lg:px-9 lg:py-7">
-      <nav class="flex items-center gap-1.5 text-[12px] font-medium text-ink-60" aria-label="Breadcrumb">
-        <a class="hover:text-ink-100" href="#">Files</a>
-        <pine-icon name="chevron-right" size="14"></pine-icon>
-        <span class="text-ink-100">All</span>
-      </nav>
+      <pp-outlet></pp-outlet>
 
-      <div class="mt-3">
+      <div>
         <file-browser-upload-panel></file-browser-upload-panel>
       </div>
 
@@ -19,9 +16,21 @@
         <file-browser-file-list></file-browser-file-list>
       </div>
 
-      <p class="mt-6 text-center font-mono text-[10.5px] uppercase tracking-[0.04em] text-ink-50">
-        Resumable uploads · pocopine-storage · TUS 1.0.0
+      <p class="mt-6 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center font-mono text-[10.5px] uppercase tracking-[0.04em] text-ink-50">
+        <span pp-text="$store.storage.listed_size_label"></span>
+        <span>·</span>
+        <span pp-text="$store.storage.listed_objects_label"></span>
+        <span>·</span>
+        <span pp-text="$store.storage.listed_folders_label"></span>
       </p>
     </main>
+
+    <file-browser-file-detail></file-browser-file-detail>
   </div>
+
+  <file-browser-connection-dialog pp-model:open="$store.storage.modal_open"
+                                  pp-bind:edit-connection-id="$store.storage.modal_connection_id"></file-browser-connection-dialog>
+  <file-browser-config-dialog pp-model:open="$store.storage.config_modal_open"></file-browser-config-dialog>
+  <file-browser-upload-dock></file-browser-upload-dock>
+  <file-browser-new-folder-dialog pp-model:open="$store.storage.new_folder_open"></file-browser-new-folder-dialog>
 </root>

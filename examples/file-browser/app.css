@@ -1,13 +1,12 @@
-@import "tailwindcss";
-
-@source "./src/**/*.poco";
-
-/* Design tokens — warm-neutral surface, single muted-blue accent,
- * green success / red danger / amber warn. Exposed as Tailwind
- * theme colors (`bg-bg`, `text-ink-100`, `border-accent`, …) AND
- * as raw `--color-*` custom properties so `bg-[var(--…)]` works
- * for opacity / shadow / box-shadow rgba()-style mixing. Lifted
- * from the Claude Design Upload Component spec.
+/* Pine Stylekit (RFC 092) compiles this file: it reads the `@theme`
+ * tokens below + the utility classes used in your `.poco` templates, prepends
+ * its built-in Preflight, and emits `pkg/stylekit.css`. No Tailwind.
+ *
+ * Design tokens — warm-neutral surface, single muted-blue accent,
+ * green success / red danger / amber warn. Exposed as theme colors
+ * (`bg-bg`, `text-ink-100`, `border-accent`, …) AND as raw `--color-*`
+ * custom properties so `bg-[var(--…)]` works for opacity / shadow /
+ * box-shadow mixing. Lifted from the Claude Design Upload spec.
  */
 @theme {
   --color-bg: #f6f5f2;
@@ -27,12 +26,19 @@
   --color-line: #e5e2e8;
   --color-line-strong: #d4d1d8;
 
+  /* Inverse / primary-button surface. Light: deep near-black with
+   * light text. Dark: a muted "stale gray" instead of stark white. */
+  --color-inverse: #18171a;
+  --color-inverse-strong: #2c2a2e;
+  --color-inverse-fg: #ffffff;
+
   --color-accent: oklch(0.54 0.13 252);
   --color-accent-soft: oklch(0.95 0.03 252);
   --color-accent-strong: oklch(0.42 0.14 252);
 
   --color-success: oklch(0.58 0.13 155);
   --color-success-soft: oklch(0.95 0.04 155);
+  --color-success-line: oklch(0.84 0.08 155);
   --color-success-strong: oklch(0.42 0.13 155);
 
   --color-danger: oklch(0.55 0.18 25);
@@ -54,10 +60,274 @@
   --shadow-ring-accent: 0 0 0 4px oklch(0.95 0.03 252 / 0.6);
 }
 
+/* Dark theme — overrides the `@theme` custom properties under the
+ * `[data-theme="dark"]` root attribute (set by the sidebar toggle).
+ * The Tailwind utilities all compile to `var(--color-*)`, so flipping
+ * these here re-skins the whole app. The ink scale inverts: `ink-100`
+ * becomes near-white text, `ink-10` a barely-raised surface tint. */
+[data-theme="dark"] {
+  --color-bg: #0c0b0e;
+  --color-surface: #161519;
+  --color-surface-2: #1d1c21;
+
+  --color-ink-100: #f4f3f6;
+  --color-ink-80: #e3e1e7;
+  --color-ink-70: #c5c2cc;
+  --color-ink-60: #a39fac;
+  --color-ink-50: #837f8c;
+  --color-ink-40: #65616d;
+  --color-ink-30: #45424c;
+  --color-ink-20: #322f38;
+  --color-ink-10: #26242b;
+
+  --color-line: #2c2a31;
+  --color-line-strong: #3a3842;
+
+  /* Primary buttons stay a stale gray rather than flipping to white. */
+  --color-inverse: #3d3c45;
+  --color-inverse-strong: #4a4953;
+  --color-inverse-fg: #f4f3f6;
+
+  --color-accent: oklch(0.66 0.13 252);
+  --color-accent-soft: oklch(0.32 0.07 252);
+  --color-accent-strong: oklch(0.78 0.11 252);
+
+  --color-success: oklch(0.68 0.13 155);
+  --color-success-soft: oklch(0.3 0.06 155);
+  --color-success-line: oklch(0.42 0.09 155);
+  --color-success-strong: oklch(0.78 0.12 155);
+
+  --color-danger: oklch(0.65 0.18 25);
+  --color-danger-soft: oklch(0.32 0.09 25);
+  --color-danger-line: oklch(0.45 0.12 25);
+  --color-danger-strong: oklch(0.78 0.15 25);
+
+  --color-warn: oklch(0.75 0.13 70);
+  --color-warn-soft: oklch(0.33 0.07 70);
+  --color-warn-strong: oklch(0.82 0.12 70);
+
+  --color-thumb-pdf: oklch(0.66 0.16 25);
+  --color-thumb-img: oklch(0.68 0.13 200);
+  --color-thumb-archive: oklch(0.68 0.14 30);
+  --color-thumb-doc: oklch(0.66 0.13 250);
+  --color-thumb-default: var(--color-ink-70);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-ring-accent: 0 0 0 4px oklch(0.66 0.13 252 / 0.4);
+
+  color-scheme: dark;
+}
+
+/* Thin "mini" scrollbars everywhere, auto-hiding — the thumb is
+ * transparent at rest and fades in only while the scroll region is
+ * hovered or focused, so it disappears with no interaction. Slim
+ * rounded thumb on a transparent track, theme-aware via the ink
+ * tokens. Firefox uses `scrollbar-*`; Chromium/WebKit use `::-webkit-*`. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+  scrollbar-color: var(--color-ink-30) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background-color: transparent;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.2s ease;
+}
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--color-ink-30);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-ink-40);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* App shell grid — the file detail panel is an in-layout right column
+ * at lg+, growing a third track only while a file is selected. Below
+ * lg it's a fixed full-screen overlay so it doesn't squash the list. */
+@media (min-width: 1024px) {
+  /* Three columns always. We animate the 3rd TRACK width 0px ⇄ 380px
+   * (grid-template-columns interpolates between fixed lengths), so the
+   * `minmax(0,1fr)` main column expands / contracts in lockstep: the file
+   * table is "pushed" smoothly open and closed instead of snapping after a
+   * deferred `display:none`. The panel never toggles `display` — visibility
+   * rides the `data-detail` attribute the shell already sets, and the panel
+   * is always column 3 so it can never wrap to the bottom-left "flush". */
+  .cfe-shell {
+    grid-template-columns: 280px minmax(0, 1fr) 0px;
+    transition: grid-template-columns 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .cfe-shell[data-detail="true"] {
+    grid-template-columns: 280px minmax(0, 1fr) 380px;
+  }
+  .cfe-detail {
+    overflow: hidden;
+    position: sticky;
+    top: 3.5rem;
+    height: calc(100vh - 3.5rem);
+  }
+  /* Fixed-width inner so the content never reflows while the track clips
+   * it during the tween; a hair of opacity fade as it reveals. */
+  .cfe-detail-inner {
+    width: 380px;
+    border-left: 1px solid var(--color-line);
+    opacity: 0;
+    transition: opacity 180ms ease;
+  }
+  .cfe-shell[data-detail="true"] .cfe-detail-inner {
+    opacity: 1;
+  }
+  /* Keep the floating upload dock within the main column — clear of the
+   * 380px detail panel when it's open. */
+  .cfe-upload-dock[data-detail="true"] {
+    right: calc(380px + 1rem);
+  }
+}
+
+@media (max-width: 1023.98px) {
+  /* Mobile: full-screen overlay that slides in from the right. Driven by
+   * the same `data-detail` attribute, transformed off-canvas when closed
+   * (and `pointer-events: none` so it never traps taps while hidden). */
+  .cfe-detail {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    height: 100vh;
+    transform: translateX(100%);
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+  }
+  .cfe-shell[data-detail="true"] .cfe-detail {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  .cfe-detail-inner {
+    width: 100%;
+    background: var(--color-surface);
+  }
+}
+
+/* Mobile: the connections list collapses under the compact trigger;
+ * on desktop it's always visible (no media rule hides it). */
+@media (max-width: 1023.98px) {
+  .cfe-conn-list {
+    display: none;
+  }
+  .cfe-conn-list[data-expanded="true"] {
+    display: block;
+  }
+}
+.cfe-conn-trigger .cfe-conn-chevron {
+  transition: transform 0.18s ease;
+}
+.cfe-conn-trigger[data-expanded="true"] .cfe-conn-chevron {
+  transform: rotate(90deg);
+}
+
+/* Fullscreen preview lightbox — overrides the centered-modal dialog
+ * content to a large flex column (header + media stage). The compound
+ * selector outranks the base `.pine-dialog-content` rule regardless of
+ * source order. */
+.pine-dialog-content.cfe-lightbox {
+  display: flex;
+  flex-direction: column;
+  width: min(100vw - 2rem, 72rem);
+  max-width: 72rem;
+  height: min(100vh - 4rem, 56rem);
+  max-height: calc(100vh - 4rem);
+  padding: 0;
+  overflow: hidden;
+}
+.cfe-lightbox-stage {
+  min-height: 0;
+}
+
+/* Detail panel attribute lists (Name / Size / Type / metadata rows). */
+.cfe-detail-attrs {
+  display: grid;
+  grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+  gap: 0.375rem 0.75rem;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.cfe-detail-attrs dt {
+  color: var(--color-ink-50);
+}
+.cfe-detail-attrs dd {
+  margin: 0;
+  color: var(--color-ink-100);
+  overflow-wrap: anywhere;
+}
+.cfe-link {
+  color: var(--color-accent-strong);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.cfe-link:hover {
+  text-decoration: underline;
+}
+.cfe-detail-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ink-50);
+  margin-bottom: 0.25rem;
+}
+.cfe-copy-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-2);
+  padding: 0.4375rem 0.5rem;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  color: var(--color-ink-70);
+  text-align: left;
+  cursor: pointer;
+}
+.cfe-copy-row:hover {
+  border-color: var(--color-line-strong);
+  color: var(--color-ink-100);
+}
+/* Accordion chevron rotates with the open state (Pine sets data-state
+ * on the trigger). */
+.cfe-detail-accordion .pine-accordion-trigger {
+  cursor: pointer;
+}
+.cfe-accordion-chevron {
+  transition: transform 0.18s ease;
+}
+.pine-accordion-trigger[data-state="open"] .cfe-accordion-chevron {
+  transform: rotate(90deg);
+}
+
 /* Custom-element display defaults — Pine compounds otherwise
  * inherit the default `display: inline`, which breaks block-flow
  * layout when the Tailwind utilities expect a block element.
  */
+pine-toggle-group-root {
+  display: block;
+}
+
 pine-upload-root,
 pine-upload-dropzone,
 pine-upload-trigger,
@@ -70,4 +340,254 @@ pine-upload-item-cancel,
 pine-upload-item-retry,
 pine-upload-item-remove {
   display: inline-flex;
+}
+
+.cfe-size-control[data-disabled="true"] {
+  opacity: 0.65;
+}
+
+.cfe-size-control-track {
+  --cfe-size-track-height: 2.625rem;
+  --cfe-size-track-inset: 0.25rem;
+  --cfe-size-pill-min: 9rem;
+  position: relative;
+  height: var(--cfe-size-track-height);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-ink-100) 10%, var(--color-line));
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-2));
+  box-shadow: inset 0 1px 1px color-mix(in srgb, var(--color-ink-100) 4%, transparent);
+  cursor: ew-resize;
+  touch-action: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.cfe-size-control-track:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 32%, var(--color-line-strong));
+  box-shadow: var(--shadow-ring-accent);
+}
+
+.cfe-size-control-range {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  opacity: 0;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+.cfe-size-control-range:disabled {
+  cursor: not-allowed;
+}
+
+.cfe-size-control-pill {
+  position: absolute;
+  top: var(--cfe-size-track-inset);
+  left: var(--cfe-size-track-inset);
+  z-index: 3;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  width: calc(
+    var(--cfe-size-pill-min) +
+    (100% - var(--cfe-size-pill-min) - 2 * var(--cfe-size-track-inset)) * var(--cfe-size-fraction)
+  );
+  max-width: calc(100% - 2 * var(--cfe-size-track-inset));
+  height: calc(var(--cfe-size-track-height) - 2 * var(--cfe-size-track-inset));
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 0.1875rem 0 0.3125rem;
+  border: 1px solid color-mix(in srgb, var(--color-ink-100) 16%, var(--color-line-strong));
+  border-radius: 0.375rem;
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-ink-100) 8%, transparent);
+  color: var(--color-ink-100);
+  pointer-events: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.cfe-size-control-track:hover .cfe-size-control-pill {
+  border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-line-strong));
+  box-shadow: var(--shadow-card);
+}
+
+.cfe-size-control-number {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0 0.5rem 0 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: inherit;
+  text-align: right;
+  outline: none;
+  pointer-events: auto;
+}
+
+.cfe-size-control-number::-webkit-inner-spin-button,
+.cfe-size-control-number::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.cfe-size-control-divider {
+  flex: none;
+  width: 1px;
+  height: 52%;
+  background: color-mix(in srgb, var(--color-ink-100) 20%, transparent);
+}
+
+.cfe-size-control-unit {
+  flex: none;
+  height: 100%;
+  min-width: 3.5rem;
+  border: 0;
+  background: transparent;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-ink-70);
+  outline: none;
+  pointer-events: auto;
+}
+
+.cfe-size-control-grip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  align-self: center;
+  height: 1.625rem;
+  margin-left: 0.0625rem;
+  border-radius: 9999px;
+  color: color-mix(in srgb, var(--color-accent) 58%, var(--color-ink-70));
+  background: transparent;
+  opacity: 0.75;
+}
+
+.storage-provider-badge {
+  position: absolute;
+  right: -0.25rem;
+  bottom: -0.25rem;
+  width: 1rem;
+  height: 1rem;
+  object-fit: cover;
+}
+
+/* The dialog root is a logical scope wrapper, not a layout box. Collapse
+ * it with `display: contents` so a closed dialog/lightbox never occupies a
+ * flow row or a grid cell — the file-detail component is `display: contents`,
+ * so its always-present lightbox root would otherwise wrap into the
+ * `.cfe-shell` grid as a stray empty row. The portal positions itself fixed
+ * when the dialog opens, independent of the root. */
+.pine-dialog-root {
+  display: contents;
+}
+
+.pine-dialog-portal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  pointer-events: none;
+}
+
+.pine-dialog-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: auto;
+  background: oklch(0.18 0.02 285 / 0.45);
+  backdrop-filter: blur(8px);
+}
+
+.pine-dialog-content {
+  position: relative;
+  z-index: 1;
+  width: min(calc(100vw - 2rem), 42rem);
+  max-height: calc(100vh - 4rem);
+  overflow: auto;
+  pointer-events: auto;
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  box-shadow: 0 24px 80px rgba(20, 18, 28, 0.25);
+  transform-origin: center;
+}
+
+.pine-dialog-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+  color: var(--color-ink-100);
+}
+
+.pine-dialog-description {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--color-ink-60);
+}
+
+.pine-dm-content,
+.pine-dm-sub-content {
+  z-index: 60;
+  min-width: 10rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  padding: 0.25rem;
+  color: var(--color-ink-100);
+  box-shadow: 0 18px 50px rgba(20, 18, 28, 0.16);
+}
+
+.pine-dm-item,
+.pine-dm-sub-trigger {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  color: var(--color-ink-70);
+  cursor: default;
+  user-select: none;
+}
+
+.pine-dm-item:hover,
+.pine-dm-sub-trigger:hover,
+.pine-dm-item[data-highlighted],
+.pine-dm-sub-trigger[data-highlighted] {
+  background: var(--color-ink-10);
+  color: var(--color-ink-100);
+}
+
+.pine-dm-item.danger {
+  color: var(--color-danger-strong);
+}
+
+.pine-dm-item.danger:hover,
+.pine-dm-item.danger[data-highlighted] {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-strong);
+}
+
+.pine-dm-separator {
+  height: 1px;
+  margin: 0.25rem;
+  background: var(--color-line);
 }
