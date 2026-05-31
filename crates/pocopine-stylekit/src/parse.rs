@@ -61,16 +61,38 @@ pub fn parse_class(input: &str) -> Result<ParsedClass, Diagnostic> {
         )));
     }
 
-    // Peel a trailing arbitrary `[…]`.
-    let (base, arbitrary) = match rest.find('[') {
-        Some(open) if rest.ends_with(']') => {
+    // Peel a trailing arbitrary value: either `[…]` (explicit) or the
+    // Tailwind v4 `(--var)` CSS-variable shorthand. `bg-(--brand)` is
+    // sugar for `bg-[var(--brand)]`; `text-(length:--x)` keeps the type
+    // hint as `[length:var(--x)]`.
+    let (mut base, mut arbitrary) =
+        if let Some(open) = rest.find('[').filter(|_| rest.ends_with(']')) {
             let inner = &rest[open + 1..rest.len() - 1];
             // Drop the connecting '-' before '[' from the base, if any.
             let base = rest[..open].strip_suffix('-').unwrap_or(&rest[..open]);
             (base.to_string(), Some(inner.to_string()))
+        } else if let Some(open) = rest.rfind('(').filter(|_| rest.ends_with(')')) {
+            let inner = &rest[open + 1..rest.len() - 1];
+            match var_shorthand(inner) {
+                Some(value) => {
+                    let base = rest[..open].strip_suffix('-').unwrap_or(&rest[..open]);
+                    (base.to_string(), Some(value))
+                }
+                // Not a `(--var)` form — leave it for the registry to reject.
+                None => (rest.to_string(), None),
+            }
+        } else {
+            (rest.to_string(), None)
+        };
+
+    // `color/[alpha]` / `color/(--a)` — the bracket is the *opacity
+    // modifier's* value, not a base arbitrary, so the peel above left a
+    // trailing `/`. Fold it back to `color/alpha` for the colour resolver.
+    if base.ends_with('/') {
+        if let Some(a) = arbitrary.take() {
+            base.push_str(&a);
         }
-        _ => (rest.to_string(), None),
-    };
+    }
 
     Ok(ParsedClass {
         variants,
@@ -79,13 +101,26 @@ pub fn parse_class(input: &str) -> Result<ParsedClass, Diagnostic> {
     })
 }
 
-/// Find the first `:` that is not nested inside `[…]`.
+/// Expand a `(…)` CSS-variable shorthand to the equivalent arbitrary
+/// value, or `None` if it isn't one. `--brand` → `var(--brand)`. A typed
+/// shorthand (`length:--x`) keeps only the variable — Stylekit routes
+/// arbitrary values by the base utility, not the type hint, so emitting
+/// the hint would produce invalid CSS.
+fn var_shorthand(inner: &str) -> Option<String> {
+    let name = inner.rsplit(':').next().unwrap_or(inner);
+    let var = name.strip_prefix("--").filter(|r| !r.is_empty())?;
+    Some(format!("var(--{var})"))
+}
+
+/// Find the first `:` that is not nested inside `[…]` or `(…)` (so the
+/// `:` in a `data-[state=on]:` value or a `(length:--x)` shorthand
+/// doesn't get mistaken for a variant separator).
 fn top_level_colon(s: &str) -> Option<usize> {
     let mut depth = 0i32;
     for (i, b) in s.bytes().enumerate() {
         match b {
-            b'[' => depth += 1,
-            b']' => depth -= 1,
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth -= 1,
             b':' if depth == 0 => return Some(i),
             _ => {}
         }
@@ -138,5 +173,26 @@ mod tests {
         let c = p("data-[state=on]:bg-accent");
         assert_eq!(c.variants, vec![Variant("data-[state=on]".into())]);
         assert_eq!(c.base, "bg-accent");
+    }
+
+    #[test]
+    fn css_variable_shorthand() {
+        // `bg-(--brand)` ≡ `bg-[var(--brand)]`.
+        let c = p("bg-(--brand)");
+        assert_eq!(c.base, "bg");
+        assert_eq!(c.arbitrary.as_deref(), Some("var(--brand)"));
+        // Typed shorthand keeps only the variable.
+        let c = p("text-(length:--size)");
+        assert_eq!(c.base, "text");
+        assert_eq!(c.arbitrary.as_deref(), Some("var(--size)"));
+        // Works under a variant.
+        let c = p("hover:w-(--w)");
+        assert_eq!(c.variants, vec![Variant("hover".into())]);
+        assert_eq!(c.base, "w");
+        assert_eq!(c.arbitrary.as_deref(), Some("var(--w)"));
+        // A `(…)` that isn't a var shorthand is not treated as arbitrary.
+        let c = p("foo-(bar)");
+        assert_eq!(c.base, "foo-(bar)");
+        assert_eq!(c.arbitrary, None);
     }
 }
