@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::backend_common::{
     checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
-    ensure_upload_length_can_be_set, expires_at, object_ref, refresh_expired, selected_strategy,
+    ensure_upload_length_can_be_set, expires_at, object_ref, refresh_expired, select_upload_mode,
 };
 use crate::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
@@ -307,7 +307,7 @@ impl LocalFsStorageBackend {
         request: InitiateUpload,
     ) -> StorageResult<UploadSession> {
         fs::create_dir_all(&self.root).map_err(|err| local_io_error("create storage root", err))?;
-        let strategy = selected_strategy(request.requested_strategy)?;
+        let strategy = select_upload_mode(request.requested_strategy, self.capabilities())?;
         ensure_supported_checksum_policy(&request.policy.checksum)?;
         let id = UploadSessionId::new(Uuid::new_v4().to_string())?;
         let session = UploadSession {

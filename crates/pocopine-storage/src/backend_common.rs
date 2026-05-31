@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use time::OffsetDateTime;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::{Mutex as TokioMutex, Semaphore};
 
 use crate::server::StorageActor;
 use crate::{
-    ObjectChecksum, ObjectRef, ObjectVisibility, StorageError, StorageKey, StorageResult,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    BackendCapabilities, ObjectChecksum, ObjectRef, ObjectVisibility, StorageError, StorageKey,
+    StorageResult, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 
 const MAX_UPLOAD_EXPIRES_AFTER_SECS: u64 = 100 * 365 * 24 * 60 * 60;
@@ -54,6 +54,53 @@ impl UploadSessionLockRegistry {
     }
 }
 
+/// Per-session permit pool bounding how many part uploads stream concurrently
+/// for one upload session, enforcing the scope's advertised
+/// `max_concurrent_parts` server-side (the client limit is otherwise only a
+/// hint). Per-process, like [`UploadSessionLockRegistry`]: horizontally-scaled
+/// replicas each enforce the limit independently.
+#[derive(Clone, Default)]
+pub struct UploadConcurrencyRegistry {
+    permits: Arc<StdMutex<HashMap<String, Arc<Semaphore>>>>,
+}
+
+impl std::fmt::Debug for UploadConcurrencyRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadConcurrencyRegistry")
+            .finish_non_exhaustive()
+    }
+}
+
+impl UploadConcurrencyRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The session's permit pool, created on first use sized to `max_concurrent`
+    /// (clamped to at least one). All parts of a session share one pool, so the
+    /// size is fixed by the first caller — which is correct since every part of a
+    /// session carries the same advertised limit.
+    pub fn semaphore(&self, session: &UploadSessionId, max_concurrent: usize) -> Arc<Semaphore> {
+        let mut permits = self
+            .permits
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        permits
+            .entry(session.as_str().to_string())
+            .or_insert_with(|| Arc::new(Semaphore::new(max_concurrent.max(1))))
+            .clone()
+    }
+
+    /// Drop a finished session's permit pool (call on complete/abort).
+    pub fn forget(&self, session: &UploadSessionId) {
+        let mut permits = self
+            .permits
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        permits.remove(session.as_str());
+    }
+}
+
 pub struct UploadSessionLockCleanup<'a> {
     registry: &'a UploadSessionLockRegistry,
     session: UploadSessionId,
@@ -74,14 +121,54 @@ impl Drop for UploadSessionLockCleanup<'_> {
     }
 }
 
-pub fn selected_strategy(strategy: UploadStrategy) -> StorageResult<UploadStrategy> {
-    match strategy {
-        UploadStrategy::Auto | UploadStrategy::Sequential => Ok(UploadStrategy::Sequential),
-        UploadStrategy::SingleRequest | UploadStrategy::Multipart => {
-            Err(StorageError::unsupported(
-                "only sequential proxy uploads are implemented in pocopine-storage PR 1",
-            ))
+/// Negotiate a requested [`UploadStrategy`] against what the backend supports,
+/// returning the concrete strategy the session will run.
+///
+/// `Auto` resolves to the most capable server-mediated mode the backend
+/// advertises (sequential proxy today; native multipart once a backend opts in).
+/// A specific request that the backend cannot satisfy is rejected as
+/// unsupported. Backends advertise [`BackendCapabilities`] via
+/// `StorageBackend::capabilities()`, whose default is sequential-proxy-only — so
+/// this preserves the previous behavior for every backend until one opts into
+/// more.
+pub fn select_upload_mode(
+    requested: UploadStrategy,
+    caps: BackendCapabilities,
+) -> StorageResult<UploadStrategy> {
+    match requested {
+        UploadStrategy::Auto => {
+            if caps.sequential_proxy {
+                Ok(UploadStrategy::Sequential)
+            } else if caps.native_multipart {
+                Ok(UploadStrategy::Multipart)
+            } else if caps.single_request {
+                Ok(UploadStrategy::SingleRequest)
+            } else {
+                Err(StorageError::unsupported(
+                    "storage backend advertises no upload mode",
+                ))
+            }
         }
+        UploadStrategy::Sequential => caps
+            .sequential_proxy
+            .then_some(UploadStrategy::Sequential)
+            .ok_or_else(|| {
+                StorageError::unsupported(
+                    "storage backend does not support sequential proxy uploads",
+                )
+            }),
+        UploadStrategy::Multipart => caps
+            .native_multipart
+            .then_some(UploadStrategy::Multipart)
+            .ok_or_else(|| {
+                StorageError::unsupported("storage backend does not support multipart uploads")
+            }),
+        UploadStrategy::SingleRequest => caps
+            .single_request
+            .then_some(UploadStrategy::SingleRequest)
+            .ok_or_else(|| {
+                StorageError::unsupported("storage backend does not support single-request uploads")
+            }),
     }
 }
 
@@ -233,5 +320,60 @@ mod tests {
             let _guard = lock.try_lock().expect("session lock remains usable");
         }
         registry.drop_if_unused(&session);
+    }
+
+    #[test]
+    fn sequential_only_caps_preserve_legacy_behavior() {
+        // The default capabilities a backend advertises before opting into more.
+        let caps = BackendCapabilities::default();
+        assert_eq!(
+            select_upload_mode(UploadStrategy::Auto, caps).unwrap(),
+            UploadStrategy::Sequential
+        );
+        assert_eq!(
+            select_upload_mode(UploadStrategy::Sequential, caps).unwrap(),
+            UploadStrategy::Sequential
+        );
+        assert!(matches!(
+            select_upload_mode(UploadStrategy::Multipart, caps),
+            Err(StorageError::Unsupported { .. })
+        ));
+        assert!(matches!(
+            select_upload_mode(UploadStrategy::SingleRequest, caps),
+            Err(StorageError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn capabilities_gate_each_strategy() {
+        let multipart = BackendCapabilities {
+            native_multipart: true,
+            ..BackendCapabilities::default()
+        };
+        assert_eq!(
+            select_upload_mode(UploadStrategy::Multipart, multipart).unwrap(),
+            UploadStrategy::Multipart
+        );
+        // Auto still prefers sequential proxy when both are available.
+        assert_eq!(
+            select_upload_mode(UploadStrategy::Auto, multipart).unwrap(),
+            UploadStrategy::Sequential
+        );
+
+        let single = BackendCapabilities {
+            single_request: true,
+            ..BackendCapabilities::default()
+        };
+        assert_eq!(
+            select_upload_mode(UploadStrategy::SingleRequest, single).unwrap(),
+            UploadStrategy::SingleRequest
+        );
+
+        // A backend with no modes rejects everything, including Auto.
+        let none = BackendCapabilities {
+            sequential_proxy: false,
+            ..BackendCapabilities::default()
+        };
+        assert!(select_upload_mode(UploadStrategy::Auto, none).is_err());
     }
 }
