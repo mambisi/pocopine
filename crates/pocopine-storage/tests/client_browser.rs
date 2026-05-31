@@ -380,6 +380,162 @@ async fn upload_client_local_storage_resume_is_opt_in() {
     pocopine_storage::__reset_browser_transport_for_test();
 }
 
+#[wasm_bindgen_test(async)]
+async fn multipart_upload_sends_parts_with_part_header_and_completes() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    fake.state.borrow_mut().multipart = true;
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let progress = Rc::new(RefCell::new(Vec::<UploadProgress>::new()));
+    let progress_for_callback = progress.clone();
+    let object = StorageClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .strategy(UploadStrategy::Multipart)
+        .on_progress(move |event| progress_for_callback.borrow_mut().push(event))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(object.size, 5);
+    let state = state.borrow();
+    // initiate, three by-number part PUTs, then complete.
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST", "PUT", "PUT", "PUT", "POST"]
+    );
+    // every part carried the Upload-Part header (no /parts/ sub-path, no offset).
+    assert!(state
+        .requests
+        .iter()
+        .filter(|request| request.method == "PUT")
+        .all(|request| header(request, "Upload-Part").is_some()));
+    // all three 1-based part numbers were uploaded (order-independent).
+    let mut numbers = state.part_numbers.clone();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [1, 2, 3]);
+    // multipart progress reports the per-part index, and ends Complete.
+    assert!(progress
+        .borrow()
+        .iter()
+        .any(|event| event.current_part.is_some()));
+    assert_eq!(
+        progress.borrow().last().unwrap().phase,
+        UploadPhase::Complete
+    );
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn multipart_part_retries_transient_error_without_duplicate() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    {
+        let mut state = fake.state.borrow_mut();
+        state.multipart = true;
+        state.part_error_once = true;
+    }
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let object = StorageClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .strategy(UploadStrategy::Multipart)
+        .retry_limit(1)
+        .retry_base_delay_ms(0)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(object.size, 5);
+    let state = state.borrow();
+    // One part PUT failed transiently and was retried, so there are four PUTs
+    // but still exactly three distinct recorded parts (no phantom/duplicate).
+    let put_count = state
+        .requests
+        .iter()
+        .filter(|request| request.method == "PUT")
+        .count();
+    assert_eq!(put_count, 4);
+    let mut numbers = state.part_numbers.clone();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [1, 2, 3]);
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn multipart_terminal_part_failure_aborts_and_errors() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    {
+        let mut state = fake.state.borrow_mut();
+        state.multipart = true;
+        state.part_error_once = true;
+    }
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    // retry_limit 0 → the first part error is terminal; the client must clean up
+    // the provider's multipart state with a DELETE rather than orphaning it.
+    let err = StorageClient::new()
+        .scope("avatars")
+        .upload_blob(blob("hello"), "photo.txt")
+        .strategy(UploadStrategy::Multipart)
+        .retry_limit(0)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, StorageError::Client { .. }));
+    let state = state.borrow();
+    assert!(
+        state
+            .requests
+            .iter()
+            .any(|request| request.method == "DELETE"),
+        "a terminal part failure must trigger best-effort cleanup"
+    );
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn multipart_zero_byte_upload_plans_no_parts() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    fake.state.borrow_mut().multipart = true;
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let object = StorageClient::new()
+        .scope("avatars")
+        .upload_blob(blob(""), "photo.txt")
+        .strategy(UploadStrategy::Multipart)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(object.size, 0);
+    let state = state.borrow();
+    // An empty object has no parts: initiate then complete, no PUTs.
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST", "POST"]
+    );
+    assert!(state.part_numbers.is_empty());
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
 #[derive(Clone, Default)]
 struct FakeStorageTransport {
     state: Rc<RefCell<FakeState>>,
@@ -392,6 +548,9 @@ struct FakeState {
     patch_offsets: Vec<u64>,
     mismatch_once: bool,
     client_error_once: bool,
+    multipart: bool,
+    part_error_once: bool,
+    part_numbers: Vec<u32>,
     tus_offset: u64,
     tus_patch_offsets: Vec<u64>,
     tus_conflict_once: bool,
@@ -428,12 +587,47 @@ impl BrowserStorageTransport for FakeStorageTransport {
             match (request.method.as_str(), request.url.as_str()) {
                 ("POST", "/__pocopine/storage/v1/uploads") => {
                     state.offset = 0;
-                    Ok(json_response(Ok(session(state.offset))))
+                    if state.multipart {
+                        Ok(json_response(Ok(multipart_session())))
+                    } else {
+                        Ok(json_response(Ok(session(state.offset))))
+                    }
+                }
+                ("PUT", "/__pocopine/storage/v1/uploads/session-1") => {
+                    let number = request
+                        .headers
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("Upload-Part"))
+                        .and_then(|(_, value)| value.parse::<u32>().ok())
+                        .unwrap();
+                    // Fail before recording so a transient part error never leaves a
+                    // phantom part — a retried PUT records the number exactly once.
+                    if state.part_error_once {
+                        state.part_error_once = false;
+                        return Err(StorageError::client("temporary part transport failure"));
+                    }
+                    state.part_numbers.push(number);
+                    let size = request
+                        .blob_body
+                        .as_ref()
+                        .map(|blob| blob.size() as u64)
+                        .unwrap_or(0);
+                    state.offset += size;
+                    // upload_part returns the (refreshed) session
+                    Ok(json_response(Ok(multipart_session())))
+                }
+                ("DELETE", "/__pocopine/storage/v1/uploads/session-1") => {
+                    // Best-effort multipart cleanup; the body is ignored client-side.
+                    Ok(BrowserStorageResponse {
+                        status: 204,
+                        headers: Vec::new(),
+                        body: String::new(),
+                    })
                 }
                 ("GET", "/__pocopine/storage/v1/uploads/session-1") => {
                     Ok(json_response(Ok(session(state.offset))))
                 }
-                ("PATCH", "/__pocopine/storage/v1/uploads/session-1/bytes") => {
+                ("PATCH", "/__pocopine/storage/v1/uploads/session-1") => {
                     let provided = request
                         .headers
                         .iter()
@@ -551,6 +745,32 @@ fn session(offset: u64) -> UploadSession {
             max_part_size: None,
             max_parts: None,
             max_concurrent_parts: 1,
+            resumable: true,
+        },
+        uploaded_parts: Vec::new(),
+        expires_at: OffsetDateTime::UNIX_EPOCH + time::Duration::days(1),
+    }
+}
+
+fn multipart_session() -> UploadSession {
+    UploadSession {
+        id: UploadSessionId::new("session-1").unwrap(),
+        scope: "avatars".to_string(),
+        file_name: "photo.txt".to_string(),
+        size: Some(5),
+        content_type: None,
+        metadata: Default::default(),
+        strategy: UploadStrategy::Multipart,
+        status: UploadSessionStatus::Open,
+        next_offset: Some(0),
+        part_size: Some(2),
+        // 2-byte parts over a 5-byte object → 3 parts; concurrency 2.
+        plan: TransferPlan {
+            min_part_size: Some(2),
+            preferred_part_size: Some(2),
+            max_part_size: Some(2),
+            max_parts: Some(3),
+            max_concurrent_parts: 2,
             resumable: true,
         },
         uploaded_parts: Vec::new(),

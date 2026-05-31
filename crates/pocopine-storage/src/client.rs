@@ -246,6 +246,7 @@ pub struct ResumableUploadBuilder;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use std::cell::Cell;
     #[cfg(any(test, feature = "test-utils"))]
     use std::cell::RefCell;
     use std::collections::BTreeMap;
@@ -254,6 +255,7 @@ mod wasm {
     use std::rc::Rc;
 
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+    use futures_util::stream::{FuturesUnordered, StreamExt as _};
     use js_sys::Promise;
     use serde::de::DeserializeOwned;
     use wasm_bindgen::prelude::*;
@@ -265,12 +267,17 @@ mod wasm {
 
     use super::*;
     use crate::{
-        CompleteUploadRequest, InitiateUploadRequest, ObjectRef, StorageResponse, UploadPhase,
-        UploadProgress, UploadStrategy, STORAGE_PROTOCOL_V1,
+        plan_parts, CompleteUploadRequest, InitiateUploadRequest, ObjectRef, PartSpec,
+        StorageResponse, UploadPhase, UploadProgress, UploadStrategy, STORAGE_PROTOCOL_V1,
     };
 
     const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
     const TUS_PROTOCOL_VERSION: &str = "1.0.0";
+    /// Hard ceiling on in-flight multipart part uploads, regardless of what the
+    /// server's plan advertises. Browsers cap concurrent connections per origin
+    /// anyway; this just keeps a buggy/hostile plan from making us seed an
+    /// unbounded sliding window of fetches.
+    const MAX_CLIENT_CONCURRENT_PARTS: usize = 16;
 
     /// Test hook for the browser upload transport.
     #[doc(hidden)]
@@ -557,7 +564,7 @@ mod wasm {
         pub async fn send(self) -> StorageResult<ObjectRef> {
             self.emit(UploadPhase::Initiating, 0);
 
-            let mut session = match self.resume_session.clone() {
+            let session = match self.resume_session.clone() {
                 Some(session) => session,
                 None if self.auto_resume => {
                     if let Some(session) = self.load_resume_session().await? {
@@ -568,15 +575,26 @@ mod wasm {
                 }
                 None => self.initiate().await?,
             };
-            self.store_resume_session(&session);
 
-            if session.strategy != UploadStrategy::Sequential {
-                self.emit(UploadPhase::Failed, session.next_offset.unwrap_or(0));
-                return Err(StorageError::unsupported(
-                    "only sequential proxy uploads are implemented in pocopine-storage PR 1",
-                ));
+            // The server negotiated the strategy at initiate; the client drives the
+            // matching transport. SingleRequest/Auto are not client-driven. Each
+            // path owns its own resume-session persistence (only the sequential
+            // path is offset-resumable).
+            match session.strategy {
+                UploadStrategy::Sequential => self.send_sequential(session).await,
+                UploadStrategy::Multipart => self.send_multipart(session).await,
+                other => {
+                    self.emit(UploadPhase::Failed, session.next_offset.unwrap_or(0));
+                    Err(StorageError::unsupported(format!(
+                        "the browser client cannot drive the {other:?} upload strategy"
+                    )))
+                }
             }
+        }
 
+        /// Sequential proxy upload: ordered `PATCH` chunks coalesced server-side.
+        async fn send_sequential(&self, mut session: UploadSession) -> StorageResult<ObjectRef> {
+            self.store_resume_session(&session);
             let mut offset = self.inspect_offset(&session).await?;
             while offset < self.source.size {
                 self.emit(UploadPhase::Uploading, offset);
@@ -603,7 +621,9 @@ mod wasm {
                             break;
                         }
                         Err(err)
-                            if err.is_retryable_client_error() && attempts < self.retry_limit =>
+                            if err.is_retryable_client_error()
+                                && attempts < self.retry_limit
+                                && !self.is_aborted() =>
                         {
                             attempts += 1;
                             self.emit(UploadPhase::Retrying, offset);
@@ -618,10 +638,146 @@ mod wasm {
             }
 
             self.emit(UploadPhase::Completing, self.source.size);
-            let object = self.complete(&session).await?;
+            let object = self.complete_retrying(&session).await?;
             self.clear_resume_session();
             self.emit(UploadPhase::Complete, self.source.size);
             Ok(object)
+        }
+
+        /// Server-mediated multipart upload: parts (sized by the session plan) are
+        /// `PUT` to the by-number part endpoint with bounded concurrency, then the
+        /// upload is completed (the server assembles from the provider's parts).
+        async fn send_multipart(&self, session: UploadSession) -> StorageResult<ObjectRef> {
+            let parts = plan_parts(self.source.size, &session.plan)?;
+            // Clamp the server-advertised concurrency to a client ceiling so a
+            // buggy/hostile plan can't make us seed thousands of in-flight part
+            // fetches at once.
+            let concurrency = usize::from(session.plan.max_concurrent_parts.max(1))
+                .min(MAX_CLIENT_CONCURRENT_PARTS);
+            let total = self.source.size;
+            // Aggregate completed bytes, shared with the part futures so a
+            // per-part `Retrying` reports the true monotonic total (parts complete
+            // out of order, so a part's own offset could jump ahead then regress).
+            let uploaded = Rc::new(Cell::new(0u64));
+            let mut specs = parts.into_iter();
+            // Sliding window of in-flight parts, capped at the advertised
+            // concurrency. wasm is single-threaded, so these futures are `!Send`
+            // and run on this one task — no `spawn_local`.
+            let mut in_flight = FuturesUnordered::new();
+            for _ in 0..concurrency {
+                if let Some(spec) = specs.next() {
+                    in_flight.push(self.upload_part(&session, spec, uploaded.clone()));
+                }
+            }
+            while let Some(result) = in_flight.next().await {
+                match result {
+                    Ok(spec) => {
+                        uploaded.set(uploaded.get().saturating_add(spec.len));
+                        self.emit_part(UploadPhase::Uploading, uploaded.get(), spec.number);
+                        if let Some(spec) = specs.next() {
+                            in_flight.push(self.upload_part(&session, spec, uploaded.clone()));
+                        }
+                    }
+                    Err(err) => {
+                        self.emit(UploadPhase::Failed, uploaded.get());
+                        // Best-effort cleanup. Sibling part PUTs still in flight are
+                        // not individually cancelled, but the server's abort
+                        // reconciles them: a late part either hits the now-deleted
+                        // session (rejected) or lands a provider part the abort's
+                        // own cleanup removes (S3 NoSuchUpload, GCS component-range
+                        // delete, Azure uncommitted-block GC).
+                        let _ = self.abort(&session).await;
+                        return Err(err);
+                    }
+                }
+            }
+
+            self.emit(UploadPhase::Completing, total);
+            // Retry a transient failure on the final assemble (re-complete is
+            // idempotent server-side); on a terminal failure clean up the
+            // provider's multipart state rather than orphaning it.
+            match self.complete_retrying(&session).await {
+                Ok(object) => {
+                    self.clear_resume_session();
+                    self.emit(UploadPhase::Complete, total);
+                    Ok(object)
+                }
+                Err(err) => {
+                    self.emit(UploadPhase::Failed, total);
+                    let _ = self.abort(&session).await;
+                    Err(err)
+                }
+            }
+        }
+
+        /// Upload one part, retrying transient transport errors. Re-`PUT`ting the
+        /// same part number is idempotent server-side, so a retry is safe. Returns
+        /// the spec so the caller can advance progress.
+        async fn upload_part(
+            &self,
+            session: &UploadSession,
+            spec: PartSpec,
+            uploaded: Rc<Cell<u64>>,
+        ) -> StorageResult<PartSpec> {
+            let blob = self.slice(spec.offset, spec.offset + spec.len)?;
+            let mut attempts = 0;
+            loop {
+                match self.put_part(session, spec.number, blob.clone()).await {
+                    Ok(()) => return Ok(spec),
+                    Err(err)
+                        if err.is_retryable_client_error()
+                            && attempts < self.retry_limit
+                            && !self.is_aborted() =>
+                    {
+                        attempts += 1;
+                        // Report the aggregate completed bytes (monotonic), not this
+                        // part's offset, so progress never jumps ahead/regresses.
+                        self.emit_part(UploadPhase::Retrying, uploaded.get(), spec.number);
+                        retry_delay(self.retry_base_delay_ms, attempts).await?;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
+        async fn put_part(
+            &self,
+            session: &UploadSession,
+            number: u32,
+            blob: Blob,
+        ) -> StorageResult<()> {
+            // The server records the part on the provider and returns the session;
+            // we only need success — completion lists the parts server-side, so the
+            // client never reports per-part receipts on the proxy path. Check the
+            // status only rather than deserializing (and discarding) the session
+            // body, so the part path doesn't break if the server ever answers a
+            // part PUT with an empty/2xx body.
+            fetch_no_content(
+                BrowserStorageRequest::put_part(
+                    upload_url(&self.endpoint, session.id.as_str()),
+                    number,
+                    blob,
+                    self.with_credentials,
+                    self.abort_signal.clone(),
+                ),
+                "upload part",
+            )
+            .await
+        }
+
+        async fn abort(&self, session: &UploadSession) -> StorageResult<()> {
+            // Deliberately omit the caller's `AbortSignal`: this cleanup often runs
+            // *because* that signal fired (user cancel / timeout), and a
+            // pre-aborted signal makes `fetch` reject before sending — so the
+            // server would never receive the DELETE and the provider's multipart
+            // state would leak until expiry.
+            send_request(BrowserStorageRequest::delete(
+                upload_url(&self.endpoint, session.id.as_str()),
+                self.with_credentials,
+                None,
+            ))
+            .await
+            .map(|_| ())
         }
 
         async fn initiate(&self) -> StorageResult<UploadSession> {
@@ -671,7 +827,9 @@ mod wasm {
         ) -> StorageResult<UploadSession> {
             fetch_json(
                 BrowserStorageRequest::patch_blob(
-                    upload_bytes_url(&self.endpoint, session.id.as_str()),
+                    // Sequential append PATCHes the session resource directly
+                    // (TUS-shaped); the part number / offset rides in a header.
+                    upload_url(&self.endpoint, session.id.as_str()),
                     offset,
                     chunk,
                     self.with_credentials,
@@ -695,6 +853,28 @@ mod wasm {
             .await
         }
 
+        /// Complete, retrying transient transport errors. Re-completing is
+        /// idempotent server-side (the server lists the provider's parts and a
+        /// second assemble returns the same `ObjectRef`), so a retry is safe and
+        /// keeps a flaky final request from discarding a fully-uploaded object.
+        async fn complete_retrying(&self, session: &UploadSession) -> StorageResult<ObjectRef> {
+            let mut attempts = 0;
+            loop {
+                match self.complete(session).await {
+                    Ok(object) => return Ok(object),
+                    Err(err)
+                        if err.is_retryable_client_error()
+                            && attempts < self.retry_limit
+                            && !self.is_aborted() =>
+                    {
+                        attempts += 1;
+                        retry_delay(self.retry_base_delay_ms, attempts).await?;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
         fn chunk_size(&self, session: &UploadSession) -> u64 {
             session
                 .plan
@@ -712,14 +892,32 @@ mod wasm {
         }
 
         fn emit(&self, phase: UploadPhase, bytes_sent: u64) {
+            self.emit_progress(phase, bytes_sent, None);
+        }
+
+        fn emit_part(&self, phase: UploadPhase, bytes_sent: u64, number: u32) {
+            self.emit_progress(phase, bytes_sent, Some(number));
+        }
+
+        fn emit_progress(&self, phase: UploadPhase, bytes_sent: u64, current_part: Option<u32>) {
             if let Some(callback) = &self.progress {
                 callback(UploadProgress {
                     bytes_sent,
                     bytes_total: Some(self.source.size),
-                    current_part: None,
+                    current_part,
                     phase,
                 });
             }
+        }
+
+        /// True once the caller's `AbortSignal` has fired. Used to stop retrying
+        /// a transient transport error when the upload has been cancelled (a
+        /// cancelled `fetch` rejects as a retryable client error, so without this
+        /// guard the part/chunk loops would spin against a dead signal).
+        fn is_aborted(&self) -> bool {
+            self.abort_signal
+                .as_ref()
+                .is_some_and(web_sys::AbortSignal::aborted)
         }
 
         async fn load_resume_session(&self) -> StorageResult<Option<UploadSession>> {
@@ -1164,6 +1362,36 @@ mod wasm {
             }
         }
 
+        fn put_part(
+            url: String,
+            number: u32,
+            blob: Blob,
+            with_credentials: bool,
+            abort_signal: Option<AbortSignal>,
+        ) -> Self {
+            Self {
+                method: "PUT".to_string(),
+                url,
+                headers: vec![("Upload-Part".to_string(), number.to_string())],
+                json_body: None,
+                blob_body: Some(blob),
+                with_credentials,
+                abort_signal,
+            }
+        }
+
+        fn delete(url: String, with_credentials: bool, abort_signal: Option<AbortSignal>) -> Self {
+            Self {
+                method: "DELETE".to_string(),
+                url,
+                headers: Vec::new(),
+                json_body: None,
+                blob_body: None,
+                with_credentials,
+                abort_signal,
+            }
+        }
+
         fn tus_patch(
             url: String,
             offset: u64,
@@ -1228,6 +1456,31 @@ mod wasm {
             )));
         }
         result
+    }
+
+    /// Send a request that returns no body the client needs, surfacing the
+    /// structured `StorageError` from the envelope on failure. Used by the
+    /// multipart part path, where success is status-only and the server's
+    /// session body is intentionally discarded.
+    async fn fetch_no_content(
+        request: BrowserStorageRequest,
+        operation: &'static str,
+    ) -> StorageResult<()> {
+        let response = send_request(request).await?;
+        if (200..300).contains(&response.status) {
+            return Ok(());
+        }
+        // Non-2xx: prefer the structured error from the envelope (so the part
+        // retry loop sees the real variant), else a generic client error.
+        match serde_json::from_str::<StorageResponse<serde::de::IgnoredAny>>(&response.body) {
+            Ok(envelope) => Err(envelope.into_result().err().unwrap_or_else(|| {
+                StorageError::client(format!("{operation} failed with HTTP {}", response.status))
+            })),
+            Err(_) => Err(StorageError::client(format!(
+                "{operation} failed with HTTP {}",
+                response.status
+            ))),
+        }
     }
 
     fn ensure_tus_status(
@@ -1531,10 +1784,6 @@ mod wasm {
             endpoint.trim_end_matches('/'),
             percent_encode_path_segment(session)
         )
-    }
-
-    fn upload_bytes_url(endpoint: &str, session: &str) -> String {
-        format!("{}/bytes", upload_url(endpoint, session))
     }
 
     fn upload_complete_url(endpoint: &str, session: &str) -> String {
