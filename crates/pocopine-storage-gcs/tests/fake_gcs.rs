@@ -14,9 +14,10 @@ use bytes::Bytes;
 use google_cloud_auth::credentials::anonymous::Builder as Anonymous;
 use google_cloud_storage::client::Storage;
 use pocopine_storage::{
-    CompleteUpload, InitiateUpload, PrincipalRef, SafeObjectKey, StorageActor, StorageBackend,
-    StorageContext, StorageError, StorageKey, StorageResult, UploadPolicy, UploadSession,
-    UploadSessionStatus, UploadStrategy,
+    ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum,
+    PrincipalRef, SafeObjectKey, StorageActor, StorageBackend, StorageContext, StorageError,
+    StorageKey, StorageResult, UploadBody, UploadPolicy, UploadSession, UploadSessionStatus,
+    UploadStrategy,
 };
 use pocopine_storage_gcs::GcsStorageBackend;
 use testcontainers::core::{wait::HttpWaitStrategy, ContainerPort, WaitFor};
@@ -154,6 +155,55 @@ async fn initiate(backend: &GcsStorageBackend, size: Option<u64>) -> StorageResu
             },
         )
         .await
+}
+
+fn large_policy() -> StorageResult<UploadPolicy> {
+    let mut policy = UploadPolicy::new("gcs")?
+        .max_bytes(32 * 1024 * 1024)
+        .preferred_chunk_size(1024 * 1024);
+    policy.expires_after = Duration::from_secs(60 * 60);
+    Ok(policy)
+}
+
+async fn initiate_large_checked(
+    backend: &GcsStorageBackend,
+    key: &str,
+    size: u64,
+    checksum: ChecksumPolicy,
+) -> StorageResult<UploadSession> {
+    let mut policy = large_policy()?;
+    policy.checksum = checksum;
+    backend
+        .initiate_upload(
+            &ctx(),
+            InitiateUpload {
+                scope: "files".to_string(),
+                storage_key: StorageKey::new(SafeObjectKey::parse(key)?),
+                file_name: "large.bin".to_string(),
+                size: Some(size),
+                content_type: Some("application/octet-stream".to_string()),
+                metadata: BTreeMap::new(),
+                requested_strategy: UploadStrategy::Auto,
+                policy,
+            },
+        )
+        .await
+}
+
+fn pattern_bytes(start: usize, len: usize) -> Bytes {
+    let mut buf = Vec::with_capacity(len);
+    for i in 0..len {
+        buf.push(((start + i) % 251) as u8);
+    }
+    Bytes::from(buf)
+}
+
+async fn object_exists(storage: &Storage, bucket: &str, key: &str) -> bool {
+    storage
+        .read_object(bucket_resource(bucket), key)
+        .send()
+        .await
+        .is_ok()
 }
 
 async fn object_bytes(storage: &Storage, bucket: &str, key: &str) -> Vec<u8> {
@@ -459,12 +509,15 @@ async fn duplicate_append_retry_after_staged_write_advances_metadata() -> Storag
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inspect_truncates_rogue_staged_bytes_back_to_committed_offset() -> StorageResult<()> {
+async fn rogue_staged_object_does_not_promote_committed_offset() -> StorageResult<()> {
     let clients = gcs_clients().await;
     let bucket = create_bucket(&clients, "truncate").await;
     let backend =
         GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
     let session = initiate(&backend, Some(5)).await?;
+    // Native compose sessions buffer their tail inline in the metadata; the
+    // legacy `bytes.tmp` staging object is not part of the protocol, so a rogue
+    // one must never be mistaken for committed bytes.
     let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
     clients
         .storage
@@ -479,10 +532,6 @@ async fn inspect_truncates_rogue_staged_bytes_back_to_committed_offset() -> Stor
 
     let inspected = backend.inspect_upload(&ctx(), session.id).await?;
     assert_eq!(inspected.next_offset, Some(0));
-    assert_eq!(
-        object_bytes(&clients.storage, backend.bucket(), &bytes_key).await,
-        b""
-    );
     Ok(())
 }
 
@@ -633,5 +682,394 @@ async fn initiate_rejects_policy_above_proxy_cap_for_streaming_upload() -> Stora
         rejected,
         Err(StorageError::PayloadTooLarge { limit: 8 })
     ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compose_upload_assembles_large_object_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "compose").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+
+    // 4 MiB in 2 MiB chunks; with a 1 MiB component size this writes several
+    // component objects that are composed into the final object.
+    let chunk = 2 * 1024 * 1024usize;
+    let total = 2 * chunk;
+    let session = initiate_large_checked(
+        &backend,
+        "files/large.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+
+    let mut offset = 0u64;
+    for index in 0..2 {
+        let updated = backend
+            .append_upload_bytes(
+                &ctx(),
+                session.id.clone(),
+                offset,
+                pattern_bytes(index * chunk, chunk),
+            )
+            .await?;
+        offset += chunk as u64;
+        assert_eq!(updated.next_offset, Some(offset));
+    }
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total as u64);
+    assert_eq!(
+        object_bytes(&clients.storage, backend.bucket(), "files/large.bin").await,
+        pattern_bytes(0, total).to_vec()
+    );
+    // Component objects are temporary and removed after completion.
+    let first_component = session_object_key(&backend, &session, "components/comp-00000");
+    assert!(!object_exists(&clients.storage, backend.bucket(), &first_component).await);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compose_abort_removes_component_objects_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "compose-abort").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let session = initiate_large_checked(
+        &backend,
+        "files/large.bin",
+        2 * 1024 * 1024,
+        ChecksumPolicy::None,
+    )
+    .await?;
+
+    // 2 MiB at a 1 MiB component size writes component objects.
+    backend
+        .append_upload_bytes(
+            &ctx(),
+            session.id.clone(),
+            0,
+            pattern_bytes(0, 2 * 1024 * 1024),
+        )
+        .await?;
+    let first_component = session_object_key(&backend, &session, "components/comp-00000");
+    assert!(object_exists(&clients.storage, backend.bucket(), &first_component).await);
+
+    backend.abort_upload(&ctx(), session.id.clone()).await?;
+
+    assert!(!object_exists(&clients.storage, backend.bucket(), &first_component).await);
+    assert!(!object_exists(&clients.storage, backend.bucket(), "files/large.bin").await);
+    let inspected = backend.inspect_upload(&ctx(), session.id).await;
+    assert!(matches!(
+        inspected,
+        Err(StorageError::UnknownUploadSession { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compose_completion_is_idempotent_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "compose-idem").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let total = 3 * 1024 * 1024usize;
+    let session = initiate_large_checked(
+        &backend,
+        "files/large.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, total))
+        .await?;
+
+    let first = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await?;
+    let second = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(first, second);
+    assert_eq!(first.size, total as u64);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compose_upload_verifies_streaming_sha256_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "compose-sha").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    let total = 3 * 1024 * 1024usize;
+    let data = pattern_bytes(0, total);
+    let expected = ObjectChecksum {
+        algorithm: ChecksumAlgorithm::Sha256,
+        value: pocopine_crypto::sha256_hex(&data),
+    };
+    let session = initiate_large_checked(
+        &backend,
+        "files/checked.bin",
+        total as u64,
+        ChecksumPolicy::Required(ChecksumAlgorithm::Sha256),
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, data)
+        .await?;
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: Some(expected.clone()),
+            },
+        )
+        .await?;
+    assert_eq!(object.checksum, Some(expected));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compose_buffers_large_inline_tail_in_metadata_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "compose-tail").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+    // 500 KiB stays below the 1 MiB component size, so it is buffered entirely
+    // in the inline (base64) tail — well over the 256 KiB non-tail metadata
+    // bound. inspect + complete must still read the session metadata.
+    let total = 500 * 1024usize;
+    let session = initiate_large_checked(
+        &backend,
+        "files/tail.bin",
+        total as u64,
+        ChecksumPolicy::None,
+    )
+    .await?;
+    backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, total))
+        .await?;
+
+    let inspected = backend.inspect_upload(&ctx(), session.id.clone()).await?;
+    assert_eq!(inspected.next_offset, Some(total as u64));
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total as u64);
+    assert_eq!(
+        object_bytes(&clients.storage, backend.bucket(), "files/tail.bin").await,
+        pattern_bytes(0, total).to_vec()
+    );
+    Ok(())
+}
+
+/// Initiate a server-mediated by-number multipart upload (the `upload_part`
+/// path). Component size for the 32 MiB cap is 1 MiB, so parts are <= 1 MiB.
+async fn initiate_multipart(
+    backend: &GcsStorageBackend,
+    key: &str,
+    size: u64,
+) -> StorageResult<UploadSession> {
+    let mut policy = large_policy()?;
+    policy.max_concurrent_parts = 4;
+    backend
+        .initiate_upload(
+            &ctx(),
+            InitiateUpload {
+                scope: "files".to_string(),
+                storage_key: StorageKey::new(SafeObjectKey::parse(key)?),
+                file_name: "bynum.bin".to_string(),
+                size: Some(size),
+                content_type: Some("application/octet-stream".to_string()),
+                metadata: BTreeMap::new(),
+                requested_strategy: UploadStrategy::Multipart,
+                policy,
+            },
+        )
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn multipart_by_number_composes_parts_concurrently_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "bynum").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+
+    // 1 MiB component size: two full parts plus a 512 KiB final part.
+    let part = 1024 * 1024usize;
+    let last = 512 * 1024usize;
+    let total = (2 * part + last) as u64;
+    let session = initiate_multipart(&backend, "files/bynum.bin", total).await?;
+    assert_eq!(session.strategy, UploadStrategy::Multipart);
+    assert!(session.plan.max_concurrent_parts >= 2);
+
+    let specs = [
+        (1u32, 0usize, part),
+        (2u32, part, part),
+        (3u32, 2 * part, last),
+    ];
+    let mut handles = Vec::new();
+    for (number, start, len) in specs.into_iter().rev() {
+        let backend = backend.clone();
+        let session_id = session.id.clone();
+        let bytes = pattern_bytes(start, len);
+        handles.push(tokio::spawn(async move {
+            backend
+                .upload_part(&ctx(), session_id, number, UploadBody::from_bytes(bytes))
+                .await
+        }));
+    }
+    for handle in handles {
+        handle.await.expect("join part task")?;
+    }
+
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total);
+    assert_eq!(
+        object_bytes(&clients.storage, backend.bucket(), "files/bynum.bin").await,
+        pattern_bytes(0, total as usize).to_vec()
+    );
+
+    // Idempotent re-complete returns the same object.
+    let again = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(again, object);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn multipart_by_number_rejects_missing_part_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "bynum-gap").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+
+    let part = 1024 * 1024usize;
+    let total = (3 * part) as u64;
+    let session = initiate_multipart(&backend, "files/gap.bin", total).await?;
+    // Upload parts 1 and 3, leaving a gap at 2.
+    backend
+        .upload_part(
+            &ctx(),
+            session.id.clone(),
+            1,
+            UploadBody::from_bytes(pattern_bytes(0, part)),
+        )
+        .await?;
+    backend
+        .upload_part(
+            &ctx(),
+            session.id.clone(),
+            3,
+            UploadBody::from_bytes(pattern_bytes(2 * part, part)),
+        )
+        .await?;
+
+    let rejected = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id.clone(),
+                checksum: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(rejected, Err(StorageError::PolicyRejected { .. })),
+        "a missing part 2 must be rejected, got {rejected:?}"
+    );
+    assert!(!object_exists(&clients.storage, backend.bucket(), "files/gap.bin").await);
+
+    // The session stays Open; uploading the missing part lets it complete.
+    backend
+        .upload_part(
+            &ctx(),
+            session.id.clone(),
+            2,
+            UploadBody::from_bytes(pattern_bytes(part, part)),
+        )
+        .await?;
+    let object = backend
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn multipart_by_number_rejects_wrong_part_length_against_fake_gcs() -> StorageResult<()> {
+    let clients = gcs_clients().await;
+    let bucket = create_bucket(&clients, "bynum-len").await;
+    let backend =
+        GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
+
+    // 1 MiB component size, declared 2 MiB => part 1 must be exactly 1 MiB.
+    let part = 1024 * 1024usize;
+    let session = initiate_multipart(&backend, "files/len.bin", (2 * part) as u64).await?;
+    let rejected = backend
+        .upload_part(
+            &ctx(),
+            session.id.clone(),
+            1,
+            UploadBody::from_bytes(pattern_bytes(0, part / 2)),
+        )
+        .await;
+    assert!(
+        matches!(rejected, Err(StorageError::PolicyRejected { .. })),
+        "an undersized non-final part must be rejected, got {rejected:?}"
+    );
     Ok(())
 }
