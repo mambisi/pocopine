@@ -452,7 +452,7 @@ pub fn main() {
     ];
     pine::register_all();
     App::new()
-        .plugin(pocopine_storage::upload_plugin())
+        .plugin(pocopine_storage::storage_plugin())
         .store::<FileBrowserStore>()
         .register::<PineIcon>()
         .register::<FileBrowserApp>()
