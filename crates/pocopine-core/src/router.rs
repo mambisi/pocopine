@@ -50,6 +50,7 @@ pub use return_to::ReturnTo;
 enum Segment {
     Literal(String),
     Param(String),
+    RestParam(String),
     Wildcard,
 }
 
@@ -74,6 +75,9 @@ impl Route {
                 .split('/')
                 .filter(|s| !s.is_empty())
                 .map(|s| {
+                    if let Some(name) = s.strip_prefix('*') {
+                        return Segment::RestParam(name.to_string());
+                    }
                     if let Some(name) = s.strip_prefix(':') {
                         Segment::Param(name.to_string())
                     } else {
@@ -101,15 +105,33 @@ impl Route {
             return Some(HashMap::new());
         }
         let input: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        if input.len() != self.segments.len() {
+        let has_rest = self
+            .segments
+            .last()
+            .is_some_and(|segment| matches!(segment, Segment::RestParam(_)));
+        if (!has_rest && input.len() != self.segments.len())
+            || (has_rest && input.len() + 1 < self.segments.len())
+        {
             return None;
         }
         let mut params = HashMap::new();
-        for (seg, got) in self.segments.iter().zip(input.iter()) {
+        for (idx, seg) in self.segments.iter().enumerate() {
             match seg {
-                Segment::Literal(s) if s == got => {}
+                Segment::RestParam(name) if idx + 1 == self.segments.len() => {
+                    let value = input[idx..]
+                        .iter()
+                        .map(|part| url_decode_path_segment(part))
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    params.insert(name.clone(), value);
+                    break;
+                }
+                Segment::RestParam(_) => return None,
+                _ if idx >= input.len() => return None,
+                Segment::Literal(s) if s == input[idx] => {}
                 Segment::Literal(_) => return None,
                 Segment::Param(name) => {
+                    let got = input[idx];
                     params.insert(name.clone(), url_decode_path_segment(got));
                 }
                 Segment::Wildcard => {}
@@ -766,6 +788,25 @@ pub(crate) fn target_for_name(
                             return;
                         }
                         push_encoded_route_path_segment(value, &mut path);
+                    }
+                    Segment::RestParam(param) => {
+                        let Some(value) = params.get(param) else {
+                            found = Some(Err(RouteTargetError::MissingParam(param.clone())));
+                            return;
+                        };
+                        let mut parts =
+                            value.trim_matches('/').split('/').filter(|s| !s.is_empty());
+                        let Some(first) = parts.next() else {
+                            if path.len() > 1 {
+                                path.pop();
+                            }
+                            continue;
+                        };
+                        push_encoded_route_path_segment(first, &mut path);
+                        for part in parts {
+                            path.push('/');
+                            push_encoded_route_path_segment(part, &mut path);
+                        }
                     }
                     Segment::Wildcard => {
                         found = Some(Err(RouteTargetError::UnbuildablePattern(route.pattern)));
@@ -1809,6 +1850,20 @@ mod tests {
         let caps = r.match_path("/users/7/posts/99").unwrap();
         assert_eq!(caps.get("uid"), Some(&"7".to_string()));
         assert_eq!(caps.get("pid"), Some(&"99".to_string()));
+    }
+
+    #[test]
+    fn named_rest_param_captures_remaining_path_segments() {
+        let r = Route::parse(
+            "/connection/:connection_id/*prefix",
+            "storage",
+            RouteRuntimeConfig::default(),
+        );
+        let caps = r
+            .match_path("/connection/abc/Videos/Recent%20Files")
+            .unwrap();
+        assert_eq!(caps.get("connection_id"), Some(&"abc".to_string()));
+        assert_eq!(caps.get("prefix"), Some(&"Videos/Recent Files".to_string()));
     }
 
     #[test]

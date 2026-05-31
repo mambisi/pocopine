@@ -239,6 +239,7 @@ Drop into any one with `pocopine dev --path examples/<name>`:
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
 | [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, pp-for |
 | [`website`](./examples/website) | Pine UI — every primitive, side-by-side |
+| [`file-browser`](./examples/file-browser) | Storage browser shell for S3/MinIO, with cloud-provider expansion path |
 | [`site`](./examples/site) | The marketing page, dogfooded |
 | [`tailwind`](./examples/tailwind) | Tailwind v4 + `.poco` scanning (CDN-mode for demo) |
 

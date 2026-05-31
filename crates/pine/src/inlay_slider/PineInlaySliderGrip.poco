@@ -1,0 +1,19 @@
+<root role="slider"
+      class="pine-inlay-slider-grip"
+      :tabindex="disabled ? -1 : 0"
+      :aria-valuemin="min"
+      :aria-valuemax="max"
+      :aria-valuenow="value"
+      aria-orientation="horizontal"
+      :aria-disabled="disabled"
+      :data-disabled="disabled"
+      @keydown.arrow-left.prevent="step_dec"
+      @keydown.arrow-down.prevent="step_dec"
+      @keydown.arrow-right.prevent="step_inc"
+      @keydown.arrow-up.prevent="step_inc"
+      @keydown.home.prevent="to_min"
+      @keydown.end.prevent="to_max"
+      @keydown.page-up.prevent="page_inc"
+      @keydown.page-down.prevent="page_dec">
+  <slot></slot>
+</root>

@@ -4,19 +4,24 @@
 //! selector escapes the class-literal special characters and appends
 //! the variant pseudo-classes / wraps in at-rules.
 
-/// Escape a class name for use in a CSS selector. The literal class
-/// text (`hover:bg-[12px]`) appears verbatim in the DOM `class`
-/// attribute, so the selector must escape `:`, `[`, `]`, `.`, `/`,
-/// `%`, `(`, `)`, `,`, `#`, and whitespace with a backslash.
+/// Escape a class name for use in a CSS selector. The literal class text
+/// (`hover:bg-[12px]`, `data-[active=true]:bg-surface`) appears verbatim in
+/// the DOM `class` attribute, so every character that is **not** a valid CSS
+/// identifier character — letters, digits, `-`, `_`, and non-ASCII — is
+/// backslash-escaped. This covers `:`, `[`, `]`, `.`, `/`, `%`, `(`, `)`,
+/// `,`, `#`, `@`, `!`, `=`, `>`, `&`, `*`, whitespace, and anything else a
+/// Tailwind-style arbitrary value or variant can carry. An allowlist of
+/// "chars to escape" silently drops styles the moment a class uses a
+/// character that isn't on it (e.g. the `=` in `data-[active=true]:` made
+/// the whole selector an invalid parse, so the rule never applied).
 pub fn escape_selector(class: &str) -> String {
     let mut out = String::with_capacity(class.len() + 8);
     for ch in class.chars() {
-        match ch {
-            ':' | '[' | ']' | '.' | '/' | '%' | '(' | ')' | ',' | '#' | '@' | '!' | ' ' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || !ch.is_ascii() {
+            out.push(ch);
+        } else {
+            out.push('\\');
+            out.push(ch);
         }
     }
     out
@@ -65,6 +70,27 @@ mod tests {
     fn escapes_variant_and_arbitrary() {
         assert_eq!(escape_selector("hover:bg-surface"), "hover\\:bg-surface");
         assert_eq!(escape_selector("text-[13px]"), "text-\\[13px\\]");
+    }
+
+    #[test]
+    fn escapes_equals_in_data_attribute_variant() {
+        // The `=` must be escaped — an unescaped `=` in the class portion is
+        // an invalid CSS selector, so the browser drops the rule and the
+        // stateful style (active/current/state) silently never applies.
+        assert_eq!(
+            escape_selector("data-[active=true]:bg-surface"),
+            "data-\\[active\\=true\\]\\:bg-surface"
+        );
+    }
+
+    #[test]
+    fn keeps_identifier_chars_but_escapes_the_rest() {
+        // Letters, digits, `-`, `_` pass through; arbitrary-value punctuation
+        // is escaped (matches the previously-working `(`, `,`, `.`, `/` cases).
+        assert_eq!(
+            escape_selector("grid-cols-[minmax(0,1fr)_2rem]"),
+            "grid-cols-\\[minmax\\(0\\,1fr\\)_2rem\\]"
+        );
     }
 
     #[test]

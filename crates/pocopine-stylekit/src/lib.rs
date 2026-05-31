@@ -118,19 +118,77 @@ impl Compiler {
         );
 
         let mut out = Compilation::default();
+
+        // Parse first, then emit in cascade order. Utility rules all carry
+        // ~equal specificity, so when two variants of the same property both
+        // match an element the *source order* decides the winner — a plain
+        // alphabetical sort (the order `used` arrives in) gets this wrong two
+        // ways, both of which this re-ordering fixes (matching Tailwind's
+        // layering):
+        //
+        //   1. Responsive `@media` rules sort by their prefix letter
+        //      (`lg`→"l", `md`→"m", `sm`→"s"), so a bare `lg:` block lands
+        //      *before* a `sm:` block — breakpoints cascade in reverse and a
+        //      smaller breakpoint clobbers a larger one. They must emit after
+        //      the non-responsive rules, ascending (sm < md < lg < xl < 2xl).
+        //   2. `data-[…]:`/`aria-[…]:` (d) sort before `hover:` (h), so
+        //      hovering an active element lets `hover:` clobber its
+        //      `data-[state=on]:` styling. State variants must emit *after*
+        //      pseudo-class variants.
+        let mut parsed: Vec<(&extract::UsedClass, parse::ParsedClass)> =
+            Vec::with_capacity(used.len());
         for used in used {
             match parse::parse_class(&used.value) {
-                Ok(parsed) => self.registry.emit_into(
-                    &used.value,
-                    &parsed,
-                    &self.tokens,
-                    used.span,
-                    &self.options,
-                    &mut out,
-                ),
+                Ok(p) => parsed.push((used, p)),
                 Err(diag) => out.diagnostics.push(diag.at(used.span)),
             }
         }
+        // Stable sort keeps the incoming literal order within each layer, so
+        // output stays deterministic.
+        parsed.sort_by_key(|(_, p)| cascade_sort_key(p));
+
+        for (used, parsed) in &parsed {
+            self.registry.emit_into(
+                &used.value,
+                parsed,
+                &self.tokens,
+                used.span,
+                &self.options,
+                &mut out,
+            );
+        }
         out
     }
+}
+
+/// Emission-order key. Lower keys emit first (and so lose to later keys on
+/// equal specificity). Ordered by `(breakpoint, state)`:
+///
+/// * `breakpoint` — `0` for non-responsive rules, then `sm`/`md`/`lg`/`xl`/
+///   `2xl` ascending (`1..=5`). Responsive `@media` rules thus emit after the
+///   base layer and in min-width order, so a larger breakpoint wins.
+/// * `state` — `0` for base/pseudo-class variants, `1` for component-state
+///   attribute variants (`data-[…]`, `aria-[…]`), so an active/checked element
+///   keeps its styling when hovered or focused.
+fn cascade_sort_key(parsed: &parse::ParsedClass) -> (u8, u8) {
+    let breakpoint = parsed
+        .variants
+        .iter()
+        .filter_map(|v| match v.0.as_str() {
+            "sm" => Some(1u8),
+            "md" => Some(2),
+            "lg" => Some(3),
+            "xl" => Some(4),
+            "2xl" => Some(5),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let state = u8::from(
+        parsed
+            .variants
+            .iter()
+            .any(|v| v.0.starts_with("data-[") || v.0.starts_with("aria-[")),
+    );
+    (breakpoint, state)
 }

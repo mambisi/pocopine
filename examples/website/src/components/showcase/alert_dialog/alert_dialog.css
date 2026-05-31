@@ -4,12 +4,13 @@
    accent overlay, etc.). */
 
 .pine-alert-dialog-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
-  z-index: 50;
+  z-index: 0;
+  pointer-events: auto;
 }
-pine-alert-dialog-content {
+.pine-alert-dialog-portal {
   position: fixed;
   inset: 0;
   display: flex;
@@ -19,6 +20,8 @@ pine-alert-dialog-content {
   pointer-events: none;
 }
 .pine-alert-dialog-content {
+  position: relative;
+  z-index: 1;
   pointer-events: auto;
   width: 90vw;
   max-width: 440px;

@@ -1,0 +1,6 @@
+<root class="pine-inlay-slider-root"
+      pp-ref="root"
+      :data-disabled="disabled"
+      :aria-disabled="disabled">
+  <slot></slot>
+</root>

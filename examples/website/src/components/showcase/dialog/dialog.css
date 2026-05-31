@@ -1,20 +1,17 @@
 /* ─── PineDialog (compound) ───────────────────────────────────── */
 
-/* Portal wraps Overlay + Content as siblings in <body>.  Kept
-   layout-transparent so each child positions against the
-   viewport directly. */
+/* Portal wraps Overlay + Content as siblings in <body>. The rendered
+   portal root centers the card while the card keeps Pine's fade-scale
+   transform animation. */
 
 .pine-dialog-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 50;
+  z-index: 0;
+  pointer-events: auto;
 }
-/* The custom element is only the viewport centering wrapper. The
- * rendered `.pine-dialog-content` card keeps Pine's default
- * fade-scale transition, so transform animation stays on the panel
- * instead of moving the full-screen wrapper. */
-pine-dialog-content {
+.pine-dialog-portal {
   position: fixed;
   inset: 0;
   display: flex;
@@ -24,6 +21,8 @@ pine-dialog-content {
   pointer-events: none;
 }
 .pine-dialog-content {
+  position: relative;
+  z-index: 1;
   pointer-events: auto;
   width: 90vw;
   max-width: 420px;

@@ -29,7 +29,8 @@ use crate::layout::{S3KeyLayout, DEFAULT_INTERNAL_PREFIX};
 use crate::state::{NativeUploadState, S3CompletedPart, S3MultipartState, StoredUploadSession};
 use crate::util::{
     ensure_completable, is_get_object_not_found, is_head_object_not_found, is_no_such_upload,
-    is_precondition_failed, is_put_precondition_failed, normalize_etag, s3_error,
+    is_precondition_failed, is_put_conditional_header_unsupported, is_put_precondition_failed,
+    normalize_etag, put_error_code, put_error_message, put_error_status, s3_error, s3_put_error,
 };
 
 const DEFAULT_BACKEND_NAME: &str = "s3";
@@ -375,7 +376,7 @@ impl S3StorageBackend {
             .bucket(&self.layout.bucket)
             .key(key)
             .if_none_match("*")
-            .body(ByteStream::from(bytes));
+            .body(ByteStream::from(bytes.clone()));
         if let Some(content_type) = content_type {
             request = request.content_type(content_type);
         }
@@ -384,7 +385,39 @@ impl S3StorageBackend {
             Err(err) if is_put_precondition_failed(&err) => Err(StorageError::policy_rejected(
                 format!("S3 object key already exists: {key}"),
             )),
-            Err(err) => Err(s3_error("put completed object", err)),
+            Err(err) if is_put_conditional_header_unsupported(&err) => {
+                let status = put_error_status(&err);
+                let code = put_error_code(&err).map(str::to_owned);
+                let message = put_error_message(&err).map(str::to_owned);
+                tracing::warn!(
+                    target: "pocopine.log",
+                    event_name = "pocopine.storage.s3_conditional_put_unsupported",
+                    operation = "put completed object",
+                    status = ?status,
+                    error_code = ?code,
+                    error_message = ?message,
+                    "retrying completed object PUT without If-None-Match",
+                );
+
+                // Some S3-compatible providers reject conditional PUTs. We
+                // already did the existing-object preflight above; this keeps
+                // those providers usable while preserving conditional writes
+                // for providers that support them.
+                let mut request = self
+                    .client
+                    .put_object()
+                    .bucket(&self.layout.bucket)
+                    .key(key)
+                    .body(ByteStream::from(bytes));
+                if let Some(content_type) = content_type {
+                    request = request.content_type(content_type);
+                }
+                let output = request.send().await.map_err(|err| {
+                    s3_put_error("put completed object without conditional header", err)
+                })?;
+                Ok(output.e_tag.map(normalize_etag))
+            }
+            Err(err) => Err(s3_put_error("put completed object", err)),
         }
     }
 

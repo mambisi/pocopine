@@ -46,6 +46,7 @@ pub mod field;
 pub mod fieldset;
 pub mod form;
 pub mod hover_card;
+pub mod inlay_slider;
 pub mod input;
 pub mod label;
 pub mod otp_field;
@@ -127,6 +128,9 @@ pub use fieldset::{PineFieldsetLegend, PineFieldsetRoot};
 pub use form::PineFormRoot;
 pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
+};
+pub use inlay_slider::{
+    PineInlaySliderGrip, PineInlaySliderHandle, PineInlaySliderRoot, PineInlaySliderTrack,
 };
 pub use input::PineInput;
 pub use label::PineLabel;
@@ -306,6 +310,10 @@ pub fn register_all() {
     PineSliderTrack::register();
     PineSliderRange::register();
     PineSliderThumb::register();
+    PineInlaySliderRoot::register();
+    PineInlaySliderTrack::register();
+    PineInlaySliderHandle::register();
+    PineInlaySliderGrip::register();
     PineSelectRoot::register();
     PineSelectTrigger::register();
     PineSelectValue::register();

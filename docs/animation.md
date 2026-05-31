@@ -339,9 +339,26 @@ want to scale or slide. Common patterns:
 .my-portal > .my-content { pointer-events: auto; }
 ```
 
-Either keeps `transform` free for the preset to own. The
-website's Dialog / AlertDialog / Command CSS uses the first
-pattern — copy from there if you're styling the same primitives.
+Either keeps `transform` free for the preset to own. Pine
+layout-bearing hosts default to `display: contents`, so for Dialog /
+AlertDialog, center the rendered portal root and keep the rendered
+`.pine-dialog-content` panel as the animated card:
+
+```css
+.pine-dialog-portal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.pine-dialog-overlay { pointer-events: auto; }
+.pine-dialog-content { pointer-events: auto; }
+```
+
+The website Dialog / AlertDialog showcase CSS is the reference
+pattern for those primitives.
 
 ## Theming hooks (RFC-039)
 

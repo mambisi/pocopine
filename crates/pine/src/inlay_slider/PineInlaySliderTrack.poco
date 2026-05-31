@@ -1,0 +1,5 @@
+<root class="pine-inlay-slider-track"
+      pp-ref="track"
+      :data-disabled="disabled">
+  <slot></slot>
+</root>
