@@ -481,12 +481,16 @@ async fn complete_does_not_overwrite_existing_object_key() -> StorageResult<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn duplicate_append_retry_after_staged_write_advances_metadata() -> StorageResult<()> {
+async fn append_ignores_rogue_staged_object_and_advances_metadata() -> StorageResult<()> {
     let clients = gcs_clients().await;
     let bucket = create_bucket(&clients, "retry").await;
     let backend =
         GcsStorageBackend::emulator(clients.storage.clone(), clients.endpoint.clone(), bucket)?;
     let session = initiate(&backend, Some(5)).await?;
+    // Native compose buffers the tail inline in the session metadata; a stray
+    // `bytes.tmp` object is not part of the protocol, so the append must write
+    // its bytes as usual and advance the offset to the appended length without
+    // ever consulting the rogue object.
     let bytes_key = session_object_key(&backend, &session, "bytes.tmp");
     clients
         .storage
@@ -497,7 +501,7 @@ async fn duplicate_append_retry_after_staged_write_advances_metadata() -> Storag
         )
         .send_unbuffered()
         .await
-        .expect("seed staged retry bytes");
+        .expect("seed rogue staged bytes");
 
     let updated = backend
         .append_upload_bytes(&ctx(), session.id.clone(), 0, Bytes::from_static(b"hello"))

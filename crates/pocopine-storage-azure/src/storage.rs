@@ -19,7 +19,7 @@ use pocopine_storage::backend_common::{
 };
 use pocopine_storage::checksum::{
     checksum_algorithm_to_compute, ensure_supported_checksum_policy, precheck_checksum,
-    validate_complete_checksum, validate_complete_checksum_precomputed, StreamingChecksum,
+    validate_complete_checksum_precomputed, StreamingChecksum,
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, CompleteUpload, InitiateUpload, ObjectChecksum,
@@ -36,7 +36,7 @@ use crate::state::{
     AzureObjectMetadata, AzureObjectWrite, NativeUploadState, StoredUploadSession,
 };
 use crate::util::{
-    azure_error, bytes_match_at, ensure_completable, is_azure_already_exists, is_azure_not_found,
+    azure_error, ensure_completable, is_azure_already_exists, is_azure_not_found,
     is_azure_precondition_failed, map_session_write_error, usize_from_u64,
 };
 
@@ -163,10 +163,11 @@ impl AzureBlobStorageBackend {
         Ok(self)
     }
 
-    /// Override the maximum size accepted by this sequential proxy backend.
+    /// Override the maximum object size accepted by this backend.
     ///
-    /// The default is 64 MiB because each append rewrites the staged blob and
-    /// completion loads the staged bytes before the final Azure write.
+    /// The cap also sizes the per-session block width (`block_size_for`) so the
+    /// committed block count stays within Azure's per-blob limit. The default is
+    /// 64 MiB.
     pub fn with_max_proxy_upload_bytes(mut self, max_bytes: u64) -> StorageResult<Self> {
         if max_bytes == 0 {
             return Err(StorageError::policy_rejected(
@@ -301,84 +302,6 @@ impl AzureBlobStorageBackend {
         Ok(())
     }
 
-    async fn get_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        read_limit: u64,
-    ) -> StorageResult<AzureObjectBytes> {
-        let key = self.layout.session_bytes_key(session);
-        match self.get_object_bytes_with_limit(&key, read_limit).await {
-            Ok(bytes) => Ok(bytes),
-            Err(StorageError::UnknownUploadSession { .. }) => Ok(AzureObjectBytes::empty()),
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn reconcile_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        trusted_len: u64,
-    ) -> StorageResult<Vec<u8>> {
-        let read_limit = trusted_len
-            .checked_add(1)
-            .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-        let mut staged = self.get_staged_bytes(session, read_limit).await?;
-        let actual = staged.bytes.len() as u64;
-        if actual > trusted_len {
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.azure_staged_bytes_truncated",
-                session = %session,
-                actual,
-                trusted = trusted_len,
-            );
-            staged.bytes.truncate(usize_from_u64(trusted_len)?);
-            self.put_staged_bytes(
-                session,
-                Bytes::from(staged.bytes.clone()),
-                staged.etag.map(BlobWritePrecondition::IfMatch),
-            )
-            .await?;
-            return Ok(staged.bytes);
-        }
-        if actual == trusted_len {
-            return Ok(staged.bytes);
-        }
-        Err(StorageError::backend(format!(
-            "Azure staged upload blob is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
-        )))
-    }
-
-    async fn ensure_staged_not_shorter_than_metadata(
-        &self,
-        session: &UploadSessionId,
-        trusted_len: u64,
-    ) -> StorageResult<()> {
-        let read_limit = trusted_len
-            .checked_add(1)
-            .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-        let staged = self.get_staged_bytes(session, read_limit).await?;
-        let actual = staged.bytes.len() as u64;
-        if actual < trusted_len {
-            return Err(StorageError::backend(format!(
-                "Azure staged upload blob is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
-            )));
-        }
-        Ok(())
-    }
-
-    async fn put_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        bytes: Bytes,
-        precondition: Option<BlobWritePrecondition>,
-    ) -> StorageResult<AzureObjectWrite> {
-        let key = self.layout.session_bytes_key(session);
-        self.put_object_bytes(&key, bytes, Some("application/octet-stream"), precondition)
-            .await
-            .map_err(map_session_write_error)
-    }
-
     async fn get_object_bytes_with_limit(
         &self,
         key: &str,
@@ -399,8 +322,6 @@ impl AzureBlobStorageBackend {
             return Ok(AzureObjectBytes {
                 bytes: Vec::new(),
                 etag: metadata.etag,
-                version_id: metadata.version_id,
-                truncated: false,
             });
         }
         let probe_limit = max_bytes
@@ -433,23 +354,18 @@ impl AzureBlobStorageBackend {
         let collect_limit = usize_from_u64(probe_limit)?;
         let mut body = response.body;
         let mut bytes = Vec::with_capacity(usize_from_u64(read_len.min(probe_limit))?);
-        let mut body_exceeded_limit = false;
         while let Some(chunk) = body.next().await {
             let chunk = chunk.map_err(|err| azure_error("read blob body", err))?;
             let remaining = collect_limit.saturating_sub(bytes.len());
             if chunk.len() > remaining {
                 bytes.extend_from_slice(&chunk[..remaining]);
-                body_exceeded_limit = true;
                 break;
             }
             bytes.extend_from_slice(&chunk);
             if bytes.len() == collect_limit {
-                body_exceeded_limit = true;
                 break;
             }
         }
-        let truncated =
-            metadata.size.map(|size| size > max_bytes).unwrap_or(false) || body_exceeded_limit;
         if bytes.len() > usize_from_u64(max_bytes)? {
             bytes.truncate(usize_from_u64(max_bytes)?);
         }
@@ -460,8 +376,6 @@ impl AzureBlobStorageBackend {
                 .etag
                 .map(|etag| etag.to_string())
                 .or(metadata.etag),
-            version_id: response.properties.version_id.or(metadata.version_id),
-            truncated,
         })
     }
 
@@ -485,14 +399,7 @@ impl AzureBlobStorageBackend {
             .etag()
             .map_err(|err| azure_error("read blob etag", err))?
             .map(|etag| etag.to_string());
-        let version_id = response
-            .version_id()
-            .map_err(|err| azure_error("read blob version id", err))?;
-        Ok(AzureObjectMetadata {
-            size,
-            etag,
-            version_id,
-        })
+        Ok(AzureObjectMetadata { size, etag })
     }
 
     async fn put_object_bytes(
@@ -535,72 +442,6 @@ impl AzureBlobStorageBackend {
         })
     }
 
-    async fn put_completed_object(
-        &self,
-        key: &str,
-        bytes: Bytes,
-        content_type: Option<&str>,
-    ) -> StorageResult<AzureObjectWrite> {
-        match self.compare_existing_completed_object(key, &bytes).await {
-            Ok(Some(existing)) => return Ok(existing),
-            Ok(None) => {
-                return Err(StorageError::policy_rejected(format!(
-                    "Azure blob key already exists with different bytes: {key}"
-                )));
-            }
-            Err(StorageError::UnknownUploadSession { .. }) => {}
-            Err(err) => return Err(err),
-        }
-        match self
-            .put_object_bytes(
-                key,
-                bytes.clone(),
-                content_type,
-                Some(BlobWritePrecondition::IfNotExists),
-            )
-            .await
-        {
-            Ok(written) => Ok(written),
-            Err(StorageError::Conflict { .. }) => {
-                match self.compare_existing_completed_object(key, &bytes).await {
-                    Ok(Some(existing)) => Ok(existing),
-                    Ok(None) | Err(StorageError::UnknownUploadSession { .. }) => {
-                        Err(StorageError::policy_rejected(format!(
-                            "Azure blob key already exists: {key}"
-                        )))
-                    }
-                    Err(err) => Err(err),
-                }
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn compare_existing_completed_object(
-        &self,
-        key: &str,
-        bytes: &Bytes,
-    ) -> StorageResult<Option<AzureObjectWrite>> {
-        let metadata = self.get_object_metadata(key).await?;
-        if let Some(size) = metadata.size {
-            if size != bytes.len() as u64 {
-                return Ok(None);
-            }
-        }
-        let metadata_etag = metadata.etag.clone();
-        let metadata_version_id = metadata.version_id.clone();
-        let existing = self
-            .download_object_bytes_with_limit(key, bytes.len() as u64, metadata)
-            .await?;
-        if existing.truncated || existing.bytes.as_slice() != bytes.as_ref() {
-            return Ok(None);
-        }
-        Ok(Some(AzureObjectWrite {
-            etag: existing.etag.or(metadata_etag),
-            version_id: existing.version_id.or(metadata_version_id),
-        }))
-    }
-
     async fn delete_object(&self, key: &str) -> StorageResult<()> {
         let options = BlobClientDeleteOptions {
             delete_snapshots: Some(DeleteSnapshotsOptionType::Include),
@@ -636,60 +477,6 @@ impl AzureBlobStorageBackend {
             self.write_session(session, stored).await?;
         }
         Ok(())
-    }
-
-    async fn cleanup_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        stored: &mut StoredUploadSession,
-    ) -> StorageResult<()> {
-        if !stored.cleanup_pending {
-            return Ok(());
-        }
-        self.delete_object_if_exists(&self.layout.session_bytes_key(session))
-            .await?;
-        stored.cleanup_pending = false;
-        self.write_session(session, stored).await
-    }
-
-    async fn cleanup_staged_bytes_best_effort(
-        &self,
-        session: &UploadSessionId,
-        stored: &mut StoredUploadSession,
-    ) {
-        if let Err(err) = self.cleanup_staged_bytes(session, stored).await {
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.azure_cleanup_pending",
-                session = %session,
-                error = %err,
-            );
-        }
-    }
-
-    async fn rollback_completion_after_error(
-        &self,
-        session: &UploadSessionId,
-        stored: &mut StoredUploadSession,
-        error: StorageError,
-    ) -> StorageError {
-        stored.public.status = UploadSessionStatus::Open;
-        stored.completion_object_key = None;
-        match self.write_session(session, stored).await {
-            Ok(()) => error,
-            Err(rollback_error) => {
-                tracing::error!(
-                    target: "pocopine.log",
-                    event_name = "pocopine.storage.azure_completion_rollback_failed",
-                    session = %session,
-                    original_error = %error,
-                    rollback_error = %rollback_error,
-                );
-                StorageError::backend(format!(
-                    "Azure complete upload failed ({error}); rollback failed ({rollback_error})"
-                ))
-            }
-        }
     }
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
@@ -1361,134 +1148,6 @@ impl AzureBlobStorageBackend {
         self.write_session(session, &mut stored).await?;
         Ok(object)
     }
-
-    // --- legacy staged-object rewrite flow (pre-block sessions) ---------------
-
-    async fn append_legacy(
-        &self,
-        session: &UploadSessionId,
-        mut stored: StoredUploadSession,
-        offset: u64,
-        bytes: Bytes,
-    ) -> StorageResult<UploadSession> {
-        let expected = stored.public.next_offset.unwrap_or(0);
-        let new_offset = checked_new_offset(offset, bytes.len())?;
-        let read_limit = expected
-            .max(new_offset)
-            .checked_add(1)
-            .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-        let mut staged_object = self.get_staged_bytes(session, read_limit).await?;
-        let staged_len = staged_object.bytes.len() as u64;
-        if expected != offset {
-            if new_offset == expected
-                && bytes_match_at(&staged_object.bytes, offset, bytes.as_ref())?
-            {
-                return Ok(stored.public);
-            }
-            tracing::debug!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.offset_mismatch",
-                session = %session,
-                expected,
-                provided = offset,
-            );
-            return Err(StorageError::offset_mismatch(expected, offset));
-        }
-        if staged_len > expected {
-            if staged_len == new_offset
-                && bytes_match_at(&staged_object.bytes, expected, bytes.as_ref())?
-            {
-                stored.public.next_offset = Some(new_offset);
-                self.write_session(session, &mut stored).await?;
-                return Ok(stored.public);
-            }
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.azure_staged_bytes_truncated",
-                session = %session,
-                actual = staged_len,
-                trusted = expected,
-            );
-            staged_object.bytes.truncate(usize_from_u64(expected)?);
-            let written = self
-                .put_staged_bytes(
-                    session,
-                    Bytes::from(staged_object.bytes.clone()),
-                    staged_object
-                        .etag
-                        .clone()
-                        .map(BlobWritePrecondition::IfMatch),
-                )
-                .await?;
-            staged_object.etag = written.etag;
-        } else if staged_len < expected {
-            return Err(StorageError::backend(format!(
-                "Azure staged upload blob is shorter than committed metadata: expected {expected} bytes, got {staged_len}"
-            )));
-        }
-        ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
-        staged_object.bytes.extend_from_slice(&bytes);
-        self.put_staged_bytes(
-            session,
-            Bytes::from(staged_object.bytes),
-            staged_object.etag.map(BlobWritePrecondition::IfMatch),
-        )
-        .await?;
-        stored.public.next_offset = Some(new_offset);
-        self.write_session(session, &mut stored).await?;
-        Ok(stored.public)
-    }
-
-    async fn complete_legacy(
-        &self,
-        session: &UploadSessionId,
-        mut stored: StoredUploadSession,
-        provided_checksum: Option<ObjectChecksum>,
-    ) -> StorageResult<ObjectRef> {
-        let trusted = stored.public.next_offset.unwrap_or(0);
-        let staged = self.reconcile_staged_bytes(session, trusted).await?;
-        let actual = staged.len() as u64;
-        if let Some(expected) = stored.public.size {
-            if actual != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {actual}"
-                )));
-            }
-        }
-        ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
-        let checksum =
-            validate_complete_checksum(&stored.checksum_policy, &staged, provided_checksum)?;
-        let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-        if stored.public.status == UploadSessionStatus::Open
-            || stored.public.next_offset != Some(actual)
-            || stored.completion_object_key.as_deref() != Some(object_key.as_str())
-        {
-            stored.public.status = UploadSessionStatus::Completing;
-            stored.public.next_offset = Some(actual);
-            stored.completion_object_key = Some(object_key.clone());
-            self.write_session(session, &mut stored).await?;
-        }
-        let staged = Bytes::from(staged);
-        let written = match self
-            .put_completed_object(&object_key, staged, stored.public.content_type.as_deref())
-            .await
-        {
-            Ok(written) => written,
-            Err(err) => {
-                return Err(self
-                    .rollback_completion_after_error(session, &mut stored, err)
-                    .await);
-            }
-        };
-        let object = self.object_ref(&stored, actual, written, checksum);
-        stored.public.status = UploadSessionStatus::Complete;
-        stored.public.next_offset = Some(actual);
-        stored.object = Some(object.clone());
-        stored.cleanup_pending = true;
-        self.write_session(session, &mut stored).await?;
-        self.cleanup_staged_bytes(session, &mut stored).await?;
-        Ok(object)
-    }
 }
 
 impl StorageBackend for AzureBlobStorageBackend {
@@ -1574,7 +1233,6 @@ impl StorageBackend for AzureBlobStorageBackend {
                 request_metadata: request.metadata,
                 object: None,
                 completion_object_key: None,
-                cleanup_pending: false,
                 native: NativeUploadState::Block(Default::default()),
                 meta_etag: None,
             };
@@ -1596,16 +1254,8 @@ impl StorageBackend for AzureBlobStorageBackend {
             let _guard = lock.lock().await;
             let stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
-            // Native block sessions keep an authoritative offset in the metadata;
-            // only the legacy staged-object path reconciles against storage.
-            if stored.public.status == UploadSessionStatus::Open && stored.native.block().is_none()
-            {
-                self.ensure_staged_not_shorter_than_metadata(
-                    &session,
-                    stored.public.next_offset.unwrap_or(0),
-                )
-                .await?;
-            }
+            // Native block sessions keep an authoritative offset in the session
+            // metadata, so no provider round-trip is needed to report progress.
             Ok(stored.public)
         })
     }
@@ -1626,10 +1276,6 @@ impl StorageBackend for AzureBlobStorageBackend {
             self.persist_expired_if_needed(&session, &mut stored)
                 .await?;
             let committed_offset = stored.public.next_offset.unwrap_or(0);
-            if stored.native.block().is_none() {
-                self.ensure_staged_not_shorter_than_metadata(&session, committed_offset)
-                    .await?;
-            }
             ensure_upload_length_can_be_set(
                 stored.max_bytes,
                 &stored.public,
@@ -1663,11 +1309,7 @@ impl StorageBackend for AzureBlobStorageBackend {
                     "Azure backend currently supports sequential proxy uploads only",
                 ));
             }
-            if stored.native.block().is_some() {
-                self.append_block(&session, stored, offset, bytes).await
-            } else {
-                self.append_legacy(&session, stored, offset, bytes).await
-            }
+            self.append_block(&session, stored, offset, bytes).await
         })
     }
 
@@ -1793,8 +1435,6 @@ impl StorageBackend for AzureBlobStorageBackend {
             ensure_owner(&ctx.actor, &stored.owner)?;
             if let Some(object) = &stored.object {
                 let object = object.clone();
-                self.cleanup_staged_bytes_best_effort(&request.session, &mut stored)
-                    .await;
                 self.part_concurrency.forget(&request.session);
                 return Ok(object);
             }
@@ -1802,16 +1442,11 @@ impl StorageBackend for AzureBlobStorageBackend {
                 .await?;
             ensure_completable(&stored.public)?;
             let session = request.session.clone();
-            let result = if stored.native.block().is_some() {
-                if stored.public.strategy == UploadStrategy::Multipart {
-                    self.complete_block_by_number(&session, stored, request.checksum)
-                        .await
-                } else {
-                    self.complete_block(&session, stored, request.checksum)
-                        .await
-                }
+            let result = if stored.public.strategy == UploadStrategy::Multipart {
+                self.complete_block_by_number(&session, stored, request.checksum)
+                    .await
             } else {
-                self.complete_legacy(&session, stored, request.checksum)
+                self.complete_block(&session, stored, request.checksum)
                     .await
             };
             // Drop the concurrency pool only on success; a failed attempt leaves
@@ -1862,15 +1497,12 @@ impl StorageBackend for AzureBlobStorageBackend {
                 }
             }
             let meta_key = self.layout.session_meta_key(&session);
-            let bytes_key = self.layout.session_bytes_key(&session);
-            let bytes_deleted = self.delete_object_if_exists(&bytes_key).await;
             let meta_deleted = match read_session {
                 AbortSessionRead::Known(_) | AbortSessionRead::Corrupt => {
                     self.delete_object_if_exists(&meta_key).await
                 }
                 AbortSessionRead::Missing => Ok(()),
             };
-            bytes_deleted?;
             meta_deleted?;
             self.part_concurrency.forget(&session);
             Ok(())

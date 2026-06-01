@@ -57,10 +57,6 @@ impl S3KeyLayout {
     pub(crate) fn session_meta_key(&self, session: &UploadSessionId) -> String {
         format!("{}/{}/session.json", self.internal_prefix, session.as_str())
     }
-
-    pub(crate) fn session_bytes_key(&self, session: &UploadSessionId) -> String {
-        format!("{}/{}/bytes.tmp", self.internal_prefix, session.as_str())
-    }
 }
 
 fn normalize_object_prefix(prefix: String) -> StorageResult<Option<String>> {
@@ -109,10 +105,6 @@ mod tests {
         assert_eq!(
             layout.session_meta_key(&session),
             "tenant-a/__pocopine/storage/sessions/session-1/session.json"
-        );
-        assert_eq!(
-            layout.session_bytes_key(&session),
-            "tenant-a/__pocopine/storage/sessions/session-1/bytes.tmp"
         );
     }
 

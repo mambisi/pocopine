@@ -79,10 +79,6 @@ impl GcsKeyLayout {
         format!("{}/{}/session.json", self.internal_prefix, session.as_str())
     }
 
-    pub(crate) fn session_bytes_key(&self, session: &UploadSessionId) -> String {
-        format!("{}/{}/bytes.tmp", self.internal_prefix, session.as_str())
-    }
-
     /// Key for one native-compose component object.
     pub(crate) fn session_component_key(&self, session: &UploadSessionId, index: u32) -> String {
         format!(
@@ -139,10 +135,6 @@ mod tests {
         assert_eq!(
             layout.session_meta_key(&session),
             "tenant-a/__pocopine/storage/sessions/session-1/session.json"
-        );
-        assert_eq!(
-            layout.session_bytes_key(&session),
-            "tenant-a/__pocopine/storage/sessions/session-1/bytes.tmp"
         );
         assert_eq!(layout.bucket_resource(), "projects/_/buckets/bucket");
     }

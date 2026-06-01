@@ -17,11 +17,7 @@ pub(crate) struct StoredUploadSession {
     pub(crate) object: Option<ObjectRef>,
     #[serde(default)]
     pub(crate) completion_object_key: Option<String>,
-    #[serde(default)]
-    pub(crate) cleanup_pending: bool,
-    /// Transfer mechanism. Sessions written before native block-blob support
-    /// omit this field and deserialize as [`NativeUploadState::LegacyProxy`], so
-    /// in-flight uploads from an older build keep the staged-object rewrite path.
+    /// Transfer mechanism backing this session.
     #[serde(default)]
     pub(crate) native: NativeUploadState,
     #[serde(skip)]
@@ -29,16 +25,22 @@ pub(crate) struct StoredUploadSession {
 }
 
 /// Backend transfer mechanism for an upload session.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+///
+/// Modeled as an enum so additional transfer modes (e.g. signed direct-to-
+/// provider uploads) can be added without changing the session schema.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NativeUploadState {
-    /// Legacy staged-object rewrite (download → extend → re-upload per append).
-    #[default]
-    LegacyProxy,
     /// Native block blob: sub-block `PATCH` chunks are coalesced into a bounded
     /// tail and flushed as blocks (`Put Block`); completion assembles them with
     /// `Put Block List`. No bytes are re-written.
     Block(AzureBlockState),
+}
+
+impl Default for NativeUploadState {
+    fn default() -> Self {
+        NativeUploadState::Block(AzureBlockState::default())
+    }
 }
 
 /// Block-blob bookkeeping for one session. Block ids are derived from the index
@@ -65,14 +67,12 @@ impl NativeUploadState {
     pub(crate) fn block(&self) -> Option<&AzureBlockState> {
         match self {
             NativeUploadState::Block(state) => Some(state),
-            NativeUploadState::LegacyProxy => None,
         }
     }
 
     pub(crate) fn block_mut(&mut self) -> Option<&mut AzureBlockState> {
         match self {
             NativeUploadState::Block(state) => Some(state),
-            NativeUploadState::LegacyProxy => None,
         }
     }
 }
@@ -87,25 +87,11 @@ pub(crate) struct AzureObjectAttrs {
 pub(crate) struct AzureObjectBytes {
     pub(crate) bytes: Vec<u8>,
     pub(crate) etag: Option<String>,
-    pub(crate) version_id: Option<String>,
-    pub(crate) truncated: bool,
-}
-
-impl AzureObjectBytes {
-    pub(crate) fn empty() -> Self {
-        Self {
-            bytes: Vec::new(),
-            etag: None,
-            version_id: None,
-            truncated: false,
-        }
-    }
 }
 
 pub(crate) struct AzureObjectMetadata {
     pub(crate) size: Option<u64>,
     pub(crate) etag: Option<String>,
-    pub(crate) version_id: Option<String>,
 }
 
 pub(crate) struct AzureObjectWrite {
@@ -175,7 +161,6 @@ mod tests {
             request_metadata: BTreeMap::new(),
             object: None,
             completion_object_key: None,
-            cleanup_pending: false,
             native: NativeUploadState::default(),
             meta_etag: None,
         };
@@ -184,8 +169,6 @@ mod tests {
         let decoded = decode_session_object(AzureObjectBytes {
             bytes,
             etag: Some("\"etag-1\"".to_string()),
-            version_id: Some("version-1".to_string()),
-            truncated: false,
         })
         .unwrap();
 
