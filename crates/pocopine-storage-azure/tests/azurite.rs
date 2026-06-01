@@ -12,10 +12,7 @@ use std::time::Duration;
 
 use azure_core::http::{NoFormat, RequestContent, Url};
 use azure_storage_blob::BlobContainerClient;
-use base64::Engine;
 use bytes::Bytes;
-use hmac::{Hmac, Mac};
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use pocopine_storage::{
     ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum,
     PrincipalRef, SafeObjectKey, StorageActor, StorageBackend, StorageContext, StorageError,
@@ -23,7 +20,6 @@ use pocopine_storage::{
     UploadStrategy,
 };
 use pocopine_storage_azure::AzureBlobStorageBackend;
-use sha2::Sha256;
 use testcontainers::core::{wait::HttpWaitStrategy, ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -166,16 +162,15 @@ fn service_sas_query(container: &str) -> String {
 }
 
 fn encode_query_value(value: &str) -> String {
-    utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
+    // SAS query values use the strict NON_ALPHANUMERIC set (the base64
+    // signature contains `+`, `/`, `=` which must all be escaped).
+    pocopine_codec::percent_encode_set(value, pocopine_codec::NON_ALPHANUMERIC)
 }
 
 fn hmac_sha256_base64(string_to_sign: &str) -> String {
-    let key = base64::engine::general_purpose::STANDARD
-        .decode(AZURITE_KEY)
-        .expect("decode Azurite account key");
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key).expect("create HMAC");
-    mac.update(string_to_sign.as_bytes());
-    base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+    let key = pocopine_codec::base64_decode(AZURITE_KEY).expect("decode Azurite account key");
+    let mac = pocopine_crypto::hmac_sha256(&key, string_to_sign.as_bytes());
+    pocopine_codec::base64_encode(&mac)
 }
 
 fn session_object_key(

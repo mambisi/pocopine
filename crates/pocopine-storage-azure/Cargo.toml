@@ -22,11 +22,10 @@ tracing = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-base64 = "0.22"
-hmac = "0.12"
-percent-encoding = "2"
-pocopine-crypto = { workspace = true }
+# Shared-Key / SAS request signing in tests/azurite.rs goes through
+# pocopine-crypto (HMAC-SHA256) + pocopine-codec (base64 + percent-encode),
+# which are already normal dependencies — no raw hmac/sha2/base64/
+# percent-encoding here.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-sha2 = "0.10"
 testcontainers = { version = "0.23", features = ["http_wait"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
