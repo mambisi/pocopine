@@ -14,30 +14,28 @@ pub(crate) struct StoredUploadSession {
     pub(crate) checksum_policy: ChecksumPolicy,
     pub(crate) request_metadata: BTreeMap<String, String>,
     pub(crate) object: Option<ObjectRef>,
-    #[serde(default)]
-    pub(crate) cleanup_pending: bool,
     /// Transfer mechanism backing this session.
-    ///
-    /// Sessions written before native multipart support omit this field and
-    /// deserialize as [`NativeUploadState::LegacyProxy`], so in-flight uploads
-    /// created by an older build keep working on the staged-object rewrite path.
     #[serde(default)]
     pub(crate) native: NativeUploadState,
 }
 
 /// Backend transfer mechanism for an upload session.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+///
+/// Modeled as an enum so additional transfer modes (e.g. signed direct-to-
+/// provider uploads) can be added without changing the session schema.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NativeUploadState {
-    /// Legacy staged-object rewrite (download → extend → re-upload per append).
-    ///
-    /// Only used for sessions created before native multipart was introduced.
-    #[default]
-    LegacyProxy,
     /// S3 native multipart upload: each flushed block is an `UploadPart`, the
     /// final object is assembled by `CompleteMultipartUpload`, and only an
-    /// unflushed tail (smaller than one part) is ever staged in memory/`bytes.tmp`.
+    /// unflushed tail (smaller than one part) is ever buffered in memory.
     Multipart(S3MultipartState),
+}
+
+impl Default for NativeUploadState {
+    fn default() -> Self {
+        NativeUploadState::Multipart(S3MultipartState::default())
+    }
 }
 
 /// Provider-side multipart bookkeeping for one session.
@@ -84,14 +82,12 @@ impl NativeUploadState {
     pub(crate) fn multipart_mut(&mut self) -> Option<&mut S3MultipartState> {
         match self {
             NativeUploadState::Multipart(state) => Some(state),
-            NativeUploadState::LegacyProxy => None,
         }
     }
 
     pub(crate) fn multipart(&self) -> Option<&S3MultipartState> {
         match self {
             NativeUploadState::Multipart(state) => Some(state),
-            NativeUploadState::LegacyProxy => None,
         }
     }
 }

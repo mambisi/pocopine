@@ -126,9 +126,7 @@ fn upload_body_to_byte_stream(body: UploadBody) -> ByteStream {
 /// to a provider `UploadPart`. The final object is assembled by
 /// `CompleteMultipartUpload`. Peak memory is one part regardless of object size,
 /// and every byte is sent to S3 exactly once (no per-`PATCH` full-object
-/// rewrite). Sessions created by an older build deserialize as
-/// [`NativeUploadState::LegacyProxy`] and keep using the staged-object rewrite
-/// path until they drain.
+/// rewrite).
 #[derive(Clone)]
 pub struct S3StorageBackend {
     name: &'static str,
@@ -248,51 +246,6 @@ impl S3StorageBackend {
         let bytes = serde_json::to_vec_pretty(stored)
             .map_err(|err| StorageError::backend(format!("encode s3 upload metadata: {err}")))?;
         self.put_object_bytes(&key, bytes, Some("application/json"))
-            .await
-            .map(|_| ())
-    }
-
-    async fn get_staged_bytes(&self, session: &UploadSessionId) -> StorageResult<Vec<u8>> {
-        let key = self.layout.session_bytes_key(session);
-        match self.get_object_bytes(&key).await {
-            Ok(bytes) => Ok(bytes),
-            Err(StorageError::UnknownUploadSession { .. }) => Ok(Vec::new()),
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn reconcile_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        trusted_len: u64,
-    ) -> StorageResult<Vec<u8>> {
-        let staged = self.get_staged_bytes(session).await?;
-        let actual = staged.len() as u64;
-        if actual > trusted_len {
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.s3_staged_bytes_ahead",
-                session = %session,
-                actual,
-                trusted = trusted_len,
-            );
-            return Ok(staged);
-        }
-        if actual == trusted_len {
-            return Ok(staged);
-        }
-        Err(StorageError::backend(format!(
-            "S3 staged upload object is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
-        )))
-    }
-
-    async fn put_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        bytes: Vec<u8>,
-    ) -> StorageResult<()> {
-        let key = self.layout.session_bytes_key(session);
-        self.put_object_bytes(&key, bytes, Some("application/octet-stream"))
             .await
             .map(|_| ())
     }
@@ -904,20 +857,6 @@ impl S3StorageBackend {
         Ok(())
     }
 
-    async fn cleanup_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        stored: &mut StoredUploadSession,
-    ) -> StorageResult<()> {
-        if !stored.cleanup_pending {
-            return Ok(());
-        }
-        self.delete_object(&self.layout.session_bytes_key(session))
-            .await?;
-        stored.cleanup_pending = false;
-        self.write_session(session, stored).await
-    }
-
     // --- native multipart upload flow ----------------------------------------
 
     async fn append_multipart(
@@ -1342,83 +1281,6 @@ impl S3StorageBackend {
         }
         Ok(())
     }
-
-    // --- legacy staged-object rewrite flow (pre-multipart sessions) -----------
-
-    async fn append_legacy(
-        &self,
-        session: &UploadSessionId,
-        mut stored: StoredUploadSession,
-        offset: u64,
-        bytes: Bytes,
-    ) -> StorageResult<UploadSession> {
-        let mut expected = stored.public.next_offset.unwrap_or(0);
-        let mut staged = self.reconcile_staged_bytes(session, expected).await?;
-        let staged_len = staged.len() as u64;
-        if staged_len > expected {
-            expected = staged_len;
-            stored.public.next_offset = Some(staged_len);
-            self.write_session(session, &stored).await?;
-        }
-        if expected != offset {
-            tracing::debug!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.offset_mismatch",
-                session = %session,
-                expected,
-                provided = offset,
-            );
-            return Err(StorageError::offset_mismatch(expected, offset));
-        }
-        let new_offset = checked_new_offset(offset, bytes.len())?;
-        ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
-        staged.extend_from_slice(&bytes);
-        self.put_staged_bytes(session, staged).await?;
-        stored.public.next_offset = Some(new_offset);
-        self.write_session(session, &stored).await?;
-        Ok(stored.public)
-    }
-
-    async fn complete_legacy(
-        &self,
-        session: &UploadSessionId,
-        mut stored: StoredUploadSession,
-        request: CompleteUpload,
-    ) -> StorageResult<ObjectRef> {
-        let trusted = stored.public.next_offset.unwrap_or(0);
-        let staged = self.reconcile_staged_bytes(session, trusted).await?;
-        let actual = staged.len() as u64;
-        if let Some(expected) = stored.public.size {
-            if actual != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {actual}"
-                )));
-            }
-        }
-        ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
-        let checksum =
-            validate_complete_checksum(&stored.checksum_policy, &staged, request.checksum)?;
-        let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-        if stored.public.status == UploadSessionStatus::Open
-            || stored.public.next_offset != Some(actual)
-        {
-            stored.public.status = UploadSessionStatus::Completing;
-            stored.public.next_offset = Some(actual);
-            self.write_session(session, &stored).await?;
-        }
-        let staged = Bytes::from(staged);
-        let etag = self
-            .put_completed_object(&object_key, staged, stored.public.content_type.as_deref())
-            .await?;
-        let object = self.object_ref(&stored, actual, etag, checksum);
-        stored.public.status = UploadSessionStatus::Complete;
-        stored.public.next_offset = Some(actual);
-        stored.object = Some(object.clone());
-        stored.cleanup_pending = true;
-        self.write_session(session, &stored).await?;
-        self.cleanup_staged_bytes(session, &mut stored).await?;
-        Ok(object)
-    }
 }
 
 impl StorageBackend for S3StorageBackend {
@@ -1510,7 +1372,6 @@ impl StorageBackend for S3StorageBackend {
                 checksum_policy: request.policy.checksum,
                 request_metadata: request.metadata,
                 object: None,
-                cleanup_pending: false,
                 native: NativeUploadState::Multipart(S3MultipartState {
                     upload_id: None,
                     parts: Vec::new(),
@@ -1534,28 +1395,16 @@ impl StorageBackend for S3StorageBackend {
             let lock = self.session_locks.lock(&session);
             let _cleanup = UploadSessionLockCleanup::new(&self.session_locks, &session);
             let _guard = lock.lock().await;
-            let mut stored = self.read_session(&session).await?;
+            let stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
-            // Only legacy sessions reconcile here. `inspect_upload` is also on the
-            // internal routing/authorization path (`backend_for_session` calls it
-            // for every part `PUT`), so it must stay cheap: a by-number multipart
-            // session deliberately does NOT `ListParts` here, which would turn an
-            // n-part upload into O(n²) provider calls serialized on the session
-            // lock. Per-part resume listing is surfaced separately via
-            // `list_committed_parts` rather than on this hot path.
-            if stored.public.status == UploadSessionStatus::Open
-                && stored.native.multipart().is_none()
-            {
-                // Legacy sessions recover their offset from the staged object.
-                let staged = self
-                    .reconcile_staged_bytes(&session, stored.public.next_offset.unwrap_or(0))
-                    .await?;
-                let staged_len = staged.len() as u64;
-                if stored.public.next_offset != Some(staged_len) {
-                    stored.public.next_offset = Some(staged_len);
-                    self.write_session(&session, &stored).await?;
-                }
-            }
+            // `inspect_upload` is on the internal routing/authorization path
+            // (`backend_for_session` calls it for every part `PUT`), so it must
+            // stay cheap: a by-number multipart session deliberately does NOT
+            // `ListParts` here, which would turn an n-part upload into O(n²)
+            // provider calls serialized on the session lock. The sequential
+            // tail offset is tracked in the session metadata, so no provider
+            // round-trip is needed; per-part resume listing is surfaced
+            // separately via `list_committed_parts`.
             Ok(stored.public)
         })
     }
@@ -1574,13 +1423,10 @@ impl StorageBackend for S3StorageBackend {
             let mut stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
             self.persist_expired_if_needed(&session, &stored).await?;
-            let committed_offset = match stored.native.multipart() {
-                Some(state) => state.committed_len(),
-                None => self
-                    .reconcile_staged_bytes(&session, stored.public.next_offset.unwrap_or(0))
-                    .await?
-                    .len() as u64,
-            };
+            let committed_offset = stored
+                .native
+                .multipart()
+                .map_or(0, |state| state.committed_len());
             ensure_upload_length_can_be_set(
                 stored.max_bytes,
                 &stored.public,
@@ -1614,11 +1460,7 @@ impl StorageBackend for S3StorageBackend {
                     "S3 backend currently supports sequential proxy uploads only",
                 ));
             }
-            if stored.native.multipart().is_some() {
-                self.append_multipart(&session, stored, offset, bytes).await
-            } else {
-                self.append_legacy(&session, stored, offset, bytes).await
-            }
+            self.append_multipart(&session, stored, offset, bytes).await
         })
     }
 
@@ -1737,12 +1579,10 @@ impl StorageBackend for S3StorageBackend {
             let lock = self.session_locks.lock(&request.session);
             let _cleanup = UploadSessionLockCleanup::new(&self.session_locks, &request.session);
             let _guard = lock.lock().await;
-            let mut stored = self.read_session(&request.session).await?;
+            let stored = self.read_session(&request.session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
             if let Some(object) = &stored.object {
                 let object = object.clone();
-                self.cleanup_staged_bytes(&request.session, &mut stored)
-                    .await?;
                 // Terminal: the object is finalized, so the part-concurrency pool
                 // can go (in-flight permit holders keep their own Arc clone).
                 self.part_concurrency.forget(&request.session);
@@ -1752,16 +1592,12 @@ impl StorageBackend for S3StorageBackend {
                 .await?;
             ensure_completable(&stored.public)?;
             let session = request.session.clone();
-            let result = if stored.native.multipart().is_some() {
-                if stored.public.strategy == UploadStrategy::Multipart {
-                    self.complete_multipart_by_number_flow(&session, stored, request)
-                        .await
-                } else {
-                    self.complete_multipart_upload_flow(&session, stored, request)
-                        .await
-                }
+            let result = if stored.public.strategy == UploadStrategy::Multipart {
+                self.complete_multipart_by_number_flow(&session, stored, request)
+                    .await
             } else {
-                self.complete_legacy(&session, stored, request).await
+                self.complete_multipart_upload_flow(&session, stored, request)
+                    .await
             };
             // Only drop the concurrency pool once completion actually succeeds. A
             // failed attempt (missing length, part gap, undersized/in-flight part)
@@ -1810,8 +1646,6 @@ impl StorageBackend for S3StorageBackend {
                 Err(err) => return Err(err),
             };
             let meta_key = self.layout.session_meta_key(&session);
-            let bytes_key = self.layout.session_bytes_key(&session);
-            self.delete_object(&bytes_key).await?;
             if known_session {
                 self.delete_object(&meta_key).await?;
             }

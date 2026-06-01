@@ -17,11 +17,7 @@ pub(crate) struct StoredUploadSession {
     pub(crate) object: Option<ObjectRef>,
     #[serde(default)]
     pub(crate) completion_object_key: Option<String>,
-    #[serde(default)]
-    pub(crate) cleanup_pending: bool,
-    /// Transfer mechanism. Sessions written before native compose support omit
-    /// this field and deserialize as [`NativeUploadState::LegacyProxy`], so
-    /// in-flight uploads from an older build keep the staged-object rewrite path.
+    /// Transfer mechanism backing this session.
     #[serde(default)]
     pub(crate) native: NativeUploadState,
     #[serde(skip)]
@@ -29,17 +25,23 @@ pub(crate) struct StoredUploadSession {
 }
 
 /// Backend transfer mechanism for an upload session.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+///
+/// Modeled as an enum so additional transfer modes (e.g. signed direct-to-
+/// provider uploads) can be added without changing the session schema.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NativeUploadState {
-    /// Legacy staged-object rewrite (download → extend → re-upload per append).
-    #[default]
-    LegacyProxy,
     /// Native compose: each flushed block is written once as a component object
     /// and the final object is assembled with a single `ComposeObject`. Only an
     /// unflushed tail (smaller than one component) is buffered, inline in this
     /// metadata so the tail and bookkeeping persist in one atomic write.
     Compose(GcsComposeState),
+}
+
+impl Default for NativeUploadState {
+    fn default() -> Self {
+        NativeUploadState::Compose(GcsComposeState::default())
+    }
 }
 
 /// Compose bookkeeping for one session.
@@ -74,14 +76,12 @@ impl NativeUploadState {
     pub(crate) fn compose(&self) -> Option<&GcsComposeState> {
         match self {
             NativeUploadState::Compose(state) => Some(state),
-            NativeUploadState::LegacyProxy => None,
         }
     }
 
     pub(crate) fn compose_mut(&mut self) -> Option<&mut GcsComposeState> {
         match self {
             NativeUploadState::Compose(state) => Some(state),
-            NativeUploadState::LegacyProxy => None,
         }
     }
 }
@@ -102,18 +102,6 @@ pub(crate) struct GcsObjectBytes {
     pub(crate) generation: Option<String>,
     pub(crate) generation_match: Option<i64>,
     pub(crate) truncated: bool,
-}
-
-impl GcsObjectBytes {
-    pub(crate) fn empty() -> Self {
-        Self {
-            bytes: Vec::new(),
-            etag: None,
-            generation: None,
-            generation_match: None,
-            truncated: false,
-        }
-    }
 }
 
 pub(crate) struct GcsObjectMetadata {

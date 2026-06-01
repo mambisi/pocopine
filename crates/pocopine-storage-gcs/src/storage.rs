@@ -25,7 +25,7 @@ use crate::state::{
     GcsObjectMetadata, GcsObjectWrite, NativeUploadState, StoredUploadSession,
 };
 use crate::util::{
-    bytes_match_at, ensure_completable, gcs_error, is_gcs_not_found, is_gcs_precondition_failed,
+    ensure_completable, gcs_error, is_gcs_not_found, is_gcs_precondition_failed,
     map_session_write_error, non_empty, positive_generation, usize_from_u64,
 };
 
@@ -166,8 +166,9 @@ impl GcsStorageBackend {
 
     /// Override the maximum size accepted by this sequential proxy backend.
     ///
-    /// The default is 64 MiB because each append rewrites the staged object and
-    /// completion loads the staged bytes before the final GCS write.
+    /// The default is 64 MiB: appends flush full-size component objects (each
+    /// written once) and completion assembles them with a single `ComposeObject`,
+    /// so the cap bounds component count and the inline tail buffered per session.
     pub fn with_max_proxy_upload_bytes(mut self, max_bytes: u64) -> StorageResult<Self> {
         if max_bytes == 0 {
             return Err(StorageError::policy_rejected(
@@ -292,72 +293,6 @@ impl GcsStorageBackend {
             .map_err(map_session_write_error)?;
         stored.meta_generation = written.generation_match;
         Ok(())
-    }
-
-    async fn get_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        read_limit: u64,
-    ) -> StorageResult<GcsObjectBytes> {
-        let key = self.layout.session_bytes_key(session);
-        match self.get_object_bytes_with_limit(&key, read_limit).await {
-            Ok(bytes) => Ok(bytes),
-            Err(StorageError::UnknownUploadSession { .. }) => Ok(GcsObjectBytes::empty()),
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn reconcile_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        trusted_len: u64,
-    ) -> StorageResult<Vec<u8>> {
-        let read_limit = trusted_len
-            .checked_add(1)
-            .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-        let mut staged = self.get_staged_bytes(session, read_limit).await?;
-        let actual = staged.bytes.len() as u64;
-        if actual > trusted_len {
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.gcs_staged_bytes_truncated",
-                session = %session,
-                actual,
-                trusted = trusted_len,
-            );
-            staged.bytes.truncate(usize_from_u64(trusted_len)?);
-            self.put_staged_bytes(
-                session,
-                Bytes::from(staged.bytes.clone()),
-                staged.generation_match,
-            )
-            .await?;
-            return Ok(staged.bytes);
-        }
-        if actual == trusted_len {
-            return Ok(staged.bytes);
-        }
-        Err(StorageError::backend(format!(
-            "GCS staged upload object is shorter than committed metadata: expected {trusted_len} bytes, got {actual}"
-        )))
-    }
-
-    async fn put_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        bytes: Bytes,
-        if_generation_match: Option<i64>,
-    ) -> StorageResult<()> {
-        let key = self.layout.session_bytes_key(session);
-        self.put_object_bytes(
-            &key,
-            bytes,
-            Some("application/octet-stream"),
-            if_generation_match,
-        )
-        .await
-        .map_err(map_session_write_error)
-        .map(|_| ())
     }
 
     async fn get_object_bytes_with_limit(
@@ -761,20 +696,6 @@ impl GcsStorageBackend {
             self.write_session(session, stored).await?;
         }
         Ok(())
-    }
-
-    async fn cleanup_staged_bytes(
-        &self,
-        session: &UploadSessionId,
-        stored: &mut StoredUploadSession,
-    ) -> StorageResult<()> {
-        if !stored.cleanup_pending {
-            return Ok(());
-        }
-        self.delete_object_if_exists(&self.layout.session_bytes_key(session))
-            .await?;
-        stored.cleanup_pending = false;
-        self.write_session(session, stored).await
     }
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
@@ -1373,131 +1294,6 @@ impl GcsStorageBackend {
         self.delete_component_chain(session).await;
         Ok(object)
     }
-
-    // --- legacy staged-object rewrite flow (pre-compose sessions) -------------
-
-    async fn append_legacy(
-        &self,
-        session: &UploadSessionId,
-        mut stored: StoredUploadSession,
-        offset: u64,
-        bytes: Bytes,
-    ) -> StorageResult<UploadSession> {
-        let expected = stored.public.next_offset.unwrap_or(0);
-        let new_offset = checked_new_offset(offset, bytes.len())?;
-        let read_limit = expected
-            .max(new_offset)
-            .checked_add(1)
-            .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-        let mut staged_object = self.get_staged_bytes(session, read_limit).await?;
-        let staged_len = staged_object.bytes.len() as u64;
-        if expected != offset {
-            if new_offset == expected
-                && bytes_match_at(&staged_object.bytes, offset, bytes.as_ref())?
-            {
-                return Ok(stored.public);
-            }
-            tracing::debug!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.offset_mismatch",
-                session = %session,
-                expected,
-                provided = offset,
-            );
-            return Err(StorageError::offset_mismatch(expected, offset));
-        }
-        if staged_len > expected {
-            if staged_len == new_offset
-                && bytes_match_at(&staged_object.bytes, expected, bytes.as_ref())?
-            {
-                stored.public.next_offset = Some(new_offset);
-                self.write_session(session, &mut stored).await?;
-                return Ok(stored.public);
-            }
-            tracing::warn!(
-                target: "pocopine.log",
-                event_name = "pocopine.storage.gcs_staged_bytes_truncated",
-                session = %session,
-                actual = staged_len,
-                trusted = expected,
-            );
-            staged_object.bytes.truncate(usize_from_u64(expected)?);
-            self.put_staged_bytes(
-                session,
-                Bytes::from(staged_object.bytes.clone()),
-                staged_object.generation_match,
-            )
-            .await?;
-        } else if staged_len < expected {
-            return Err(StorageError::backend(format!(
-                "GCS staged upload object is shorter than committed metadata: expected {expected} bytes, got {staged_len}"
-            )));
-        }
-        ensure_size_limit(stored.max_bytes, stored.public.size, new_offset)?;
-        staged_object.bytes.extend_from_slice(&bytes);
-        self.put_staged_bytes(
-            session,
-            Bytes::from(staged_object.bytes),
-            staged_object.generation_match,
-        )
-        .await?;
-        stored.public.next_offset = Some(new_offset);
-        self.write_session(session, &mut stored).await?;
-        Ok(stored.public)
-    }
-
-    async fn complete_legacy(
-        &self,
-        session: &UploadSessionId,
-        mut stored: StoredUploadSession,
-        provided_checksum: Option<ObjectChecksum>,
-    ) -> StorageResult<ObjectRef> {
-        let trusted = stored.public.next_offset.unwrap_or(0);
-        let staged = self.reconcile_staged_bytes(session, trusted).await?;
-        let actual = staged.len() as u64;
-        if let Some(expected) = stored.public.size {
-            if actual != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {actual}"
-                )));
-            }
-        }
-        ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
-        let checksum =
-            validate_complete_checksum(&stored.checksum_policy, &staged, provided_checksum)?;
-        let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-        if stored.public.status == UploadSessionStatus::Open
-            || stored.public.next_offset != Some(actual)
-            || stored.completion_object_key.as_deref() != Some(object_key.as_str())
-        {
-            stored.public.status = UploadSessionStatus::Completing;
-            stored.public.next_offset = Some(actual);
-            stored.completion_object_key = Some(object_key.clone());
-            self.write_session(session, &mut stored).await?;
-        }
-        let staged = Bytes::from(staged);
-        let written = match self
-            .put_completed_object(&object_key, staged, stored.public.content_type.as_deref())
-            .await
-        {
-            Ok(written) => written,
-            Err(err @ StorageError::PolicyRejected { .. }) => {
-                stored.public.status = UploadSessionStatus::Open;
-                stored.completion_object_key = None;
-                let _ = self.write_session(session, &mut stored).await;
-                return Err(err);
-            }
-            Err(err) => return Err(err),
-        };
-        let object = self.object_ref(&stored, actual, written, checksum);
-        stored.public.status = UploadSessionStatus::Complete;
-        stored.public.next_offset = Some(actual);
-        stored.object = Some(object.clone());
-        stored.cleanup_pending = true;
-        self.write_session(session, &mut stored).await?;
-        self.cleanup_staged_bytes(session, &mut stored).await?;
-        Ok(object)
-    }
 }
 
 impl StorageBackend for GcsStorageBackend {
@@ -1586,12 +1382,11 @@ impl StorageBackend for GcsStorageBackend {
                 request_metadata: request.metadata,
                 object: None,
                 completion_object_key: None,
-                cleanup_pending: false,
                 native: NativeUploadState::Compose(Default::default()),
                 meta_generation: None,
             };
-            // Native sessions buffer their tail inline in the metadata, so no
-            // separate staged `bytes.tmp` object is created up front.
+            // The session buffers its tail inline in the metadata, so no
+            // separate staging object is created up front.
             self.create_session(&id, &mut stored).await?;
             Ok(session)
         })
@@ -1606,22 +1401,11 @@ impl StorageBackend for GcsStorageBackend {
             let lock = self.session_locks.lock(&session);
             let _cleanup = UploadSessionLockCleanup::new(&self.session_locks, &session);
             let _guard = lock.lock().await;
-            let mut stored = self.read_session(&session).await?;
+            let stored = self.read_session(&session).await?;
             ensure_owner(&ctx.actor, &stored.owner)?;
-            // Native sessions keep an authoritative offset in the metadata; only
-            // the legacy staged-object path needs reconciliation against storage.
-            if stored.public.status == UploadSessionStatus::Open
-                && stored.native.compose().is_none()
-            {
-                let staged = self
-                    .reconcile_staged_bytes(&session, stored.public.next_offset.unwrap_or(0))
-                    .await?;
-                let staged_len = staged.len() as u64;
-                if stored.public.next_offset != Some(staged_len) {
-                    stored.public.next_offset = Some(staged_len);
-                    self.write_session(&session, &mut stored).await?;
-                }
-            }
+            // Native compose sessions keep an authoritative offset in the
+            // metadata (flushed components plus the inline tail), so `inspect`
+            // needs no provider round-trip to reconcile.
             Ok(stored.public)
         })
     }
@@ -1641,15 +1425,10 @@ impl StorageBackend for GcsStorageBackend {
             ensure_owner(&ctx.actor, &stored.owner)?;
             self.persist_expired_if_needed(&session, &mut stored)
                 .await?;
-            let committed_offset = match stored.native.compose() {
-                Some(state) => state.committed_len(),
-                None => {
-                    let staged = self
-                        .reconcile_staged_bytes(&session, stored.public.next_offset.unwrap_or(0))
-                        .await?;
-                    staged.len() as u64
-                }
-            };
+            let committed_offset = stored
+                .native
+                .compose()
+                .map_or(0, |state| state.committed_len());
             ensure_upload_length_can_be_set(
                 stored.max_bytes,
                 &stored.public,
@@ -1683,11 +1462,7 @@ impl StorageBackend for GcsStorageBackend {
                     "GCS backend currently supports sequential proxy uploads only",
                 ));
             }
-            if stored.native.compose().is_some() {
-                self.append_compose(&session, stored, offset, bytes).await
-            } else {
-                self.append_legacy(&session, stored, offset, bytes).await
-            }
+            self.append_compose(&session, stored, offset, bytes).await
         })
     }
 
@@ -1812,8 +1587,6 @@ impl StorageBackend for GcsStorageBackend {
             ensure_owner(&ctx.actor, &stored.owner)?;
             if let Some(object) = &stored.object {
                 let object = object.clone();
-                self.cleanup_staged_bytes(&request.session, &mut stored)
-                    .await?;
                 self.part_concurrency.forget(&request.session);
                 return Ok(object);
             }
@@ -1821,16 +1594,11 @@ impl StorageBackend for GcsStorageBackend {
                 .await?;
             ensure_completable(&stored.public)?;
             let session = request.session.clone();
-            let result = if stored.native.compose().is_some() {
-                if stored.public.strategy == UploadStrategy::Multipart {
-                    self.complete_compose_by_number(&session, stored, request.checksum)
-                        .await
-                } else {
-                    self.complete_compose(&session, stored, request.checksum)
-                        .await
-                }
+            let result = if stored.public.strategy == UploadStrategy::Multipart {
+                self.complete_compose_by_number(&session, stored, request.checksum)
+                    .await
             } else {
-                self.complete_legacy(&session, stored, request.checksum)
+                self.complete_compose(&session, stored, request.checksum)
                     .await
             };
             // Drop the concurrency pool only once completion succeeds; a failed
@@ -1894,15 +1662,12 @@ impl StorageBackend for GcsStorageBackend {
                 }
             }
             let meta_key = self.layout.session_meta_key(&session);
-            let bytes_key = self.layout.session_bytes_key(&session);
-            let bytes_deleted = self.delete_object_if_exists(&bytes_key).await;
             let meta_deleted = match read_session {
                 AbortSessionRead::Known(_) | AbortSessionRead::Corrupt => {
                     self.delete_object_if_exists(&meta_key).await
                 }
                 AbortSessionRead::Missing => Ok(()),
             };
-            bytes_deleted?;
             meta_deleted?;
             self.part_concurrency.forget(&session);
             Ok(())

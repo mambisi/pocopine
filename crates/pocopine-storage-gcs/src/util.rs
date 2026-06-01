@@ -31,16 +31,6 @@ pub(crate) fn usize_from_u64(value: u64) -> StorageResult<usize> {
         .map_err(|_| StorageError::policy_rejected("upload byte count exceeds host capacity"))
 }
 
-pub(crate) fn bytes_match_at(staged: &[u8], offset: u64, bytes: &[u8]) -> StorageResult<bool> {
-    let start = usize_from_u64(offset)?;
-    let end = start
-        .checked_add(bytes.len())
-        .ok_or_else(|| StorageError::policy_rejected("upload byte offset overflowed"))?;
-    Ok(staged
-        .get(start..end)
-        .is_some_and(|existing| existing == bytes))
-}
-
 pub(crate) fn map_session_write_error(error: StorageError) -> StorageError {
     match error {
         StorageError::PolicyRejected { .. } => {
