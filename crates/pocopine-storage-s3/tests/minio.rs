@@ -264,6 +264,74 @@ async fn sequential_upload_resumes_and_completes_against_minio() -> StorageResul
     Ok(())
 }
 
+/// Sequential pause/resume ACROSS a flushed-part boundary. Unlike the tail-only
+/// resume above (chunks below the 5 MiB floor never flush a part), this sends
+/// enough to flush a real `UploadPart`, then resumes on a fresh backend instance
+/// that holds only durable state — the committed part on S3 plus the sub-part
+/// tail buffered inline in the session metadata. This is the resume case the O(n)
+/// coalescing path hinges on, and the one the removed legacy staged-rewrite path
+/// used to cover differently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_upload_resumes_across_part_flush_against_minio() -> StorageResult<()> {
+    const MIB: usize = 1024 * 1024;
+    let client = minio_client().await;
+    let bucket = create_bucket(&client, "resume-part").await;
+    let backend = S3StorageBackend::new(client.clone(), bucket.clone())?;
+
+    // 7 MiB total. The first 6 MiB append crosses the 5 MiB floor: one 5 MiB part
+    // flushes to S3, a 1 MiB remainder stays buffered as the tail.
+    let first = 6 * MIB;
+    let total = 7 * MIB;
+    let session = initiate_large(&backend, Some(total as u64)).await?;
+    let updated = backend
+        .append_upload_bytes(&ctx(), session.id.clone(), 0, pattern_bytes(0, first))
+        .await?;
+    assert_eq!(updated.next_offset, Some(first as u64));
+
+    // Pause: a fresh backend instance keeps only what is durable — the committed
+    // part on S3 and the tail in the session metadata. The flushed 5 MiB part
+    // survived the restart and is visible from S3.
+    let reloaded = S3StorageBackend::new(client.clone(), bucket.clone())?;
+    let committed = reloaded
+        .list_committed_parts(&ctx(), session.id.clone())
+        .await?;
+    assert_eq!(committed.len(), 1, "one part flushed before the pause");
+    assert_eq!(committed[0].size, (5 * MIB) as u64);
+
+    // Inspect recovers the offset (5 MiB flushed + 1 MiB tail) with no provider
+    // payload re-read, then we resume from it and finish.
+    let inspected = reloaded.inspect_upload(&ctx(), session.id.clone()).await?;
+    assert_eq!(inspected.next_offset, Some(first as u64));
+    let updated = reloaded
+        .append_upload_bytes(
+            &ctx(),
+            session.id.clone(),
+            first as u64,
+            pattern_bytes(first, total - first),
+        )
+        .await?;
+    assert_eq!(updated.next_offset, Some(total as u64));
+
+    let object = reloaded
+        .complete_upload(
+            &ctx(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.size, total as u64);
+    // Byte-exact across both the 5 MiB part boundary and the 6 MiB resume seam:
+    // proves the committed part, the recovered tail, and the final remainder
+    // assembled in order (never rewritten as one staged object).
+    assert_eq!(
+        object_bytes(&client, &bucket, "files/large.bin").await,
+        pattern_bytes(0, total).to_vec()
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_offset_returns_typed_mismatch_against_minio() -> StorageResult<()> {
     let client = minio_client().await;
