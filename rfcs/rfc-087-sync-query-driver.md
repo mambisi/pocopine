@@ -1,6 +1,6 @@
 # RFC 087 — `pocopine-sync-query` driver lifecycle
 
-* **Status:** Draft
+* **Status:** Implemented
 * **Author:** sync framework working group
 * **Tracking branch:** `wip/sync-query-driver`
 * **Supersedes:** the "background-task drivers" line item in `pocopine-sync-query` README's roadmap

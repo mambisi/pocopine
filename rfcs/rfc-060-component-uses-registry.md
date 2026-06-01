@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted (core registry landed: uses/extends parsing, hard-error validation, phf table, transitive registration; strict-mode opt-in, dev-mode warnings, cluster hookup pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-28 |
 | **Supersedes** | — (extends RFC 049; resolves RFC 051's deferral) |

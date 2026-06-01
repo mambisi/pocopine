@@ -1,6 +1,6 @@
 # RFC 089 - SPA router parity and nested outlets
 
-* **Status:** Draft
+* **Status:** Accepted (Phases 0–1 typed target/location/navigation API + reserved-namespace enforcement landed; compiled `pp-route` links + nested outlets, Phases 2–5 pending)
 * **Author:** pocopine team
 * **Created:** 2026-05-28
 * **Tracking branch:** `review/router-api-docs`

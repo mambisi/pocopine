@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (revised 2026-04-29 — `pp-html` removed from delete bucket) |
+| **Status** | Accepted (Tier 1 deletes landed: pp-cloak/pp-init/pp-data forbidden; §4.2 convergences, migrate-063 codemod, pp-outlet promotion & pine-icons rewrite pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-28 |
 | **Supersedes** | — (deletes/converges directives from RFC 001, RFC 007, RFC 011) |

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (open questions resolved 2026-04-28) |
+| **Status** | Implemented (Phases 1–4: bridge deletion, `[pp-app]` mount, `mount_subtree`/`SubtreeHandle`, phf registry; optional dev MutationObserver pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-28 |
 | **Supersedes** | RFC 058 Phase 6.5 adopted-DOM bridge (deletion target) |

@@ -1,6 +1,6 @@
 # RFC 090 — Merge `pocopine-sync-crud` into `pocopine-sync-query`
 
-* **Status:** Draft
+* **Status:** Implemented
 * **Author:** sync framework working group
 * **Tracking branch:** `feat/rfc-090-merge-crud-into-query`
 * **Supersedes:** the dual-crate boundary documented in

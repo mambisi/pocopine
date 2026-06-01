@@ -1,6 +1,6 @@
 # RFC 086 — `pocopine-sync-query`
 
-* **Status:** Draft
+* **Status:** Implemented
 * **Author:** sync framework working group
 * **Tracking branch:** `wip/sync-query` (TBD)
 * **Supersedes:** the shape-subscription portion of RFC 085 for production multi-tenant use; coexists with `pocopine-sync-crud`.

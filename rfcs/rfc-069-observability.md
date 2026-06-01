@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-05-03 |
 | **Related** | [`rfc-037-js-bridge.md`](./rfc-037-js-bridge.md), [`rfc-059-server-side-rendering-and-hydration.md`](./rfc-059-server-side-rendering-and-hydration.md), [`rfc-066-server-function-auth.md`](./rfc-066-server-function-auth.md), [`rfc-067-redis-background-jobs.md`](./rfc-067-redis-background-jobs.md) |

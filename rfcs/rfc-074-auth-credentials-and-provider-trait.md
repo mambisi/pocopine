@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted (PR-1 Provider trait + PR-2 credentials data plane — signup/login/logout — landed; PR-3 email/reset flows & PR-4 example adoption pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-04 |
 | **Related** | [`rfc-066-server-function-auth.md`](./rfc-066-server-function-auth.md), [`rfc-069-observability.md`](./rfc-069-observability.md), [`rfc-070-jwt-auth-verification.md`](./rfc-070-jwt-auth-verification.md) |

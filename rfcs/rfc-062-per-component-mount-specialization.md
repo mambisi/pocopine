@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted (per-component mount specialization + const node-path walk + no-fallback-lane landed; hydrate emit + §4.4 size gate pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-28 |
 | **Supersedes** | — |

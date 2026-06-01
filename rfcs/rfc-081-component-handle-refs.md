@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (Phase 1 landed) |
+| **Status** | Implemented (Phases 1–3 landed; Phase 4 `Parent<T>` symmetry optional) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-19 |
 | **Related** | [`rfc-002-app-stores-servers.md`](./rfc-002-app-stores-servers.md), [`rfc-060-component-uses-registry.md`](./rfc-060-component-uses-registry.md), [`rfc-079-pine-richtext-tables-extension.md`](./rfc-079-pine-richtext-tables-extension.md) |
