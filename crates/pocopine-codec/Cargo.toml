@@ -4,11 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared encoding/codec utilities (base64, serde adapters) for the pocopine workspace."
+description = "Shared encoding/codec utilities (base64, percent-encoding, serde adapters) for the pocopine workspace."
 
 [dependencies]
-# `no_std` + `alloc`: base64 and serde both build without `std`.
+# `no_std` + `alloc`: base64, percent-encoding, and serde all build without
+# `std`.
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+percent-encoding = { version = "2", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 
 [dev-dependencies]
