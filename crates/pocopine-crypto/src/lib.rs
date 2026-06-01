@@ -21,12 +21,16 @@
 //! let _hex = hasher.finalize_hex();
 //! ```
 //!
+//! Raw digests are available too — [`sha256`] for a one-shot `[u8; 32]`,
+//! [`Hasher::finalize_bytes`] for the streaming case — alongside keyed
+//! [`hmac_sha256`] for request-signing paths (e.g. Azure Shared-Key / SAS).
+//!
 //! The underlying crates are re-exported (`pocopine_crypto::{sha2, md5,
-//! crc32c}`) for the rare case a caller needs a primitive this API does not
-//! wrap yet — but prefer adding to this API over reaching for them.
+//! crc32c, hmac}`) for the rare case a caller needs a primitive this API does
+//! not wrap yet — but prefer adding to this API over reaching for them.
 //!
 //! This crate is `no_std` (it only needs `alloc` for the returned hex
-//! `String`).
+//! `String` / `Vec`).
 
 #![cfg_attr(not(test), no_std)]
 
@@ -34,11 +38,14 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 pub use crc32c;
+pub use hmac;
 pub use md5;
 pub use sha2;
 
+use hmac::{Hmac, Mac};
 use md5::Md5;
 use sha2::{Digest, Sha256};
 
@@ -108,6 +115,22 @@ impl Hasher {
             Inner::Crc32c(crc) => format!("{crc:08x}"),
         }
     }
+
+    /// Finish hashing and return the raw digest bytes.
+    ///
+    /// Length is algorithm-dependent: 32 bytes for SHA-256, 16 for MD5,
+    /// 4 (big-endian) for CRC32C — the same bytes [`finalize_hex`] renders.
+    /// Use this when a downstream API wants the raw digest (e.g. a
+    /// `[u8; 32]` token-hash key) instead of a hex string.
+    ///
+    /// [`finalize_hex`]: Hasher::finalize_hex
+    pub fn finalize_bytes(self) -> Vec<u8> {
+        match self.inner {
+            Inner::Sha256(h) => h.finalize().to_vec(),
+            Inner::Md5(h) => h.finalize().to_vec(),
+            Inner::Crc32c(crc) => crc.to_be_bytes().to_vec(),
+        }
+    }
 }
 
 /// One-shot lowercase-hex digest of `bytes` under `algorithm`.
@@ -132,6 +155,29 @@ pub fn md5_hex(bytes: &[u8]) -> String {
 /// One-shot CRC32C hex digest.
 pub fn crc32c_hex(bytes: &[u8]) -> String {
     digest_hex(Algorithm::Crc32c, bytes)
+}
+
+/// One-shot raw SHA-256 digest (`[u8; 32]`).
+///
+/// The raw-bytes counterpart to [`sha256_hex`]. Use this where a downstream
+/// API keys on the raw digest — e.g. a `token_hash: [u8; 32]` store.
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&Sha256::digest(bytes));
+    out
+}
+
+/// Keyed HMAC-SHA256 of `msg` under `key`, as a raw 32-byte MAC.
+///
+/// HMAC accepts a key of any length, so this never fails. Base64- or
+/// hex-encode the result for the wire (e.g. an Azure Shared-Key
+/// `Authorization` header or a SAS `sig` query value).
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC accepts keys of any length");
+    mac.update(msg);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&mac.finalize().into_bytes());
+    out
 }
 
 fn hex(bytes: impl AsRef<[u8]>) -> String {
@@ -183,5 +229,37 @@ mod tests {
             hasher.update(b"world");
             assert_eq!(hasher.finalize_hex(), digest_hex(alg, b"hello world"));
         }
+    }
+
+    #[test]
+    fn raw_sha256_matches_hex() {
+        assert_eq!(sha256(b"").len(), 32);
+        assert_eq!(hex(sha256(b"")), sha256_hex(b""));
+        assert_eq!(hex(sha256(b"abc")), sha256_hex(b"abc"));
+    }
+
+    #[test]
+    fn finalize_bytes_matches_finalize_hex() {
+        for alg in [Algorithm::Sha256, Algorithm::Md5, Algorithm::Crc32c] {
+            let mut hasher = Hasher::new(alg);
+            hasher.update(b"hello world");
+            assert_eq!(
+                hex(hasher.finalize_bytes()),
+                digest_hex(alg, b"hello world")
+            );
+        }
+        // CRC32C raw digest is the 4 big-endian bytes of the checksum.
+        let mut hasher = Hasher::new(Algorithm::Crc32c);
+        hasher.update(b"123456789");
+        assert_eq!(hasher.finalize_bytes(), [0xe3, 0x06, 0x92, 0x83]);
+    }
+
+    #[test]
+    fn hmac_sha256_rfc4231_test_case_2() {
+        // RFC 4231 §4.3: key "Jefe", data "what do ya want for nothing?".
+        assert_eq!(
+            hex(hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
     }
 }
