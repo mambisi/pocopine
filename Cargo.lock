@@ -5732,6 +5732,7 @@ name = "pocopine-codec"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "percent-encoding",
  "serde",
  "serde_json",
 ]
@@ -5760,6 +5761,7 @@ name = "pocopine-crypto"
 version = "0.1.0"
 dependencies = [
  "crc32c",
+ "hmac 0.12.1",
  "md-5 0.10.6",
  "sha2 0.10.9",
 ]
@@ -5949,7 +5951,6 @@ dependencies = [
 name = "pocopine-storage"
 version = "0.1.0"
 dependencies = [
- "base64",
  "bytes",
  "criterion",
  "futures-core",
@@ -5957,6 +5958,7 @@ dependencies = [
  "http-body-util",
  "js-sys",
  "pocopine",
+ "pocopine-codec",
  "pocopine-core",
  "pocopine-crypto",
  "pocopine-server",

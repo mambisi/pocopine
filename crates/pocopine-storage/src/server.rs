@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::TryStreamExt;
@@ -1718,8 +1717,7 @@ fn tus_metadata(headers: &HeaderMap) -> StorageResult<TusMetadata> {
                     format!("duplicate key {key}"),
                 ));
             }
-            let bytes = BASE64_STANDARD
-                .decode(encoded)
+            let bytes = pocopine_codec::base64_decode(encoded)
                 .map_err(|_| StorageError::invalid_value("Upload-Metadata", pair.to_string()))?;
             let value = String::from_utf8(bytes)
                 .map_err(|_| StorageError::invalid_value("Upload-Metadata", pair.to_string()))?;
@@ -1755,7 +1753,7 @@ fn set_tus_upload_metadata_header(
             values.push(format!(
                 "{} {}",
                 key,
-                BASE64_STANDARD.encode(value.as_bytes())
+                pocopine_codec::base64_encode(value.as_bytes())
             ));
         }
     }
