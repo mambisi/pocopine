@@ -126,7 +126,7 @@ pub struct DeployArgs {
     #[command(subcommand)]
     pub cmd: Option<DeployCmd>,
 
-    /// Target host adapter (e.g. `fly`).
+    /// Target host adapter (e.g. `railway`).
     #[arg(long)]
     pub target: Option<String>,
 
@@ -185,7 +185,7 @@ pub enum ConfigCmd {
     /// `~/.pocopine/config.toml`. If `<value>` is omitted, read it
     /// from stdin (so secrets aren't visible in shell history).
     Set {
-        /// Host name (`render`, `railway`, `fly`, …).
+        /// Host name (`render`, `railway`, …).
         host: String,
         /// Field name (`owner_id`, `workspace_id`, `region`, …).
         field: String,
@@ -213,7 +213,7 @@ pub struct StatusArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct AuthArgs {
-    /// Host name (e.g. `fly`). Required unless `--list` or `--revoke`.
+    /// Host name (e.g. `railway`). Required unless `--list` or `--revoke`.
     pub host: Option<String>,
 
     /// List configured tokens and their source (file/env).

@@ -43,8 +43,7 @@ fn install_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
 
     let default = "warn,pocopine=info,pocopine_cli=info,pocopine_deploy=info,\
-                   pocopine_deploy_fly=info,pocopine_deploy_railway=info,\
-                   pocopine_deploy_render=info";
+                   pocopine_deploy_railway=info,pocopine_deploy_render=info";
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     let _ = fmt()
         .with_env_filter(filter)

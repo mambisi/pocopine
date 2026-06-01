@@ -68,9 +68,9 @@ pub enum DeployState {
 pub struct ProcessStatus {
     /// Logical process name from the spec (e.g. `"web"`, `"worker"`).
     pub process: String,
-    /// Host-side service identifier (e.g. Render `srv-XXXX`, Fly app
-    /// name, Railway service id). `None` if the host has no record of
-    /// this process yet.
+    /// Host-side service identifier (e.g. Render `srv-XXXX`, Railway
+    /// service id). `None` if the host has no record of this process
+    /// yet.
     pub host_service_id: Option<String>,
     /// Most recent deploy id, if any.
     pub deploy_id: Option<String>,

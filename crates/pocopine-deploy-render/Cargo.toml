@@ -15,7 +15,7 @@ serde_json = { workspace = true }
 toml = "0.8"
 tracing = { workspace = true }
 
-# Render's API is host-only. Matches pocopine-deploy-fly's gate so
+# Render's API is host-only. Matches pocopine-deploy-railway's gate so
 # `cargo check --target wasm32-unknown-unknown` stays clean.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-webpki-roots"] }

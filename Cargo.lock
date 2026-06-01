@@ -5701,7 +5701,6 @@ dependencies = [
  "notify",
  "pocopine-client-codegen",
  "pocopine-deploy",
- "pocopine-deploy-fly",
  "pocopine-deploy-railway",
  "pocopine-deploy-render",
  "pocopine-stylekit",
@@ -5781,23 +5780,6 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "pocopine-deploy-fly"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "pocopine-deploy",
- "reqwest 0.12.28",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "wiremock",
 ]
 
 [[package]]

@@ -7,8 +7,8 @@
 //! Layout:
 //!
 //! ```toml
-//! [fly]
-//! token = "fly_..."
+//! [render]
+//! token = "rnd_..."
 //!
 //! [railway]
 //! token = "rw_..."
@@ -71,7 +71,6 @@ pub fn list() -> Result<Vec<(String, Source)>> {
 pub const KNOWN_HOSTS: &[&str] = &[
     "cf-pages",
     "cloud-run",
-    "fly",
     "gh-pages",
     "netlify",
     "railway",
@@ -295,7 +294,7 @@ mod tests {
 
     #[test]
     fn env_var_name_uppercases_and_normalises() {
-        assert_eq!(env_var_name("fly"), "POCOPINE_FLY_TOKEN");
+        assert_eq!(env_var_name("render"), "POCOPINE_RENDER_TOKEN");
         assert_eq!(env_var_name("Cloud-Run"), "POCOPINE_CLOUD_RUN_TOKEN");
         assert_eq!(env_var_name("cf-pages"), "POCOPINE_CF_PAGES_TOKEN");
     }
@@ -305,7 +304,7 @@ mod tests {
         // If this fails because a new adapter exists, add its canonical
         // host name to KNOWN_HOSTS. The list is what `list_inner` probes
         // for env-only tokens.
-        assert!(KNOWN_HOSTS.contains(&"fly"));
+        assert!(KNOWN_HOSTS.contains(&"render"));
         assert!(KNOWN_HOSTS.contains(&"cf-pages"));
         let mut sorted: Vec<&str> = KNOWN_HOSTS.to_vec();
         sorted.sort();
@@ -315,8 +314,8 @@ mod tests {
     #[test]
     fn store_then_load_roundtrip_with_no_env() {
         let home = temp_home();
-        store_inner(home.path(), "fly", "tok-1").unwrap();
-        let got = load_inner(home.path(), "fly", no_env).unwrap();
+        store_inner(home.path(), "render", "tok-1").unwrap();
+        let got = load_inner(home.path(), "render", no_env).unwrap();
         assert_eq!(got, "tok-1");
     }
 
@@ -326,7 +325,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let home = temp_home();
-            store_inner(home.path(), "fly", "tok-1").unwrap();
+            store_inner(home.path(), "render", "tok-1").unwrap();
             let mode = fs::metadata(home.path().join(REL_PATH))
                 .unwrap()
                 .permissions()
@@ -339,9 +338,12 @@ mod tests {
     #[test]
     fn store_preserves_other_hosts() {
         let home = temp_home();
-        store_inner(home.path(), "fly", "fly-tok").unwrap();
+        store_inner(home.path(), "render", "render-tok").unwrap();
         store_inner(home.path(), "railway", "rw-tok").unwrap();
-        assert_eq!(load_inner(home.path(), "fly", no_env).unwrap(), "fly-tok");
+        assert_eq!(
+            load_inner(home.path(), "render", no_env).unwrap(),
+            "render-tok"
+        );
         assert_eq!(
             load_inner(home.path(), "railway", no_env).unwrap(),
             "rw-tok"
@@ -351,12 +353,12 @@ mod tests {
     #[test]
     fn env_overrides_file() {
         let home = temp_home();
-        store_inner(home.path(), "fly", "file-tok").unwrap();
+        store_inner(home.path(), "render", "file-tok").unwrap();
 
         // Cell so the closure can capture without lifetime gymnastics.
         let env = RefCell::new(true);
-        let got = load_inner(home.path(), "fly", |k| {
-            if *env.borrow() && k == "POCOPINE_FLY_TOKEN" {
+        let got = load_inner(home.path(), "render", |k| {
+            if *env.borrow() && k == "POCOPINE_RENDER_TOKEN" {
                 Some("env-tok".into())
             } else {
                 None
@@ -369,58 +371,61 @@ mod tests {
     #[test]
     fn missing_host_with_no_file_errors_with_hint() {
         let home = temp_home();
-        let err = load_inner(home.path(), "fly", no_env)
+        let err = load_inner(home.path(), "render", no_env)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("POCOPINE_FLY_TOKEN"));
-        assert!(err.contains("pocopine deploy auth fly"));
+        assert!(err.contains("POCOPINE_RENDER_TOKEN"));
+        assert!(err.contains("pocopine deploy auth render"));
     }
 
     #[test]
     fn missing_host_with_file_present_errors_with_hint() {
         let home = temp_home();
         store_inner(home.path(), "railway", "rw").unwrap();
-        let err = load_inner(home.path(), "fly", no_env)
+        let err = load_inner(home.path(), "render", no_env)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("no `[fly]` entry"));
-        assert!(err.contains("pocopine deploy auth fly"));
+        assert!(err.contains("no `[render]` entry"));
+        assert!(err.contains("pocopine deploy auth render"));
     }
 
     #[test]
     fn revoke_removes_only_named_host_and_is_idempotent() {
         let home = temp_home();
-        store_inner(home.path(), "fly", "f").unwrap();
+        store_inner(home.path(), "render", "f").unwrap();
         store_inner(home.path(), "railway", "r").unwrap();
-        revoke_inner(home.path(), "fly").unwrap();
-        assert!(load_inner(home.path(), "fly", no_env).is_err());
+        revoke_inner(home.path(), "render").unwrap();
+        assert!(load_inner(home.path(), "render", no_env).is_err());
         assert_eq!(load_inner(home.path(), "railway", no_env).unwrap(), "r");
         // Second revoke on the same host: no-op.
-        revoke_inner(home.path(), "fly").unwrap();
+        revoke_inner(home.path(), "render").unwrap();
     }
 
     #[test]
     fn revoke_with_no_file_is_ok() {
         let home = temp_home();
-        revoke_inner(home.path(), "fly").unwrap();
+        revoke_inner(home.path(), "render").unwrap();
     }
 
     #[test]
     fn list_merges_file_and_env() {
         let home = temp_home();
-        store_inner(home.path(), "fly", "ft").unwrap();
+        store_inner(home.path(), "netlify", "ft").unwrap();
         store_inner(home.path(), "railway", "rt").unwrap();
 
         let env = std::collections::BTreeMap::from([
-            ("POCOPINE_FLY_TOKEN".to_owned(), "env-fly".to_owned()),
+            (
+                "POCOPINE_NETLIFY_TOKEN".to_owned(),
+                "env-netlify".to_owned(),
+            ),
             ("POCOPINE_RENDER_TOKEN".to_owned(), "env-render".to_owned()),
             ("UNRELATED".to_owned(), "noise".to_owned()),
         ]);
         let entries = list_inner(home.path(), |k| env.get(k).cloned()).unwrap();
 
-        // Alphabetical by host: fly, railway, render.
+        // Alphabetical by host: netlify, railway, render.
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0], ("fly".into(), Source::EnvOverridesFile));
+        assert_eq!(entries[0], ("netlify".into(), Source::EnvOverridesFile));
         assert_eq!(entries[1], ("railway".into(), Source::File));
         assert_eq!(entries[2], ("render".into(), Source::Env));
     }
@@ -429,7 +434,7 @@ mod tests {
     fn list_ignores_empty_env_values() {
         let home = temp_home();
         let env =
-            std::collections::BTreeMap::from([("POCOPINE_FLY_TOKEN".to_owned(), "".to_owned())]);
+            std::collections::BTreeMap::from([("POCOPINE_RENDER_TOKEN".to_owned(), "".to_owned())]);
         let entries = list_inner(home.path(), |k| env.get(k).cloned()).unwrap();
         assert!(entries.is_empty());
     }

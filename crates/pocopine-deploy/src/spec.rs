@@ -29,7 +29,7 @@ pub struct DeploySpec {
     pub processes: BTreeMap<String, ProcessSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
     pub env: BTreeMap<String, EnvValue>,
-    /// Host-namespaced overrides (`[deploy.fly]`, …). Read via
+    /// Host-namespaced overrides (`[deploy.render]`, …). Read via
     /// [`DeploySpec::host_override`].
     pub host_overrides: BTreeMap<String, toml::Value>,
 
@@ -362,7 +362,7 @@ fn apply_env_overrides(spec: &mut DeploySpec, env_block: toml::Value) -> anyhow:
                 );
             }
             // Anything else is a host-override block (e.g.
-            // [deploy.production.fly]) that replaces the base
+            // [deploy.production.render]) that replaces the base
             // [deploy.<host>] block for the duration of this deploy.
             _ => {
                 spec.host_overrides.insert(key, value);
@@ -390,7 +390,7 @@ mod tests {
             [env]
             LOG_LEVEL = "info"
 
-            [fly]
+            [render]
             org = "personal"
             regions = ["fra"]
 
@@ -399,7 +399,7 @@ mod tests {
             LOG_LEVEL = "warn"
             SENTRY_DSN = "https://prod-only"
 
-            [production.fly]
+            [production.render]
             org = "myorg"
             regions = ["fra", "iad"]
         }
@@ -459,12 +459,15 @@ mod tests {
             Some("production".into()),
         )
         .unwrap();
-        // [deploy.production.fly] replaces [deploy.fly].
-        let fly_block = spec
+        // [deploy.production.render] replaces [deploy.render].
+        let render_block = spec
             .host_overrides
-            .get("fly")
-            .expect("fly block present after env merge");
-        assert_eq!(fly_block.get("org").and_then(|v| v.as_str()), Some("myorg"),);
+            .get("render")
+            .expect("render block present after env merge");
+        assert_eq!(
+            render_block.get("org").and_then(|v| v.as_str()),
+            Some("myorg"),
+        );
         // The `production` key itself is consumed (removed) so adapters
         // looking up `host_overrides["production"]` get None.
         assert!(!spec.host_overrides.contains_key("production"));

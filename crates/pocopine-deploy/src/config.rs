@@ -7,7 +7,7 @@
 //!
 //! Adapters resolve every host-override field via [`resolve`]
 //! (env → project Cargo.toml → this file). The three-tier order is
-//! the same pattern as `cargo` / `gh` / `kubectl` / `flyctl`: a
+//! the same pattern as `cargo` / `gh` / `kubectl`: a
 //! per-user file is the default, the project's metadata overrides
 //! it for that crate, and env vars override both for CI.
 //!

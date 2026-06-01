@@ -311,16 +311,10 @@ mod tests {
 
     #[test]
     fn login_args_use_password_stdin_never_password_flag() {
-        let args = login_args("registry.fly.io", "x");
+        let args = login_args("ghcr.io", "x");
         assert_eq!(
             args,
-            vec![
-                "login",
-                "registry.fly.io",
-                "--username",
-                "x",
-                "--password-stdin"
-            ]
+            vec!["login", "ghcr.io", "--username", "x", "--password-stdin"]
         );
         // The password itself is not in argv. Regression: never use
         // `--password` since it leaks the secret to `ps aux`.
@@ -329,8 +323,8 @@ mod tests {
 
     #[test]
     fn push_args_is_minimal() {
-        let args = push_args("registry.fly.io/myapp:sha");
-        assert_eq!(args, vec!["push", "registry.fly.io/myapp:sha"]);
+        let args = push_args("ghcr.io/myapp:sha");
+        assert_eq!(args, vec!["push", "ghcr.io/myapp:sha"]);
     }
 
     #[test]
