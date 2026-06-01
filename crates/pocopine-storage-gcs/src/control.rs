@@ -5,7 +5,7 @@ use google_cloud_gax::options::RequestOptionsBuilder;
 use google_cloud_storage::client::StorageControl;
 use google_cloud_storage::model::compose_object_request::SourceObject;
 use google_cloud_storage::model::Object;
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use pocopine_codec::{percent_encode_set, AsciiSet, CONTROLS};
 use pocopine_storage::{StorageError, StorageResult};
 
 use crate::layout::GcsKeyLayout;
@@ -385,7 +385,7 @@ async fn delete_object_with_google_control(
 }
 
 fn encode_uri_component(value: &str) -> String {
-    utf8_percent_encode(value, GCS_JSON_PATH_ENCODE_SET).to_string()
+    percent_encode_set(value, GCS_JSON_PATH_ENCODE_SET)
 }
 
 #[cfg(test)]

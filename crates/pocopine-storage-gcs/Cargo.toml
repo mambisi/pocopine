@@ -10,7 +10,6 @@ description = "Google Cloud Storage backend adapter for pocopine-storage."
 bytes = "1"
 google-cloud-storage = "1"
 google-cloud-gax = "1"
-percent-encoding = "2"
 pocopine-codec = { workspace = true }
 pocopine-storage = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
