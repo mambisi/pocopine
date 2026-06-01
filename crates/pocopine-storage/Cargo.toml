@@ -15,8 +15,8 @@ description = "Storage protocol, browser client, and server plugin extension for
 test-utils = []
 
 [dependencies]
-base64 = "0.22"
 bytes = "1"
+pocopine-codec = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }

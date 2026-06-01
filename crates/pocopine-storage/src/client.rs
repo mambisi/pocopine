@@ -254,7 +254,6 @@ mod wasm {
     use std::pin::Pin;
     use std::rc::Rc;
 
-    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use futures_util::stream::{FuturesUnordered, StreamExt as _};
     use js_sys::Promise;
     use serde::de::DeserializeOwned;
@@ -1542,7 +1541,7 @@ mod wasm {
                 encoded.push(format!(
                     "{} {}",
                     key,
-                    BASE64_STANDARD.encode(value.as_bytes())
+                    pocopine_codec::base64_encode(value.as_bytes())
                 ));
             }
         }
@@ -1723,7 +1722,7 @@ mod wasm {
         format!(
             "{}/{}/uploads",
             endpoint.trim_end_matches('/'),
-            percent_encode_path_segment(scope)
+            pocopine_codec::percent_encode(scope)
         )
     }
 
@@ -1774,7 +1773,7 @@ mod wasm {
         format!(
             "{}/scopes/{}",
             endpoint.trim_end_matches('/'),
-            percent_encode_path_segment(scope)
+            pocopine_codec::percent_encode(scope)
         )
     }
 
@@ -1782,24 +1781,12 @@ mod wasm {
         format!(
             "{}/uploads/{}",
             endpoint.trim_end_matches('/'),
-            percent_encode_path_segment(session)
+            pocopine_codec::percent_encode(session)
         )
     }
 
     fn upload_complete_url(endpoint: &str, session: &str) -> String {
         format!("{}/complete", upload_url(endpoint, session))
-    }
-
-    fn percent_encode_path_segment(value: &str) -> String {
-        let mut encoded = String::new();
-        for byte in value.bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-                encoded.push(char::from(byte));
-            } else {
-                encoded.push_str(&format!("%{byte:02X}"));
-            }
-        }
-        encoded
     }
 
     fn empty_to_none(value: String) -> Option<String> {
