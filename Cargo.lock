@@ -5638,6 +5638,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "pocopine-auth",
+ "pocopine-codec",
  "pocopine-core",
  "serde",
  "serde_json",

@@ -339,32 +339,15 @@ fn build_return_to(ctx: &RouteRejectionContext<'_>) -> ReturnTo {
         if i > 0 {
             combined.push('&');
         }
-        percent_encode_into(&mut combined, k);
+        // Conservative RFC 3986 "unreserved"-set encoding: covers the
+        // x-www-form-urlencoded reserved chars (`&`, `=`, `+`, `?`, `#`, …)
+        // plus the rest of the URI reserved set, so a decoded `q=a&b`
+        // can't reconstruct as two params on the way back out.
+        pocopine_codec::percent_encode_into(&mut combined, k);
         combined.push('=');
-        percent_encode_into(&mut combined, v);
+        pocopine_codec::percent_encode_into(&mut combined, v);
     }
     ReturnTo::from_path(&combined)
-}
-
-/// Percent-encode `s` into `out` per RFC 3986 "unreserved" set
-/// (`A-Z` / `a-z` / `0-9` / `-` / `.` / `_` / `~`). Any other byte
-/// becomes `%XX`. Conservative on purpose: covers the
-/// `application/x-www-form-urlencoded` reserved characters (`&`,
-/// `=`, `+`, `?`, `#`, …) plus the rest of the URI reserved set.
-fn percent_encode_into(out: &mut String, s: &str) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0x0f) as usize] as char);
-            }
-        }
-    }
 }
 
 /// Adapt a [`Predicate`] into a [`RouteGuard`].
