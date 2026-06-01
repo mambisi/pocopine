@@ -20,8 +20,8 @@ tracing = { workspace = true }
 [build-dependencies]
 ureq = "2"
 
-# Railway's GraphQL API is host-only. Matches pocopine-deploy-fly /
-# pocopine-deploy-render so `cargo check --target wasm32-unknown-unknown`
+# Railway's GraphQL API is host-only. Matches pocopine-deploy-render
+# so `cargo check --target wasm32-unknown-unknown`
 # stays clean — the trait impl compiles on every target, only the HTTP
 # client lives behind this cfg. `graphql_client` derives the typed
 # client from the committed `schema.json` (compile-time query checks).

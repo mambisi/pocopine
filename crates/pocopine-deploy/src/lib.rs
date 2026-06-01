@@ -7,8 +7,8 @@
 //! - [`DeployAdapter`] — the trait every vendor crate implements (§5.2).
 //! - [`common`] — shared helpers (Dockerfile generation, `.dockerignore`).
 //!
-//! Vendor adapters live in their own crates (`pocopine-deploy-fly`,
-//! `pocopine-deploy-railway`, …) and depend on this one. Adapters talk
+//! Vendor adapters live in their own crates (`pocopine-deploy-railway`,
+//! `pocopine-deploy-render`, …) and depend on this one. Adapters talk
 //! to each host's API directly; no host CLIs are shelled out (RFC 080
 //! §2.3, §11 q7). Only `docker` is an acceptable external binary in
 //! the deploy path.

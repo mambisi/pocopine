@@ -7,8 +7,8 @@
 //!      but cargo metadata is what's available today)
 //!   2. infer `app_name` from `[package].name` and `git_sha` from
 //!      `git rev-parse HEAD`
-//!   3. resolve the adapter (`fly` is built-in; new vendors live in
-//!      their own crates)
+//!   3. resolve the adapter (`railway`/`render` are built-in; new
+//!      vendors live in their own crates)
 //!   4. run the pipeline: `detect_constraints` → `render_config` →
 //!      flush to disk → `build_artefact` → `deploy` → `post_deploy_hint`
 //!
@@ -92,7 +92,7 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
     let target = args
         .target
         .as_deref()
-        .context("--target required (e.g. `--target fly`)")?;
+        .context("--target required (e.g. `--target railway`)")?;
 
     let environment = if args.prod {
         Some("production".to_owned())
@@ -629,7 +629,7 @@ fn targets_for_project(args: &DeployArgs, project: &Path) -> Result<Vec<&'static
 
 /// Adapter names supported by the built-in [`resolve_adapter`]. Source
 /// of truth for `--target`-less status discovery.
-const KNOWN_TARGETS: &[&str] = &["fly", "railway", "render"];
+const KNOWN_TARGETS: &[&str] = &["railway", "render"];
 
 fn status_one_project(
     args: &DeployArgs,
@@ -717,16 +717,14 @@ fn flush_one(dest: &Path, content: &str) -> Result<()> {
 
 fn resolve_adapter(target: &str) -> Result<Box<dyn DeployAdapter>> {
     match target {
-        "fly" => Ok(Box::new(pocopine_deploy_fly::FlyAdapter)),
         "railway" => Ok(Box::new(pocopine_deploy_railway::RailwayAdapter)),
         "render" => Ok(Box::new(pocopine_deploy_render::RenderAdapter)),
-        other => bail!("unknown target `{other}`. Known: fly, railway, render."),
+        other => bail!("unknown target `{other}`. Known: railway, render."),
     }
 }
 
 fn dashboard_url_for(host: &str) -> &'static str {
     match host {
-        "fly" => "https://fly.io/user/personal_access_tokens",
         "railway" => "https://railway.com/account/tokens",
         "render" => "https://dashboard.render.com/u/settings#api-keys",
         _ => "<host dashboard>",
@@ -994,14 +992,13 @@ mod tests {
 
     #[test]
     fn dashboard_url_for_known_hosts() {
-        assert!(dashboard_url_for("fly").contains("fly.io"));
         assert!(dashboard_url_for("railway").contains("railway"));
+        assert!(dashboard_url_for("render").contains("render"));
         assert_eq!(dashboard_url_for("nope"), "<host dashboard>");
     }
 
     #[test]
     fn resolve_adapter_known_target() {
-        assert!(resolve_adapter("fly").is_ok());
         assert!(resolve_adapter("railway").is_ok());
         assert!(resolve_adapter("render").is_ok());
         assert!(resolve_adapter("nope").is_err());

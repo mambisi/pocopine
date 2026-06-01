@@ -1,6 +1,6 @@
 //! Container-registry resolution for adapters that don't own a registry.
 //!
-//! Fly owns `registry.fly.io`; Render and Railway don't, so their
+//! Render and Railway don't own a container registry, so their
 //! adapters must pick a registry to push the image to. Precedence
 //! (RFC 080 §11 q1):
 //!

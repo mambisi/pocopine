@@ -1,7 +1,7 @@
 //! Render.com deploy adapter for pocopine (RFC 080 §6).
 //!
-//! Render's deploy model is fundamentally different from Fly's: there
-//! are no Machines — instead you have **Services** (web / background
+//! Render's deploy model is service-oriented: there are no long-lived
+//! machines to manage — instead you have **Services** (web / background
 //! worker / cron / static) and Render handles per-service scaling
 //! internally. Our two-process spec (`web`, `worker`) maps cleanly:
 //!
@@ -59,9 +59,9 @@ struct RenderOverride {
 }
 
 /// Default wait timeout (seconds) for a Render deploy to reach `live`.
-/// Render builds + boots take longer than Fly machine starts because
-/// the platform pulls and runs the image on shared infrastructure;
-/// 10 minutes covers cold-pull and small services.
+/// Render builds + boots take time because the platform pulls and runs
+/// the image on shared infrastructure; 10 minutes covers cold-pull and
+/// small services.
 #[cfg(not(target_arch = "wasm32"))]
 const WAIT_LIVE_SECS: u64 = 600;
 
@@ -152,7 +152,7 @@ impl DeployAdapter for RenderAdapter {
             out.push(Constraint::Refuse(e.to_string()));
         }
 
-        // Backing-service URLs — same gate as Fly.
+        // Backing-service URLs — Render does not auto-provision them.
         if spec.requires_postgres() && !env_provides(spec, "DATABASE_URL") {
             out.push(Constraint::Refuse(
                 "postgres is required but no `DATABASE_URL` entry in [deploy.env]. Add a literal, `{ from = \"env\" }`, or `{ from = \"secret\" }` entry (Render Postgres URL or external)."
@@ -524,9 +524,9 @@ fn is_placeholder_owner_id(s: &str) -> bool {
     upper.starts_with("REPLACE_WITH") || upper == "<REPLACE_ME>" || upper == "TODO"
 }
 
-/// Render service names must match `[a-z0-9][a-z0-9_-]{0,62}`. Same
-/// rule we apply to Fly's machine names; we re-check here so the adapter
-/// rejects bad identifiers before any API call.
+/// Render service names must match `[a-z0-9][a-z0-9_-]{0,62}`. We
+/// re-check here so the adapter rejects bad identifiers before any API
+/// call.
 fn is_render_safe_service_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -605,8 +605,8 @@ fn load_render_token() -> Result<String> {
 }
 
 /// Resolve `[deploy.env]` into a `(key, value)` list ready to push to
-/// Render's env-vars API. Same shape as Fly's `resolve_env` + secret
-/// path collapsed into one map (Render's `env_vars` API encrypts
+/// Render's env-vars API, with the secret path collapsed into one map
+/// (Render's `env_vars` API encrypts
 /// values, so secrets and plain envs use the same endpoint — no
 /// separate `set_secrets` call needed).
 #[cfg(not(target_arch = "wasm32"))]

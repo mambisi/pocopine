@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted (contract + launcher + Fly/Railway/Render adapters landed; `--container` build container + static/Cloud Run adapters pending) |
+| **Status** | Accepted (contract + launcher + Railway/Render adapters landed; Fly.io adapter dropped from v1 — not supported; `--container` build container + static/Cloud Run adapters pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-17 |
 | **Related** | [RFC 002 — App / Stores / Servers](./rfc-002-app-stores-servers.md), [RFC 037 — JS bridge](./rfc-037-js-bridge.md), [RFC 067 — Background jobs](./rfc-067-redis-background-jobs.md), [RFC 073 — Yrs collaboration](./rfc-073-yrs-collaboration.md) |

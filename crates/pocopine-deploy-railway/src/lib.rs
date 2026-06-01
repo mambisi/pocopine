@@ -16,7 +16,7 @@
 //! Auth: API token via `pocopine deploy auth railway`, or the
 //! `RAILWAY_API_TOKEN` / `RAILWAY_TOKEN` env vars.
 //!
-//! Backing services: unlike Fly/Render, the adapter does **not**
+//! Backing services: unlike Render, the adapter does **not**
 //! provision databases — Railway has no documented public mutation for
 //! it. The user adds a Postgres/Redis database to the project in the
 //! Railway dashboard (Railway injects its connection variables), or
@@ -1030,7 +1030,7 @@ mod tests {
     fn missing_database_url_warns_does_not_refuse() {
         // Railway can inject a connection variable from a dashboard-
         // attached database, so an absent URL is a Warn — never a Refuse
-        // like Fly/Render. The adapter itself does not provision DBs.
+        // like Render. The adapter itself does not provision DBs.
         let spec = fullstack_spec_with_railway_config();
         let cs = RailwayAdapter.detect_constraints(&spec);
         assert!(cs.iter().any(|c| matches!(
