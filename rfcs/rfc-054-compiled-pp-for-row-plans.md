@@ -1,6 +1,6 @@
 # RFC 054 — Compiled `pp-for` row plans
 
-Status: Draft
+Status: Implemented
 
 Author: Codex
 

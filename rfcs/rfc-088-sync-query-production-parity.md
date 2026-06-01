@@ -1,6 +1,6 @@
 # RFC 088 — `pocopine-sync-query` production parity
 
-* **Status:** Draft
+* **Status:** Implemented
 * **Author:** sync framework working group
 * **Tracking branches:** `wip/sync-query-persistence` (Section A), `wip/sync-query-selectors` (Section B), `wip/sync-query-per-params-topics` (Section C)
 * **Supersedes:** the "Non-goals" line items in RFC 087 §"Non-goals" — this RFC closes those gaps.

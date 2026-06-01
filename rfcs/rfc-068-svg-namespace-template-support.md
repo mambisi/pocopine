@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-05-03 |
 | **Related** | [RFC 058](./rfc-058-compiled-views-walker-removal.md), [RFC 063](./rfc-063-directive-cleanup-vue-alignment.md) |

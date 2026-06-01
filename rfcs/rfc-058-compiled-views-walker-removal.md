@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft - council review |
+| **Status** | Accepted (Phases 1–4, 6, 6.5 landed — runtime walker removed; Phase 5 hydration / 7 clustering / 8 split-delivery pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-26 |
 | **Supersedes** | Draft direction of [RFC 057](./rfc-057-compile-time-template-plans.md) for the main optimization path |

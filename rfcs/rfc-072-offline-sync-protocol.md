@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted (core protocol open/pull/push + local stores incl. SQLite/IndexedDB + live wakeup landed; Phase C CDC sources / E custom conflict / G SQLx pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-03 |
 | **Builds on** | [RFC 071](./rfc-071-event-spine-and-live-invalidation.md) |

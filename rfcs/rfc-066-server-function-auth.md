@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-05-02 |
 | **Related** | [`rfc-002-app-stores-servers.md`](./rfc-002-app-stores-servers.md), [`rfc-059-server-side-rendering-and-hydration.md`](./rfc-059-server-side-rendering-and-hydration.md) |

@@ -57,41 +57,43 @@ Conventions:
 | 048 | [Scoped async tasks and extractor-driven `#[computed]`](./rfc-048-hooks.md) | Implemented |
 | 046 | [`Children` extractor on `LifecycleContext`](./rfc-046-children-extractor.md) | Draft |
 | 047 | [`$slots` magic + slot-presence probes](./rfc-047-slots-magic.md) | Draft |
-| 049 | [Typed slot contracts — compile-time child constraints](./rfc-049-typed-slot-contracts.md) | Draft |
-| 050 | [Real HTML parser at compile time — `html5ever` in `pocopine-macros`](./rfc-050-html5ever-compile-time-parser.md) | Draft |
+| 049 | [Typed slot contracts — compile-time child constraints](./rfc-049-typed-slot-contracts.md) | Implemented |
+| 050 | [Real HTML parser at compile time — `html5ever` in `pocopine-macros`](./rfc-050-html5ever-compile-time-parser.md) | Implemented |
 | 051 | [Component registry safety — aliases, prefixes, boot verification](./rfc-051-component-registry-safety.md) | Deferred to 056 |
 | 052 | [Typed structural parent extractors](./rfc-052-parent-extractors.md) | Deferred to 056 |
 | 053 | [Typed component interaction surface](./rfc-053-typed-component-interaction.md) | Deferred to 056 |
-| 054 | [Compiled `pp-for` row plans](./rfc-054-compiled-pp-for-row-plans.md) | Draft |
+| 054 | [Compiled `pp-for` row plans](./rfc-054-compiled-pp-for-row-plans.md) | Implemented |
 | 055 | [Typed context ergonomics on top of keyed `provide` / `inject`](./rfc-055-typed-context.md) | Deferred to 056 |
 | 056 | [Component interaction safety batch](./rfc-056-component-interaction-safety-batch.md) | Implemented (all phases + follow-on infrastructure) |
 | 057 | [Compile-time template plans](./rfc-057-compile-time-template-plans.md) | Superseded by 058 |
-| 058 | [Compiled views and walker removal](./rfc-058-compiled-views-walker-removal.md) | Phases 1–6.5 implemented; 7–8 deferred |
+| 058 | [Compiled views and walker removal](./rfc-058-compiled-views-walker-removal.md) | Accepted |
 | 059 | [Server-side rendering and hydration](./rfc-059-server-side-rendering-and-hydration.md) | Draft (revised post-RFC-058 Phase 6.5) |
-| 060 | [`uses` as the authoritative component registry](./rfc-060-component-uses-registry.md) | Draft |
-| 061 | [Compiled-mount-only architecture](./rfc-061-compiled-mount-only.md) | Draft |
-| 062 | [Per-component mount specialization](./rfc-062-per-component-mount-specialization.md) | Draft |
-| 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Draft |
+| 060 | [`uses` as the authoritative component registry](./rfc-060-component-uses-registry.md) | Accepted |
+| 061 | [Compiled-mount-only architecture](./rfc-061-compiled-mount-only.md) | Implemented |
+| 062 | [Per-component mount specialization](./rfc-062-per-component-mount-specialization.md) | Accepted |
+| 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Accepted |
 | 064 | [Performance roadmap to community-credible benchmarks](./rfc-064-performance-roadmap.md) | Draft |
 | 065 | [Route-cluster bundling](./rfc-065-route-cluster-bundling.md) | Draft |
-| 066 | [Server-function auth and access policy](./rfc-066-server-function-auth.md) | Draft |
-| 067 | [Background jobs with Redis and memory backends](./rfc-067-redis-background-jobs.md) | Draft |
-| 068 | [SVG namespace template support](./rfc-068-svg-namespace-template-support.md) | Draft |
-| 069 | [Unified observability, logging, and analytics](./rfc-069-observability.md) | Draft |
-| 070 | [JWT-based authentication verification](./rfc-070-jwt-auth-verification.md) | Draft |
-| 071 | [Event spine and live invalidation streams](./rfc-071-event-spine-and-live-invalidation.md) | Draft |
-| 072 | [Offline sync protocol](./rfc-072-offline-sync-protocol.md) | Draft |
+| 066 | [Server-function auth and access policy](./rfc-066-server-function-auth.md) | Implemented |
+| 067 | [Background jobs with Redis and memory backends](./rfc-067-redis-background-jobs.md) | Implemented |
+| 068 | [SVG namespace template support](./rfc-068-svg-namespace-template-support.md) | Implemented |
+| 069 | [Unified observability, logging, and analytics](./rfc-069-observability.md) | Implemented |
+| 070 | [JWT-based authentication verification](./rfc-070-jwt-auth-verification.md) | Implemented |
+| 071 | [Event spine and live invalidation streams](./rfc-071-event-spine-and-live-invalidation.md) | Implemented |
+| 072 | [Offline sync protocol](./rfc-072-offline-sync-protocol.md) | Accepted |
 | 073 | [Yrs collaboration over WebSocket and Redis](./rfc-073-yrs-collaboration.md) | Draft |
-| 074 | [`pocopine-auth-credentials` and the `Provider` trait](./rfc-074-auth-credentials-and-provider-trait.md) | Draft |
+| 074 | [`pocopine-auth-credentials` and the `Provider` trait](./rfc-074-auth-credentials-and-provider-trait.md) | Accepted |
 | 076 | [App plugin lifecycle](./rfc-076-app-plugin-lifecycle.md) | Implemented |
 | 077 | [Server plugin lifecycle](./rfc-077-server-plugin-lifecycle.md) | Implemented (Phase 4 typed hooks rejected) |
 | 078 | [Client route guards, loaders, and fetch middleware](./rfc-078-client-route-guards-and-loaders.md) | Implemented |
 | 079 | [`pine-richtext` TablesExtension](./rfc-079-pine-richtext-tables-extension.md) | Draft |
-| 080 | [Heroku-style deploy contract (process graph + services)](./rfc-080-deploy-contract.md) | Draft |
-| 081 | [Component handle refs](./rfc-081-component-handle-refs.md) | Draft (Phase 1 landed) |
+| 080 | [Heroku-style deploy contract (process graph + services)](./rfc-080-deploy-contract.md) | Accepted |
+| 081 | [Component handle refs](./rfc-081-component-handle-refs.md) | Implemented |
 | 082 | [Storage-agnostic file/object storage](./rfc-082-pocopine-storage.md) | Accepted |
-| 084 | [Typed slot props](./rfc-084-typed-slot-props.md) | Draft |
-| 086 | [`pocopine-sync-query`](./rfc-086-sync-query.md) | Draft |
-| 087 | [`pocopine-sync-query` driver lifecycle](./rfc-087-sync-query-driver.md) | Draft |
-| 088 | [`pocopine-sync-query` production parity](./rfc-088-sync-query-production-parity.md) | Draft |
-| 089 | [SPA router parity and nested outlets](./rfc-089-spa-router-parity.md) | Draft |
+| 084 | [Typed slot props](./rfc-084-typed-slot-props.md) | Accepted |
+| 086 | [`pocopine-sync-query`](./rfc-086-sync-query.md) | Implemented |
+| 087 | [`pocopine-sync-query` driver lifecycle](./rfc-087-sync-query-driver.md) | Implemented |
+| 088 | [`pocopine-sync-query` production parity](./rfc-088-sync-query-production-parity.md) | Implemented |
+| 089 | [SPA router parity and nested outlets](./rfc-089-spa-router-parity.md) | Accepted |
+| 090 | [Merge `pocopine-sync-crud` into `pocopine-sync-query`](./rfc-090-merge-crud-into-query.md) | Implemented |
+| 092 | [Pine Stylekit utility compiler](./rfc-092-pocopine-stylekit.md) | Accepted |

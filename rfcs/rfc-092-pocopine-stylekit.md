@@ -1,6 +1,6 @@
 # RFC 092 — Pine Stylekit utility compiler
 
-* **Status:** Draft
+* **Status:** Accepted (Milestone 1 shipped; default CSS engine)
 * **Author:** Pine design-system working group
 * **Tracking branch:** `rfc/pine-stylekit`
 * **Tracking issue:** [#169](https://github.com/mambisi/pocopine/issues/169)

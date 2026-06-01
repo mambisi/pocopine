@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted (Phases 1–2 compound-side `props = T` validation landed; Phase 3 caller-side `pp-let` checking + compile-fail tests pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-26 |
 | **Related** | [`rfc-044-props.md`](./rfc-044-props.md), [`rfc-049-slot-contracts.md`](./rfc-049-slot-contracts.md), [`rfc-050-template-ast.md`](./rfc-050-template-ast.md), [`rfc-081-component-handle-refs.md`](./rfc-081-component-handle-refs.md) |
