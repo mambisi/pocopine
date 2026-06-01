@@ -298,27 +298,11 @@ pub fn encode_route_fragment(input: &str) -> String {
 }
 
 pub(crate) fn push_encoded_route_path_segment(input: &str, out: &mut String) {
-    push_percent_encoded(input, out);
+    pocopine_codec::percent_encode_into(out, input);
 }
 
 pub(crate) fn push_encoded_route_query_part(input: &str, out: &mut String) {
-    push_percent_encoded(input, out);
-}
-
-fn push_percent_encoded(input: &str, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(byte as char);
-            }
-            other => {
-                out.push('%');
-                out.push(HEX[(other >> 4) as usize] as char);
-                out.push(HEX[(other & 0x0f) as usize] as char);
-            }
-        }
-    }
+    pocopine_codec::percent_encode_into(out, input);
 }
 
 /// Builder for app-local route URLs.

@@ -5745,6 +5745,7 @@ dependencies = [
  "js-sys",
  "once_cell",
  "phf 0.13.1",
+ "pocopine-codec",
  "pocopine-expr",
  "serde",
  "serde-wasm-bindgen 0.6.5",

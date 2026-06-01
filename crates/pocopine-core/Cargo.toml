@@ -21,6 +21,7 @@ mount-profiler = []
 runtime-expr-fallback = []
 
 [dependencies]
+pocopine-codec = { workspace = true }
 pocopine-expr = { workspace = true }
 wasm-bindgen = { workspace = true }
 # Hooks `std::panic` so wasm panics surface their message via

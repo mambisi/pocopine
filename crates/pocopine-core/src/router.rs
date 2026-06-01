@@ -1754,45 +1754,15 @@ fn parse_query(search: &str) -> HashMap<String, String> {
 }
 
 fn url_decode(s: &str) -> String {
-    // Minimal percent-decode + `+` → ` `. js_sys has URLSearchParams
-    // but avoiding the extra feature for the host-compat path.
-    percent_decode(s, true)
+    // Query semantics: percent-decode + `+` → ` `. Lossy on invalid UTF-8;
+    // a stray `%` is passed through. (Avoids pulling in js_sys URLSearchParams
+    // so the same path works on the host-compat side.)
+    pocopine_codec::percent_decode(s, true)
 }
 
 fn url_decode_path_segment(s: &str) -> String {
-    percent_decode(s, false)
-}
-
-fn percent_decode(s: &str, plus_as_space: bool) -> String {
-    let s = if plus_as_space {
-        s.replace('+', " ")
-    } else {
-        s.to_string()
-    };
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(a), Some(b)) = (hex_nib(bytes[i + 1]), hex_nib(bytes[i + 2])) {
-                out.push((a << 4) | b);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_nib(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+    // Path semantics: percent-decode, but `+` is a literal plus.
+    pocopine_codec::percent_decode(s, false)
 }
 
 #[cfg(test)]
