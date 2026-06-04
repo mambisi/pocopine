@@ -505,13 +505,13 @@ the typed form once it lands.
 
 ### Phase 4 — Docs + migration sweep
 
-- Update `docs/components/03-composition.md` "Slots" section
+- Update `docs/guides/components/03-composition.md` "Slots" section
   with the typed form alongside the existing untyped form;
   recommend the typed form as the default going forward.
 - Sweep pine primitives (`pine/src/tabs/`, `pine/src/combobox/`,
   upload primitive from PR #127 follow-up, etc.) migrating to
   `props = T`.
-- Cross-link from `docs/poco/04-expressions.md` to the
+- Cross-link from `docs/guides/poco/04-expressions.md` to the
   typed-slot pattern (it's the formal version of the
   "compute Rust-side, expose by name" reflex).
 

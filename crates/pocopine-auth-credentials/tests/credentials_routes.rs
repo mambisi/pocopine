@@ -13,7 +13,7 @@
 //! these stubs exist only to drive the routes through axum
 //! `oneshot` for testing; production apps implement `UserStore` /
 //! `TokenStore` against their own database (see
-//! `docs/auth-credentials.md` for a Postgres + `sqlx` walkthrough).
+//! `docs/guides/auth/credentials.md` for a Postgres + `sqlx` walkthrough).
 
 #![cfg(not(target_arch = "wasm32"))]
 

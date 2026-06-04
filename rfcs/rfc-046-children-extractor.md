@@ -649,7 +649,7 @@ thing Vue authors reach this API for) are RFC 047's scope.
 2. Migrate one Pine primitive as a reference — most likely
    `PineRadioGroupRoot`, whose ARIA setup is the cleanest
    showcase.
-3. Update `docs/components/` with a short "children extractor"
+3. Update `docs/guides/components/` with a short "children extractor"
    section referencing RFC 032's lifecycle extractor list.
 
 No migration is required for existing code. `Children` is

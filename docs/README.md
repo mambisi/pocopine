@@ -1,111 +1,79 @@
-# pocopine design docs
+# pocopine documentation
 
-Working notes, plans, and code sketches. Source of truth for *why* the code
-looks the way it does — the code itself tells you *what*.
+User-facing guides and tutorials for [pocopine](../README.md), the
+full-stack Rust application framework. This tree is the source for the
+documentation site — [`site.toml`](./site.toml) defines the navigation
+and each page carries `title` / `description` front-matter.
 
-- [`components/`](./components/) — opinionated structure for building
-  components and managing state. Read first.
-- [`reactivity/`](./reactivity/) — the reactive core: effects, dep tracking,
-  the JS `Proxy` bridge, and everything we want to bolt on next.
-- [`poco/`](./poco/) — the `.poco` template format (HTML + directives),
-  paired with sibling `.rs` + `.css` files. No mixed-language SFCs.
-- [`recipes/`](./recipes/) — applied implementation recipes for using
-  Pocopine primitives in real app structure.
-- [`client-modules.md`](./client-modules.md) — optional typed
-  `.client.ts` modules, npm package imports, node_modules ownership,
-  package-manager selection, and dev-watch behavior.
-- [`integration-firebase.md`](./integration-firebase.md) — Firebase Auth
-  tutorial using Pocopine client modules, an app-owned auth extension,
-  `pocopine-auth-client`, Pine avatar/popover UI, and server-side
-  verification boundaries.
-- [`animation.md`](./animation.md) — preset catalogue, macro args,
-  FLIP, and the WAAPI escape hatch. See RFC-038 for the design notes.
-- [`animation-perf.md`](./animation-perf.md) — perf characteristics
-  + baseline numbers for the motion stack. Refresh via
-  `examples/website/e2e/test_motion_perf.py`.
-- [`performance-strategy.md`](./performance-strategy.md) — current
-  large-list performance strategy, including why Vue / Svelte are
-  ahead and what pocopine should optimize next.
-- [`jobs.md`](./jobs.md) — background-job runtime: Redis Streams +
-  sorted-set scheduler + Lua-scripted state transitions, periodic
-  firings, reclaim, and the memory backend. Includes redis-cli
-  recipes for validating a live deployment.
-- [`app-plugins.md`](./app-plugins.md) — app plugin architecture:
-  install-time setup, lifecycle hook ordering, `app! { plugins: [...] }`,
-  and the ownership boundary for observability/live/auth integrations.
-- [`browser-storage.md`](./browser-storage.md) — typed `localStorage`
-  helpers for small browser preferences, plus the auth-token and SSR
-  boundaries.
-- [`storage-uploads.md`](./storage-uploads.md) — object-storage upload
-  architecture (#176): the server-mediated, proxy-like path that streams
-  bytes once into S3/GCS/Azure native multipart, capability negotiation,
-  race-free completion, concurrency fencing, and the crash-recovery model.
-- [`pine-stylekit.md`](./pine-stylekit.md) — the Pocopine-native
-  utility-CSS compiler (RFC 092): Tailwind-shaped class grammar,
-  `@theme` tokens, the generated utility catalog, diagnostics, and the
-  `pocopine build --stylekit` integration.
-- [`route-guards-and-loaders.md`](./route-guards-and-loaders.md) —
-  client-side route guards, async loaders, fetch middleware, and the
-  rejection-handler chain. Covers `ReturnTo` validation,
-  `reevaluate_current` for sign-out, and the privacy invariants from
-  RFC-078 §5.10.
-- [`server-plugins.md`](./server-plugins.md) — host-side plugin
-  lifecycle: `Server` builder, `request_event_layer`, server-function
-  typed hooks, validation diagnostics, and the privacy invariant on
-  framework events.
-- [`live.md`](./live.md) — live invalidation tutorial: SSE streams,
-  collection/query refresh callbacks, server topic policies, and the
-  example/test files that must stay in sync with live API changes.
-- [`sync.md`](./sync.md) — sync tutorial: build a workspace-scoped issue
-  tracker end-to-end with `#[query_resource]`, a `Source` impl,
-  reactive `QueryView`, and typed writes with optimistic overlays.
-- [`sync-server.md`](./sync-server.md) — host contract: `Source` trait,
-  `SourceResource` builder, `MutationLog` idempotency invariant,
-  `partition_by` for live wake-up precision, schema migration ordering.
-- [`sync-client.md`](./sync-client.md) — wasm runtime: `QueryClient`,
-  the `Query<Row>` DSL, `QueryView` reactive surface, typed writes,
-  pending overlay vs canonical, live wake-up config.
-- [`sync-query-selector-mechanism.md`](./sync-query-selector-mechanism.md) —
-  design + worked example for the `#[query]` selector layer: read
-  tracking, memoization, diff-suppressed listeners, refcount lifecycle,
-  and composition between selectors.
-- [`sync-query-selector-implementation.md`](./sync-query-selector-implementation.md) —
-  implementation plan for the selector runtime + macro (forthcoming PR).
-- [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
-  browser console logging, backend logging, structured observed
-  events, analytics sinks, privacy labels, and target filtering.
-- [`auth-jwt-providers.md`](./auth-jwt-providers.md) — contract
-  for adding a JWT identity provider preset (in-tree or
-  community-maintained), with the mandatory integration-test
-  shape and the bundled-providers list.
-- [`auth-credentials.md`](./auth-credentials.md) — first-party
-  email + password tutorial: implement `UserStore`/`TokenStore`
-  against your database (Postgres + `sqlx` walkthrough),
-  plug `Credentials` in as a `ServerPlugin`, pair the issuer
-  with `JwtVerifier::custom`. The crate ships only the trait
-  shapes — no bundled in-memory backend.
-- [`auth-client.md`](./auth-client.md) — wasm-side tutorial:
-  install the bearer fetch middleware, wire `auth_plugin()` to
-  install `AuthSession` + `Unauthorized → /login` redirect, and
-  build route guards from `Predicate` values via `predicate_guard`.
-- [`auth-phone-otp-tutorial.md`](./auth-phone-otp-tutorial.md) —
-  build phone OTP auth today with Twilio + Postgres on top of
-  the credentials primitives, until the official
-  `pocopine-auth-otp` crate ships. Schema, sender, rate limiting,
-  attempt limits, and the migration path.
-- [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
-  invariants new code should preserve.
+New here? Start with **[Getting Started](./getting-started/introduction.md)**.
 
-Formal design decisions live one level up in [`../rfcs/`](../rfcs/).
-Example apps:
+## Getting started
 
-- [`examples/counter/`](../examples/counter/) — a single component.
-- [`examples/todo/`](../examples/todo/) — multi-component, slots, and a store.
-- [`examples/blog/`](../examples/blog/) — `App` + `#[server]` + axum server bin.
-- [`examples/live/`](../examples/live/) — `pocopine-live` SSE invalidation
-  with collection/query refetch callbacks.
-- [`examples/sync/`](../examples/sync/) — `pocopine-sync` cursor pulls
-  with `pocopine-live` wake-ups.
-- [`examples/observability-smoke/`](../examples/observability-smoke/) — OTLP trace export and JSON-lines analytics exporter smoke paths.
-- [`examples/spa/`](../examples/spa/) — `App::route` + `<pp-outlet>` + `pp-route` + `$route`.
-- [`examples/site/`](../examples/site/) — the marketing page, dogfooded.
+- [Introduction](./getting-started/introduction.md) — what pocopine is and how the pieces fit.
+- [Installation](./getting-started/installation.md) — install the CLI and check your toolchain.
+- [Quickstart](./getting-started/quickstart.md) — scaffold an app, write a component, run it.
+
+## Guides
+
+**Core**
+
+- [Components](./guides/components/README.md) — structure, state, and composition.
+- [Reactivity](./guides/reactivity/README.md) — effects, dep tracking, signals, the `Proxy` bridge.
+- [Templates (`.poco`)](./guides/poco/README.md) — format, compilation, scoped styles, expressions.
+
+**Styling & UI**
+
+- [Pine Stylekit](./guides/styling/stylekit.md) — the utility-CSS compiler and `@theme` tokens.
+- [Animation](./guides/styling/animation.md) — presets, FLIP, and the WAAPI escape hatch.
+- [Icons](./guides/styling/icons.md) — tree-shaken Tabler icons.
+- [Charts](./guides/styling/charts/README.md) — SVG-first chart primitives.
+
+**Routing & server**
+
+- [Route guards & loaders](./guides/routing/route-guards-and-loaders.md)
+- [Server plugins](./guides/server/server-plugins.md) · [Client modules](./guides/server/client-modules.md)
+
+**Data & sync**
+
+- [Sync (client)](./guides/data/sync-client.md) · [Sync (server)](./guides/data/sync-server.md)
+- [Object-storage uploads](./guides/data/storage-uploads.md) · [Browser storage](./guides/data/browser-storage.md)
+
+**Auth**
+
+- [Credentials](./guides/auth/credentials.md) · [JWT providers](./guides/auth/jwt-providers.md) · [Client bridge](./guides/auth/client.md)
+
+**Operations**
+
+- [Background jobs](./guides/jobs/jobs.md)
+- [Logging & tracing](./guides/observability/logging-tracing.md)
+- [App plugins](./guides/plugins/app-plugins.md)
+
+**Recipes**
+
+- [Recipes index](./guides/recipes/README.md) — applied patterns for real app structure.
+
+## Tutorials
+
+End-to-end builds:
+
+- [Build an issue tracker (sync)](./tutorials/issue-tracker-sync.md)
+- [Live invalidation](./tutorials/live-invalidation.md)
+- [Phone OTP auth](./tutorials/phone-otp-auth.md)
+- [Firebase Auth](./tutorials/firebase-auth.md)
+
+## For contributors
+
+- [`internal/`](./internal/) — design notes, roadmaps, performance
+  retrospectives, and postmortems. These explain *why* the code looks
+  the way it does and are **not** part of the published site.
+- [`../rfcs/`](../rfcs/) — authoritative design decisions. Non-trivial
+  features open an RFC first.
+
+## Building the site
+
+The documentation site is a pocopine app that renders this markdown as
+static pages. [`site.toml`](./site.toml) is the navigation contract:
+each entry maps a sidebar label to a markdown file, grouped under the
+**Docs** and **Tutorials** tabs. To add a page, drop a markdown file
+with `title` / `description` front-matter under the right folder and
+add it to `site.toml`.

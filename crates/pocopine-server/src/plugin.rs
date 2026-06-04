@@ -582,7 +582,7 @@ fn active_hook_mask_contains(mask: HookMask) -> bool {
 /// axum [`State`](axum::extract::State), or use a short middleware
 /// layer that caches the lookup in request extensions for the rest
 /// of the request to consume via [`Extension`](axum::extract::Extension).
-/// `docs/server-plugins.md` walks through both patterns.
+/// `docs/guides/server/server-plugins.md` walks through both patterns.
 ///
 /// Hook closures registered via [`crate::Server::hook_plugin`] pay
 /// the **same** lookup cost on every emit — the registration

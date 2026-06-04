@@ -179,7 +179,7 @@ let _tok = view.on_update(|| pocopine_core::scope::notify(scope, "open_count"));
 
 The convention: if the first arg's type is `QueryClient`, it's the selector's client handle — not hashed, not in `observe()`'s public arg list (which always takes `&QueryClient` first). Every other arg must be `Hash + Clone + 'static`; the return type must be `PartialEq + Clone + 'static`.
 
-Selectors compose: `#[query] fn dashboard(...) { open_issue_count::observe(&client, ws).value() + … }`. An inner selector whose output is `PartialEq`-equal across reruns stops the cascade — the outer selector doesn't rerun. See [`docs/sync-query-selector-mechanism.md`](../../docs/sync-query-selector-mechanism.md) for the full design and [`docs/sync-query-selector-implementation.md`](../../docs/sync-query-selector-implementation.md) for the code map (layer diagram, data flows, file pointers).
+Selectors compose: `#[query] fn dashboard(...) { open_issue_count::observe(&client, ws).value() + … }`. An inner selector whose output is `PartialEq`-equal across reruns stops the cascade — the outer selector doesn't rerun. See [`docs/internal/sync-query-selector-mechanism.md`](../../docs/internal/sync-query-selector-mechanism.md) for the full design and [`docs/internal/sync-query-selector-implementation.md`](../../docs/internal/sync-query-selector-implementation.md) for the code map (layer diagram, data flows, file pointers).
 
 ## Live invalidation and multi-node deployments
 
@@ -199,14 +199,14 @@ let hub = pocopine_live::LiveHub::new(backend)
 
 RFC 088 §C (per-`(stream, params_hash)` topics) is also broker-agnostic — it changes the *topic naming* scheme, not the broker contract. For ~1M users single-node Redis is fine; if you cross ~10M distinct partition hashes, shard with Redis Cluster or move to NATS / Kafka.
 
-Full picture, broker comparison, and topic-cardinality scaling notes in [`docs/live.md` §8 "Production Backends"](../../docs/live.md#8-production-backends).
+Full picture, broker comparison, and topic-cardinality scaling notes in [`docs/tutorials/live-invalidation.md` §8 "Production Backends"](../../docs/tutorials/live-invalidation.md#8-production-backends).
 
 ## Docs
 
-- [`docs/sync.md`](../../docs/sync.md) — end-to-end tutorial.
-- [`docs/sync-server.md`](../../docs/sync-server.md) — `Source` /
+- [`docs/tutorials/issue-tracker-sync.md`](../../docs/tutorials/issue-tracker-sync.md) — end-to-end tutorial.
+- [`docs/guides/data/sync-server.md`](../../docs/guides/data/sync-server.md) — `Source` /
   `SourceResource` / `MutationLog` contract reference.
-- [`docs/sync-client.md`](../../docs/sync-client.md) — `QueryClient` /
+- [`docs/guides/data/sync-client.md`](../../docs/guides/data/sync-client.md) — `QueryClient` /
   `Query<Row>` DSL / typed writes reference.
 
 RFC 090 (merged) folded `pocopine-sync-crud` into this crate. The

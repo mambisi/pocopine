@@ -2,7 +2,7 @@
 //!
 //! The credentials crate intentionally ships no default backend.
 //!
-//! Apps implement [`UserStore`] / [`TokenStore`] against their database of choice (see `docs/auth-credentials.md` for a Postgres + `sqlx` walkthrough). The integration tests still need a concrete pair to exercise the routes end-to-end, so they keep their own minimal in-memory implementation here.
+//! Apps implement [`UserStore`] / [`TokenStore`] against their database of choice (see `docs/guides/auth/credentials.md` for a Postgres + `sqlx` walkthrough). The integration tests still need a concrete pair to exercise the routes end-to-end, so they keep their own minimal in-memory implementation here.
 
 #![allow(dead_code)]
 

@@ -198,7 +198,7 @@ impl<'a> Lexer<'a> {
             }
             // Arithmetic beyond `+` is not supported. Compute Rust-side
             // as a `#[computed]` field and bind by name. See
-            // docs/poco/04-expressions.md.
+            // docs/guides/poco/04-expressions.md.
             b'*' | b'/' | b'%' => {
                 return Err(self.err(
                     start..start + 1,
@@ -207,7 +207,7 @@ impl<'a> Lexer<'a> {
                         c as char
                     ),
                     Some(
-                        "compute Rust-side as a `#[computed]` field and bind by name — see docs/poco/04-expressions.md",
+                        "compute Rust-side as a `#[computed]` field and bind by name — see docs/guides/poco/04-expressions.md",
                     ),
                 ));
             }
@@ -221,7 +221,7 @@ impl<'a> Lexer<'a> {
                     start..start + 1,
                     "arithmetic subtraction is not supported in pine-expr",
                     Some(
-                        "compute Rust-side as a `#[computed]` field and bind by name — see docs/poco/04-expressions.md",
+                        "compute Rust-side as a `#[computed]` field and bind by name — see docs/guides/poco/04-expressions.md",
                     ),
                 ));
             }
@@ -297,7 +297,7 @@ impl<'a> Lexer<'a> {
                         start..self.pos + 2,
                         "arrow functions are not supported in pine-expr",
                         Some(
-                            "define a handler method on the component — see docs/poco/04-expressions.md",
+                            "define a handler method on the component — see docs/guides/poco/04-expressions.md",
                         ),
                     ));
                 } else {
@@ -746,7 +746,7 @@ impl Parser {
                             .to_string(),
                         span: self.peek().1.clone(),
                         hint: Some(
-                            "define a plain identifier handler, or a `#[computed]` field, that takes the object as an argument — see docs/poco/04-expressions.md"
+                            "define a plain identifier handler, or a `#[computed]` field, that takes the object as an argument — see docs/guides/poco/04-expressions.md"
                                 .to_string(),
                         ),
                     });

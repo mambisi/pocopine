@@ -354,7 +354,7 @@ keep-note-card .note-actions { ... }
 Scoped component CSS is tracked separately in:
 
 - <https://github.com/mambisi/pocopine/issues/79>
-- `docs/poco/03-scoped-styles.md`
+- `docs/guides/poco/03-scoped-styles.md`
 
 Until that lands, CSS split is an organization tool, not a safety boundary.
 

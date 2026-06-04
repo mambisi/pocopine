@@ -18,7 +18,7 @@
 //! )?;
 //! ```
 //!
-//! See `docs/auth-jwt-providers.md` for the provider contract
+//! See `docs/guides/auth/jwt-providers.md` for the provider contract
 //! and guidance for app-local or community-maintained presets.
 //!
 //! For custom OIDC issuers without a preset, configure the

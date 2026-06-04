@@ -217,7 +217,7 @@ pocopine::animate::register_preset(
   Dialog; Tooltip content asymmetric (`scale` in, `fade` out);
   Combobox / Select content `fade`; TagsInput item gets `animate =
   "flip"` + `transition = "scale"`; Command / Combobox items get
-  `animate = "flip"`. `docs/animation.md` ships the user-facing
+  `animate = "flip"`. `docs/guides/styling/animation.md` ships the user-facing
   preset catalogue + override + custom-preset recipes; demo header
   explains the no-config story.
 

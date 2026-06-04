@@ -2787,7 +2787,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // *and* the role didn't default one, fail compilation with a
     // directive message. The custom element defaults to
     // `display: inline`, which silently breaks the offending
-    // utility — see RFC docs/poco/04-expressions.md companion.
+    // utility — see RFC docs/guides/poco/04-expressions.md companion.
     let layout_lint_tokens: proc_macro2::TokenStream = if effective_display.is_none() {
         template_ast
             .as_ref()

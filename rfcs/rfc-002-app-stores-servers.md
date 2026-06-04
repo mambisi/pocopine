@@ -6,7 +6,7 @@
 | **Author** | pocopine team |
 | **Created** | 2026-04-18 |
 | **Supersedes** | — |
-| **Related** | [`rfc-001-components.md`](./rfc-001-components.md), [`docs/components/02-state.md`](../docs/components/02-state.md) |
+| **Related** | [`rfc-001-components.md`](./rfc-001-components.md), [`docs/guides/components/02-state.md`](../docs/guides/components/02-state.md) |
 
 ## 1. Summary
 

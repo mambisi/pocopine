@@ -78,7 +78,7 @@ creation** (~2 ms × N in Firefox), not `querySelectorAll`. The
 cache wouldn't move the needle on this benchmark and isn't justified
 without one that does. Documented where it would help (heavy
 pp-show toggle subtrees) so a future profile can reopen the
-question with evidence. See `docs/animation-perf.md`.
+question with evidence. See `docs/internal/animation-perf.md`.
 
 ### §4 — `transitionend` event for completion (`max`-duration parser)
 
@@ -138,7 +138,7 @@ content on the compositor's fast path on Firefox. FLIP already had
   + WAAPI Future + theming`. §1 §2 §4 §5 §8 + setattr fuzz test.
 - **PR 2** — `afdc52e` `feat(pine-demo): RFC-039 PR 2 — 500-row
   stress fixture + perf baseline`. Stress fixture +
-  `docs/animation-perf.md`. §3 deferred (justified by profile).
+  `docs/internal/animation-perf.md`. §3 deferred (justified by profile).
 - **PR 3** — `170dc19` `feat(core): RFC-039 PR 3 — pp-flip directive
   + enter_subtree_staggered`. §6 §7.
 
