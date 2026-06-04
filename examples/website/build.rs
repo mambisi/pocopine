@@ -237,6 +237,15 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     }
     s.push_str("            _ => \"\",\n        }\n    }\n}\n");
 
+    // "Whole flow" walkthrough snippets, highlighted by step index.
+    s.push_str("pub mod flow {\n");
+    s.push_str("    pub fn code(i: usize) -> &'static str {\n        match i {\n");
+    for (idx, (lang, code)) in FLOW_SNIPPETS.iter().enumerate() {
+        let html = hl.code(code, lang);
+        s.push_str(&format!("            {idx} => {html:?},\n"));
+    }
+    s.push_str("            _ => \"\",\n        }\n    }\n}\n");
+
     // Component reference Code tabs: every showcase demo's `.poco`
     // source, highlighted as markup. The slug is the demo directory
     // with `_` → `-` (matching `component_meta`), so the table stays in
@@ -295,6 +304,32 @@ const SECURE_SNIPPETS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// "One language, the whole flow" walkthrough snippets `(language,
+/// source)`, in step order. Highlighted at build time; `StackFlow`
+/// injects them via `pp-html`.
+const FLOW_SNIPPETS: &[(&str, &str)] = &[
+    (
+        "rust",
+        "#[component(template = \"IssueList.poco\")]\npub struct IssueList {\n    issues: Vec<Issue>,\n    draft: String,\n}",
+    ),
+    (
+        "rust",
+        "// one async fn → a server route AND a typed client stub\n#[pocopine::server]\nasync fn list_issues() -> ServerResult<Vec<Issue>> {\n    db().open_issues().await\n}\n\n// in the component: let open = list_issues().await?;",
+    ),
+    (
+        "rust",
+        "// local-first view; updates push to every client\nlet open = Issue::query()\n    .eq(field::status, Status::Open)\n    .observe();",
+    ),
+    (
+        "rust",
+        "Server::new(router)\n    .with_auth(JwtVerifier::firebase(project))\n    .plugin(Jobs::redis(url))        // background work\n    .plugin(Storage::s3(bucket));    // uploads",
+    ),
+    (
+        "rust",
+        "tracing::info!(target: \"pocopine.log\", route = \"/issues\", \"served\");\n// then ship it:\n//   $ pocopine deploy   → web + worker, one container",
+    ),
+];
+
 /// Source data for the showcase. Highlighted at build time (see
 /// `emit_snippets`); the component reads the generated `FEATS`.
 struct ShowcaseFeat {
@@ -316,6 +351,15 @@ const SHOWCASE_FEATS: &[ShowcaseFeat] = &[
         desc: "A component is a struct plus a sibling .poco template. State is just fields; handlers mutate &mut self. No virtual DOM and no Rc<RefCell> — pocopine makes the fields reactive and updates the real DOM in place.",
         doc: "/docs/guides/components/README",
         code: "#[derive(Default, Serialize, Deserialize)]\n#[component(template = \"Todo.poco\")]\npub struct TodoApp {\n    items: Vec<Todo>,\n    draft: String,\n}\n\n#[handlers]\nimpl TodoApp {\n    pub fn add(&mut self) {\n        self.items.push(Todo::new(&self.draft));\n        self.draft.clear();\n    }\n}",
+    },
+    ShowcaseFeat {
+        name: "Stylekit",
+        file: "Button.poco",
+        lang: "poco",
+        title: "Utility CSS that compiles itself",
+        desc: "Pine Stylekit is a built-in, Tailwind-shaped utility-CSS compiler — on by default in build, run, and dev. It parses your .poco (it doesn't scan), validates every class against the token catalog, and emits one deterministic stylesheet. No watcher, no config; an unknown class is a build error, not a silent miss.",
+        doc: "/docs/guides/styling/stylekit",
+        code: "<!-- Tailwind-shaped utilities, compiled at build time -->\n<button class=\"inline-flex items-center gap-2 px-3.5 py-2\n               rounded-md bg-accent text-surface font-medium\n               hover:bg-accent-strong transition-colors\">\n  Ship it\n</button>\n<!-- bg-accent → var(--color-accent); unknown class = build error -->",
     },
     ShowcaseFeat {
         name: "Server functions",

@@ -36,8 +36,8 @@ use components::showcase::{
     TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{
-    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, Landing, SecureSection,
-    ShowcaseCard, SiteHeader, StackFlow, StackShowcase, Tutorial,
+    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, IssueFlowDemo, Landing,
+    SecureSection, ShowcaseCard, SiteHeader, StackFlow, StackShowcase, Tutorial,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -60,10 +60,23 @@ impl Default for WebsiteApp {
 
 inject_key!(pub WEBSITE_APP: Handle<WebsiteApp>);
 
+/// localStorage key for the persisted theme (shared with the pre-paint
+/// restore script in `index.html`).
+const THEME_KEY: &str = "pocopine-theme";
+
 #[handlers]
 impl WebsiteApp {
     pub fn on_setup(&mut self) {
         provide(&WEBSITE_APP, this::<Self>());
+        // Restore the saved theme across reloads / deep-links. The
+        // inline script in index.html already applied it before paint;
+        // this syncs our own state (and re-applies on a remount).
+        if let Ok(Some(saved)) = LocalStorage::<String>::new(THEME_KEY).get() {
+            if saved == "dark" || saved == "light" {
+                self.theme = saved;
+            }
+        }
+        self.apply_theme();
     }
 
     pub fn open_palette(&mut self) {
@@ -76,11 +89,8 @@ impl WebsiteApp {
         } else {
             "dark".into()
         };
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(root) = doc.document_element() {
-                let _ = root.set_attribute("data-theme", &self.theme);
-            }
-        }
+        self.apply_theme();
+        let _ = LocalStorage::<String>::new(THEME_KEY).set(&self.theme);
     }
 
     pub fn open_github(&mut self) {
@@ -112,6 +122,17 @@ impl WebsiteApp {
     }
 }
 
+impl WebsiteApp {
+    /// Mirror `self.theme` onto `<html data-theme>` (not a handler).
+    fn apply_theme(&self) {
+        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+            if let Some(root) = doc.document_element() {
+                let _ = root.set_attribute("data-theme", &self.theme);
+            }
+        }
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn main() {
     pine::register_all();
@@ -137,6 +158,7 @@ pub fn main() {
         .register::<InstallCmd>()
         .register::<StackShowcase>()
         .register::<StackFlow>()
+        .register::<IssueFlowDemo>()
         .register::<SecureSection>()
         .register::<ShowcaseCard>()
         // All primitive demos — reused as live previews on the

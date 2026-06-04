@@ -1,0 +1,49 @@
+<root class="ifd"
+  :data-deployed="stage >= 5 ? 'true' : 'false'"
+  :data-live="stage >= 3 ? 'true' : 'false'"
+  :data-auth="stage >= 4 ? 'true' : 'false'">
+
+  <div class="ifd-frame">
+    <div class="ifd-chrome">
+      <span class="ifd-tl"></span><span class="ifd-tl"></span><span class="ifd-tl"></span>
+      <span class="ifd-url">issues.up.railway.app</span>
+    </div>
+
+    <div class="ifd-app">
+      <div class="ifd-head">
+        <span class="ifd-title-h">Issues</span>
+        <span class="ifd-live"><span class="ifd-live-dot"></span>live</span>
+        <span class="ifd-user"><img class="ifd-user-av" :src="me_avatar" alt="" />you</span>
+      </div>
+
+      <ul class="ifd-list">
+        <template pp-for="i in issues" pp-key="i.id">
+          <li class="ifd-item" :data-live="i.live ? 'true' : 'false'">
+            <span class="ifd-dot-sync"></span>
+            <span class="ifd-item-title" pp-text="i.title"></span>
+            <span class="ifd-label" :data-label="i.label" pp-text="i.label"></span>
+            <img class="ifd-avatar" :src="i.avatar" :alt="i.assignee" :title="i.assignee" loading="lazy" />
+          </li>
+        </template>
+      </ul>
+
+      <div class="ifd-add">
+        <input class="ifd-input" pp-model="draft" placeholder="New issue title…" />
+        <button class="ifd-btn" type="button" pp-on:click="add">Add issue</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ifd-logs">
+    <div class="ifd-logs-bar"><span class="ifd-logs-dot"></span>logs · pocopine.*</div>
+    <ul class="ifd-logs-list">
+      <template pp-for="l in logs" pp-key="l.id">
+        <li class="ifd-log">
+          <span class="ifd-log-target" pp-text="l.target"></span>
+          <span class="ifd-log-msg" pp-text="l.msg"></span>
+        </li>
+      </template>
+    </ul>
+    <p class="ifd-logs-hint">Add an issue — one event fans out to logging · tracing · analytics.</p>
+  </div>
+</root>
