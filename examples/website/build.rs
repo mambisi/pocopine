@@ -13,12 +13,13 @@
 //!   pub fn page_title(slug) -> &'static str
 //!   pub fn page_toc(slug)  -> &'static [TocItem]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::{env, fs, path::Path};
 
 use pulldown_cmark::{
     html, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
+use quote::ToTokens;
 use serde::Deserialize;
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::html::highlighted_html_for_string;
@@ -253,6 +254,9 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     let showcase = Path::new(manifest).join("src/components/showcase");
     println!("cargo:rerun-if-changed={}", showcase.display());
     let mut demos: Vec<(String, String)> = Vec::new();
+    // Per-component install snippet (correct `.register::<…>()` calls
+    // derived from the demo's own `pine-{slug}` tags), highlighted.
+    let mut installs: Vec<(String, String)> = Vec::new();
     if let Ok(dirs) = fs::read_dir(&showcase) {
         for dir in dirs.flatten() {
             if !dir.path().is_dir() {
@@ -267,6 +271,7 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
                 if fname.ends_with("Demo.poco") {
                     let src = fs::read_to_string(file.path()).unwrap_or_default();
                     demos.push((slug.clone(), hl.code(src.trim_end_matches('\n'), "poco")));
+                    installs.push((slug.clone(), hl.code(&install_snippet(&src, &slug), "rust")));
                     break;
                 }
             }
@@ -280,8 +285,285 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     }
     s.push_str("            _ => \"\",\n        }\n    }\n}\n");
 
+    // Auto-generated reference data: props (from the Pine `#[prop]` /
+    // `#[model]` fields), the per-component install snippet, and the
+    // anatomy skeleton (highlighted from the `component_meta` strings).
+    let pine_api = extract_pine_api(manifest);
+    let meta_anatomy = parse_meta_anatomy(manifest);
+    let mut props_arms = String::new();
+    let mut install_arms = String::new();
+    let mut anatomy_arms = String::new();
+    for (slug, _) in &demos {
+        let exact = format!("pine-{slug}");
+        let sub = format!("pine-{slug}-");
+        let mut props: Vec<&ApiPropRaw> = pine_api
+            .iter()
+            .filter(|p| p.tag == exact || p.tag.starts_with(&sub))
+            .collect();
+        props.sort_by(|a, b| a.tag.cmp(&b.tag)); // stable: keeps field order within a tag
+        if !props.is_empty() {
+            props_arms.push_str(&format!("            {slug:?} => &[\n"));
+            for p in props {
+                props_arms.push_str(&format!(
+                    "                ApiProp {{ key: {:?}, element: {:?}, name: {:?}, ty: {:?}, desc: {:?} }},\n",
+                    format!("{}.{}", p.tag, p.name), p.tag, p.name, p.ty, p.doc
+                ));
+            }
+            props_arms.push_str("            ],\n");
+        }
+        if let Some((_, html)) = installs.iter().find(|(s, _)| s == slug) {
+            install_arms.push_str(&format!("            {slug:?} => {html:?},\n"));
+        }
+        if let Some(anatomy) = meta_anatomy.get(slug) {
+            if !anatomy.is_empty() {
+                anatomy_arms.push_str(&format!(
+                    "            {slug:?} => {:?},\n",
+                    hl.code(anatomy, "poco")
+                ));
+            }
+        }
+    }
+    s.push_str("pub mod api {\n");
+    s.push_str(
+        "    pub struct ApiProp { pub key: &'static str, pub element: &'static str, \
+         pub name: &'static str, pub ty: &'static str, pub desc: &'static str }\n",
+    );
+    s.push_str(&format!(
+        "    pub fn props_for(slug: &str) -> &'static [ApiProp] {{\n        match slug {{\n{props_arms}            _ => &[],\n        }}\n    }}\n"
+    ));
+    s.push_str(&format!(
+        "    pub fn install_for(slug: &str) -> &'static str {{\n        match slug {{\n{install_arms}            _ => \"\",\n        }}\n    }}\n"
+    ));
+    s.push_str(&format!(
+        "    pub fn anatomy_for(slug: &str) -> &'static str {{\n        match slug {{\n{anatomy_arms}            _ => \"\",\n        }}\n    }}\n"
+    ));
+    s.push_str("}\n");
+
     let dest = Path::new(out_dir).join("gen_code.rs");
     fs::write(dest, s).unwrap();
+}
+
+/// One auto-extracted prop: element tag, field name, type, doc comment.
+struct ApiPropRaw {
+    tag: String,
+    name: String,
+    ty: String,
+    doc: String,
+}
+
+/// Parse the Pine component sources and pull every `#[prop]` / `#[model]`
+/// field (type + doc comment) off each `#[component]` struct. The
+/// element tag is the struct name kebab-cased (`PineDialogRoot` →
+/// `pine-dialog-root`).
+fn extract_pine_api(manifest: &str) -> Vec<ApiPropRaw> {
+    let root = Path::new(manifest).join("../../crates/pine/src");
+    println!("cargo:rerun-if-changed={}", root.display());
+    let mut files = Vec::new();
+    collect_rs(&root, &mut files);
+    let mut out = Vec::new();
+    for path in files {
+        let Ok(src) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(file) = syn::parse_file(&src) else {
+            continue;
+        };
+        for item in file.items {
+            let syn::Item::Struct(s) = item else {
+                continue;
+            };
+            if !has_attr(&s.attrs, "component") {
+                continue;
+            }
+            let tag = kebab(&s.ident.to_string());
+            let syn::Fields::Named(named) = s.fields else {
+                continue;
+            };
+            for f in named.named {
+                if !has_attr(&f.attrs, "prop") && !has_attr(&f.attrs, "model") {
+                    continue;
+                }
+                let Some(name) = f.ident.as_ref().map(|i| i.to_string()) else {
+                    continue;
+                };
+                out.push(ApiPropRaw {
+                    tag: tag.clone(),
+                    name,
+                    ty: ty_str(&f.ty),
+                    doc: doc_of(&f.attrs),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_rs(&p, out);
+        } else if p.extension().is_some_and(|x| x == "rs") {
+            out.push(p);
+        }
+    }
+}
+
+fn has_attr(attrs: &[syn::Attribute], ident: &str) -> bool {
+    attrs.iter().any(|a| a.path().is_ident(ident))
+}
+
+fn doc_of(attrs: &[syn::Attribute]) -> String {
+    let mut lines = Vec::new();
+    for a in attrs {
+        if !a.path().is_ident("doc") {
+            continue;
+        }
+        if let syn::Meta::NameValue(nv) = &a.meta {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+            {
+                lines.push(s.value().trim().to_string());
+            }
+        }
+    }
+    lines
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn ty_str(ty: &syn::Type) -> String {
+    let s = ty.to_token_stream().to_string();
+    s.replace(" <", "<")
+        .replace("< ", "<")
+        .replace(" >", ">")
+        .replace("> ", ">")
+        .replace(" ::", "::")
+        .replace(":: ", "::")
+}
+
+fn kebab(name: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                out.push('-');
+            }
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// `pine-dialog-root` → `PineDialogRoot`.
+fn struct_name(tag: &str) -> String {
+    tag.split('-')
+        .map(|seg| {
+            let mut ch = seg.chars();
+            match ch.next() {
+                Some(f) => f.to_uppercase().chain(ch).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Build the per-component install snippet from the `pine-{slug}` tags
+/// the demo actually uses — a correct `.register::<…>()` chain (not
+/// `register_all()`, which would pull in every primitive). Falls back
+/// to `register_all()` only when no `pine-{slug}` element is found.
+fn install_snippet(src: &str, slug: &str) -> String {
+    let exact = format!("pine-{slug}");
+    let sub = format!("pine-{slug}-");
+    let mut tags: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(off) = src[i..].find('<') {
+        let start = i + off + 1;
+        i = start;
+        let tag: String = src[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        if (tag == exact || tag.starts_with(&sub)) && !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    if tags.is_empty() {
+        return "// cargo add pocopine pine\npine::register_all(); // every Pine primitive".into();
+    }
+    // Root element first, then the rest alphabetically.
+    tags.sort();
+    tags.sort_by_key(|t| (!(*t == exact || t.ends_with("-root")), t.clone()));
+    let mut out = String::from("// cargo add pocopine pine\nApp::new()\n");
+    for t in &tags {
+        out.push_str(&format!("    .register::<pine::{}>()\n", struct_name(t)));
+    }
+    out.push_str("    .run();");
+    out
+}
+
+/// Parse `component_meta.rs` and pull each entry's `slug` → `anatomy`
+/// string, so the anatomy skeleton can be highlighted at build time
+/// without duplicating it (the meta stays the single source).
+fn parse_meta_anatomy(manifest: &str) -> HashMap<String, String> {
+    let path = Path::new(manifest).join("src/components/component_meta.rs");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut map = HashMap::new();
+    let Ok(src) = fs::read_to_string(&path) else {
+        return map;
+    };
+    let Ok(file) = syn::parse_file(&src) else {
+        return map;
+    };
+    for item in file.items {
+        let syn::Item::Const(c) = item else { continue };
+        if c.ident != "COMPONENTS" {
+            continue;
+        }
+        let array = match &*c.expr {
+            syn::Expr::Reference(r) => &*r.expr,
+            other => other,
+        };
+        let syn::Expr::Array(arr) = array else {
+            continue;
+        };
+        for elem in &arr.elems {
+            let syn::Expr::Struct(st) = elem else {
+                continue;
+            };
+            let mut slug = None;
+            let mut anatomy = None;
+            for f in &st.fields {
+                let syn::Member::Named(key) = &f.member else {
+                    continue;
+                };
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(ls),
+                    ..
+                }) = &f.expr
+                {
+                    match key.to_string().as_str() {
+                        "slug" => slug = Some(ls.value()),
+                        "anatomy" => anatomy = Some(ls.value()),
+                        _ => {}
+                    }
+                }
+            }
+            if let (Some(s), Some(a)) = (slug, anatomy) {
+                map.insert(s, a);
+            }
+        }
+    }
+    map
 }
 
 /// Secure-section snippets `(key, language, source)`. Highlighted at

@@ -2,69 +2,84 @@
   <header class="ci-head">
     <h1>Components</h1>
     <p class="ci-lead">
-      ~50 headless, accessible Pine primitives. Behavior, keyboard, focus,
-      and ARIA are done — bring your own styles (or
-      <a href="/docs/guides/styling/stylekit" pp-route>Pine Stylekit</a>).
+      ~50 headless, accessible Pine primitives — behavior, keyboard, focus,
+      and ARIA are done; bring your own styles (or
+      <a href="/docs/guides/styling/stylekit">Pine Stylekit</a>).
+      A few favorites below — open any to browse the rest from the sidebar.
     </p>
   </header>
 
-  <section class="ci-cat">
-    <h2 class="ci-cat-title">Forms &amp; inputs</h2>
-    <div class="ci-grid">
-      <template pp-for="item in forms" pp-key="item.href">
-        <a class="ci-card" pp-bind:href="item.href">
-          <span class="ci-card-title" pp-text="item.title"></span>
-          <span class="ci-card-blurb" pp-text="item.blurb"></span>
-        </a>
-      </template>
-    </div>
-  </section>
+  <div class="ci-grid">
+    <a class="ci-card" href="/components/button">
+      <div class="ci-preview"><button-demo></button-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Button</span>
+        <span class="ci-card-blurb">A clickable action with variants and disabled state.</span>
+      </div>
+    </a>
 
-  <section class="ci-cat">
-    <h2 class="ci-cat-title">Overlays &amp; menus</h2>
-    <div class="ci-grid">
-      <template pp-for="item in overlays" pp-key="item.href">
-        <a class="ci-card" pp-bind:href="item.href">
-          <span class="ci-card-title" pp-text="item.title"></span>
-          <span class="ci-card-blurb" pp-text="item.blurb"></span>
-        </a>
-      </template>
-    </div>
-  </section>
+    <a class="ci-card" href="/components/switch-checkbox">
+      <div class="ci-preview"><switch-checkbox-demo></switch-checkbox-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Switch &amp; Checkbox</span>
+        <span class="ci-card-blurb">Boolean toggles, both pp-model bound.</span>
+      </div>
+    </a>
 
-  <section class="ci-cat">
-    <h2 class="ci-cat-title">Navigation &amp; layout</h2>
-    <div class="ci-grid">
-      <template pp-for="item in navigation" pp-key="item.href">
-        <a class="ci-card" pp-bind:href="item.href">
-          <span class="ci-card-title" pp-text="item.title"></span>
-          <span class="ci-card-blurb" pp-text="item.blurb"></span>
-        </a>
-      </template>
-    </div>
-  </section>
+    <a class="ci-card" href="/components/slider">
+      <div class="ci-preview"><slider-demo></slider-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Slider</span>
+        <span class="ci-card-blurb">A draggable range input with keyboard support.</span>
+      </div>
+    </a>
 
-  <section class="ci-cat">
-    <h2 class="ci-cat-title">Display</h2>
-    <div class="ci-grid">
-      <template pp-for="item in display" pp-key="item.href">
-        <a class="ci-card" pp-bind:href="item.href">
-          <span class="ci-card-title" pp-text="item.title"></span>
-          <span class="ci-card-blurb" pp-text="item.blurb"></span>
-        </a>
-      </template>
-    </div>
-  </section>
+    <a class="ci-card" href="/components/radio-group">
+      <div class="ci-preview"><radio-group-demo></radio-group-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Radio Group</span>
+        <span class="ci-card-blurb">A single-select set with roving focus.</span>
+      </div>
+    </a>
 
-  <section class="ci-cat">
-    <h2 class="ci-cat-title">Date &amp; time</h2>
-    <div class="ci-grid">
-      <template pp-for="item in datetime" pp-key="item.href">
-        <a class="ci-card" pp-bind:href="item.href">
-          <span class="ci-card-title" pp-text="item.title"></span>
-          <span class="ci-card-blurb" pp-text="item.blurb"></span>
-        </a>
-      </template>
-    </div>
-  </section>
+    <a class="ci-card" href="/components/tabs">
+      <div class="ci-preview"><tabs-demo></tabs-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Tabs</span>
+        <span class="ci-card-blurb">A tabbed panel switcher with roving focus.</span>
+      </div>
+    </a>
+
+    <a class="ci-card" href="/components/toggle">
+      <div class="ci-preview"><toggle-demo></toggle-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Toggle</span>
+        <span class="ci-card-blurb">A two-state pressed / unpressed button.</span>
+      </div>
+    </a>
+
+    <a class="ci-card" href="/components/accordion">
+      <div class="ci-preview"><accordion-demo></accordion-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Accordion</span>
+        <span class="ci-card-blurb">Stacked, collapsible sections.</span>
+      </div>
+    </a>
+
+    <a class="ci-card" href="/components/avatar">
+      <div class="ci-preview"><avatar-demo></avatar-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Avatar</span>
+        <span class="ci-card-blurb">A user image with a fallback when it fails to load.</span>
+      </div>
+    </a>
+
+    <a class="ci-card" href="/components/input">
+      <div class="ci-preview"><input-demo></input-demo></div>
+      <div class="ci-meta">
+        <span class="ci-card-title">Input</span>
+        <span class="ci-card-blurb">A single-line text field that binds with pp-model.</span>
+      </div>
+    </a>
+  </div>
 </root>

@@ -48,6 +48,7 @@ web-sys = { version = "0.3", features = [
     "Event",
     "EventTarget",
     "MouseEvent",
+    "CustomEvent",
     "Element",
     "Navigator",
     "Clipboard",
@@ -69,3 +70,7 @@ serde = { workspace = true }
 # Pre-colours docs code blocks + showcase snippets to inline-styled
 # HTML, so the wasm bundle ships zero highlighter.
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# Parse the Pine component source to auto-generate the props tables on
+# the component reference pages (extract `#[prop]`/`#[model]` fields).
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"

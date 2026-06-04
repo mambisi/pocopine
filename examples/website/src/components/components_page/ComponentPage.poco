@@ -1,6 +1,19 @@
 <root class="component-page">
-  <a class="cp-back" href="/components" pp-route>← All components</a>
+  <div class="cp-layout">
+    <aside class="cp-nav" pp-on:click="on_nav" aria-label="All components">
+      <nav class="cp-nav-list">
+        <template pp-for="row in nav" pp-key="row.key">
+          <a class="side-nav-link"
+             :data-header="row.is_header ? 'true' : 'false'"
+             :data-active="row.active ? 'true' : 'false'"
+             :href="row.href">
+            <span pp-text="row.label"></span>
+          </a>
+        </template>
+      </nav>
+    </aside>
 
+    <div class="cp-main">
   <header class="cp-head">
     <span class="cp-cat" pp-text="category"></span>
     <h1 pp-text="title"></h1>
@@ -70,27 +83,28 @@
 
   <section class="cp-section">
     <h2>Installation</h2>
-    <pre class="code-block"><code pp-text="install"></code></pre>
+    <pre class="code-block"><code pp-html="install"></code></pre>
   </section>
 
   <section class="cp-section" pp-show="has_anatomy">
     <h2>Anatomy</h2>
-    <pre class="code-block"><code pp-text="anatomy"></code></pre>
+    <pre class="code-block"><code pp-html="anatomy"></code></pre>
   </section>
 
   <section class="cp-section" pp-show="has_props">
     <h2>Props &amp; data attributes</h2>
+    <p class="cp-api-note">Generated from the Pine component source.</p>
     <div class="cp-table-wrap">
       <table class="props-table">
         <thead>
-          <tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          <tr><th>Element</th><th>Prop</th><th>Type</th><th>Description</th></tr>
         </thead>
         <tbody>
-          <template pp-for="p in props" pp-key="p.name">
+          <template pp-for="p in props" pp-key="p.key">
             <tr>
+              <td><code pp-text="p.element"></code></td>
               <td><code pp-text="p.name"></code></td>
               <td><code pp-text="p.ty"></code></td>
-              <td><code pp-text="p.default"></code></td>
               <td pp-text="p.desc"></td>
             </tr>
           </template>
@@ -98,4 +112,6 @@
       </table>
     </div>
   </section>
+    </div>
+  </div>
 </root>

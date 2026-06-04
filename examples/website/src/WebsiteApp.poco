@@ -24,23 +24,22 @@
   <pine-command-root shortcut="Mod+k" pp-model:open="open">
     <pine-command-portal>
       <pine-command-overlay></pine-command-overlay>
-      <pine-command-content pp-transition="none">
+      <pine-command-content>
         <pine-command-input placeholder="Search docs, components, actions…"></pine-command-input>
         <pine-command-list>
-          <pine-command-item value="home" @pp:command:select="nav_home">
-            <span>Go to home</span>
-          </pine-command-item>
-          <pine-command-item value="docs" @pp:command:select="nav_docs">
-            <span>Open the docs</span>
-          </pine-command-item>
-          <pine-command-item value="components" @pp:command:select="nav_components">
-            <span>Browse components</span>
-          </pine-command-item>
-          <pine-command-item value="theme" @pp:command:select="cmd_toggle_theme">
+          <template pp-for="e in search" pp-key="e.value">
+            <pine-command-item :value="e.value" @pp:command:select="on_command">
+              <span pp-text="e.label"></span>
+              <span class="cmd-kind" pp-text="e.kind"></span>
+            </pine-command-item>
+          </template>
+          <pine-command-item value="theme dark light mode" @pp:command:select="cmd_toggle_theme">
             <span>Toggle dark mode</span>
+            <span class="cmd-kind">Action</span>
           </pine-command-item>
-          <pine-command-item value="github" @pp:command:select="cmd_github">
+          <pine-command-item value="github repository source code" @pp:command:select="cmd_github">
             <span>Open GitHub repo</span>
+            <span class="cmd-kind">Action</span>
           </pine-command-item>
           <pine-command-empty>No results.</pine-command-empty>
         </pine-command-list>

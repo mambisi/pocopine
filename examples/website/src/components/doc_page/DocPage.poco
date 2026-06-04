@@ -2,7 +2,7 @@
   <aside class="doc-sidebar">
     <nav class="doc-nav">
       <template pp-for="row in nav" pp-key="row.key">
-        <a class="doc-nav-link"
+        <a class="side-nav-link"
            :data-header="row.is_header ? 'true' : 'false'"
            :data-active="row.active ? 'true' : 'false'"
            :href="row.href">

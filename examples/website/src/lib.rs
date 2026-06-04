@@ -40,6 +40,16 @@ use components::{
     SecureSection, ShowcaseCard, SiteHeader, StackFlow, StackShowcase, Tutorial,
 };
 
+/// One searchable entry in the ⌘K palette — a doc page, a component,
+/// or a top-level page. `value` is the route to navigate to (and what
+/// pine-command matches against, alongside `label`).
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct SearchEntry {
+    pub label: String,
+    pub value: String,
+    pub kind: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[component(template = "WebsiteApp.poco")]
 pub struct WebsiteApp {
@@ -47,6 +57,8 @@ pub struct WebsiteApp {
     pub open: bool,
     /// `"light"` | `"dark"` — mirrored onto `<html data-theme>`.
     pub theme: String,
+    /// Searchable index (docs + components + pages) for the palette.
+    pub search: Vec<SearchEntry>,
 }
 
 impl Default for WebsiteApp {
@@ -54,6 +66,7 @@ impl Default for WebsiteApp {
         Self {
             open: false,
             theme: "light".into(),
+            search: Vec::new(),
         }
     }
 }
@@ -77,6 +90,7 @@ impl WebsiteApp {
             }
         }
         self.apply_theme();
+        self.search = build_search_index();
     }
 
     pub fn open_palette(&mut self) {
@@ -99,18 +113,16 @@ impl WebsiteApp {
         }
     }
 
-    // ─── command-palette navigation ──────────────────────────────
-    pub fn nav_home(&mut self) {
+    // ─── command-palette ──────────────────────────────────────────
+    /// A palette result was selected. pine-command emits the item's
+    /// `value` (the route) as the event detail; navigate to it.
+    pub fn on_command(&mut self, ev: web_sys::CustomEvent) {
         self.open = false;
-        navigate("/");
-    }
-    pub fn nav_components(&mut self) {
-        self.open = false;
-        navigate("/components");
-    }
-    pub fn nav_docs(&mut self) {
-        self.open = false;
-        navigate("/docs/getting-started/introduction");
+        if let Some(target) = ev.detail().as_string() {
+            if !target.is_empty() {
+                navigate(&target);
+            }
+        }
     }
     pub fn cmd_toggle_theme(&mut self) {
         self.open = false;
@@ -131,6 +143,55 @@ impl WebsiteApp {
             }
         }
     }
+}
+
+/// Build the ⌘K search index from the generated docs nav + the
+/// component catalogue — every doc page and component is searchable
+/// and navigable. `value` is the route (also matched by pine-command).
+fn build_search_index() -> Vec<SearchEntry> {
+    use std::collections::HashSet;
+    let mut out: Vec<SearchEntry> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let push = |out: &mut Vec<SearchEntry>,
+                seen: &mut HashSet<String>,
+                label: String,
+                value: String,
+                kind: &str| {
+        if seen.insert(value.clone()) {
+            out.push(SearchEntry {
+                label,
+                value,
+                kind: kind.into(),
+            });
+        }
+    };
+    push(&mut out, &mut seen, "Home".into(), "/".into(), "Page");
+    push(
+        &mut out,
+        &mut seen,
+        "Components".into(),
+        "/components".into(),
+        "Page",
+    );
+    for c in components::component_meta::COMPONENTS {
+        push(
+            &mut out,
+            &mut seen,
+            c.title.into(),
+            format!("/components/{}", c.slug),
+            "Component",
+        );
+    }
+    for n in docs_data::NAV {
+        push(
+            &mut out,
+            &mut seen,
+            n.title.into(),
+            format!("/docs/{}", n.slug),
+            n.group,
+        );
+    }
+    out
 }
 
 #[wasm_bindgen(start)]
