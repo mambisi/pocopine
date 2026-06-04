@@ -634,7 +634,7 @@ Update:
   notes.
 * RFC 078: align code snippets with the shipped `Pending` and
   `predicate_guard` APIs.
-* `docs/route-guards-and-loaders.md`: include `Pending`, current
+* `docs/guides/routing/route-guards-and-loaders.md`: include `Pending`, current
   `pocopine-auth-client` adapter names, route refresh semantics, and
   nested-route ordering once implemented.
 * `examples/spa`: keep as the flat starter example and add a nested

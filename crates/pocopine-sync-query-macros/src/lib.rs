@@ -1606,7 +1606,7 @@ fn generate_partition_for_topic_body(params: &[ParamDef]) -> TokenStream2 {
 /// compute closure clones the args and the client into a `'static`
 /// `Fn` so it can be invoked on every rerun.
 ///
-/// See `docs/sync-query-selector-mechanism.md` for the runtime
+/// See `docs/internal/sync-query-selector-mechanism.md` for the runtime
 /// design and the four-moving-parts walk-through.
 #[proc_macro_attribute]
 pub fn query(attr: TokenStream, item: TokenStream) -> TokenStream {

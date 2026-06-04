@@ -832,7 +832,7 @@ reads as "this came from somewhere else."
    golden-file snapshots gate correctness.
 5. Migrate one Pine primitive as reference —
    `PineContextMenuContent`.
-6. Author-facing docs in `docs/components/typed-slots.md`,
+6. Author-facing docs in `docs/guides/components/typed-slots.md`,
    including a screenshot of the rendered two-block error so
    reviewers can evaluate the UX before adopting.
 7. Roll into the rest of Pine compound-by-compound as

@@ -436,7 +436,7 @@ reflection object.
 4. Remove `has_slot` language from RFC 046 (the DOM-iteration
    extractor); RFC 046 focuses purely on rendered-child
    iteration.
-5. Update `docs/poco/` with the new magic.
+5. Update `docs/guides/poco/` with the new magic.
 6. Migrate one Pine primitive as a reference — `PineDialog`
    footer wrapping is the cleanest showcase.
 

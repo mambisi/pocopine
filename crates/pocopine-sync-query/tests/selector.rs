@@ -1,7 +1,7 @@
 //! Integration tests for the `#[query]` selector runtime.
 //!
 //! Exercises the four moving parts from
-//! `docs/sync-query-selector-mechanism.md`:
+//! `docs/internal/sync-query-selector-mechanism.md`:
 //!
 //! * Thread-local read tracking — `QueryView::rows()` inside a
 //!   selector's compute registers the subscription as a dep.

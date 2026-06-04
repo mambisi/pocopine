@@ -5,7 +5,7 @@
 //! renders two ways:
 //!
 //! - [`Catalog::to_markdown`] — the human/LLM-facing catalog embedded in
-//!   `docs/pine-stylekit.md` (regenerated via `pocopine stylekit --docs`).
+//!   `docs/guides/styling/stylekit.md` (regenerated via `pocopine stylekit --docs`).
 //! - [`Catalog::to_metadata_json`] — machine-readable completion data for
 //!   editors (`pocopine stylekit --metadata`), pairing with the token
 //!   manifest ([`crate::ThemeTokens::to_manifest_json`]).
@@ -358,7 +358,7 @@ pub fn catalog() -> Catalog {
 }
 
 impl Catalog {
-    /// Render the catalog as Markdown for `docs/pine-stylekit.md`.
+    /// Render the catalog as Markdown for `docs/guides/styling/stylekit.md`.
     pub fn to_markdown(&self) -> String {
         let mut s = String::new();
         for group in &self.groups {

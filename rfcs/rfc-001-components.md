@@ -6,7 +6,7 @@
 | **Author** | pocopine team |
 | **Created** | 2026-04-18 |
 | **Supersedes** | — |
-| **Related docs** | [`docs/components/`](../docs/components/), [`docs/poco/`](../docs/poco/) |
+| **Related docs** | [`docs/guides/components/`](../docs/guides/components/), [`docs/guides/poco/`](../docs/guides/poco/) |
 
 ## 1. Summary
 
@@ -51,7 +51,7 @@ one consistent style across apps.
 * Prop APIs for callbacks (use event dispatch).
 * Two-way prop binding (`pp-model:prop`) — not in v0.
 * Named slots, `pp-for` iteration — deferred, gated by array
-  reactivity (see `docs/reactivity/02-roadmap.md`).
+  reactivity (see `docs/guides/reactivity/02-roadmap.md`).
 
 ## 5. Design
 
@@ -138,7 +138,7 @@ A plain `.css` file. When a stylesheet is associated with a component,
 it is **scoped by default** using the data-attribute strategy
 (`data-pp-<hash>` on every template element; `[data-pp-<hash>]`
 appended to every selector's last compound). Opt out per-rule with
-`:global(...)`. Full spec: `docs/poco/03-scoped-styles.md`.
+`:global(...)`. Full spec: `docs/guides/poco/03-scoped-styles.md`.
 
 Implementation uses `lightningcss` for parsing and rewriting.
 
@@ -346,7 +346,7 @@ Each step is individually landable and shippable.
   Probably the emitted string, but the server-layer RFC will settle
   it.
 * **`:deep(...)` scoping opt-out for cross-component selectors.**
-  Mentioned in `docs/poco/03-scoped-styles.md` but semantics aren't
+  Mentioned in `docs/guides/poco/03-scoped-styles.md` but semantics aren't
   locked. Punt to the scoped-styles implementation PR.
 
 ## 11. Migration / impact

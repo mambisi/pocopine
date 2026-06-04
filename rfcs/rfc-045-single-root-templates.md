@@ -394,7 +394,7 @@ render that drops half the template.
    point at the template literal. Three-arm `match` on
    `RootCheck` so the user sees the right failure message.
 4. No documentation page yet — this RFC is the spec; once
-   Implemented, a line goes into `docs/poco/` describing the
+   Implemented, a line goes into `docs/guides/poco/` describing the
    one-root rule and the two failure messages.
 
 ## 8. In-flight migration — RFC 050 §4.5
@@ -486,7 +486,7 @@ render that reflects the parser's best-effort interpretation.
   generated code is byte-identical in both modes; no
   `cfg(pocopine_lenient)` branches in runtime code.
 - **CI must not set it.** Document the guard-rail in
-  `docs/poco/` and encourage teams to add a CI check that
+  `docs/guides/poco/` and encourage teams to add a CI check that
   `POCOPINE_TEMPLATES_LENIENT` is unset in the build
   environment. Making it easy to opt out is worth the risk;
   the build-green-in-CI invariant is unchanged.
@@ -564,7 +564,7 @@ This is acceptable because:
   silence ALL deprecated-use warnings, not just ours —
   worse cure than the disease.
 
-Document this limitation under `docs/poco/` alongside the
+Document this limitation under `docs/guides/poco/` alongside the
 env-var's usage, with the workaround: authors on
 `deny(deprecated)` projects either temporarily unset the
 deny, or fix the template.

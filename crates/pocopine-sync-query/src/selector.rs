@@ -6,7 +6,7 @@
 //! `QuerySubscription::notify_listeners` plumbing, and `PartialEq`-diff
 //! suppression of downstream notifications.
 //!
-//! See [`docs/sync-query-selector-mechanism.md`](../../docs/sync-query-selector-mechanism.md)
+//! See [`docs/internal/sync-query-selector-mechanism.md`](../../docs/internal/sync-query-selector-mechanism.md)
 //! for the design explainer.
 
 use std::any::Any;

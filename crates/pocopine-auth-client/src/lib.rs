@@ -89,7 +89,7 @@
 //! pocopine_auth_client::clear_token();
 //! ```
 //!
-//! See `docs/auth-client.md` for a step-by-step walkthrough of each
+//! See `docs/guides/auth/client.md` for a step-by-step walkthrough of each
 //! surface, the security tradeoffs, and the cross-tab/refresh wire
 //! traces.
 //!

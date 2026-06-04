@@ -9,7 +9,7 @@
 //! avatar, tenant id, profile fields, OAuth-linked accounts) is the
 //! app's concern.
 //!
-//! See `docs/auth-credentials.md` for an end-to-end Postgres + `sqlx`
+//! See `docs/guides/auth/credentials.md` for an end-to-end Postgres + `sqlx`
 //! example.
 
 pub mod token;
@@ -105,7 +105,7 @@ pub trait PasswordCredentials: Send + Sync + 'static {
 /// User-record storage contract.
 ///
 /// Implement this against your database of choice. The
-/// `docs/auth-credentials.md` walkthrough shows a Postgres + `sqlx`
+/// `docs/guides/auth/credentials.md` walkthrough shows a Postgres + `sqlx`
 /// implementation; SQLite, Redis, or any custom backend works the
 /// same way.
 ///

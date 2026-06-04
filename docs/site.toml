@@ -1,0 +1,163 @@
+# Navigation manifest for the pocopine documentation site.
+#
+# The docs app reads this file to build the top-level tabs, the
+# sidebar, and a static page for each markdown file. Page <title> and
+# <meta description> come from each file's YAML front-matter; this file
+# defines ordering, sidebar labels, and grouping.
+#
+# Schema:
+#   [[group]]
+#   section = "Docs" | "Tutorials"   # which top-level tab the group sits under
+#   title   = "..."                   # sidebar group heading
+#   pages   = [ { title = "...", path = "<relative-to-docs/>" }, ... ]
+#
+# URL slugs are derived from `path`: drop the `docs/` root and the
+# `.md` extension, and map a folder's `README.md` to the folder index.
+# Anything not listed here (e.g. docs/internal/) is excluded from the
+# published site.
+
+title = "pocopine docs"
+site_url = "/"
+edit_base = "https://github.com/mambisi/pocopine/edit/main/docs/"
+
+[[group]]
+section = "Docs"
+title = "Getting Started"
+pages = [
+  { title = "Introduction", path = "getting-started/introduction.md" },
+  { title = "Installation", path = "getting-started/installation.md" },
+  { title = "Quickstart",   path = "getting-started/quickstart.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Components"
+pages = [
+  { title = "Overview",     path = "guides/components/README.md" },
+  { title = "Structure",    path = "guides/components/01-structure.md" },
+  { title = "State",        path = "guides/components/02-state.md" },
+  { title = "Composition",  path = "guides/components/03-composition.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Reactivity"
+pages = [
+  { title = "Overview",        path = "guides/reactivity/README.md" },
+  { title = "Current design",  path = "guides/reactivity/01-current-design.md" },
+  { title = "Roadmap",         path = "guides/reactivity/02-roadmap.md" },
+  { title = "Signals",         path = "guides/reactivity/03-signals.md" },
+  { title = "Vue 3 reference", path = "guides/reactivity/04-vue3-reference.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Templates (.poco)"
+pages = [
+  { title = "Overview",      path = "guides/poco/README.md" },
+  { title = "Format",        path = "guides/poco/01-format.md" },
+  { title = "Compilation",   path = "guides/poco/02-compilation.md" },
+  { title = "Scoped styles", path = "guides/poco/03-scoped-styles.md" },
+  { title = "Expressions",   path = "guides/poco/04-expressions.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Styling & UI"
+pages = [
+  { title = "Pine Stylekit", path = "guides/styling/stylekit.md" },
+  { title = "Animation",     path = "guides/styling/animation.md" },
+  { title = "Icons",         path = "guides/styling/icons.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Charts"
+pages = [
+  { title = "Overview",       path = "guides/styling/charts/README.md" },
+  { title = "Foundation",     path = "guides/styling/charts/foundation.md" },
+  { title = "Cartesian",      path = "guides/styling/charts/cartesian.md" },
+  { title = "Components",     path = "guides/styling/charts/components.md" },
+  { title = "Axes & grid",    path = "guides/styling/charts/axes-grid.md" },
+  { title = "Layers",         path = "guides/styling/charts/layers.md" },
+  { title = "Layered charts", path = "guides/styling/charts/layered.md" },
+  { title = "Legend",         path = "guides/styling/charts/legend.md" },
+  { title = "Interaction",    path = "guides/styling/charts/interaction.md" },
+  { title = "Events",         path = "guides/styling/charts/events.md" },
+  { title = "Responsive",     path = "guides/styling/charts/responsive.md" },
+  { title = "Cookbook",       path = "guides/styling/charts/cookbook.md" },
+  { title = "Examples",       path = "guides/styling/charts/examples.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Routing"
+pages = [
+  { title = "Guards & loaders", path = "guides/routing/route-guards-and-loaders.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Server"
+pages = [
+  { title = "Server plugins", path = "guides/server/server-plugins.md" },
+  { title = "Client modules", path = "guides/server/client-modules.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Data & Sync"
+pages = [
+  { title = "Sync (client)",          path = "guides/data/sync-client.md" },
+  { title = "Sync (server)",          path = "guides/data/sync-server.md" },
+  { title = "Object-storage uploads", path = "guides/data/storage-uploads.md" },
+  { title = "Browser storage",        path = "guides/data/browser-storage.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Auth"
+pages = [
+  { title = "Credentials",   path = "guides/auth/credentials.md" },
+  { title = "JWT providers", path = "guides/auth/jwt-providers.md" },
+  { title = "Client bridge", path = "guides/auth/client.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Background Jobs"
+pages = [
+  { title = "Jobs", path = "guides/jobs/jobs.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Observability"
+pages = [
+  { title = "Logging & tracing", path = "guides/observability/logging-tracing.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Plugins"
+pages = [
+  { title = "App plugins", path = "guides/plugins/app-plugins.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Recipes"
+pages = [
+  { title = "Overview",            path = "guides/recipes/README.md" },
+  { title = "Storage browser state", path = "guides/recipes/storage-browser-state-refactor.md" },
+]
+
+[[group]]
+section = "Tutorials"
+title = "Tutorials"
+pages = [
+  { title = "Build an issue tracker (sync)", path = "tutorials/issue-tracker-sync.md" },
+  { title = "Live invalidation",             path = "tutorials/live-invalidation.md" },
+  { title = "Phone OTP auth",                path = "tutorials/phone-otp-auth.md" },
+  { title = "Firebase Auth",                 path = "tutorials/firebase-auth.md" },
+]

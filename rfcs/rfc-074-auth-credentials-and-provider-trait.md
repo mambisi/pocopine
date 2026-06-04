@@ -246,7 +246,7 @@ let verifier = JwtVerifier::from_provider(
 )?;
 ```
 
-`docs/auth-jwt-providers.md` (new, this RFC) maintains a
+`docs/guides/auth/jwt-providers.md` (new, this RFC) maintains a
 community-maintained list of provider crates. Adding a row to
 that table is the same drive-by PR third-party authors already do
 for `serde-*` adapters.
@@ -619,7 +619,7 @@ the verifier engine.
 ### 6.3 Operator obligations
 
 Documented in the credentials module rustdoc and
-`docs/auth-credentials.md`:
+`docs/guides/auth/credentials.md`:
 
 1. Set `POCOPINE_AUTH_SECRET` in production (≥ 32 random bytes).
    `Credentials::tryout` warns at startup if the secret is
@@ -659,9 +659,9 @@ Recommended ship sequence (each its own PR):
    ~3 days.
 4. **PR-4: Examples + docs.**
    `examples/blog` adopts the credentials crate;
-   `docs/auth-credentials.md` walks through tryout → durable
+   `docs/guides/auth/credentials.md` walks through tryout → durable
    store → email sender;
-   `docs/auth-jwt-providers.md` documents the `Provider`
+   `docs/guides/auth/jwt-providers.md` documents the `Provider`
    convention and lists in-tree + community providers. ~3 days.
 
 ## 8. Open questions

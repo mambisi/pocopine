@@ -958,7 +958,7 @@ an attacker cannot bypass.
 The framework actively encourages the correct symmetry (one
 predicate, two install points; same `Decision` type) but cannot
 prevent misuse. Implementations of this RFC **MUST** state this
-prominently in the public docs (`docs/route-guards-and-loaders.md`)
+prominently in the public docs (`docs/guides/routing/route-guards-and-loaders.md`)
 and the rustdoc on `RouteConfig::guard`. Reviewers of consuming
 PRs should treat "I added a client guard, the route is secure" as a
 defect.
@@ -1278,7 +1278,7 @@ through the default UI or through plugin event consumers.
 
 ### Phase 5 — Documentation + integration tests (core implemented; auth-client integration pending)
 
-- `docs/route-guards-and-loaders.md` walking through the four
+- `docs/guides/routing/route-guards-and-loaders.md` walking through the four
   phases AND the security model with a "client guards are not
   authorization" callout at the top.
 - wasm tests covering: guard outcomes; loader success/failure

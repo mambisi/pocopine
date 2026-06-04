@@ -698,7 +698,7 @@ mod host {
     /// invalidations work in dev but mysteriously drop in production
     /// the moment traffic crosses node boundaries.
     ///
-    /// See `docs/live.md §8 "Production Backends"` for the broker
+    /// See `docs/tutorials/live-invalidation.md §8 "Production Backends"` for the broker
     /// comparison and `pocopine_events::build_event_backend` for the
     /// one-line config switch.
     #[derive(Clone, Debug)]

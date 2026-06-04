@@ -5,24 +5,29 @@
 <h1 align="center">pocopine</h1>
 
 <p align="center">
-  <em>A tiny, blazing-fast, reactive Rust/WASM UI framework with a
-  full primitive library — ships server-rendered HTML, animates by
-  default, benchmarks with the mature ones.</em>
+  <em>A full-stack Rust application framework — reactive Rust/WASM UI,
+  type-safe server functions, a local-first data layer, auth, storage,
+  background jobs, and one-command deploy. One language, end to end.</em>
 </p>
 
 ---
 
-pocopine is a directive-driven Rust/WASM UI framework: a Vue-3-style
+pocopine is a full-stack application framework written in Rust. The
+front end is a directive-driven Rust/WASM UI layer: a Vue-3-style
 reactive core (real `Proxy` traps, auto dep-tracking) wired into
-compiled `.poco` template plans, with tag-based components, a
-type-safe server-function bridge, and a built-in SPA router. Runtime
-directive handling still exists for dynamic/adopted DOM boundaries,
-but normal component templates mount through macro-generated install
-code.
+compiled `.poco` template plans, with tag-based components and a
+built-in SPA router. The back end is reached through a type-safe
+server-function bridge — write an `async fn`, call it from the client
+as a typed stub. Around that core sits a set of opt-in crates for the
+rest of an application: a query-centric data layer, auth, object
+storage, live updates, background jobs, observability, and deploy
+adapters.
+
 Templates live in plain HTML files (`.poco`), styles in plain CSS
 files, logic in plain Rust files. No mixed-language SFCs, no virtual
 DOM, and no JavaScript toolchain unless you opt into Pocopine-managed
-typed `.client.ts` modules.
+typed `.client.ts` modules. One canonical way per decision — the
+framework is opinionated so application code stays small.
 
 > Status: **pre-1.0 / experimental.** The API is still moving; every
 > breaking change lands in an RFC under [`rfcs/`](./rfcs/).
@@ -67,86 +72,14 @@ pub fn main() { App::new().register::<Counter>().run(); }
 ```
 
 That's the whole counter. No virtual DOM, no build step beyond
-`wasm-pack`, no `Rc<RefCell<_>>` in the author's code.
-
-## Highlights
-
-* **Directives:** `pp-text`, `pp-html`, `pp-bind:<attr>`, `pp-on:<event>`,
-  `pp-show`, `pp-model`, `pp-init`, `pp-for`, `pp-if`, `pp-cloak`,
-  `pp-transition:*`, `pp-teleport`, `pp-ref`, `pp-route`.
-* **Compiled templates.** Component templates, lifted `pp-if` /
-  `pp-for` / `pp-teleport` bodies, and dynamic slot fragments install
-  through generated closures instead of a generic fragment applier.
-* **Tag-based components.** Declare a struct, drop `<my-thing>` in
-  HTML, done. Props bind by attribute name (kebab → snake), slots via
-  `<slot>`.
-* **Lifecycle hooks.** Write `pub fn on_mount(&mut self)` /
-  `pub fn on_unmount(&mut self)` and the macro auto-wires them; no
-  `pp-init` attribute needed.
-* **Devtools overlay.** Opt-in with `App::with_devtools()`. Lists live
-  scopes, their fields, and registered refs; `Ctrl+Shift+D` toggles.
-* **Reactive core.** `signal()` / `computed()` / `watch()` compose with
-  components through a `js_sys::Proxy` — same semantics as Vue 3's
-  reactivity.
-* **Stores.** `#[store]` gives you an app-wide reactive cell addressed
-  as `$store.*` from any template.
-* **Server functions.** `#[server] async fn` compiles to a POST route
-  on the server and a typed `fetch` stub on the client. One function,
-  two build targets.
-* **SPA router.** `App::route::<C>("/item/:id")` + `<pp-outlet>` +
-  `pp-route` on links. Path params become component props through
-  the same pipeline as HTML attributes.
-* **Opinionated layout.** One canonical way per decision: `.poco`
-  templates, `.rs` structs, `.css` stylesheets; each lives in its own
-  file. No runtime config-shopping.
-* **Tailwind-friendly transitions.** `pp-transition:enter`,
-  `enter-start`, `enter-end` (and leave variants) — class strings go
-  straight through, no custom CSS language.
-* **Optional client modules.** Typed `.client.ts` files can import npm
-  SDKs through the Pocopine CLI-managed esbuild path. No TSX/JSX,
-  untyped managed modules, or framework islands.
-
-## Performance
-
-The `js-framework-benchmark` keyed-table action plan, run locally
-under headless Firefox against pinned Rust/WASM and JS competitors.
-Numbers are wall-clock geometric means (lower is better) across:
-`run(1000)`, `update every 10th`, `select`, `swapRows`, `remove`,
-`clear`, `runLots(10000)`, `add(1000)`. Vanilla is always measured as
-the control because browser timing can drift between runs.
-
-| framework  | geomean (ms) | vs vanilla |
-|------------|-------------:|-----------:|
-| vanilla JS |       185.41 |       1.00× |
-| Vue 3      |       202.17 |       1.09× |
-| **pocopine** |   **215.92** |   **1.16×** |
-| Yew        |       225.07 |       1.21× |
-| Leptos     |       281.45 |       1.52× |
-
-pocopine now sits between Vue and Yew in the Firefox harness after
-RFC 064's compiled fragment installs, static string surfaces,
-compiled expression envelope, and keyed `pp-for` fast paths. No
-virtual-DOM diff runs in the hot path; generated template code and
-fine-grained `Proxy` reactivity mutate real DOM nodes in place.
-
-Reproduce locally:
-
-```bash
-python3 jsbench/measure.py --browser firefox jsbench/vanilla
-./jsbench/benchmark.sh pocopine --browser firefox --no-build
-./jsbench/benchmark.sh --all --browser firefox
-```
-
-The harness pins each competitor to a fixed version and runs the
-plan with 2 warm-up + N measured passes per action. Source under
-[`jsbench/`](./jsbench/).
+`pocopine dev`, no `Rc<RefCell<_>>` in the author's code.
 
 ## Get started in 60 seconds
 
 ### 1. Install the CLI
 
-The `pocopine` CLI handles building, serving, and hot-reload —
-one install covers all three.
+The `pocopine` CLI handles building, serving, and hot-reload — one
+install covers all three.
 
 ```bash
 cargo install pocopine-cli
@@ -159,24 +92,10 @@ From a source checkout, use the repo helper:
 pocopine doctor --path .
 ```
 
-If a project needs wrappers or pinned tool paths, add a local
-`.pocopine.toml`. Pocopine reads this file instead of guessing from
-global tools, without shelling out through npm scripts:
-
-```toml
-[tools]
-cargo = { command = "cargo", args = ["+stable"] }
-rustc = { command = "rustc", args = ["+stable"] }
-wasm-pack = "/opt/tools/wasm-pack"
-package-manager = "pnpm"
-node = "node"
-tailwindcss = "tailwindcss"
-```
-
 ### 2. Scaffold an app
 
 A pocopine app is a regular Rust library crate. Add `pocopine`
-(runtime) and `pine` (optional UI primitives).
+(runtime) and, optionally, `pine` (UI primitives).
 
 ```bash
 cargo new --lib hello-pine
@@ -216,15 +135,126 @@ pub fn main() {
 
 ### 4. Run it
 
-`pocopine dev` builds the wasm bundle, serves it on a local
-port, and rebuilds on save.
+`pocopine dev` builds the wasm bundle, serves it on a local port, and
+rebuilds on save.
 
 ```bash
 pocopine dev
 # → listening on http://127.0.0.1:5243
 ```
 
-Ship with `pocopine build --release`.
+Ship with `pocopine build --release`, then `pocopine deploy`.
+
+## The stack
+
+pocopine is a Cargo workspace. Apps depend on the `pocopine` façade
+crate (runtime + prelude) and add only the modules they need. Each
+module is documented under [`docs/`](./docs).
+
+### Core & rendering
+
+| Crate | What it does |
+|---|---|
+| [`pocopine`](./crates/pocopine) | The façade crate apps depend on: runtime re-exports + `prelude`. |
+| [`pocopine-core`](./crates/pocopine-core) | Reactive runtime — signals, effects, component scopes, directives, router. A Rust/WASM port of Alpine.js. |
+| [`pocopine-macros`](./crates/pocopine-macros) | `#[component]`, `#[handlers]`, `#[store]`, `#[server]`. |
+| [`pocopine-template-parser`](./crates/pocopine-template-parser) | Host-only `.poco` parser (html5ever); shared by the macros and Stylekit. Never linked into wasm. |
+| [`pocopine-expr`](./crates/pocopine-expr) | Pure-Rust template-expression grammar (RFC 012), shared by the runtime evaluator and compile-time validation. |
+| [`pocopine-stylekit`](./crates/pocopine-stylekit) | Pine Stylekit — a Pocopine-native, Tailwind-shaped utility-CSS compiler. Build-time only, no browser runtime. |
+
+### Pine — UI primitives
+
+| Crate | What it does |
+|---|---|
+| [`pine`](./crates/pine) | Unstyled, accessible UI primitives (Button, Dialog, Popover, …) ready to style. |
+| [`pine-icons`](./crates/pine-icons) | Tabler Icons as a tree-shaken Pine component. |
+| [`pine-charts`](./crates/pine-charts) | SVG-first chart primitives. |
+| [`pine-motion`](./crates/pine-motion) | Motion.dev-style animation — springs, gestures, drag, scroll, shared-layout (FLIP). |
+| [`pine-richtext`](./crates/pine-richtext) | Rust-native rich-text document model + editor state, with an optional browser view. |
+
+### Server & types
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-server`](./crates/pocopine-server) | Host-side helpers for `#[server]` functions: axum integration + static-file serving. |
+| [`pocopine-client-codegen`](./crates/pocopine-client-codegen) | Discovery + typed-facade generation for managed `.client.ts` modules. |
+| [`pocopine-ts-rs`](./crates/pocopine-ts-rs) | Rust → TypeScript DTO generation (a Pocopine-owned fork of `ts-rs`). |
+
+### Data & sync
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-sync-query`](./crates/pocopine-sync-query) | Query-centric, local-first data layer: filtered subscriptions, predicate-routed mutations, reactive selectors, typed writes. |
+| [`pocopine-sync`](./crates/pocopine-sync) | Sync protocol + server plugin the query layer rides on. |
+| [`pocopine-sync-sqlite`](./crates/pocopine-sync-sqlite) / [`-indexdb`](./crates/pocopine-sync-indexdb) | Local-store backends (server/native and browser). |
+| [`pocopine-storage`](./crates/pocopine-storage) | Object-storage protocol + server-mediated uploads, with [`-s3`](./crates/pocopine-storage-s3), [`-gcs`](./crates/pocopine-storage-gcs), and [`-azure`](./crates/pocopine-storage-azure) backends. |
+
+### Auth
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-auth`](./crates/pocopine-auth) | Auth contracts + server-function guards. |
+| [`pocopine-auth-credentials`](./crates/pocopine-auth-credentials) | First-party email + password (argon2id, signup/login/logout as a `ServerPlugin`). |
+| [`pocopine-auth-jwt`](./crates/pocopine-auth-jwt) | JWT verification for Firebase, Clerk, Auth0, Supabase, custom OIDC, and pocopine-issued tokens. |
+| [`pocopine-auth-client`](./crates/pocopine-auth-client) | Wasm-side bearer-token bridge + fetch middleware. |
+
+### Realtime & background work
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-live`](./crates/pocopine-live) | Browser live-invalidation streams (SSE) for collection/query refresh. |
+| [`pocopine-events`](./crates/pocopine-events) | Event envelopes, cursors, and backends for live features. |
+| [`pocopine-jobs`](./crates/pocopine-jobs) | Background jobs — Redis Streams + scheduler, periodic firings, reclaim, in-memory backend. |
+
+### Observability
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-observe`](./crates/pocopine-observe) | Shared observability event contract for logging, tracing, and analytics. |
+| [`pocopine-logging`](./crates/pocopine-logging) | Logging adapters for server and browser. |
+| [`pocopine-analytics`](./crates/pocopine-analytics) | Analytics + telemetry adapters. |
+
+### Deploy & ops
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-cli`](./crates/pocopine-cli) | `pocopine build \| run \| dev \| deploy`. |
+| [`pocopine-deploy`](./crates/pocopine-deploy) | Deploy contract + adapters (RFC 080), with [`-railway`](./crates/pocopine-deploy-railway) and [`-render`](./crates/pocopine-deploy-render). Host-API-direct; no host CLIs. |
+| [`pocopine-launcher`](./crates/pocopine-launcher) | Procfile-style entrypoint for the production OCI image. |
+
+### Shared utilities
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-crypto`](./crates/pocopine-crypto) | Centralized hashing + checksum primitives (sha2, hmac, crc32c). |
+| [`pocopine-codec`](./crates/pocopine-codec) | Shared encoding (base64, percent-encoding, serde adapters). |
+
+## Documentation & tutorials
+
+Full guides and tutorials live under [`docs/`](./docs). Start here:
+
+**Concepts & guides**
+
+- [Components](./docs/guides/components/) — structure, state, and composition. Read first.
+- [Reactivity](./docs/guides/reactivity/) — effects, dep tracking, signals, and the `Proxy` bridge.
+- [`.poco` templates](./docs/guides/poco/) — the template format, compilation, scoped styles, and expressions.
+- [Pine Stylekit](./docs/guides/styling/stylekit.md) — the utility-CSS compiler and `@theme` tokens.
+- [Animation](./docs/guides/styling/animation.md) — presets, FLIP, and the WAAPI escape hatch.
+- [Routing](./docs/guides/routing/route-guards-and-loaders.md) — route guards, async loaders, and fetch middleware.
+- [App plugins](./docs/guides/plugins/app-plugins.md) / [Server plugins](./docs/guides/server/server-plugins.md) — install-time setup and lifecycle ordering.
+- [Sync (client)](./docs/guides/data/sync-client.md) / [Sync (server)](./docs/guides/data/sync-server.md) — the query data layer, end to end.
+- [Object-storage uploads](./docs/guides/data/storage-uploads.md) — the server-mediated upload path.
+- [Logging, tracing & observers](./docs/guides/observability/logging-tracing.md) — structured events, sinks, and privacy labels.
+- [Charts](./docs/guides/styling/charts/) · [Icons](./docs/guides/styling/icons.md) · [Client modules](./docs/guides/server/client-modules.md) · [Browser storage](./docs/guides/data/browser-storage.md)
+
+**Tutorials (build something end to end)**
+
+- [Sync: a workspace issue tracker](./docs/tutorials/issue-tracker-sync.md) — `#[query_resource]`, a `Source` impl, reactive views, typed writes.
+- [Live invalidation](./docs/tutorials/live-invalidation.md) — SSE streams + collection/query refresh callbacks.
+- [Email + password auth](./docs/guides/auth/credentials.md) — implement `UserStore`/`TokenStore` (Postgres + `sqlx`), plug in `Credentials`.
+- [Phone OTP auth](./docs/tutorials/phone-otp-auth.md) — Twilio + Postgres on top of the credentials primitives.
+- [Firebase Auth](./docs/tutorials/firebase-auth.md) — client modules + server-side token verification.
+- [Background jobs](./docs/guides/jobs/jobs.md) — the job runtime, scheduling, and a live-deployment validation recipe.
 
 ## Examples
 
@@ -235,125 +265,98 @@ Drop into any one with `pocopine dev --path examples/<name>`:
 | [`counter`](./examples/counter) | Single component, basic directives |
 | [`todo`](./examples/todo) | Multi-component, slots, stores |
 | [`blog`](./examples/blog) | `App` + `#[server]` + axum server bin |
-| [`live`](./examples/live) | SSE live invalidation + collection/query refresh |
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
-| [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, pp-for |
+| [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, `pp-for` |
+| [`sync`](./examples/sync) | Query data layer + `pocopine-live` wake-ups |
+| [`live`](./examples/live) | SSE live invalidation + collection/query refresh |
+| [`charts`](./examples/charts) | `pine-charts` primitives |
+| [`richtext`](./examples/richtext) | `pine-richtext` editor |
+| [`file-browser`](./examples/file-browser) | Storage browser shell for S3/MinIO |
 | [`website`](./examples/website) | Pine UI — every primitive, side-by-side |
-| [`file-browser`](./examples/file-browser) | Storage browser shell for S3/MinIO, with cloud-provider expansion path |
 | [`site`](./examples/site) | The marketing page, dogfooded |
-| [`tailwind`](./examples/tailwind) | Tailwind v4 + `.poco` scanning (CDN-mode for demo) |
-
-## Repository layout
-
-```
-crates/
-├── pocopine-core/     reactive core, compiled plans, directives, router
-├── pocopine-macros/   #[component], #[handlers], #[store], #[server]
-├── pocopine-server/   host-side: axum + tower-http glue for #[server]
-├── pocopine-cli/      `pocopine build | run | dev`
-└── pocopine/          thin façade + prelude (what apps depend on)
-docs/                  design notes (how + why)
-rfcs/                  accepted design decisions (authoritative)
-examples/              runnable apps demonstrating each feature
-```
+| [`tailwind`](./examples/tailwind) | Tailwind v4 + `.poco` scanning (fallback styling) |
 
 ## Architecture
 
-Three layers you can reach for independently:
+Three layers you can reach for independently, with the application
+modules layered on top:
 
-1. **Runtime** — reactive engine, component scopes, directives, and
-   the adopted-DOM bridge for dynamic HTML. No virtual DOM; mutations
-   happen in place against the real DOM.
+1. **Runtime** — reactive engine, component scopes, directives, and the
+   adopted-DOM bridge for dynamic HTML. No virtual DOM; mutations
+   happen in place against real DOM nodes.
 2. **Templates** — `.poco` files are pure HTML with `pp-*` directives.
    The `#[component]` macro wires them to Rust structs, emits static
    template metadata, and specializes eligible binding/listener
    installs at compile time.
-3. **Server functions** — `#[server] async fn` on the backend; client
-   gets a typed stub that POSTs to `/_pocopine/<fn_name>` and
+3. **Server functions** — `#[server] async fn` on the backend; the
+   client gets a typed stub that POSTs to `/_pocopine/<fn_name>` and
    deserializes the response. Works with any serde-compatible type.
 
-Design docs live under [`docs/`](./docs); the authoritative
-decisions are in [`rfcs/`](./rfcs):
+On top of those sit the opt-in application modules — data/sync, auth,
+storage, live, jobs, observability — most of which install as **app
+plugins** (browser) or **server plugins** (host) through a single
+lifecycle boundary. See [`docs/guides/plugins/app-plugins.md`](./docs/guides/plugins/app-plugins.md).
 
-| # | Title |
-|---|---|
-| 001 | [Components](./rfcs/rfc-001-components.md) |
-| 002 | [Application framework, stores, server functions](./rfcs/rfc-002-app-stores-servers.md) |
-| 003 | [Client-side SPA router](./rfcs/rfc-003-router.md) |
-| 004 | [`pp-for` list iteration](./rfcs/rfc-004-pp-for.md) |
-| 005 | [`pp-transition` enter/leave animations](./rfcs/rfc-005-pp-transition.md) |
-| 006 | [`pp-teleport` dialogs / popovers / portals](./rfcs/rfc-006-pp-teleport.md) |
-| 007 | [`pp-for` keyed iteration](./rfcs/rfc-007-pp-for-keys.md) |
+Authoritative design decisions live in [`rfcs/`](./rfcs); narrative
+design notes live in [`docs/`](./docs).
+
+### Directives
+
+`pp-text`, `pp-html`, `pp-bind:<attr>`, `pp-on:<event>`, `pp-show`,
+`pp-model`, `pp-init`, `pp-for`, `pp-if`, `pp-cloak`, `pp-transition:*`,
+`pp-teleport`, `pp-ref`, `pp-route`. Component templates and lifted
+`pp-if` / `pp-for` / `pp-teleport` bodies install through
+macro-generated closures rather than a generic runtime applier.
+
+## Performance
+
+The `js-framework-benchmark` keyed-table action plan, run locally under
+headless Firefox against pinned Rust/WASM and JS competitors. Numbers
+are wall-clock geometric means (lower is better); vanilla is the
+control because browser timing drifts between runs.
+
+| framework  | geomean (ms) | vs vanilla |
+|------------|-------------:|-----------:|
+| vanilla JS |       185.41 |       1.00× |
+| Vue 3      |       202.17 |       1.09× |
+| **pocopine** |   **215.92** |   **1.16×** |
+| Yew        |       225.07 |       1.21× |
+| Leptos     |       281.45 |       1.52× |
+
+No virtual-DOM diff runs in the hot path; generated template code and
+fine-grained `Proxy` reactivity mutate real DOM nodes in place.
+Reproduce locally with the harness under [`jsbench/`](./jsbench/):
+
+```bash
+./jsbench/benchmark.sh pocopine --browser firefox --no-build
+./jsbench/benchmark.sh --all --browser firefox
+```
 
 ## Styling
 
-**Pine Stylekit is the recommended way to style Pocopine apps** — a
-native utility-CSS compiler with Tailwind-shaped classes, compiled
-in-process at build time (no external watcher, no Node). It runs **by
-default**: write utility classes in your `.poco` templates, declare any
-colours in an `@theme` block, link `/pkg/stylekit.css`, and
-`pocopine build`/`dev` does the rest. It parses `.poco` with the real
-compiler (not text scanning), fails loud on typos with source spans, and
-ships Tailwind's default palette + a Preflight. See
-[`docs/pine-stylekit.md`](./docs/pine-stylekit.md).
+**Pine Stylekit is the default way to style pocopine apps** — a native
+utility-CSS compiler with Tailwind-shaped classes, compiled in-process
+at build time (no external watcher, no Node). It runs by default: write
+utility classes in `.poco` templates, declare colours in an `@theme`
+block, link `/pkg/stylekit.css`, and `pocopine build`/`dev` does the
+rest. It parses `.poco` with the real compiler (not text scanning) and
+fails loud on typos with source spans. See
+[`docs/guides/styling/stylekit.md`](./docs/guides/styling/stylekit.md).
 
 ```html
-<!-- index.html -->
 <link rel="stylesheet" href="/pkg/stylekit.css" />
 ```
 
-```css
-/* app.css — only needed if you use custom colours */
-@theme {
-  --color-surface: #ffffff;
-  --color-accent: oklch(0.54 0.13 252);
-}
-```
-
-### Tailwind / DaisyUI (fallback)
-
-Prefer Tailwind? It stays a first-class option — add a
+Prefer Tailwind? It stays a first-class fallback — add a
 `[package.metadata.pocopine.tailwind]` block (with no `[stylekit]`
-block) and Stylekit defers to it. `pocopine-cli` downloads the
-standalone Rust binary on first run, then spawns it alongside
-`wasm-pack`:
-
-```toml
-[package.metadata.pocopine.tailwind]
-input = "app.css"            # entry CSS
-output = "pkg/tailwind.css"  # compiled bundle
-# version = "v4.0.0"         # optional — pin the upstream release
-# binary = "./tailwindcss"   # optional — use your own binary instead
-```
-
-Your `app.css` is a normal Tailwind entry. `.poco` files aren't a
-recognised extension, but Tailwind's parser scans raw text, so a
-`@source` line is all it takes:
-
-```css
-@import "tailwindcss";
-@source "./src/**/*.poco";
-```
-
-`cargo run -p pocopine-cli -- dev --path examples/tailwind` does the
-whole dance: binary in `target/pocopine/bin/tailwindcss`, watch mode,
-compiled CSS at `/pkg/tailwind.css`. No Node, no `npm install`.
-
-DaisyUI is a plugin:
-
-```css
-@import "tailwindcss";
-@plugin "daisyui";
-@source "./src/**/*.poco";
-```
-
-If your `pp-bind:class="..."` expressions live in Rust strings, expand
-the glob: `@source "./src/**/*.{poco,rs}";`.
+block) and Stylekit defers to it; the CLI downloads the standalone
+binary and runs it alongside the build. DaisyUI works as a plugin. See
+[`docs/guides/styling/stylekit.md`](./docs/guides/styling/stylekit.md) for both paths.
 
 ## Development
 
 ```bash
-# cross-target checks
+# cross-target checks (apps build for wasm32)
 cargo check --workspace --target wasm32-unknown-unknown
 cargo clippy --workspace --all-targets -- -D warnings
 
@@ -368,12 +371,9 @@ for the convention.
 ## Inspiration
 
 * [**Alpine.js**][alpine] — the directive model and author ergonomics.
-* [**Vue 3**](https://github.com/vuejs/core) — the `Proxy`-based
-  reactive core.
-* [**Headless UI**](https://headlessui.com) — the `<Transition>` API
-  that `pp-transition:*` mirrors.
-* [**Solid**](https://solidjs.com) / [**Leptos**](https://leptos.dev) —
-  fine-grained reactivity references.
+* [**Vue 3**](https://github.com/vuejs/core) — the `Proxy`-based reactive core.
+* [**Headless UI**](https://headlessui.com) — the `<Transition>` API that `pp-transition:*` mirrors.
+* [**Solid**](https://solidjs.com) / [**Leptos**](https://leptos.dev) — fine-grained reactivity references.
 
 ## License
 

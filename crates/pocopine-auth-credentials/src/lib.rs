@@ -49,7 +49,7 @@
 //!     async fn create(&self, _: &str, _: String) -> _ { unimplemented!() }
 //! }
 //!
-//! // ... see docs/auth-credentials.md for the full Postgres example.
+//! // ... see docs/guides/auth/credentials.md for the full Postgres example.
 //! ```
 //!
 //! ## Out of scope (deferred to follow-up PRs)

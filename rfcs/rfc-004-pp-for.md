@@ -271,7 +271,7 @@ No compiler (`pocopine-macros`) changes.
    they become declarative markup.
 6. Introduce `<hn-comment>` as a recursive component to exercise the
    tree-via-pp-for path.
-7. Update `docs/components/03-composition.md` §iteration. Remove
+7. Update `docs/guides/components/03-composition.md` §iteration. Remove
    the "deferred" hedges in RFC-001 §5.9 that called out `pp-for`
    as blocked.
 8. Follow-up RFC-005 for keyed diffing.
