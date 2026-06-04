@@ -1,0 +1,157 @@
+/* ─── Learn: build a Todo app (Apple-tutorial layout) ────────── */
+
+.learn {
+  display: block;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 2.5rem var(--site-padding-x) 5rem;
+}
+
+.dc-eyebrow {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--brand-fg);
+  background: var(--brand);
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  margin-bottom: 0.9rem;
+}
+.learn-head { max-width: 44rem; margin-bottom: 2.5rem; }
+.learn-head h1 { font-size: 2.4rem; margin: 0 0 0.6rem; letter-spacing: -0.025em; }
+.learn-head p { color: var(--fg-muted); font-size: 1.08rem; margin: 0; }
+
+.learn-grid {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) 360px;
+  gap: 2rem;
+  align-items: start;
+}
+
+/* Sticky chapter nav */
+.learn-nav {
+  position: sticky;
+  top: 4.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+.learn-nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  padding: 0.4rem 0.65rem;
+  border-left: 2px solid transparent;
+  border-radius: 0 6px 6px 0;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.learn-nav a span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.learn-nav a:hover { color: var(--fg); background: var(--bg-subtle); }
+.learn-nav a[data-active="true"] {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--bg-subtle);
+  border-left-color: var(--brand);
+}
+.learn-nav a[data-active="true"] span {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-fg);
+}
+
+/* Chapters */
+.learn-main { min-width: 0; }
+.learn-sec {
+  scroll-margin-top: 4.5rem;
+  padding: 0.5rem 0 2.5rem;
+  border-bottom: 1px solid var(--border);
+}
+/* Tall enough that the final chapter can scroll up into the scroll-spy
+   band (otherwise it can never become "active" at the page bottom). */
+.learn-sec:last-child { border-bottom: 0; min-height: 72vh; }
+.learn-sec h2 { font-size: 1.4rem; margin: 0 0 0.6rem; letter-spacing: -0.01em; }
+.learn-sec p { color: var(--fg); line-height: 1.65; margin: 0 0 1rem; max-width: 42rem; }
+.learn-sec code { font-family: var(--mono); font-size: 0.86em; background: var(--bg-subtle); padding: 0.1em 0.35em; border-radius: 4px; }
+
+.code-block {
+  margin: 0;
+  background: #2d1a0f;
+  color: #faf0dc;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.65;
+  padding: 1.1rem 1.25rem;
+  border-radius: 12px;
+  overflow-x: auto;
+  white-space: pre;
+  box-shadow: var(--shadow);
+}
+.code-block code { background: transparent; padding: 0; color: inherit; }
+
+.learn-end { display: flex; gap: 0.7rem; flex-wrap: wrap; margin-top: 1.5rem; }
+.learn-end a {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.55rem 1.05rem;
+  border-radius: var(--radius);
+  font-weight: 500;
+  font-size: 0.92rem;
+}
+.learn-end .cta-primary { background: var(--brand); color: var(--brand-fg); }
+.learn-end .cta-primary:hover { filter: brightness(1.06); }
+.learn-end .cta-ghost { color: var(--fg); border: 1px solid var(--border); background: var(--bg); }
+.learn-end .cta-ghost:hover { background: var(--bg-hover); }
+
+/* Sticky live preview */
+.learn-preview { position: sticky; top: 4.5rem; }
+.learn-preview-card {
+  border-radius: 16px;
+  background: var(--bg);
+  padding: 1.1rem 1.15rem 1.25rem;
+  box-shadow: var(--shadow);
+}
+.learn-preview-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 0.85rem;
+}
+.learn-preview-stage { color: var(--fg); }
+
+@media (max-width: 1040px) {
+  .learn-grid { grid-template-columns: 180px minmax(0, 1fr); }
+  .learn-preview { display: none; }
+}
+@media (max-width: 720px) {
+  .learn-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+  .learn-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .learn-nav a span { display: none; }
+}

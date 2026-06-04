@@ -1,37 +1,45 @@
-<div>
-  <!-- App root owns palette state + theme. Children render as
-       siblings; each one's scope chains up to WebsiteApp, so
-       `inject::<Handle<WebsiteApp>>(&WEBSITE_APP)` resolves from
-       anywhere below. -->
+<div class="app-shell">
+  <!-- App shell: owns palette state + theme, provides WEBSITE_APP so
+       any descendant can inject it. Routes mount into <pp-outlet>. -->
   <site-header></site-header>
-  <div class="site-content">
-    <hero id="hero"></hero>
-    <install-tutorial id="install"></install-tutorial>
-    <showcase id="showcase"></showcase>
-  </div>
 
-  <!-- Site-wide command palette. Bound to the root's `open`
-       field; the header's search button and any page CTA flip
-       this via injected handle. -->
+  <main class="app-main">
+    <pp-outlet></pp-outlet>
+  </main>
+
+  <footer class="app-footer">
+    <div class="app-footer-inner">
+      <span class="app-footer-brand"><span class="brand">poco</span>pine — a full-stack Rust framework</span>
+      <span class="app-footer-links">
+        <a href="/docs/getting-started/introduction" pp-route>Docs</a>
+        <a href="/components" pp-route>Components</a>
+        <a href="https://github.com/mambisi/pocopine">GitHub</a>
+        <span class="mono">MIT OR Apache-2.0</span>
+      </span>
+    </div>
+  </footer>
+
+  <!-- Site-wide command palette. `open` is bound to the shell; the
+       header search button and any CTA flip it via injected handle. -->
   <pine-command-root shortcut="Mod+k" pp-model:open="open">
     <pine-command-portal>
       <pine-command-overlay></pine-command-overlay>
       <pine-command-content pp-transition="none">
-        <pine-command-input placeholder="Search docs, sections, actions…"></pine-command-input>
+        <pine-command-input placeholder="Search docs, components, actions…"></pine-command-input>
         <pine-command-list>
-          <pine-command-item value="home" @pp:command:select="go_hero">
-            <span>Go to hero</span>
+          <pine-command-item value="home" @pp:command:select="nav_home">
+            <span>Go to home</span>
           </pine-command-item>
-          <pine-command-item value="install" @pp:command:select="go_tutorial">
-            <span>Jump to install tutorial</span>
+          <pine-command-item value="docs" @pp:command:select="nav_docs">
+            <span>Open the docs</span>
           </pine-command-item>
-          <pine-command-item value="showcase" @pp:command:select="go_showcase">
-            <span>Jump to showcase</span>
+          <pine-command-item value="components" @pp:command:select="nav_components">
+            <span>Browse components</span>
           </pine-command-item>
           <pine-command-item value="theme" @pp:command:select="cmd_toggle_theme">
             <span>Toggle dark mode</span>
           </pine-command-item>
-          <pine-command-item value="github" @pp:command:select="go_github">
+          <pine-command-item value="github" @pp:command:select="cmd_github">
             <span>Open GitHub repo</span>
           </pine-command-item>
           <pine-command-empty>No results.</pine-command-empty>

@@ -1,24 +1,27 @@
-<root :class="show_header_github ? 'site-header border-b' : 'site-header'">
+<root class="site-header">
   <div class="site-header-bar">
-    <div class="site-header-center">
+    <a class="site-brand" href="/" pp-route><span class="brand">poco</span>pine</a>
+
+    <nav class="site-nav">
+      <a href="/learn" pp-route>Learn</a>
+      <a href="/docs/getting-started/introduction" pp-route>Docs</a>
+      <a href="/components" pp-route>Components</a>
+    </nav>
+
+    <div class="site-header-actions">
       <button class="site-header-search" @click="open_palette" aria-label="Search (Ctrl+K)">
         <pine-icon name="search" size="14"></pine-icon>
         <span class="site-header-search-label">Search…</span>
         <span class="site-header-search-kbd"><kbd>⌘</kbd><kbd>K</kbd></span>
       </button>
 
-      <div>
-        <button class="site-header-github"
-              pp-show="show_header_github"
-              @click="open_github"
-              aria-label="Open GitHub repo">
-          <pine-icon name="brand-github" size="16"></pine-icon>
-        </button>
+      <a class="site-header-github" href="https://github.com/mambisi/pocopine" aria-label="GitHub repo">
+        <pine-icon name="brand-github" size="16"></pine-icon>
+      </a>
 
-        <button class="site-header-theme" @click="toggle_theme" aria-label="Toggle theme">
-          <pine-icon :name="theme == 'dark' ? 'sun' : 'moon'" size="16"></pine-icon>
-        </button>
-      </div>
+      <button class="site-header-theme" @click="toggle_theme" aria-label="Toggle theme">
+        <pine-icon :name="theme == 'dark' ? 'sun' : 'moon'" size="16"></pine-icon>
+      </button>
     </div>
   </div>
 </root>

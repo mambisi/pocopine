@@ -1,0 +1,101 @@
+<root class="component-page">
+  <a class="cp-back" href="/components" pp-route>← All components</a>
+
+  <header class="cp-head">
+    <span class="cp-cat" pp-text="category"></span>
+    <h1 pp-text="title"></h1>
+    <p class="cp-blurb" pp-text="blurb"></p>
+  </header>
+
+  <div class="cp-demo">
+    <div class="cp-tabs" role="tablist">
+      <button class="cp-tab"
+              role="tab"
+              :data-active="tab == 'preview' ? 'true' : 'false'"
+              :aria-selected="tab == 'preview' ? 'true' : 'false'"
+              @click="show_preview">Preview</button>
+      <button class="cp-tab"
+              role="tab"
+              :data-active="tab == 'code' ? 'true' : 'false'"
+              :aria-selected="tab == 'code' ? 'true' : 'false'"
+              @click="show_code">Code</button>
+    </div>
+
+    <div class="cp-panel cp-preview" pp-show="tab == 'preview'" role="tabpanel">
+      <div class="cp-empty" pp-show="not_found">
+        No such component. <a href="/components" pp-route>Browse all components</a>.
+      </div>
+      <template pp-if="name == 'button'"><div class="cp-preview-host"><button-demo></button-demo></div></template>
+      <template pp-if="name == 'input'"><div class="cp-preview-host"><input-demo></input-demo></div></template>
+      <template pp-if="name == 'switch-checkbox'"><div class="cp-preview-host"><switch-checkbox-demo></switch-checkbox-demo></div></template>
+      <template pp-if="name == 'radio-group'"><div class="cp-preview-host"><radio-group-demo></radio-group-demo></div></template>
+      <template pp-if="name == 'select'"><div class="cp-preview-host"><select-demo></select-demo></div></template>
+      <template pp-if="name == 'combobox'"><div class="cp-preview-host"><combobox-demo></combobox-demo></div></template>
+      <template pp-if="name == 'slider'"><div class="cp-preview-host"><slider-demo></slider-demo></div></template>
+      <template pp-if="name == 'toggle'"><div class="cp-preview-host"><toggle-demo></toggle-demo></div></template>
+      <template pp-if="name == 'field'"><div class="cp-preview-host"><field-demo></field-demo></div></template>
+      <template pp-if="name == 'fieldset'"><div class="cp-preview-host"><fieldset-demo></fieldset-demo></div></template>
+      <template pp-if="name == 'form'"><div class="cp-preview-host"><form-demo></form-demo></div></template>
+      <template pp-if="name == 'otp'"><div class="cp-preview-host"><otp-demo></otp-demo></div></template>
+      <template pp-if="name == 'tags-input'"><div class="cp-preview-host"><tags-input-demo></tags-input-demo></div></template>
+      <template pp-if="name == 'dialog'"><div class="cp-preview-host"><dialog-demo></dialog-demo></div></template>
+      <template pp-if="name == 'alert-dialog'"><div class="cp-preview-host"><alert-dialog-demo></alert-dialog-demo></div></template>
+      <template pp-if="name == 'popover'"><div class="cp-preview-host"><popover-demo></popover-demo></div></template>
+      <template pp-if="name == 'dropdown-menu'"><div class="cp-preview-host"><dropdown-menu-demo></dropdown-menu-demo></div></template>
+      <template pp-if="name == 'context-menu'"><div class="cp-preview-host"><context-menu-demo></context-menu-demo></div></template>
+      <template pp-if="name == 'hover-card'"><div class="cp-preview-host"><hover-card-demo></hover-card-demo></div></template>
+      <template pp-if="name == 'tooltip'"><div class="cp-preview-host"><tooltip-demo></tooltip-demo></div></template>
+      <template pp-if="name == 'command'"><div class="cp-preview-host"><command-demo></command-demo></div></template>
+      <template pp-if="name == 'tabs'"><div class="cp-preview-host"><tabs-demo></tabs-demo></div></template>
+      <template pp-if="name == 'accordion'"><div class="cp-preview-host"><accordion-demo></accordion-demo></div></template>
+      <template pp-if="name == 'collapsible'"><div class="cp-preview-host"><collapsible-demo></collapsible-demo></div></template>
+      <template pp-if="name == 'toolbar'"><div class="cp-preview-host"><toolbar-demo></toolbar-demo></div></template>
+      <template pp-if="name == 'scroll-area'"><div class="cp-preview-host"><scroll-area-demo></scroll-area-demo></div></template>
+      <template pp-if="name == 'splitter'"><div class="cp-preview-host"><splitter-demo></splitter-demo></div></template>
+      <template pp-if="name == 'tree'"><div class="cp-preview-host"><tree-demo></tree-demo></div></template>
+      <template pp-if="name == 'aspect-ratio'"><div class="cp-preview-host"><aspect-ratio-demo></aspect-ratio-demo></div></template>
+      <template pp-if="name == 'avatar'"><div class="cp-preview-host"><avatar-demo></avatar-demo></div></template>
+      <template pp-if="name == 'text'"><div class="cp-preview-host"><text-demo></text-demo></div></template>
+      <template pp-if="name == 'calendar'"><div class="cp-preview-host"><calendar-demo></calendar-demo></div></template>
+      <template pp-if="name == 'range-calendar'"><div class="cp-preview-host"><range-calendar-demo></range-calendar-demo></div></template>
+      <template pp-if="name == 'date-picker'"><div class="cp-preview-host"><date-picker-demo></date-picker-demo></div></template>
+      <template pp-if="name == 'date-range-picker'"><div class="cp-preview-host"><date-range-picker-demo></date-range-picker-demo></div></template>
+      <template pp-if="name == 'datetime-fields'"><div class="cp-preview-host"><datetime-fields-demo></datetime-fields-demo></div></template>
+    </div>
+
+    <div class="cp-panel cp-code" pp-show="tab == 'code'" role="tabpanel">
+      <pre class="code-block"><code pp-text="code"></code></pre>
+    </div>
+  </div>
+
+  <section class="cp-section">
+    <h2>Installation</h2>
+    <pre class="code-block"><code pp-text="install"></code></pre>
+  </section>
+
+  <section class="cp-section" pp-show="has_anatomy">
+    <h2>Anatomy</h2>
+    <pre class="code-block"><code pp-text="anatomy"></code></pre>
+  </section>
+
+  <section class="cp-section" pp-show="has_props">
+    <h2>Props &amp; data attributes</h2>
+    <div class="cp-table-wrap">
+      <table class="props-table">
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <template pp-for="p in props" pp-key="p.name">
+            <tr>
+              <td><code pp-text="p.name"></code></td>
+              <td><code pp-text="p.ty"></code></td>
+              <td><code pp-text="p.default"></code></td>
+              <td pp-text="p.desc"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</root>

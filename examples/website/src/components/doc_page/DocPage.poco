@@ -1,0 +1,37 @@
+<root class="doc-layout" pp-on:click="on_nav">
+  <aside class="doc-sidebar">
+    <nav class="doc-nav">
+      <template pp-for="row in nav" pp-key="row.key">
+        <a class="doc-nav-link"
+           :data-header="row.is_header ? 'true' : 'false'"
+           :data-active="row.active ? 'true' : 'false'"
+           :href="row.href">
+          <span pp-text="row.label"></span>
+        </a>
+      </template>
+    </nav>
+  </aside>
+
+  <main class="doc-main">
+    <div class="doc-loading" pp-show="loading">Loading…</div>
+    <article class="doc-body" pp-html="html"></article>
+    <div class="doc-notfound" pp-show="not_found">
+      <h1>Page not found</h1>
+      <p>
+        There's no documentation page at this path.
+        <a href="/docs/getting-started/introduction" pp-route>Start from the introduction</a>.
+      </p>
+    </div>
+  </main>
+
+  <aside class="doc-toc" pp-show="has_toc">
+    <span class="doc-toc-title">On this page</span>
+    <template pp-for="t in toc" pp-key="t.href">
+      <a class="doc-toc-link"
+         :href="t.href"
+         :data-sub="t.sub ? 'true' : 'false'">
+        <span pp-text="t.text"></span>
+      </a>
+    </template>
+  </aside>
+</root>
