@@ -16,6 +16,9 @@ pub struct Issue {
     pub title: String,
     /// Freshly arrived (optimistic / live-pushed) → sync pulse.
     pub live: bool,
+    /// Workflow state: `"open"` | `"closed"` | `"backlog"`. Drives the
+    /// row dot's color; `"closed"` strikes through the title.
+    pub status: String,
     pub label: String,
     pub assignee: String,
     /// Pre-built avatar URL (bound to `<img :src>`).
@@ -29,14 +32,14 @@ pub struct LogLine {
     pub msg: String,
 }
 
-/// New issues the server pushes to every client `(title, label, who)`.
-const SERVER_ISSUES: &[(&str, &str, &str)] = &[
-    ("Rate-limit the public API", "infra", "Mateo"),
-    ("Upgrade to Pine 0.9", "chore", "Priya"),
-    ("Investigate flaky deploy test", "bug", "Sam"),
-    ("Add CSV export", "feat", "Lena"),
-    ("Cache avatar images", "infra", "Noah"),
-    ("Tighten the members_only guard", "bug", "Ava"),
+/// Issues the server pushes to clients `(title, label, who, status)`.
+const SERVER_ISSUES: &[(&str, &str, &str, &str)] = &[
+    ("Rate-limit the public API", "infra", "Mateo", "open"),
+    ("Upgrade to Pine 0.9", "chore", "Priya", "backlog"),
+    ("Investigate flaky deploy test", "bug", "Sam", "open"),
+    ("Add CSV export", "feat", "Lena", "open"),
+    ("Cache avatar images", "infra", "Noah", "closed"),
+    ("Tighten the members_only guard", "bug", "Ava", "open"),
 ];
 
 /// The signed-in user's avatar seed.
@@ -61,6 +64,8 @@ pub struct IssueFlowDemo {
     pub logs: Vec<LogLine>,
     /// The signed-in user's avatar (header chip).
     pub me_avatar: String,
+    /// A sync is in flight — drives the spinning `[live]` badge.
+    pub syncing: bool,
     next_id: u32,
     next_log: u32,
     pushed: u32,
@@ -75,6 +80,7 @@ impl IssueFlowDemo {
                 id: 1,
                 title: "Fix login redirect".into(),
                 live: false,
+                status: "open".into(),
                 label: "bug".into(),
                 assignee: "Ava".into(),
                 avatar: avatar("Ava"),
@@ -83,19 +89,34 @@ impl IssueFlowDemo {
                 id: 2,
                 title: "Add dark-mode toggle".into(),
                 live: false,
+                status: "backlog".into(),
                 label: "feat".into(),
                 assignee: "Mateo".into(),
                 avatar: avatar("Mateo"),
             },
+            Issue {
+                id: 3,
+                title: "Deduplicate API calls".into(),
+                live: false,
+                status: "closed".into(),
+                label: "chore".into(),
+                assignee: "Priya".into(),
+                avatar: avatar("Priya"),
+            },
         ];
-        self.next_id = 3;
+        self.next_id = 4;
         self.next_log = 1;
 
         // Simulate live sync — the server pushes new issues to every
-        // client. The tick no-ops until the "live" step is on screen.
+        // client. `server_push` no-ops until the "live" step is on
+        // screen; when it does push, spin the badge briefly.
         let handle = this::<Self>();
         pocopine::timers::every_scoped(3200, move || {
-            handle.update(|c| c.server_push());
+            if handle.update(|c| c.server_push()) {
+                handle.update(|c| c.syncing = true);
+                let h = handle.clone();
+                pocopine::timers::after_scoped(900, move || h.update(|c| c.syncing = false));
+            }
         });
     }
 
@@ -108,6 +129,7 @@ impl IssueFlowDemo {
             id: self.next_id,
             title,
             live: true,
+            status: "open".into(),
             label: "feat".into(),
             assignee: "you".into(),
             avatar: avatar(ME),
@@ -121,23 +143,30 @@ impl IssueFlowDemo {
         );
         self.log("pocopine.log", "issue created · 201 · /api/create_issue");
         self.log("pocopine.analytics", "issue_created · workspace=acme");
+        // Spin the live badge while the change syncs out.
+        self.syncing = true;
+        let handle = this::<Self>();
+        pocopine::timers::after_scoped(900, move || handle.update(|c| c.syncing = false));
     }
 }
 
 impl IssueFlowDemo {
     /// A live invalidation arriving from the server — another client or
     /// a worker created an issue, and it shows up here in real time.
-    fn server_push(&mut self) {
-        // Only stream arrivals once the "live" chapter is on screen.
+    /// Returns `true` when an issue was actually pushed (so the caller
+    /// can spin the live badge). No-ops until the "live" chapter is on
+    /// screen.
+    fn server_push(&mut self) -> bool {
         if self.stage < 3 {
-            return;
+            return false;
         }
-        let (title, label, who) = SERVER_ISSUES[self.pushed as usize % SERVER_ISSUES.len()];
+        let (title, label, who, status) = SERVER_ISSUES[self.pushed as usize % SERVER_ISSUES.len()];
         self.pushed += 1;
         self.issues.push(Issue {
             id: self.next_id,
             title: title.into(),
             live: true,
+            status: status.into(),
             label: label.into(),
             assignee: who.into(),
             avatar: avatar(who),
@@ -149,6 +178,7 @@ impl IssueFlowDemo {
             self.issues.drain(0..n - 7);
         }
         self.log("pocopine.live", "invalidation · issues · upsert");
+        true
     }
 
     /// Append a structured-event line (not a handler — kept off the

@@ -1,0 +1,218 @@
+<root class="section-page">
+  <div class="ref-layout">
+    <aside class="ref-nav" pp-on:click="on_nav" aria-label="Charts">
+      <nav>
+        <template pp-for="row in nav" pp-key="row.slug">
+          <a class="side-nav-link"
+             :data-active="row.active ? 'true' : 'false'"
+             :href="row.href"><span pp-text="row.title"></span></a>
+        </template>
+      </nav>
+    </aside>
+
+    <div class="ref-main">
+      <header class="section-page-head">
+        <span class="ref-cat">Charts</span>
+        <h1 pp-text="title"></h1>
+        <p class="section-page-lead" pp-text="blurb"></p>
+      </header>
+
+      <article class="demo-card">
+        <header class="demo-head">
+          <div class="demo-tabs" role="tablist">
+            <button class="demo-tab" type="button" :data-active="tab == 'preview' ? 'true' : 'false'" @click="show_preview">Preview</button>
+            <button class="demo-tab" type="button" :data-active="tab == 'code' ? 'true' : 'false'" @click="show_code">Code</button>
+          </div>
+        </header>
+
+        <div class="demo-preview" pp-show="tab == 'preview'">
+          <div class="ref-empty" pp-show="not_found">
+            No such chart. <a href="/charts/line" pp-route>Browse charts</a>.
+          </div>
+          <template pp-if="name == 'line'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="1.7" min_height="240">
+                <pine-line-chart label="Weekly growth"
+                                 pp-bind:series="line_series"
+                                 x_label="Week" y_label="Value"
+                                 animate="true" animation_duration="180"
+                                 animation_easing="ease-out"></pine-line-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Line legend" pp-bind:items="line_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'bar'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="1.7" min_height="240">
+                <pine-bar-chart label="Distribution"
+                                pp-bind:series="bar_series"
+                                x_label="Week" y_label="Count"
+                                animate="true" animation_duration="180"
+                                animation_easing="ease-out"></pine-bar-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Bar legend" pp-bind:items="bar_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'area'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="1.7" min_height="240">
+                <pine-area-chart label="Trend"
+                                 pp-bind:series="area_series"
+                                 x_label="Week" y_label="Volume" show_markers="true"
+                                 animate="true" animation_duration="180"
+                                 animation_easing="ease-out"></pine-area-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Area legend" pp-bind:items="area_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'pie'">
+            <div class="chart-host chart-host--pie">
+              <pine-chart-responsive aspect_ratio="1" min_height="240" width="min(300px, 100%)">
+                <pine-pie-chart label="Channel share"
+                                pp-bind:data="pie_data"
+                                animate="true" animation_duration="180"
+                                animation_easing="ease-out"></pine-pie-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Pie legend" pp-bind:items="pie_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'stacked-bar'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="1.7" min_height="240">
+                <pine-bar-chart label="Distribution (stacked)"
+                                pp-bind:series="bar_series"
+                                mode="stacked"
+                                x_label="Week" y_label="Count"
+                                animate="true" animation_duration="180"
+                                animation_easing="ease-out"></pine-bar-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Stacked bar legend" pp-bind:items="bar_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'scatter'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="1.7" min_height="240">
+                <pine-scatter-chart label="Cohort spread"
+                                    pp-bind:series="scatter_series"
+                                    x_label="Size" y_label="Rate"
+                                    point_radius="5"
+                                    animate="true" animation_duration="180"
+                                    animation_easing="ease-out"></pine-scatter-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Scatter legend" pp-bind:items="scatter_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'donut'">
+            <div class="chart-host chart-host--pie">
+              <pine-chart-responsive aspect_ratio="1" min_height="240" width="min(300px, 100%)">
+                <pine-pie-chart label="Channel share"
+                                pp-bind:data="pie_data"
+                                inner_radius="0.6"
+                                center_label="Channels" center_value="4"
+                                animate="true" animation_duration="180"
+                                animation_easing="ease-out"></pine-pie-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Donut legend" pp-bind:items="pie_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'radial'">
+            <div class="chart-host chart-host--pie">
+              <pine-chart-responsive aspect_ratio="1" min_height="240" width="min(300px, 100%)">
+                <pine-radial-bar-chart label="Readiness rings"
+                                       pp-bind:data="radial_data"
+                                       inner_radius="0.34" ring_gap="7"
+                                       center_label="Avg" pp-bind:center_value="radial_center"
+                                       animate="true" animation_duration="900"
+                                       animation_easing="ease"></pine-radial-bar-chart>
+              </pine-chart-responsive>
+              <pine-chart-legend label="Radial legend" pp-bind:items="radial_legend"></pine-chart-legend>
+            </div>
+          </template>
+          <template pp-if="name == 'cartesian'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="2.4" min_height="240">
+                <pine-cartesian-chart label="Weekly metric combo"
+                                      animate="true" animation_duration="180" animation_easing="ease-out">
+                  <pine-chart-grid></pine-chart-grid>
+                  <pine-x-axis label="Week"></pine-x-axis>
+                  <pine-y-axis label="Metric"></pine-y-axis>
+                  <pine-bar-series key="actual" label="Actual" color="#16a085" pp-bind:data="combo_bar_data"></pine-bar-series>
+                  <pine-cartesian-reference-line key="goal" label="Goal" pp-bind:y="combo_goal" color="#667085" stroke_width="1.5" stroke_dasharray="4 4"></pine-cartesian-reference-line>
+                  <pine-area-series key="band" label="Trend band" fill="#1d6fd833" color="#1d6fd8" stroke_width="2" pp-bind:points="combo_area_points"></pine-area-series>
+                  <pine-line-series key="target" label="Target" color="#d96c2c" stroke_width="3" show_markers="true" marker_radius="3" pp-bind:data="combo_line_data"></pine-line-series>
+                  <pine-scatter-series key="samples" label="Samples" color="#5b6ee1" point_radius="4" pp-bind:points="combo_scatter_points"></pine-scatter-series>
+                  <pine-cartesian-reference-dot key="latest" label="Latest" pp-bind:x="combo_latest_x" pp-bind:y="combo_latest_y" radius="7" fill="#18212f" stroke="#ffffff" stroke_width="2"></pine-cartesian-reference-dot>
+                  <pine-cartesian-reference-label key="latest-label" text="Latest" pp-bind:x="combo_latest_x" pp-bind:y="combo_latest_y" dy="-12" fill="#18212f" font_weight="700"></pine-cartesian-reference-label>
+                </pine-cartesian-chart>
+              </pine-chart-responsive>
+            </div>
+          </template>
+          <template pp-if="name == 'layer'">
+            <div class="chart-host">
+              <pine-chart-responsive aspect_ratio="2.4" min_height="260">
+                <pine-layer-chart label="Metro layer order"
+                                  animate="true" animation_duration="180" animation_easing="ease-out">
+                  <pine-chart-layer name="grid">
+                    <pine-chart-guide key="top-row" x1="80" y1="120" x2="820" y2="120"></pine-chart-guide>
+                    <pine-chart-guide key="mid-row" x1="80" y1="240" x2="820" y2="240"></pine-chart-guide>
+                    <pine-chart-guide key="bottom-row" x1="80" y1="360" x2="820" y2="360"></pine-chart-guide>
+                    <pine-chart-guide key="left-col" x1="160" y1="70" x2="160" y2="400"></pine-chart-guide>
+                    <pine-chart-guide key="center-col" x1="450" y1="70" x2="450" y2="400"></pine-chart-guide>
+                    <pine-chart-guide key="right-col" x1="720" y1="70" x2="720" y2="400"></pine-chart-guide>
+                  </pine-chart-layer>
+                  <pine-chart-layer name="series">
+                    <pine-chart-line key="line-a" label="Line A" color="#19a974" stroke_width="14" pp-bind:points="metro_line_a"></pine-chart-line>
+                    <pine-chart-line key="line-b" label="Line B" color="#f2c230" stroke_width="14" pp-bind:points="metro_line_b"></pine-chart-line>
+                    <pine-chart-line key="line-c" label="Line C" color="#d9363e" stroke_width="14" pp-bind:points="metro_line_c"></pine-chart-line>
+                  </pine-chart-layer>
+                  <pine-chart-layer name="markers">
+                    <pine-chart-marker key="a1" label="A1" x="100" y="120" radius="8.5" fill="#19a974" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="a-end" label="A7" x="780" y="360" radius="8.5" fill="#19a974" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="b1" label="B1" x="80" y="240" radius="8.5" fill="#f2c230" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="b-end" label="B6" x="840" y="240" radius="8.5" fill="#f2c230" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="c1" label="C1" x="140" y="360" radius="8.5" fill="#d9363e" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="central" label="Central" x="420" y="180" radius="9.5" fill="#19a974" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="republic" label="Republic" x="520" y="180" radius="9.5" fill="#f2c230" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                    <pine-chart-marker key="museum" label="Museum" x="480" y="300" radius="9.5" fill="#d9363e" stroke="#ffffff" stroke_width="3"></pine-chart-marker>
+                  </pine-chart-layer>
+                  <pine-chart-layer name="labels">
+                    <pine-chart-label key="central-label" text="Central" x="420" y="180" dx="14" dy="-22" angle="-60" fill="#18212f" text_anchor="start" font_weight="700"></pine-chart-label>
+                    <pine-chart-label key="republic-label" text="Republic" x="520" y="180" dx="12" dy="-22" angle="-60" fill="#18212f" text_anchor="start" font_weight="700"></pine-chart-label>
+                    <pine-chart-label key="museum-label" text="Museum" x="480" y="300" dx="-12" dy="40" angle="-60" fill="#18212f" text_anchor="end" font_weight="700"></pine-chart-label>
+                  </pine-chart-layer>
+                </pine-layer-chart>
+              </pine-chart-responsive>
+            </div>
+          </template>
+        </div>
+
+        <div class="demo-code" pp-show="tab == 'code'">
+          <pre class="code-block"><code pp-html="code"></code></pre>
+        </div>
+      </article>
+
+      <section class="doc-section">
+        <h2>API reference</h2>
+        <p class="doc-api-note">Props for <code pp-text="tag"></code>. Wrap
+        it in <code>&lt;pine-chart-responsive&gt;</code> and pair with
+        <code>&lt;pine-chart-legend&gt;</code>.</p>
+        <div class="doc-table-wrap">
+          <table class="props-table">
+            <thead>
+              <tr><th>Prop</th><th>Type</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <template pp-for="p in props" pp-key="p.key">
+                <tr>
+                  <td><code pp-text="p.name"></code></td>
+                  <td><code pp-text="p.ty"></code></td>
+                  <td pp-text="p.desc"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</root>

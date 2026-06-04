@@ -247,6 +247,24 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     }
     s.push_str("            _ => \"\",\n        }\n    }\n}\n");
 
+    // Charts-page snippets (data setup + per-chart markup), by key.
+    s.push_str("pub mod charts {\n");
+    s.push_str("    pub fn code(key: &str) -> &'static str {\n        match key {\n");
+    for (key, lang, code) in CHARTS_SNIPPETS {
+        let html = hl.code(code, lang);
+        s.push_str(&format!("            {key:?} => {html:?},\n"));
+    }
+    s.push_str("            _ => \"\",\n        }\n    }\n}\n");
+
+    // Motion-page snippets (per-technique pine-motion calls), by key.
+    s.push_str("pub mod motion {\n");
+    s.push_str("    pub fn code(key: &str) -> &'static str {\n        match key {\n");
+    for (key, lang, code) in MOTION_SNIPPETS {
+        let html = hl.code(code, lang);
+        s.push_str(&format!("            {key:?} => {html:?},\n"));
+    }
+    s.push_str("            _ => \"\",\n        }\n    }\n}\n");
+
     // Component reference Code tabs: every showcase demo's `.poco`
     // source, highlighted as markup. The slug is the demo directory
     // with `_` → `-` (matching `component_meta`), so the table stays in
@@ -339,8 +357,89 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     ));
     s.push_str("}\n");
 
+    // ── Icons page: enumerate the Tabler catalogue + stage the SVG
+    // assets into a served static dir. Names go into the wasm for
+    // instant client-side search; the SVGs are streamed from the server
+    // (mask-rendered so they follow the theme). ──
+    let tabler = Path::new(manifest).join("../../crates/pine-icons/assets/tabler");
+    println!(
+        "cargo:rerun-if-changed={}",
+        tabler.join("MANIFEST.json").display()
+    );
+    let outline = icon_names(&tabler.join("outline"));
+    let filled = icon_names(&tabler.join("filled"));
+    s.push_str("pub mod icons {\n");
+    s.push_str(&format!(
+        "    pub static OUTLINE: &str = {:?};\n",
+        outline.join("\n")
+    ));
+    s.push_str(&format!(
+        "    pub static FILLED: &str = {:?};\n",
+        filled.join("\n")
+    ));
+    // Install / usage / macro snippets, highlighted by key.
+    s.push_str("    pub fn code(key: &str) -> &'static str {\n        match key {\n");
+    for (key, lang, code) in ICONS_SNIPPETS {
+        let html = hl.code(code, lang);
+        s.push_str(&format!("            {key:?} => {html:?},\n"));
+    }
+    s.push_str("            _ => \"\",\n        }\n    }\n");
+    s.push_str("}\n");
+    stage_icons(
+        &tabler.join("outline"),
+        &Path::new(manifest).join("icons/outline"),
+        outline.len(),
+    );
+    stage_icons(
+        &tabler.join("filled"),
+        &Path::new(manifest).join("icons/filled"),
+        filled.len(),
+    );
+
     let dest = Path::new(out_dir).join("gen_code.rs");
     fs::write(dest, s).unwrap();
+}
+
+/// Collect kebab-case icon names (SVG file stems) from a Tabler asset
+/// directory, sorted.
+fn icon_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = match fs::read_dir(dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("svg") {
+                    p.file_stem().and_then(|s| s.to_str()).map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names
+}
+
+/// Copy a Tabler asset directory's SVGs into a served static dir. Skips
+/// the whole copy when the destination already holds the expected count,
+/// so a docs-only rebuild doesn't re-copy thousands of files.
+fn stage_icons(src: &Path, dst: &Path, expected: usize) {
+    let have = fs::read_dir(dst).map(|d| d.flatten().count()).unwrap_or(0);
+    if expected > 0 && have == expected {
+        return;
+    }
+    fs::create_dir_all(dst).ok();
+    if let Ok(entries) = fs::read_dir(src) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("svg") {
+                if let Some(name) = p.file_name() {
+                    let _ = fs::copy(&p, dst.join(name));
+                }
+            }
+        }
+    }
 }
 
 /// One auto-extracted prop: element tag, field name, type, doc comment.
@@ -609,6 +708,167 @@ const FLOW_SNIPPETS: &[(&str, &str)] = &[
     (
         "rust",
         "tracing::info!(target: \"pocopine.log\", route = \"/issues\", \"served\");\n// then ship it:\n//   $ pocopine deploy   → web + worker, one container",
+    ),
+];
+
+/// Charts-page snippets — the data setup (Rust) and per-chart markup
+/// (`.poco`). Highlighted at build time; `ChartsPage` injects via
+/// `pp-html`.
+const CHARTS_SNIPPETS: &[(&str, &str, &str)] = &[
+    (
+        "setup",
+        "rust",
+        "use pine_charts::{ChartLineSeries, ChartPoint, line_legend_items};\n\n// Plain Rust vectors — built in Default or on_setup:\nlet line_series = vec![\n    ChartLineSeries::new(\"Actual\", actual_points),\n    ChartLineSeries::new(\"Target\", target_points),\n];\nlet line_legend = line_legend_items(&line_series);",
+    ),
+    (
+        "line",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1.6\" min_height=\"220\">\n  <pine-line-chart label=\"Weekly growth\"\n                   pp-bind:series=\"line_series\"\n                   x_label=\"Week\" y_label=\"Value\"\n                   animate=\"true\"></pine-line-chart>\n</pine-chart-responsive>\n<pine-chart-legend pp-bind:items=\"line_legend\"></pine-chart-legend>",
+    ),
+    (
+        "bar",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1.6\" min_height=\"220\">\n  <pine-bar-chart label=\"Distribution\"\n                  pp-bind:series=\"bar_series\"\n                  x_label=\"Week\" y_label=\"Count\"\n                  animate=\"true\"></pine-bar-chart>\n</pine-chart-responsive>\n<pine-chart-legend pp-bind:items=\"bar_legend\"></pine-chart-legend>",
+    ),
+    (
+        "area",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1.6\" min_height=\"220\">\n  <pine-area-chart label=\"Trend\"\n                   pp-bind:series=\"area_series\"\n                   x_label=\"Week\" y_label=\"Volume\"\n                   show_markers=\"true\" animate=\"true\"></pine-area-chart>\n</pine-chart-responsive>\n<pine-chart-legend pp-bind:items=\"area_legend\"></pine-chart-legend>",
+    ),
+    (
+        "pie",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1\" min_height=\"220\">\n  <pine-pie-chart label=\"Channel share\"\n                  pp-bind:data=\"pie_data\"\n                  animate=\"true\"></pine-pie-chart>\n</pine-chart-responsive>\n<pine-chart-legend pp-bind:items=\"pie_legend\"></pine-chart-legend>",
+    ),
+    (
+        "scatter",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1.6\" min_height=\"220\">\n  <pine-scatter-chart label=\"Spend vs. reach\"\n                      pp-bind:series=\"scatter_series\"\n                      x_label=\"Spend\" y_label=\"Reach\"\n                      animate=\"true\"></pine-scatter-chart>\n</pine-chart-responsive>",
+    ),
+    (
+        "radial",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1\" min_height=\"240\">\n  <pine-radial-bar-chart label=\"Readiness rings\"\n                         pp-bind:data=\"radial_data\"\n                         inner_radius=\"0.34\" ring_gap=\"7\"\n                         center_label=\"Avg\" pp-bind:center_value=\"radial_center\"\n                         animate=\"true\"></pine-radial-bar-chart>\n</pine-chart-responsive>",
+    ),
+    (
+        "donut",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1\" min_height=\"240\">\n  <pine-pie-chart label=\"Channel share\"\n                  pp-bind:data=\"pie_data\"\n                  inner_radius=\"0.6\"\n                  center_label=\"Channels\" center_value=\"4\"\n                  animate=\"true\"></pine-pie-chart>\n</pine-chart-responsive>",
+    ),
+    (
+        "stacked-bar",
+        "poco",
+        "<pine-chart-responsive aspect_ratio=\"1.7\" min_height=\"240\">\n  <pine-bar-chart label=\"Distribution\"\n                  pp-bind:series=\"bar_series\"\n                  mode=\"stacked\"\n                  x_label=\"Week\" y_label=\"Count\"\n                  animate=\"true\"></pine-bar-chart>\n</pine-chart-responsive>",
+    ),
+    (
+        "cartesian",
+        "poco",
+        "<!-- Compose series + reference overlays on shared axes. -->\n<pine-cartesian-chart label=\"Weekly metric\" animate=\"true\">\n  <pine-chart-grid></pine-chart-grid>\n  <pine-x-axis label=\"Week\"></pine-x-axis>\n  <pine-y-axis label=\"Metric\"></pine-y-axis>\n  <pine-bar-series label=\"Actual\" color=\"#16a085\" pp-bind:data=\"bar_data\"></pine-bar-series>\n  <pine-line-series label=\"Target\" color=\"#d96c2c\" show_markers=\"true\" pp-bind:data=\"line_data\"></pine-line-series>\n  <pine-cartesian-reference-line label=\"Goal\" pp-bind:y=\"goal\" stroke_dasharray=\"4 4\"></pine-cartesian-reference-line>\n</pine-cartesian-chart>",
+    ),
+    (
+        "layer",
+        "poco",
+        "<!-- Hand-place layers for custom diagrams (here, a metro map). -->\n<pine-layer-chart label=\"Metro\" animate=\"true\">\n  <pine-chart-layer name=\"series\">\n    <pine-chart-line color=\"#19a974\" stroke_width=\"14\" pp-bind:points=\"line_a\"></pine-chart-line>\n  </pine-chart-layer>\n  <pine-chart-layer name=\"markers\">\n    <pine-chart-marker label=\"Central\" x=\"420\" y=\"180\" radius=\"9\"\n                       fill=\"#19a974\" stroke=\"#fff\" stroke_width=\"3\"></pine-chart-marker>\n  </pine-chart-layer>\n</pine-layer-chart>",
+    ),
+    (
+        "install",
+        "rust",
+        "// Cargo.toml\n//   pine-charts = \"0.1\"\n\n// Charts render to SVG. Register the custom elements once at startup:\nfn main() {\n    pine_charts::register_all();\n    App::new().register::<Dashboard>().run();\n}",
+    ),
+];
+
+/// Motion-page snippets — one pine-motion call per technique.
+/// Highlighted at build time; `MotionPage` injects via `pp-html`.
+const MOTION_SNIPPETS: &[(&str, &str, &str)] = &[
+    (
+        "spring",
+        "rust",
+        "use pine_motion::{animate, Spring};\n\n// Spring presets are the react-motion / flip-toolkit names.\nanimate(&el, &[(\"transform\", \"scale(0.85)\", \"scale(1)\")], Spring::gentle());\n// also: Spring::stiff(), Spring::wobbly()",
+    ),
+    (
+        "stagger",
+        "rust",
+        "use pine_motion::{animate, Stagger, Origin, Tween};\n\nlet stagger = Stagger::new(60.0).from(Origin::Center);\nfor (i, el) in cells.iter().enumerate() {\n    let delay = stagger.delay_for(i, cells.len());\n    animate(el, &[(\"opacity\", \"0\", \"1\")], Tween::new().duration(420).delay(delay));\n}",
+    ),
+    (
+        "drag",
+        "rust",
+        "use pine_motion::{drag, DragConfig, DragAxis, Spring};\n\nlet handle = drag(&card, DragConfig {\n    axis: DragAxis::Both,\n    momentum: true,\n    release_spring: Spring::gentle(),\n    ..Default::default()\n});",
+    ),
+    (
+        "state",
+        "rust",
+        "use pine_motion::{animate, Spring};\n\n// Animate to a target whenever state changes — the box springs\n// from its current transform to the new one.\nanimate(&el, &[(\"transform\", &from, &to)], Spring::wobbly());",
+    ),
+    (
+        "install",
+        "rust",
+        "// Cargo.toml\n//   pine-motion = \"0.1\"\n\n// pine-motion is imperative — nothing to register. Call it from a\n// #[handlers] method with an element resolved from a ref:\nuse pine_motion::{animate, Spring};\n\nanimate(&el, &[(\"transform\", \"scale(0.9)\", \"scale(1)\")], Spring::gentle());",
+    ),
+    (
+        "easing",
+        "rust",
+        "use pine_motion::{animate, Tween, Easing};\n\n// Named cubic-bezier presets — or pass your own control points.\nanimate(&el, &[(\"opacity\", \"0\", \"1\")],\n    Tween::new().duration(320).easing(Easing::EASE_OUT_EXPO));\nanimate(&el, &[(\"transform\", \"translateY(8px)\", \"none\")],\n    Tween::new().easing(Easing::CubicBezier([0.2, 0.8, 0.2, 1.0])));",
+    ),
+    (
+        "hover",
+        "rust",
+        "use pine_motion::{raise, scale};\n\n// Lift + shadow on hover — or scale(&card, 1.06) for a grow.\nlet _hover = raise(&card);",
+    ),
+    (
+        "focus",
+        "rust",
+        "use pine_motion::{focus, animate, Spring};\n\nlet _focus = focus(&input, move |focused, _| {\n    let (from, to) = if focused {\n        (\"0 0 0 0\", \"0 0 0 3px rgba(59,130,246,0.45)\")\n    } else {\n        (\"0 0 0 3px rgba(59,130,246,0.45)\", \"0 0 0 0\")\n    };\n    animate(&input, &[(\"boxShadow\", from, to)], Spring::gentle());\n});",
+    ),
+    (
+        "press",
+        "rust",
+        "use pine_motion::{press, animate, Spring};\n\nlet _press = press(&btn, move |_| {\n    animate(&btn, &[(\"transform\", \"scale(1)\", \"scale(0.92)\")], Spring::stiff());\n    Some(Box::new(move |_, _| {\n        animate(&btn, &[(\"transform\", \"scale(0.92)\", \"scale(1)\")], Spring::wobbly());\n    }))\n});",
+    ),
+    (
+        "tilt",
+        "rust",
+        "use pine_motion::{tilt, TiltConfig};\n\n// Pointer position rotates the card in 3D; children marked\n// `data-pm-tilt` lift on hover.\nlet _tilt = tilt(&card, TiltConfig { divisor: 18.0, transition_ms: 120.0 });",
+    ),
+    (
+        "scroll",
+        "rust",
+        "use pine_motion::scroll_progress;\n\n// Calls back with 0..=1 page progress on every scroll —\n// e.g. fill a reading-progress bar:\nlet _p = scroll_progress(|t| {\n    set_bar_width(t * 100.0);\n});",
+    ),
+    (
+        "inview",
+        "rust",
+        "use pine_motion::{on_view, animate, ViewConfig, Spring};\n\n// Fire once when the element scrolls into view — fade + rise it in:\nlet _v = on_view(&box_el, ViewConfig { threshold: 0.25, once: true }, move |shown| {\n    if shown {\n        animate(&box_el, &[(\"opacity\", \"0\", \"1\"),\n                          (\"transform\", \"translateY(24px)\", \"translateY(0px)\")],\n            Spring::gentle());\n    }\n});",
+    ),
+    (
+        "pan",
+        "rust",
+        "use pine_motion::{pan, PanConfig, PanEvent};\n\nlet _pan = pan(&zone, PanConfig::default(), move |ev| match ev {\n    PanEvent::Move { delta, velocity } => {\n        // delta.0 / delta.1 cumulative; velocity.0 / .1 instantaneous\n    }\n    PanEvent::End { velocity } => { /* hand to Spring::with_velocity */ }\n    _ => {}\n});",
+    ),
+    (
+        "layout",
+        "rust",
+        "use pine_motion::{snapshot_layout, play_layout, Spring};\n\n// FLIP: snapshot, mutate the DOM, then play the delta. Mark tracked\n// nodes with `data-pp-layout-id`.\nlet before = snapshot_layout(&list);\nreorder(&list);\nplay_layout(&list, before, Spring::gentle());",
+    ),
+];
+
+/// Icons-page snippets — install + template + macro usage. Highlighted
+/// at build time; `IconsPage` injects via `pp-html`.
+const ICONS_SNIPPETS: &[(&str, &str, &str)] = &[
+    (
+        "install",
+        "rust",
+        "// Cargo.toml\n//   pine-icons = \"0.1\"\n\n// Register the <pine-icon> primitive + the names you use. Only the\n// listed icons are pulled into the wasm — tree-shaking by default.\nfn main() {\n    pine_icons::register_icons![\"search\", \"user\", \"chevron-down\"];\n    App::new().register::<pine_icons::PineIcon>().run();\n}",
+    ),
+    (
+        "template",
+        "poco",
+        "<!-- A registered icon. Color follows `currentColor`. -->\n<pine-icon name=\"user\" size=\"20\"></pine-icon>\n<pine-icon name=\"star\" variant=\"filled\" size=\"16\"></pine-icon>\n\n<!-- Bind the name reactively — one element, not two pp-show'd icons. -->\n<pine-icon :name=\"open ? 'chevron-up' : 'chevron-down'\"></pine-icon>",
+    ),
+    (
+        "macro",
+        "rust",
+        "use pine_icons::icon;\n\n// Compile-time inline SVG — no registry, no lookup. &'static str.\nconst SEARCH: &str = icon!(outline / \"search\");\nlet star = icon!(filled / \"star\");",
     ),
 ];
 

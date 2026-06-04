@@ -61,9 +61,6 @@
 .pm-spring-box:hover {
   border-color: var(--accent);
 }
-.pm-spring-box.gentle   { border-left: 3px solid #3b82f6; }
-.pm-spring-box.stiff    { border-left: 3px solid #10b981; }
-.pm-spring-box.wobbly   { border-left: 3px solid #f59e0b; }
 
 .pm-spring-caption {
   font-size: 0.75rem;
@@ -334,4 +331,177 @@
 }
 .pm-drag-card:active {
   cursor: grabbing;
+}
+
+/* ── easing ───────────────────────────────────────────────────── */
+
+.pm-easing-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.pm-easing-track {
+  position: relative;
+  height: 64px;
+  max-width: 340px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg-alt);
+  overflow: hidden;
+}
+.pm-easing-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--brand) 16%, var(--bg-subtle)), var(--bg-subtle));
+}
+
+/* ── hover ────────────────────────────────────────────────────── */
+
+.pm-hover-card {
+  width: min(100%, 240px);
+  padding: 1.5rem;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--brand) 12%, var(--bg-subtle)), var(--bg-subtle));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  font-weight: 600;
+  text-align: center;
+  cursor: default;
+}
+
+/* ── focus ────────────────────────────────────────────────────── */
+
+.pm-focus-input {
+  font: inherit;
+  padding: 0.7rem 0.9rem;
+  width: min(100%, 280px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+
+/* ── press ────────────────────────────────────────────────────── */
+
+.pm-press-btn {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.8rem 1.6rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--brand) 14%, var(--bg-subtle)), var(--bg-subtle));
+  color: var(--fg);
+  cursor: pointer;
+}
+
+/* ── pan ──────────────────────────────────────────────────────── */
+
+.pm-pan-zone {
+  height: 120px;
+  max-width: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+}
+.pm-pan-zone:active {
+  cursor: grabbing;
+}
+.pm-pan-readout {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+}
+.pm-pan-readout code {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── scroll progress ──────────────────────────────────────────── */
+
+.pm-scroll-track {
+  height: 10px;
+  max-width: 360px;
+  border-radius: 9999px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.pm-scroll-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 9999px;
+  background: var(--brand);
+}
+
+/* ── in-view reveal ───────────────────────────────────────────── */
+
+.pm-inview-box {
+  max-width: 360px;
+  padding: 1.5rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--brand) 12%, var(--bg-subtle)), var(--bg-subtle));
+  font-weight: 600;
+}
+
+/* ── shared layout (FLIP) ─────────────────────────────────────── */
+
+.pm-flip-controls {
+  margin-bottom: 0.75rem;
+}
+.pm-flip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.pm-flip-item {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--brand) 14%, var(--bg-subtle)), var(--bg-subtle));
+  font-weight: 700;
+  font-size: 1.1rem;
+  transition: none;
+}
+.pm-flip-item[data-pp-animating="true"] {
+  z-index: 5;
+}
+
+/* Embedded in a per-technique motion page (`only="…"`): the page header
+ * already names the technique and there is no outer card — so drop the
+ * subsection title, hint, and top separator for a single clean demo. */
+[data-embedded="true"] .pm-subsection {
+  border-top: 0;
+  padding: 0;
+}
+[data-embedded="true"] .pm-subsection > h3,
+[data-embedded="true"] .pm-subsection > .pm-hint {
+  display: none;
 }

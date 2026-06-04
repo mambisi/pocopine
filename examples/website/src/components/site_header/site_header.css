@@ -55,6 +55,24 @@
   color: var(--fg);
   border-bottom-color: var(--brand);
 }
+.site-nav-dd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 1.5px solid transparent;
+  padding: 0.2rem 0;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+.site-nav-dd-trigger:hover,
+.site-nav-dd-trigger[data-state="open"] {
+  color: var(--fg);
+}
 
 /* Right-aligned actions */
 .site-header-actions {

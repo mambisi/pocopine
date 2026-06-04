@@ -36,8 +36,9 @@ use components::showcase::{
     TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{
-    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, IssueFlowDemo, Landing,
-    SecureSection, ShowcaseCard, SiteHeader, StackFlow, StackShowcase, Tutorial,
+    ChartsPage, ComponentPage, ComponentsIndex, DocPage, EasingPlayground, Hero, IconsPage,
+    InstallCmd, IssueFlowDemo, Landing, MotionPage, SecureSection, ShowcaseCard, SiteHeader,
+    StackFlow, StackShowcase, Tutorial,
 };
 
 /// One searchable entry in the ⌘K palette — a doc page, a component,
@@ -197,6 +198,7 @@ fn build_search_index() -> Vec<SearchEntry> {
 #[wasm_bindgen(start)]
 pub fn main() {
     pine::register_all();
+    pine_charts::register_all();
     pine_icons::register_icons![
         "search",
         "moon",
@@ -268,10 +270,14 @@ pub fn main() {
         .register::<CmdPopoverDemo>()
         .register::<StressDemo>()
         .register::<AnimationDemo>()
+        .register::<EasingPlayground>()
         // Routes.
         .route::<Landing>("/")
         .route::<ComponentsIndex>("/components")
+        .route::<IconsPage>("/components/icons")
         .route::<ComponentPage>("/components/:name")
+        .route::<ChartsPage>("/charts/:name")
+        .route::<MotionPage>("/motion/:name")
         .route::<DocPage>("/docs/*slug")
         .run();
 }

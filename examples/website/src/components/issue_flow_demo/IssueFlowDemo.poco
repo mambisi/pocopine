@@ -12,14 +12,14 @@
     <div class="ifd-app">
       <div class="ifd-head">
         <span class="ifd-title-h">Issues</span>
-        <span class="ifd-live"><span class="ifd-live-dot"></span>live</span>
+        <span class="ifd-live" :data-syncing="syncing ? 'true' : 'false'"><span class="ifd-live-dot"></span><span pp-text="syncing ? 'syncing' : 'live'"></span></span>
         <span class="ifd-user"><img class="ifd-user-av" :src="me_avatar" alt="" />you</span>
       </div>
 
       <ul class="ifd-list">
         <template pp-for="i in issues" pp-key="i.id">
-          <li class="ifd-item" :data-live="i.live ? 'true' : 'false'">
-            <span class="ifd-dot-sync"></span>
+          <li class="ifd-item" :data-live="i.live ? 'true' : 'false'" :data-status="i.status">
+            <span class="ifd-dot-sync" :title="i.status"></span>
             <span class="ifd-item-title" pp-text="i.title"></span>
             <span class="ifd-label" :data-label="i.label" pp-text="i.label"></span>
             <img class="ifd-avatar" :src="i.avatar" :alt="i.assignee" :title="i.assignee" loading="lazy" />

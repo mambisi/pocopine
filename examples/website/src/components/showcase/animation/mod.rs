@@ -17,11 +17,14 @@
 //!   motion.
 
 use pine_motion::{
-    animate, drag, press, tilt, AnimationHandleSlot, DragAxis, DragConfig, DragConstraints,
-    GestureHandleSlot, Origin, Spring, Stagger, TiltConfig,
+    animate, drag, focus, on_view, pan, play_layout, press, raise, scroll_progress,
+    snapshot_layout, tilt, AnimationHandleSlot, DragAxis, DragConfig, DragConstraints, Easing,
+    GestureHandleSlot, Origin, PanConfig, PanEvent, ScrollHandle, Spring, Stagger, TiltConfig,
+    Tween, ViewConfig,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use wasm_bindgen::JsCast;
 
 #[derive(Default, Serialize, Deserialize)]
@@ -34,6 +37,8 @@ pub struct AnimationDemo {
     /// Label of the last spring preset fired — drives the readout
     /// text beside the three spring boxes.
     pub last_spring: String,
+    /// Label of the last easing preset fired.
+    pub last_easing: String,
     /// Currently-selected stagger origin. One of `"first"`,
     /// `"center"`, `"last"`. Backs the three origin toggle buttons
     /// and is read by `stagger_play` to build the actual `Stagger`
@@ -46,6 +51,28 @@ pub struct AnimationDemo {
     pub motion_scale: f64,
     pub motion_raise: f64,
     pub motion_shadow: f64,
+    /// When set (e.g. `"springs"`), render only that subsection — the
+    /// per-technique motion pages embed `<animation-demo only="…">`.
+    /// Empty shows the full combined demo (the default elsewhere).
+    #[prop]
+    pub only: String,
+    /// Live readout for the pan demo.
+    pub pan_delta: String,
+    pub pan_velocity: String,
+    pub show_intro: bool,
+    pub show_springs: bool,
+    pub show_easing: bool,
+    pub show_stagger: bool,
+    pub show_state: bool,
+    pub show_hover: bool,
+    pub show_focus: bool,
+    pub show_press: bool,
+    pub show_pan: bool,
+    pub show_tilt: bool,
+    pub show_drag: bool,
+    pub show_scroll: bool,
+    pub show_inview: bool,
+    pub show_flip: bool,
 }
 
 #[handlers]
@@ -58,48 +85,46 @@ impl AnimationDemo {
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
-        let Ok(Some(el)) = doc.query_selector(".pm-drag-card") else {
-            return;
-        };
-        let handle = drag(
-            &el,
-            DragConfig {
-                axis: DragAxis::Both,
-                constraints: Some(DragConstraints::rect(-180.0, 180.0, -80.0, 80.0)),
-                momentum: true,
-                snap_to_origin: false,
-                release_spring: Spring::gentle(),
-            },
-        );
-        DRAG_HANDLE.with(|slot| {
-            *slot.borrow_mut() = Some(handle);
-        });
 
-        let press_el = el.clone();
-        let handle = press(&el, move |_| {
-            animate_card_depth(
-                &press_el,
-                CARD_REST_SHADOW,
-                CARD_PRESSED_SHADOW,
-                CARD_REST_FILTER,
-                CARD_PRESSED_FILTER,
-                Spring::stiff(),
+        // Each demo subsection is wired independently (`if let`), so a
+        // single-technique page that only renders one of them still works.
+        if let Ok(Some(el)) = doc.query_selector(".pm-drag-card") {
+            let handle = drag(
+                &el,
+                DragConfig {
+                    axis: DragAxis::Both,
+                    constraints: Some(DragConstraints::rect(-180.0, 180.0, -80.0, 80.0)),
+                    momentum: true,
+                    snap_to_origin: false,
+                    release_spring: Spring::gentle(),
+                },
             );
-            let release_el = press_el.clone();
-            Some(Box::new(move |_, _| {
+            DRAG_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+
+            let press_el = el.clone();
+            let handle = press(&el, move |_| {
                 animate_card_depth(
-                    &release_el,
-                    CARD_PRESSED_SHADOW,
+                    &press_el,
                     CARD_REST_SHADOW,
-                    CARD_PRESSED_FILTER,
+                    CARD_PRESSED_SHADOW,
                     CARD_REST_FILTER,
-                    Spring::gentle(),
+                    CARD_PRESSED_FILTER,
+                    Spring::stiff(),
                 );
-            }))
-        });
-        PRESS_HANDLE.with(|slot| {
-            *slot.borrow_mut() = Some(handle);
-        });
+                let release_el = press_el.clone();
+                Some(Box::new(move |_, _| {
+                    animate_card_depth(
+                        &release_el,
+                        CARD_PRESSED_SHADOW,
+                        CARD_REST_SHADOW,
+                        CARD_PRESSED_FILTER,
+                        CARD_REST_FILTER,
+                        Spring::gentle(),
+                    );
+                }))
+            });
+            PRESS_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
 
         if let Ok(Some(card)) = doc.query_selector(".pm-tilt-card") {
             let handle = tilt(
@@ -109,10 +134,156 @@ impl AnimationDemo {
                     ..Default::default()
                 },
             );
-            TILT_HANDLE.with(|slot| {
-                *slot.borrow_mut() = Some(handle);
-            });
+            TILT_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
         }
+
+        // Hover card — lift + shadow on hover via the `raise` preset.
+        if let Ok(Some(el)) = doc.query_selector(".pm-hover-card") {
+            let handle = raise(&el);
+            HOVER_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+
+        // Focus input — spring a focus ring in on focus, out on blur.
+        if let Ok(Some(el)) = doc.query_selector(".pm-focus-input") {
+            let target = el.clone();
+            let handle = focus(&el, move |focused, _| {
+                let (from, to) = if focused {
+                    (
+                        "0 0 0 0 rgba(59,130,246,0)",
+                        "0 0 0 3px rgba(59,130,246,0.45)",
+                    )
+                } else {
+                    (
+                        "0 0 0 3px rgba(59,130,246,0.45)",
+                        "0 0 0 0 rgba(59,130,246,0)",
+                    )
+                };
+                animate(&target, &[("boxShadow", from, to)], Spring::gentle());
+            });
+            FOCUS_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+
+        // Press button — spring down on press, bounce back on release.
+        if let Ok(Some(el)) = doc.query_selector(".pm-press-btn") {
+            let down = el.clone();
+            let handle = press(&el, move |_| {
+                animate(
+                    &down,
+                    &[("transform", "scale(1)", "scale(0.92)")],
+                    Spring::stiff(),
+                );
+                let up = down.clone();
+                Some(Box::new(move |_, _| {
+                    animate(
+                        &up,
+                        &[("transform", "scale(0.92)", "scale(1)")],
+                        Spring::wobbly(),
+                    );
+                }))
+            });
+            PRESS_BTN_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+
+        // Pan surface — report live delta + velocity into the readout.
+        if let Ok(Some(el)) = doc.query_selector(".pm-pan-zone") {
+            let to_self = this::<AnimationDemo>();
+            let handle = pan(&el, PanConfig::default(), move |ev| match ev {
+                PanEvent::Move { delta, velocity } => {
+                    to_self.update(|s: &mut AnimationDemo| {
+                        s.pan_delta = format!("{:.0}, {:.0}", delta.0, delta.1);
+                        s.pan_velocity = format!("{:.0}, {:.0}", velocity.0, velocity.1);
+                    });
+                }
+                PanEvent::End { .. } | PanEvent::Cancel => {
+                    to_self.update(|s: &mut AnimationDemo| s.pan_velocity = "0, 0".into());
+                }
+                _ => {}
+            });
+            PAN_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+
+        // Scroll-progress bar — fills as the page scrolls.
+        if doc
+            .query_selector(".pm-scroll-fill")
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            let handle = scroll_progress(|progress| {
+                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                    if let Ok(Some(fill)) = doc.query_selector(".pm-scroll-fill") {
+                        let _ = fill.set_attribute(
+                            "style",
+                            &format!("width:{}%", (progress * 100.0).round()),
+                        );
+                    }
+                }
+            });
+            SCROLL_PROGRESS_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+
+        // In-view reveal — fade + rise when the box enters the viewport.
+        if let Ok(Some(el)) = doc.query_selector(".pm-inview-box") {
+            let target = el.clone();
+            let handle = on_view(
+                &el,
+                ViewConfig {
+                    threshold: 0.25,
+                    once: true,
+                },
+                move |shown| {
+                    if shown {
+                        animate(
+                            &target,
+                            &[
+                                ("opacity", "0", "1"),
+                                ("transform", "translateY(24px)", "translateY(0px)"),
+                            ],
+                            Spring::gentle(),
+                        );
+                    }
+                },
+            );
+            INVIEW_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+    }
+
+    /// FLIP reorder: snapshot positions, move the first item to the end
+    /// of the DOM directly (no reactive list, so node identity is kept),
+    /// then play the delta — each item springs from old to new position.
+    pub fn flip_shuffle(&mut self) {
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let Ok(Some(root)) = doc.query_selector(".pm-flip-list") else {
+            return;
+        };
+        let snapshot = snapshot_layout(&root);
+        if let Some(first) = root.first_element_child() {
+            let _ = root.append_child(&first);
+        }
+        play_layout(&root, snapshot, Spring::gentle());
+    }
+
+    pub fn easing_quad(&mut self) {
+        self.last_easing = "EASE_OUT_QUAD".into();
+        animate_easing_box(Easing::EASE_OUT_QUAD);
+    }
+    pub fn easing_expo(&mut self) {
+        self.last_easing = "EASE_OUT_EXPO".into();
+        animate_easing_box(Easing::EASE_OUT_EXPO);
+    }
+    pub fn easing_back(&mut self) {
+        self.last_easing = "EASE_OUT_BACK".into();
+        animate_easing_box(Easing::EASE_OUT_BACK);
+    }
+    pub fn easing_circ(&mut self) {
+        self.last_easing = "EASE_OUT_CIRC".into();
+        animate_easing_box(Easing::EASE_OUT_CIRC);
+    }
+    pub fn easing_apple(&mut self) {
+        self.last_easing = "APPLE".into();
+        animate_easing_box(Easing::APPLE);
     }
 
     pub fn pop_gentle(&mut self) {
@@ -316,6 +487,23 @@ impl AnimationDemo {
         if self.motion_shadow == 0.0 {
             self.motion_shadow = 16.0;
         }
+        // `only` empty → the full combined demo; otherwise just one
+        // subsection (the per-technique motion pages set this).
+        let all = self.only.is_empty();
+        self.show_intro = all;
+        self.show_springs = all || self.only == "springs";
+        self.show_easing = all || self.only == "easing";
+        self.show_stagger = all || self.only == "stagger";
+        self.show_state = all || self.only == "state";
+        self.show_hover = all || self.only == "hover";
+        self.show_focus = all || self.only == "focus";
+        self.show_press = all || self.only == "press";
+        self.show_pan = all || self.only == "pan";
+        self.show_tilt = all || self.only == "tilt";
+        self.show_drag = all || self.only == "drag";
+        self.show_scroll = all || self.only == "scroll";
+        self.show_inview = all || self.only == "inview";
+        self.show_flip = all || self.only == "flip";
     }
 }
 
@@ -326,7 +514,29 @@ thread_local! {
     static DRAG_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
     static PRESS_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
     static TILT_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
+    static HOVER_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
+    static FOCUS_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
+    static PRESS_BTN_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
+    static PAN_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
+    static SCROLL_PROGRESS_HANDLE: GestureHandleSlot = GestureHandleSlot::default();
+    static INVIEW_HANDLE: RefCell<Option<ScrollHandle>> = const { RefCell::new(None) };
     static STATE_ANIMATION_HANDLE: AnimationHandleSlot = AnimationHandleSlot::default();
+}
+
+/// Send the easing-demo box across its track with the given easing so
+/// the curve is visible. Reverts to the start (no fill) for the next click.
+fn animate_easing_box(easing: Easing) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(Some(el)) = doc.query_selector(".pm-easing-box") else {
+        return;
+    };
+    animate(
+        &el,
+        &[("transform", "translateX(0)", "translateX(240px)")],
+        Tween::new().duration(700.0).easing(easing),
+    );
 }
 
 const CARD_REST_SHADOW: &str = "0 14px 26px rgba(0, 0, 0, 0.18)";

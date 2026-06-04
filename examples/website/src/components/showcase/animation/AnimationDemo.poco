@@ -1,15 +1,15 @@
-<root>
-  <h2>pine-motion — spring feel, stagger, drag</h2>
+<root :data-embedded="show_intro ? 'false' : 'true'">
+  <h2 pp-show="show_intro">pine-motion — spring feel, stagger, drag</h2>
 
   <section>
-    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+    <p pp-show="show_intro" style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
       Four demos sharing one library. Springs are sampled into a
       CSS <code>linear()</code> timing function so WAAPI runs them
       on the GPU compositor — no per-frame JavaScript.
     </p>
 
     <!-- ── spring presets ────────────────────────────────────── -->
-    <div class="pm-subsection">
+    <div class="pm-subsection" pp-show="show_springs">
       <h3>Spring presets</h3>
       <p class="pm-hint">
         Click any box to see its spring feel. Presets are the
@@ -41,8 +41,31 @@
       </div>
     </div>
 
+    <!-- ── easing presets ────────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_easing">
+      <h3>Easing</h3>
+      <p class="pm-hint">
+        Named cubic-bezier presets. Click one to send the box across
+        with that curve — note how <code>Back</code> overshoots and
+        <code>Apple</code> decelerates sharply.
+      </p>
+      <div class="pm-easing-controls">
+        <pine-button variant="ghost" @click="easing_quad">Quad</pine-button>
+        <pine-button variant="ghost" @click="easing_expo">Expo</pine-button>
+        <pine-button variant="ghost" @click="easing_back">Back</pine-button>
+        <pine-button variant="ghost" @click="easing_circ">Circ</pine-button>
+        <pine-button variant="ghost" @click="easing_apple">Apple</pine-button>
+        <span class="pm-hint" style="align-self:center">
+          last: <strong pp-text="last_easing || '—'"></strong>
+        </span>
+      </div>
+      <div class="pm-easing-track">
+        <div class="pm-easing-box"></div>
+      </div>
+    </div>
+
     <!-- ── stagger grid ──────────────────────────────────────── -->
-    <div class="pm-subsection">
+    <div class="pm-subsection" pp-show="show_stagger">
       <h3>Stagger</h3>
       <p class="pm-hint">
         Per-index delay with selectable origin. Center emanates
@@ -81,7 +104,7 @@
     </div>
 
     <!-- ── state animation ──────────────────────────────────── -->
-    <div class="pm-subsection">
+    <div class="pm-subsection" pp-show="show_state">
       <h3>State animation</h3>
       <p class="pm-hint">
         Motion-style target animation: update transform and depth
@@ -160,8 +183,52 @@
       </div>
     </div>
 
+    <!-- ── hover ─────────────────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_hover">
+      <h3>Hover</h3>
+      <p class="pm-hint">
+        Pointer-enter springs a lift + deeper shadow; leave springs it
+        back. Hover the card.
+      </p>
+      <div class="pm-hover-card">Hover me</div>
+    </div>
+
+    <!-- ── focus ─────────────────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_focus">
+      <h3>Focus</h3>
+      <p class="pm-hint">
+        Focus springs a ring in, blur springs it out — keyboard-friendly
+        feedback. Click or tab into the field.
+      </p>
+      <input class="pm-focus-input" type="text" placeholder="Focus me">
+    </div>
+
+    <!-- ── press ─────────────────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_press">
+      <h3>Press</h3>
+      <p class="pm-hint">
+        Pointer-down springs the button down; release bounces it back.
+        Press and hold, then release.
+      </p>
+      <button class="pm-press-btn" type="button">Press me</button>
+    </div>
+
+    <!-- ── pan ───────────────────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_pan">
+      <h3>Pan</h3>
+      <p class="pm-hint">
+        Raw pointer tracking before constraints or physics. Drag across
+        the zone to read cumulative delta and instantaneous velocity.
+      </p>
+      <div class="pm-pan-zone">Drag across me</div>
+      <div class="pm-pan-readout">
+        <code>delta: <strong pp-text="pan_delta || '0, 0'"></strong></code>
+        <code>velocity: <strong pp-text="pan_velocity || '0, 0'"></strong></code>
+      </div>
+    </div>
+
     <!-- ── 3D tilt ───────────────────────────────────────────── -->
-    <div class="pm-subsection">
+    <div class="pm-subsection" pp-show="show_tilt">
       <h3>3D tilt card</h3>
       <p class="pm-hint">
         A Motion-style card container: pointer position rotates the
@@ -182,7 +249,7 @@
     </div>
 
     <!-- ── drag ──────────────────────────────────────────────── -->
-    <div class="pm-subsection">
+    <div class="pm-subsection" pp-show="show_drag">
       <h3>Drag with momentum</h3>
       <p class="pm-hint">
         Drag the card inside the dashed area. On release, a gentle
@@ -191,6 +258,48 @@
       </p>
       <div class="pm-drag-stage">
         <div class="pm-drag-card">drag me</div>
+      </div>
+    </div>
+
+    <!-- ── scroll progress ───────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_scroll">
+      <h3>Scroll progress</h3>
+      <p class="pm-hint">
+        A bar driven by page-scroll progress (0–1). Scroll the page and
+        watch it fill.
+      </p>
+      <div class="pm-scroll-track">
+        <div class="pm-scroll-fill"></div>
+      </div>
+    </div>
+
+    <!-- ── in-view reveal ────────────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_inview">
+      <h3>In-view reveal</h3>
+      <p class="pm-hint">
+        Fires once when the box scrolls into view — fade + rise. Scroll
+        it into view (or reload the page).
+      </p>
+      <div class="pm-inview-box">I fade in when you reach me</div>
+    </div>
+
+    <!-- ── shared layout (FLIP) ──────────────────────────────── -->
+    <div class="pm-subsection" pp-show="show_flip">
+      <h3>Shared layout (FLIP)</h3>
+      <p class="pm-hint">
+        Snapshot positions, reorder the DOM, then play the delta. Hit
+        Shuffle to move the first tile to the end — every tile springs
+        to its new spot.
+      </p>
+      <div class="pm-flip-controls">
+        <pine-button @click="flip_shuffle">Shuffle</pine-button>
+      </div>
+      <div class="pm-flip-list">
+        <div class="pm-flip-item" data-pp-layout-id="f1">1</div>
+        <div class="pm-flip-item" data-pp-layout-id="f2">2</div>
+        <div class="pm-flip-item" data-pp-layout-id="f3">3</div>
+        <div class="pm-flip-item" data-pp-layout-id="f4">4</div>
+        <div class="pm-flip-item" data-pp-layout-id="f5">5</div>
       </div>
     </div>
   </section>

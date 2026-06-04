@@ -1,0 +1,66 @@
+<root class="section-page icons-page">
+  <header class="section-page-head">
+    <h1>Icons</h1>
+    <p class="section-page-lead">
+      ~6,000 <a href="https://tabler.io/icons">Tabler</a> icons, streamed
+      from the server — the names ship in the bundle for instant search,
+      the SVGs load on demand and are mask-rendered so they follow the
+      theme. Click any icon for copy-ready usage.
+    </p>
+  </header>
+
+  <div class="icons-layout">
+    <aside class="icons-customizer">
+      <p class="icons-cust-title">Customize</p>
+      <label class="icons-cust-row">
+        <span>Size</span>
+        <input class="icons-size" type="range" min="16" max="48" step="2" value="24" @input="set_size">
+        <span class="icons-size-val" pp-text="size_label"></span>
+      </label>
+      <div class="icons-cust-row">
+        <span>Variant</span>
+        <div class="icons-variants" role="tablist">
+          <button class="demo-tab" type="button" :data-active="variant == 'outline' ? 'true' : 'false'" @click="set_variant('outline')">Outline</button>
+          <button class="demo-tab" type="button" :data-active="variant == 'filled' ? 'true' : 'false'" @click="set_variant('filled')">Filled</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="icons-browse">
+      <div class="icons-toolbar">
+        <input class="icons-search" type="search" placeholder="Search icons…" @input="search">
+      </div>
+      <p class="icons-count" pp-text="count_label"></p>
+      <div class="icon-grid" :style="grid_style" pp-on:click="on_pick">
+        <template pp-for="name in results" pp-key="name">
+          <button class="icon-tile" type="button" :data-name="name" :title="name">
+            <span class="icon-glyph" :style="'-webkit-mask-image:url(/icons/' + variant + '/' + name + '.svg);mask-image:url(/icons/' + variant + '/' + name + '.svg)'"></span>
+            <span class="icon-tile-name" pp-text="name"></span>
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <aside class="icons-detail-col">
+      <div class="icon-detail-empty" pp-show="!has_selection">
+        Select an icon to see its name and copy-ready usage.
+      </div>
+      <div class="icon-detail" pp-show="has_selection">
+        <div class="icon-detail-preview">
+          <span class="icon-detail-glyph" :style="'-webkit-mask-image:url(/icons/' + variant + '/' + selected + '.svg);mask-image:url(/icons/' + variant + '/' + selected + '.svg)'"></span>
+        </div>
+        <div class="icon-detail-head">
+          <code class="icon-detail-name" pp-text="selected"></code>
+          <button class="icon-detail-close" type="button" @click="close_detail" aria-label="Clear selection">×</button>
+        </div>
+        <div class="icon-detail-actions">
+          <button class="icon-copy-btn" type="button" @click="copy_name">Copy name</button>
+          <button class="icon-copy-btn" type="button" @click="copy_tag">Copy &lt;pine-icon&gt; tag</button>
+          <button class="icon-copy-btn" type="button" @click="copy_macro">Copy icon! macro</button>
+        </div>
+        <pre class="icon-detail-snippet"><code pp-text="selected_tag"></code></pre>
+        <p class="icon-detail-copied" pp-show="copied" pp-text="copied"></p>
+      </div>
+    </aside>
+  </div>
+</root>
