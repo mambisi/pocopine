@@ -46,17 +46,54 @@ let series: Vec<ChartAreaSeries> = /* application data */;
 let legend_items = area_legend_items(&series);
 ```
 
+For scatter charts:
+
+```rust
+use pine_charts::{scatter_legend_items, ChartScatterSeries};
+
+let series: Vec<ChartScatterSeries> = /* application data */;
+let legend_items = scatter_legend_items(&series);
+```
+
+For pie/donut charts:
+
+```rust
+use pine_charts::{pie_legend_items, ChartPieSlice};
+
+let data: Vec<ChartPieSlice> = /* application data */;
+let legend_items = pie_legend_items(&data);
+```
+
+For radial bar charts:
+
+```rust
+use pine_charts::{radial_bar_legend_items, ChartRadialBar};
+
+let data: Vec<ChartRadialBar> = /* application data */;
+let legend_items = radial_bar_legend_items(&data);
+```
+
 ## Component
 
-```html
+```poco
 <pine-chart-legend
   label="Acquisition legend"
   pp-bind:items="legend_items"></pine-chart-legend>
 ```
 
+Set `orientation` to `"vertical"` when the legend stacks items in a column
+(default is `"horizontal"`):
+
+```poco
+<pine-chart-legend
+  label="Acquisition legend"
+  orientation="vertical"
+  pp-bind:items="legend_items"></pine-chart-legend>
+```
+
 Set `interactive="true"` when legend items should be keyboard-focusable toggles:
 
-```html
+```poco
 <pine-chart-legend
   label="Acquisition legend"
   interactive="true"
@@ -66,7 +103,7 @@ Set `interactive="true"` when legend items should be keyboard-focusable toggles:
 
 The component renders an HTML list with stable styling hooks:
 
-- `.pine-chart-legend`
+- `.pine-chart-legend` — root element; carries `data-empty`, `data-interactive`, and `data-orientation`
 - `.pine-chart-legend-list`
 - `.pine-chart-legend-item`
 - `.pine-chart-legend-marker`
@@ -108,9 +145,18 @@ impl Metrics {
 }
 ```
 
-Matching helpers exist for area, scatter, bar, and pie data:
-`set_area_series_visible`, `set_scatter_series_visible`,
-`set_bar_series_visible`, and `set_pie_slice_visible`.
+Matching helpers exist for every chart type:
+
+| Helper | Type |
+|---|---|
+| `set_line_series_visible` | `&mut [ChartLineSeries]` |
+| `set_area_series_visible` | `&mut [ChartAreaSeries]` |
+| `set_scatter_series_visible` | `&mut [ChartScatterSeries]` |
+| `set_bar_series_visible` | `&mut [ChartBarSeries]` |
+| `set_pie_slice_visible` | `&mut [ChartPieSlice]` |
+| `set_radial_bar_visible` | `&mut [ChartRadialBar]` |
+
+Each returns `true` when the key was found and the record updated.
 
 Markers do not ship with framework colors. Applications map `data-series` to
 their palette:

@@ -5,19 +5,19 @@ description: "Add a JWT identity-provider preset and the integration-test contra
 
 # JWT providers — adding a vendor preset
 
-The pocopine `JwtVerifier` accepts any OIDC-shaped JWT issuer
-through a typed `Provider` config struct. Provider configs can
+The `JwtVerifier` in `pocopine-auth-jwt` accepts any OIDC-shaped JWT
+issuer through a typed `Provider` config struct. Provider configs can
 live directly in your app, in tutorial code, or in
 community-maintained crates following the
-`pocopine-auth-jwt-<vendor>` naming convention. The framework
-keeps `pocopine-auth-jwt` vendor-neutral.
+`pocopine-auth-jwt-<vendor>` naming convention. The framework itself
+has zero vendor coupling.
 
 This page is the contract for adding a new provider. RFC-074 §5.2
-and §5.3 cover the design rationale; this doc is the cookbook.
+and §5.3 cover the design rationale; this page is the cookbook.
 
 ## The contract
 
-A provider is a struct + a `Provider` impl. That's the whole API.
+A provider is a plain struct plus a `Provider` impl. That's the whole API surface.
 
 ```rust
 use std::time::Duration;
@@ -69,7 +69,7 @@ impl Provider for Okta {
 }
 ```
 
-User-facing API:
+User-facing construction:
 
 ```rust
 let verifier = JwtVerifier::from_provider(
@@ -77,8 +77,10 @@ let verifier = JwtVerifier::from_provider(
 )?;
 ```
 
-That's the whole user-visible surface. No registration step, no
-runtime discovery — Rust's `impl Trait` does the work.
+No registration step, no runtime discovery — Rust's `impl Trait`
+does the work. `from_provider` calls `jwt_config()` then
+`JwtVerifier::custom`, which validates the config and returns an
+error on misconfiguration.
 
 ## Conventions
 
@@ -109,21 +111,20 @@ runtime discovery — Rust's `impl Trait` does the work.
 5. **Use `ClaimMap::oidc()` as the default claim map.** Override
    only when the IdP's claims diverge from OIDC standard.
    Document overrides in the struct's rustdoc.
-6. **Build from `Self::new(args)`, never on construction.** The
-   `Provider::jwt_config(self)` impl should be straight-line code
-   that consumes `self` and returns `Ok(JwtConfig { ... })`. No
-   network calls, no fixture parsing — runtime work belongs in
-   `JwksResolver`.
+6. **`jwt_config` is pure construction — no I/O.** The impl
+   consumes `self` and returns `Ok(JwtConfig { ... })` through
+   straight-line code. No network calls, no file reads — runtime
+   JWKS fetches happen inside `JwksResolver`, not here.
 
 ## The mandatory integration test
 
-**Every reusable provider should ship a recorded-token integration
-test.** No exceptions for published crates; this is RFC-074 §5.3.1,
-encoded because the original RFC-070 §5.9 presets shipped without
-tests and at least one was subtly wrong.
+Every reusable provider must ship a recorded-token integration test.
+No exceptions for published crates; this is RFC-074 §5.3.1. The
+original RFC-070 §5.9 presets shipped without tests and at least
+one was subtly wrong — that's why the rule exists.
 
-The test pattern (synthesize a keypair → inject as static JWKS →
-sign a token → verify round-trip):
+Test pattern: synthesize a keypair, inject it as a `StaticJwks`
+source, sign a token, verify the round-trip:
 
 ```rust
 // In your `pocopine-auth-jwt-okta` crate's tests/okta_provider.rs:
@@ -159,18 +160,18 @@ Keep the helper code local to the provider crate or tutorial. The
 important part is that verification exercises the provider's exact
 issuer, audience, key source, algorithm, and claim-map choices.
 
-## Bundled Providers
+## Bundled providers
 
-None. Pocopine intentionally does not maintain in-tree vendor
-provider crates. Firebase, Clerk, Auth0, Okta, Cognito, and similar
-providers should be wired in app code, tutorial code, or external
-crates using the `Provider` contract above.
+None. Pocopine does not maintain in-tree vendor provider crates.
+Firebase, Clerk, Auth0, Okta, Cognito, and similar providers belong
+in app code, tutorial code, or external crates using the `Provider`
+contract above.
 
-## Community Providers
+## Community providers
 
 If you maintain a third-party provider crate, open a PR adding a
 row here. The bar is one passing integration test against the
-provider's actual JWKS (mocked via the static-JWKS pattern above).
+provider's actual JWKS (mocked via the `StaticJwks` pattern above).
 
 | Provider | Crate | Maintainer |
 |---|---|---|
@@ -181,15 +182,15 @@ provider's actual JWKS (mocked via the static-JWKS pattern above).
 Out of scope for `pocopine-auth-jwt`. The verifier handles
 **JWT verification**, not the OAuth authorization-code flow.
 
-If you want native social login without Firebase:
+For native social login without Firebase:
 
-1. Use the `oauth2` Rust crate to drive the redirect + code
+1. Use the `oauth2` Rust crate to drive the redirect and code
    exchange.
 2. Once you have an ID token, hand it to the corresponding
    provider's `JwtVerifier` for verification.
-3. Issue a pocopine session token via `JwtIssuer::hs256` so
-   subsequent `#[server]` calls use a single token shape.
+3. Issue a pocopine session token via `JwtIssuer::hs256(secret, issuer, audience)`
+   so subsequent `#[server]` calls use a single consistent token shape.
 
-This is a future RFC's scope (a `pocopine-oauth` crate would wrap
-`oauth2` with pocopine-shaped helpers); for now the integration
-is application-level glue.
+A future `pocopine-oauth` crate will wrap `oauth2` with
+pocopine-shaped helpers; for now the integration is
+application-level glue.

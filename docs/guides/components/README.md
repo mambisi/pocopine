@@ -5,23 +5,28 @@ description: "Opinionated structure for building pocopine components and managin
 
 # Components & state management
 
-pocopine is an opinionated framework. When there's a choice to make
-about how to structure a component or where to put state, we pick one
-answer and document it here. Users aren't meant to invent this stuff.
+pocopine is an opinionated framework. For every common decision about
+component structure and state placement there is one canonical answer,
+documented in this section. Pick the pattern that fits; don't invent
+alternatives.
 
-> **The rule:** if this folder says "do X," do X. If it says "don't do Y,"
-> don't do Y. If something isn't covered, ask for it to be added here
-> before inventing a pattern. That's how we stay consistent.
+## In this section
 
-Docs in this folder:
-
-1. [`01-structure.md`](./01-structure.md) — where files live, what a
-   component looks like, naming conventions, handler conventions.
-   The "every component I write looks like this" doc.
+1. [`01-structure.md`](./01-structure.md) — file layout, component shape,
+   naming conventions, handler conventions. The reference for what every
+   component looks like.
 2. [`02-state.md`](./02-state.md) — state management: local state,
-   parent ↔ child communication, global stores, async data. One
-   canonical pattern per category.
+   parent-to-child props, child-to-parent events, global stores, and async
+   data. One canonical pattern per category.
 3. [`03-composition.md`](./03-composition.md) — composing components:
-   `<pp-*>` custom-element tags, attribute props (static and
-   `pp-bind:`), slots, and the iteration syntax planned for when
-   array reactivity lands.
+   kebab-case custom-element tags, attribute props (static and `pp-bind:`),
+   slots (default and scoped), and the `pp-for` iteration syntax.
+4. [`04-lifecycle.md`](./04-lifecycle.md) — the four lifecycle hooks
+   (`on_setup`, `on_mount`, `on_ready`, `on_unmount`), their order and
+   receivers, and the borrow rules that govern deferred work.
+5. [`05-extractors.md`](./05-extractors.md) — declaring what a method needs
+   by type: lifecycle-context extractors for hooks, `FromHandlerArg` for
+   event-handler arguments.
+6. [`06-events.md`](./06-events.md) — emitting and listening: the `emit`
+   one-liner, typed `#[derive(Emit)]` events, cancelable events, and the
+   `on` / `on_emit` listeners.

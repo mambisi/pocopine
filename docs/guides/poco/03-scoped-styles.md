@@ -1,54 +1,64 @@
 ---
 title: "Scoped styles for .poco components"
-description: "Goal: CSS in a component's .css file applies only to that component's template by default. Same idea as Vue SFC / Svelte, but the file layout is cleaner —…"
+description: "How component stylesheets are registered and injected, and the planned compile-time scoping strategy that keeps component CSS from leaking into the rest of the page."
 ---
 
 # Scoped styles for `.poco` components
 
-Goal: CSS in a component's `.css` file applies only to that
-component's template by default. Same idea as Vue SFC / Svelte, but
-the file layout is cleaner — the CSS is already in its own file, so
-the "scoping" is purely a compile-time transform of that file's
-contents, not a section-extraction problem.
-
-## Strategy
-
-For a component `name = "counter"`:
-
-1. Compute `H = hash("counter")` — first 8 hex chars of a
-   deterministic digest (FNV-1a or blake3 truncated). Stable across
-   builds and machines.
-2. Attribute namespace: `data-pp-<H>`, e.g. `data-pp-a1b2c3d4`.
-3. **Template pass**: walk the `.poco` HTML, append `data-pp-<H>` to
-   every element. Done at `#[component]` expansion time; the macro
-   emits the rewritten HTML as the literal string it registers.
-4. **CSS pass**: parse `Counter.css`, append `[data-pp-<H>]` to every
-   selector's last compound. Done at the same expansion time.
-
-Both passes happen inside the `pocopine-macros` (or a helper
-`pocopine-poco`) crate. The runtime wasm sees already-scoped strings.
-
-## Scoping is the default
-
-Because styles live in their own file, the simplest rule is: **if
-`style = "..."` is set, scope the contents**. No `scoped` flag on the
-attribute. Opt-out is per-rule inside the CSS.
+A component's `.css` file is linked via `style = "..."` in `#[component]`. At registration time the macro emits a call to `inject_style`, which appends a `<style data-pp-component="<name>">` element to `<head>`. The injected CSS is raw — the same text your `.css` file contains.
 
 ```rust
-#[component(name = "counter", style = "Counter.css")]  // scoped
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "counter", template = "Counter.poco", style = "Counter.css")]
+pub struct Counter {
+    pub count: i32,
+}
 ```
 
-To opt a single rule out of scoping, use `:global(selector)`:
+`template` and `style` paths are resolved relative to the `.rs` source file, exactly like `include_str!`. Adding the `style` argument creates a cargo rebuild dependency: editing `Counter.css` invalidates the build.
+
+## How injection works
+
+`inject_style` is idempotent per component name. The first call for a given name creates the `<style>` tag; any subsequent call (e.g. from a second `register()` invocation) is a no-op. The style element carries `data-pp-component="<name>"` so browser devtools and server-side rendering can attribute each block to its component.
+
+```rust
+// Generated register() body (abbreviated)
+pub fn register() {
+    if !mark_registered::<Counter>() { return; }
+    // …template registration…
+    ::pocopine::__private::inject_style(
+        "counter",
+        include_str!("Counter.css"),
+    );
+}
+```
+
+Because the CSS lands in a plain `<style>` block, it follows normal cascade rules. Nothing prevents one component's selectors from matching another component's DOM. The planned scoping transform described below is what will change that.
+
+## Planned: compile-time CSS scoping
+
+The design goal is that CSS in a component's `.css` file applies only to elements stamped by that component's template. This is the same idea as Vue SFCs and Svelte, but the file layout is already clean — the CSS is in its own file, so scoping is a pure compile-time rewrite of that file's selectors.
+
+The planned mechanism, for a component `name = "counter"`:
+
+1. Compute `H = hash("counter")` — the first 8 hex chars of a deterministic hash (FNV-1a; no extra dependency, stable across builds and machines).
+2. Define an attribute namespace: `data-pp-<H>`, e.g. `data-pp-a1b2c3d4`.
+3. **Template pass** — walk the `.poco` HTML and append `data-pp-<H>` to every element. Done inside the `#[component]` macro so the runtime WASM sees already-rewritten strings.
+4. **CSS pass** — parse `Counter.css` and append `[data-pp-<H>]` to the last compound of every selector.
+
+Both passes run inside `pocopine-macros`; the runtime never sees un-scoped selectors.
+
+### Opt-out with `:global()`
+
+When scoping is active, a single rule can escape it:
 
 ```css
 :global(body.dark) .wrapper { background: #000; }
 ```
 
-Rewriter rule: selectors containing `:global(...)` have the
-`:global()` wrapper stripped and the `[data-pp-H]` *not* appended.
-Everything else in the file is scoped.
+The rewriter strips the `:global()` wrapper and does not append the attribute. Everything else in the file is scoped.
 
-## Examples
+### Example
 
 **Input** (`Counter.css`):
 
@@ -59,69 +69,45 @@ button            { padding: 0.5rem; }
 :global(body.dark) .wrapper { background: #000; }
 ```
 
-**Output** after scoping with `H = a1b2c3d4`:
+**Output** after the scoping pass with `H = a1b2c3d4`:
 
 ```css
-.wrapper[data-pp-a1b2c3d4]       { display: flex; }
-.wrapper .count[data-pp-a1b2c3d4]{ font-size: 2rem; }
-button[data-pp-a1b2c3d4]         { padding: 0.5rem; }
-body.dark .wrapper               { background: #000; }  /* :global() unscoped */
+.wrapper[data-pp-a1b2c3d4]        { display: flex; }
+.wrapper .count[data-pp-a1b2c3d4] { font-size: 2rem; }
+button[data-pp-a1b2c3d4]          { padding: 0.5rem; }
+body.dark .wrapper                 { background: #000; }  /* :global() — unscoped */
 ```
 
 **Input** (`Counter.poco`):
 
-```html
-<div pp-data="counter" class="wrapper">
+```poco
+<div class="wrapper">
   <span class="count" pp-text="count"></span>
   <button pp-on:click="increment">+</button>
 </div>
 ```
 
-**Output** registered template:
+**Template after the scoping pass:**
 
 ```html
-<div pp-data="counter" class="wrapper" data-pp-a1b2c3d4>
+<div class="wrapper" data-pp-a1b2c3d4>
   <span class="count" pp-text="count" data-pp-a1b2c3d4></span>
   <button pp-on:click="increment" data-pp-a1b2c3d4>+</button>
 </div>
 ```
 
-## Edge cases
+### Edge cases covered by the design
 
-* **`:root`, `html`, `body`** — never scope. A small allowlist in the
-  rewriter.
-* **`::before` / `::after`** — append the attribute to the element
-  part, before the pseudo-element: `button[data-pp-H]::before`.
-* **`@keyframes`** — rename to `keyframes-<H>` (or the original name
-  suffixed) so two components can both define `spin` without colliding.
-  Substitute in `animation-name` references within the same file.
-* **`@media` / `@supports`** — the at-rule itself is untouched;
-  selectors inside are scoped normally.
-* **Cross-component selectors**: `.parent .child` in `Parent.css`
-  expecting to hit a `.child` inside an imported `Child.poco` **breaks**
-  under scoping. Document this; `:deep(.child)` opt-out rewrites to
-  `.parent[data-pp-H] .child` (drops the trailing attribute).
+* **`:root`, `html`, `body`** — never scoped. A small allowlist in the rewriter skips these.
+* **`::before` / `::after`** — the attribute is appended to the element part, before the pseudo-element: `button[data-pp-H]::before`.
+* **`@keyframes`** — renamed to `<original>-<H>` so two components can both define `spin` without colliding. All `animation-name` references in the same file are substituted accordingly.
+* **`@media` / `@supports`** — the at-rule itself is untouched; selectors inside are scoped normally.
+* **Cross-component selectors** — `.parent .child` in `Parent.css` targeting a `.child` inside a child component's template breaks under scoping, because the child's elements carry only the child's `data-pp-<H>`. Use `:deep(.child)` to opt a descendant selector out of the trailing-attribute rule: `.parent[data-pp-H] .child` (the child's class is not scoped by the parent).
 
-## Implementation notes
+## Working with unscoped styles today
 
-* **CSS parser**: `lightningcss` (pure Rust, compiles to wasm, handles
-  minify + autoprefix). Overkill for v0 but the right dep to commit to
-  — regex-based selector munging breaks on attribute selectors with
-  commas inside strings.
-* **HTML parser**: hand-rolled single-pass tokenizer is fine for v0.
-  The `.poco` is our format, we can forbid edge cases. If we ever want
-  full HTML5, reach for `html5ever`.
-* **Hash function**: FNV-1a (no extra dep; runs in proc-macro context
-  without blowing compile times). Switch to `blake3` only if we hit a
-  collision in practice — 32 bits of hash over component names in one
-  app is ample.
+Until the scoping pass lands, write component CSS defensively:
 
-## Deferred
-
-* CSS Modules (local class renaming). Scoped attributes cover the
-  common case; modules are an alternative strategy for a different
-  milestone.
-* `@import` resolution inside the component's CSS. Same reason.
-* Autoprefixing — let `lightningcss` do it when we flip the feature
-  on, with a browserslist config at workspace root.
-* Source maps — wait until a user asks.
+* **Namespace by component name** — prefix every class with the component name: `.counter-wrapper`, `.counter-count`.
+* **Use the custom-element tag as a selector root** — custom elements don't collide with HTML element names, so `counter .wrapper { … }` is already isolated.
+* **Keep utilities in Pine Stylekit** — utility classes in `.poco` templates are resolved by the Stylekit compiler and emitted once at the project level, not per-component. No scoping concern there.

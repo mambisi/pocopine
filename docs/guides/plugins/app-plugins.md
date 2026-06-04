@@ -3,11 +3,11 @@ title: "App plugins"
 description: "The app-plugin architecture: install-time setup, lifecycle ordering, and the ownership boundary."
 ---
 
-# App plugins - architecture
+# App plugins
 
-This doc explains the app plugin lifecycle introduced by
-[`RFC 076`](../../../rfcs/rfc-076-app-plugin-lifecycle.md). The goal is to let
-optional crates install app-level behavior without editing `pocopine-core`.
+The app plugin system, introduced by
+[RFC 076](../../../rfcs/rfc-076-app-plugin-lifecycle.md), lets optional crates
+install app-level behavior without editing `pocopine-core`.
 
 Plugins are the boundary between framework-owned startup and integration-owned
 setup:
@@ -32,7 +32,8 @@ pub trait AppPlugin {
 }
 ```
 
-Closures implement `AppPlugin`, so an app-local plugin can be one function:
+`FnOnce(App) -> App` implements `AppPlugin`, so an app-local plugin can be a
+plain function or closure:
 
 ```rust
 fn local_plugin(app: pocopine::App) -> pocopine::App {
@@ -82,10 +83,10 @@ assembled. It can do immediate global setup and can also attach later lifecycle
 hooks.
 
 `name()` is optional, but reusable plugin crates should override it with a
-stable name. Core uses the name in duplicate-service panics, boot diagnostics,
-devtools, logs, and future ordering checks. Closures default to their Rust type
-name, and that closure type name is what appears in diagnostics. That is
-useful enough for app-local plugins but noisy for published integrations.
+stable string. Core uses the name in duplicate-service panics, boot diagnostics,
+devtools, and future ordering checks. Without an override, `name()` returns
+`std::any::type_name::<Self>()` — opaque enough for app-local plugins but noisy
+for published integrations.
 
 ## Runtime Services
 
@@ -343,18 +344,23 @@ After `run()` starts, the runtime order is:
 1. validate plugin hook/service wiring;
 2. activate plugin services and emit `AppBootStarted`;
 3. verify the component registry;
-4. install built-in animation styles;
-5. run `before_mount` hooks;
-6. mount the `[pp-app]` subtree;
-7. initialize router and devtools;
-8. schedule `after_mount` hooks on the next microtask;
-9. emit `AppBootCompleted`.
+4. check that every `$store.X` reference in compiled templates has a
+   corresponding `App::store::<T>()` registration;
+5. install built-in animation styles;
+6. run `before_mount` hooks;
+7. mount the `[pp-app]` subtree;
+8. initialize router and devtools;
+9. schedule `after_mount` hooks on the next microtask;
+10. emit `AppBootCompleted`.
 
 Core emits `AppBootFailed` for boot failures that happen after plugins are
-valid and active, such as registry conflicts or a missing `[pp-app]` root.
-Plugin validation failures happen before activation, so invalid plugin wiring
-renders the plugin boot error instead of dispatching hook events through a
-known-bad plugin graph.
+valid and active. These include component registry conflicts
+(`"component_registry"`), missing `$store` registrations
+(`"missing_store_registration"`), missing `[pp-app]` root
+(`"missing_pp_app_root"`), and missing browser globals (`"missing_window"`,
+`"missing_document"`). Plugin validation failures happen before activation, so
+invalid plugin wiring renders the plugin boot error instead of dispatching hook
+events through a known-bad plugin graph.
 
 ## Framework Event Surface
 
@@ -371,7 +377,8 @@ AppBootCompleted {
 }
 
 AppBootFailed {
-    reason,
+    reason,  // "component_registry" | "missing_store_registration"
+             // | "missing_pp_app_root" | "missing_window" | "missing_document"
 }
 
 ComponentSetup {
@@ -455,7 +462,7 @@ pocopine::app! {
     components: [AppShell, Home, Report],
     plugins: [
         ObservabilityPlugin { service_name: "site" },
-        live_query_plugin(),
+        query_client_plugin(),
     ],
     routes: [
         ("/", Home),

@@ -30,12 +30,12 @@ What the crate **does not** ship:
 - A `User` struct. The framework doesn't own user identity — apps
   do. Many apps need one user table that spans password + OAuth +
   passkey + magic-link auth, with the password hash being one
-  column among many. Bundling our own `User` would force a
-  parallel record they'd have to keep in sync.
+  column among many. Bundling a framework-owned `User` would force
+  a parallel record that has to be kept in sync.
 - A default in-memory store. The in-memory shape is a footgun
   (data lost every restart, no shared state across processes),
-  and we'd rather you spend ten minutes on the real thing than
-  ship a tryout backend you'll forget to swap.
+  and spending ten minutes on the real thing is better than
+  shipping a tryout backend that gets forgotten.
 - Phone-OTP / username-based / passkey / OAuth flows. Those are
   **different credential types** and ship as **sibling crates**
   (future `pocopine-auth-otp`, etc.). They produce the same
@@ -182,8 +182,8 @@ parallel traits and routes for the others:
 | `pocopine-auth-otp` | `PhoneOtpCredentials` | SMS OTP |
 
 Apps that link multiple methods implement multiple traits on the
-**same** `AppUser` struct (or composing struct). Their `users`
-table grows columns / link tables for each provider:
+**same** `AppUser` struct. Their `users` table grows columns or
+link tables for each provider:
 
 ```sql
 CREATE TABLE app_users (
@@ -222,14 +222,10 @@ trait shape — apps don't have to remember to filter
 `password_hash IS NOT NULL` in their SQL; the framework does the
 right thing if they just return the row.
 
-When the OAuth / passkey / OTP crates ship, an account-linking
-flow will let users add a password to a previously-passwordless
-account (and vice versa). That's a separate plugin — out of
-scope for the current PR, but the trait shape is ready.
-
-The framework reads `password_hash()` exactly twice per login
-(once to verify, once nowhere — the value never escapes); it
-reads the others on signup and on login to build the response and
+The framework reads `password_hash()` once per login
+(to verify); the raw value never escapes the handler —
+it is only compared against the submitted password via argon2.
+The framework reads the other methods on signup and on login to build the response and
 the JWT. Anything you don't surface in `to_auth_user()` simply
 isn't visible to the framework — the rest of your row stays your
 business.
@@ -331,20 +327,20 @@ A few non-obvious things to keep in mind:
   logs even though both surface the same closed-set HTTP reason.
 - **Nothing in the error message reaches the wire.** The body is
   `{"error": "email_taken"}` — closed-set identifier — and the
-  detail is in the log line. RFC-077 §6 invariant.
-- **`to_auth_user` runs once per authenticated request.** The JWT
-  carries the projected fields; the verifier on the other side
-  rebuilds an `AuthUser` from the claims, so anything you forget
-  to project doesn't get to the request handler. Keep this method
-  cheap — it's per-request after sign-in too if the session
-  cookie path is used.
+  detail is in the log line.
+- **`to_auth_user` runs once at sign-up and once at login.** The JWT
+  carries the projected fields; the verifier rebuilds an `AuthUser`
+  from the claims on every subsequent request without calling
+  `to_auth_user` again. Anything you forget to project doesn't reach
+  request handlers.
 
 ## Step 3 — implement `TokenStore` against Postgres
 
 The `TokenStore` is for ephemeral password-reset / email-verification
-tokens. It's not used by the routes that ship in this slice
-(signup/login/logout), but the `Credentials<S, T>` generic carries
-both stores so the email-flow PR (PR-3) doesn't churn the API.
+tokens. The `Credentials<S, T>` generic carries both stores so the
+email-flow routes (coming in a future update) don't churn the API.
+You can use a stub implementation today and fill in the real logic
+when you add email flows.
 
 ```sql
 CREATE TABLE auth_tokens (
@@ -444,10 +440,10 @@ fn kind_from_str(s: &str) -> Result<TokenKind, StoreError> {
 ```
 
 The single-use contract is non-negotiable: implementations
-**must** remove-then-return atomically. With Postgres, `DELETE ...
+**must** remove-and-return atomically. With Postgres, `DELETE ...
 RETURNING` is the idiomatic shape; with Redis, `WATCH/MULTI/EXEC`
 or a Lua script. Don't read-then-delete in two round trips — that's
-the replay vector RFC-074 §6.1 calls out by name.
+the replay vector.
 
 ## Step 4 — wire it up
 
@@ -458,7 +454,7 @@ use pocopine_server::{axum::Router, RouterAuthExt, Server};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    pocopine_logging::init();
+    pocopine_logging::init_default().ok();
 
     let secret = SecretBytes::new(
         std::env::var("POCOPINE_AUTH_SECRET")
@@ -497,7 +493,7 @@ required values; everything else is a builder method:
 | Method | Default | Purpose |
 |---|---|---|
 | `.with_session_ttl(Duration)` | 1 hour | Session JWT lifetime. |
-| `.with_argon_params(Argon2Params)` | OWASP m=64MiB / t=3 / p=4 | Argon2id cost. Validated against `owasp_minimum()` (m=19MiB / t=2 / p=1). |
+| `.with_argon_params(Argon2Params) -> Result<Self, CredentialsError>` | OWASP m=64MiB / t=3 / p=4 | Argon2id cost. Validated against `Argon2Params::owasp_minimum()` (m=19MiB / t=2 / p=1) — returns `Err` on weaker params. |
 | `.with_issuer(name)` | `"pocopine"` | `iss` claim. |
 | `.with_audience(name)` | `"pocopine"` | `aud` claim. |
 | `.with_password_validator(closure)` | min 8 chars | NIST SP 800-63B-style checks, HIBP, anything you want. |
@@ -516,7 +512,7 @@ doesn't lock builder state.
 |---|---|
 | Plaintext-password storage | **Framework** — only the argon2id PHC string ever touches the store; the framework never logs or serializes it. |
 | User-enumeration via response timing | **Framework** — constant-time login (always runs `verify_password` against a pre-baked dummy hash on miss). |
-| User-enumeration via response shape | **You (PR-3)** — the email-flow `/password/reset/request` route returns `200 {}` regardless of whether the address matches. |
+| User-enumeration via response shape | **You** — the email-flow `/password/reset/request` route (coming in a future update) returns `200 {}` regardless of whether the address matches. |
 | Token replay | **Framework** — reset/verify tokens are stored as their SHA-256 hash, single-use via `take`. |
 | `password_hash` leak via logs | **Framework** — the response body builds an `AuthUser` projection that excludes the hash. **You** make sure your `AppUser`'s `Debug` impl redacts the hash too. |
 | Argon2 misuse | **Framework** — `Argon2Params::validate` rejects below OWASP minimum at builder time. |
@@ -525,12 +521,12 @@ doesn't lock builder state.
 | Rate limiting | **You** — install `tower-governor` or a CDN-side limiter on `/_pocopine/auth/*`. |
 | Account lockout after N failed logins | **You** — track via your own metrics store and short-circuit `login` ahead of the credentials handler. |
 
-Per RFC-074 §6 these are firm boundaries. Production checklist:
+Production checklist:
 
 1. `POCOPINE_AUTH_SECRET` set to ≥ 32 random bytes; rotated only in
    coordination with verifier rollout.
-2. Rate limits on `/_pocopine/auth/login` and (when PR-3 lands)
-   `/password/reset/request`, `/email/verify/request`.
+2. Rate limits on `/_pocopine/auth/login` and (when email flows
+   land) `/password/reset/request`, `/email/verify/request`.
 3. HTTPS — full stop. The bearer token in `Authorization` is the
    session credential.
 4. Session TTL ≤ 1 hour without a revocation hook (`JwtConfig::revocation`
@@ -559,16 +555,17 @@ it as `Authorization: Bearer …` on subsequent `#[server]` calls.
 See [`auth-client.md`](client.md) for the full client-side
 walkthrough — you'll usually wire both sides in the same change.
 
-## Out of scope (deferred, per RFC-074 PR sequence)
+## What's coming
 
-- Email flows: `EmailSender` trait, `/password/reset/{request,confirm}`,
-  `/email/verify/{request,confirm}` ship in PR-3. PR-3 will add
-  `update_password_hash` and `set_email_verified` methods to
-  `UserStore` (default-no-op for apps that don't need them).
-- HIBP / breach checks ship in `pocopine-auth-credentials-hibp`.
-- A `/me` route is under consideration for PR-4 (apps frequently
-  add their own).
-- Bundled Postgres / SQLite / Redis adapter crates. Open to
-  contributions — the test fixture in
+- **Email flows** — `EmailSender` trait, `/password/reset/{request,confirm}`,
+  `/email/verify/{request,confirm}`. When they land, `UserStore` will
+  gain `update_password_hash` and `set_email_verified` methods
+  (with default no-op impls so existing stores don't need updating
+  unless the app uses those routes).
+- **HIBP / breach checks** — will ship as a separate
+  `pocopine-auth-credentials-hibp` crate; plug in via
+  `with_password_validator`.
+- **Bundled adapter crates** — Postgres / SQLite / Redis backends as
+  community or official add-ons. The test fixture in
   `crates/pocopine-auth-credentials/tests/common/mod.rs` shows the
-  exact trait shape an adapter would implement.
+  exact trait shape an adapter implements.

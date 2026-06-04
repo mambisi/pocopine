@@ -1,6 +1,6 @@
 ---
 title: ".poco expressions"
-description: "Every pp-='...' attribute value is a pine-expr expression. The surface is deliberately small. If you need more than this page lists, the answer is to…"
+description: "Every pp-*='...' attribute value is a pine-expr expression. The surface is deliberately small — if you need more, compute it Rust-side and bind by name."
 ---
 
 # `.poco` expressions — surface and convention
@@ -29,8 +29,9 @@ not to write a bigger expression.
 **Calls**
 
 * Plain identifier calls only: `upper(name)`, `format_id(id)`
-* The callee must be a Rust-side handler or `#[computed]` registered
-  on the component
+* The callee must be a plain identifier naming a handler method on the
+  component (`#[handlers] impl …`); dotted method calls like
+  `obj.method()` are rejected
 
 **Assignment and sequences** (handler context only)
 
@@ -91,8 +92,8 @@ truncated strings, percent strings, derived class names.
 #[handlers]
 impl PineUploadItem {
     #[watch(extension)]
-    fn update_thumb_label(&mut self) {
-        self.thumb_label = self.extension
+    fn on_extension_change(&mut self, new: String, _prev: Option<String>) {
+        self.thumb_label = new
             .chars()
             .take(3)
             .collect::<String>()
@@ -101,9 +102,13 @@ impl PineUploadItem {
 }
 ```
 
-Reach for `#[watch]` when the derivation isn't a pure function of its
-inputs — for example, when it touches another field on `self`, calls
-out to a store, or has side effects (logging, telemetry).
+`#[watch(field)]` methods receive the new value and the previous value
+as typed arguments (`new: V, prev: Option<V>`). The first call after
+mount passes `None` for `prev`.
+
+Reach for `#[watch]` when the derivation isn't a pure function of a
+single value — for example, when it touches other fields on `self`,
+calls out to a store, or has side effects (logging, telemetry).
 
 ### 3. Plain handler — derives on user action
 
@@ -147,22 +152,25 @@ a name.
 
 ## Compile-time errors you may see
 
-The pine-expr parser rejects common JS patterns with a directive
-message. If you see any of these, the fix is to compute the value
-as a `#[computed]` field (or `#[watch]`, or in a handler) and bind
-to it by name:
+The pine-expr parser rejects common JS patterns at compile time with
+a directive message. Each error names the unsupported construct and
+points at the offending span in the `.poco` file:
 
-* `arithmetic in templates is not supported — compute Rust-side as
-  a #[computed] field`
-* `=== is not supported; use == (pine-expr uses Rust-style equality)`
-* `method calls on objects are not supported — compute Rust-side`
-* `JS globals (Math.*, Date.*, JSON.*) are not available — compute
-  Rust-side`
-* `arrow functions are not supported`
+| Pattern | Error message |
+|---|---|
+| `progress * 100`, `a / b`, `i % 2` | `` arithmetic operator `*` is not supported in pine-expr `` |
+| `count - 1` | `arithmetic subtraction is not supported in pine-expr` |
+| `status === 'done'` | `` `===` is not supported in pine-expr `` |
+| `x !== 'y'` | `` `!==` is not supported in pine-expr `` |
+| `files.filter(f)` | `method calls on objects are not supported in pine-expr` |
+| `x => x + 1` | `arrow functions are not supported in pine-expr` |
+| `a ?? b` | `` nullish coalescing `??` is not supported in pine-expr `` |
+| `user?.name` | `` optional chaining `?.` is not supported in pine-expr `` |
+| `...rest` | `` spread `...` is not supported in pine-expr `` |
 
-These errors fire at compile time when the framework parses your
-`.poco` template, with the file and span pointing at the offending
-expression.
+The fix in every case is the same: compute the value as a
+`#[computed]` field (or `#[watch]`, or in a handler) and bind to it
+by name.
 
 ## Related
 

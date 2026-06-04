@@ -45,12 +45,23 @@ fn app(app: App) -> App {
 }
 ```
 
-The plugin is the only public constructor — direct
-`QueryClient::new` / `with_endpoint` / `with_config` were removed in
-the polish PR. For tests that need a bare client without the plugin
-lifecycle, use [`QueryClient::without_driver`](#querycientwithout_driver-tests-only).
+The plugin is the only public constructor — there is no direct
+`QueryClient::new`. For tests that need a bare client without the plugin
+lifecycle, use [`QueryClient::without_driver`](#queryclientwithout_driver-tests-only).
 
 ### Configure endpoint + driver
+
+Override just the endpoint prefix:
+
+```rust
+app.plugin(
+    query_client_plugin()
+        .endpoint("/my-api/sync/v1")
+);
+```
+
+Replace the full driver config when you need to tune the poll interval,
+disable live wake-up, or adjust credential handling:
 
 ```rust
 use std::time::Duration;
@@ -58,7 +69,6 @@ use pocopine_sync_query::QueryClientConfig;
 
 app.plugin(
     query_client_plugin()
-        .endpoint("/my-api/sync/v1")
         .config(QueryClientConfig {
             endpoint: "/my-api/sync/v1".into(),
             poll_interval: Some(Duration::from_secs(15)),
@@ -105,7 +115,7 @@ let view = Issue::query()
 | Method                            | Behaviour                                                       |
 |-----------------------------------|-----------------------------------------------------------------|
 | `.eq(field, value)`               | Exact match. Always available on `#[query_param]` fields.       |
-| `.any_of(field, iter)`            | Set membership. `SyncResult` (empty set is rejected).           |
+| `.any_of(field, iter)`            | Set membership. Returns `SyncResult<Builder>` (error on empty iter). |
 | `.range(field, range)`            | Closed/half-open range. Ordered types only.                     |
 | `.contains(field, needle)`        | Case-insensitive substring. String fields only.                 |
 | `.contains_exact(field, needle)`  | Case-sensitive substring.                                       |
@@ -174,7 +184,7 @@ impl<Row: 'static> QueryView<Row> {
     pub fn is_empty(&self) -> bool;
     pub fn version(&self) -> u64;
     pub fn on_update<F: Fn() + 'static>(&self, callback: F) -> UpdateToken<Row>;
-    pub fn into_signal(self) -> Signal<Vec<Row>>     // T1.2: drop-safe bridge
+    pub fn into_signal(self) -> Signal<Vec<Row>>     // drop-safe bridge
         where Row: Clone + Serialize;
 }
 ```
@@ -205,7 +215,9 @@ subscription tears down — no explicit cleanup needed.
 ### `on_update` (manual)
 
 ```rust
-let view = Issue::query().eq(field::ws, "W1").observe(&qc);
+let view = Issue::query()
+    .eq(issues::field::workspace_id, "W1")
+    .observe(&qc);
 let _token = view.on_update(|| { /* re-render */ });
 ```
 

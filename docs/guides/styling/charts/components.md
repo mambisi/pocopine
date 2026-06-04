@@ -1,22 +1,27 @@
 ---
 title: "Chart Components"
-description: "The first component layer is intentionally small: PineLineChart renders SVG line charts from numeric points or named numeric series, PineScatterChart…"
+description: "Standalone chart primitives (PineLineChart, PineScatterChart, PineAreaChart, PineBarChart, PinePieChart, PineRadialBarChart) and compound surfaces (PineLayerChart, PineCartesianChart) for custom SVG compositions."
 ---
 
 # Chart Components
 
-The first component layer is intentionally small: `PineLineChart` renders SVG
-line charts from numeric points or named numeric series, `PineScatterChart`
-renders point-only numeric series, `PineAreaChart` renders closed SVG area fills
-from the same numeric shape, `PineBarChart` renders categorical values as SVG
-bars, `PinePieChart` renders pie, donut, half-pie, and half-donut slices, and
-`PineRadialBarChart` renders radial progress rings.
-`PineLayerChart` provides the lower-level compound component surface for custom
-SVG compositions: child tags register lines, guides, markers, labels, and
-annotations into one root-owned SVG.
-`PineCartesianChart` provides the compound surface for Cartesian charts: child
-tags register grid, axes, bar series, line series, area series, and scatter
-series plus reference lines, dots, and labels into one root-owned SVG.
+Pine Charts ships two layers. The standalone primitives cover the most common
+chart types:
+
+- `PineLineChart` — SVG line charts from numeric points or named multi-series data
+- `PineScatterChart` — point-only numeric series
+- `PineAreaChart` — closed SVG area fills from the same numeric shape
+- `PineBarChart` — categorical values as SVG bars (single, grouped, or stacked)
+- `PinePieChart` — pie, donut, half-pie, and half-donut slices
+- `PineRadialBarChart` — radial progress rings
+
+The compound surfaces expose lower-level control:
+
+- `PineLayerChart` — custom SVG compositions; child tags register lines, guides,
+  markers, labels, and annotations into one root-owned SVG.
+- `PineCartesianChart` — Cartesian charts; child tags register grid, axes, bar
+  series, line series, area series, and scatter series plus reference lines,
+  dots, and labels into one root-owned SVG.
 
 Use `PineChartResponsive` when a chart should follow its parent size. The
 responsive container measures its content box and writes concrete `width` and
@@ -106,10 +111,10 @@ let legend_items = line_legend_items(&series);
   pp-bind:items="legend_items"></pine-chart-legend>
 ```
 
-Line charts also expose a hover crosshair, marker, and tooltip. Pointer movement
-is mapped to the nearest sampled point in SVG space. For multi-series charts,
-that means nearest x/y distance, not just nearest x position. The component owns
-the nearest-point state and geometry variables, while the application owns
+Line charts expose a hover crosshair, marker, and tooltip. Pointer movement
+is mapped to the nearest sampled point in SVG space by Euclidean distance —
+x and y position both contribute to the nearest-match calculation. The component
+owns the nearest-point state and geometry variables, while the application owns
 tooltip placement and visual styling.
 Set `tooltip="none"` to suppress the built-in tooltip and render a custom block
 from the `pp:chart:hover` event payload instead.
@@ -678,7 +683,7 @@ authoritative for interaction, donut radius changes, and half-donut morphs.
 }
 ```
 
-Future components must keep following this pattern: generate SVG structure and
+All chart components follow this contract: they generate SVG structure and
 state hooks, but leave palette, typography, spacing, and dashboard layout to the
 application.
 

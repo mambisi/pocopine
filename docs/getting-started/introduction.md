@@ -10,22 +10,23 @@ build the whole application in one language: the front end, the server
 logic it calls, and the data, auth, and deploy layers around them.
 
 - **Front end** — a directive-driven Rust/WASM UI layer with a
-  Vue-3-style reactive core (real `Proxy` traps, automatic dependency
-  tracking) wired into compiled `.poco` template plans, tag-based
+  reactive core built on real JS `Proxy` traps and automatic dependency
+  tracking, wired into compiled `.poco` template plans, tag-based
   components, and a built-in SPA router.
 - **Back end** — a type-safe server-function bridge. Write an
   `async fn`, mark it `#[server]`, and call it from the client as a
   typed stub. No hand-written endpoints or fetch glue.
-- **The rest of the app** — opt-in crates for a query-centric data
-  layer, auth, object storage, live updates, background jobs,
-  observability, and deploy. You add only what you use.
+- **The rest of the app** — opt-in crates for styling (Pine Stylekit,
+  on by default), a query-centric data layer, auth, object storage,
+  live updates, background jobs, observability, and deploy. You add
+  only what you use.
 
 ## How code is organised
 
 Templates live in plain HTML files (`.poco`), styles in plain CSS files,
 and logic in plain Rust files. There are no mixed-language single-file
 components, no virtual DOM, and no JavaScript toolchain unless you opt
-into Pocopine-managed typed `.client.ts` modules.
+into typed `.client.ts` modules for third-party JS integrations.
 
 pocopine is **opinionated**: one canonical way per decision, so
 application code stays small and consistent across projects.

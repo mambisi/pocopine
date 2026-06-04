@@ -228,7 +228,7 @@ angles and radii.
   position: absolute;
   top: var(--pine-chart-tooltip-y);
   transform: translate(10px, calc(-100% - 10px));
-  transition: opacity var(--pine-chart-animation-duration, 120ms)
+  transition: opacity var(--pine-chart-animation-duration, 160ms)
     var(--pine-chart-animation-easing, ease);
   visibility: hidden;
 }

@@ -29,6 +29,8 @@ Every component that wants route-local behavior implements
 
 ```rust
 use pocopine::prelude::*;
+use pocopine_auth::require_auth;
+use pocopine_auth_client::predicate_guard;
 
 #[derive(Default)]
 #[component(template_inline = "<div>...</div>")]
@@ -48,7 +50,7 @@ impl Dashboard {
 impl RouteComponent for Dashboard {
     fn config() -> RouteConfig<Self> {
         RouteConfig::new()
-            .guard(require_auth())
+            .guard(predicate_guard(require_auth()))
             .loader(|ctx| async move { fetch_dashboard(ctx).await })
     }
 }
@@ -70,8 +72,13 @@ pub trait RouteGuard: 'static {
 
 pub enum RouteGuardDecision {
     Allow,
-    Redirect(RouteTarget),
+    /// Guard cannot decide yet — an async client-side prerequisite
+    /// is still hydrating. The router leaves the outlet untouched
+    /// until the owner of that prerequisite calls
+    /// `router::reevaluate_current()`.
+    Pending,
     Reject(RouteRejection),
+    Redirect(RouteTarget),
 }
 ```
 
@@ -95,7 +102,8 @@ wins:
 | Outcome | Router behavior |
 |---|---|
 | `Allow` | continue to loader / mount |
-| `Redirect(target)` | `navigate(target.into_path())`, no mount, emit `RouteNavigationFailed` with `reason: "guard_redirected"` |
+| `Pending` | leave outlet untouched; wait for `reevaluate_current()` |
+| `Redirect(target)` | `navigate(target)`, no mount, emit `RouteNavigationFailed` with `reason: "guard_redirected"` |
 | `Reject(rejection)` | dispatch through the rejection chain (see below) |
 
 ### `Predicate` and the auth bridge
@@ -113,17 +121,27 @@ A single `Predicate` value plugs into **two** install points:
 - **Server-side**: `#[server(guard = require_role("admin"))]` —
   `Decision::Deny(DenyReason::Unauthorized)` becomes
   `ServerError::Unauthorized`; `DenyReason::Forbidden` and
-  `DenyReason::Custom(reason)` become `ServerError::Forbidden`
-  (custom reasons carried verbatim). The `From<Decision>` adapter
-  lives in `pocopine-auth`.
-- **Client-side**: a future `pocopine-auth-client` plugin will
-  ship `impl<P: Predicate> RouteGuard for P` — same predicate
-  value, two install points. Until that plugin lands, write a
-  closure adapter:
+  `DenyReason::Custom(reason)` become `ServerError::Forbidden`.
+  The `From<Decision>` adapter lives in `pocopine-auth`.
+- **Client-side**: `pocopine-auth-client` ships
+  `predicate_guard(predicate)` — same predicate value, used as a
+  `RouteGuard`. It reads the reactive client `Principal` and maps
+  `Decision::Deny` into `RouteGuardDecision::Reject`:
 
 ```rust
-RouteConfig::new().guard(move |_: &RouteContext| {
-    let principal = current_principal(); // your AuthSession
+use pocopine_auth_client::predicate_guard;
+use pocopine_auth::require_role;
+
+RouteConfig::new()
+    .guard(predicate_guard(require_role("admin")))
+```
+
+For guards that need access to route params or other context,
+write a closure guard directly:
+
+```rust
+RouteConfig::new().guard(|ctx: &RouteContext| {
+    let principal = pocopine_auth_client::active_principal();
     match require_role("admin").check(&principal) {
         Decision::Allow => RouteGuardDecision::Allow,
         Decision::Deny(DenyReason::Unauthorized) => {
@@ -170,8 +188,8 @@ pub enum LoaderError {
 
 ### Reading loader data in the component
 
-`Loader<T>` is an extractor on `LifecycleContext` (mirror of
-`Plugin<T>`):
+`Loader<T>` is an extractor on `LifecycleContext` (mirrors the
+`Plugin<T>` shape):
 
 ```rust
 #[handlers]
@@ -224,8 +242,7 @@ twice. Compose multiple async fetches inside one body:
 ```
 
 This keeps the data shape the component sees explicit and avoids
-the accidental "I see one prop but two mysterious extractors"
-trap.
+the "I see one prop but two mysterious extractors" trap.
 
 ### Cancellation
 
@@ -252,9 +269,21 @@ usage.
 ## Route rejection chain
 
 `RouteRejection` is the generic routing failure surface; the
-router is **not** auth-aware. Plugins install handlers via
-`App::route_rejection_handler(...)` to claim rejections they
-understand:
+router is **not** auth-aware. The full variant set:
+
+```rust
+pub enum RouteRejection {
+    Unauthorized,
+    Forbidden(&'static str),
+    Blocked(&'static str),
+    NotFound,
+    Server(&'static str),
+    Custom { reason: &'static str },
+}
+```
+
+Plugins install handlers via `App::route_rejection_handler(...)`
+to claim rejections they understand:
 
 ```rust
 pub trait RouteRejectionHandler: 'static {
@@ -276,7 +305,7 @@ Handlers run in install order; the first to return
 `Some(action)` claims the rejection. `None` falls through. If
 **every** handler returns `None`, the router falls back to the
 default `RouteErrorSurface` — a plain HTML banner unless the app
-configured `App::route_error_component<MyError>()`.
+configured `App::route_error_component::<MyError>()`.
 
 Example: an auth plugin's `Unauthorized` handler:
 
@@ -323,6 +352,10 @@ sign-in / sign-out), the auth plugin **must** call
 current path:
 
 - `Allow` → no-op, current mount stays.
+- `Pending` → record the current URL and leave the outlet
+  untouched. A later `reevaluate_current()` after the prerequisite
+  completes will either mount the route or take the normal
+  redirect/reject path.
 - `Redirect / Reject` → outlet cleared **synchronously** (PII
   dropped before the rejection chain paints), then the full
   flow re-runs.
@@ -456,6 +489,8 @@ negotiable per RFC-078 §5.10:
 
 ```rust
 use pocopine::prelude::*;
+use pocopine_auth::require_auth;
+use pocopine_auth_client::{auth_plugin, predicate_guard};
 
 // ─── Component ──────────────────────────────────────────────
 
@@ -474,13 +509,7 @@ impl Dashboard {
 impl RouteComponent for Dashboard {
     fn config() -> RouteConfig<Self> {
         RouteConfig::new()
-            .guard(|_| {
-                if AuthSession::current().is_authenticated() {
-                    RouteGuardDecision::Allow
-                } else {
-                    RouteGuardDecision::Reject(RouteRejection::Unauthorized)
-                }
-            })
+            .guard(predicate_guard(require_auth()))
             .loader(|_ctx| async move {
                 let (user, stats) = futures::try_join!(
                     api::current_user(),
@@ -491,34 +520,14 @@ impl RouteComponent for Dashboard {
     }
 }
 
-// ─── Plugins ───────────────────────────────────────────────
-
-fn auth_plugin(provider: impl Provider) -> impl AppPlugin {
-    move |app| {
-        // Outgoing: attach Bearer + retry on Unauthorized.
-        fetch::install_middleware(|mut req, next| async move {
-            if let Some(token) = AuthSession::current().token() {
-                req.set_header("authorization", format!("Bearer {token}"));
-            }
-            next.run(req).await
-        });
-
-        // Inbound rejection: redirect to /login with intent.
-        app.route_rejection_handler(|_, rejection| match rejection {
-            RouteRejection::Unauthorized => {
-                let target = ReturnTo::current()
-                    .append_to(RouteTarget::path("/login"), "next");
-                Some(RouteRejectionAction::Redirect(target))
-            }
-            _ => None,
-        })
-    }
-}
-
 // ─── App ───────────────────────────────────────────────────
 
 App::new()
-    .plugin(auth_plugin(provider))
+    .plugin(
+        auth_plugin()
+            .login_route("/login")
+            .with_bearer_middleware(true),
+    )
     .route_component::<Dashboard>("/dashboard")
     .route_component::<Login>("/login")
     .not_found_component::<NotFound>()
@@ -526,8 +535,8 @@ App::new()
     .run();
 ```
 
-Sign-in fires `AuthSession::set_token(...)` →
-`router::reevaluate_current()`. Sign-out fires
-`AuthSession::clear()` → `router::reevaluate_current()` →
+Sign-in calls `session.sign_in(token, principal)` →
+`set_principal` → `router::reevaluate_current()`. Sign-out calls
+`session.sign_out()` → `router::reevaluate_current()` →
 existing component unmounts before the auth handler redirects to
-`/login?next=/dashboard`.
+`/login?redirect=/dashboard`.

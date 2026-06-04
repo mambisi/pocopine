@@ -1,15 +1,15 @@
 ---
 title: "Layered Charts"
-description: "pine-layer-chart is the composable SVG chart primitive. It follows the Pine UI compound-component pattern: the root owns state and rendering, while child…"
+description: "pine-layer-chart is the composable SVG chart primitive. The root owns state and rendering; child components describe marks that register into named paint-order buckets."
 ---
 
 # Layered Charts
 
 `pine-layer-chart` is the composable SVG chart primitive. It follows the Pine UI
 compound-component pattern: the root owns state and rendering, while child
-components describe marks.
+components register mark definitions.
 
-```html
+```poco
 <pine-layer-chart label="Metro map">
   <pine-chart-layer name="grid">
     <pine-chart-guide key="top" x1="80" y1="120" x2="820" y2="120"></pine-chart-guide>
@@ -50,12 +50,24 @@ namespace correctness, paint order, responsive sizing, and validation.
 - `pine-chart-marker`: point marker rendered above series paths.
 - `pine-chart-reference-dot`: larger background or foreground reference mark.
 - `pine-chart-label`: positioned SVG text with optional rotation.
-- `pine-chart-icon`: annotation icon. Built-in icon paths are rendered from
-  chart state; `kind="plane"` is available for now.
+- `pine-chart-icon`: annotation icon. The only built-in kind is `"plane"`;
+  unrecognized kinds are accepted but render no path.
+
+## Root props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `label` | `String` | `"Layer chart"` | `aria-label` on the SVG root. |
+| `width` | `f64` | `900` | SVG `width` and `viewBox` width in user units. |
+| `height` | `f64` | `480` | SVG `height` and `viewBox` height in user units. |
+| `empty_message` | `String` | `"No visible data"` | Status text shown when no marks are registered. |
+| `animate` | `bool` | `false` | Enables CSS transitions on marks via `data-animate`. |
+| `animation_duration` | `f64` | `160` | Transition duration in milliseconds. |
+| `animation_easing` | `String` | `"ease"` | CSS easing function for the transition. |
 
 ## Layers
 
-Layer names map to SVG paint-order buckets:
+The SVG tree has seven paint-order groups rendered in this order:
 
 1. `grid`
 2. `reference-background`
@@ -65,17 +77,28 @@ Layer names map to SVG paint-order buckets:
 6. `annotations`
 7. `labels`
 
-SVG does not support CSS `z-index` for children inside one `<svg>`. Use
-`pine-chart-layer` or the `layer` prop on `pine-chart-reference-dot` instead of
-CSS z-index.
+Each mark type maps to a fixed group: guides → `grid`, lines → `series`,
+markers → `markers`, icons → `annotations`, labels → `labels`. Only
+`pine-chart-reference-dot` is layer-selectable.
 
-`pine-chart-reference-dot` only accepts `reference-background`/`background` and
-`reference-foreground`/`foreground`. Unsupported reference-dot layers make the
-chart invalid instead of silently painting in the wrong bucket.
+SVG does not support CSS `z-index` for children inside one `<svg>`. Use the
+`layer` prop on `pine-chart-reference-dot` to place a dot in front of or behind
+the series path instead of CSS z-index.
+
+`pine-chart-reference-dot` accepts `"reference-background"` / `"background"` and
+`"reference-foreground"` / `"foreground"` for its `layer` prop. Omitting `layer`
+defaults to `reference-background`. Any other value marks the chart invalid
+instead of silently painting in the wrong bucket.
+
+`pine-chart-layer` is an optional grouping element. Nesting marks inside
+`<pine-chart-layer name="...">` does not change where non-reference-dot marks
+are painted; it provides organizational structure in the host tree and passes a
+layer-name context that `pine-chart-reference-dot` can inherit when its own
+`layer` prop is empty.
 
 ## Data
 
-Line points are intentionally plain data:
+Line points are plain data:
 
 ```rust
 use pine_charts::ChartLayerPoint;
@@ -87,6 +110,6 @@ let line_a = vec![
 ];
 ```
 
-Other marks can usually be authored directly in markup. Use `key` values that
+Other marks are authored directly in markup. Use `key` values that
 remain stable while the component is mounted; changing a key is treated as a new
 mark.

@@ -1,6 +1,6 @@
 ---
 title: "Pine Stylekit"
-description: "Pine Stylekit, the built-in Tailwind-shaped utility-CSS compiler, and @theme tokens."
+description: "Pine Stylekit is Pocopine's built-in utility-CSS compiler: Tailwind-shaped class grammar, typed registry, @theme tokens, and deterministic static output."
 ---
 
 # Pine Stylekit
@@ -123,7 +123,7 @@ lists the defined ones.
 <hr class="h-[3px] w-[calc(100%-2rem)]" />
 ```
 
-**Colour with alpha** (`/NN` → `color-mix`):
+**Colour with alpha** (`/NN` → `color-mix(in oklab, …)`):
 ```html
 <header class="bg-surface/95 backdrop-blur-md">
 ```

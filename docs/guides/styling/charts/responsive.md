@@ -1,6 +1,6 @@
 ---
 title: "Responsive Containers"
-description: "PineChartResponsive is the Recharts-style sizing layer for Pine Charts. It owns browser measurement with ResizeObserver, then writes concrete width and…"
+description: "PineChartResponsive is the sizing layer for Pine Charts. It owns browser measurement with ResizeObserver, then passes concrete width and height to the slotted chart component."
 ---
 
 # Responsive Containers

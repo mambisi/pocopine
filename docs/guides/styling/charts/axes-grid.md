@@ -1,49 +1,48 @@
 ---
 title: "Axes and Grid"
-description: "PineLineChart, PineScatterChart, PineAreaChart, and PineBarChart emit a basic SVG guide layer:"
+description: "How pine-charts renders axes, grid lines, and tick labels, and how to style or compose them."
 ---
 
 # Axes and Grid
 
-`PineLineChart`, `PineScatterChart`, `PineAreaChart`, and `PineBarChart` emit a
-basic SVG guide layer:
+`pine-line-chart`, `pine-scatter-chart`, `pine-area-chart`, and `pine-bar-chart`
+each emit a Cartesian guide layer inside their SVG output:
 
-- grid lines for x ticks,
-- grid lines for y ticks,
+- grid lines aligned to x ticks (line/scatter/area) and y ticks (all four),
 - x and y axis domain lines,
-- tick marks and labels,
-- optional x and y axis labels from `x_label` and `y_label`.
+- tick marks and tick labels,
+- optional axis labels set via the `x_label` and `y_label` props.
 
-Bar charts omit vertical category grid lines for now, but they use the same axis
-and tick-label hooks. Stacked bars infer their y domain from positive and
-negative stack totals, so the axis baseline stays meaningful for mixed-sign
-data.
+`pine-bar-chart` renders only horizontal (y) grid lines because its x axis is
+categorical — each band corresponds to a label, not a numeric tick. Stacked bars
+derive the y domain from the sum of positive stacks and the sum of negative
+stacks, so the baseline remains meaningful for mixed-sign data.
 
-This remains intentionally generated from the same low-level scale data. The
-component does not own colors, fonts, or stroke widths.
+The guide layer carries no default colors, fonts, or stroke widths. All visual
+treatment comes from CSS selectors described below.
 
 ## Styling Hooks
 
-Use these selectors for chart guides:
+The following CSS classes are emitted on the SVG guide elements:
 
-- `.pine-chart-grid`
-- `.pine-chart-grid-line`
-- `.pine-chart-grid-line-x`
-- `.pine-chart-grid-line-y`
-- `.pine-chart-axes`
-- `.pine-chart-axis`
-- `.pine-chart-axis-x`
-- `.pine-chart-axis-y`
-- `.pine-chart-axis-label`
-- `.pine-chart-axis-label-x`
-- `.pine-chart-axis-label-y`
-- `.pine-chart-tick`
-- `.pine-chart-tick-x`
-- `.pine-chart-tick-y`
-- `.pine-chart-tick-line`
-- `.pine-chart-tick-label`
-
-Example:
+| Selector | Element |
+|---|---|
+| `.pine-chart-grid` | `<g>` wrapping all grid lines |
+| `.pine-chart-grid-line` | individual grid `<line>` |
+| `.pine-chart-grid-line-x` | x-tick grid line |
+| `.pine-chart-grid-line-y` | y-tick grid line |
+| `.pine-chart-axes` | `<g>` wrapping both axes |
+| `.pine-chart-axis` | axis domain `<line>` |
+| `.pine-chart-axis-x` | x axis domain line |
+| `.pine-chart-axis-y` | y axis domain line |
+| `.pine-chart-axis-label` | axis label `<text>` |
+| `.pine-chart-axis-label-x` | x axis label |
+| `.pine-chart-axis-label-y` | y axis label |
+| `.pine-chart-tick` | `<g>` wrapping one tick mark + label |
+| `.pine-chart-tick-x` | x-axis tick group |
+| `.pine-chart-tick-y` | y-axis tick group |
+| `.pine-chart-tick-line` | tick mark `<line>` |
+| `.pine-chart-tick-label` | tick `<text>` |
 
 ```css
 .pine-chart-grid-line {
@@ -71,14 +70,14 @@ Example:
 ## Composition Boundary
 
 Preset charts (`pine-line-chart`, `pine-scatter-chart`, `pine-area-chart`, and
-`pine-bar-chart`) still own their generated axes and grid. That keeps the common
-case compact: set `x_label` / `y_label`, bind data, and style the emitted hooks.
-(`pine-pie-chart` is radial and has no axes or grid.)
+`pine-bar-chart`) own their axes and grid directly. The common workflow is to set
+`x_label` / `y_label` props, bind data, and style the emitted hooks.
+`pine-pie-chart` and `pine-radial-bar-chart` are radial and have no axes or grid.
 
-`pine-cartesian-chart` exposes guide ownership as child components:
+`pine-cartesian-chart` externalises guide ownership as child components:
 
 ```html
-<pine-cartesian-chart label="Revenue">
+<pine-cartesian-chart label="Revenue over time">
   <pine-chart-grid></pine-chart-grid>
   <pine-x-axis label="Week"></pine-x-axis>
   <pine-y-axis label="Revenue"></pine-y-axis>
@@ -86,7 +85,15 @@ case compact: set `x_label` / `y_label`, bind data, and style the emitted hooks.
 </pine-cartesian-chart>
 ```
 
-Those child tags are definitions, not nested SVG nodes. They register intent with
-the nearest Cartesian root, and the root still renders one valid SVG tree. This
-preserves namespace correctness, shared scales, responsive sizing, and paint
-order while letting applications opt into or omit guides explicitly.
+`pine-chart-grid` accepts `x` and `y` boolean props to enable or disable each
+grid direction independently:
+
+```html
+<pine-chart-grid x="false" y="true"></pine-chart-grid>
+```
+
+These child components are definition nodes — they render as hidden elements and
+register intent with the nearest `pine-cartesian-chart` root. The root produces
+one valid SVG tree, preserving namespace correctness, shared scales, responsive
+sizing, and correct paint order while letting you opt into or omit guides
+explicitly.

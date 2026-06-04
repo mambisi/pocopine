@@ -28,10 +28,14 @@ New here? Start with **[Getting Started](./getting-started/introduction.md)**.
 - [Icons](./guides/styling/icons.md) — tree-shaken Tabler icons.
 - [Charts](./guides/styling/charts/README.md) — SVG-first chart primitives.
 
-**Routing & server**
+**Routing**
 
-- [Route guards & loaders](./guides/routing/route-guards-and-loaders.md)
-- [Server plugins](./guides/server/server-plugins.md) · [Client modules](./guides/server/client-modules.md)
+- [Route guards & loaders](./guides/routing/route-guards-and-loaders.md) — sync guards, async loaders, and fetch middleware for the SPA router.
+
+**Server**
+
+- [Server plugins](./guides/server/server-plugins.md) — host-side plugin lifecycle, tower middleware, and the `Server` builder.
+- [Client modules](./guides/server/client-modules.md) — optional typed `.client.ts` modules and npm package imports.
 
 **Data & sync**
 

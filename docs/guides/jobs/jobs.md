@@ -5,15 +5,7 @@ description: "The background-job runtime: Redis Streams, the scheduler, periodic
 
 # Background jobs — architecture
 
-Source of truth for how `pocopine-jobs` works. The code tells you what
-each function does; this doc tells you what the broker is doing,
-which invariants the algorithm preserves, and how to verify them
-against a live Redis.
-
-For the framing decision (why two backends, what's a non-goal), see
-[`rfcs/rfc-067-redis-background-jobs.md`](../../../rfcs/rfc-067-redis-background-jobs.md).
-For the auth surface server functions use, see
-[`rfcs/rfc-066-server-function-auth.md`](../../../rfcs/rfc-066-server-function-auth.md).
+This page covers what `pocopine-jobs` does at the protocol level: what the broker stores, which invariants the algorithm preserves, and how to verify them against a live Redis.
 
 ## Mental model
 
@@ -22,9 +14,9 @@ A `#[pocopine::job]` function compiles to two artifacts:
 1. **A static descriptor** registered through `inventory` at link
    time. `Worker::new()` walks the registry to build a name →
    handler dispatch map.
-2. **A typed enqueue/schedule helper module** (`<fn>_job::enqueue`,
-   `enqueue_with`, `schedule_in`, `schedule_at`, …) that produces a
-   JSON envelope and writes it to the chosen backend.
+2. **Typed enqueue/schedule helpers** (`JobClient::enqueue_json`,
+   `schedule_json_in`, `schedule_json_at`) that produce a JSON
+   envelope and write it to the chosen backend.
 
 The runtime has two backends behind the same enum:
 
@@ -47,16 +39,14 @@ flowchart LR
     Redis[("Redis<br/>broker")]
     Handler["#[pocopine::job]<br/>handler fn"]
 
-    App -->|"enqueue_with / schedule_in"| Client
+    App -->|"enqueue_json / schedule_json_in"| Client
     Client -->|"XADD / ZADD"| Redis
     Worker -->|"TIME / XREADGROUP / XAUTOCLAIM /<br/>EVALSHA promote, retry, dead"| Redis
     Worker --> Handler
     Handler -.->|"Ok / Err / panic"| Worker
 ```
 
-The client and worker are usually different processes — `bin = "server"`
-and `worker-bin = "worker"` in `[package.metadata.pocopine]`. They
-communicate only through Redis; there's no in-process queue or RPC.
+The client and worker run as separate processes — the `web` and `worker` processes from the deploy contract. They communicate only through Redis; there's no in-process queue or RPC.
 
 ### Job state machine
 
@@ -130,12 +120,12 @@ flowchart TD
 ```
 
 ```rust
-async fn run_redis_once(&self, conn) -> JobResult<usize> {
-    let now_ms = redis_time_ms(conn).await?;             // ①
-    self.enqueue_due_periodic_jobs(conn, now_ms).await?; // ②
-    self.promote_due_jobs(conn, now_ms).await?;          // ③
-    self.reclaim_stale_jobs(conn).await?;                 // ④
-    self.read_ready_jobs(conn).await                      // ⑤
+async fn run_redis_once(&self, conn: &mut MultiplexedConnection) -> JobResult<usize> {
+    let now_ms = redis_time_ms(&mut *conn).await?;             // ①
+    self.enqueue_due_periodic_jobs(&mut *conn, now_ms).await?; // ②
+    self.promote_due_jobs(&mut *conn, now_ms).await?;          // ③
+    self.reclaim_stale_jobs(&mut *conn).await?;                 // ④
+    self.read_ready_jobs(conn).await                            // ⑤
 }
 ```
 
@@ -170,7 +160,7 @@ sequenceDiagram
     participant W as Worker
     participant H as Handler
 
-    App->>Cli: enqueue_with(payload)
+    App->>Cli: enqueue_json(job_name, queue, payload)
     Cli->>R: XADD pocopine:{app}:queue:Q *<br/>job_id, attempt=1, payload, …
     R-->>Cli: stream-id
 
@@ -258,11 +248,14 @@ When `run_handler_safely` returns `Err(_)`:
 ```rust
 if envelope.attempt < envelope.max_attempts {
     retry.attempt += 1;
-    due_ms = redis_TIME() + retry_delay_ms(retry.attempt, retry.job_id);
+    let due_ms = redis_time_ms(&mut *conn).await?
+        .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
+    retry.scheduled_for_ms = Some(due_ms);
     schedule_retry_and_ack(conn, scheduled_key, stream, group,
-                            stream_id, retry, due_ms).await?;
+                           stream_id, &retry, due_ms).await?;
 } else {
-    move_to_dead_and_ack(conn, stream, stream_id, envelope, err.to_string()).await?;
+    self.move_to_dead_and_ack(conn, stream, stream_id, &envelope,
+                              &err.to_string(), Some(elapsed_ms(started))).await?;
 }
 ```
 
@@ -311,8 +304,10 @@ The retry then waits in the sorted set until the next promote tick:
 
 ```rust
 async fn promote_due_jobs(conn, now_ms):
-    let raw_jobs: Vec<String> = ZRANGEBYSCORE scheduled -inf now_ms LIMIT 0 100
+    let raw_jobs: Vec<String> =
+        ZRANGEBYSCORE scheduled -inf now_ms LIMIT 0 100
     for raw in raw_jobs:
+        let envelope = serde_json::from_str(&raw)  // decode to get queue name
         promote_scheduled_envelope(conn, scheduled_key, queue_key, raw, envelope)
 ```
 
@@ -443,14 +438,16 @@ RFC-067 §4 and in the doc comment on `WorkerConfig.visibility_timeout`.
 
 ```rust
 async fn reclaim_stale_jobs(conn):
-    XAUTOCLAIM ... → claimed entries
-    for id in claimed:
-        envelope = parse(id.map)
+    let reply = conn.xautoclaim_options(
+        stream, group, consumer, idle_ms, "0-0",
+        StreamAutoClaimOptions::count(batch_size)).await?;
+    for id in reply.claimed:
+        let envelope = envelope_from_stream(id.map)?
         if envelope.attempt >= envelope.max_attempts:
-            move_to_dead_and_ack(...)              // already exhausted
+            move_to_dead_and_ack(...)              // budget already exhausted
         else:
             envelope.attempt += 1
-            run_envelope(...)                       // run with bumped attempt
+            run_envelope(conn, stream, id.id, envelope)  // normal Ok/retry/dead path
 ```
 
 The `attempt += 1` is critical: a handler that hangs forever would
@@ -521,13 +518,15 @@ async fn enqueue_due_periodic_jobs(conn, now_ms):
     for descriptor in periodic descriptors with matching queue:
         last_fired_ms = GET pocopine:{app}:periodic:last:{job}
         for due_ms in due_periodic_slots(schedule, now_ms,
-                                          scheduler_interval, last_fired_ms):
+                                          scheduler_interval, last_fired_ms,
+                                          max_periodic_catch_up):
             // Lock the slot. SET NX PX is atomic on the broker.
-            locked = SET pocopine:{app}:periodic:{job}:{due_ms}
-                          1 NX PX <ttl>
-            if locked:
-                XADD ready_stream (envelope payload = ())
-                SET pocopine:{app}:periodic:last:{job} {due_ms}
+            locked: Option<String> = SET pocopine:{app}:periodic:{job}:{due_ms}
+                                         1 NX PX <ttl>
+            if locked.is_none():
+                continue                  // another worker won this slot
+            XADD ready_stream (envelope payload = ())
+            SET pocopine:{app}:periodic:last:{job} {due_ms}
 ```
 
 Two failure modes the lock defends against:
@@ -546,26 +545,30 @@ Two failure modes the lock defends against:
 ### `due_periodic_slots`
 
 ```rust
-match schedule {
-    Every { interval_ms } => {
-        let due_ms = (now_ms / interval_ms) * interval_ms;
-        if last_fired_ms.is_some_and(|last| last >= due_ms) {
-            vec![]                  // already fired this slot
-        } else {
-            vec![due_ms]
+fn due_periodic_slots(schedule, now_ms, scheduler_interval,
+                      last_fired_ms, max_catch_up):
+    match schedule {
+        Every { interval_ms } => {
+            let due_ms = (now_ms / interval_ms) * interval_ms;
+            if last_fired_ms.is_some_and(|last| last >= due_ms) {
+                vec![]                  // already fired this slot
+            } else {
+                vec![due_ms]
+            }
+        }
+        Cron { expr } => {
+            let window_start = match last_fired_ms {
+                Some(last) => DateTime::from_timestamp_millis(last),
+                None       => now - scheduler_interval,
+            };
+            Schedule::from_str(expr)
+                .after(&window_start)
+                .take(max_catch_up)         // cap on catch-up
+                .filter_map(|d| (d.timestamp_millis() as u64 <= now_ms)
+                                 .then_some(d.timestamp_millis() as u64))
+                .collect()
         }
     }
-    Cron { expr } => {
-        let window_start = match last_fired_ms {
-            Some(last) => from_ms(last),
-            None => now - scheduler_interval,
-        };
-        schedule.after(&window_start)
-                .take(MAX_CATCH_UP)         // cap on catch-up
-                .filter(|d| d as u64 <= now_ms)
-                .collect()
-    }
-}
 ```
 
 For `every`, only one slot is returned per tick — the most recent
@@ -600,10 +603,10 @@ in lockstep with each successful enqueue.
 | Field / env var | Default | What it controls |
 |---|---|---|
 | `WorkerConfig.visibility_timeout` / `POCOPINE_JOB_VISIBILITY_MS` | 60 000 ms | `XAUTOCLAIM` `min_idle_ms`. Handlers must finish well under this or be idempotent under reclaim. |
-| `WorkerConfig.scheduler_interval` | 1 000 ms | Sleep when `run_redis_once` returns 0 work. Bounds the worst-case latency between "scheduled time reached" and "promoted to stream." |
-| `WorkerConfig.block_ms` | 1 000 ms | `XREADGROUP BLOCK` timeout. **Special case:** `0` means non-blocking poll, *not* "block forever" — the worker omits `BLOCK` from the command so callers using `run_once` against an idle stream don't deadlock. |
-| `WorkerConfig.batch_size` | 10 | `XREADGROUP COUNT` and reclaim/promote batch size. |
-| `WorkerConfig.max_periodic_catch_up` | 16 | Cap on missed cron firings backfilled per loop iteration. |
+| `WorkerConfig.scheduler_interval` | 1 000 ms | Sleep when `run_redis_once` returns 0 work. Bounds the worst-case latency between "scheduled time reached" and "promoted to stream." (code only; no env var) |
+| `WorkerConfig.block_ms` | 1 000 ms | `XREADGROUP BLOCK` timeout. **Special case:** `0` means non-blocking poll, *not* "block forever" — the worker omits `BLOCK` from the command so callers using `run_once` against an idle stream don't deadlock. (code only; no env var) |
+| `WorkerConfig.batch_size` | 10 | `XREADGROUP COUNT` and reclaim/promote batch size. (code only; no env var) |
+| `WorkerConfig.max_periodic_catch_up` / `POCOPINE_JOB_PERIODIC_CATCH_UP_MAX` | 16 | Cap on missed periodic firings backfilled per loop iteration. |
 | `POCOPINE_JOB_BACKEND` | (auto) | `memory` or `redis`. If unset and `POCOPINE_REDIS_URL` is set → redis; otherwise → memory. |
 | `POCOPINE_REDIS_URL` | — | Standard `redis://[user[:pass]]@host:port/[db]` connection string. |
 
@@ -677,10 +680,8 @@ Differences from the Redis backend:
   results.
 - **Process-local.** Two separately-launched processes both pick the
   memory backend by default if neither env is set, and never share
-  state. The CLI rejects `worker-bin` + `POCOPINE_JOB_BACKEND=memory`
-  to defend against this in the official path; for direct
-  `cargo run`, the `Worker::run` startup banner names the backend so
-  the misconfiguration is loud at startup.
+  state. `Worker::run` logs a `tracing::warn` at startup naming the
+  backend, so the misconfiguration is visible in the startup logs.
 
 When to pick which:
 
@@ -720,23 +721,24 @@ of the lifecycle diagrams above, that's worth a bug report.
 
 ## Code locations
 
+All line numbers are approximate. If the code and this page disagree,
+the code is authoritative — open a PR.
+
 | Concern | Where |
 |---|---|
-| Lua script source | `crates/pocopine-jobs/src/lib.rs:108-164` |
-| `EVALSHA` wrappers | `crates/pocopine-jobs/src/lib.rs:182-198` |
-| `run_redis_once` (loop body) | `crates/pocopine-jobs/src/lib.rs:705-715` |
-| `enqueue_due_periodic_jobs` | `~:756-803` |
-| `promote_due_jobs` | `~:805-836` |
-| `reclaim_stale_jobs` | `~:838-880` |
-| `read_ready_jobs` (incl. `block_ms == 0` special case) | `~:884-918` |
-| `run_envelope` | `~:920-960` |
-| `run_handler_safely` (panic capture) | `~:1453-1473` |
-| `retry_delay_ms` (backoff math) | `~:1487-1495` |
-| `due_periodic_slots` | `~:1422-1471` |
-| `JobId` construction | `~:1500-1505` |
-| Memory backend state + helpers | `~:218-227, 1085-1140, 1175-1207` |
+| Lua script sources | `crates/pocopine-jobs/src/lib.rs:114-175` |
+| `EVALSHA` wrapper functions | `~:180-193` |
+| `run_redis_once` (loop body) | `~:771-777` |
+| `enqueue_due_periodic_jobs` (Redis) | `~:866-917` |
+| `promote_due_jobs` | `~:919-948` |
+| `reclaim_stale_jobs` | `~:951-990` |
+| `read_ready_jobs` (incl. `block_ms == 0` special case) | `~:993-1033` |
+| `run_envelope` (Redis) | `~:1035-1096` |
+| `run_envelope_memory` | `~:1098-1139` |
+| `run_handler_safely` (panic capture) | `~:1586-1605` |
+| `due_periodic_slots` | `~:1748-1798` |
+| `retry_delay_ms` (backoff math) | `~:1810-1818` |
+| `new_job_id` (job-id construction) | `~:1830-1834` |
+| `MemoryState` struct | `~:227-233` |
 | Integration tests | `crates/pocopine/tests/jobs_redis.rs` |
-| Unit tests (math, parsers, ids) | `crates/pocopine-jobs/src/lib.rs` `mod tests` |
-
-If a function on this page doesn't match what's in the file, the
-file is right and this page is stale — please open a PR.
+| Unit tests (math, parsers, ids) | `crates/pocopine-jobs/src/lib.rs` `mod tests` (~:1897) |

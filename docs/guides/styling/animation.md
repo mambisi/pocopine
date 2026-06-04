@@ -27,13 +27,13 @@ with `pp-anchor` / `pp-resize` if you need more.
 | --- | --- |
 | `fade` | opacity 0 ↔ 1 |
 | `scale` | scale 0.95 ↔ 1 + opacity |
-| `fade-scale` | both simultaneously |
+| `fade-scale` | scale 0.94 ↔ 1 + opacity |
 | `zoom` | scale 0.8 ↔ 1 + opacity |
 | `slide-up` | translateY +8px ↔ 0 + opacity |
 | `slide-down` | translateY -8px ↔ 0 + opacity |
 | `slide-left` | translateX +8px ↔ 0 + opacity |
 | `slide-right` | translateX -8px ↔ 0 + opacity |
-| `collapse` | height 0 ↔ scrollHeight (measured at runtime) |
+| `collapse` | grid-template-rows 0fr ↔ 1fr + opacity (no JS measurement) |
 | `none` | disables the primitive's default preset |
 
 ## Declaring motion on a component
@@ -41,7 +41,7 @@ with `pp-anchor` / `pp-resize` if you need more.
 ```rust
 use pocopine::prelude::*;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default)]
 #[component(template = "MyPanel.poco", transition = "fade-scale")]
 pub struct MyPanel {
     #[prop] pub open: bool,
@@ -64,20 +64,21 @@ pub struct Toast { … }
 
 ## Per-instance override
 
-Authors override any primitive's default from the template:
+Authors override any primitive's default from the template using
+`pp-transition`:
 
 ```html
 <!-- Override the default slide-down with a zoom -->
-<pine-popover-content transition="zoom">…</pine-popover-content>
+<pine-popover-content pp-transition="zoom">…</pine-popover-content>
 
 <!-- Disable animation entirely for this one use -->
-<pine-dialog-content transition="none">…</pine-dialog-content>
+<pine-dialog-content pp-transition="none">…</pine-dialog-content>
 
 <!-- Asymmetric -->
-<pine-tooltip-content transition:in="scale" transition:out="fade">…</pine-tooltip-content>
+<pine-tooltip-content pp-transition:in="scale" pp-transition:out="fade">…</pine-tooltip-content>
 ```
 
-Precedence: per-instance attributes > `#[component]` macro default.
+Precedence: per-instance `pp-transition` attributes > `#[component]` macro default.
 
 ## FLIP — keyed list reorder
 
@@ -116,7 +117,7 @@ animate(
         Keyframe::from_iter([("opacity", "0"), ("transform", "translateY(20px)")]),
         Keyframe::from_iter([("opacity", "1"), ("transform", "translateY(0)")]),
     ],
-    AnimateOptions { duration_ms: 240, easing: "cubic-bezier(0.16, 1, 0.3, 1)", ..Default::default() },
+    AnimateOptions { duration_ms: 240.0, easing: "cubic-bezier(0.16, 1, 0.3, 1)".into(), ..Default::default() },
 );
 ```
 
@@ -126,24 +127,38 @@ The returned `AnimationHandle` exposes `.cancel()`, `.finish()`, and
 ## Registering a custom preset
 
 One call at app boot. Registered names work everywhere the built-ins
-do — macro args, template attributes, `apply_preset`:
+do — macro args, template attributes, `apply_preset`.
+
+Each `Phase` carries three CSS class strings: `base` (the
+`transition-property` + duration + easing rule), `from` (the
+visual extreme to start from), and `to` (the settled state).
+Define the atom classes in your CSS, then reference them here:
+
+```css
+/* styles.css */
+.brand-rise-base {
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+}
+.brand-rise-from { opacity: 0; transform: translateY(1rem); }
+.brand-rise-to   { opacity: 1; transform: translateY(0); }
+```
 
 ```rust
 use pocopine::animate::{register_preset, Preset, Phase};
 
 pub fn main() {
     App::new()
-        .init(|| {
-            register_preset("brand-rise", Preset {
+        .before_mount(|| {
+            let _ = register_preset("brand-rise", Preset {
                 enter: Phase {
-                    base: "transition duration-300 ease-out".into(),
-                    from: "opacity-0 translate-y-4".into(),
-                    to:   "opacity-100 translate-y-0".into(),
+                    base: "brand-rise-base",
+                    from: "brand-rise-from",
+                    to:   "brand-rise-to",
                 },
                 leave: Phase {
-                    base: "transition duration-200 ease-in".into(),
-                    from: "opacity-100 translate-y-0".into(),
-                    to:   "opacity-0 translate-y-4".into(),
+                    base: "brand-rise-base",
+                    from: "brand-rise-to",   // leave starts from the settled state
+                    to:   "brand-rise-from", // and animates back to the extreme
                 },
             });
         })
@@ -151,7 +166,8 @@ pub fn main() {
 }
 ```
 
-Collisions error — overriding a built-in is a deliberate opt-in.
+`register_preset` returns `Err` if the name is already taken —
+overriding a built-in is a deliberate, explicit step.
 
 ## Pine primitive defaults
 
@@ -231,10 +247,6 @@ motion-as-data UI:
 ```html
 <pine-progress-root data-pp-motion="always" value="42"></pine-progress-root>
 ```
-
-`#[component(motion = "always")]` stamps the attribute
-automatically (deferred — author the attribute directly until that
-ships).
 
 ## `@starting-style` — the modern CSS-only path
 

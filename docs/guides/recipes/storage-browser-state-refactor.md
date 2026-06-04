@@ -1,60 +1,59 @@
 ---
 title: "Storage Browser State Refactor"
-description: "The storage browser example is intentionally becoming a real app: connection profiles, S3/GCS browsing, route-backed prefixes, command search, dialogs, and…"
+description: "How to decompose an over-extended global store into focused component state, prop bags, and server DTOs — using the file-browser example as the reference."
 ---
 
 # Storage Browser State Refactor
 
-The storage browser example is intentionally becoming a real app: connection
-profiles, S3/GCS browsing, route-backed prefixes, command search, dialogs, and
-uploads. That also means `StorageBrowserStore` has started to hold unrelated
-state. The refactor should use Pocopine's component model instead of adding more
-global fields.
+`StorageBrowserStore` has grown to cover connection profiles, S3/GCS browsing,
+route-backed prefixes, command search, dialogs, and uploads in a single global
+scope. This recipe describes the target structure and migration order for moving
+unrelated state out of the store and into the components that own the
+corresponding UI.
 
-This recipe is the target structure and migration order.
-
-## Pocopine Tools To Use
+## Pocopine Primitives to Use
 
 Use the narrowest Pocopine primitive that matches the data lifetime:
 
 | Need | Pocopine shape |
 |---|---|
-| One component owns it | local component fields on `#[component]` |
-| Parent configures a child | `#[prop]` fields plus static attrs or `pp-bind:` |
-| Many parent-to-child fields | `#[derive(Props)]` prop bag plus `#[prop(flatten)]` |
-| Route params | route component `#[prop]` fields |
+| One component owns it | plain fields on a `#[component]` struct |
+| Parent configures a child | `#[prop]` fields, bound with static attrs or `pp-bind:` |
+| Many parent-to-child fields | `#[derive(Props)]` prop bag with `#[prop(flatten)]` |
+| Route params | `#[prop]` fields on a route component |
 | Cross-subtree app state | one focused `#[store]` |
 | Browser/server boundary | `#[pocopine::server]` functions with serializable DTOs |
-| Repeated UI rows | keyed `pp-for` with small row DTOs |
-| User-controlled Pine primitives | `pp-model:*` for open/value state when the parent controls it |
+| Repeated UI rows | `pp-for` with `pp-key` and small row DTOs |
+| Parent-controlled open/value state | `#[model]` field + `pp-model:*` at the call site |
 
 Two rules matter most:
 
 - Stores are for durable, cross-subtree state. Dialog inputs, loading flags,
-  command search results, upload expansion, and transient errors should usually
-  live in the component that renders them.
-- Props are an explicit component contract. Mark exposed fields with `#[prop]`;
-  keep everything else as private component state.
+  command search results, upload expansion, and transient errors should live in
+  the component that renders them.
+- Props are an explicit component contract. Mark inbound fields with `#[prop]`
+  (or `#[model]` for two-way binding); keep everything else as private
+  component state.
 
 ## Current Problem Shape
 
-`examples/file-browser/src/store/mod.rs` is doing all of these jobs:
+`examples/file-browser/src/store/mod.rs` carries all of these responsibilities:
 
 - selected connection and route prefix
 - connection list and selected connection metadata
-- object listing, filters, derived counts, breadcrumbs, path labels
+- object listing, filters, derived counts, breadcrumbs, and path labels
 - connection modal form state for both S3 and GCS
 - command palette state and all-bucket search results
 - upload dock state and upload metadata
 - new-folder dialog state
 - loading, saving, and error flags for several independent workflows
 
-That creates three symptoms:
+That produces three symptoms:
 
-- Unrelated UI actions invalidate the same global store.
-- Components read many `$store.storage.*` fields they do not own.
-- Derived labels such as `path_meta`, count labels, and prefix labels become
-  cached state instead of local render facts.
+- Unrelated UI actions invalidate the same reactive scope.
+- Components read `$store.storage.*` fields that belong to a different workflow.
+- Derived labels (`path_meta`, count labels, prefix labels) are stored as
+  cached state rather than computed at render time from local data.
 
 ## Target Ownership
 
@@ -70,14 +69,14 @@ pub struct StorageBrowserStore {
 }
 ```
 
-Everything else should move closer to the component that owns the UI.
+Everything else moves closer to the component that owns the corresponding UI.
 
 | Concern | Owner after refactor |
 |---|---|
 | Connection list load/delete/reconnect | `FileBrowserSidebar` |
 | Connection form fields/save errors | `FileBrowserConnectionDialog` |
 | Current object listing/filter/counts | `FileBrowserFileList` or a new `FileBrowserObjectBrowser` |
-| Breadcrumbs/path title/path subtitle | object browser/header local derived state |
+| Breadcrumbs/path title/path subtitle | local derived state inside the object browser or header |
 | New folder name/error/saving | `FileBrowserNewFolderDialog` |
 | Upload open/expanded/metadata | `FileBrowserUploadDock` |
 | Command palette open/query/results/errors | `FileBrowserStorageCommand` |
@@ -110,9 +109,10 @@ pub struct FileBrowserHeader {
 }
 ```
 
-The caller still writes flat template bindings:
+`#[prop(flatten)]` maps the leaves of `ConnectionBadgeProps` directly to the
+host element's attributes. The caller still writes flat `pp-bind:` bindings:
 
-```html
+```poco
 <file-browser-header
   pp-bind:id="selected.id"
   pp-bind:name="selected.name"
@@ -123,15 +123,15 @@ The caller still writes flat template bindings:
   pp-bind:prefix="$store.storage.current_prefix" />
 ```
 
-Use this for UI identity and display metadata. Do not use prop bags to smuggle
-mutable workflow state across the tree.
+Use prop bags for UI identity and display metadata. Do not use them to pass
+mutable workflow state across the component tree.
 
 ## Server DTOs Stay Central
 
 Keep provider DTOs and server functions in `examples/file-browser/src/storage_browser/`:
 
 - `mod.rs` exposes serializable DTOs and `#[pocopine::server]` wrappers.
-- `server.rs` owns local config persistence and provider-specific SDK calls.
+- `server/mod.rs` owns local config persistence and provider-specific SDK calls.
 - Components call the server functions directly and update their local fields
   from the response.
 
@@ -142,28 +142,32 @@ global store.
 
 1. Extract `FileBrowserConnectionDialog`.
    Move `connection_*`, `saving_connection`, and `modal_error` out of the store.
-   Keep the dialog controlled by `pp-model:open` if the shell needs to open it.
+   Declare `#[model] pub open: bool` on the dialog so the shell can control it
+   with `pp-model:open` when it needs to open the dialog programmatically.
 
 2. Extract object-browser state.
-   Move `entries`, `visible_entries`, filters, listing request id, breadcrumbs,
-   counts, and listing errors into the file-list/browser component. Pass only
-   `connection_id` and `prefix` as props.
+   Move `entries`, `visible_entries`, filters, `listing_request_id`, breadcrumbs,
+   counts, and listing errors into `FileBrowserFileList` (or a new
+   `FileBrowserObjectBrowser`). Pass only `connection_id` and `prefix` as
+   `#[prop]` fields.
 
-3. Let route state stay global.
-   Keep `selected_connection_id` and `current_prefix` in the store so sidebar,
-   route sync, upload, and listing agree on the browser location.
+3. Keep route state global.
+   `selected_connection_id` and `current_prefix` stay in the store so the
+   sidebar, `FileBrowserRoute`, upload dock, and file list all agree on the
+   current browser location.
 
 4. Move command search into `FileBrowserStorageCommand`.
-   The command palette already owns its visual shell. It should own query,
-   loading, errors, and result rows too.
+   The command palette already owns its visual shell. Move `query`, loading
+   flag, errors, and result rows into the component as plain fields.
 
 5. Move upload dock state into `FileBrowserUploadDock`.
-   Pass `connection_id` and `prefix` as props and build upload metadata locally.
-   Keep completion refresh as an explicit event or store update.
+   Pass `connection_id` and `prefix` as `#[prop]` fields and build upload
+   metadata locally. Trigger a listing refresh via a store handler or direct
+   server call on completion.
 
 6. Delete derived global labels last.
-   Once components own their data, recompute labels locally from the local state:
-   count labels from entries, title from prefix, subtitle from connection props.
+   Once components own their data, recompute labels locally: count labels from
+   entries, title from prefix, subtitle from connection props.
 
 ## Test Split
 

@@ -34,8 +34,8 @@ Three files in the same directory:
 
 **`Counter.poco`**
 
-```html
-<div pp-data="counter" pp-init="init" class="wrapper">
+```poco
+<div class="wrapper">
   <button pp-on:click="decrement">-</button>
   <span class="count" pp-text="count"></span>
   <button pp-on:click="increment">+</button>
@@ -46,19 +46,19 @@ Three files in the same directory:
 
 ```rust
 use pocopine::prelude::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "counter", template = "Counter.poco", style = "Counter.css")]
+#[component(template = "Counter.poco", style = "Counter.css")]
 pub struct Counter {
     pub count: i32,
 }
 
 #[handlers]
 impl Counter {
-    pub fn init(&mut self)      { self.count = 0; }
-    pub fn increment(&mut self) { self.count += 1; }
-    pub fn decrement(&mut self) { self.count -= 1; }
+    pub fn on_setup(&mut self) { self.count = 0; }
+    pub fn increment(&mut self)  { self.count += 1; }
+    pub fn decrement(&mut self)  { self.count -= 1; }
 }
 ```
 
@@ -72,37 +72,60 @@ button   { padding: 0.5rem 1rem; }
 
 ## Rules for the `.poco` body
 
-* **Single root element.** It must carry `pp-data="name"` matching the
-  `#[component(name = "...")]` in the paired `.rs`. Fragments aren't
-  supported in the first milestone; wrap in a `<div>`.
-* **Directive attributes** follow the runtime's `pp-*` naming rules
-  (see `crates/pocopine-core/src/directives/mod.rs::parse_attr`):
-  `pp-on:event.modifier`, `pp-bind:attr`, etc.
-* **No Rust inside attribute values yet.** The current runtime treats
-  the value as a bare identifier (field name or handler name).
-  Full Rust expressions in attribute values are a future milestone
-  (`pp-on:click="self.count += 1"`); until then, the field/handler
-  identifier model stays.
+* **Single root element.** Fragments aren't supported; wrap in a `<div>`
+  or any other block element. The `#[component]` macro enforces this at
+  compile time and emits a diagnostic pointing at the second root if the
+  rule is violated.
+* **No `pp-data` or `pp-init`.** These directives were removed. The
+  macro auto-stamps the scope marker on the root element — you never
+  write it yourself. Initialization logic goes in the `on_setup`
+  lifecycle hook in the paired `.rs` (see below).
+* **Directive attributes** use the `pp-*` prefix:
+  `pp-on:event.modifier`, `pp-bind:attr` (shorthand `:`), `pp-text`,
+  `pp-show`, `pp-if`, `pp-for`, `pp-model`, `pp-ref`, `pp-html`, etc.
+  Event bindings also accept the `@event` shorthand.
+* **Attribute values are expressions**, not bare identifiers. `pp-text="count"`,
+  `pp-text="count * 2"`, and `pp-bind:title="open ? 'close' : 'open'"` are
+  all valid.
 * **Plain HTML comments are fine.** `<!-- ... -->` works. The compiler
   strips them.
 
 ## Rules for the `.rs` file
 
-* Exactly one `#[component(name = "...", template = "...", style = "...")]`
-  per file is the convention (more is allowed but unusual).
-* `template` and `style` paths are **relative to the `.rs` file**, same
-  as `include_str!`. Both accept missing files (warn, don't error) so a
-  component can be authored without styles.
-* The paired `.poco` must exist at the `template` path; the macro reads
-  and validates it at compile time (see `02-compilation.md`).
+* Exactly one `#[component(...)]` per file is the convention (more is
+  allowed but unusual).
+* All arguments to `#[component]` are optional:
+  * `name` defaults to the kebab-case of the struct identifier
+    (`Counter` → `counter`).
+  * `template` defaults to `<StructIdent>.poco` relative to the `.rs` file.
+  * `style` is omitted unless explicit.
+* `template` and `style` paths are **relative to the `.rs` file**, matching
+  `include_str!` semantics. A missing `template` file is a **compile
+  error** in the default strict mode. A missing `style` file is silently
+  skipped — components without styles are valid.
+* The macro parses and validates the `.poco` at compile time
+  (see `02-compilation.md`). Template errors produce annotated diagnostics
+  pointing at the offending line.
+* Lifecycle hooks go in the `#[handlers]` impl:
+  * `on_setup(&mut self)` — runs before first render; use it for field
+    initialization.
+  * `on_mount(&mut self)` — runs after the component is inserted into the
+    DOM.
+  * `on_ready(&self)` — runs after `on_mount` and all child
+    `on_mount` hooks have fired. Takes an immutable receiver —
+    mutation goes through `this::<Self>().update(...)` or a deferred
+    `tick::next` call.
+  * `on_unmount(&mut self)` — runs when the component is removed from
+    the DOM.
 
 ## Rules for the `.css` file
 
-* Plain CSS. `style = "..."` in `#[component(...)]` opts the file into
-  compile-time processing.
-* `scoped` behavior is on by default — styles only apply to the
-  component's template. Opt out per rule with `:global(...)`
-  (implementation detail in `03-scoped-styles.md`).
+* Plain CSS. `style = "..."` in `#[component(...)]` inlines the file
+  via `include_str!` and injects it into `<head>` at runtime as a
+  `<style data-pp-component="...">` element.
+* CSS is currently **global** — selectors can match elements outside
+  the component. Compile-time scoping is planned; see
+  `03-scoped-styles.md` for the design and status.
 
 ## File naming / layout
 
@@ -119,21 +142,16 @@ components/
 ```
 
 The compiler does not require matching stems — the `template = "..."`
-path is authoritative. Matching stems are convention and will probably
-become a clippy-style lint warning later.
+path is authoritative. Matching stems are convention.
 
-## Future: syntax highlighting
+## Syntax highlighting
 
-The whole point of keeping `.poco` as "HTML with `pp-*` attributes" is
-that an editor can:
-
-1. Treat the file as HTML by default → every editor gets free HTML
-   highlighting.
-2. Recognize `pp-*="..."` attribute values and switch to a Rust-like
-   grammar for the value. Today it's just an identifier; later it's
-   an expression. Either way the inner grammar is small enough that a
-   Tree-sitter injection or TextMate child grammar is maybe 100 lines
-   per editor.
+`.poco` files are HTML with `pp-*` attributes, so every editor already
+highlights them correctly without plugins. A future editor plugin only
+needs to do one additional thing: inside a `pp-*="..."` attribute value,
+switch to a Rust-expression grammar. That injection is small enough for
+a Tree-sitter grammar or a TextMate child grammar — not a full SFC
+plugin.
 
 Nothing in the format blocks that; the format *enables* it by not
 mixing languages at file scope.

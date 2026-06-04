@@ -93,26 +93,36 @@ impl From<(String, IssueDraft)> for Issue {
 }
 ```
 
-`#[query_resource]` emits a lot:
+`#[query_resource]` emits:
 
 ```rust
 impl Issue {
-    pub fn query() -> QueryBuilder<Self>           // DSL entry
-    pub fn create(id, draft)        -> TypedMutation<…>  // requires From<(Id, Draft)>
-    pub fn update(id, draft, expected_version: Option<RowVersion>) -> TypedMutation<…>
-    pub fn delete(id, expected_version: Option<RowVersion>)        -> TypedMutation<…>
+    pub fn query() -> QueryBuilder<Self>    // DSL entry point
+    // create / update / delete are emitted because `draft = IssueDraft` was declared:
+    pub fn create(id: String, draft: IssueDraft) -> TypedMutation<Self, String, IssueDraft>
+    pub fn update(id: String, draft: IssueDraft, expected_version: Option<RowVersion>)
+        -> TypedMutation<Self, String, IssueDraft>
+    pub fn delete(id: String, expected_version: Option<RowVersion>)
+        -> TypedMutation<Self, String, IssueDraft>
 }
 
-pub mod issues {                                  // resource module
+pub mod issues {                             // module name = resource name
     pub const NAME: &str = "issues";
     pub const SCHEMA_VERSION: u32 = 1;
-    pub fn resource<S: Source<Row = Issue, Id = String>>(impl_: S) -> SourceResource<S, _>;
-    pub fn row_to_params(row) -> StreamParams;    // server live wake-up projector (Value)
-    pub fn row_to_params_typed(row) -> StreamParams;   // typed sibling, used by partition_by
-    pub fn partition_for_topic(p) -> Option<u64>; // client subscribe hash
-    pub mod field { /* one typed marker per #[query_param] */ }
+    pub const HAS_PER_PARAMS_LIVE_ROUTING: bool = true; // has a required field
+    pub fn resource<S>(impl_: S) -> SourceResource<S, …>  // auto-wires id / version / partition_by
+        where S: Source<Row = Issue, Id = String>;
+    pub fn row_to_params(row: &Value) -> SyncResult<StreamParams>; // server §C projector
+    pub fn row_to_params_typed(row: &Issue) -> StreamParams;       // typed sibling
+    pub fn partition_for_topic(captured: &StreamParams) -> Option<u64>; // client subscribe hash
+    pub fn matches(query: &Query<Issue>, row: &Issue) -> bool;     // predicate evaluator
+    pub mod field { /* one typed marker per #[query_param]-annotated field */ }
 }
 ```
+
+`#[query_resource]` must come before `#[derive(...)]` so it strips
+the per-field `#[query_param]` annotations before downstream derives
+see the struct.
 
 `#[query_param(required)]` on `workspace_id` makes it a **tenant gate**:
 predicates without it are rejected, and every subscription is
@@ -140,12 +150,13 @@ pub struct WorkspaceCtx {
 
 impl WorkspaceCtx {
     fn extract(ctx: &RequestContext, db: &Db) -> SyncResult<Self> {
-        let user_id = ctx.user.id_string()
-            .ok_or_else(|| SyncError::auth("unauthenticated"))?;
-        let workspace_id = ctx.header_str("x-workspace-id")
+        let user_id = ctx.user.user()
+            .map(|u| u.id.clone())
+            .ok_or_else(|| SyncError::unauthorized("unauthenticated"))?;
+        let workspace_id = ctx.header("x-workspace-id")
             .ok_or_else(|| SyncError::client("missing x-workspace-id"))?
             .to_string();
-        // Real impl would call db.assert_member(user_id, workspace_id) here.
+        // Real impl would call db.assert_member(&user_id, &workspace_id) here.
         Ok(Self { workspace_id, user_id })
     }
 }
@@ -231,16 +242,16 @@ let sync = SyncServer::builder()
     .public_stream(
         issues::resource(IssueStore { db })
             .mutation_log(MemoryMutationLog::<Issue>::with_scope_fn(|ctx| {
-                Ok(ctx.tenant_id()?.to_string())
+                ctx.header("x-workspace-id")
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| SyncError::unauthorized("missing x-workspace-id"))
             })),
     )
-    .events(Arc::new(live_backend()))
     .build();
 
-let server = Server::builder()
-    .plugin(sync_server_plugin(sync))
-    .plugin(live_plugin(live_backend()))
-    .build();
+let router = axum::Router::new(); // add your other routes here
+let server = Server::new(router)
+    .plugin(sync_server_plugin(sync));
 ```
 
 `issues::resource(impl_)` is the macro-emitted convenience that
@@ -297,7 +308,7 @@ impl IssueList {
         Issue::query()
             .eq(issues::field::workspace_id, &self.workspace_id)
             .eq(issues::field::status, "open")
-            .order_by(issues::field::created_at, Order::Desc)
+            .order_by_raw("created_at", Order::Desc)
             .limit(50)
             .bind::<Self, _>(&qc, |s: &mut Self| &mut s.rows);
     }

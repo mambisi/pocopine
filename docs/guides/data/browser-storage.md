@@ -1,6 +1,6 @@
 ---
 title: "Typed browser storage"
-description: "Typed localStorage helpers for small browser preferences, with the auth-token and SSR boundaries."
+description: "Typed localStorage helpers for small browser preferences, with auth-token and SSR guidance."
 ---
 
 # Typed browser storage
@@ -38,18 +38,22 @@ fn load_theme() -> Theme {
 fn save_theme(theme: Theme) {
     let _ = LocalStorage::new(THEME_KEY).set(&theme);
 }
+
+fn clear_theme() {
+    let _ = LocalStorage::<Theme>::new(THEME_KEY).remove();
+}
 ```
 
 ## Failure model
 
 All operations return `Result<_, StorageError>`.
 
-- On host targets, storage is unavailable.
-- In private or restricted browser contexts, storage may be unavailable.
-- Quota, permission, and browser errors are returned as
+- On host (non-wasm) targets and in private or restricted browser
+  contexts, operations return `StorageError::Unavailable`.
+- Quota, permission, and other browser-level errors are returned as
   `StorageError::Browser`.
-- Malformed JSON is returned as `StorageError::Deserialize`; it is not
-  silently ignored by the storage helper.
+- Malformed JSON or a type mismatch returns `StorageError::Deserialize`;
+  it is never silently ignored.
 
 Apps can decide whether a failed preference read should show an error,
 clear the key, or fall back to a default.

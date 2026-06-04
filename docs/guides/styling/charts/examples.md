@@ -1,24 +1,25 @@
 ---
 title: "Examples"
-description: "The examples/charts app is the first integration target for Pine Charts."
+description: "Run the built-in charts example app to see every Pine Charts primitive in action."
 ---
 
 # Examples
 
-The `examples/charts` app is the first integration target for Pine Charts.
+The `examples/charts` app exercises every public Pine Charts primitive in a
+single runnable application. Build and start it from the repo root:
 
 ```bash
 cargo run -p pocopine-cli -- build --path examples/charts
 cargo run -p pocopine-cli -- run --path examples/charts --port 8025
 ```
 
-Open `http://localhost:8025` and switch between the two datasets. The demo keeps
-all visual styling in `index.html` CSS so the chart crate can stay unstyled.
+Open `http://localhost:8025` and switch between the two datasets. All visual
+styling lives in `index.html` CSS so the chart crate itself stays unstyled.
 
-## What The Demo Proves
+## What the example covers
 
-The demo is intentionally a composition test, not a theme showcase. It should
-prove that applications can assemble chart blocks into their own product UI:
+The example is a composition test rather than a theme showcase. It demonstrates
+that applications can assemble chart primitives into a full product UI:
 
 - combo Cartesian charts with bars, areas, lines, scatter points, and reference
   marks sharing one scale system,
@@ -30,7 +31,7 @@ prove that applications can assemble chart blocks into their own product UI:
 - empty states when filtering hides all visible data,
 - independent radial progress rings for non-part-of-total metrics.
 
-The example intentionally uses the same public API an application would use:
+It uses the same public API your application uses:
 
 - `pine_charts::register_all()` at startup,
 - `<pine-cartesian-chart>` with `pine-chart-grid`, `pine-x-axis`, and
@@ -49,7 +50,7 @@ The example intentionally uses the same public API an application would use:
 - `line_legend_items(&line_series)` to drive a separate line legend,
 - `scatter_legend_items(&scatter_series)` to drive a separate scatter legend,
 - `area_legend_items(&area_series)` to drive a separate area legend,
-- `bar_legend_items(&bar_series)` to drive a separate legend,
+- `bar_legend_items(&bar_series)` to drive a separate bar legend,
 - `pie_legend_items(&pie_data)` to drive pie/donut legends,
 - `radial_bar_legend_items(&radial_data)` to drive radial bar legends,
 - `<pine-line-chart pp-bind:series="line_series">` in the template,
@@ -72,18 +73,15 @@ The example intentionally uses the same public API an application would use:
   `<pine-chart-legend pp-bind:items="radial_legend">` in the template,
 - CSS selectors from the chart styling contract.
 
-This example should be extended whenever a new chart primitive becomes public.
+## Browser tests
 
-## Browser Tests
-
-Pine Charts also has browser integration coverage, matching the Pine crate's
-`wasm-bindgen-test` style:
+Pine Charts has browser integration coverage using `wasm-bindgen-test`:
 
 ```bash
 wasm-pack test --firefox --headless crates/pine-charts
 ```
 
-The browser suite mounts compiled Pocopine fixtures and verifies SVG output,
+The browser suite mounts compiled pocopine fixtures and verifies SVG output,
 reactive bound data updates, hover behavior, click/keyboard selection,
 pie/donut slices, responsive panel sizing, radial centering, half-donut center
 text, narrow-width resizing, and empty/invalid states.
