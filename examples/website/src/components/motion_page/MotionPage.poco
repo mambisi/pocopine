@@ -1,0 +1,84 @@
+<root class="section-page">
+  <div class="ref-layout">
+    <aside class="ref-nav" pp-on:click="on_nav" aria-label="Motion techniques">
+      <nav>
+        <template pp-for="row in nav" pp-key="row.slug">
+          <a class="side-nav-link"
+             :data-active="row.active ? 'true' : 'false'"
+             :href="row.href"><span pp-text="row.title"></span></a>
+        </template>
+      </nav>
+    </aside>
+
+    <div class="ref-main">
+      <header class="section-page-head">
+        <span class="ref-cat">Motion</span>
+        <h1 pp-text="title"></h1>
+        <p class="section-page-lead" pp-text="blurb"></p>
+      </header>
+
+      <div class="ref-empty" pp-show="not_found">
+        No such technique. <a href="/motion/springs" pp-route>Browse motion</a>.
+      </div>
+
+      <template pp-if="name == 'springs'"><div class="motion-demo-frame"><animation-demo only="springs"></animation-demo></div></template>
+      <template pp-if="name == 'easing'"><div class="motion-demo-frame"><easing-playground></easing-playground></div></template>
+      <template pp-if="name == 'stagger'"><div class="motion-demo-frame"><animation-demo only="stagger"></animation-demo></div></template>
+      <template pp-if="name == 'state'"><div class="motion-demo-frame"><animation-demo only="state"></animation-demo></div></template>
+      <template pp-if="name == 'hover'"><div class="motion-demo-frame"><animation-demo only="hover"></animation-demo></div></template>
+      <template pp-if="name == 'focus'"><div class="motion-demo-frame"><animation-demo only="focus"></animation-demo></div></template>
+      <template pp-if="name == 'press'"><div class="motion-demo-frame"><animation-demo only="press"></animation-demo></div></template>
+      <template pp-if="name == 'pan'"><div class="motion-demo-frame"><animation-demo only="pan"></animation-demo></div></template>
+      <template pp-if="name == 'tilt'"><div class="motion-demo-frame"><animation-demo only="tilt"></animation-demo></div></template>
+      <template pp-if="name == 'drag'"><div class="motion-demo-frame"><animation-demo only="drag"></animation-demo></div></template>
+      <template pp-if="name == 'scroll'"><div class="motion-demo-frame"><animation-demo only="scroll"></animation-demo></div></template>
+      <template pp-if="name == 'inview'"><div class="motion-demo-frame"><animation-demo only="inview"></animation-demo></div></template>
+      <template pp-if="name == 'flip'"><div class="motion-demo-frame"><animation-demo only="flip"></animation-demo></div></template>
+
+      <section class="doc-section" pp-show="found">
+        <h2>Example</h2>
+        <pre class="code-block"><code pp-html="code"></code></pre>
+      </section>
+
+      <section class="doc-section" pp-show="show_springs">
+        <h2>Spring presets</h2>
+        <div class="doc-table-wrap">
+          <table class="props-table">
+            <thead>
+              <tr><th>Preset</th><th>Stiffness</th><th>Damping</th><th>Mass</th></tr>
+            </thead>
+            <tbody>
+              <template pp-for="r in spring_presets" pp-key="r.key">
+                <tr>
+                  <td><code pp-text="r.a"></code></td>
+                  <td><code pp-text="r.b"></code></td>
+                  <td><code pp-text="r.c"></code></td>
+                  <td pp-text="r.d"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" pp-show="found">
+        <h2>API reference</h2>
+        <div class="doc-table-wrap">
+          <table class="props-table">
+            <thead>
+              <tr><th>Signature</th><th>What it does</th></tr>
+            </thead>
+            <tbody>
+              <template pp-for="r in functions" pp-key="r.key">
+                <tr>
+                  <td><code pp-text="r.a"></code></td>
+                  <td pp-text="r.b"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</root>

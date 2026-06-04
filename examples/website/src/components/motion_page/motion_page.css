@@ -1,0 +1,5 @@
+/* No outer card — the demo's own stage (or boxes) is the only surface,
+   so per-technique pages don't show cards-within-cards. Just spacing. */
+.motion-demo-frame {
+  margin-bottom: 1.5rem;
+}

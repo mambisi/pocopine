@@ -9294,6 +9294,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "pine",
+ "pine-charts",
  "pine-icons",
  "pine-motion",
  "pocopine",

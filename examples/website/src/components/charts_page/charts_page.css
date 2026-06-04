@@ -1,0 +1,9 @@
+.chart-host {
+  width: 100%;
+}
+
+.chart-host--pie {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}

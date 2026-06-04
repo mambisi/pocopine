@@ -1,0 +1,41 @@
+<root class="ce-card">
+  <div class="ce-controls">
+    <div class="ce-anim-chips" role="tablist">
+      <button class="demo-tab" type="button" :data-active="move_on ? 'true' : 'false'" :aria-pressed="move_on ? 'true' : 'false'" @click="toggle_move">Move</button>
+      <button class="demo-tab" type="button" :data-active="scale_on ? 'true' : 'false'" :aria-pressed="scale_on ? 'true' : 'false'" @click="toggle_scale">Scale</button>
+      <button class="demo-tab" type="button" :data-active="rotate_on ? 'true' : 'false'" :aria-pressed="rotate_on ? 'true' : 'false'" @click="toggle_rotate">Rotate</button>
+      <button class="demo-tab" type="button" :data-active="fade_on ? 'true' : 'false'" :aria-pressed="fade_on ? 'true' : 'false'" @click="toggle_fade">Fade</button>
+    </div>
+    <button class="ce-play" type="button" @click="play">▶ Play</button>
+  </div>
+
+  <div class="ce-body">
+    <div class="ce-preview">
+      <div class="ce-preview-box"></div>
+    </div>
+
+    <div class="ce-editor">
+      <svg class="ce-editor-svg" viewBox="0 0 220 220"
+           @pointermove="on_move" @pointerup="end_drag" @pointerleave="end_drag">
+        <rect class="ce-grid" x="34" y="34" width="152" height="152" rx="10"></rect>
+        <line class="ce-baseline" x1="34" y1="186" x2="186" y2="34"></line>
+        <line class="ce-handle-line" x1="34" y1="186" :x2="p1_cx" :y2="p1_cy"></line>
+        <line class="ce-handle-line" x1="186" y1="34" :x2="p2_cx" :y2="p2_cy"></line>
+        <path class="ce-curve" :d="path_d"></path>
+        <circle class="ce-handle ce-handle-1" :cx="p1_cx" :cy="p1_cy" r="9" @pointerdown="start_p1"></circle>
+        <circle class="ce-handle ce-handle-2" :cx="p2_cx" :cy="p2_cy" r="9" @pointerdown="start_p2"></circle>
+      </svg>
+    </div>
+  </div>
+
+  <div class="ce-footer">
+    <code class="ce-bezier" pp-text="bezier_label"></code>
+    <div class="ce-presets">
+      <button class="ce-preset" type="button" @click="preset_ease">ease</button>
+      <button class="ce-preset" type="button" @click="preset_in">in</button>
+      <button class="ce-preset" type="button" @click="preset_out">out</button>
+      <button class="ce-preset" type="button" @click="preset_in_out">in-out</button>
+      <button class="ce-preset" type="button" @click="preset_back">back</button>
+    </div>
+  </div>
+</root>

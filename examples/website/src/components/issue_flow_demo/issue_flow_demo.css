@@ -81,11 +81,22 @@
   display: inline-flex;
 }
 .ifd-live-dot {
-  width: 6px;
-  height: 6px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   background: #6fae5b;
   animation: ifd-pulse 1.6s ease-in-out infinite;
+}
+/* While a change is syncing, the dot becomes a spinning loader. */
+.ifd-live[data-syncing="true"] .ifd-live-dot {
+  background: transparent;
+  border: 2px solid color-mix(in srgb, #4f8f4a 28%, transparent);
+  border-top-color: #4f8f4a;
+  box-sizing: border-box;
+  animation: ifd-spin 0.6s linear infinite;
+}
+@keyframes ifd-spin {
+  to { transform: rotate(360deg); }
 }
 .ifd-user {
   display: none;
@@ -133,16 +144,24 @@
 }
 .ifd-dot-sync {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--border);
+  background: var(--fg-muted);
 }
-.ifd[data-live="true"] .ifd-dot-sync {
+/* Row dot reflects the issue's workflow status. */
+.ifd-item[data-status="open"] .ifd-dot-sync {
   background: #6fae5b;
 }
+.ifd-item[data-status="backlog"] .ifd-dot-sync {
+  background: #d9a441;
+}
+.ifd-item[data-status="closed"] .ifd-dot-sync {
+  background: var(--fg-muted);
+  opacity: 0.45;
+}
+/* Freshly synced rows still pulse a ring, whatever their status. */
 .ifd-item[data-live="true"] .ifd-dot-sync {
-  background: #6fae5b;
   box-shadow: 0 0 0 3px color-mix(in srgb, #6fae5b 25%, transparent);
 }
 .ifd-item-title {
@@ -152,6 +171,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Closed issues read as done — strike through the title. */
+.ifd-item[data-status="closed"] .ifd-item-title {
+  text-decoration: line-through;
+  color: var(--fg-muted);
 }
 .ifd-label {
   flex: none;

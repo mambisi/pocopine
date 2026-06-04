@@ -1,0 +1,101 @@
+.ce-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  padding: 1.25rem;
+}
+
+.ce-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.ce-anim-chips {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+.ce-play {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.45rem 1.1rem;
+  border: 1px solid var(--brand);
+  border-radius: 8px;
+  background: var(--brand);
+  color: #fff;
+  cursor: pointer;
+}
+.ce-play:hover {
+  filter: brightness(1.06);
+}
+
+/* Preview (left) | curve editor (right). The editor gets a generous
+   column so the curve has room; it stacks below the preview on mobile. */
+.ce-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+  gap: 1.5rem;
+  align-items: center;
+}
+.ce-preview {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  padding: 0 1.25rem;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg-alt);
+  overflow: hidden;
+}
+.ce-preview-box {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--brand) 22%, var(--bg-subtle)), var(--bg-subtle));
+}
+
+/* The `.ce-editor-svg` + its SVG children are styled in the global
+   styles.css — scoped component CSS doesn't reach SVG-namespace nodes,
+   so the rect/path/circles would fall back to SVG's default black fill. */
+
+.ce-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.ce-bezier {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+.ce-presets {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.ce-preset {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+.ce-preset:hover {
+  border-color: var(--fg-muted);
+}
+
+@media (max-width: 640px) {
+  .ce-body {
+    grid-template-columns: 1fr;
+  }
+}

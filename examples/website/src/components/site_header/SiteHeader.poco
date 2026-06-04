@@ -4,7 +4,19 @@
 
     <nav class="site-nav">
       <a href="/docs/getting-started/introduction" pp-route>Docs</a>
-      <a href="/components" pp-route>Components</a>
+      <pine-hover-card-root open_delay="100" close_delay="220">
+        <pine-hover-card-trigger>
+          <button type="button" class="site-nav-dd-trigger">Components<pine-icon name="chevron-down" size="14"></pine-icon></button>
+        </pine-hover-card-trigger>
+        <pine-hover-card-portal>
+          <pine-hover-card-content class="nav-popover">
+            <button type="button" class="nav-popover-item" @click="go_primitives">UI Primitives</button>
+            <button type="button" class="nav-popover-item" @click="go_charts">Charts</button>
+            <button type="button" class="nav-popover-item" @click="go_icons">Icons</button>
+            <button type="button" class="nav-popover-item" @click="go_motion">Motion &amp; Animation</button>
+          </pine-hover-card-content>
+        </pine-hover-card-portal>
+      </pine-hover-card-root>
     </nav>
 
     <div class="site-header-actions">

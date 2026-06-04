@@ -34,4 +34,18 @@ impl SiteHeader {
             app.update(|a: &mut WebsiteApp| a.toggle_theme());
         }
     }
+
+    // ─── Components menu (app-bar hover card) ─────────────────────
+    pub fn go_primitives(&mut self) {
+        navigate("/components");
+    }
+    pub fn go_charts(&mut self) {
+        navigate("/charts/line");
+    }
+    pub fn go_icons(&mut self) {
+        navigate("/components/icons");
+    }
+    pub fn go_motion(&mut self) {
+        navigate("/motion/springs");
+    }
 }
