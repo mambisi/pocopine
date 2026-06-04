@@ -3,41 +3,65 @@
 .site-header {
   position: sticky;
   top: 0;
-  /* Low sticky band — above normal scrolled content, but must
-     stay well below the command-palette overlay (z-index 1000+).
-     `backdrop-filter` creates a stacking context on this element;
-     keeping z-index small makes the ordering predictable. */
+  /* Above scrolled content, well below the command palette overlay
+     (z-index 1000+). `backdrop-filter` makes a stacking context, so
+     a small z-index keeps ordering predictable. */
   z-index: 5;
-  padding: 0.5rem 0;
+  padding: 0.55rem 0;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: saturate(180%) blur(10px);
   -webkit-backdrop-filter: saturate(180%) blur(10px);
-  margin-bottom: 1.5rem;
-}
-
-
-.site-header.border-b{
-  border-bottom: 0.875px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
 }
 
 .site-header-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  width: 100%;
-}
-
-.site-header-center {
-  display: flex;
-  align-items: center;
-  flex: row;
-  justify-content: space-between;
+  gap: 1.25rem;
   width: 100%;
   max-width: var(--max-site-width);
+  margin: 0 auto;
   padding: 0 var(--site-padding-x);
+}
+
+/* Brand wordmark */
+.site-brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  text-decoration: none;
+}
+.site-brand .brand {
+  color: var(--brand);
+}
+
+/* Primary nav */
+.site-nav {
+  display: flex;
+  gap: 1rem;
+}
+.site-nav a {
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  padding: 0.2rem 0;
+  border-bottom: 1.5px solid transparent;
+  transition: color 0.12s, border-color 0.12s;
+}
+.site-nav a:hover,
+.site-nav a.route-active {
+  color: var(--fg);
+  border-bottom-color: var(--brand);
+}
+
+/* Right-aligned actions */
+.site-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin-left: auto;
-  margin-right: auto;
 }
 
 .site-header-search {
@@ -79,35 +103,7 @@
   color: var(--fg-muted);
 }
 
-.site-header-github {
-  width: 1.9rem;
-  height: 1.9rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font: inherit;
-  font-size: 0.95rem;
-  line-height: 1;
-  /* <button> defaults to the browser-UA text color, which does NOT
-     inherit `--fg`. Opt back into inheritance so the SVG inside
-     (which uses `stroke="currentColor"`) picks up the theme. */
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background 0.12s, transform 0.15s;
-}
-.site-header-github:hover,
-.site-header-github:focus-visible {
-  background: var(--bg-subtle);
-  border-color: color-mix(in srgb, var(--fg) 15%, var(--border));
-  outline: none;
-}
-.site-header-github:active {
-  transform: translateY(1px);
-}
-
+.site-header-github,
 .site-header-theme {
   width: 1.9rem;
   height: 1.9rem;
@@ -117,15 +113,28 @@
   font: inherit;
   font-size: 0.95rem;
   line-height: 1;
-  /* <button> defaults to the browser-UA text color, which does NOT
-     inherit `--fg`. Opt back into inheritance so the SVG inside
-     (which uses `stroke="currentColor"`) picks up the theme. */
+  /* Opt back into color inheritance so the SVG `currentColor`
+     stroke picks up the theme (UA buttons/links reset it). */
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   cursor: pointer;
+  text-decoration: none;
   transition: background 0.12s, transform 0.15s;
 }
-.site-header-theme:hover { background: var(--bg-subtle); }
+.site-header-github:hover,
+.site-header-github:focus-visible,
+.site-header-theme:hover {
+  background: var(--bg-subtle);
+  border-color: color-mix(in srgb, var(--fg) 15%, var(--border));
+  outline: none;
+}
 .site-header-theme:active { transform: scale(0.92); }
+.site-header-github:active { transform: translateY(1px); }
+
+@media (max-width: 600px) {
+  .site-nav { display: none; }
+  .site-header-search-label { display: none; }
+  .site-header-search { flex: 0 0 auto; max-width: none; }
+}

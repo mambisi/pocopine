@@ -1,8 +1,8 @@
-//! Sticky top bar: thin view-only component. Palette state,
-//! theme, and every action live on `WebsiteApp` (the app root
-//! provider). The header injects the root handle to forward
-//! clicks, and `#[observe]` mirrors the root's `theme` string
-//! into a local field so the sun/moon emoji updates reactively.
+//! Sticky top bar: thin view-only component. Palette state, theme,
+//! and every action live on `WebsiteApp` (the app-shell provider).
+//! The header injects the root handle to forward clicks, and
+//! `#[observe]` mirrors the root's `theme` so the sun/moon icon
+//! updates reactively.
 
 use pocopine::inject;
 use pocopine::prelude::*;
@@ -19,8 +19,6 @@ use crate::{WebsiteApp, WEBSITE_APP};
 pub struct SiteHeader {
     #[observe(crate::WEBSITE_APP)]
     pub theme: String,
-    #[observe(crate::WEBSITE_APP)]
-    pub show_header_github: bool,
 }
 
 #[handlers]
@@ -34,12 +32,6 @@ impl SiteHeader {
     pub fn toggle_theme(&mut self) {
         if let Some(app) = inject::<Handle<WebsiteApp>>(&WEBSITE_APP) {
             app.update(|a: &mut WebsiteApp| a.toggle_theme());
-        }
-    }
-
-    pub fn open_github(&mut self) {
-        if let Some(app) = inject::<Handle<WebsiteApp>>(&WEBSITE_APP) {
-            app.update(|a: &mut WebsiteApp| a.go_github());
         }
     }
 }

@@ -1,0 +1,8 @@
+<root class="install">
+  <span class="install-prompt">$</span>
+  <code class="install-cmd" pp-text="cmd"></code>
+  <button class="install-copy" type="button" pp-on:click="copy" aria-label="Copy install command">
+    <span class="install-copy-label" pp-show="!copied">Copy</span>
+    <span class="install-copy-label install-copied" pp-show="copied">Copied&nbsp;✓</span>
+  </button>
+</root>

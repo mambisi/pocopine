@@ -1,0 +1,47 @@
+<root class="sfw">
+  <span class="sfw-corner sfw-corner-l" aria-hidden="true"></span>
+  <span class="sfw-corner sfw-corner-r" aria-hidden="true"></span>
+
+  <div class="sfw-grid">
+    <div class="sfw-intro">
+      <h2>A framework with opinions on the whole stack</h2>
+      <p>
+        pocopine has answers for routing, components, data, auth, jobs, and
+        deploy — that's thousands of decisions you (and your agents) don't
+        have to make. The result is clean Rust that reads the same in every
+        project.
+      </p>
+      <ul class="sfw-checks">
+        <li><span class="sfw-check">✓</span> Reactive UI + ~50 accessible Pine components</li>
+        <li><span class="sfw-check">✓</span> Type-safe <code>#[server]</code> functions</li>
+        <li><span class="sfw-check">✓</span> Local-first data with live sync</li>
+        <li><span class="sfw-check">✓</span> Auth, object storage &amp; background jobs</li>
+        <li><span class="sfw-check">✓</span> One-command deploy + built-in observability</li>
+      </ul>
+      <a class="sfw-cta" href="/docs/getting-started/introduction" pp-route>
+        Explore the framework
+        <span class="sfw-arrow">↗</span>
+      </a>
+    </div>
+
+    <div class="sfw-show" pp-on:click="on_tab">
+      <div class="sfw-tabs" role="tablist">
+        <button class="sfw-tab" data-feat="0" :data-active="active == 0 ? 'true' : 'false'">Components</button>
+        <button class="sfw-tab" data-feat="1" :data-active="active == 1 ? 'true' : 'false'">Server fns</button>
+        <button class="sfw-tab" data-feat="2" :data-active="active == 2 ? 'true' : 'false'">Data &amp; live</button>
+        <button class="sfw-tab" data-feat="3" :data-active="active == 3 ? 'true' : 'false'">Auth</button>
+        <button class="sfw-tab" data-feat="4" :data-active="active == 4 ? 'true' : 'false'">Deploy</button>
+        <button class="sfw-tab" data-feat="5" :data-active="active == 5 ? 'true' : 'false'">Observe</button>
+      </div>
+
+      <div class="sfw-editor">
+        <div class="sfw-editor-bar">
+          <span class="sfw-dot"></span><span class="sfw-dot"></span><span class="sfw-dot"></span>
+          <span class="sfw-file" pp-text="file"></span>
+          <span class="sfw-lang" pp-text="lang"></span>
+        </div>
+        <pre class="sfw-code"><code pp-text="code"></code></pre>
+      </div>
+    </div>
+  </div>
+</root>

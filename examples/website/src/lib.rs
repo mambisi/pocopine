@@ -1,16 +1,24 @@
-//! pocopine's own website. The app root (`WebsiteApp`) is also
-//! the canonical root-provider — it owns the site-wide command
-//! palette state + theme, publishes a `WEBSITE_APP` handle into
-//! its scope, and lets any descendant (the header, a hero CTA,
-//! a single demo card) inject that handle to drive the palette.
-//! The palette DOM itself lives in `WebsiteApp.poco` so state
-//! and view sit together; `SiteHeader` is a thin top-bar view
-//! that only forwards clicks up to the app root.
+//! pocopine's own website — the canonical full-stack showcase.
+//!
+//! `WebsiteApp` is the **app shell**: it owns the site-wide command
+//! palette + theme, hosts the router `<pp-outlet>`, and publishes a
+//! `WEBSITE_APP` handle into its scope so any descendant (the header,
+//! a CTA) can inject it to drive the palette/theme. Routes mount into
+//! the outlet:
+//!   /                     → Landing (rebranded marketing page)
+//!   /components           → ComponentsIndex (Phase 2)
+//!   /components/:name      → ComponentPage (Phase 2)
+//!   /docs/*slug            → DocPage (Phase 3)
 
 pub mod components;
 
+/// Docs content rendered from `docs/` at build time (see `build.rs`).
+pub mod docs_data {
+    include!(concat!(env!("OUT_DIR"), "/docs_data.rs"));
+}
+
 use pocopine::prelude::*;
-use pocopine::{inject_key, provide};
+use pocopine::{inject_key, navigate, provide};
 use serde::{Deserialize, Serialize};
 
 use components::showcase::{
@@ -22,15 +30,18 @@ use components::showcase::{
     SplitterDemo, StressDemo, SwitchCheckboxDemo, TabsDemo, TagsInputDemo, TagsMentionsDemo,
     TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
-use components::{Hero, Showcase, ShowcaseCard, SiteHeader, Tutorial};
+use components::{
+    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, Landing, LearnTodo, ShowcaseCard,
+    SiteHeader, StackShowcase, TodoDemo, Tutorial,
+};
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "WebsiteApp.poco")]
 pub struct WebsiteApp {
+    /// Command-palette visibility (bound via `pp-model:open`).
     pub open: bool,
+    /// `"light"` | `"dark"` — mirrored onto `<html data-theme>`.
     pub theme: String,
-    pub last: String,
-    pub show_header_github: bool,
 }
 
 impl Default for WebsiteApp {
@@ -38,8 +49,6 @@ impl Default for WebsiteApp {
         Self {
             open: false,
             theme: "light".into(),
-            last: String::new(),
-            show_header_github: false,
         }
     }
 }
@@ -69,56 +78,38 @@ impl WebsiteApp {
         }
     }
 
-    pub fn show_header_github(&mut self) {
-        self.show_header_github = true;
-    }
-
-    pub fn hide_header_github(&mut self) {
-        self.show_header_github = false;
-    }
-
-    pub fn go_hero(&mut self) {
-        self.last = "Hero".into();
-        self.open = false;
-        Self::scroll_to("hero");
-    }
-    pub fn go_tutorial(&mut self) {
-        self.last = "Install".into();
-        self.open = false;
-        Self::scroll_to("install");
-    }
-    pub fn go_showcase(&mut self) {
-        self.last = "Showcase".into();
-        self.open = false;
-        Self::scroll_to("showcase");
-    }
-    pub fn go_github(&mut self) {
-        self.last = "GitHub".into();
-        self.open = false;
+    pub fn open_github(&mut self) {
         if let Some(win) = web_sys::window() {
             let _ = win.open_with_url("https://github.com/mambisi/pocopine");
         }
     }
+
+    // ─── command-palette navigation ──────────────────────────────
+    pub fn nav_home(&mut self) {
+        self.open = false;
+        navigate("/");
+    }
+    pub fn nav_components(&mut self) {
+        self.open = false;
+        navigate("/components");
+    }
+    pub fn nav_docs(&mut self) {
+        self.open = false;
+        navigate("/docs/getting-started/introduction");
+    }
     pub fn cmd_toggle_theme(&mut self) {
-        self.last = "Toggle theme".into();
         self.open = false;
         self.toggle_theme();
     }
-
-    fn scroll_to(id: &str) {
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(el) = doc.get_element_by_id(id) {
-                el.scroll_into_view();
-            }
-        }
+    pub fn cmd_github(&mut self) {
+        self.open = false;
+        self.open_github();
     }
 }
 
 #[wasm_bindgen(start)]
 pub fn main() {
     pine::register_all();
-    // Pull in the icons the header + demos actually reference.
-    // Any icon not in this list stays out of the WASM binary.
     pine_icons::register_icons![
         "search",
         "moon",
@@ -128,6 +119,9 @@ pub fn main() {
         "check",
         "brand-github",
         "x",
+        "arrow-right",
+        "book",
+        "components",
     ];
     App::new()
         .register::<WebsiteApp>()
@@ -135,10 +129,12 @@ pub fn main() {
         .register::<pine_icons::PineIcon>()
         .register::<Hero>()
         .register::<Tutorial>()
-        .register::<Showcase>()
+        .register::<InstallCmd>()
+        .register::<StackShowcase>()
+        .register::<TodoDemo>()
         .register::<ShowcaseCard>()
-        // All 31 primitive demos. Every one is a focused
-        // `#[component]` owning only its own reactive state.
+        // All primitive demos — reused as live previews on the
+        // component reference pages.
         .register::<Basics>()
         .register::<AspectRatioDemo>()
         .register::<ToolbarDemo>()
@@ -183,5 +179,11 @@ pub fn main() {
         .register::<CmdPopoverDemo>()
         .register::<StressDemo>()
         .register::<AnimationDemo>()
+        // Routes.
+        .route::<Landing>("/")
+        .route::<LearnTodo>("/learn")
+        .route::<ComponentsIndex>("/components")
+        .route::<ComponentPage>("/components/:name")
+        .route::<DocPage>("/docs/*slug")
         .run();
 }

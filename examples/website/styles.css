@@ -56,12 +56,41 @@ body {
   line-height: 1.6;
 }
 
-website-app >* .site-content {
+/* ─── App shell (header · routed <main> · footer) ─────────────── */
+
+.app-shell { display: block; }
+.app-main {
   display: block;
+  min-height: 60vh;
+  padding-top: 1.5rem;
+}
+
+.app-footer {
+  border-top: 1px solid var(--border);
+  margin-top: 4rem;
+  padding: 2rem 0;
+}
+.app-footer-inner {
   max-width: var(--max-site-width);
   margin: 0 auto;
-  padding: 0 var(--site-padding-x) 6rem;
+  padding: 0 var(--site-padding-x);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
 }
+.app-footer-links {
+  display: inline-flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.app-footer-links a { color: var(--fg-muted); }
+.app-footer .brand { color: var(--brand); }
+.mono { font-family: var(--mono); }
 
 h1 { font-size: 2.75rem; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
 h2 { font-size: 1.35rem; margin: 3rem 0 1rem; letter-spacing: -0.01em; }
@@ -120,4 +149,72 @@ section {
 .pine-btn[data-variant="ghost"]:hover { background: var(--bg-subtle); }
 .pine-btn[data-size="sm"]  { padding: 0.25rem 0.625rem; font-size: 0.875rem; }
 .pine-btn[data-disabled]   { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── Rendered markdown (.doc-body) ───────────────────────────── *
+ * Global, not component-scoped: the HTML is injected at runtime via
+ * pp-html, so these rules must apply without a scope attribute.      */
+
+.doc-body { color: var(--fg); line-height: 1.7; min-width: 0; }
+.doc-body > :first-child { margin-top: 0; }
+.doc-body h1 { font-size: 2rem; margin: 0 0 1rem; letter-spacing: -0.02em; }
+.doc-body h2 {
+  font-size: 1.4rem;
+  margin: 2.5rem 0 1rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: -0.01em;
+}
+.doc-body h3 { font-size: 1.12rem; margin: 2rem 0 0.75rem; }
+.doc-body h4 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
+.doc-body p { margin: 0 0 1rem; color: var(--fg); }
+.doc-body a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 3px; }
+.doc-body a:hover { text-decoration-thickness: 2px; }
+.doc-body ul, .doc-body ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+.doc-body li { margin: 0.3rem 0; }
+.doc-body blockquote {
+  margin: 0 0 1rem;
+  padding: 0.5rem 1rem;
+  border-left: 3px solid var(--brand);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.doc-body code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--bg-subtle);
+  padding: 0.12em 0.4em;
+  border-radius: 4px;
+  color: var(--fg);
+}
+.doc-body pre {
+  margin: 0 0 1.25rem;
+  background: #2d1a0f;
+  color: #faf0dc;
+  padding: 1.1rem 1.25rem;
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.doc-body pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.doc-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+}
+.doc-body th, .doc-body td {
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+}
+.doc-body th { background: var(--bg-subtle); font-weight: 600; }
+.doc-body hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+.doc-body img { max-width: 100%; height: auto; border-radius: var(--radius); }
+.doc-body :target { scroll-margin-top: 4.5rem; }
 

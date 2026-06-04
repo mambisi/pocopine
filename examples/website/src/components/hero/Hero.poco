@@ -2,16 +2,13 @@
   <img class="hero-mascot" src="/mascot.svg" alt="pocopine mascot">
   <h1><span class="brand">poco</span>pine</h1>
   <p class="tagline">
-    A reactive Rust/WASM UI framework with compiled HTML
-    templates, in-place DOM updates, and a full primitive
-    library that animates by default.
+    A full-stack Rust application framework — reactive Rust/WASM UI,
+    type-safe server functions, a local-first data layer, auth,
+    storage, and one-command deploy. One language, end to end.
   </p>
-  <div class="hero-actions"
-       pp-intersect:enter.margin.-72="hide_header_github"
-       pp-intersect:leave.margin.-72="show_header_github">
-    <button class="cta-primary" @click="open_site_palette">
-      Get started <kbd class="cta-kbd">⌘K</kbd>
-    </button>
+  <div class="hero-actions">
+    <a class="cta-primary" href="/docs/getting-started/introduction" pp-route>Get started</a>
+    <a class="cta-ghost" href="/components" pp-route>Browse components</a>
     <a class="cta-ghost" href="https://github.com/mambisi/pocopine">GitHub ↗</a>
   </div>
 </root>

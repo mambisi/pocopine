@@ -1,0 +1,38 @@
+/* ─── Copyable install command ───────────────────────────────── */
+
+.install {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  padding: 0.6rem 0.7rem 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+.install-prompt { color: var(--brand); font-weight: 700; }
+.install-cmd {
+  color: var(--fg);
+  background: transparent;
+  padding: 0;
+  white-space: nowrap;
+}
+.install-copy {
+  display: inline-flex;
+  align-items: center;
+  font: inherit;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--brand-fg);
+  background: var(--brand);
+  border: 0;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.install-copy:hover { filter: brightness(1.06); }
+.install-copied { color: var(--brand-fg); }

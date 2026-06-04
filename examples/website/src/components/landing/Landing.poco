@@ -1,0 +1,9 @@
+<root class="landing">
+  <hero></hero>
+
+  <div class="landing-cmd">
+    <install-cmd></install-cmd>
+  </div>
+
+  <stack-showcase></stack-showcase>
+</root>

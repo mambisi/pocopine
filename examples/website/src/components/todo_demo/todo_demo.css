@@ -1,0 +1,151 @@
+/* ─── Live Todo demo ─────────────────────────────────────────── */
+
+.todo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.todo-add { display: flex; gap: 0.5rem; }
+.todo-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.55rem 0.75rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.todo-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+.todo-addbtn {
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.55rem 1rem;
+  color: var(--brand-fg);
+  background: var(--brand);
+  border: 1px solid var(--brand);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.todo-addbtn:hover { filter: brightness(1.06); }
+
+.todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.45rem;
+  border-radius: var(--radius);
+  transition: background 0.12s;
+}
+.todo-item:hover { background: var(--bg-subtle); }
+
+.todo-check {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--fg);
+}
+.todo-box {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+.todo-text { font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.todo-item[data-done="true"] .todo-box { background: var(--brand); border-color: var(--brand); }
+.todo-item[data-done="true"] .todo-box::after {
+  content: "";
+  position: absolute;
+  left: 0.34rem;
+  top: 0.14rem;
+  width: 0.3rem;
+  height: 0.55rem;
+  border: solid var(--brand-fg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.todo-item[data-done="true"] .todo-text { color: var(--fg-muted); text-decoration: line-through; }
+
+.todo-remove {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.todo-item:hover .todo-remove { opacity: 1; }
+.todo-remove:hover { background: var(--bg-hover); color: var(--destructive); }
+
+.todo-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.todo-foot-left { display: inline-flex; align-items: center; gap: 0.4rem; }
+.todo-foot-left strong { color: var(--fg); }
+.todo-saved { color: #5e9e4a; font-weight: 600; }
+[data-theme="dark"] .todo-saved { color: #8fd27a; }
+
+.todo-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--brand) 16%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--border));
+  border-radius: var(--radius);
+  padding: 0.45rem 0.7rem;
+}
+.todo-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #5e9e4a;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #5e9e4a 25%, transparent);
+}
+.todo-clear {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.todo-clear:hover { color: var(--fg); text-decoration: underline; }

@@ -1,0 +1,70 @@
+<root class="components-index" pp-on:click="on_nav">
+  <header class="ci-head">
+    <h1>Components</h1>
+    <p class="ci-lead">
+      ~50 headless, accessible Pine primitives. Behavior, keyboard, focus,
+      and ARIA are done — bring your own styles (or
+      <a href="/docs/guides/styling/stylekit" pp-route>Pine Stylekit</a>).
+    </p>
+  </header>
+
+  <section class="ci-cat">
+    <h2 class="ci-cat-title">Forms &amp; inputs</h2>
+    <div class="ci-grid">
+      <template pp-for="item in forms" pp-key="item.href">
+        <a class="ci-card" pp-bind:href="item.href">
+          <span class="ci-card-title" pp-text="item.title"></span>
+          <span class="ci-card-blurb" pp-text="item.blurb"></span>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <section class="ci-cat">
+    <h2 class="ci-cat-title">Overlays &amp; menus</h2>
+    <div class="ci-grid">
+      <template pp-for="item in overlays" pp-key="item.href">
+        <a class="ci-card" pp-bind:href="item.href">
+          <span class="ci-card-title" pp-text="item.title"></span>
+          <span class="ci-card-blurb" pp-text="item.blurb"></span>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <section class="ci-cat">
+    <h2 class="ci-cat-title">Navigation &amp; layout</h2>
+    <div class="ci-grid">
+      <template pp-for="item in navigation" pp-key="item.href">
+        <a class="ci-card" pp-bind:href="item.href">
+          <span class="ci-card-title" pp-text="item.title"></span>
+          <span class="ci-card-blurb" pp-text="item.blurb"></span>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <section class="ci-cat">
+    <h2 class="ci-cat-title">Display</h2>
+    <div class="ci-grid">
+      <template pp-for="item in display" pp-key="item.href">
+        <a class="ci-card" pp-bind:href="item.href">
+          <span class="ci-card-title" pp-text="item.title"></span>
+          <span class="ci-card-blurb" pp-text="item.blurb"></span>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <section class="ci-cat">
+    <h2 class="ci-cat-title">Date &amp; time</h2>
+    <div class="ci-grid">
+      <template pp-for="item in datetime" pp-key="item.href">
+        <a class="ci-card" pp-bind:href="item.href">
+          <span class="ci-card-title" pp-text="item.title"></span>
+          <span class="ci-card-blurb" pp-text="item.blurb"></span>
+        </a>
+      </template>
+    </div>
+  </section>
+</root>

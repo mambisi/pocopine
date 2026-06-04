@@ -1,0 +1,100 @@
+/* ─── Landing page ───────────────────────────────────────────── */
+
+.landing {
+  display: block;
+  padding-bottom: 5rem;
+}
+
+/* Copyable install command, centered under the hero */
+.landing-cmd {
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--site-padding-x);
+  margin: -1rem 0 0.5rem;
+}
+
+/* Feature grid */
+.landing-features {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  margin: 1rem 0 3rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.feature {
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.feature h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.02rem;
+  letter-spacing: -0.01em;
+}
+.feature p {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--fg-muted);
+  line-height: 1.55;
+}
+
+.landing-install {
+  margin: 0 0 3rem;
+}
+
+/* Closing CTA */
+.landing-cta {
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+.landing-cta h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.6rem;
+}
+.landing-cta p {
+  margin: 0 0 1.5rem;
+  color: var(--fg-muted);
+}
+.landing-cta-actions {
+  display: inline-flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.landing-cta-actions a {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.15rem;
+  border-radius: var(--radius);
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+.landing-cta-actions .cta-primary {
+  background: var(--brand);
+  color: var(--brand-fg);
+}
+.landing-cta-actions .cta-primary:hover {
+  filter: brightness(1.06);
+}
+.landing-cta-actions .cta-ghost {
+  color: var(--fg);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.landing-cta-actions .cta-ghost:hover {
+  background: var(--bg-hover);
+}
+
+@media (max-width: 680px) {
+  .landing-features {
+    grid-template-columns: 1fr;
+  }
+}
