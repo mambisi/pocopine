@@ -9,9 +9,11 @@ pub mod doc_page;
 pub mod hero;
 pub mod install_cmd;
 pub mod landing;
+pub mod secure_section;
 pub mod showcase;
 pub mod showcase_card;
 pub mod site_header;
+pub mod stack_flow;
 pub mod stack_showcase;
 pub mod tutorial;
 
@@ -21,9 +23,11 @@ pub use doc_page::DocPage;
 pub use hero::Hero;
 pub use install_cmd::InstallCmd;
 pub use landing::Landing;
+pub use secure_section::SecureSection;
 pub use showcase::Showcase;
 pub use showcase_card::ShowcaseCard;
 pub use site_header::SiteHeader;
+pub use stack_flow::StackFlow;
 pub use stack_showcase::StackShowcase;
 pub use tutorial::Tutorial;
 

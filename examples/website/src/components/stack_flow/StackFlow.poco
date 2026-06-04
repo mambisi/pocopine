@@ -1,0 +1,119 @@
+<root id="full-stack" class="flow">
+  <div class="flow-head">
+    <h2>One language, the whole flow</h2>
+    <p>
+      The same Rust types run in the browser and on the server. A
+      component calls a <code>#[server]</code> function like any async
+      fn; <code>#[query_resource]</code> views are local-first and
+      update optimistically while the server pushes live changes back.
+      It all ships as one container — and one observability contract
+      traces every hop.
+    </p>
+  </div>
+
+  <div class="flow-figure">
+    <svg viewBox="0 0 960 540" role="img" aria-label="pocopine full-stack flow: browser components call typed server functions, the server reads your data layer and services and pushes live invalidations back; one observability contract and one container span the whole stack.">
+      <defs>
+        <marker id="flow-ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="flow-ah"></path>
+        </marker>
+        <marker id="flow-ah-brand" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="flow-ah-brand"></path>
+        </marker>
+        <radialGradient id="flowdot-glow">
+          <stop offset="0%" stop-color="#f8ae45" stop-opacity="0.95"></stop>
+          <stop offset="45%" stop-color="#f8ae45" stop-opacity="0.4"></stop>
+          <stop offset="100%" stop-color="#f8ae45" stop-opacity="0"></stop>
+        </radialGradient>
+      </defs>
+
+      <!-- Browser -->
+      <rect class="flow-panel" x="24" y="40" width="404" height="324" rx="16"></rect>
+      <text class="flow-panel-label" x="44" y="68">BROWSER · RUST → WASM</text>
+      <g>
+        <rect class="flow-node" x="44" y="84" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="62" y="107">.poco components</text>
+        <text class="flow-sub" x="62" y="125">plain Rust structs + scoped CSS</text>
+      </g>
+      <g>
+        <rect class="flow-node" x="44" y="148" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="62" y="171">reactive runtime</text>
+        <text class="flow-sub" x="62" y="189">signals · effects · scope</text>
+      </g>
+      <g>
+        <rect class="flow-node" x="44" y="212" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="62" y="235">SPA router</text>
+        <text class="flow-sub" x="62" y="253">routes · guards · loaders</text>
+      </g>
+      <g>
+        <rect class="flow-node flow-node-accent" x="44" y="276" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="62" y="299">#[query_resource] view</text>
+        <text class="flow-sub" x="62" y="317">local-first · optimistic writes</text>
+      </g>
+
+      <!-- Server -->
+      <rect class="flow-panel" x="532" y="40" width="404" height="324" rx="16"></rect>
+      <text class="flow-panel-label" x="552" y="68">SERVER · ONE RUST BINARY</text>
+      <g>
+        <rect class="flow-node flow-node-accent" x="552" y="84" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="570" y="107">#[server] functions</text>
+        <text class="flow-sub" x="570" y="125">typed route + client stub</text>
+      </g>
+      <g>
+        <rect class="flow-node" x="552" y="148" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="570" y="171">Source — your data</text>
+        <text class="flow-sub" x="570" y="189">list · create · update · delete</text>
+      </g>
+      <g>
+        <rect class="flow-node" x="552" y="212" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="570" y="235">auth · storage</text>
+        <text class="flow-sub" x="570" y="253">Credentials · JWT verify · uploads</text>
+      </g>
+      <g>
+        <rect class="flow-node" x="552" y="276" width="364" height="52" rx="10"></rect>
+        <text class="flow-text" x="570" y="299">jobs worker</text>
+        <text class="flow-sub" x="570" y="317">Redis · background</text>
+      </g>
+
+      <!-- Cross-stack flow -->
+      <path class="flow-arrow-brand" d="M428,182 H530" marker-end="url(#flow-ah-brand)"></path>
+      <text class="flow-edge-strong" x="479" y="174" text-anchor="middle">call().await</text>
+      <text class="flow-edge-label" x="479" y="200" text-anchor="middle">same types,</text>
+      <text class="flow-edge-label" x="479" y="214" text-anchor="middle">both ends</text>
+      <path class="flow-arrow" d="M530,250 H428" marker-end="url(#flow-ah)"></path>
+      <text class="flow-edge-label" x="479" y="242" text-anchor="middle">live sync · SSE</text>
+
+      <!-- data packets riding the connectors toward each endpoint -->
+      <g>
+        <circle r="6" fill="url(#flowdot-glow)"></circle>
+        <circle r="2" fill="#f8ae45"></circle>
+        <animateMotion dur="1.9s" repeatCount="indefinite" path="M428,182 H530"></animateMotion>
+      </g>
+      <g>
+        <circle r="6" fill="url(#flowdot-glow)"></circle>
+        <circle r="2" fill="#f8ae45"></circle>
+        <animateMotion dur="1.9s" begin="-0.95s" repeatCount="indefinite" path="M428,182 H530"></animateMotion>
+      </g>
+      <g>
+        <circle r="5" fill="url(#flowdot-glow)"></circle>
+        <circle r="1.7" fill="#f8ae45"></circle>
+        <animateMotion dur="2.2s" repeatCount="indefinite" path="M530,250 H428"></animateMotion>
+      </g>
+
+      <!-- Observability band -->
+      <rect class="flow-band" x="24" y="386" width="912" height="62" rx="12"></rect>
+      <text class="flow-band-title" x="44" y="413">Observability, built in</text>
+      <text class="flow-band-sub" x="44" y="433">one tracing event → logging · OpenTelemetry traces · analytics — browser + server, privacy-labeled</text>
+
+      <!-- Deploy strip -->
+      <rect class="flow-band flow-band-2" x="24" y="460" width="912" height="56" rx="12"></rect>
+      <text class="flow-band-title" x="44" y="484">One container</text>
+      <text class="flow-band-sub" x="44" y="503">web + worker processes → Railway / Render, or anywhere Docker runs</text>
+    </svg>
+  </div>
+
+  <a class="flow-cta" href="/docs/getting-started/introduction" pp-route>
+    How it fits together
+    <span class="flow-arrow-link">↗</span>
+  </a>
+</root>

@@ -218,6 +218,22 @@ section {
 .doc-body img { max-width: 100%; height: auto; border-radius: var(--radius); }
 .doc-body :target { scroll-margin-top: 4.5rem; }
 
+/* ─── Animated "data flowing" dashes on diagram connectors ────── *
+ * Marches the dash pattern toward each path's end (its arrowhead), so
+ * the SVG flow arrows read as live data moving to the endpoints.
+ * Keyframes are document-global; the dashed treatment + animation are
+ * applied by the per-diagram arrow classes (stack_flow / secure). The
+ * -40 delta is a multiple of the 10px dash period, so the loop is
+ * seamless. Honoured only when motion is allowed (see below).         */
+@keyframes flow-dash {
+  to { stroke-dashoffset: -40; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-arrow, .flow-arrow-brand, .sec-flow-arrow {
+    animation: none !important;
+  }
+}
+
 /* ─── Thin, auto-hiding scrollbars on scroll panels ───────────── */
 
 .sfw-code, .code-block, .doc-body pre, .doc-sidebar, .cp-code, .cp-preview, .doc-toc {

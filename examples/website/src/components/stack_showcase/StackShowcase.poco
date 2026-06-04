@@ -3,7 +3,7 @@
   <span class="sfw-corner sfw-corner-r" aria-hidden="true"></span>
 
   <div class="sfw-head">
-    <h2>The agentic-era framework — fast to ship, secure by default</h2>
+    <h2>The agentic-era <a href="#full-stack">full-stack</a> framework — fast to ship, <a href="#secure">secure</a> by default</h2>
     <p>
       Routing, components, data, auth, jobs, deploy — pocopine has an
       answer for each, so you (and your agents) make fewer decisions and

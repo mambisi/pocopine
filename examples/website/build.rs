@@ -228,6 +228,15 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     }
     s.push_str("    ];\n}\n");
 
+    // Secure-section snippets, highlighted by key.
+    s.push_str("pub mod secure {\n");
+    s.push_str("    pub fn code(key: &str) -> &'static str {\n        match key {\n");
+    for (key, lang, code) in SECURE_SNIPPETS {
+        let html = hl.code(code, lang);
+        s.push_str(&format!("            {key:?} => {html:?},\n"));
+    }
+    s.push_str("            _ => \"\",\n        }\n    }\n}\n");
+
     // Component reference Code tabs: every showcase demo's `.poco`
     // source, highlighted as markup. The slug is the demo directory
     // with `_` → `-` (matching `component_meta`), so the table stays in
@@ -265,6 +274,26 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
     let dest = Path::new(out_dir).join("gen_code.rs");
     fs::write(dest, s).unwrap();
 }
+
+/// Secure-section snippets `(key, language, source)`. Highlighted at
+/// build time; `SecureSection` injects them via `pp-html`.
+const SECURE_SNIPPETS: &[(&str, &str, &str)] = &[
+    (
+        "client",
+        "rust",
+        "// One plugin carries the bearer token + sign-in state.\nApp::new()\n    .plugin(auth_plugin().login_route(\"/login\"))\n    .route::<Dashboard>(\"/dashboard\")\n    .run();\n\n// A guard gates the page before it mounts,\n// reusing the shared `members_only` predicate.\nimpl RouteComponent for Dashboard {\n    fn config() -> RouteConfig<Self> {\n        RouteConfig::new()\n            .guard(predicate_guard(members_only))\n    }\n}",
+    ),
+    (
+        "server",
+        "rust",
+        "// Verify every request's token into a Principal.\nServer::new(router)\n    .with_auth(JwtVerifier::firebase(project))\n    .plugin(Credentials::new(users))\n    .serve(\"0.0.0.0:3000\")\n    .await?;\n\n// The SAME predicate — checked before the body is parsed.\n#[server(guard = members_only)]\nasync fn close_account(id: Uuid) -> ServerResult<()> {\n    db().close(id).await?;\n    Ok(())\n}",
+    ),
+    (
+        "observe",
+        "rust",
+        "// Same call in the browser and on the server.\ntracing::info!(\n    target: \"pocopine.log\",\n    user = %principal.id(),   // privacy-labeled field\n    route = \"/checkout\",\n    \"checkout completed\",\n);\n// one event → logging · OpenTelemetry traces · analytics",
+    ),
+];
 
 /// Source data for the showcase. Highlighted at build time (see
 /// `emit_snippets`); the component reads the generated `FEATS`.

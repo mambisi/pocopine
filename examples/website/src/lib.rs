@@ -36,8 +36,8 @@ use components::showcase::{
     TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{
-    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, Landing, ShowcaseCard, SiteHeader,
-    StackShowcase, Tutorial,
+    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, Landing, SecureSection,
+    ShowcaseCard, SiteHeader, StackFlow, StackShowcase, Tutorial,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -136,6 +136,8 @@ pub fn main() {
         .register::<Tutorial>()
         .register::<InstallCmd>()
         .register::<StackShowcase>()
+        .register::<StackFlow>()
+        .register::<SecureSection>()
         .register::<ShowcaseCard>()
         // All primitive demos — reused as live previews on the
         // component reference pages.
