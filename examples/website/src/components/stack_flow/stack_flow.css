@@ -1,0 +1,151 @@
+/* ─── "One language, the whole flow" — full-stack diagram ─────── */
+
+.flow {
+  display: block;
+  max-width: var(--max-site-width);
+  margin: 0 auto;
+  padding: 3.5rem var(--site-padding-x) 2rem;
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 5rem;
+}
+
+.flow-head {
+  max-width: 48rem;
+  margin-bottom: 2rem;
+}
+.flow-head h2 {
+  font-size: 1.9rem;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  margin: 0 0 0.6rem;
+}
+.flow-head p {
+  color: var(--fg-muted);
+  font-size: 1rem;
+  line-height: 1.65;
+  margin: 0;
+}
+.flow-head code {
+  font-size: 0.85em;
+}
+
+.flow-figure {
+  width: 100%;
+}
+.flow-figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* SVG theming — fills/strokes track the light/dark tokens */
+.flow-panel {
+  fill: color-mix(in srgb, var(--bg-subtle) 55%, transparent);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.flow-panel-label {
+  fill: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+}
+.flow-node {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.flow-node-accent {
+  fill: color-mix(in srgb, var(--brand) 14%, var(--bg));
+  stroke: color-mix(in srgb, var(--brand) 55%, var(--border));
+}
+.flow-text {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+}
+.flow-sub {
+  fill: var(--fg-muted);
+  font-size: 12.5px;
+}
+.flow-arrow {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.6;
+  stroke-dasharray: 4 6;
+  animation: flow-dash 1s linear infinite;
+}
+.flow-arrow-brand {
+  fill: none;
+  stroke: var(--brand);
+  stroke-width: 2.2;
+  stroke-dasharray: 4 6;
+  animation: flow-dash 1s linear infinite;
+}
+.flow-ah {
+  fill: var(--fg-muted);
+}
+.flow-ah-brand {
+  fill: var(--brand);
+}
+.flow-edge-label {
+  fill: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.flow-edge-strong {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.flow-band {
+  fill: color-mix(in srgb, var(--brand) 12%, transparent);
+  stroke: color-mix(in srgb, var(--brand) 30%, var(--border));
+  stroke-width: 1;
+}
+.flow-band-2 {
+  fill: color-mix(in srgb, var(--bg-subtle) 70%, transparent);
+  stroke: var(--border);
+}
+.flow-band-title {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+.flow-band-sub {
+  fill: var(--fg-muted);
+  font-size: 12.5px;
+}
+
+.flow-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 1.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.9rem;
+  box-shadow: var(--shadow);
+  transition: background 0.12s;
+}
+.flow-cta:hover {
+  background: var(--bg-subtle);
+}
+.flow-arrow-link {
+  color: var(--brand);
+}
+
+@media (max-width: 600px) {
+  .flow-head h2 {
+    font-size: 1.55rem;
+  }
+}

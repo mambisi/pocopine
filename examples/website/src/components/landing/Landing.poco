@@ -6,4 +6,6 @@
   </div>
 
   <stack-showcase></stack-showcase>
+  <stack-flow></stack-flow>
+  <secure-section></secure-section>
 </root>

@@ -1,0 +1,187 @@
+<root id="secure" class="sec">
+  <div class="sec-head">
+    <h2>Secure by default, observable by default</h2>
+    <p>
+      pocopine is Rust end to end — memory-safe and strongly typed,
+      with no undefined behaviour to exploit. Auth is one model across
+      the whole stack, and a single observability contract makes
+      failures diagnosable and repairable.
+    </p>
+  </div>
+
+  <!-- ── Auth, front to back ─────────────────────────────────── -->
+  <div class="sec-block">
+    <div class="sec-sub-head">
+      <span class="sec-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect>
+          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"></path>
+        </svg>
+      </span>
+      <div>
+        <h3>Auth, front to back</h3>
+        <p>One model, both ends — a token rides every call, the server verifies it, and the same predicate gates the route and the function.</p>
+      </div>
+    </div>
+
+    <div class="sec-flow-figure">
+      <svg viewBox="0 0 960 188" role="img" aria-label="Auth request lifecycle: sign in, AuthSession holds the token, the bearer token rides every server call, the server verifies it into a Principal, then the guard predicate runs before the handler.">
+        <defs>
+          <marker id="sec-ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="sec-ah"></path>
+          </marker>
+          <marker id="sec-ah-brand" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="sec-ah-brand"></path>
+          </marker>
+        </defs>
+
+        <rect class="sec-zone" x="12" y="40" width="368" height="120" rx="12"></rect>
+        <text class="sec-zone-label" x="26" y="32">CLIENT · WASM</text>
+        <rect class="sec-zone" x="580" y="40" width="368" height="120" rx="12"></rect>
+        <text class="sec-zone-label" x="594" y="32">SERVER</text>
+
+        <g>
+          <rect class="sec-stage" x="28" y="64" width="160" height="72" rx="10"></rect>
+          <text class="sec-stage-title" x="108" y="96" text-anchor="middle">Sign in</text>
+          <text class="sec-stage-sub" x="108" y="116" text-anchor="middle">credentials · IdP</text>
+        </g>
+        <g>
+          <rect class="sec-stage" x="204" y="64" width="160" height="72" rx="10"></rect>
+          <text class="sec-stage-title" x="284" y="96" text-anchor="middle">AuthSession</text>
+          <text class="sec-stage-sub" x="284" y="116" text-anchor="middle">holds the token</text>
+        </g>
+        <g>
+          <rect class="sec-stage sec-stage-accent" x="400" y="64" width="160" height="72" rx="10"></rect>
+          <text class="sec-stage-title" x="480" y="96" text-anchor="middle">Authorization:</text>
+          <text class="sec-stage-sub" x="480" y="116" text-anchor="middle">Bearer &lt;token&gt;</text>
+        </g>
+        <g>
+          <rect class="sec-stage" x="596" y="64" width="160" height="72" rx="10"></rect>
+          <text class="sec-stage-title" x="676" y="96" text-anchor="middle">JwtVerifier</text>
+          <text class="sec-stage-sub" x="676" y="116" text-anchor="middle">→ Principal</text>
+        </g>
+        <g>
+          <rect class="sec-stage sec-stage-accent" x="772" y="64" width="160" height="72" rx="10"></rect>
+          <text class="sec-stage-title" x="852" y="96" text-anchor="middle">guard → run</text>
+          <text class="sec-stage-sub" x="852" y="116" text-anchor="middle">members_only</text>
+        </g>
+
+        <path class="sec-auth-arrow" d="M188,100 H204" marker-end="url(#sec-ah)"></path>
+        <path class="sec-auth-arrow-brand" d="M364,100 H400" marker-end="url(#sec-ah-brand)"></path>
+        <path class="sec-auth-arrow-brand" d="M560,100 H596" marker-end="url(#sec-ah-brand)"></path>
+        <path class="sec-auth-arrow" d="M756,100 H772" marker-end="url(#sec-ah)"></path>
+      </svg>
+    </div>
+
+    <div class="sec-code-grid">
+      <div class="sec-code">
+        <div class="sec-code-bar">
+          <span class="sec-dot"></span><span class="sec-dot"></span><span class="sec-dot"></span>
+          <span class="sec-code-file">client · lib.rs</span>
+        </div>
+        <pre class="sec-code-pre"><code pp-html="code_client"></code></pre>
+      </div>
+      <div class="sec-code">
+        <div class="sec-code-bar">
+          <span class="sec-dot"></span><span class="sec-dot"></span><span class="sec-dot"></span>
+          <span class="sec-code-file">server · main.rs</span>
+        </div>
+        <pre class="sec-code-pre"><code pp-html="code_server"></code></pre>
+      </div>
+    </div>
+
+    <p class="sec-note">
+      The same <code>members_only</code> predicate guards the client
+      route and the server function — the auth model can't drift
+      between ends, and an unauthenticated path won't type-check into a
+      call that skips it.
+    </p>
+    <a class="sec-cta" href="/docs/guides/auth/credentials" pp-route>
+      Auth docs <span class="sec-arrow">↗</span>
+    </a>
+  </div>
+
+  <!-- ── Diagnose & repair ───────────────────────────────────── -->
+  <div class="sec-block">
+    <div class="sec-sub-head">
+      <span class="sec-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12h4l2.4-7 5 14 2.4-7H21"></path>
+        </svg>
+      </span>
+      <div>
+        <h3>Diagnose &amp; repair, built in</h3>
+        <p>One structured-event contract — the same API in the browser and on the server — fans every event out to logs, traces, and analytics.</p>
+      </div>
+    </div>
+
+    <div class="sec-obs-grid">
+      <div class="sec-code">
+        <div class="sec-code-bar">
+          <span class="sec-dot"></span><span class="sec-dot"></span><span class="sec-dot"></span>
+          <span class="sec-code-file">checkout.rs</span>
+        </div>
+        <pre class="sec-code-pre"><code pp-html="code_observe"></code></pre>
+      </div>
+
+      <div class="sec-fan-figure">
+        <svg viewBox="0 0 320 224" role="img" aria-label="One tracing event fans out to logging, OpenTelemetry traces, and analytics sinks.">
+          <defs>
+            <radialGradient id="fandot-glow">
+              <stop offset="0%" stop-color="#f8ae45" stop-opacity="0.95"></stop>
+              <stop offset="45%" stop-color="#f8ae45" stop-opacity="0.4"></stop>
+              <stop offset="100%" stop-color="#f8ae45" stop-opacity="0"></stop>
+            </radialGradient>
+          </defs>
+          <rect class="sec-stage sec-stage-accent" x="8" y="86" width="132" height="52" rx="10"></rect>
+          <text class="sec-stage-title" x="74" y="108" text-anchor="middle">tracing event</text>
+          <text class="sec-stage-sub" x="74" y="126" text-anchor="middle">pocopine.*</text>
+
+          <path class="sec-flow-arrow" d="M140,100 C164,100 164,40 188,40"></path>
+          <path class="sec-flow-arrow" d="M140,112 H188"></path>
+          <path class="sec-flow-arrow" d="M140,124 C164,124 164,184 188,184"></path>
+
+          <!-- one event fanning out to each sink -->
+          <g>
+            <circle r="5" fill="url(#fandot-glow)"></circle>
+            <circle r="1.7" fill="#f8ae45"></circle>
+            <animateMotion dur="1.5s" repeatCount="indefinite" path="M140,100 C164,100 164,40 188,40"></animateMotion>
+          </g>
+          <g>
+            <circle r="5" fill="url(#fandot-glow)"></circle>
+            <circle r="1.7" fill="#f8ae45"></circle>
+            <animateMotion dur="1.5s" begin="-0.5s" repeatCount="indefinite" path="M140,112 H188"></animateMotion>
+          </g>
+          <g>
+            <circle r="5" fill="url(#fandot-glow)"></circle>
+            <circle r="1.7" fill="#f8ae45"></circle>
+            <animateMotion dur="1.5s" begin="-1s" repeatCount="indefinite" path="M140,124 C164,124 164,184 188,184"></animateMotion>
+          </g>
+
+          <g>
+            <rect class="sec-stage" x="190" y="18" width="122" height="44" rx="9"></rect>
+            <text class="sec-stage-title" x="251" y="45" text-anchor="middle">logging</text>
+          </g>
+          <g>
+            <rect class="sec-stage" x="190" y="90" width="122" height="44" rx="9"></rect>
+            <text class="sec-stage-title" x="251" y="117" text-anchor="middle">OTel traces</text>
+          </g>
+          <g>
+            <rect class="sec-stage" x="190" y="162" width="122" height="44" rx="9"></rect>
+            <text class="sec-stage-title" x="251" y="189" text-anchor="middle">analytics</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <p class="sec-note">
+      A shared <code>trace_id</code> stitches a browser action to its
+      server span; privacy labels keep tokens, PII, and request bodies
+      out of the logs. Typed signal in, typed signal out — enough for
+      you (or an agent) to find the fault and ship the fix.
+    </p>
+    <a class="sec-cta" href="/docs/guides/observability/logging-tracing" pp-route>
+      Observability docs <span class="sec-arrow">↗</span>
+    </a>
+  </div>
+</root>
