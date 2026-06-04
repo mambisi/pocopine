@@ -6,13 +6,13 @@ description: "Pine Charts emits bubbling CustomEvents for interactions that appl
 # Chart Events
 
 Pine Charts emits bubbling `CustomEvent`s for interactions that applications
-usually connect to detail panels, filters, or route changes.
+connect to detail panels, filters, or route changes.
 
 ## Selection
 
 Line markers, area markers, scatter points, bars, pie/donut slices, and radial
-bars emit `pp:chart:select` when selected by pointer or keyboard. The event
-payload is `ChartSelection`:
+bars emit `pp:chart:select` when selected by pointer or keyboard. The payload
+type is `ChartSelection`:
 
 ```rust
 use pine_charts::{ChartSelection, ChartSelectionEnd};
@@ -36,14 +36,14 @@ Payload fields:
 
 Template listeners use the event name directly:
 
-```html
+```poco
 <pine-line-chart
   pp-bind:series="series"
   show_markers="true"
   @pp:chart:select="show_detail"></pine-line-chart>
 ```
 
-Selection is persistent: the selected mark keeps `data-selected` and
+Selection is persistent: the selected mark retains `data-selected` and
 `aria-selected="true"` until another mark is selected or selection is cleared.
 Charts emit `pp:chart:select-end` with `ChartSelectionEnd { chart, key }` when
 selection is cleared by Escape, a background chart click, or a data update that
@@ -53,13 +53,13 @@ removes the selected mark. Use `pp:chart:select` for drilldown/detail panels and
 ## Hover
 
 Line, scatter, area, bar, pie/donut, and radial charts emit `pp:chart:hover`
-while the pointer is over an interactive chart mark. Pointer exit emits
-`pp:chart:hover-end`. Hover events are pointer-driven, so custom handlers should
-stay cheap and push expensive work outside the pointer path. The hover payload
-is `ChartHover`:
+while the pointer is over an interactive mark. Pointer exit emits
+`pp:chart:hover-end` with `ChartHoverEnd { chart }`. Hover events are
+pointer-driven, so handlers must stay cheap and push expensive work off the
+pointer path. The hover payload type is `ChartHover`:
 
 ```rust
-use pine_charts::ChartHover;
+use pine_charts::{ChartHover, ChartHoverEnd};
 use pocopine::prelude::JsValue;
 ```
 
@@ -87,18 +87,17 @@ Payload fields:
   `series` is the series label when present, and `x`, `y`, `x_label`, and
   `y_label` are populated.
 - `category`: bar hovers. `label` and `category` are the category label,
-  `series` is populated for grouped/stacked series, and `value` /
+  `series` is populated for grouped/stacked series, and `value` and
   `value_label` are populated.
 - `share`: pie, donut, and radial hovers. `label` is the slice or ring label,
   `value`, `value_label`, `percentage`, and `percentage_label` are populated,
-  and `series` / `category` are empty.
+  and `series` and `category` are empty.
 
 `aria_label` always matches the rendered mark's accessible label. Prefer
 `label` for concise custom UI and `aria_label` when mirroring the chart's
 accessible announcement.
 
-`ChartHover` and `ChartSelection` also expose small formatting helpers for
-custom UI:
+`ChartHover` and `ChartSelection` expose formatting helpers for custom UI:
 
 - `series_or_chart()` returns the series label when present, otherwise the chart
   kind.
@@ -106,14 +105,14 @@ custom UI:
   `<x_label>: <y_label>`, `<category>: <value_label>`, or
   `<value_label> (<percentage_label>)`.
 
-The built-in tooltip remains the default. Set `tooltip="none"` on a chart to
-hide the built-in tooltip while keeping hover crosshairs, markers, data
-attributes, and hover events active. Applications can then render a custom
-tooltip block, overlay, or portal from the event payload. Because Pine Charts
-does not ship a stylesheet, include the `[data-tooltip="none"]` suppression rule
-from [Interaction](interaction.md) when styling the built-in tooltip.
+The built-in tooltip is on by default. Set `tooltip="none"` on a chart to hide
+it while keeping hover crosshairs, markers, data attributes, and hover events
+active. Applications can then render a custom tooltip, overlay, or portal from
+the event payload. Because Pine Charts does not ship a stylesheet, include the
+`[data-tooltip="none"]` suppression rule from [Interaction](interaction.md) when
+styling the built-in tooltip.
 
-```html
+```poco
 <pine-area-chart
   pp-bind:series="series"
   tooltip="none"
@@ -135,12 +134,12 @@ pub fn show_tooltip(&mut self, event: JsValue) {
 ```
 
 When `tooltip="none"` is set, the application owns the replacement tooltip's
-accessibility. Use a status/live region such as `role="status"` and
+accessibility. Use a live region such as `role="status"` and
 `aria-live="polite"` when the custom tooltip should be announced.
 
 ## Legend Toggles
 
-`PineChartLegend` can be made interactive with `interactive="true"`. Interactive
+`PineChartLegend` becomes interactive with `interactive="true"`. Interactive
 legend items toggle their own `active` state, expose `data-active`, and emit
 `pp:chart:legend-toggle` with `LegendToggle`:
 
@@ -156,12 +155,12 @@ Payload fields:
 - `series`
 - `active`
 
-The legend intentionally does not hide chart series by itself. Applications use
-the event to decide whether toggling should filter data, dim marks, open a
-drilldown, or do nothing.
+The legend does not hide chart series on its own. Applications use the event to
+decide whether toggling should filter data, dim marks, open a drilldown, or do
+nothing.
 
-For the common controlled-filtering case, update chart data with the visibility
-helpers, then rebuild legend items from that same data:
+For the common controlled-filtering pattern, update chart data with the
+visibility helpers, then rebuild legend items from that same data:
 
 ```rust
 use pine_charts::{line_legend_items, set_line_series_visible, LegendToggle};

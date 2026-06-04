@@ -1,18 +1,18 @@
 ---
 title: "Cookbook"
-description: "These snippets show the intended composition style for application dashboards: chart behavior stays in Pine Charts, while spacing, color, cards, and layout…"
+description: "Composition patterns for application dashboards: chart behavior stays in Pine Charts, while spacing, color, cards, and layout stay in application CSS."
 ---
 
 # Cookbook
 
-These snippets show the intended composition style for application dashboards:
-chart behavior stays in Pine Charts, while spacing, color, cards, and layout
-stay in application CSS.
+These snippets show the intended composition style for application dashboards.
+Chart behavior stays in Pine Charts; spacing, color, cards, and layout stay in
+application CSS.
 
 ## Dashboard Card
 
-Use a responsive wrapper for each chart surface, then place legends wherever
-the application layout needs them.
+Wrap each chart surface in `pine-chart-responsive`, then place legends wherever
+the layout requires them.
 
 ```html
 <section class="metrics-grid">
@@ -89,15 +89,16 @@ the application layout needs them.
 }
 ```
 
-The important rule is that the responsive component owns the chart pixel box.
-Application CSS can decorate the panel, but should not force the SVG to
-`width: 100%; height: 100%`; doing so can stretch text and circular marks.
+The responsive component owns the chart pixel box. Application CSS can decorate
+the panel, but must not force the SVG to `width: 100%; height: 100%` — doing
+so stretches text and circular marks.
 
-## Custom Tooltip And Drilldown
+## Custom Tooltip and Drilldown
 
-Use `tooltip="none"` when the built-in tooltip is too small for the product UI.
-The chart still owns hit testing, crosshair placement, hover markers, keyboard
-selection, and typed event payloads. The application owns the HTML surface.
+Use `tooltip="none"` when the built-in tooltip is too constrained for the
+product UI. The chart still owns hit testing, crosshair placement, hover
+markers, keyboard selection, and typed event payloads. The application owns the
+HTML surface.
 
 ```html
 <section class="metric-card">
@@ -194,9 +195,9 @@ pub fn hide_latency_detail(&mut self) {
 }
 ```
 
-## Half Donut Progress
+## Half-Donut Progress
 
-Half donuts use the same `PinePieChart` component as full donuts. The angle
+Half-donuts use the same `PinePieChart` component as full donuts. The angle
 range controls the visible arc:
 
 ```html
@@ -216,6 +217,6 @@ range controls the visible arc:
 </pine-chart-responsive>
 ```
 
-For half donuts, Pine Charts keeps `center_label` on the chart center line and
-places `center_value` above it. That keeps the text attached to the ring rather
-than visually centered in the empty lower half of the SVG.
+When the arc span is 180 degrees or less, Pine Charts raises `center_value`
+above the center line and anchors `center_label` on it. This keeps both labels
+attached to the ring rather than floating in the empty lower half of the SVG.

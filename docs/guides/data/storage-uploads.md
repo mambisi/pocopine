@@ -8,8 +8,7 @@ description: "Server-mediated object-storage uploads into S3, GCS, and Azure nat
 How `pocopine-storage` moves bytes from a browser into S3, GCS, or Azure
 Blob Storage: a **server-mediated, proxy-like** upload path that streams
 each byte to the provider exactly once, with O(1) server memory per
-in-flight part. This is the architecture reference for the upload
-runtime (issue #176). For the small typed-`localStorage` helper, see
+in-flight part. For the small typed-`localStorage` helper, see
 [`browser-storage.md`](./browser-storage.md) instead — different feature,
 same crate name prefix.
 
@@ -32,13 +31,13 @@ falls over under load. The whole upload runtime is built to avoid that:
 ## Layers
 
 ```text
-  browser UploadClient                         ← Phase 4 (roadmap)
+  browser UploadClient
         │  HTTP, bytes stream through the server
         ▼
   axum routes (server.rs)                       ← per-request plumbing
      POST   /uploads                 initiate
      PATCH  /uploads/:s              sequential chunk   (Upload-Offset header)
-     PUT    /uploads/:s              multipart part     (Upload-Part header)  ← Phase 2
+     PUT    /uploads/:s              multipart part     (Upload-Part header)
      POST   /uploads/:s/complete     assemble
      GET/DELETE /uploads/:s          inspect / abort
         ▼
@@ -67,7 +66,7 @@ client's requested [`UploadStrategy`] is negotiated against that.
 |----------|-------|------------------------------|
 | `Sequential` | `PATCH …/uploads/:s` + `Upload-Offset` | Ordered chunks; the server coalesces them into a **bounded tail** and flushes provider-sized parts. One chunk in flight. |
 | `Multipart` | `PUT …/uploads/:s` + `Upload-Part: n` | Parts addressed **by number**, uploaded **concurrently**; each streams straight to a provider part. |
-| `SingleRequest` / `Auto` | — | `Auto` resolves to the most capable advertised mode; `SingleRequest` is reserved. |
+| `SingleRequest` / `Auto` | — | `Auto` resolves to `Sequential` if available, then `Multipart`, then `SingleRequest`; `SingleRequest` is reserved. |
 
 Both transports converge on the same native provider assembly at
 `complete`. `Sequential` is the default and exists so an upload works
@@ -81,7 +80,7 @@ pub struct BackendCapabilities {
     pub sequential_proxy: bool,   // PATCH-chunk proxy (default true)
     pub native_multipart: bool,   // by-number part route
     pub single_request: bool,
-    pub signed_direct: bool,      // Phase 3 (roadmap)
+    pub signed_direct: bool,      // signed direct-to-provider (roadmap)
 }
 ```
 
@@ -94,13 +93,13 @@ fn capabilities(&self) -> BackendCapabilities {
 ```
 
 `backend_common::select_upload_mode(requested, caps)` resolves the
-session's concrete strategy: `Auto` picks the best advertised mode, a
-specific request that the backend can't satisfy is rejected as
-`Unsupported`. The default capabilities are sequential-proxy-only, so a
-backend that does nothing keeps working exactly as before. The
-`/scopes/:scope` descriptor derives its advertised `strategies` from the
-backend's capabilities, so client-side discovery matches what `initiate`
-will actually accept.
+session's concrete strategy: `Auto` resolves to `Sequential` if the
+backend advertises it, then `Multipart`, then `SingleRequest`; a specific
+request that the backend can't satisfy is rejected as `Unsupported`. The
+default capabilities are sequential-proxy-only, so a backend that does
+nothing keeps working exactly as before. The `/scopes/:scope` descriptor
+derives its advertised `strategies` from the backend's capabilities, so
+client-side discovery matches what `initiate` will actually accept.
 
 ## The streaming part path
 
@@ -122,8 +121,9 @@ header) never calls `to_bytes`; it builds an `UploadBody` from the live axum
 body and hands it to:
 
 ```rust
-fn upload_part(&self, ctx, session, number: u32, body: UploadBody)
-    -> StorageBoxFuture<UploadSession>;
+fn upload_part<'a>(&'a self, ctx: &'a StorageContext, session: UploadSessionId,
+    number: u32, body: UploadBody)
+    -> StorageBoxFuture<'a, UploadSession>;
 ```
 
 `upload_part` defaults to `Unsupported`, so only backends that advertise
@@ -200,8 +200,8 @@ assembles from that. Several invariants make the result trustworthy:
   rather than silently concatenated.
 - **No overwrite + ownership.** Assembly uses `If-None-Match: *` (or the
   provider equivalent) so it never clobbers an existing key, and stamps an
-  ownership marker (`pocopine-upload-session`) in the object's custom
-  metadata.
+  ownership marker in the object's custom metadata (key name varies by
+  provider: hyphens on S3/GCS, underscores on Azure).
 - **Idempotent re-complete.** If our own marked object already exists, a
   retry adopts it; a foreign object at the key is rejected.
 - **Checksum before observable.** When a checksum policy is set, the
@@ -285,10 +285,9 @@ provider exactly once.
 
 ## Roadmap
 
-- **Signed direct-to-provider** (`UploadPolicy.allow_signed_direct`): the
+- **Signed direct-to-provider** (`BackendCapabilities::signed_direct`): the
   server issues short-lived signed part URLs and the browser uploads
   straight to the provider, bypassing the proxy. Opt-in per scope;
   everything else (complete, abort, validation) is unchanged.
-- **Browser client + Pine UI**: a `send_multipart` branch in the browser
-  `UploadClient` that drives the part endpoints with bounded concurrency,
-  per-part progress, and retry, plus the Pine upload component retarget.
+- **Pine upload component**: retarget the Pine upload component to drive the
+  native multipart part endpoints with per-part progress.

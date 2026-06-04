@@ -9,24 +9,24 @@ Pine Charts is the SVG-first chart layer for Pine. It follows the same contract
 as the rest of Pine: the crate owns behavior, geometry, accessibility metadata,
 and stable DOM hooks, while the application owns visual styling.
 
-The first layer is intentionally low level:
+The primitives layer covers:
 
 - chart rectangles and margins,
 - linear and band scales,
 - SVG path builders for line and area series,
 - single-line, multi-line, scatter, area, grouped bar, stacked bar, pie/donut,
   radial bar, legend, marker, and hover components,
-- strict finite-number validation.
+- strict finite-number validation on every data input.
 
-Higher level components build on those primitives instead of hiding them. That
-keeps charts useful for simple dashboards while still giving application authors
-a path to custom marks, axes, interaction, and styling.
+Higher-level components build on those primitives instead of hiding them. That
+keeps charts useful for simple dashboards while still giving you a path to
+custom marks, axes, interaction, and styling.
 
 ## Design Model
 
-Pine Charts is a block system, not a full dashboard framework. The crate should
-make the hard chart behavior reusable without taking over the application's
-layout or product decisions.
+Pine Charts is a block system, not a full dashboard framework. The crate makes
+hard chart behavior reusable without taking over your application's layout or
+product decisions.
 
 Pine owns:
 
@@ -48,15 +48,15 @@ layered SVG blocks when the visualization needs custom marks.
 
 ## Styling Contract
 
-Pine Charts does not ship a theme. Components must expose semantic classes such
-as `pine-chart-root`, `pine-chart-axis`, and `pine-chart-line`, plus `data-*`
-attributes for state and orientation. Applications style those selectors with
-their own CSS.
+Pine Charts ships no theme. Components expose semantic classes such as
+`pine-chart-root`, `pine-chart-svg`, `pine-chart-axis`, and `pine-chart-line`,
+plus `data-state` and `data-orientation` attributes for component state and
+layout direction. You style those selectors with your own CSS.
 
-The crate should prefer attributes and CSS variables over inline presentation
-styles. Inline SVG geometry such as `x`, `y`, `d`, `viewBox`, and ARIA
-attributes is framework-owned; color, stroke width, typography, and spacing
-should remain author-owned whenever possible.
+The crate prefers attributes and CSS variables over inline presentation styles.
+SVG geometry attributes such as `x`, `y`, `d`, and `viewBox`, as well as ARIA
+attributes, are framework-owned. Color, stroke width, typography, and spacing
+remain author-owned.
 
 ## Guides
 
@@ -75,13 +75,16 @@ should remain author-owned whenever possible.
 
 ## Progression
 
-1. Foundation: pure geometry, scale, and path utilities.
-2. Components: SVG root, plot area, and first line/area/bar series components.
-3. Composition: axes, grid lines, labels, markers, and legends.
-4. Interaction: tooltip, hover/crosshair, selection, and keyboard affordances.
-5. Strict mode: clear validation errors for malformed data and unsafe chart
-   structures.
+The guides follow a bottom-up order that matches how the crate is layered:
 
-Canvas is out of scope for now. If a future chart type needs canvas for very
-large datasets, it should be introduced as a separate rendering backend instead
-of replacing the SVG component model.
+1. **Foundation** — pure geometry, scale, and path utilities.
+2. **Components** — SVG root, plot area, and ready-made line, area, bar, scatter,
+   pie, and radial components.
+3. **Composition** — axes, grid lines, labels, markers, and legends combined via
+   `PineCartesianChart` and `PineLayerChart`.
+4. **Interaction** — tooltip, hover/crosshair, selection, and keyboard
+   affordances.
+
+Canvas is out of scope. If a future chart type needs canvas for very large
+datasets, it will be introduced as a separate rendering backend rather than
+replacing the SVG component model.

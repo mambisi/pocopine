@@ -153,8 +153,7 @@ supported bridge shapes:
 - `onAuthStateChanged(callback: AuthStateCallback): Unsubscribe` becomes
   `on_auth_state_changed(scope, handler)`.
 
-It also accepts `file = "..."` and `name = "..."` for explicit
-cases:
+Use `file = "..."` and `name = "..."` for explicit overrides:
 
 ```rust
 #[pocopine::client_module(file = "Firebase.client.ts", name = "firebase")]
@@ -163,15 +162,12 @@ pub mod client {
 }
 ```
 
-The generated facade is intentionally thin today:
+Call into the facade from wherever you need it:
 
 ```rust
 let module = firebase::client::required()?;
 let user = module.sign_in().await?;
 ```
-
-The next codegen layer will broaden this extractor beyond the small bridge
-shapes above.
 
 ## Commands
 
@@ -224,8 +220,10 @@ uses the configured command directly; it does not require npm scripts.
 - Rust/template files under `src/` and rebuilds wasm.
 - `.client.ts` files and rebuilds wasm plus `/pkg/pocopine-client.js`, because
   Rust facade signatures may have changed.
-- `package.json` and supported lockfiles, then reruns install and rebundles the
-  client bundle.
+- `package.json` changes, which reruns install and rebundles the client bundle.
+- Lockfile changes (`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`,
+  `bun.lockb`, `bun.lock`), which rebundle the client bundle without
+  reinstalling.
 
 This keeps the Rust build and node package flow separate while sharing one CLI
 entrypoint.

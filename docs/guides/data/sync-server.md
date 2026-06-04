@@ -119,9 +119,10 @@ impl Source for IssueStore {
     {
         let db = self.db.clone();
         Box::pin(async move {
-            let user_id = ctx.user.id_string()
-                .ok_or_else(|| SyncError::auth("unauthenticated"))?;
-            let workspace_id = ctx.header_str("x-workspace-id")
+            let user_id = ctx.user.require_user()
+                .map_err(|_| SyncError::unauthorized("unauthenticated"))?
+                .id.clone();
+            let workspace_id = ctx.header("x-workspace-id")
                 .ok_or_else(|| SyncError::client("missing x-workspace-id"))?
                 .to_string();
             db.assert_member(&user_id, &workspace_id).await?;
@@ -190,15 +191,14 @@ impl<Row> WriteResult<Row> {
 ```
 
 `Conflict::new(server_row, reason)` / `Conflict::stale(server_row)`
-build the rejection envelope. The `.into_result()` helper lets you
-chain through `?`:
+build the rejection envelope. The `.into_result()` helper converts to
+`Result<Row, Conflict<Row>>` for `?`-chaining:
 
 ```rust
-let row = self.db.try_update(id, draft, expected_version)
-    .await
-    .map(WriteResult::Applied)?
+let write_result = source.update(ctx, id, draft, expected_version).await?;
+let row = write_result
     .into_result()
-    .map_err(SyncError::from)?;
+    .map_err(|c| SyncError::backend(c.reason))?;
 ```
 
 ### `SourceId`
@@ -222,7 +222,9 @@ use myapp_shared::issue::issues;
 
 let resource = issues::resource(IssueStore::new(db))
     .mutation_log(MemoryMutationLog::with_scope_fn(|ctx| {
-        Ok(ctx.tenant_id()?.to_string())
+        ctx.header("x-tenant-id")
+            .map(str::to_string)
+            .ok_or_else(|| SyncError::unauthorized("missing x-tenant-id"))
     }));
 ```
 
@@ -252,7 +254,9 @@ let resource = source("issues", IssueStore::new(db))?       // 1. name + Source
         Ok(Some(RowVersion::new(&row.version)?)))
     .partition_by(issues::row_to_params_typed)               //    optional: live
     .mutation_log(MemoryMutationLog::with_scope_fn(|ctx| {   //    optional: see note
-        Ok(ctx.tenant_id()?.to_string())
+        ctx.header("x-tenant-id")
+            .map(str::to_string)
+            .ok_or_else(|| SyncError::unauthorized("missing x-tenant-id"))
     }));
 ```
 
@@ -273,14 +277,17 @@ finalizer defaults to `MemoryMutationLog::new()`; on the first push
 under the default, a one-shot `tracing::warn!` fires:
 
 ```text
-SourceResource using the default in-memory MutationLog. Replays
-after process restart will be lost. Production: call
-.mutation_log(MemoryMutationLog::with_scope_fn(...)) on the
-builder, or attach a durable backend.
+SourceResource using the default in-memory MutationLog.
+Replays after process restart will be lost. Production:
+override `Source::mutation_log()` to return `Some(self)`
+(when the store impls MutationLog), or call
+`.mutation_log(...)` on the builder with a durable backend.
 ```
 
-Explicit `.mutation_log(...)` silences the warn. Match the log's
-scope to your tenant boundary — see [Scoping](#scoping) below.
+Providing a log via `.mutation_log(...)` on the builder, or by
+returning `Some(...)` from `Source::mutation_log()`, silences the
+warn. Match the log's scope to your tenant boundary — see
+[Scoping](#scoping) below.
 
 ## `MutationLog`
 
@@ -336,7 +343,9 @@ the `RequestContext`:
 
 ```rust
 MemoryMutationLog::<Issue>::with_scope_fn(|ctx| {
-    Ok(ctx.tenant_id()?.to_string())
+    ctx.header("x-tenant-id")
+        .map(str::to_string)
+        .ok_or_else(|| SyncError::unauthorized("missing x-tenant-id"))
 });
 ```
 
@@ -416,13 +425,13 @@ malformed first tries, so a well-formed retry would be rejected as a
 `Source` methods return `SyncResult<...>` = `Result<..., SyncError>`.
 Translation:
 
-- `SyncError::Auth(_)` → HTTP 401/403 — returned from `extract_context`
+- `SyncError::Unauthorized(_)` → HTTP 401 — returned from `extract_context`
   to short-circuit unauthorised requests.
-- `SyncError::Client(_)` → HTTP 400 — bad id format, missing required
-  param, etc.
+- `SyncError::Client(_)` → HTTP 500 — browser/client integration failures;
+  maps to a generic server error so internal detail is not leaked.
 - `SyncError::Backend(_)` → HTTP 500 — unrecoverable storage failures.
 
-Use the matching constructor (`SyncError::auth(msg)`,
+Use the matching constructor (`SyncError::unauthorized(msg)`,
 `SyncError::client(msg)`, `SyncError::backend(msg)`).
 
 ## Mount points: registering a resource on the server
@@ -464,7 +473,7 @@ let sync = SyncServer::builder()
 
 ```rust
 let sync = SyncServer::builder()
-    .guarded_stream(issues_resource(store)?, Predicate::authenticated())
+    .guarded_stream(issues_resource(store)?, require_auth())
     .events(Arc::new(live_backend()))
     .build();
 ```
@@ -478,12 +487,18 @@ async DB lookup.
 ```rust
 struct WorkspaceMembershipGuard { db: Db }
 
-#[async_trait]
 impl SyncStreamGuard for WorkspaceMembershipGuard {
-    async fn check(&self, ctx: &RequestContext) -> SyncResult<()> {
-        let workspace_id = ctx.path_param("workspace_id")?;
-        self.db.assert_member(ctx.user_id()?, workspace_id).await?;
-        Ok(())
+    fn check(&self, ctx: RequestContext) -> SyncGuardFuture<'_> {
+        let db = self.db.clone();
+        Box::pin(async move {
+            let workspace_id = ctx.header("x-workspace-id")
+                .ok_or_else(|| ServerError::bad_request("missing x-workspace-id"))?
+                .to_string();
+            let user_id = ctx.user.require_user()?.id.clone();
+            db.assert_member(&user_id, &workspace_id).await
+                .map_err(ServerError::from)?;
+            Ok(())
+        })
     }
 }
 
@@ -501,12 +516,13 @@ member?"); use `extract_context` for request-level shape
 ### Install on `Server`
 
 ```rust
+use pocopine_server::axum::Router;
 use pocopine_server::Server;
 
-let server = Server::builder()
+let server = Server::new(Router::new())
     .plugin(sync_server_plugin(sync))     // /open, /pull, /push
-    .plugin(live_plugin(live_backend()))  // SSE wake-ups
-    .build();
+    .serve("0.0.0.0:3000")
+    .await?;
 ```
 
 Routes mounted per stream:

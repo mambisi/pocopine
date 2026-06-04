@@ -6,9 +6,9 @@ description: "Tree-shaken Tabler icons via the pine-icons component."
 # Icons (`pine-icons`)
 
 pocopine ships a dedicated crate — `pine-icons` — that vendors
-[Tabler Icons][tabler] (MIT, ~6000 icons across outline and
-filled sets) with a tree-shaking-friendly API for both Rust
-handlers and `.poco` templates.
+[Tabler Icons][tabler] (MIT, ~5000 outline and ~1000 filled
+icons) with a tree-shaking-friendly API for both Rust handlers
+and `.poco` templates.
 
 ## The two call sites
 
@@ -32,7 +32,7 @@ let star_outline  = icon!(outline / "star");      // same as icon!("star")
 
 Typos become compile errors:
 
-```
+```text
 error: unknown tabler outline icon `usre` — did you mean `user`?
 ```
 
@@ -53,7 +53,7 @@ fn main() {
 }
 ```
 
-```html
+```poco
 <!-- static -->
 <pine-icon name="search" size="16"></pine-icon>
 
@@ -82,23 +82,23 @@ template.
 
 ## Styling
 
-`<pine-icon>` renders as a `<span>` (role=`visual`) containing
-the raw SVG. Default CSS inherits `currentColor` for both
-`fill` and `stroke`, so icons take on the surrounding text
-color with no extra work:
+`<pine-icon>` renders as a `<span>` (`role="visual"`) containing
+the raw SVG. Tabler's outline icons ship `stroke="currentColor"`
+and filled icons ship `fill="currentColor"`, so they pick up the
+surrounding text color with no extra CSS:
 
 ```css
 button { color: var(--brand); }
 /* any <pine-icon> inside the button inherits brand color */
 ```
 
-Size comes from the `size` prop (pixels, default 20). Override
-with CSS if you want em-relative sizing:
+Size comes from the `size` prop (pixels, default `20`). Override
+with CSS for em-relative sizing:
 
 ```css
-.inline-glyph { font-size: 1em; }
+/* size the icon to match the surrounding text */
 .inline-glyph .pine-icon,
-.inline-glyph svg {
+.inline-glyph .pine-icon svg {
     width: 1em;
     height: 1em;
 }

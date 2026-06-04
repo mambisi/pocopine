@@ -1,15 +1,15 @@
 ---
 title: "Component composition"
-description: "One way to compose: tag-based composition with bare kebab-case tags. A parent's template references a child by its tag; attributes become props; children…"
+description: "Tag-based composition: a parent's template references a child by its kebab-case tag; attributes become props; children inside the tag become slot content."
 ---
 
 # Component composition
 
-One way to compose: **tag-based composition with bare kebab-case
-tags**. A parent's template references a child by its tag; attributes
-become props; children inside the tag become slot content. Tags read
-as HTML, and `pp-data` stays a compiler-injected implementation
-detail rather than something authors type.
+**Tag-based composition with bare kebab-case tags.** A parent's template
+references a child by its tag; attributes become props; children inside the
+tag become slot content. Tags read as HTML, and the scope marker
+(`data-pp-scope-id`) is a compiler-injected implementation detail you never
+type.
 
 ## Tag naming
 
@@ -29,21 +29,23 @@ ident — no prefix:
   becomes `<x>`.
 * **HTML collision check.** The `#[component]` macro rejects struct
   idents whose kebab-case matches a known HTML element. The rejected
-  list is the full HTML5 catalog plus `slot`, `template`, `svg`,
-  `math`. Rename the struct or pass an explicit `name = "..."` to
-  opt out (but you *should* rename — HTML collisions confuse readers
+  list is the full HTML Living Standard catalog plus `slot`, `template`,
+  `svg`, `math`. Rename the struct or pass an explicit `name = "..."` to
+  opt out (but you _should_ rename — HTML collisions confuse readers
   and break tooling even when the runtime copes).
 * Browsers treat unknown kebab-case tags (`<counter>`, `<todo-item>`)
-  as `HTMLUnknownElement`. That's fine: we don't rely on the native
-  custom-elements API, we just walk the DOM. Unknown elements render
-  nothing by default, which matches what we want before the walker
-  clones the registered template in.
+  as `HTMLElement` (the HTML spec creates any unregistered element with
+  a hyphen as an autonomous custom element, not `HTMLUnknownElement`).
+  That's fine: pocopine doesn't rely on the native custom-elements API,
+  it just walks the DOM. Unknown elements render nothing by default,
+  which matches what we want before the walker clones the registered
+  template in.
 
 ## Using a component in a parent's template
 
-```html
+```poco
 <!-- TodoList.poco -->
-<div pp-init="init">
+<div>
   <h1 pp-text="title"></h1>
   <todo-item id="1" label="Buy milk" />
   <todo-item id="2" label="Write docs" done />
@@ -51,15 +53,18 @@ ident — no prefix:
 ```
 
 `TodoItem` gets instantiated once per `<todo-item>` tag. Attributes
-on the tag feed the child's initial state (next section). The parent's
-directives (`pp-init`, `pp-text`) still evaluate in the parent's scope.
+on the tag feed the child's initial props (next section). The parent's
+directives (`pp-text`) still evaluate in the parent's scope.
 
 ## Props: attributes flow into child state
 
-**Static attributes** seed the child's fields on mount. All `pub`
-fields on the child struct are addressable; attribute names match
-field names (`id`, `label`, `done`). Values are parsed into the field's
-type:
+Only fields marked `#[prop]` on the child struct are addressable from
+a parent tag. This is the explicit parent contract — fields without
+`#[prop]` are internal state and cannot be set from outside.
+
+**Static attributes** seed the child's `#[prop]` fields on mount.
+Attribute names match field names (`id`, `label`, `done`). Values are
+parsed into the field's type:
 
 | Field type | Attribute value format |
 |---|---|
@@ -70,11 +75,12 @@ type:
 | `Option<T>` | absent = `None`, else parsed as `T` |
 | `Vec<T>` / `HashMap<..>` / other `Deserialize` | JSON: `foo='[1,2,3]'` |
 
-**Reactive attributes** use `pp-bind:field="expr"`. `expr` evaluates
-in the parent's scope; a binding effect keeps the child's field in
-sync when the parent mutates:
+**Reactive attributes** use `pp-bind:field="expr"` (or the shorthand
+`:field="expr"`). `expr` evaluates in the parent's scope; a binding
+effect keeps the child's `#[prop]` field in sync when the parent
+mutates:
 
-```html
+```poco
 <todo-item
   pp-bind:id="todo.id"
   pp-bind:label="todo.label"
@@ -82,26 +88,28 @@ sync when the parent mutates:
 ```
 
 Under the hood, `pp-bind:X` on a custom-element tag writes to
-`child_proxy["X"]` inside an `effect()` — so it rides the existing
+the child's proxy field inside an `effect()` — it rides the existing
 reactivity engine, no new machinery.
 
 **Rules:**
 
-* Only `pub` fields are settable from attributes. Non-pub = not a prop.
-* **Static attributes are one-shot**. They run during `init` and are
-  not reactive. If you want reactivity, use `pp-bind:`.
+* Only `#[prop]` fields are settable from attributes. Fields without
+  `#[prop]` are internal state — writes from a parent are silently
+  dropped.
+* **Static attributes are one-shot.** They run during setup and are
+  not reactive. Use `pp-bind:` for reactivity.
 * Passing a prop the child doesn't declare is a warning (dev build)
   and a no-op (release).
-* Missing required props is *not* an error — fields start at
+* Missing required props is not an error — fields start at
   `Default::default()`. A child component is expected to render
   sensibly with defaults.
 
 ## Slots
 
-Children inside the tag become slot content. One default slot for v0;
-named slots land with iteration.
+Children inside the tag become slot content. One default slot ships
+today; named slots are planned.
 
-```html
+```poco
 <!-- Card.poco -->
 <div class="card">
   <header pp-text="title"></header>
@@ -111,7 +119,7 @@ named slots land with iteration.
 </div>
 ```
 
-```html
+```poco
 <!-- Parent.poco, using <card> -->
 <card title="Hello">
   <p>Body content lives here.</p>
@@ -126,57 +134,57 @@ inside the slot content still evaluate in the **parent's** scope, not
 the child's — that's what makes a slot useful.
 
 `<slot>` here is the native HTML element. Outside Shadow DOM (which
-we don't use), `<slot>` is inert — the browser renders it as a
-transparent pass-through, and our walker repurposes it as the slot
+pocopine doesn't use), `<slot>` is inert — the browser renders it as
+a transparent pass-through, and the walker repurposes it as the slot
 marker. Same tag name, same mental model, no Shadow DOM cost.
 
 **Rules:**
 
-* **Default slot only in v0.** One `<slot>` per template.
+* **Default slot only today.** One `<slot>` per template.
 * **Slot content is parent-scoped.** A handler referenced inside slot
   content (`pp-on:click="dismiss"`) resolves to the parent's handler.
 * **Shadow DOM is not used.** Slots are a flat DOM move; CSS scoping
   still works because scoping is attribute-based, not shadow-based.
 
-### Why doesn't my `pp-text` work inside a compound's slot?
+### Why doesn't my `pp-text` work inside a component's slot?
 
 The single most common gotcha for authors coming from Vue or Svelte.
 This **does not work**:
 
-```html
+```poco
 <!-- UploadItem.poco -->
 <div class="row">
   <slot></slot>
 </div>
 ```
 
-```html
+```poco
 <!-- Caller.poco -->
 <upload-item :name="file.name" :status="file.status">
-  <span pp-text="name"></span>           <!-- ❌ resolves to caller's `name` -->
-  <span pp-show="status == 'uploading'">…</span>  <!-- ❌ same -->
+  <span pp-text="name"></span>           <!-- resolves to caller's `name` -->
+  <span pp-show="status == 'uploading'">…</span>  <!-- same -->
 </upload-item>
 ```
 
 Inside the slot, `name` and `status` resolve in **the caller's
 scope**, not the `UploadItem`'s scope. The child's props are
-invisible to the slot content. (Search the runtime for the comment
-in `crates/pocopine-core/src/slot_scope.rs` if you want to see why —
-slot handlers are deliberately delegated to the caller so a
-`@click="parent_handler"` inside the slot reaches the right scope.)
+invisible to the slot content. (The reason: slot handlers are
+deliberately delegated to the caller so `@click="parent_handler"`
+inside the slot reaches the right scope — see
+`crates/pocopine-core/src/slot_scope.rs`.)
 
 The fix is **scoped slots**: the child's template `<slot>` exposes
 the fields it wants to share, and the caller's `<template pp-slot>`
 names them with `pp-let`:
 
-```html
+```poco
 <!-- UploadItem.poco — expose child state on the slot -->
 <div class="row">
   <slot :name="name" :status="status" :progress="progress"></slot>
 </div>
 ```
 
-```html
+```poco
 <!-- Caller.poco — bind the exposed fields with pp-let -->
 <upload-item :name="file.name" :status="file.status" :progress="file.progress">
   <template pp-slot="default" pp-let="row">
@@ -220,7 +228,7 @@ options in a `<select>`): the child exposes the collection on its
 
 The untyped form above ships and works, but **typed slot props
 are the recommended form going forward.** Authors opt in by
-adding one keyword to `#[slot]` and declaring the publication
+adding `props = T` to `#[slot]` and declaring the publication
 shape as a `Props` struct:
 
 ```rust
@@ -235,20 +243,20 @@ pub struct UploadItemSlotProps {
 #[component(template = "UploadItem.poco", role = "panel")]
 #[slot(default, props = UploadItemSlotProps)]
 pub struct UploadItem {
-    pub name: String,
-    pub status: String,
-    pub progress: f64,
+    #[prop] pub name: String,
+    #[prop] pub status: String,
+    #[prop] pub progress: f64,
 }
 ```
 
-```html
+```poco
 <!-- UploadItem.poco — same shape as the untyped form -->
 <div class="row">
   <slot :name="name" :status="status" :progress="progress"></slot>
 </div>
 ```
 
-What the macro now checks at `cargo check` time:
+What the macro checks at `cargo check` time:
 
 * `UploadItemSlotProps` derives `Props`. If you forget the
   derive, the slot decl errors with the missing trait bound.
@@ -272,7 +280,7 @@ pub struct UploadRoot {
 }
 ```
 
-```html
+```poco
 <!-- UploadRoot.poco — macro auto-publishes `file` as the slot binding -->
 <ul>
   <li pp-for="file in files">
@@ -281,7 +289,7 @@ pub struct UploadRoot {
 </ul>
 ```
 
-```html
+```poco
 <!-- Caller -->
 <upload-root>
   <template pp-slot="row" pp-let="file">
@@ -320,7 +328,7 @@ pub struct UploadRow {
 #[slot(name = "row", props = UploadRow)]
 ```
 
-```html
+```poco
 <li pp-for="file in files">
   <slot name="row"
     :name="file.name" :progress="file.progress"
@@ -341,10 +349,10 @@ inline template type annotations, etc.).
 
 Planned syntax for the array-reactivity milestone:
 
-```html
+```poco
 <todo-item
   pp-for="todo in todos"
-  pp-bind:key="todo.id"
+  pp-key="todo.id"
   pp-bind:id="todo.id"
   pp-bind:label="todo.label" />
 ```
@@ -352,7 +360,7 @@ Planned syntax for the array-reactivity milestone:
 **Rules (when shipped):**
 
 * `pp-for` on a custom-element tag clones the child once per item.
-* `pp-bind:key` is required — that's how the walker pairs list items
+* `pp-key` is required — that's how the walker pairs list items
   to child scopes across re-renders (stable identity = no unnecessary
   re-mounts).
 * Iteration variable scope: `todo` is readable by any `pp-bind:X` on
@@ -363,39 +371,35 @@ This is **blocked** by the array-reactivity work in
 `docs/guides/reactivity/02-roadmap.md` (#9). Syntax is committed now so
 users plan around it.
 
-## Where `pp-data` went
+## Where `data-pp-scope-id` comes from
 
-Authors don't write `pp-data` anymore. When the compiler emits a
-component's registered template string, it injects `pp-data="<name>"`
-onto the root element. Authors just write the template:
+Authors never write the scope marker attribute. When the `#[component]`
+macro emits the template string at compile time, it injects
+`data-pp-scope-id="<name>"` onto the root element. The template you
+author stays clean:
 
-```html
+```poco
 <!-- Counter.poco — as authored -->
-<div pp-init="init">
+<div>
   <button pp-on:click="decrement">-</button>
   <span class="count" pp-text="count"></span>
   <button pp-on:click="increment">+</button>
 </div>
 ```
 
-The compiler emits:
+The macro-processed string stored in the registry contains:
 
 ```html
-<div pp-data="counter" pp-init="init">
+<div data-pp-scope-id="counter">
   <button pp-on:click="decrement">-</button>
   <span class="count" pp-text="count"></span>
   <button pp-on:click="increment">+</button>
 </div>
 ```
 
-This keeps the authored template focused on content and directives —
-the "this element owns a scope" fact is tracked by the filename and
-struct ident, not duplicated in the markup.
-
-(Note: the current runtime *requires* `pp-data` on the root. This
-change lands as part of the composition milestone, alongside tag
-resolution. Until then, authored templates still include
-`pp-data="..."` manually.)
+The marker is stripped from the DOM immediately after the mount binds
+the scope to the element. It is never visible in the browser's
+inspector.
 
 ## Full example
 
@@ -417,7 +421,7 @@ pub struct TodoList {
 
 #[handlers]
 impl TodoList {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         self.title = "Things to do".into();
         self.todos = vec![
             Todo { id: 1, label: "Buy milk".into(),   done: false },
@@ -429,9 +433,9 @@ impl TodoList {
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct TodoItem {
-    pub id: u32,
-    pub label: String,
-    pub done: bool,
+    #[prop] pub id: u32,
+    #[prop] pub label: String,
+    #[prop] pub done: bool,
 }
 
 #[handlers]
@@ -442,8 +446,8 @@ impl TodoItem {
 
 **`components/TodoList.poco`** (v0 — `pp-for` not yet available)
 
-```html
-<div pp-init="init">
+```poco
+<div>
   <h1 pp-text="title"></h1>
   <todo-item id="1" label="Buy milk" />
   <todo-item id="2" label="Write docs" done />
@@ -452,12 +456,12 @@ impl TodoItem {
 
 **`components/TodoItem.poco`**
 
-```html
-<div>
+```poco
+<li>
   <input type="checkbox" pp-model="done" />
   <span pp-text="label" pp-bind:class="done ? 'done' : ''"></span>
   <button pp-on:click="toggle">toggle</button>
-</div>
+</li>
 ```
 
 ## Runtime resolution
@@ -469,7 +473,7 @@ just the hook points:
 2. Look up the tag name in the component registry. If registered:
    * Capture the tag's original direct children (future slot content).
    * Build a fresh `Scope`.
-   * Apply attribute-props to the scope's state (static + `pp-bind:`).
+   * Apply `#[prop]` attributes to the scope's state (static + `pp-bind:`).
    * Clone the registered template into the element (replacing any
      current children).
    * Move the captured children into the first `<slot>` found in
@@ -479,15 +483,15 @@ just the hook points:
    behavior).
 
 Tag-to-component resolution is O(1) with the existing registry. The
-registry keyspace is "exact tag name" — since we kebab-case idents at
-registration time and reject HTML-collision names at compile time,
-the lookup can't accidentally fire on a real HTML element.
+registry keyspace is "exact tag name" — since pocopine kebab-cases
+idents at registration time and rejects HTML-collision names at compile
+time, the lookup can't accidentally fire on a real HTML element.
 
 ## Out of scope for v0
 
 * Named slots (`<slot name="footer">` + `slot="footer"` on children).
 * `pp-for` on custom elements — blocked by array reactivity.
-* Scoped CSS cascading into slot content (we leave slot content in the
+* Scoped CSS cascading into slot content (slot content stays in the
   parent's scope attribute, so its styles come from the parent).
 * Event-based child→parent callbacks beyond `$dispatch`. Props don't
   accept callbacks today; use event dispatch instead

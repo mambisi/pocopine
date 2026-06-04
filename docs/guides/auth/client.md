@@ -195,8 +195,13 @@ auth_plugin()
 `AppPlugin::install` does:
 
 1. Calls `pocopine_auth_client::install()` if the builder requested it.
-2. `app.provide_plugin(AuthSession::new())` so any component can
-   extract the session as `Plugin<AuthSession>` /
+2. `app.provide_plugin(session)` where `session` is chosen by the
+   builder: `AuthSession::restoring(snapshot)` when a snapshot store
+   contains an authenticated principal, `AuthSession::pending()` when
+   `.wait_for_initial_auth_check(true)` was set or a persisted token
+   was found in storage (so the app can confirm the identity before
+   routing), and `AuthSession::new()` otherwise. Any component can
+   extract it as `Plugin<AuthSession>` /
    `Option<Plugin<AuthSession>>`. With
    `.wait_for_initial_auth_check(true)`, the session starts pending
    and `predicate_guard(...)` pauses navigation until the provider
@@ -323,27 +328,24 @@ impl Dashboard {
 ```
 
 Outside lifecycle hooks (in event handlers, etc.) use the
-component-owned accessor:
+free-standing `active_session()` accessor:
 
 ```rust
 fn on_sign_out(&self) {
-    if let Some(session) = self.plugins().get::<AuthSession>() {
-        session.sign_out();                       // clears bearer slot,
-                                                  // resets principal
-        pocopine_core::reevaluate_current();      // re-runs current
-                                                  // route's guards
-        pocopine_core::navigate("/login");        // explicit redirect
-                                                  // (or rely on the
-                                                  // guard's Unauthorized)
+    if let Some(session) = pocopine_auth_client::active_session() {
+        session.sign_out();            // clears bearer slot, resets
+                                       // principal, re-evaluates guards
+        pocopine::navigate("/login");  // explicit redirect
+                                       // (or rely on the guard's
+                                       // Unauthorized redirect)
     }
 }
 ```
 
-The `pocopine_core::reevaluate_current()` call is the missing
-piece RFC-078 §5.10.6 calls out: when the user signs out, gated
-components stay painted until the next navigation unless something
-re-runs guards. Wire it into your sign-out path — typically
-right after `AuthSession::sign_out()`.
+`AuthSession::sign_out()` calls `reevaluate_current()` internally,
+so gated routes are re-checked immediately. The explicit call in the
+snippet above is redundant — include it only if you call `clear_token()`
+or `set_principal()` directly rather than going through `sign_out()`.
 
 For non-component code (utility modules, browser-event listeners,
 …) the free-standing helpers work the same way:
@@ -444,7 +446,7 @@ JWT gets a stale client-side `Principal` (their server requests
 still fail with `Unauthorized`). The decode is small:
 
 ```rust
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use pocopine_codec::base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use pocopine_auth::{AuthUser, Principal};
 
 fn decode_unverified_principal(token: &str) -> Option<Principal> {
@@ -489,23 +491,23 @@ pub fn __pocopine_set_token(token: String) {
 `Principal` authoritatively. Costs one round-trip; useful when the
 server's `to_auth_user()` projection includes app-specific roles
 (via custom Firebase claims, Clerk org metadata, etc.) you don't
-want to re-derive on the client. The endpoint reads
-`Principal` from the request extensions (set by the auth
-middleware) and serializes the inner `AuthUser`:
+want to re-derive on the client.
+
+The guard confirms authentication; the body fetches the full user
+record from your auth layer. Server function bodies do not receive
+the `RequestContext` directly — the guard function consumes it.
 
 ```rust
+use pocopine_auth::{require_login, AuthUser};
+use pocopine_core::ServerResult;
+
 #[pocopine::server(guard = require_login)]
-pub async fn me() -> pocopine::ServerResult<AuthUser> {
-    let principal = pocopine::server::principal()?;
-    // `require_user` returns `ServerResult<&AuthUser>`; on the
-    // anonymous branch it produces `ServerError::Unauthorized` so
-    // the client gets `401`, not a defaulted-empty user. (The
-    // `require_login` guard above already rejects anonymous, so
-    // this is belt-and-suspenders — and `AuthUser` doesn't impl
-    // `Default` anyway, so falling through to `unwrap_or_default`
-    // wouldn't compile.)
-    let user = principal.require_user()?;
-    Ok(user.clone())
+pub async fn me() -> ServerResult<AuthUser> {
+    // The guard confirmed the caller is authenticated.
+    // Fetch the full user record from your auth layer —
+    // e.g. from a session store or via a second JWT decode.
+    let user = my_auth::current_user().await?;
+    Ok(user)
 }
 ```
 
@@ -534,24 +536,41 @@ to short-circuit a guard's `decide` to `Allow`, or call a
 
 The security boundary is the server. Every `#[server]` function
 that touches sensitive data **must** carry its own
-`#[server(guard = …)]` policy. The same `Predicate` value plugs
-into both install points — the macro turns it into a
-`Result<(), ServerError>` via the `From<Decision>` adapter — so
-a route-guard miss never leaves a server function unprotected:
+`#[server(guard = …)]` policy:
 
 ```rust
-use pocopine_auth::require_role;
+use pocopine_auth::{require_admin, require_role, RequestContext};
+use pocopine_auth_client::predicate_guard;
+use pocopine_core::{RouteComponent, RouteConfig, ServerResult};
 
-// Same `require_role("admin")` value works on both sides.
+// Client-side: predicate_guard wraps the predicate into a RouteGuard.
 impl RouteComponent for AdminPanel {
     fn config() -> RouteConfig<Self> {
         RouteConfig::new().guard(predicate_guard(require_role("admin")))
     }
 }
 
-#[pocopine::server(guard = require_role("admin"))]
+// Server-side: guard = an async fn(RequestContext) -> ServerResult<()>.
+// `require_admin` from `pocopine_auth` is a built-in for the admin role.
+#[pocopine::server(guard = require_admin)]
 pub async fn admin_audit() -> ServerResult<Vec<Event>> {
     // server-side check runs even if the wasm guard was bypassed
+    // ...
+}
+```
+
+The `#[server(guard = …)]` attribute takes a path to an `async fn(RequestContext) -> ServerResult<()>`. `pocopine_auth` ships built-in guards for the common cases: `require_login` (any authenticated user), `require_admin` (admin role), and `require_staff` (staff role). For custom role/permission checks, write a small async wrapper:
+
+```rust
+use pocopine_auth::{require_role, RequestContext};
+use pocopine_core::ServerResult;
+
+async fn require_auditor(ctx: RequestContext) -> ServerResult<()> {
+    require_role("auditor").check(&ctx.user).into()
+}
+
+#[pocopine::server(guard = require_auditor)]
+pub async fn audit_log() -> ServerResult<Vec<AuditEntry>> {
     // ...
 }
 ```
@@ -698,8 +717,9 @@ auth_plugin()
 **`with_token_storage` is required** for cross-tab sync to work
 end-to-end. The broadcast tells peer tabs "something changed" but
 doesn't carry the new token over the channel — peers re-read it
-from shared storage. Without storage, peers just bump their epoch
-and have no way to learn the new credential.
+from shared storage. Calling `with_cross_tab_sync(true)` without a
+configured `TokenStorage` panics at plugin install time with a clear
+diagnostic.
 
 ### What happens on the wire
 

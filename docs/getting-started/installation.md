@@ -12,22 +12,31 @@ install covers all three.
 cargo install pocopine-cli
 ```
 
-From a source checkout of the repository, use the helper script:
+From a source checkout of the repository, use the helper script
+instead — it installs the CLI from the local crate, ensures the
+`wasm32-unknown-unknown` target is present, and reminds you if
+`wasm-pack` is missing:
 
 ```bash
 ./install.sh
+```
+
+After either installation path, run `pocopine doctor` to verify the
+tools the CLI depends on — `cargo`, `rustc`, and `wasm-pack`:
+
+```bash
 pocopine doctor --path .
 ```
 
-`pocopine doctor` checks that the toolchain it needs (Rust, the
-`wasm32-unknown-unknown` target, and `wasm-pack`) is present and
-reports anything missing.
+It reports each check as `[ok]`, `[warn]`, or `[fail]`, and exits
+non-zero if any failures are found. Pass `--strict` to also fail on
+warnings.
 
 ## Pinning tools per project
 
-If a project needs wrappers or pinned tool paths, add a local
-`.pocopine.toml`. Pocopine reads this file instead of guessing from
-global tools, and never shells out through npm scripts:
+If a project needs wrappers or pinned tool paths, add a
+`.pocopine.toml` at the project root. The CLI reads this file on
+every invocation and falls back to PATH when a key is absent:
 
 ```toml
 [tools]
@@ -38,5 +47,8 @@ package-manager = "pnpm"
 node = "node"
 tailwindcss = "tailwindcss"
 ```
+
+Each value is either a plain string (the executable name or path) or
+a `{ command, args }` table for prepending fixed arguments.
 
 Next: **[Quickstart](./quickstart.md)**.

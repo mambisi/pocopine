@@ -1,130 +1,182 @@
 ---
 title: "Vue 3 as a reference"
-description: "Upstream reference repo: <https://github.com/pinglu85/vue3-deep-dive>. The 7-intro-to-reactivity/, 8-building-reactivity-from-scratch/deps.html, and…"
+description: "How pocopine's reactive engine maps to the Vue 3 deep-dive primitives — where the designs converge, where they diverge, and what remains on the roadmap."
 ---
 
 # Vue 3 as a reference
 
-Upstream reference repo: <https://github.com/pinglu85/vue3-deep-dive>.
-The `7-intro-to-reactivity/`, `8-building-reactivity-from-scratch/deps.html`,
-and `9-building-the-reactive-api/reactive.html` chapters walk through the
-exact primitives we care about.
+The [vue3-deep-dive](https://github.com/pinglu85/vue3-deep-dive) reference repo — specifically the
+`7-intro-to-reactivity/`, `8-building-reactivity-from-scratch/deps.html`, and
+`9-building-the-reactive-api/reactive.html` chapters — walks through the same
+dependency-tracking primitives that power pocopine's reactive core. This page
+maps each concept to its current implementation.
 
 ## Where Vue 3 and pocopine agree
 
-| Concept | Vue 3 | pocopine (today) |
+| Concept | Vue 3 | pocopine |
 |---|---|---|
 | "currently running effect" | global `activeEffect` | `CURRENT_EFFECT: Cell<Option<EffectId>>` |
 | proxy trap on read | `get(target, key)` → `dep.depend()` | `get` closure → `track(scope_id, key)` |
 | proxy trap on write | `set(target, key, val)` → `dep.notify()` | `set` closure → `trigger(scope_id, key)` |
-| "the subscribers of a (target, key)" | `WeakMap<obj, Map<key, Set<Effect>>>` | `HashMap<(ScopeId, String), HashSet<EffectId>>` |
+| "the subscribers of a (target, key)" | `WeakMap<obj, Map<key, Set<Effect>>>` | `HashMap<ScopeId, HashMap<Key, HashSet<EffectId>>>` |
 | effect rerun | `subscribers.forEach(e => e())` | drain `QUEUE` in microtask |
 
-The shape is the same. We just key by `(ScopeId, key)` instead of
-`(raw_object, key)` because (a) Rust can't hash a `JsValue` by identity
-and (b) our scope already has a stable id.
+The shape is the same. pocopine keys by `(ScopeId, key)` instead of `(raw_object, key)` because
+Rust cannot hash a `JsValue` by identity, and each component scope already has a stable numeric id.
 
-## Where Vue 3 does more than we do
+The dependency table uses a two-level nested map — `DEPS[scope_id][key]` — rather than a flat
+`HashMap<(ScopeId, Key), _>`. The two-level layout lets `HashMap` resolve a `&str` lookup directly
+(via `Cow<'static, str>: Borrow<str>`) without allocating a compound key, and makes
+`trigger_scope` O(k) in the scope's live keys rather than O(|DEPS|).
 
-These are the specific Vue 3 features worth mining for our roadmap.
-Links are to directory paths inside the reference repo.
+A second, id-keyed table (`SIGNAL_DEPS` / `SIGNAL_REVERSE`) keys subscriptions on a numeric id
+directly — no per-access string conversion. `computed` rides on it for its dirty-notification
+edges. Both tables share the same effect engine, queue, flush, and batching machinery.
 
-### 1. `ref()` — a reactive single value
+## reactive(), not ref()
 
-Vue wraps a scalar: `const r = ref(0); r.value++`. The `.value` access
-flows through a minimal proxy that calls `track` / `trigger` against a
-synthetic `(ref_id, 'value')` key. This is literally the "signal" we
-sketched in `03-signals.md`; adopting Vue's naming (`ref` + `.value`) or
-Solid's (`signal` + `count()`) is a taste question — the mechanics are
-identical. **Recommendation**: call ours `signal` to avoid overlap with
-Rust's `&ref` semantics and the `ref!` keyword proposals.
+Vue 3 ships two reactive primitives: `reactive(obj)` wraps an object in a proxy, and `ref(value)`
+boxes a single value in a `.value` cell. pocopine picks **one**: the proxy.
 
-### 2. `computed()` — lazy memoized derivation
-
-Vue's computed doesn't run its body eagerly. It returns an object whose
-`.value` getter:
-1. if a `dirty` flag is set, runs the effect and stores the result;
-2. tracks the *caller* as a subscriber of the computed itself;
-3. returns the cached value.
-
-The effect's `scheduler` just sets `dirty = true` and re-notifies the
-computed's own subscribers — it does *not* recompute until someone reads.
-**Take-away for us**: `computed` needs an `effect` with a custom
-scheduler, which means our `effect()` API needs to grow an options
-argument. Sketch:
+A `#[component]` *is* a `reactive()` object. Its fields are tracked through the scope proxy exactly
+like properties of a Vue `reactive` target — there is no `.value`, no read/write split, no cell to
+construct. There is **no `ref()` equivalent**, by design: a Rust struct field is already a typed,
+named, tool-visible value, and wrapping it in a reactive cell would only add ceremony over what the
+proxy does natively.
 
 ```rust
-pub fn effect_with<F: Fn() + 'static>(
-    f: F,
-    opts: EffectOptions,
-) -> EffectId;
+// Vue: const state = reactive({ count: 0 }); state.count++
+#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct Counter {
+    pub count: i32,
+}
 
-pub struct EffectOptions {
-    pub lazy: bool,
-    pub scheduler: Option<Rc<dyn Fn(EffectId)>>,
+#[handlers]
+impl Counter {
+    pub fn increment(&mut self) { self.count += 1; }
 }
 ```
 
-### 3. `effect(fn, { scheduler })`
+Derived values that Vue would write as `computed(() => ...)` are `#[computed]` methods; reactions
+Vue would write as `watch(...)` / `watchEffect(...)` are `#[watch(field)]` methods or the
+`watch` / `effect` free functions.
 
-Schedulers are how Vue plugs in its job queue (pre / sync / post flush
-timing). For us, the scheduler is a hook that replaces the default
-"push to `QUEUE` + microtask flush" with "call this closure with the
-effect id, you decide what to do." Biggest payoff: computed (above),
-watchEffect (one-shot), and batched test-mode flush.
+## Where Vue 3 maps to shipped features
 
-### 4. Deep / shallow / readonly
+### `computed()` — lazy memoized derivation
 
-`reactive(obj)` wraps recursively — reading `user.address.street` returns
-a proxy of `address`, which tracks `.street`. `shallowReactive` stops at
-the first level. `readonly` forbids `set`.
+Vue's computed uses a `dirty` flag and a custom `scheduler`. pocopine's `computed` (driven by the
+`#[computed]` attribute) follows the same pattern exactly:
 
-Ours is flat-only today because a component is a single struct with
-primitive/owned fields. The first time someone writes a
-`Vec<TodoItem>` field and wants per-item reactivity, we'll hit this.
-**Deferred**: proper nesting gates `pp-for`, so it's on the critical path
-for that milestone, not this one.
+- The backing effect is registered with `lazy: true` so it does not run at construction time.
+- The scheduler sets `dirty = true` and re-notifies downstream effects through the computed's own
+  id — it does not recompute until a caller reads.
+- The first read reruns the effect via `run_now`, then tracks via the computed's own id.
 
-### 5. Collection handlers (Map / Set)
+```rust
+#[handlers]
+impl Cart {
+    #[computed]
+    pub fn doubled(count: i32) -> i32 {
+        count * 2
+    }
+}
+```
 
-Vue supplies separate proxy handlers for `Map`, `Set`, `WeakMap`,
-`WeakSet` because their mutating methods bypass the normal property
-traps. We don't face this directly — our "collections" would be
-`Vec<T>` / `HashMap<K,V>` on the Rust side, and we'd build tracking
-around macro-generated accessors, not JS proxy traps. Worth remembering
-the *shape* though: reads track, writes trigger, and for collections you
-also track a synthetic "iteration" key so anyone iterating is
-re-notified on any insert/delete.
+`Computed` implements `Drop` and calls `release(effect_id)` automatically, so its internal effect
+is cleaned up when the handle goes out of scope.
 
-### 6. `effectScope()`
+### `effect(fn, { scheduler })` — effects with custom scheduling
 
-Vue groups effects so a parent can stop them all at once
-(`scope.stop()`). Our equivalent would be "release every effect an
-element owns" — which the walker already does on unmount via
-`__pp_effects`. The generalization: let users group arbitrary effects
-into a scope for manual teardown.
+`effect_with` is the low-level primitive that `computed` and test-mode flush both build on:
 
-### 7. `trigger`'s `TriggerOpTypes`
+```rust
+use std::rc::Rc;
+use pocopine_core::reactive::{effect_with, EffectId, EffectOptions};
 
-Vue's trigger carries an op kind (`SET` / `ADD` / `DELETE` / `CLEAR`).
-This is what makes iteration-aware tracking work — a plain SET doesn't
-re-notify an iteration effect, but ADD or DELETE does. We can get away
-without this for flat fields; it becomes necessary the moment we do
-reactive collections.
+let id = effect_with(
+    move || { /* body */ },
+    EffectOptions {
+        lazy: false,
+        scheduler: Some(Rc::new(|_eid: EffectId| {
+            // called by trigger instead of the default queue+flush path
+        })),
+    },
+);
+```
 
-## Direct adoption list, ranked
+`EffectOptions::lazy` — if `true`, the effect is stored but not run immediately.
 
-1. **Signal / ref** (trivial) — covered in `03-signals.md`.
-2. **Computed with scheduler** (small) — needs `effect_with(opts)`.
-3. **`effectScope`** (small) — we have the data structure already
-   (`__pp_effects`); promote it to a public API.
-4. **Flush timing tiers** (medium) — `queueJob` / `queuePostFlushCb`
-   idea; good once we have transitions or async components.
-5. **Deep reactive** (medium–large) — gates `pp-for`, park until then.
-6. **Collection handlers** (large) — same gate as deep reactive.
-7. **Op-typed triggers** (medium) — only after 5.
+`EffectOptions::scheduler` — if `Some`, `trigger` hands control to this closure with the
+`EffectId` instead of pushing to `QUEUE`. The default (no scheduler) pushes to `QUEUE` and
+schedules a microtask flush via a resolved `Promise`.
 
-Reading path in the reference repo for us:
-`9-building-the-reactive-api/reactive.html` first (it's the condensed
-build), then back-fill with `8-building-reactivity-from-scratch/deps.html`
-if anything's opaque.
+Test-mode flush (`set_auto_flush(false)` + `flush_sync()`) uses the same engine: the auto-flush
+path is gated behind `AUTO_FLUSH`, so callers that need deterministic control disable it and drive
+`flush_sync` themselves without spinning the JS event loop.
+
+## Where Vue 3 does more — roadmap items
+
+### Deep / shallow / readonly
+
+Vue's `reactive(obj)` wraps recursively — reading `user.address.street` returns a proxy of
+`address` that tracks `.street`. `shallowReactive` stops at the first level; `readonly` forbids
+`set`.
+
+pocopine's proxy scope is currently flat: a component is a single struct with primitive or
+owned fields, so there is no recursive proxy chain. Per-item reactivity on a `Vec<TodoItem>`
+field — and the `pp-for` directive that needs it — is the gate for this work.
+
+### Collection handlers
+
+Vue ships separate proxy handler sets for `Map`, `Set`, `WeakMap`, and `WeakSet` because their
+mutating methods bypass normal property traps. The key shape: reads track, writes trigger, and
+any insert or delete also triggers a synthetic "iteration" key so observers iterating the
+collection are notified.
+
+pocopine's equivalent would build tracking around macro-generated accessors on `Vec<T>` /
+`HashMap<K, V>` fields rather than JS proxy traps, but the iteration-key concept carries over
+directly. This is gated behind deep reactive support.
+
+### `effectScope()`
+
+Vue groups effects under a scope handle so `scope.stop()` releases them all at once. pocopine
+already tracks per-element effects and releases them on unmount (via `mount::release_subtree`);
+exposing a user-facing `EffectScope` handle for manually-grouped teardown is the remaining step.
+
+### Op-typed triggers (`TriggerOpTypes`)
+
+Vue's `trigger` carries an operation kind — `SET`, `ADD`, `DELETE`, `CLEAR`. A plain `SET` does
+not re-notify effects that are subscribed to the collection's iteration key, but `ADD` and `DELETE`
+do. pocopine does not need this for flat scalar fields; it becomes necessary once reactive
+collections land.
+
+### Flush timing tiers
+
+Vue's job queue distinguishes pre-flush, sync, and post-flush callbacks (`queueJob` /
+`queuePostFlushCb`). pocopine's flush currently runs all queued effects in a single microtask.
+Timing tiers become relevant once transitions or async components require post-flush DOM reads.
+
+## Feature status
+
+| Feature | Status |
+|---|---|
+| Proxy-scoped fields (`reactive`) | Shipped |
+| `#[computed]` (lazy + scheduler) | Shipped |
+| `#[watch(field)]` / `watch` / `watch_field` | Shipped |
+| `effect_with(opts)` — lazy + custom scheduler | Shipped |
+| `batch` | Shipped |
+| `on_cleanup` | Shipped |
+| `#[store]` (app-wide reactive singleton) | Shipped |
+| Deep / shallow reactive | Roadmap (gates `pp-for` per-item) |
+| Collection handlers | Roadmap (same gate) |
+| `effectScope` (user-facing) | Roadmap |
+| Op-typed triggers | Roadmap (after deep reactive) |
+| Flush timing tiers | Roadmap (after transitions / async) |
+
+## Reading path
+
+Start with `9-building-the-reactive-api/reactive.html` in the reference repo — it is the
+condensed build. Back-fill with `8-building-reactivity-from-scratch/deps.html` if any step
+is opaque.

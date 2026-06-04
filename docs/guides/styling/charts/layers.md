@@ -14,23 +14,30 @@ hooks document the paint order and give applications a reliable styling target.
 
 ## Cartesian Order
 
-Line, area, scatter, and bar charts use this order:
+Line charts use:
 
 1. `grid`
 2. `axes`
-3. data marks, usually `series`
+3. `series`
 4. optional `markers`
-5. optional `hover`
+5. `hover`
 
-Area charts split filled areas and line strokes so filled shapes stay behind
-their strokes:
+Area charts add a separate `area` layer so filled shapes stay behind their
+line strokes:
 
 1. `grid`
 2. `axes`
 3. `area`
 4. `series`
 5. optional `markers`
-6. optional `hover`
+6. `hover`
+
+Scatter charts have no `markers` layer:
+
+1. `grid`
+2. `axes`
+3. `series`
+4. `hover`
 
 Bar charts currently use `grid`, `axes`, then `series`.
 
@@ -45,9 +52,19 @@ above lines, and foreground references plus labels stay readable.
 Pie and donut charts use:
 
 1. `series`
-2. optional `labels`
+2. `hover`
+3. optional `labels`
 
-The center label layer paints above slices and does not receive pointer events.
+The `hover` layer renders the highlighted slice overlay and does not receive
+pointer events. The center label (`labels`) paints above both and also blocks
+no pointer events.
+
+Radial bar charts use:
+
+1. `tracks`
+2. `series`
+3. `hover`
+4. optional `labels`
 
 ## Styling
 
@@ -69,11 +86,26 @@ per-mark layer order inside the chart. If two whole charts need to overlap, put
 
 ## Composable Layers
 
-Use `pine-layer-chart` when an app needs custom composition. It accepts child
-components such as `pine-chart-layer`, `pine-chart-line`,
-`pine-chart-reference-dot`, `pine-chart-label`, and `pine-chart-icon`, then
-renders them through the same stable SVG paint-order buckets documented above.
+Use `pine-layer-chart` when an app needs custom composition. It accepts
+`pine-chart-layer`, `pine-chart-guide`, `pine-chart-line`,
+`pine-chart-marker`, `pine-chart-reference-dot`, `pine-chart-label`, and
+`pine-chart-icon` as direct children or nested inside a `pine-chart-layer`,
+then renders everything through a fixed SVG paint-order:
 
-Pine Charts still does not expose a numeric `z_index` prop. The framework keeps
-an opinionated bucketed order because it is portable across browsers and avoids
-pretending that CSS z-index works inside SVG.
+1. `grid` — guide lines
+2. `reference-background` — reference dots behind data
+3. `series` — line paths
+4. `markers` — point markers
+5. `reference-foreground` — reference dots in front of data
+6. `annotations` — icon overlays
+7. `labels` — text labels
+
+`pine-chart-layer` sets the paint bucket for its children via its `name` prop.
+Accepted names are `grid`, `reference-background`, `series`, `markers`,
+`reference-foreground`, `annotations`, and `labels`. `pine-chart-reference-dot` placed without
+a `pine-chart-layer` wrapper defaults to `reference-background`; other mark
+types are assigned to their natural bucket regardless of wrapping.
+
+Pine Charts does not expose a numeric `z_index` prop. The bucketed order is
+portable across browsers and avoids the pretense that CSS z-index works inside
+SVG.

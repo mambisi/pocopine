@@ -20,9 +20,6 @@ component-owned `QueryState<T>`. The runnable source of truth is
 [`examples/live`](../../examples/live/), and the CI regression test is
 [`examples/live/tests/live_refresh.rs`](../../examples/live/tests/live_refresh.rs).
 
-When live APIs change, update this document, `examples/live/README.md`,
-and the live example test in the same PR.
-
 ## What You Build
 
 A live app needs four pieces:
@@ -419,20 +416,20 @@ locally but mysteriously drop in production"; the fix is one line.
 ### Switching to `RedisEventBackend`
 
 ```rust,ignore
+use pocopine::live::{routes, LiveHub};
 use pocopine_events::{build_event_backend, EventBackendConfig, RedisEventConfig};
-use pocopine_live::LiveHub;
 
 let backend = build_event_backend(EventBackendConfig::Redis(
     RedisEventConfig::new("redis://prod-redis:6379", "myapp")?,
 ))?;
 
 let hub = LiveHub::new(backend)
-    .allow_topic_prefixes(sync.live_topic_prefixes());  // RFC 088 §C; or
-    // .allow_topics(sync.live_topics())                // pre-§C bare-only.
+    .allow_topics([posts_topic, posts_list_topic]);
 ```
 
-No `LiveHub` / `SyncServer` / `LiveClient` / browser code changes. The
-backend is plug-and-play.
+No browser code changes. The `LiveHub` API, topic allowlist, and
+`LiveQuery` components stay identical; only the backend construction
+changes.
 
 ### Choosing a broker at scale
 

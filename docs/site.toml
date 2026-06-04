@@ -37,6 +37,9 @@ pages = [
   { title = "Structure",    path = "guides/components/01-structure.md" },
   { title = "State",        path = "guides/components/02-state.md" },
   { title = "Composition",  path = "guides/components/03-composition.md" },
+  { title = "Lifecycle",    path = "guides/components/04-lifecycle.md" },
+  { title = "Extractors",   path = "guides/components/05-extractors.md" },
+  { title = "Events",       path = "guides/components/06-events.md" },
 ]
 
 [[group]]
@@ -46,7 +49,6 @@ pages = [
   { title = "Overview",        path = "guides/reactivity/README.md" },
   { title = "Current design",  path = "guides/reactivity/01-current-design.md" },
   { title = "Roadmap",         path = "guides/reactivity/02-roadmap.md" },
-  { title = "Signals",         path = "guides/reactivity/03-signals.md" },
   { title = "Vue 3 reference", path = "guides/reactivity/04-vue3-reference.md" },
 ]
 

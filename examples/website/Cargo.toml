@@ -11,6 +11,11 @@ port = 3001
 
 [package.metadata.pocopine.deploy]
 mode = "fullstack"
+# Everything the server serves out of POCOPINE_DIST. The default is just
+# ["index.html", "pkg"]; this site also ships the global stylesheet, the
+# mascot/favicon, and the build-time-rendered docs fragments. Directory
+# entries (pkg, static-docs) are copied recursively.
+static_files = ["index.html", "pkg", "styles.css", "mascot.svg", "static-docs"]
 
 [package.metadata.pocopine.deploy.processes.web]
 bin = "server"

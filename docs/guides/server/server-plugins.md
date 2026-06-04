@@ -190,7 +190,7 @@ its rustdoc — same axum constraint.
 ## active_plugin cost
 
 `active_plugin::<T>()` reads the process-global plugin registry
-behind an `RwLock` and returns an `Arc<T>` clone. Each call:
+behind an `RwLock` and returns an `Option<ServerPluginHandle<T>>`. Each call:
 
 - one `RwLock::read` (~10 ns under no contention),
 - one `Arc::clone` of the registry,
@@ -203,8 +203,9 @@ atomic operations per request that you don't need. Two patterns avoid
 the per-request cost:
 
 - **Stash on app state.** Look up the plugin once when building the
-  router and clone its `Arc` into your axum `State`. Handlers extract
-  `State<Arc<T>>` and reach the service through normal axum DI.
+  router, call `.arc()` on the handle to get an `Arc<T>`, and clone
+  it into your axum `State`. Handlers extract `State<Arc<T>>` and
+  reach the service through normal axum DI.
 - **Read from a request-scoped extension.** A plugin can install a
   short layer that calls `active_plugin::<T>()` once per request,
   inserts the handle into request extensions, and downstream
@@ -213,10 +214,12 @@ the per-request cost:
 
 Typed hook closures registered via `hook_plugin` capture the type
 parameter `T` but **still resolve the concrete service through the
-registry on each dispatch**. The cost is one `HashMap::get` (keyed
-by `TypeId::of::<T>()`) and one `Arc::clone` per emit; the
-registry's `RwLock` read is already held when `emit` enters, so
-hooks don't pay it again. For typical observability volume
+registry on each dispatch**. Each `emit` call pays one
+`RwLock::read`, clones the registry `Arc`, releases the lock, and
+then dispatches to every registered hook — each hook pays one
+`HashMap::get` (keyed by `TypeId::of::<T>()`) and one `Arc`
+downcast to reach the concrete service; no additional `RwLock::read`
+is taken during hook dispatch. For typical observability volume
 (hundreds to low-thousands of emits per second) this is in the
 noise; for very hot custom events, profile before assuming hooks
 are free.
@@ -242,7 +245,8 @@ so the first server's `active_plugin::<T>()` lookups and
 server's plugins:
 
 - Services the new server didn't provide return `None` from
-  `active_plugin`, or panic from `Plugin<T>` extractors.
+  `active_plugin` — callers that `.unwrap()` or `.expect()` the
+  result will panic.
 - Hooks the old server registered are silently dropped.
 
 Real applications run a single HTTP listener per process and don't
@@ -252,9 +256,9 @@ hit this. The patterns that do:
   `pocopine_server::__reset_for_test()` between activations to
   return the registry to a clean state, mirroring the helper used
   in the framework's own integration tests.
-- **Multi-tenant deployments that expected to run two listeners
-  with independent plugin sets.** Don't — compose them into one
-  `Server` (one router with merged routes, one plugin chain). If
-  per-tenant plugin isolation becomes a real need, the right path
-  is a follow-up RFC that moves registry identity into request
-  state rather than a process-global.
+- **Multi-tenant patterns that need two listeners with independent
+  plugin sets.** Don't — compose them into one `Server` (one router
+  with merged routes, one plugin chain). If per-tenant plugin
+  isolation becomes a real need, the right path is a follow-up RFC
+  that moves registry identity into request state rather than a
+  process-global.

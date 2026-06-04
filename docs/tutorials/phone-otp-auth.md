@@ -101,6 +101,7 @@ CREATE INDEX otp_request_log_phone_idx ON otp_request_log (phone, requested_at_m
 pocopine-auth = { workspace = true }
 pocopine-auth-jwt = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
+pocopine-crypto = { workspace = true }
 pocopine-server = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
@@ -109,10 +110,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
-sha2 = "0.10"
 subtle = "2"
 rand = "0.8"
-async-trait = "0.1"
+uuid = { version = "1", features = ["v7"] }
 ```
 
 ## Twilio sender
@@ -233,11 +233,11 @@ use axum::routing::post;
 use axum::{Json, Router};
 use pocopine_auth::AuthUser;
 use pocopine_auth_jwt::JwtIssuer;
+use pocopine_crypto::sha256 as crypto_sha256;
 use pocopine_server::{Server, ServerPlugin};
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 
@@ -312,7 +312,7 @@ async fn request_handler(
 
     // Generate, hash, store.
     let code = generate_code();
-    let code_hash = sha256(&code);
+    let code_hash = crypto_sha256(code.as_bytes());
     sqlx::query(
         "INSERT INTO otp_codes (phone, code_hash, expires_at_ms, attempt_count, requested_at_ms)
          VALUES ($1, $2, $3, 0, $4)
@@ -427,7 +427,7 @@ async fn verify_handler(
     .await
     .map_err(|e| OtpError::Storage(Box::new(e)))?;
 
-    let submitted_hash = sha256(submitted);
+    let submitted_hash = crypto_sha256(submitted.as_bytes());
     let matches: bool = stored_hash.ct_eq(&submitted_hash[..]).into();
     if !matches {
         tx.commit().await.ok();
@@ -531,7 +531,7 @@ Google OAuth), the same `AppUser` struct also implements
 `PasswordCredentials` from the credentials crate; rows have
 both `phone` and `password_hash` columns and a user can sign in
 either way. The OTP route doesn't care about the password
-column; the password route's `find_by_login_id` uses the email
+column; the password route's `find_by_email` uses the email
 column. Both routes mint the same JWT shape.
 
 ## Validation + helpers
@@ -555,12 +555,6 @@ fn generate_code() -> String {
     format!("{n:06}")
 }
 
-fn sha256(s: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    hasher.finalize().into()
-}
-
 fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -572,6 +566,10 @@ fn unix_ms() -> u64 {
 `generate_code` uses `rand::thread_rng()` which is seeded from
 the OS RNG — fine for OTP codes. Don't substitute a deterministic
 RNG.
+
+`crypto_sha256` comes from `pocopine_crypto` and returns `[u8; 32]`.
+The workspace routes all SHA-256 calls through that crate; don't pull
+`sha2` directly.
 
 ## Errors
 
@@ -641,7 +639,7 @@ client can do one error-display path for both auth surfaces.
 
 ```rust
 use pocopine_auth_jwt::{JwtIssuer, JwtVerifier, SecretBytes};
-use pocopine_server::{axum::Router, RouterAuthExt, Server};
+use pocopine_server::{axum::Router, Server};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -695,7 +693,7 @@ async fn main() -> std::io::Result<()> {
 | Code stored only as SHA-256 hash | **Tutorial** — `code_hash BYTEA`. Even a database leak doesn't expose live codes. |
 | Single-use code | **Tutorial** — `DELETE` on success in the verify transaction. Replay protection. |
 | Code TTL | **Tutorial** — 5 minutes hard-coded. Tune for your audience. |
-| Constant-time comparison | **Tutorial** — `subtle::ConstantTimeEq`. The hashes are 32 bytes so `==` would also be constant-time in practice, but `ct_eq` documents intent. |
+| Constant-time comparison | **Tutorial** — `subtle::ConstantTimeEq`. Rust's `==` on slices short-circuits and leaks timing; `ct_eq` is required here. |
 | Per-phone rate limit | **Tutorial** — `otp_request_log` sliding window. 5 codes per 15 minutes per phone. |
 | Per-IP rate limit | **You** — install `tower-governor` or a CDN-side limiter on `/_pocopine/auth/otp/*`. SMS is expensive and the per-phone limit alone doesn't stop a botnet hitting one phone with thousands of IPs. |
 | Attempt limit | **Tutorial** — `attempt_count` bumped per verify. 3 strikes deletes the row, forces resend. |
@@ -703,7 +701,7 @@ async fn main() -> std::io::Result<()> {
 | HTTPS | **You** — `Authorization: Bearer …` is the session credential. |
 | Phone-number enumeration | **Tutorial** — invalid phone returns `422 invalid_phone` regardless of whether the number has an account; the `/request` route doesn't reveal whether the phone is registered. |
 | Code-not-leaked-via-side-channel | **Tutorial** — the code never appears in the response. Twilio sees the plaintext code (it has to, to deliver the SMS); your server logs only the SHA-256 hash and the failure class. |
-| Secret rotation | **You** — `POCOPINE_AUTH_SECRET` rotation requires coordinating with the verifier. Plan it.
+| Secret rotation | **You** — `POCOPINE_AUTH_SECRET` rotation requires coordinating with the verifier. Plan it. |
 
 ## What changes when `pocopine-auth-otp` ships
 
