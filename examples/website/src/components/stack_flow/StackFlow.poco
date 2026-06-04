@@ -2,118 +2,69 @@
   <div class="flow-head">
     <h2>One language, the whole flow</h2>
     <p>
-      The same Rust types run in the browser and on the server. A
-      component calls a <code>#[server]</code> function like any async
-      fn; <code>#[query_resource]</code> views are local-first and
-      update optimistically while the server pushes live changes back.
-      It all ships as one container — and one observability contract
-      traces every hop.
+      Follow one request through the stack — the same Rust types run in
+      the browser and on the server. Scroll the steps; the issue tracker
+      on the right builds up, goes live, and ships.
     </p>
   </div>
 
-  <div class="flow-figure">
-    <svg viewBox="0 0 960 540" role="img" aria-label="pocopine full-stack flow: browser components call typed server functions, the server reads your data layer and services and pushes live invalidations back; one observability contract and one container span the whole stack.">
-      <defs>
-        <marker id="flow-ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="flow-ah"></path>
-        </marker>
-        <marker id="flow-ah-brand" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="flow-ah-brand"></path>
-        </marker>
-        <radialGradient id="flowdot-glow">
-          <stop offset="0%" stop-color="#f8ae45" stop-opacity="0.95"></stop>
-          <stop offset="45%" stop-color="#f8ae45" stop-opacity="0.4"></stop>
-          <stop offset="100%" stop-color="#f8ae45" stop-opacity="0"></stop>
-        </radialGradient>
-      </defs>
+  <div class="flow-layout">
+    <!-- Steps on a timeline; scroll-spy drives the demo's stage -->
+    <div class="flow-steps">
+      <article class="flow-step" pp-intersect:enter.margin.0.0.-55%.0="enter1">
+        <span class="flow-step-num" :data-active="active == 1 ? 'true' : 'false'">1</span>
+        <div class="flow-step-body">
+          <h3>Write a component</h3>
+          <p>A <code>.poco</code> template plus a Rust struct — state is just fields, handlers mutate <code>&amp;mut self</code>. No virtual DOM.</p>
+          <pre class="flow-code"><code pp-html="code1"></code></pre>
+        </div>
+      </article>
 
-      <!-- Browser -->
-      <rect class="flow-panel" x="24" y="40" width="404" height="324" rx="16"></rect>
-      <text class="flow-panel-label" x="44" y="68">BROWSER · RUST → WASM</text>
-      <g>
-        <rect class="flow-node" x="44" y="84" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="62" y="107">.poco components</text>
-        <text class="flow-sub" x="62" y="125">plain Rust structs + scoped CSS</text>
-      </g>
-      <g>
-        <rect class="flow-node" x="44" y="148" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="62" y="171">reactive runtime</text>
-        <text class="flow-sub" x="62" y="189">signals · effects · scope</text>
-      </g>
-      <g>
-        <rect class="flow-node" x="44" y="212" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="62" y="235">SPA router</text>
-        <text class="flow-sub" x="62" y="253">routes · guards · loaders</text>
-      </g>
-      <g>
-        <rect class="flow-node flow-node-accent" x="44" y="276" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="62" y="299">#[query_resource] view</text>
-        <text class="flow-sub" x="62" y="317">local-first · optimistic writes</text>
-      </g>
+      <article class="flow-step" pp-intersect:enter.margin.0.0.-55%.0="enter2">
+        <span class="flow-step-num" :data-active="active == 2 ? 'true' : 'false'">2</span>
+        <div class="flow-step-body">
+          <h3>Call the server, typed</h3>
+          <p>Mark an async fn <code>#[server]</code> and call it from the browser like any async fn — same types, both ends, no fetch glue.</p>
+          <pre class="flow-code"><code pp-html="code2"></code></pre>
+        </div>
+      </article>
 
-      <!-- Server -->
-      <rect class="flow-panel" x="532" y="40" width="404" height="324" rx="16"></rect>
-      <text class="flow-panel-label" x="552" y="68">SERVER · ONE RUST BINARY</text>
-      <g>
-        <rect class="flow-node flow-node-accent" x="552" y="84" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="570" y="107">#[server] functions</text>
-        <text class="flow-sub" x="570" y="125">typed route + client stub</text>
-      </g>
-      <g>
-        <rect class="flow-node" x="552" y="148" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="570" y="171">Source — your data</text>
-        <text class="flow-sub" x="570" y="189">list · create · update · delete</text>
-      </g>
-      <g>
-        <rect class="flow-node" x="552" y="212" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="570" y="235">auth · storage</text>
-        <text class="flow-sub" x="570" y="253">Credentials · JWT verify · uploads</text>
-      </g>
-      <g>
-        <rect class="flow-node" x="552" y="276" width="364" height="52" rx="10"></rect>
-        <text class="flow-text" x="570" y="299">jobs worker</text>
-        <text class="flow-sub" x="570" y="317">Redis · background</text>
-      </g>
+      <article class="flow-step" pp-intersect:enter.margin.0.0.-55%.0="enter3">
+        <span class="flow-step-num" :data-active="active == 3 ? 'true' : 'false'">3</span>
+        <div class="flow-step-body">
+          <h3>Data is local-first and live</h3>
+          <p>A <code>#[query_resource]</code> view reads instantly and updates optimistically; the server pushes each change back to every client.</p>
+          <pre class="flow-code"><code pp-html="code3"></code></pre>
+        </div>
+      </article>
 
-      <!-- Cross-stack flow -->
-      <path class="flow-arrow-brand" d="M428,182 H530" marker-end="url(#flow-ah-brand)"></path>
-      <text class="flow-edge-strong" x="479" y="174" text-anchor="middle">call().await</text>
-      <text class="flow-edge-label" x="479" y="200" text-anchor="middle">same types,</text>
-      <text class="flow-edge-label" x="479" y="214" text-anchor="middle">both ends</text>
-      <path class="flow-arrow" d="M530,250 H428" marker-end="url(#flow-ah)"></path>
-      <text class="flow-edge-label" x="479" y="242" text-anchor="middle">live sync · SSE</text>
+      <article class="flow-step" pp-intersect:enter.margin.0.0.-55%.0="enter4">
+        <span class="flow-step-num" :data-active="active == 4 ? 'true' : 'false'">4</span>
+        <div class="flow-step-body">
+          <h3>Auth &amp; services, wired in</h3>
+          <p>The request is authenticated by the same model as the client; object storage and Redis-backed jobs are one <code>plugin</code> away.</p>
+          <pre class="flow-code"><code pp-html="code4"></code></pre>
+        </div>
+      </article>
 
-      <!-- data packets riding the connectors toward each endpoint -->
-      <g>
-        <circle r="6" fill="url(#flowdot-glow)"></circle>
-        <circle r="2" fill="#f8ae45"></circle>
-        <animateMotion dur="1.9s" repeatCount="indefinite" path="M428,182 H530"></animateMotion>
-      </g>
-      <g>
-        <circle r="6" fill="url(#flowdot-glow)"></circle>
-        <circle r="2" fill="#f8ae45"></circle>
-        <animateMotion dur="1.9s" begin="-0.95s" repeatCount="indefinite" path="M428,182 H530"></animateMotion>
-      </g>
-      <g>
-        <circle r="5" fill="url(#flowdot-glow)"></circle>
-        <circle r="1.7" fill="#f8ae45"></circle>
-        <animateMotion dur="2.2s" repeatCount="indefinite" path="M530,250 H428"></animateMotion>
-      </g>
+      <article class="flow-step" pp-intersect:enter.margin.0.0.-55%.0="enter5">
+        <span class="flow-step-num" :data-active="active == 5 ? 'true' : 'false'">5</span>
+        <div class="flow-step-body">
+          <h3>Observe it, ship it</h3>
+          <p>Every hop emits a structured event for logs, traces, and analytics — and the whole thing deploys as one container. Try “Add issue”.</p>
+          <pre class="flow-code"><code pp-html="code5"></code></pre>
+        </div>
+      </article>
+    </div>
 
-      <!-- Observability band -->
-      <rect class="flow-band" x="24" y="386" width="912" height="62" rx="12"></rect>
-      <text class="flow-band-title" x="44" y="413">Observability, built in</text>
-      <text class="flow-band-sub" x="44" y="433">one tracing event → logging · OpenTelemetry traces · analytics — browser + server, privacy-labeled</text>
+    <!-- Sticky interactive preview: builds up, goes live, then ships -->
+    <div class="flow-stage">
+      <issue-flow-demo :stage="active"></issue-flow-demo>
 
-      <!-- Deploy strip -->
-      <rect class="flow-band flow-band-2" x="24" y="460" width="912" height="56" rx="12"></rect>
-      <text class="flow-band-title" x="44" y="484">One container</text>
-      <text class="flow-band-sub" x="44" y="503">web + worker processes → Railway / Render, or anywhere Docker runs</text>
-    </svg>
+      <a class="flow-cta" href="/docs/getting-started/introduction" pp-route>
+        How it fits together
+        <span class="flow-arrow-link">↗</span>
+      </a>
+    </div>
   </div>
-
-  <a class="flow-cta" href="/docs/getting-started/introduction" pp-route>
-    How it fits together
-    <span class="flow-arrow-link">↗</span>
-  </a>
 </root>

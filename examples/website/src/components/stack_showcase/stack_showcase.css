@@ -49,7 +49,10 @@
 }
 .sfw-tab:hover { color: var(--fg); background: var(--bg-subtle); }
 .sfw-tab[data-active="true"] {
-  color: var(--brand-fg);
+  /* --fg (not --brand-fg): the active chip is a brand *tint* over the
+     page bg, so the text must follow the theme — otherwise dark mode
+     renders near-black text on a dark tint. */
+  color: var(--fg);
   background: color-mix(in srgb, var(--brand) 16%, var(--bg));
   border-color: var(--brand);
   font-weight: 600;
