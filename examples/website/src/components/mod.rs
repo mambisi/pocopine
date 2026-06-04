@@ -9,12 +9,10 @@ pub mod doc_page;
 pub mod hero;
 pub mod install_cmd;
 pub mod landing;
-pub mod learn_todo;
 pub mod showcase;
 pub mod showcase_card;
 pub mod site_header;
 pub mod stack_showcase;
-pub mod todo_demo;
 pub mod tutorial;
 
 pub use components_index::ComponentsIndex;
@@ -23,12 +21,10 @@ pub use doc_page::DocPage;
 pub use hero::Hero;
 pub use install_cmd::InstallCmd;
 pub use landing::Landing;
-pub use learn_todo::LearnTodo;
 pub use showcase::Showcase;
 pub use showcase_card::ShowcaseCard;
 pub use site_header::SiteHeader;
 pub use stack_showcase::StackShowcase;
-pub use todo_demo::TodoDemo;
 pub use tutorial::Tutorial;
 
 /// Shared SPA-navigation click delegate.

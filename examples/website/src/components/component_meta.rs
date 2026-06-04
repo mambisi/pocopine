@@ -365,46 +365,8 @@ pub fn find(slug: &str) -> Option<&'static ComponentMeta> {
     COMPONENTS.iter().find(|c| c.slug == slug)
 }
 
-/// The demo `.poco` source for a slug, embedded at compile time so the
-/// **Code** tab is exactly what the **Preview** renders.
-pub fn code_for(slug: &str) -> &'static str {
-    match slug {
-        "button" => include_str!("showcase/button/ButtonDemo.poco"),
-        "input" => include_str!("showcase/input/InputDemo.poco"),
-        "switch-checkbox" => include_str!("showcase/switch_checkbox/SwitchCheckboxDemo.poco"),
-        "radio-group" => include_str!("showcase/radio_group/RadioGroupDemo.poco"),
-        "select" => include_str!("showcase/select/SelectDemo.poco"),
-        "combobox" => include_str!("showcase/combobox/ComboboxDemo.poco"),
-        "slider" => include_str!("showcase/slider/SliderDemo.poco"),
-        "toggle" => include_str!("showcase/toggle/ToggleDemo.poco"),
-        "field" => include_str!("showcase/field/FieldDemo.poco"),
-        "fieldset" => include_str!("showcase/fieldset/FieldsetDemo.poco"),
-        "form" => include_str!("showcase/form/FormDemo.poco"),
-        "otp" => include_str!("showcase/otp/OtpDemo.poco"),
-        "tags-input" => include_str!("showcase/tags_input/TagsInputDemo.poco"),
-        "dialog" => include_str!("showcase/dialog/DialogDemo.poco"),
-        "alert-dialog" => include_str!("showcase/alert_dialog/AlertDialogDemo.poco"),
-        "popover" => include_str!("showcase/popover/PopoverDemo.poco"),
-        "dropdown-menu" => include_str!("showcase/dropdown_menu/DropdownMenuDemo.poco"),
-        "context-menu" => include_str!("showcase/context_menu/ContextMenuDemo.poco"),
-        "hover-card" => include_str!("showcase/hover_card/HoverCardDemo.poco"),
-        "tooltip" => include_str!("showcase/tooltip/TooltipDemo.poco"),
-        "command" => include_str!("showcase/command/CommandDemo.poco"),
-        "tabs" => include_str!("showcase/tabs/TabsDemo.poco"),
-        "accordion" => include_str!("showcase/accordion/AccordionDemo.poco"),
-        "collapsible" => include_str!("showcase/collapsible/CollapsibleDemo.poco"),
-        "toolbar" => include_str!("showcase/toolbar/ToolbarDemo.poco"),
-        "scroll-area" => include_str!("showcase/scroll_area/ScrollAreaDemo.poco"),
-        "splitter" => include_str!("showcase/splitter/SplitterDemo.poco"),
-        "tree" => include_str!("showcase/tree/TreeDemo.poco"),
-        "aspect-ratio" => include_str!("showcase/aspect_ratio/AspectRatioDemo.poco"),
-        "avatar" => include_str!("showcase/avatar/AvatarDemo.poco"),
-        "text" => include_str!("showcase/text/TextDemo.poco"),
-        "calendar" => include_str!("showcase/calendar/CalendarDemo.poco"),
-        "range-calendar" => include_str!("showcase/range_calendar/RangeCalendarDemo.poco"),
-        "date-picker" => include_str!("showcase/date_picker/DatePickerDemo.poco"),
-        "date-range-picker" => include_str!("showcase/date_range_picker/DateRangePickerDemo.poco"),
-        "datetime-fields" => include_str!("showcase/datetime_fields/DatetimeFieldsDemo.poco"),
-        _ => "",
-    }
-}
+// The **Code** tab source is each demo's real `.poco`, syntect-
+// highlighted at build time (see `build.rs` → `gen_code::component`).
+// `build.rs` scans the demo directories directly — the slug is the
+// directory name with `_` → `-` — so the example shown is exactly what
+// the **Preview** mounts, with no duplicated path table here.

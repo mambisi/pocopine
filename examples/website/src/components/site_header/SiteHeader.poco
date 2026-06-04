@@ -3,7 +3,6 @@
     <a class="site-brand" href="/" pp-route><span class="brand">poco</span>pine</a>
 
     <nav class="site-nav">
-      <a href="/learn" pp-route>Learn</a>
       <a href="/docs/getting-started/introduction" pp-route>Docs</a>
       <a href="/components" pp-route>Components</a>
     </nav>

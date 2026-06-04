@@ -47,7 +47,8 @@ impl ComponentPage {
     // has data when the compiled template installs clone directives.
     pub fn on_setup(&mut self) {
         self.tab = "preview".into();
-        self.code = component_meta::code_for(&self.name).into();
+        // Demo `.poco` source, syntect-highlighted at build time.
+        self.code = crate::gen_code::component::code(&self.name).into();
         self.install =
             "cargo add pocopine pine\n\n// then, in fn main():\npine::register_all();".into();
 

@@ -16,8 +16,87 @@
 use std::collections::HashSet;
 use std::{env, fs, path::Path};
 
-use pulldown_cmark::{html, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    html, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use serde::Deserialize;
+use syntect::highlighting::{Theme, ThemeSet};
+use syntect::html::highlighted_html_for_string;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
+
+/// Build-time syntax highlighter. Loads syntect's bundled grammars and
+/// a warm dark theme once, then renders snippets to inline-styled HTML.
+/// The wasm bundle ships none of this — only the coloured markup.
+struct Hl {
+    ss: SyntaxSet,
+    theme: Theme,
+}
+
+impl Hl {
+    fn new() -> Self {
+        let ss = SyntaxSet::load_defaults_newlines();
+        let ts = ThemeSet::load_defaults();
+        // "base16-mocha.dark" is warm-toned and reads well on the
+        // #2d1a0f code panels; fall back to ocean if absent.
+        let theme = ts
+            .themes
+            .get("base16-mocha.dark")
+            .or_else(|| ts.themes.get("base16-ocean.dark"))
+            .cloned()
+            .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap());
+        Self { ss, theme }
+    }
+
+    fn syntax_for(&self, lang: &str) -> Option<&SyntaxReference> {
+        let lang = lang.trim().to_ascii_lowercase();
+        let ext = match lang.as_str() {
+            "rust" | "rs" => "rs",
+            "bash" | "sh" | "shell" | "console" | "zsh" => "sh",
+            "poco" | "html" | "xml" | "svg" => "html",
+            "toml" => "toml",
+            "css" => "css",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "js" | "javascript" | "mjs" => "js",
+            "ts" | "typescript" => "ts",
+            "md" | "markdown" => "md",
+            "" => return None,
+            other => other,
+        };
+        self.ss.find_syntax_by_extension(ext)
+    }
+
+    /// Highlight `code` (language `lang`) to inline-styled inner HTML —
+    /// the `<span style=…>` runs only, with syntect's `<pre>` wrapper
+    /// and theme background stripped so the site's panel shows through.
+    fn code(&self, code: &str, lang: &str) -> String {
+        let Some(syntax) = self.syntax_for(lang) else {
+            return esc(code);
+        };
+        match highlighted_html_for_string(code, &self.ss, syntax, &self.theme) {
+            Ok(html) => strip_pre(&html),
+            Err(_) => esc(code),
+        }
+    }
+}
+
+/// Strip syntect's outer `<pre style="background:…">…</pre>`, keeping the
+/// inner highlighted runs so the page's own panel background applies.
+fn strip_pre(html: &str) -> String {
+    let s = html.trim();
+    let s = match s.find('>') {
+        Some(gt) => &s[gt + 1..],
+        None => s,
+    };
+    let s = s.strip_suffix("</pre>").unwrap_or(s);
+    s.trim_matches('\n').to_string()
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
 
 #[derive(Deserialize)]
 struct Site {
@@ -59,6 +138,8 @@ fn main() {
         .and_then(|s| toml::from_str(&s).ok())
         .unwrap_or(Site { group: vec![] });
 
+    let hl = Hl::new();
+
     let mut code = String::new();
     code.push_str(
         "pub struct NavItem { pub title: &'static str, pub slug: &'static str, \
@@ -85,7 +166,7 @@ fn main() {
             }
             let raw = fs::read_to_string(docs_dir.join(&p.path)).unwrap_or_default();
             let body = strip_frontmatter(&raw);
-            let (page_html, toc) = render(&body, &p.path);
+            let (page_html, toc) = render(&hl, &body, &p.path);
             let frag = static_docs.join(format!("{slug}.html"));
             if let Some(parent) = frag.parent() {
                 fs::create_dir_all(parent).ok();
@@ -116,7 +197,143 @@ fn main() {
     ));
 
     fs::write(&dest, code).unwrap();
+
+    emit_snippets(&hl, &manifest, &out_dir);
 }
+
+/// Pre-highlight the home-page showcase snippets into `gen_code.rs`.
+/// The raw snippets live here (the build host) so syntect can colour
+/// them once; the component consumes the finished HTML via `pp-html`.
+fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
+    let mut s = String::new();
+    s.push_str("pub mod showcase {\n");
+    s.push_str(
+        "    pub struct Feat {\n\
+         \x20       pub name: &'static str,\n\
+         \x20       pub file: &'static str,\n\
+         \x20       pub lang: &'static str,\n\
+         \x20       pub title: &'static str,\n\
+         \x20       pub desc: &'static str,\n\
+         \x20       pub doc: &'static str,\n\
+         \x20       pub code_html: &'static str,\n\
+         \x20   }\n",
+    );
+    s.push_str("    pub static FEATS: &[Feat] = &[\n");
+    for f in SHOWCASE_FEATS {
+        let html = hl.code(f.code, f.lang);
+        s.push_str(&format!(
+            "        Feat {{ name: {:?}, file: {:?}, lang: {:?}, title: {:?}, desc: {:?}, doc: {:?}, code_html: {:?} }},\n",
+            f.name, f.file, f.lang, f.title, f.desc, f.doc, html
+        ));
+    }
+    s.push_str("    ];\n}\n");
+
+    // Component reference Code tabs: every showcase demo's `.poco`
+    // source, highlighted as markup. The slug is the demo directory
+    // with `_` → `-` (matching `component_meta`), so the table stays in
+    // sync with the demos on disk without a duplicated path list.
+    let showcase = Path::new(manifest).join("src/components/showcase");
+    println!("cargo:rerun-if-changed={}", showcase.display());
+    let mut demos: Vec<(String, String)> = Vec::new();
+    if let Ok(dirs) = fs::read_dir(&showcase) {
+        for dir in dirs.flatten() {
+            if !dir.path().is_dir() {
+                continue;
+            }
+            let slug = dir.file_name().to_string_lossy().replace('_', "-");
+            let Ok(files) = fs::read_dir(dir.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let fname = file.file_name().to_string_lossy().into_owned();
+                if fname.ends_with("Demo.poco") {
+                    let src = fs::read_to_string(file.path()).unwrap_or_default();
+                    demos.push((slug.clone(), hl.code(src.trim_end_matches('\n'), "poco")));
+                    break;
+                }
+            }
+        }
+    }
+    demos.sort_by(|a, b| a.0.cmp(&b.0)); // deterministic output
+    s.push_str("pub mod component {\n");
+    s.push_str("    pub fn code(slug: &str) -> &'static str {\n        match slug {\n");
+    for (slug, html) in &demos {
+        s.push_str(&format!("            {slug:?} => {html:?},\n"));
+    }
+    s.push_str("            _ => \"\",\n        }\n    }\n}\n");
+
+    let dest = Path::new(out_dir).join("gen_code.rs");
+    fs::write(dest, s).unwrap();
+}
+
+/// Source data for the showcase. Highlighted at build time (see
+/// `emit_snippets`); the component reads the generated `FEATS`.
+struct ShowcaseFeat {
+    name: &'static str,
+    file: &'static str,
+    lang: &'static str,
+    title: &'static str,
+    desc: &'static str,
+    doc: &'static str,
+    code: &'static str,
+}
+
+const SHOWCASE_FEATS: &[ShowcaseFeat] = &[
+    ShowcaseFeat {
+        name: "Components",
+        file: "Todo.rs",
+        lang: "rust",
+        title: "Components in plain Rust",
+        desc: "A component is a struct plus a sibling .poco template. State is just fields; handlers mutate &mut self. No virtual DOM and no Rc<RefCell> — pocopine makes the fields reactive and updates the real DOM in place.",
+        doc: "/docs/guides/components/README",
+        code: "#[derive(Default, Serialize, Deserialize)]\n#[component(template = \"Todo.poco\")]\npub struct TodoApp {\n    items: Vec<Todo>,\n    draft: String,\n}\n\n#[handlers]\nimpl TodoApp {\n    pub fn add(&mut self) {\n        self.items.push(Todo::new(&self.draft));\n        self.draft.clear();\n    }\n}",
+    },
+    ShowcaseFeat {
+        name: "Server functions",
+        file: "api.rs",
+        lang: "rust",
+        title: "Call the server like a function",
+        desc: "Mark an async fn #[server] and it compiles to a backend route plus a typed client stub. You call it from the browser as a normal async fn — same language, same types, both ends. No fetch glue, no hand-written endpoints.",
+        doc: "/docs/guides/server/server-plugins",
+        code: "// one function, two build targets\n#[pocopine::server]\nasync fn close(id: Uuid) -> ServerResult<()> {\n    db().close_issue(id).await?;\n    Ok(())\n}\n\n// the client calls close(id).await like any async fn",
+    },
+    ShowcaseFeat {
+        name: "Data & live",
+        file: "issues.rs",
+        lang: "rust",
+        title: "Local-first data, live-synced",
+        desc: "Query data with #[query_resource]: reactive, offline-first views that update optimistically and sync in the background. Live invalidation pushes each change to every connected client automatically.",
+        doc: "/docs/guides/data/sync-client",
+        code: "// local-first, reactive, live-synced\n#[query_resource]\nstruct Issues;\n\nlet open = Issues::query(&client)\n    .filter(|i| i.open)\n    .observe();      // updates push to every client",
+    },
+    ShowcaseFeat {
+        name: "Auth & services",
+        file: "main.rs",
+        lang: "rust",
+        title: "Auth, storage, jobs — as plugins",
+        desc: "Drop in email + password or JWT auth (Firebase, Clerk, Auth0, Supabase), object storage with server-mediated uploads, and Redis-backed background jobs. Each installs as a server plugin in one place.",
+        doc: "/docs/guides/auth/credentials",
+        code: "app! {\n    plugins: [\n        Credentials::new(users),        // email + password\n        JwtVerifier::firebase(project),  // Clerk / Auth0 / Supabase\n        Storage::s3(bucket),             // uploads\n        Jobs::redis(url),                // background jobs\n    ],\n}",
+    },
+    ShowcaseFeat {
+        name: "Deploy",
+        file: "shell",
+        lang: "bash",
+        title: "Ship with one command",
+        desc: "`pocopine deploy` builds an image and deploys the web and worker processes to Railway or Render through their APIs — no host CLIs. Or run the very same container anywhere Docker runs.",
+        doc: "/docs/getting-started/introduction",
+        code: "$ pocopine build --release\n$ pocopine deploy\n  ✓ web + worker → railway\n  → https://app.up.railway.app",
+    },
+    ShowcaseFeat {
+        name: "Observability",
+        file: "checkout.rs",
+        lang: "rust",
+        title: "Observability, built in",
+        desc: "One structured-event contract feeds logging, OpenTelemetry tracing, and analytics sinks — the same API in the browser and on the server, with privacy labels so sensitive fields never leak into logs.",
+        doc: "/docs/guides/observability/logging-tracing",
+        code: "tracing::info!(\n    target: \"pocopine.log\",\n    user = %id,\n    \"checkout completed\",\n);\n// one event → logging · OTLP tracing · analytics",
+    },
+];
 
 /// Strip a leading `---\n … \n---\n` YAML front-matter block.
 fn strip_frontmatter(s: &str) -> String {
@@ -135,7 +352,7 @@ fn strip_frontmatter(s: &str) -> String {
 /// and collecting a table of contents. Internal `*.md` links are
 /// rewritten to `/docs/<slug>` routes (or a GitHub blob URL when they
 /// escape the docs tree).
-fn render(md: &str, page_path: &str) -> (String, Vec<(u8, String, String)>) {
+fn render(hl: &Hl, md: &str, page_path: &str) -> (String, Vec<(u8, String, String)>) {
     let opts = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
@@ -179,8 +396,40 @@ fn render(md: &str, page_path: &str) -> (String, Vec<(u8, String, String)>) {
         }
     }
 
+    // Replace each fenced code block with a syntect-highlighted
+    // `<pre><code>…</code></pre>` (one raw-HTML event), so the docs
+    // ship pre-coloured markup and the wasm carries no highlighter.
+    let mut out_events: Vec<Event> = Vec::with_capacity(events.len());
+    let mut i = 0;
+    while i < events.len() {
+        if let Event::Start(Tag::CodeBlock(kind)) = &events[i] {
+            let lang = match kind {
+                CodeBlockKind::Fenced(info) => {
+                    info.split([' ', ',']).next().unwrap_or("").to_string()
+                }
+                CodeBlockKind::Indented => String::new(),
+            };
+            let mut src = String::new();
+            i += 1;
+            while i < events.len() && !matches!(events[i], Event::End(TagEnd::CodeBlock)) {
+                if let Event::Text(t) = &events[i] {
+                    src.push_str(t);
+                }
+                i += 1;
+            }
+            i += 1; // skip End(CodeBlock)
+            let inner = hl.code(src.trim_end_matches('\n'), &lang);
+            out_events.push(Event::Html(CowStr::from(format!(
+                "<pre><code>{inner}</code></pre>"
+            ))));
+        } else {
+            out_events.push(events[i].clone());
+            i += 1;
+        }
+    }
+
     let mut out = String::new();
-    html::push_html(&mut out, events.into_iter());
+    html::push_html(&mut out, out_events.into_iter());
     (out, toc)
 }
 
