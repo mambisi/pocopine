@@ -9,7 +9,7 @@
     <pine-command-root shortcut="Mod+Shift+k">
       <pine-command-portal>
         <pine-command-overlay></pine-command-overlay>
-        <pine-command-content pp-transition="none">
+        <pine-command-content>
           <pine-command-input placeholder="Type a command…"></pine-command-input>
           <pine-command-list>
             <pine-command-item value="new" @pp:command:select="cmd_new_file">

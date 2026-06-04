@@ -11,6 +11,9 @@
   background: rgba(0, 0, 0, 0.55);
   z-index: 1000;
 }
+/* The custom element is just the viewport-positioning wrapper; the
+   rendered `.pine-command-content` card keeps Pine's default
+   fade-scale transition (enter + exit) — no manual @starting-style. */
 pine-command-content {
   position: fixed;
   inset: 0;
@@ -20,13 +23,6 @@ pine-command-content {
   padding-top: 20vh;
   z-index: 1001;
   pointer-events: none;
-  opacity: 1;
-  transition: opacity 160ms ease-out;
-}
-@starting-style {
-  pine-command-content {
-    opacity: 0;
-  }
 }
 .pine-command-content {
   pointer-events: auto;
@@ -38,6 +34,7 @@ pine-command-content {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transform-origin: top center;
 }
 .pine-command-input {
   font: inherit;

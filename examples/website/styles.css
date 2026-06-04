@@ -234,6 +234,61 @@ section {
   }
 }
 
+/* ─── Components index: live-preview tiles ────────────────────── *
+ * The card supplies the title + blurb, so hide each demo's own <h2>
+ * and explanatory <p> — the tile focuses on the component itself.
+ * Global (not scoped) so it reaches the child demos' light DOM.      */
+.ci-preview h2,
+.ci-preview section > p:first-child {
+  display: none;
+}
+
+/* ─── Shared side-menu links (docs + component reference) ─────── *
+ * One styling for both sidebars. Rows are links, or non-clickable
+ * group headers via [data-header]; the active row via [data-active]. */
+.side-nav-link {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  padding: 0.2rem 0.6rem;
+  border-left: 2px solid transparent;
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+}
+.side-nav-link:hover {
+  color: var(--fg);
+  background: var(--bg-subtle);
+}
+.side-nav-link[data-active="true"] {
+  color: var(--brand-fg);
+  border-left-color: var(--brand);
+  background: var(--bg-subtle);
+  font-weight: 600;
+}
+[data-theme="dark"] .side-nav-link[data-active="true"] { color: var(--fg); }
+.side-nav-link[data-header="true"] {
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-top: 1.1rem;
+  padding-left: 0;
+  border-left: 0;
+  pointer-events: none;
+}
+.side-nav-link[data-header="true"]:hover { background: transparent; color: var(--fg-muted); }
+.side-nav-link[data-header="true"]:first-child { margin-top: 0; }
+
+/* ⌘K palette result — the kind/group label on the right of each item */
+.cmd-kind {
+  margin-left: auto;
+  padding-left: 1rem;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
 /* ─── Minimal, auto-hiding scrollbars (global) ────────────────── *
  * Thin everywhere; the thumb stays invisible until you hover the
  * scroll container (or the page), then fades in — light panels and
