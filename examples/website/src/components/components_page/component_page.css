@@ -93,6 +93,13 @@
   white-space: pre;
 }
 .cp-code .code-block { border-radius: 0; }
+.code-block code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  font-size: inherit;
+}
 
 /* Meta sections */
 .cp-section {

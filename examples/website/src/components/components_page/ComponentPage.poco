@@ -64,7 +64,7 @@
     </div>
 
     <div class="cp-panel cp-code" pp-show="tab == 'code'" role="tabpanel">
-      <pre class="code-block"><code pp-text="code"></code></pre>
+      <pre class="code-block"><code pp-html="code"></code></pre>
     </div>
   </div>
 

@@ -17,6 +17,11 @@ pub mod docs_data {
     include!(concat!(env!("OUT_DIR"), "/docs_data.rs"));
 }
 
+/// Snippets pre-highlighted by syntect at build time (see `build.rs`).
+pub mod gen_code {
+    include!(concat!(env!("OUT_DIR"), "/gen_code.rs"));
+}
+
 use pocopine::prelude::*;
 use pocopine::{inject_key, navigate, provide};
 use serde::{Deserialize, Serialize};
@@ -31,8 +36,8 @@ use components::showcase::{
     TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{
-    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, Landing, LearnTodo, ShowcaseCard,
-    SiteHeader, StackShowcase, TodoDemo, Tutorial,
+    ComponentPage, ComponentsIndex, DocPage, Hero, InstallCmd, Landing, ShowcaseCard, SiteHeader,
+    StackShowcase, Tutorial,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -131,7 +136,6 @@ pub fn main() {
         .register::<Tutorial>()
         .register::<InstallCmd>()
         .register::<StackShowcase>()
-        .register::<TodoDemo>()
         .register::<ShowcaseCard>()
         // All primitive demos — reused as live previews on the
         // component reference pages.
@@ -181,7 +185,6 @@ pub fn main() {
         .register::<AnimationDemo>()
         // Routes.
         .route::<Landing>("/")
-        .route::<LearnTodo>("/learn")
         .route::<ComponentsIndex>("/components")
         .route::<ComponentPage>("/components/:name")
         .route::<DocPage>("/docs/*slug")

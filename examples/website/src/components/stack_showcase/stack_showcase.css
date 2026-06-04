@@ -1,4 +1,4 @@
-/* ─── "Whole stack" feature showcase (Laravel-style) ─────────── */
+/* ─── "Whole stack" feature showcase ─────────────────────────── */
 
 .sfw {
   position: relative;
@@ -23,31 +23,48 @@
 .sfw-corner-l { left: -4px; }
 .sfw-corner-r { right: -4px; }
 
-.sfw-grid {
-  display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
-  gap: 2.5rem;
-  align-items: center;
-}
-
-/* Left: the pitch */
-.sfw-intro h2 {
+.sfw-head { max-width: 48rem; margin-bottom: 1.5rem; }
+.sfw-head h2 {
   font-size: 1.9rem;
   line-height: 1.1;
   letter-spacing: -0.025em;
-  margin: 0 0 0.7rem;
+  margin: 0 0 0.6rem;
 }
-.sfw-intro > p {
-  color: var(--fg-muted);
-  font-size: 1rem;
-  line-height: 1.6;
-  margin: 0 0 1.25rem;
-}
-.sfw-checks { list-style: none; margin: 0 0 1.5rem; padding: 0; display: grid; gap: 0.55rem; }
-.sfw-checks li { display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.95rem; line-height: 1.4; color: var(--fg); }
-.sfw-checks code { font-family: var(--mono); font-size: 0.85em; background: var(--bg-subtle); padding: 0.05em 0.3em; border-radius: 4px; }
-.sfw-check { color: var(--brand); font-weight: 700; flex: none; }
+.sfw-head p { color: var(--fg-muted); font-size: 1rem; line-height: 1.6; margin: 0; }
 
+/* Chip tabs — not Laravel's pill bar, not an underline */
+.sfw-tabs { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 1.75rem; }
+.sfw-tab {
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.sfw-tab:hover { color: var(--fg); background: var(--bg-subtle); }
+.sfw-tab[data-active="true"] {
+  color: var(--brand-fg);
+  background: color-mix(in srgb, var(--brand) 16%, var(--bg));
+  border-color: var(--brand);
+  font-weight: 600;
+}
+
+.sfw-grid {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 2.5rem;
+  align-items: start;
+}
+
+/* Left: the active feature's explanation */
+.sfw-feat-title { font-size: 1.2rem; letter-spacing: -0.01em; margin: 0 0 0.5rem; }
+.sfw-feat-desc { color: var(--fg-muted); font-size: 0.95rem; line-height: 1.6; margin: 0 0 1.25rem; }
 .sfw-cta {
   display: inline-flex;
   align-items: center;
@@ -66,38 +83,7 @@
 .sfw-cta:hover { background: var(--bg-subtle); }
 .sfw-arrow { color: var(--brand); }
 
-/* Right: tabbed editor */
-.sfw-show { min-width: 0; display: flex; flex-direction: column; gap: 0.9rem; align-items: flex-start; }
-.sfw-tabs {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.15rem;
-  max-width: 100%;
-  padding: 0.25rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}
-.sfw-tab {
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 500;
-  white-space: nowrap;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 0;
-  border-radius: 999px;
-  padding: 0.4rem 0.85rem;
-  cursor: pointer;
-  transition: color 0.12s, background 0.12s;
-}
-.sfw-tab:hover { color: var(--fg); }
-.sfw-tab[data-active="true"] {
-  color: var(--fg);
-  background: var(--bg);
-  box-shadow: 0 1px 3px rgba(61, 36, 21, 0.12);
-}
-
+/* Right: editor */
 .sfw-editor {
   width: 100%;
   border-radius: 14px;
@@ -118,12 +104,7 @@
 .sfw-dot:nth-child(1) { background: #e0683c; }
 .sfw-dot:nth-child(2) { background: #e3a93b; }
 .sfw-dot:nth-child(3) { background: #6fae5b; }
-.sfw-file {
-  margin-left: 0.5rem;
-  font-family: var(--mono);
-  font-size: 0.78rem;
-  color: #faf0dc;
-}
+.sfw-file { margin-left: 0.5rem; font-family: var(--mono); font-size: 0.78rem; color: #faf0dc; }
 .sfw-lang {
   margin-left: auto;
   font-family: var(--mono);
@@ -137,13 +118,23 @@
   padding: 1.15rem 1.3rem;
   font-family: var(--mono);
   font-size: 0.84rem;
-  line-height: 1.65;
-  color: #faf0dc;
-  overflow-x: auto;
+  line-height: 1.7;
+  color: #e9dcc4;
+  overflow: auto;
   white-space: pre;
-  min-height: 12.5rem;
+  /* fixed so switching tabs never resizes the panel or shifts layout */
+  height: 22rem;
+}
+.sfw-code code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  /* token colours are inline (syntect, build time); this is the
+     fallback colour for any un-tokenised text */
+  color: #e9dcc4;
+  font-size: inherit;
 }
 
 @media (max-width: 760px) {
-  .sfw-grid { grid-template-columns: 1fr; gap: 1.75rem; }
+  .sfw-grid { grid-template-columns: 1fr; gap: 1.5rem; }
 }
