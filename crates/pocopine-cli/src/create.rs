@@ -6,7 +6,7 @@ use std::fs;
 
 use anyhow::{bail, Context, Result};
 
-use crate::args::CreateArgs;
+use crate::args::NewArgs;
 
 /// `(output path relative to the project root, file contents)`. The template's
 /// `Cargo.toml` is stored as `Cargo.toml.in` (and dotfiles without the leading
@@ -26,7 +26,7 @@ const FILES: &[(&str, &str)] = &[
     ("src/Counter.poco", include_str!("../templates/app/src/Counter.poco")),
 ];
 
-pub fn run(args: &CreateArgs) -> Result<()> {
+pub fn run(args: &NewArgs) -> Result<()> {
     let crate_name = sanitize(&args.name)?;
     let module = crate_name.replace('-', "_"); // wasm-pack output / js module name
     let target = args.path.join(&args.name);

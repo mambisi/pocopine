@@ -10,6 +10,11 @@ description = "CLI for pocopine projects: build, run, dev."
 name = "pocopine"
 path = "src/main.rs"
 
+# `pp` is a short alias for `pocopine` — same binary, e.g. `pp new`, `pp dev`.
+[[bin]]
+name = "pp"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"

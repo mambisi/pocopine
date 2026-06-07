@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     install_tracing();
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Create(args) => create::run(&args),
+        Cmd::New(args) => create::run(&args),
         Cmd::Build(args) => run_build(args),
         Cmd::Run(args) => run_project(args),
         Cmd::Dev(args) => dev::run(&args),

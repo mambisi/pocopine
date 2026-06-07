@@ -9,8 +9,8 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> installing pocopine CLI from $ROOT"
-cargo install --locked --path "$ROOT/crates/pocopine-cli" --bin pocopine --force
+echo "==> installing pocopine CLI from $ROOT (installs both 'pocopine' and the 'pp' shorthand)"
+cargo install --locked --path "$ROOT/crates/pocopine-cli" --bins --force
 
 if command -v rustup >/dev/null 2>&1; then
   echo "==> ensuring wasm32-unknown-unknown target"
@@ -25,4 +25,4 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
 fi
 
 echo "==> done"
-echo "    run: pocopine doctor --path ."
+echo "    run: pocopine doctor --path .   (or the 'pp' shorthand: pp doctor)"

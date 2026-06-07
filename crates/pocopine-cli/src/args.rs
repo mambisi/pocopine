@@ -11,8 +11,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Scaffold a new pocopine project from the starter template.
-    Create(CreateArgs),
+    /// Scaffold a new pocopine project from the starter template (alias: `create`).
+    #[command(alias = "create")]
+    New(NewArgs),
     /// Build the wasm bundle (and the server bin, if configured).
     Build(BuildArgs),
     /// Build, then serve. Spawns the configured server bin if one exists;
@@ -41,7 +42,7 @@ pub enum Cmd {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub struct CreateArgs {
+pub struct NewArgs {
     /// Name of the new project (used as the directory and crate name).
     pub name: String,
     /// Parent directory to create the project in (defaults to current dir).
