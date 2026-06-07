@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Unstyled, accessible UI components for pocopine — headless primitives (Button, Dialog, Popover, …) ready to style."
+# Held back from the crates.io launch: the bare name `pine` is already taken on
+# crates.io. Nothing in the workspace depends on this crate, so skipping it does
+# not block the rest. Pick an available name (e.g. `pocopine-pine`) to publish it.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
