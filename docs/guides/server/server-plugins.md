@@ -5,6 +5,9 @@ description: "Host-side plugin lifecycle: the Server builder, request event laye
 
 # Server plugins
 
+> Part of [Plugins & extensions](../plugins/README.md) — the host-side mirror of
+> [app plugins](../plugins/app-plugins.md), same `provide_plugin` / `hook_plugin` shape.
+
 `pocopine-server` ships a host-side plugin lifecycle that mirrors the
 frontend `App` plugin shape from RFC-076. A `ServerPlugin` value installs
 tower middleware, plugin-provided services, and lifecycle event hooks
