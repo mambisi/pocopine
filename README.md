@@ -82,26 +82,34 @@ The `pocopine` CLI handles building, serving, and hot-reload — one
 install covers all three.
 
 ```bash
-cargo install pocopine-cli
+curl -fsSL https://pocopine.dev/install.sh | sh
 ```
 
-From a source checkout, use the repo helper:
+On Windows (PowerShell):
+
+```powershell
+irm https://github.com/mambisi/pocopine/releases/latest/download/pocopine-cli-installer.ps1 | iex
+```
+
+This installs a prebuilt binary — no Rust toolchain required. (Prefer
+Cargo? `cargo install pocopine-cli` once it's published, or `./install.sh`
+from a source checkout.) Then check your setup:
 
 ```bash
-./install.sh
-pocopine doctor --path .
+pocopine doctor
 ```
 
 ### 2. Scaffold an app
 
-A pocopine app is a regular Rust library crate. Add `pocopine`
-(runtime) and, optionally, `pine` (UI primitives).
-
 ```bash
-cargo new --lib hello-pine
+pocopine new hello-pine
 cd hello-pine
-cargo add pocopine pine
+just dev
 ```
+
+`pocopine new` clones the starter — a small welcome app showing props,
+slots, events, reactive state, and Pine Stylekit — and `just dev` builds
+and serves it with live reload.
 
 ### 3. Write your first component
 

@@ -15,7 +15,7 @@ mode = "fullstack"
 # ["index.html", "pkg"]; this site also ships the global stylesheet, the
 # mascot/favicon, and the build-time-rendered docs fragments. Directory
 # entries (pkg, static-docs) are copied recursively.
-static_files = ["index.html", "pkg", "styles.css", "mascot.svg", "static-docs", "icons"]
+static_files = ["index.html", "pkg", "styles.css", "mascot.svg", "static-docs", "icons", "install.sh"]
 
 [package.metadata.pocopine.deploy.processes.web]
 bin = "server"

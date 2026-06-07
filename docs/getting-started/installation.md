@@ -6,22 +6,39 @@ description: "Install the pocopine CLI and verify your toolchain."
 # Installation
 
 The `pocopine` CLI handles building, serving, and hot-reload — one
-install covers all three.
+install covers all three. The quickest way is the install script, which
+downloads a prebuilt binary for your platform — no Rust toolchain
+required:
 
 ```bash
-cargo install pocopine-cli
+curl -fsSL https://pocopine.dev/install.sh | sh
 ```
 
-From a source checkout of the repository, use the helper script
-instead — it installs the CLI from the local crate, ensures the
-`wasm32-unknown-unknown` target is present, and reminds you if
-`wasm-pack` is missing:
+On Windows, run the PowerShell installer instead:
+
+```powershell
+irm https://github.com/mambisi/pocopine/releases/latest/download/pocopine-cli-installer.ps1 | iex
+```
+
+Prefer to build from source with Cargo? Once the crate is published you
+can also `cargo install pocopine-cli`. From a source checkout of the
+repository, use the helper script instead — it installs the CLI from the
+local crate, ensures the `wasm32-unknown-unknown` target is present, and
+reminds you if `wasm-pack` is missing:
 
 ```bash
 ./install.sh
 ```
 
-After either installation path, run `pocopine doctor` to verify the
+Then scaffold your first app:
+
+```bash
+pocopine new my-app
+cd my-app
+just dev
+```
+
+After installing, run `pocopine doctor` to verify the
 tools the CLI depends on — `cargo`, `rustc`, and `wasm-pack`:
 
 ```bash

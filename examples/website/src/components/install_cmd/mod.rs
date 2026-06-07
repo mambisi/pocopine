@@ -14,7 +14,7 @@ pub struct InstallCmd {
 impl Default for InstallCmd {
     fn default() -> Self {
         Self {
-            cmd: "cargo install pocopine-cli".into(),
+            cmd: "curl -fsSL https://pocopine.dev/install.sh | sh".into(),
             copied: false,
         }
     }
