@@ -167,6 +167,7 @@ fn main() {
             }
             let raw = fs::read_to_string(docs_dir.join(&p.path)).unwrap_or_default();
             let body = strip_frontmatter(&raw);
+            let body = inject_generated(&body, &manifest);
             let (page_html, toc) = render(&hl, &body, &p.path);
             let frag = static_docs.join(format!("{slug}.html"));
             if let Some(parent) = frag.parent() {
@@ -1100,4 +1101,213 @@ fn rewrite_link(dest: &str, page_path: &str) -> String {
     } else {
         format!("https://github.com/mambisi/pocopine/blob/main/{joined}{anchor}")
     }
+}
+
+// ── Generated API reference (the `<!-- pp:reactive-api -->` marker) ──────────
+//
+// Reactive-core modules surfaced in the auto-generated API reference, each
+// paired with a friendly section title. Order = reading order on the page.
+const REACTIVE_MODULES: &[(&str, &str)] = &[
+    ("reactive", "Effects, batching & scheduling"),
+    ("computed", "Computed values"),
+    ("watch", "Watchers"),
+    ("handle", "Handles & this()"),
+    ("store", "Stores"),
+    ("context", "Context — provide / inject"),
+    ("tick", "Microtask scheduling"),
+    ("timers", "Timers"),
+    ("refs", "Element refs"),
+    ("task", "Async tasks"),
+    ("emit", "Events"),
+    ("signal", "Signals (advanced escape-hatch)"),
+];
+
+/// Replace generator markers in a doc body before markdown rendering. The
+/// `<!-- pp:reactive-api -->` marker is filled from the live `pocopine-core`
+/// source so the API reference can never drift from the code.
+fn inject_generated(body: &str, manifest: &str) -> String {
+    const MARKER: &str = "<!-- pp:reactive-api -->";
+    if !body.contains(MARKER) {
+        return body.to_string();
+    }
+    body.replace(MARKER, &reactive_api_md(manifest))
+}
+
+/// Walk the reactive-core modules and emit a markdown API reference: one
+/// `##` section per module, every public fn (signature + doc) and public
+/// type (doc + public methods). Parsed with `syn` at build time; items are
+/// `####` so the page TOC stays at module granularity.
+fn reactive_api_md(manifest: &str) -> String {
+    let core = Path::new(manifest).join("../../crates/pocopine-core/src");
+    println!("cargo:rerun-if-changed={}", core.display());
+    let mut out = String::new();
+    for (module, title) in REACTIVE_MODULES {
+        let path = core.join(format!("{module}.rs"));
+        let Ok(src) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(file) = syn::parse_file(&src) else {
+            continue;
+        };
+
+        // Public inherent methods, keyed by their self-type name.
+        let mut methods: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for item in &file.items {
+            let syn::Item::Impl(im) = item else { continue };
+            if im.trait_.is_some() {
+                continue; // skip trait-impl methods (noise)
+            }
+            let Some(self_name) = type_path_name(&im.self_ty) else {
+                continue;
+            };
+            for it in &im.items {
+                let syn::ImplItem::Fn(m) = it else { continue };
+                if !is_pub(&m.vis) || is_doc_hidden(&m.attrs) {
+                    continue;
+                }
+                methods.entry(self_name.clone()).or_default().push((
+                    format!("pub {}", clean_code(&m.sig.to_token_stream().to_string())),
+                    doc_of(&m.attrs),
+                ));
+            }
+        }
+
+        let mut fns = String::new();
+        let mut types = String::new();
+        for item in &file.items {
+            match item {
+                syn::Item::Fn(f) if is_pub(&f.vis) && !is_doc_hidden(&f.attrs) => {
+                    let name = f.sig.ident.to_string();
+                    let sig = clean_code(&f.sig.to_token_stream().to_string());
+                    fns.push_str(&format!(
+                        "#### `{name}`\n\n```rust\npub {sig}\n```\n\n{}\n\n",
+                        doc_or(&f.attrs)
+                    ));
+                }
+                syn::Item::Struct(s) if is_pub(&s.vis) && !is_doc_hidden(&s.attrs) => {
+                    emit_type(
+                        &mut types,
+                        &s.ident.to_string(),
+                        "struct",
+                        &doc_or(&s.attrs),
+                        &methods,
+                    );
+                }
+                syn::Item::Enum(e) if is_pub(&e.vis) && !is_doc_hidden(&e.attrs) => {
+                    emit_type(
+                        &mut types,
+                        &e.ident.to_string(),
+                        "enum",
+                        &doc_or(&e.attrs),
+                        &methods,
+                    );
+                }
+                syn::Item::Trait(t) if is_pub(&t.vis) && !is_doc_hidden(&t.attrs) => {
+                    emit_type(
+                        &mut types,
+                        &t.ident.to_string(),
+                        "trait",
+                        &doc_or(&t.attrs),
+                        &methods,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        if fns.is_empty() && types.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "## {title}\n\n*Module `pocopine_core::{module}`*\n\n"
+        ));
+        if !fns.is_empty() {
+            out.push_str("**Functions**\n\n");
+            out.push_str(&fns);
+        }
+        if !types.is_empty() {
+            out.push_str("**Types**\n\n");
+            out.push_str(&types);
+        }
+    }
+    out
+}
+
+fn emit_type(
+    out: &mut String,
+    name: &str,
+    kind: &str,
+    doc: &str,
+    methods: &HashMap<String, Vec<(String, String)>>,
+) {
+    out.push_str(&format!("#### `{name}` ({kind})\n\n{doc}\n\n"));
+    if let Some(ms) = methods.get(name) {
+        if !ms.is_empty() {
+            out.push_str("Methods:\n\n");
+            for (sig, mdoc) in ms {
+                if mdoc.is_empty() {
+                    out.push_str(&format!("- `{sig}`\n"));
+                } else {
+                    out.push_str(&format!("- `{sig}` — {mdoc}\n"));
+                }
+            }
+            out.push('\n');
+        }
+    }
+}
+
+fn doc_or(attrs: &[syn::Attribute]) -> String {
+    let d = doc_of(attrs);
+    if d.is_empty() {
+        "_(no doc comment)_".to_string()
+    } else {
+        d
+    }
+}
+
+fn is_pub(vis: &syn::Visibility) -> bool {
+    matches!(vis, syn::Visibility::Public(_))
+}
+
+/// True only for an explicit `#[doc(hidden)]` (a `doc(...)` list), not for
+/// a regular `#[doc = "…"]` comment that happens to contain the word.
+fn is_doc_hidden(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("doc")
+            && matches!(&a.meta, syn::Meta::List(l) if l.tokens.to_string().contains("hidden"))
+    })
+}
+
+fn type_path_name(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
+}
+
+/// Collapse the spacing `to_token_stream()` leaves around punctuation so a
+/// reconstructed signature reads like source. Cosmetic only.
+fn clean_code(s: &str) -> String {
+    let mut r = s.to_string();
+    for (a, b) in [
+        (" :", ":"),
+        ("> >", ">>"),
+        (" ,", ","),
+        (" ;", ";"),
+        (" (", "("),
+        ("( ", "("),
+        (" )", ")"),
+        (" <", "<"),
+        ("< ", "<"),
+        (" >", ">"),
+        (" ::", "::"),
+        (":: ", "::"),
+        ("& ", "&"),
+    ] {
+        r = r.replace(a, b);
+    }
+    while r.contains("  ") {
+        r = r.replace("  ", " ");
+    }
+    r.trim().to_string()
 }

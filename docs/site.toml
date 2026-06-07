@@ -47,9 +47,12 @@ section = "Docs"
 title = "Reactivity"
 pages = [
   { title = "Overview",        path = "guides/reactivity/README.md" },
-  { title = "Current design",  path = "guides/reactivity/01-current-design.md" },
-  { title = "Roadmap",         path = "guides/reactivity/02-roadmap.md" },
+  { title = "Essentials",      path = "guides/reactivity/01-essentials.md" },
+  { title = "Utilities",       path = "guides/reactivity/02-utilities.md" },
+  { title = "Internals",       path = "guides/reactivity/03-internals.md" },
   { title = "Vue 3 reference", path = "guides/reactivity/04-vue3-reference.md" },
+  { title = "Roadmap",         path = "guides/reactivity/05-roadmap.md" },
+  { title = "API reference",   path = "guides/reactivity/06-api-reference.md" },
 ]
 
 [[group]]

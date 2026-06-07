@@ -8,7 +8,9 @@ description: "Which reactive primitives are shipped, which are in progress, and 
 This page tracks the state of the reactive layer — what's implemented in
 `pocopine-core`, what's still pending, and why each item is scoped the way
 it is. The model is proxy-scoped struct fields; see
-[Overview](./README.md) for the shape.
+[Overview](./README.md) for the shape, [Essentials](./01-essentials.md)
+for the everyday API, and [Internals](./03-internals.md) for the deep
+mechanics.
 
 ## Shipped
 
@@ -20,7 +22,8 @@ Each `#[component]` is wrapped in a `js_sys::Proxy`. Reads through the
 proxy `track(scope_id, key)`; writes `trigger(scope_id, key)`. A plain
 `pub` struct field is the reactive unit — no wrapper, no cell. Handler
 mutations on `&mut self` bypass the proxy and fan out via `trigger_scope`
-after the method returns. See `scope.rs` and `reactive.rs`.
+after the method returns. See `scope.rs` and `reactive.rs`, or
+[Internals](./03-internals.md) for the read/write lifecycle.
 
 ### Derived fields — `#[computed]`
 
@@ -38,12 +41,13 @@ impl PineUploadItem {
 }
 ```
 
-Under the hood this is the `computed(f)` primitive in `computed.rs`: a
-`Computed<T>` that re-evaluates `f` lazily — only when a dependency has
-changed *and* someone reads the result again. It is a lazy effect with a
-custom scheduler that flips a `dirty` flag and re-notifies the computed's
-own subscribers; the body re-runs only when a caller reads the dirty
-value. `Computed<T>` releases its backing effect on drop.
+Under the hood this is the `computed(f)` primitive in `computed.rs`
+(documented in [Utilities](./02-utilities.md)): a `Computed<T>` that
+re-evaluates `f` lazily — only when a dependency has changed *and* someone
+reads the result again. It is a lazy effect with a custom scheduler that
+flips a `dirty` flag and re-notifies the computed's own subscribers; the
+body re-runs only when a caller reads the dirty value. `Computed<T>`
+releases its backing effect on drop.
 
 ### Reacting to changes — `#[watch(field)]`
 
@@ -65,7 +69,7 @@ The lower-level free functions back this: `watch(source, cb)` over any
 reactive read, and `watch_field("field", cb)` plus the `*_scoped` variants
 that auto-release on unmount. Both `watch_field` forms defer install by
 one microtask so the first read doesn't clash with the caller's active
-`&mut self` borrow. See `watch.rs`.
+`&mut self` borrow. See `watch.rs` and [Utilities](./02-utilities.md).
 
 ### `on_cleanup`
 
@@ -133,7 +137,8 @@ rows by identity, move existing DOM nodes on reorder, and update only the
 cells that changed. The `scope::patch_list_at_inline`,
 `append_list_inline`, `swap_list_indices_inline`, and
 `remove_list_at_inline` helpers let handlers update the cached JS Array
-surgically so reconcile skips unchanged rows entirely.
+surgically so reconcile skips unchanged rows entirely — see
+[Utilities](./02-utilities.md) for the full `scope::*_inline` family.
 
 ## Still pending
 
