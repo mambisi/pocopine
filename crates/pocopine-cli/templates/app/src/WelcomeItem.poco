@@ -1,0 +1,4 @@
+<article class="rounded-lg border border-line bg-card p-5 shadow-card hover:shadow-lg transition-shadow">
+  <h3 class="text-lg font-semibold text-ink-100" pp-text="title"></h3>
+  <div class="text-sm text-ink-60 mt-2"><slot></slot></div>
+</article>

@@ -1,0 +1,5 @@
+# pocopine builds on nightly (proc-macro span APIs). Pin the same toolchain the
+# framework uses, and add the wasm target the client is compiled to.
+[toolchain]
+channel = "nightly-2025-12-18"
+targets = ["wasm32-unknown-unknown"]

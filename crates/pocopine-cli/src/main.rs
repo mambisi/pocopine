@@ -19,6 +19,7 @@
 mod args;
 mod build;
 mod client_modules;
+mod create;
 mod config;
 mod deploy;
 mod dev;
@@ -58,6 +59,7 @@ fn main() -> Result<()> {
     install_tracing();
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Create(args) => create::run(&args),
         Cmd::Build(args) => run_build(args),
         Cmd::Run(args) => run_project(args),
         Cmd::Dev(args) => dev::run(&args),

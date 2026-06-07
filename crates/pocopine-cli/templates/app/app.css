@@ -1,0 +1,39 @@
+/* Pine Stylekit input. The @theme block defines design tokens; utility classes
+   in the .poco templates (e.g. `bg-card`, `p-4`, `rounded-lg`) compile against
+   them. `pocopine dev`/`build` emits the stylesheet to pkg/stylekit.css. */
+@theme {
+  /* palette — "pinecone" */
+  --color-surface: #fffaf2;
+  --color-card: #f8eeda;
+  --color-ink-100: #3d2415;
+  --color-ink-60: #885d3d;
+  --color-ink-10: #f0dfbf;
+  --color-line: #e5d3b0;
+  --color-accent: #f8ae45;
+  --color-accent-strong: #e89a2e;
+
+  --spacing: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --shadow-card: 0 4px 16px rgba(61, 36, 21, 0.08), 0 1px 3px rgba(61, 36, 21, 0.06);
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Non-@theme CSS passes through to the output. Auto dark mode overrides the
+   tokens; the body picks up the font + surface colors. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-surface: #1a130c;
+    --color-card: #241a10;
+    --color-ink-100: #f5ead3;
+    --color-ink-60: #b8a079;
+    --color-ink-10: #2f2317;
+    --color-line: #3a2a1a;
+  }
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-surface);
+  color: var(--color-ink-100);
+}

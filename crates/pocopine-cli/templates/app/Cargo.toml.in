@@ -1,0 +1,22 @@
+[package]
+name = "pocopine-app"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pin to a tag/rev once pocopine publishes releases; tracks the default branch
+# for now. (Or use a published crate: `pocopine = "0.1"`.)
+pocopine = { git = "https://github.com/mambisi/pocopine" }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+
+# Pine Stylekit (RFC-092) compiles utility classes used in the .poco templates
+# against the @theme tokens in app.css, emitting pkg/stylekit.css. Runs by
+# default; these are the defaults, shown for clarity.
+[package.metadata.pocopine.stylekit]
+input = "app.css"
+output = "pkg/stylekit.css"

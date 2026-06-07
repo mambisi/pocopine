@@ -11,6 +11,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
+    /// Scaffold a new pocopine project from the starter template.
+    Create(CreateArgs),
     /// Build the wasm bundle (and the server bin, if configured).
     Build(BuildArgs),
     /// Build, then serve. Spawns the configured server bin if one exists;
@@ -36,6 +38,15 @@ pub enum Cmd {
     /// compile once and print the stylesheet (or write it to --output).
     #[command(hide = true)]
     Stylekit(StylekitArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct CreateArgs {
+    /// Name of the new project (used as the directory and crate name).
+    pub name: String,
+    /// Parent directory to create the project in (defaults to current dir).
+    #[arg(long, default_value = ".")]
+    pub path: PathBuf,
 }
 
 #[derive(Parser, Debug, Clone)]
