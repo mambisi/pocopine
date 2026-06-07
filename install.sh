@@ -9,8 +9,8 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> installing pocopine CLI from $ROOT (installs both 'pocopine' and the 'pp' shorthand)"
-cargo install --locked --path "$ROOT/crates/pocopine-cli" --bins --force
+echo "==> installing pocopine CLI from $ROOT"
+cargo install --locked --path "$ROOT/crates/pocopine-cli" --bin pocopine --force
 
 if command -v rustup >/dev/null 2>&1; then
   echo "==> ensuring wasm32-unknown-unknown target"
@@ -24,5 +24,35 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
   echo "    install it with: cargo install wasm-pack"
 fi
 
+# Optional 'pp' shorthand for 'pocopine', handled at the OS level: a symlink on
+# Unix/macOS, a pp.cmd shim under Git-Bash / MSYS / Cygwin on Windows. Set
+# POCOPINE_PP_ALIAS=1 (or 0) to skip the prompt in non-interactive installs.
+BIN_DIR="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
+case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN*) PP_OS=windows ;;
+  *) PP_OS=unix ;;
+esac
+
+PP_ALIAS="${POCOPINE_PP_ALIAS:-}"
+if [ -z "$PP_ALIAS" ] && [ -t 0 ]; then
+  printf "==> add a 'pp' shorthand for 'pocopine'? [y/N] "
+  read -r _reply || _reply=""
+  case "$_reply" in [Yy]*) PP_ALIAS=1 ;; *) PP_ALIAS=0 ;; esac
+fi
+
+if [ "${PP_ALIAS:-0}" = 1 ]; then
+  mkdir -p "$BIN_DIR"
+  if [ "$PP_OS" = windows ]; then
+    printf '@"%%~dp0pocopine.exe" %%*\r\n' > "$BIN_DIR/pp.cmd"
+    echo "    wrote $BIN_DIR/pp.cmd  (pp -> pocopine)"
+  else
+    ln -sf pocopine "$BIN_DIR/pp"
+    echo "    linked $BIN_DIR/pp -> pocopine"
+  fi
+fi
+
 echo "==> done"
-echo "    run: pocopine doctor --path .   (or the 'pp' shorthand: pp doctor)"
+echo "    run: pocopine doctor --path ."
+if [ "${PP_ALIAS:-0}" = 1 ]; then
+  echo "    or:  pp doctor --path ."
+fi
