@@ -1,8 +1,0 @@
-<div class="inline-flex items-center gap-3">
-  <button class="w-10 h-10 inline-flex items-center justify-center text-xl rounded-md border border-line bg-card hover:bg-ink-10 transition-colors"
-          @click="decrement" aria-label="decrement">&minus;</button>
-  <span class="w-12 text-center text-3xl font-bold text-ink-100" pp-text="count"></span>
-  <button class="w-10 h-10 inline-flex items-center justify-center text-xl rounded-md border border-line bg-card hover:bg-ink-10 transition-colors"
-          @click="increment" aria-label="increment">+</button>
-  <span class="text-ink-60" pp-text="label"></span>
-</div>

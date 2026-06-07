@@ -19,13 +19,14 @@
 mod args;
 mod build;
 mod client_modules;
-mod create;
 mod config;
+mod create;
 mod deploy;
 mod dev;
 mod doctor;
 mod env;
 mod server;
+mod skills;
 mod stylekit;
 mod tailwind;
 mod tools;
@@ -64,6 +65,7 @@ fn main() -> Result<()> {
         Cmd::Run(args) => run_project(args),
         Cmd::Dev(args) => dev::run(&args),
         Cmd::Doctor(args) => doctor::run(&args),
+        Cmd::Skills(args) => skills::run(&args),
         Cmd::Deploy(args) => deploy::run(&args),
         Cmd::Js(args) => run_js(args),
         Cmd::Env(args) => run_env(args),

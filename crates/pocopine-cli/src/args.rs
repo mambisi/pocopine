@@ -24,6 +24,12 @@ pub enum Cmd {
     Dev(ServeArgs),
     /// Check local tools and project configuration used by Pocopine.
     Doctor(DoctorArgs),
+    /// Fetch + refresh the pocopine-skills agent guides in `.claude/skills/`.
+    ///
+    /// The guides live in their own repo and evolve independently of the
+    /// framework: `install` vendors the current set, `update` refetches the
+    /// latest, and `check` reports whether a newer revision is available.
+    Skills(SkillsArgs),
     /// Deploy to a registered host adapter (RFC 080).
     Deploy(DeployArgs),
     /// Managed JavaScript toolkit commands for typed `.client.ts` modules.
@@ -48,6 +54,31 @@ pub struct NewArgs {
     /// Parent directory to create the project in (defaults to current dir).
     #[arg(long, default_value = ".")]
     pub path: PathBuf,
+    /// Add the pocopine-skills agent guides at `.claude/skills/` as a git
+    /// submodule (needs network + access to the repo). Off by default.
+    #[arg(long)]
+    pub skills: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct SkillsArgs {
+    /// Path to the project (defaults to current dir).
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+    #[command(subcommand)]
+    pub cmd: SkillsCmd,
+}
+
+#[derive(Subcommand, Debug, Clone, Copy)]
+pub enum SkillsCmd {
+    /// Fetch the agent guides into `.claude/skills/` (first-time install).
+    Install,
+    /// Refetch the latest guides, reporting any newly added or removed skills.
+    Update,
+    /// Check (cheaply, no clone) whether a newer revision is available upstream.
+    Check,
+    /// List the skills currently installed in `.claude/skills/`.
+    List,
 }
 
 #[derive(Parser, Debug, Clone)]

@@ -1,29 +1,24 @@
-//! `pocopine create <name>` — scaffold a new project from the embedded starter
-//! template (the welcome-page app). Self-contained: the template files are
-//! compiled into the binary, so it works offline with no clone/auth.
+//! `pocopine new <name>` (alias `create`) — scaffold a new project by
+//! cloning the starter template repo (degit-style: shallow clone, strip the
+//! history + submodule wiring, re-init). The template is intentionally *not*
+//! vendored into this binary — it lives in its own repo so it can evolve
+//! without a CLI release. Needs network + a reachable starter repo.
 
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
 use crate::args::NewArgs;
+use crate::skills;
 
-/// `(output path relative to the project root, file contents)`. The template's
-/// `Cargo.toml` is stored as `Cargo.toml.in` (and dotfiles without the leading
-/// dot) so cargo doesn't treat the template dir as a package.
-const FILES: &[(&str, &str)] = &[
-    ("Cargo.toml", include_str!("../templates/app/Cargo.toml.in")),
-    ("rust-toolchain.toml", include_str!("../templates/app/rust-toolchain.toml")),
-    ("app.css", include_str!("../templates/app/app.css")),
-    ("index.html", include_str!("../templates/app/index.html")),
-    (".gitignore", include_str!("../templates/app/gitignore")),
-    ("AGENTS.md", include_str!("../templates/app/AGENTS.md")),
-    ("README.md", include_str!("../templates/app/README.md")),
-    (".vscode/extensions.json", include_str!("../templates/app/vscode/extensions.json")),
-    ("src/lib.rs", include_str!("../templates/app/src/lib.rs")),
-    ("src/WelcomeApp.poco", include_str!("../templates/app/src/WelcomeApp.poco")),
-    ("src/WelcomeItem.poco", include_str!("../templates/app/src/WelcomeItem.poco")),
-    ("src/Counter.poco", include_str!("../templates/app/src/Counter.poco")),
+const STARTER_REPO: &str = "https://github.com/mambisi/pocopine-starter-template.git";
+
+/// File extensions we string-replace the `pocopine-app` / `pocopine_app`
+/// placeholder inside, after cloning.
+const RENAME_EXTS: &[&str] = &[
+    "toml", "html", "rs", "md", "css", "json", "js", "ts", "poco",
 ];
 
 pub fn run(args: &NewArgs) -> Result<()> {
@@ -35,30 +30,90 @@ pub fn run(args: &NewArgs) -> Result<()> {
         bail!("{} already exists", target.display());
     }
 
-    for (rel, contents) in FILES {
-        let out = target.join(rel);
-        if let Some(parent) = out.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
-        }
-        // The template is the `pocopine-app` starter; rename it to this project.
-        let rendered = contents
-            .replace("pocopine-app", &crate_name)
-            .replace("pocopine_app", &module);
-        fs::write(&out, rendered).with_context(|| format!("write {}", out.display()))?;
+    // 1. degit: shallow-clone the starter, without its submodules — the skills
+    //    are fetched fresh + living via `pocopine skills`, never pinned here.
+    let status = Command::new("git")
+        .args(["clone", "--depth", "1", STARTER_REPO])
+        .arg(&target)
+        .status()
+        .context("run `git clone` (is git installed?)")?;
+    if !status.success() {
+        bail!(
+            "could not clone the starter template from {STARTER_REPO}\n\
+             (needs network access; the repo must be reachable)"
+        );
     }
 
-    // Best-effort `git init` (ignore failure — git may be absent).
-    let _ = std::process::Command::new("git")
+    // 2. strip the clone's history + submodule wiring → a clean, unversioned tree.
+    fs::remove_dir_all(target.join(".git")).context("strip cloned .git")?;
+    let _ = fs::remove_file(target.join(".gitmodules"));
+    let _ = fs::remove_dir_all(target.join(".claude/skills")); // empty gitlink dir
+    let _ = fs::remove_file(target.join("LICENSE")); // the new project picks its own
+
+    // 3. rename the `pocopine-app` placeholder throughout the tree.
+    rename_placeholder(&target, &crate_name, &module)?;
+
+    // 4. fresh history.
+    let _ = Command::new("git")
         .args(["init", "-q"])
         .current_dir(&target)
         .status();
 
+    // 5. optionally fetch the living skills now.
+    if args.skills {
+        if let Err(e) = skills::install(&target, false) {
+            eprintln!("  ! skipped --skills: {e}");
+        }
+    }
+
     println!("✓ created {}", target.display());
     println!();
     println!("  cd {}", args.name);
-    println!("  pocopine dev          # build + serve with live reload");
+    println!("  just dev                  # build + serve with live reload");
+    println!("  just                      # list all tasks");
+    if !args.skills {
+        println!("  pocopine skills install   # add the framework's agent guides");
+    }
     Ok(())
+}
+
+/// Recursively replace the `pocopine-app` / `pocopine_app` placeholder in every
+/// text file of the cloned tree.
+fn rename_placeholder(root: &Path, crate_name: &str, module: &str) -> Result<()> {
+    fn walk(dir: &Path, f: &mut dyn FnMut(&Path) -> Result<()>) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                if path.file_name().is_some_and(|n| n == ".git") {
+                    continue;
+                }
+                walk(&path, f)?;
+            } else {
+                f(&path)?;
+            }
+        }
+        Ok(())
+    }
+
+    walk(root, &mut |path: &Path| {
+        let ext_ok = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| RENAME_EXTS.contains(&e));
+        if !ext_ok {
+            return Ok(());
+        }
+        let contents =
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        if contents.contains("pocopine-app") || contents.contains("pocopine_app") {
+            let rendered = contents
+                .replace("pocopine-app", crate_name)
+                .replace("pocopine_app", module);
+            fs::write(path, rendered).with_context(|| format!("write {}", path.display()))?;
+        }
+        Ok(())
+    })
 }
 
 /// Derive a valid Cargo package name from the project name.
