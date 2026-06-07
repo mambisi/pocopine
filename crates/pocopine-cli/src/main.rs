@@ -19,12 +19,14 @@
 mod args;
 mod build;
 mod client_modules;
+mod component_index;
 mod config;
 mod create;
 mod deploy;
 mod dev;
 mod doctor;
 mod env;
+mod lsp;
 mod server;
 mod skills;
 mod stylekit;
@@ -72,6 +74,7 @@ fn main() -> Result<()> {
         Cmd::Stylekit(args) => {
             stylekit::run_command(&args.path, args.dump, args.docs, args.metadata)
         }
+        Cmd::Lsp(args) => lsp::run(args),
     }
 }
 

@@ -18,6 +18,17 @@ notify = "6"
 anyhow = "1"
 pocopine-client-codegen = { workspace = true }
 pocopine-stylekit = { workspace = true }
+pocopine-template-parser = { workspace = true }
+pocopine-expr = { workspace = true }
+pocopine-directives = { workspace = true }
+# `pocopine lsp` — editor language server over stdio. tower-lsp brings its own
+# lsp-types + jsonrpc; tokio (io-std) drives the stdio transport. `syn` parses
+# `.rs` sources for the server's `#[component]` index; `proc-macro2`'s
+# span-locations give those items line/col for goto-definition.
+syn = { workspace = true }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 pocopine-deploy = { workspace = true }
 pocopine-deploy-railway = { workspace = true }
 pocopine-deploy-render = { workspace = true }

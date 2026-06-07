@@ -46,37 +46,10 @@ use quote::quote;
 
 use crate::template_parser::{Element, Node, TemplateAst};
 
-/// Each entry: `(attr_name, message)`. Adding a new directive to
-/// the table is the entire migration step — the walker handles
-/// the rest.
-const FORBIDDEN: &[(&str, &str)] = &[
-    (
-        "pp-cloak",
-        "`pp-cloak` was removed in v2 (RFC 063 §4.1.2). Mount is \
-         synchronous post-RFC-061; the FOUC the directive guarded \
-         against no longer happens. Drop the attribute.",
-    ),
-    (
-        "pp-init",
-        "`pp-init` was removed in v2 (RFC 063 §4.1.1). Use the \
-         `on_setup` lifecycle hook instead:\n\n  \
-         #[handlers]\n  \
-         impl MyComponent {\n      \
-             fn on_setup(&mut self) {\n          \
-                 // your init code here\n      \
-             }\n  \
-         }",
-    ),
-    (
-        "pp-data",
-        "`pp-data` is no longer an author-facing attribute (RFC \
-         063 §4.1.3). The macro auto-stamps the scope marker on \
-         every component root; you never needed to type it. \
-         Drop the attribute. If you were using it as an \
-         unliftable-subtree signal, that authoring pattern was \
-         walker-era and no longer exists.",
-    ),
-];
+// The removed-directive table itself now lives in `pocopine-directives`
+// ([`pocopine_directives::REMOVED`]) so this macro's hard-error scan and the
+// `pocopine lsp` language server validate the exact same surface. This module
+// is just the AST walk that turns a match into a `compile_error!`.
 
 pub(crate) fn emit_diagnostics(ast: &TemplateAst) -> TokenStream {
     let mut out = TokenStream::new();
@@ -91,7 +64,14 @@ pub(crate) fn emit_diagnostics(ast: &TemplateAst) -> TokenStream {
 
 fn walk(el: &Element, out: &mut TokenStream, seen: &mut HashSet<&'static str>) {
     for (attr_name, _) in &el.attrs {
-        if let Some(&(name, message)) = FORBIDDEN.iter().find(|(n, _)| *n == attr_name) {
+        // Removed directives are author-facing `pp-*` attributes; strip the
+        // prefix and consult the shared registry by head name.
+        let Some(head) = attr_name.strip_prefix("pp-") else {
+            continue;
+        };
+        if let Some(&(name, message)) =
+            pocopine_directives::REMOVED.iter().find(|(n, _)| *n == head)
+        {
             if seen.insert(name) {
                 let msg = format!("pocopine: {message}");
                 out.extend(quote! { ::core::compile_error!(#msg); });

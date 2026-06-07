@@ -19,6 +19,9 @@ syn = { workspace = true }
 # RFC 050 — compile-time `.poco` parser, now a shared host-only crate
 # so build tooling (pocopine-stylekit) reuses it. Never linked into wasm.
 pocopine-template-parser = { workspace = true }
+# RFC 063 — the removed-directive table lives in the shared directive registry
+# so the macro's hard-error scan and the language server stay in lockstep.
+pocopine-directives = { workspace = true }
 # RFC 049 / RFC 050 §4.6 — rustc-flavoured diagnostic renderer.
 # Host-only, same as the parser crates above.
 annotate-snippets = "0.11"

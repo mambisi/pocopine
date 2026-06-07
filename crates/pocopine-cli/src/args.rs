@@ -45,6 +45,18 @@ pub enum Cmd {
     /// compile once and print the stylesheet (or write it to --output).
     #[command(hide = true)]
     Stylekit(StylekitArgs),
+    /// Run the pocopine language server over stdio (used by the VSCode
+    /// extension and other LSP clients). Backed by pocopine-template-parser.
+    Lsp(LspArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct LspArgs {
+    /// Communicate over stdio. This is the default and currently the only
+    /// supported transport; the flag exists so editor clients can pass it
+    /// explicitly.
+    #[arg(long)]
+    pub stdio: bool,
 }
 
 #[derive(Parser, Debug, Clone)]

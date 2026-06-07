@@ -55,6 +55,21 @@ fn resolve(cfg: &PocopineConfig) -> StylekitConfig {
     }
 }
 
+/// LSP support: the project's `@theme` input CSS, or `None` when Stylekit isn't
+/// enabled for the project or the input file is absent. The language server
+/// feeds this to [`pocopine_stylekit::compile_project`] together with a single
+/// open document, so editor class diagnostics use the same registry + theme
+/// tokens + known component classes the build does — no false positives on
+/// project-defined color tokens or author CSS classes.
+pub fn project_theme_css(project: &Path) -> Option<String> {
+    let cfg = crate::config::load(project).ok()?;
+    if !enabled(&cfg, false, false) {
+        return None;
+    }
+    let scfg = resolve(&cfg);
+    std::fs::read_to_string(project.join(&scfg.input)).ok()
+}
+
 /// Compile the project's CSS, returning the result and the source files
 /// (kept for diagnostic rendering). Does not write anything.
 fn compile(project: &Path, scfg: &StylekitConfig) -> Result<(ProjectCss, Vec<SourceFile>)> {

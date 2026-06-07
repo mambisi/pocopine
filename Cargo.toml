@@ -18,6 +18,7 @@ members = [
     "crates/pocopine-codec",
     "crates/pocopine-core",
     "crates/pocopine-crypto",
+    "crates/pocopine-directives",
     "crates/pocopine-deploy",
     "crates/pocopine-deploy-railway",
     "crates/pocopine-deploy-render",
@@ -101,6 +102,7 @@ pocopine-deploy = { path = "crates/pocopine-deploy", version = "0.1.0" }
 pocopine-deploy-railway = { path = "crates/pocopine-deploy-railway", version = "0.1.0" }
 pocopine-deploy-render = { path = "crates/pocopine-deploy-render", version = "0.1.0" }
 pocopine-events = { path = "crates/pocopine-events", version = "0.1.0" }
+pocopine-directives = { path = "crates/pocopine-directives", version = "0.1.0" }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.1.0" }
 pocopine-live = { path = "crates/pocopine-live", version = "0.1.0" }
