@@ -1,11 +1,10 @@
 name: publish-crates
 
-# Publish the workspace crates to crates.io. Triggered by pushing a version tag
-# (e.g. `v0.1.0`) or run manually. Requires the `CARGO_REGISTRY_TOKEN` repo
-# secret (a crates.io API token).
+# Publish the workspace crates to crates.io. MANUAL ONLY for now — run it
+# (Actions → publish-crates → Run workflow) once the crate names are reserved on
+# crates.io and CARGO_REGISTRY_TOKEN is set/rotated. Kept off the version tag so
+# the binary release (release.yml) isn't blocked by an unready crates.io publish.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
