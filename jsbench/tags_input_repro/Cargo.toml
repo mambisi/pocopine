@@ -10,6 +10,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pocopine = { path = "../../crates/pocopine" }
-pine = { path = "../../crates/pine" }
+pine = { package = "pine-ui", path = "../../crates/pine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }

@@ -31,7 +31,7 @@ path = "src/bin/server.rs"
 required-features = []
 
 [dependencies]
-pine = { path = "../../crates/pine" }
+pine = { package = "pine-ui", path = "../../crates/pine" }
 pine-icons = { path = "../../crates/pine-icons" }
 pine-richtext = { workspace = true, features = ["view"] }
 pocopine = { path = "../../crates/pocopine" }
