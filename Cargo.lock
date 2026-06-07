@@ -2267,8 +2267,8 @@ dependencies = [
  "google-cloud-auth",
  "google-cloud-storage",
  "percent-encoding",
- "pine",
  "pine-icons",
+ "pine-ui",
  "pocopine",
  "pocopine-logging",
  "pocopine-server",
@@ -4209,10 +4209,10 @@ version = "0.1.0"
 dependencies = [
  "http-body-util",
  "js-sys",
- "pine",
  "pine-icons",
  "pine-motion",
  "pine-richtext",
+ "pine-ui",
  "pocopine",
  "pocopine-auth-client",
  "pocopine-events",
@@ -5463,23 +5463,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
-name = "pine"
-version = "0.1.0"
-dependencies = [
- "js-sys",
- "pocopine",
- "pocopine-core",
- "pocopine-storage",
- "serde",
- "serde_json",
- "time",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
- "web-sys",
-]
-
-[[package]]
 name = "pine-charts"
 version = "0.1.0"
 dependencies = [
@@ -5544,6 +5527,23 @@ dependencies = [
  "serde_json",
  "tracing",
  "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "pine-ui"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "pocopine",
+ "pocopine-core",
+ "pocopine-storage",
+ "serde",
+ "serde_json",
+ "time",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 
@@ -8148,7 +8148,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 name = "tags_input_repro"
 version = "0.1.0"
 dependencies = [
- "pine",
+ "pine-ui",
  "pocopine",
  "serde",
  "wasm-bindgen",
@@ -9293,10 +9293,10 @@ name = "website"
 version = "0.1.0"
 dependencies = [
  "js-sys",
- "pine",
  "pine-charts",
  "pine-icons",
  "pine-motion",
+ "pine-ui",
  "pocopine",
  "pocopine-logging",
  "pocopine-server",
