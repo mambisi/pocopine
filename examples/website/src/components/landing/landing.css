@@ -13,6 +13,29 @@
   margin: -1rem 0 0.5rem;
 }
 
+/* Editor-extension install links, centered under the install command */
+.landing-ext {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem 0.7rem;
+  margin: 0 0 2.5rem;
+  padding: 0 var(--site-padding-x);
+  font-size: 0.9rem;
+}
+.landing-ext-label { color: var(--fg-muted); }
+.landing-ext-link {
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 0.32rem 0.7rem;
+  text-decoration: none;
+  transition: background 0.12s, transform 0.12s;
+}
+.landing-ext-link:hover { background: var(--bg-subtle); transform: translateY(-1px); }
+
 /* Feature grid */
 .landing-features {
   display: grid;

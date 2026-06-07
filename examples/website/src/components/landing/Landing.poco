@@ -5,6 +5,12 @@
     <install-cmd></install-cmd>
   </div>
 
+  <div class="landing-ext">
+    <span class="landing-ext-label">Editor extension</span>
+    <a class="landing-ext-link" href="https://marketplace.visualstudio.com/items?itemName=pocopine.vscode-poco">Install for VS Code ↗</a>
+    <a class="landing-ext-link" href="https://open-vsx.org/extension/pocopine/vscode-poco">Open VSX ↗</a>
+  </div>
+
   <stack-showcase></stack-showcase>
   <stack-flow></stack-flow>
   <secure-section></secure-section>

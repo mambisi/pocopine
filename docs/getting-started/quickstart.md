@@ -99,6 +99,22 @@ just dev
 Ship a release build with `pocopine build --release`, then deploy with
 `pocopine deploy`.
 
+## 4. Editor support
+
+Install the **Poco LSP** extension for `.poco` syntax highlighting, completion,
+diagnostics, hover, and goto-definition:
+
+- **VS Code** — the [Marketplace](https://marketplace.visualstudio.com/items?itemName=pocopine.vscode-poco), or from a terminal:
+  ```bash
+  code --install-extension pocopine.vscode-poco
+  ```
+- **VSCodium / Cursor / Windsurf** — [Open VSX](https://open-vsx.org/extension/pocopine/vscode-poco)
+
+With the `pocopine` CLI installed, the extension automatically runs the
+framework's own `pocopine lsp` server, so diagnostics match the compiler;
+without it, a bundled server is used. Run `pocopine doctor` to check both your
+toolchain and whether the extension is installed.
+
 ## Next steps
 
 - **[Components](../guides/components/README.md)** — structure and state, in depth.

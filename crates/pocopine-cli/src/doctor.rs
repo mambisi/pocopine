@@ -72,6 +72,8 @@ pub fn run(args: &DoctorArgs) -> Result<()> {
         "install wasm-pack or set `[tools].wasm-pack` in .pocopine.toml",
     );
 
+    check_editor_extension(&mut report);
+
     let cfg = project
         .as_deref()
         .and_then(|project| check_project_config(&mut report, project));
@@ -390,6 +392,41 @@ fn check_worker_backend(report: &mut Report) {
         "worker backend",
         "environment supports a separate worker process",
     );
+}
+
+/// Recommend the "Poco LSP" editor extension. Always informational (never a
+/// warning/failure, so it never trips `--strict`): if the VS Code CLI is on
+/// PATH we report whether the extension is installed and otherwise print the
+/// one-line install command; if there's no `code` CLI we just point at the
+/// marketplaces.
+fn check_editor_extension(report: &mut Report) {
+    const EXT_ID: &str = "pocopine.vscode-poco";
+    match tools::which("code") {
+        Some(code) => {
+            let installed = std::process::Command::new(&code)
+                .arg("--list-extensions")
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .is_some_and(|out| {
+                    String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .any(|line| line.trim().eq_ignore_ascii_case(EXT_ID))
+                });
+            if installed {
+                report.ok("editor extension", "Poco LSP (pocopine.vscode-poco) installed");
+            } else {
+                report.ok(
+                    "editor extension",
+                    "install Poco LSP — `code --install-extension pocopine.vscode-poco`",
+                );
+            }
+        }
+        None => report.ok(
+            "editor extension",
+            "Poco LSP — VS Code Marketplace / Open VSX (search \"Poco LSP\")",
+        ),
+    }
 }
 
 fn check_command(
