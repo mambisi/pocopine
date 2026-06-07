@@ -1,0 +1,60 @@
+name: release
+
+# Publish the workspace crates to crates.io. Triggered by pushing a version tag
+# (e.g. `v0.1.0`) or run manually. Requires the `CARGO_REGISTRY_TOKEN` repo
+# secret (a crates.io API token).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-crates:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain pinned to match rust-toolchain.toml — installed explicitly,
+      # same as ci.yml (dtolnay's toml support is partial).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-publish
+
+      - name: install cargo-workspaces
+        run: cargo install cargo-workspaces --locked
+
+      # Publish every publishable workspace crate (examples set `publish = false`
+      # and are skipped) in dependency order, at the versions in the tagged
+      # commit.
+      #   --from-git    publish the current commit as-is (no version bump/commit)
+      #   --no-verify   skip cargo's host build-verify — most crates only compile
+      #                 for wasm32, so a host verify would fail
+      #   --allow-branch '*'  permit the detached HEAD of a tag checkout
+      # Already-published versions are skipped, so re-runs are safe.
+      #
+      # First-release caveats (expect to iterate once):
+      #   * crate names must be free or owned on crates.io;
+      #   * crates.io rate-limits NEW crate publishes (~1 / 10 min after a small
+      #     burst), so a first all-crates release may need a couple of re-runs.
+      - name: cargo workspaces publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo workspaces publish \
+            --from-git \
+            --no-verify \
+            --allow-branch '*' \
+            --yes
