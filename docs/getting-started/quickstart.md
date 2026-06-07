@@ -10,28 +10,26 @@ assumes the [CLI is installed](./installation.md).
 
 ## 1. Scaffold an app
 
-A pocopine app is a Rust library crate compiled to WebAssembly. Create
-one and add the `pocopine` runtime (and optionally `pine` for UI
-primitives):
+`pocopine new` scaffolds a small welcome app — Cargo manifest,
+`index.html`, and a few composed components — so you skip the manual
+crate setup:
 
 ```bash
-cargo new --lib hello-pine
+pocopine new hello-pine
 cd hello-pine
-cargo add pocopine serde --features serde/derive
 ```
 
-Then set the crate type in `Cargo.toml` so wasm-pack can build a browser-
-loadable module:
+The generated crate is a Rust library compiled to WebAssembly: its
+`Cargo.toml` already depends on `pocopine` and sets
+`crate-type = ["cdylib", "rlib"]`, and `src/lib.rs` registers the
+starter components. (Want the framework's agent guides for your editor?
+`pocopine new --skills`, or `pocopine skills install` later.)
 
-```toml
-[lib]
-crate-type = ["cdylib", "rlib"]
-```
-
-## 2. Write a component
+## 2. Anatomy of a component
 
 A component is a Rust struct plus a `.poco` template file. The struct
-holds state; `#[handlers]` methods mutate it.
+holds state; `#[handlers]` methods mutate it. The scaffold ships a few;
+here's the shape of one — add your own the same way:
 
 ```rust
 // src/lib.rs
@@ -67,8 +65,10 @@ pub fn main() {
 By default `#[component]` looks for a template named after the struct
 (`Counter.poco`) in the same directory as the `.rs` file.
 
-Create an `index.html` with a `pp-app` root — `App::run()` scans for
-that attribute and mounts all registered components it finds inside it:
+The scaffold's `index.html` already has a `pp-app` root — `App::run()`
+scans for that attribute and mounts all registered components it finds
+inside it. To add a component, register it in `main()` and drop its tag
+in:
 
 ```html
 <!-- index.html -->
@@ -88,11 +88,11 @@ that attribute and mounts all registered components it finds inside it:
 
 ## 3. Run it
 
-`pocopine dev` builds the wasm bundle, serves it on a local port, and
-rebuilds on save.
+`just dev` (which wraps `pocopine dev`) builds the wasm bundle, serves it
+on a local port, and rebuilds on save.
 
 ```bash
-pocopine dev
+just dev
 # → listening on http://127.0.0.1:5243
 ```
 
