@@ -5,6 +5,10 @@ description: "Optional typed .client.ts modules, npm package imports, and dev-wa
 
 # Client Modules And Node Packages
 
+> Part of [Plugins & extensions](../plugins/README.md). A client module is the
+> typed JS-SDK layer an [app plugin](../plugins/app-plugins.md) usually wraps —
+> see the [Firebase example](../plugins/example.md) for the full chain.
+
 Pocopine apps do not need JavaScript tooling by default. When a project opts
 into typed `.client.ts` files, the CLI owns the small JavaScript toolkit path
 so authors still use Pocopine commands as the front door.

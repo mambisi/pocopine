@@ -5,6 +5,10 @@ description: "The app-plugin architecture: install-time setup, lifecycle orderin
 
 # App plugins
 
+> Part of [Plugins & extensions](./README.md). For how a component reaches the
+> services a plugin provides, see [Consuming plugins](./consuming.md); for a full
+> worked extension, see the [Firebase example](./example.md).
+
 The app plugin system, introduced by
 [RFC 076](../../../rfcs/rfc-076-app-plugin-lifecycle.md), lets optional crates
 install app-level behavior without editing `pocopine-core`.
