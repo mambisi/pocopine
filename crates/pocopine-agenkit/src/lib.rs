@@ -37,6 +37,10 @@ pub mod shared;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 
+/// The curated host-side authoring prelude (`use pocopine_agenkit::prelude::*`).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod prelude;
+
 /// Re-exported so apps can derive `JsonSchema` on structured-output types
 /// without depending on `schemars` directly.
 #[cfg(not(target_arch = "wasm32"))]
