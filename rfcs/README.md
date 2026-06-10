@@ -97,3 +97,4 @@ Conventions:
 | 089 | [SPA router parity and nested outlets](./rfc-089-spa-router-parity.md) | Accepted |
 | 090 | [Merge `pocopine-sync-crud` into `pocopine-sync-query`](./rfc-090-merge-crud-into-query.md) | Implemented |
 | 092 | [Pine Stylekit utility compiler](./rfc-092-pocopine-stylekit.md) | Accepted |
+| 093 | [Pocopine Agenkit plan](./rfc-093-pocopine-agenkit.md) | Draft |
