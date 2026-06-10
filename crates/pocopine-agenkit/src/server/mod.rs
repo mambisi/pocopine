@@ -8,6 +8,7 @@
 
 pub mod agenkit;
 pub mod agent;
+pub mod bridge;
 pub mod context;
 pub mod embed;
 pub mod flow;
@@ -20,11 +21,13 @@ pub mod reduce;
 pub mod retrieval;
 pub mod run;
 mod schema;
+pub mod stream_route;
 pub mod thread;
 pub mod tool;
 
-pub use agenkit::{with_principal, Agenkit, AgenkitBuilder};
+pub use agenkit::{Agenkit, AgenkitBuilder, with_principal};
 pub use agent::{AgentRun, AiAgent, AiAgentBuilder};
+pub use bridge::to_server_error;
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};
 pub use embed::{AiEmbedder, DynEmbedder, EmbedderRegistry};
 pub use flow::{AiFlowContext, Flow, FlowHandler, FlowRegistry, RetrieveBuilder};
@@ -36,6 +39,7 @@ pub use provider::{
     ProviderCapabilities, ProviderRegistry, StreamChunk,
 };
 pub use reduce::ReduceBuilder;
-pub use retrieval::{retriever_as_tool, AiRetriever, DynRetriever, RetrieverRegistry};
+pub use retrieval::{AiRetriever, DynRetriever, RetrieverRegistry, retriever_as_tool};
+pub use stream_route::{AI_FLOW_STREAM_PATH, ai_flow_stream_router, stream_filter};
 pub use thread::{AgentThreadHandle, AgentThreadStore, InMemoryThreadStore, ThreadBuilder};
 pub use tool::{AiTool, DynTool, ToolRegistry};
