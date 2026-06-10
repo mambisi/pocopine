@@ -1,0 +1,15 @@
+[package]
+name = "pocopine-agenkit-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dependency-light, wasm-friendly contract and payload types for Pocopine Agenkit. Defines model/provider refs, content/messages, tool/retriever/embedder descriptors, flow + orchestration types, trace/stream payloads, and AgenkitError. Stays observe-neutral so generated clients, tests, and tooling share the same types."
+
+# RFC-093 — intentionally dependency-light and wasm-friendly (no provider
+# SDKs, no tracing, no server runtime, no pocopine-observe). `serde` carries
+# the payload types; `serde_json::Value` carries opaque tool args / structured
+# output / JSON-schema metadata. Both compile cleanly for wasm32.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
