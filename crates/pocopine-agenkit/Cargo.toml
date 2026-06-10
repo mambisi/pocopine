@@ -1,0 +1,47 @@
+[package]
+name = "pocopine-agenkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pocopine Agenkit runtime facade — the unified generative-AI app surface: Agenkit/Ai builders, providers, flows, tools/retrievers/embedders, agents, threads, parallel orchestration, and trace emission. App authors depend on this crate; it re-exports the stable contracts from pocopine-agenkit-core."
+
+[dependencies]
+pocopine-agenkit-core = { workspace = true }
+
+# The runtime is host-side; its dependencies are gated so the workspace
+# `wasm32-unknown-unknown` build keeps compiling this crate as an (empty)
+# library. Modelled on crates/pocopine-sync-query. More land per checkpoint:
+#   * Phase 3    pocopine-auth + pocopine-server (server-fn + principal adapter)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Public flows map AgenkitError -> ServerError at the client boundary (§D9/§D10).
+pocopine-core = { workspace = true }
+# Tools/retrieval run under the caller principal threaded in by the in-facade
+# adapter (§D5/§D10, §D15 DC-5) — no #[server] macro change.
+pocopine-auth = { workspace = true }
+# AI events ride the existing observability stack: TraceEvent -> ObservedEvent
+# -> emit_tracing. No parallel telemetry runtime (§D12).
+pocopine-observe = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Provider runtime + bounded parallel branches (JoinSet/abort) + timeouts.
+tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+# Type-driven JSON Schemas for robust structured output (§D10).
+schemars = "0.8"
+# The public AI-flow streaming route (SSE) + Provider::generate_stream, matching
+# pocopine-server/live (§D8).
+axum = "0.7"
+futures = "0.3"
+tokio-stream = "0.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `multi_thread` so parallel-branch cancellation tests actually race.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+# Tests/examples derive JsonSchema on their structured-output types.
+schemars = "0.8"
+# Capture emitted `pocopine.trace` events in flow/parallel trace-tree tests.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+# Drive the SSE route in-process (oneshot) and collect its body.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
