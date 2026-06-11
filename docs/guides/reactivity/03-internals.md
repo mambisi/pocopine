@@ -1,6 +1,6 @@
 ---
 title: "Reactivity internals"
-description: "How pocopine's reactive runtime tracks dependencies, schedules updates, and exposes computed values and stores — for people extending the engine."
+description: "How pocopine's signals-first runtime tracks dependencies, fingerprints handler writes, schedules updates, and exposes computed values and stores — for people extending the engine."
 ---
 
 # Reactivity internals
@@ -14,48 +14,61 @@ is for extenders who need to know how the runtime actually works.
 
 Pocopine has no virtual DOM and no render pass. A directive is just an
 **effect** — a closure registered with the reactive engine. When that
-closure runs it reads component fields through a `js_sys::Proxy`; each read
-**subscribes** the running effect to a `(scope, field)` pair. When the field
-is written, the engine **requeues** every subscribed effect and reruns them
-on the next microtask. There is no diffing — the effect re-reads the value
-and patches its own piece of the DOM.
+closure runs it reads component fields through the **scoped access** layer
+(Rust-side, no JS proxy on the path); each read **subscribes** the running
+effect to that field's interned **signal**. When the field is written, the
+engine **requeues** every subscribed effect and reruns them on the next
+microtask. There is no diffing — the effect re-reads the value and patches
+its own piece of the DOM.
 
 ```text
-read  →  proxy get trap  →  track(scope, key)   subscribe running effect
-write →  proxy set trap  →  trigger(scope, key) →  queue subscribers
-                                                  →  microtask flush → rerun
+read  →  read_field_tracked(scope, key)  →  track: intern (scope, key) → SignalId
+                                            subscribe running effect to it
+write →  write_field_tracked(scope, key) →  trigger: bump the field's projection
+                                            version, queue subscribers
+                                            →  microtask flush → rerun
 ```
+
+A `js_sys::Proxy` still exists — but as an **optional JS-interop shim**,
+not the engine. Components whose compiled plan is provably proxy-free mount
+without one (`StaticTemplatePlan::needs_proxy`); the proxy is lazy-minted
+only when something genuinely dynamic asks for it, and its get/set traps
+are thin wrappers over the same `read_field_tracked` / `write_field_tracked`
+mirrors every other reader uses. `js_bridge(scope_id)` is the explicit way
+to get one for JS interop.
 
 Three moving parts hold this together, and the rest of this page walks each:
 
-- **Two dependency tables.** A proxy table keyed on `(ScopeId, key)` for
-  component fields, and a separate id-keyed table for signals — which
-  `computed` rides on. Both feed the same effect engine, queue, flush, and
-  batch counter.
+- **One signal graph.** Every dependency edge — component field, store
+  field, standalone signal, `computed` result — lives in a single id-keyed
+  table. Component fields get there by **interning**: the first
+  `track(scope, key)` allocates a `SignalId` for that `(scope, field)` pair.
 - **An effect engine.** Effects, their schedulers, cleanups, and reverse
   dep edges, all keyed on `EffectId`.
 - **A microtask flush.** A single coalesced drain of the queue, scheduled
   via a resolved-promise microtask.
 
-Everything below lives in `crates/pocopine-core/src/reactive.rs` (the engine)
-and `scope.rs` (the proxy traps and handler dispatch), with `computed.rs`,
-`signal.rs`, and `store.rs` as consumers.
+Everything below lives in `crates/pocopine-core/src/reactive.rs` (the
+engine), `scope.rs` (the access mirrors, projections, and handler
+dispatch), and `fingerprint.rs` (the dirty-sweep hasher), with
+`computed.rs`, `signal.rs`, and `store.rs` as consumers.
 
 ## Thread-locals
 
 Everything lives in per-wasm-module `thread_local`s. WASM is single-threaded,
 so these are effectively module-globals with safe access from any call site.
 
+In `reactive.rs` (the engine):
+
 | Thread-local | Type | Role |
 |---|---|---|
-| `NEXT_ID` | `Cell<u64>` | Monotonic id source shared by scopes, effects, and signals. Starts at `1`; `ScopeId(0)` is reserved as the `SIGNAL_SCOPE` sentinel. |
+| `NEXT_ID` | `Cell<u64>` | Monotonic id source shared by scopes, effects, and signals. Starts at `1`; `0` stays unallocated as an easy-to-spot "never minted" value. |
 | `CURRENT_EFFECT` | `Cell<Option<EffectId>>` | The effect running right now. Read by `track` / `track_signal` to know who is subscribing. |
 | `EFFECTS` | `HashMap<EffectId, Rc<dyn Fn()>>` | The effect body. Rerun by id during flush. |
 | `SCHEDULERS` | `HashMap<EffectId, Rc<dyn Fn(EffectId)>>` | Per-effect custom schedulers. When present, dispatch calls the scheduler inline instead of queueing. Used by `computed` to flip its dirty bit. |
-| `DEPS` | `HashMap<ScopeId, HashMap<Key, HashSet<EffectId>>>` | Proxy forward map: given a scope and field name, which effects to rerun. Two-level nesting keeps `trigger_scope` O(k) in the scope's live key count. |
-| `REVERSE` | `HashMap<EffectId, HashSet<(ScopeId, Key)>>` | Proxy back map: given an effect, which `(scope, key)` pairs it subscribed to. Used by `clear_deps_for` to drop stale subscriptions before each rerun. |
-| `SIGNAL_DEPS` | `HashMap<SignalId, HashSet<EffectId>>` | Signal forward map, keyed on `SignalId` directly (see [the dual dep tables](#the-dual-dependency-tables)). |
-| `SIGNAL_REVERSE` | `HashMap<EffectId, HashSet<SignalId>>` | Signal back map; the signal-table counterpart to `REVERSE`. |
+| `FIELD_SIGNALS` | `HashMap<ScopeId, HashMap<Key, SignalId>>` | The interning table: which `SignalId` represents each `(scope, field)` pair. The nesting keeps `trigger_scope` and `DirtySweep::begin` O(k) in the scope's observed keys, and lets lookups probe with a bare `&str`. |
+| `SIGNAL_DEPS` | `HashMap<SignalId, HashSet<EffectId>>` | THE forward map: given a signal, which effects to rerun. Fields, stores, standalone signals, and `computed` results all live here. |
+| `SIGNAL_REVERSE` | `HashMap<EffectId, HashSet<SignalId>>` | The back map: given an effect, which signals it subscribed to. Used by `clear_deps_for` to drop stale subscriptions before each rerun. |
 | `QUEUE` | `HashSet<EffectId>` | Effects pending rerun. Drained by `flush`. |
 | `FLUSH_SCHEDULED` | `Cell<bool>` | Guards against scheduling more than one flush microtask at a time. |
 | `CLEANUPS` | `HashMap<EffectId, Vec<Box<dyn FnOnce()>>>` | Teardown hooks registered via `on_cleanup`. Run before the next rerun or when `release` is called. |
@@ -63,135 +76,162 @@ so these are effectively module-globals with safe access from any call site.
 | `AUTO_FLUSH` | `Cell<bool>` | Disabling this (tests only) holds queued effects until `flush_sync` runs. |
 | `TRIGGER_SCRATCH` | `RefCell<Vec<EffectId>>` | Reusable per-thread snapshot buffer so dispatch does not clone a `HashSet` on every trigger. |
 
-The proxy `Key` type is `Cow<'static, str>`: a macro-generated `&'static str`
-threads through to the `HashMap` without allocation, while a dynamically built
-key (proxy traps, dotted paths) owns its string exactly once. `HashMap`'s
-`Borrow` support lets lookups probe with a bare `&str`.
+In `scope.rs` (access, projections, and the proxy shim):
 
-## The dual dependency tables
+| Thread-local | Type | Role |
+|---|---|---|
+| `SCOPES` | `HashMap<ScopeId, Scope>` | The scope registry: id → state + lazily-minted proxy slot. |
+| `VERSIONS` | `HashMap<SignalId, u32>` | Per-field projection version. A write bumps it; that bump IS the cache invalidation. |
+| `PROJECTIONS` | `HashMap<SignalId, (u32, JsValue)>` | The serde projection store: the field's `JsValue` form, stamped with the version it was built at. Stale stamp = rebuild on next read. |
+| `PATCHED` | `HashMap<ScopeId, HashSet<SignalId>>` | Fields surgically patched via `patch_*_inline` since the last sweep. The sweep re-stamps these to the new version instead of invalidating — the patch already wrote the JS value correctly. |
+| `BRIDGES` | `HashMap<ScopeId, JsValue>` | Memoized `js_bridge` proxies for explicit JS interop. |
+| `PROXIES_MINTED` / `SERDE_PROJECTIONS` | `Cell<u64>` | Observability counters (`proxies_minted_count`, `serde_projection_count`) — the elision and typed-lane acceptance gates assert against them in tests. |
+| `CURRENT_SCOPE_ID` / `CURRENT_EL` | — | Ambient context during handler invocation and directive install, for `this::<T>()`, `dispatch!`, and `refs`. |
 
-There are **two** dependency tables, sharing one effect engine but keyed
-differently.
+The `Key` type is `Cow<'static, str>`: a macro-generated `&'static str`
+threads through to the `HashMap` without allocation, while a dynamically
+built key owns its string exactly once. `HashMap`'s `Borrow` support lets
+lookups probe with a bare `&str`.
 
-**The proxy table** (`DEPS` / `REVERSE`) keys subscriptions on
-`(ScopeId, key)` — the scope plus the field name. This is what component
-fields and stores ride on. The nesting (`DEPS[scope][key]`) is deliberate:
+## One graph, interned fields
 
-1. Key lookup uses `&str` directly via `Cow<'static, str>: Borrow<str>`. A
-   flat `HashMap<(ScopeId, Key), _>` would need a `(ScopeId, Cow)` probe,
-   forcing a string allocation on every lookup.
-2. `trigger_scope` becomes O(k) in the scope's live keys — iterate the inner
-   map — instead of scanning every `(scope, key)` pair in the app.
+There is **one** dependency table. Component fields join it by interning:
 
-**The id-keyed signal table** (`SIGNAL_DEPS` / `SIGNAL_REVERSE`) keys
-subscriptions on a numeric `SignalId` directly — no scope, no string. Signals
-used to piggyback on the proxy map via a stringified id plus the
-`SIGNAL_SCOPE` pseudo-scope (`ScopeId(0)`), which cost two allocations per
-access — one in `id.to_string()`, one in the key's `.to_owned()`. The
-dedicated table makes that cost zero. The `SIGNAL_SCOPE` sentinel is still
-reserved so a future path could re-join the two tables without a scope-id
-collision.
+```text
+track(scope_id, "count")
+  └─ ensure_field_signal(scope_id, "count")
+     └─ FIELD_SIGNALS[scope][("count")]   — allocate SignalId on first use
+  └─ track_signal(sid)
+     ├─ SIGNAL_DEPS[sid].insert(current_effect)
+     └─ SIGNAL_REVERSE[current_effect].insert(sid)
+```
 
-Both `signal`/`rw_signal` **and** `computed` ride the id-keyed table:
+Standalone `signal` / `rw_signal` and `computed` allocate their `SignalId`s
+directly, so fields, stores, signals, and computed results are
+indistinguishable to the dispatcher: `trigger(scope, key)` resolves the
+interned id and calls the same `trigger_signal` tail that `Setter::set`
+uses. An effect that reads a field *and* a signal has both edges in
+`SIGNAL_REVERSE`; `clear_deps_for` clears them uniformly before every
+rerun.
 
-- `signal::get` / `RwSignal::get` call `track_signal(id)`; `Setter::set` /
-  `update` call `trigger_signal(id)`.
-- `computed` allocates a `SignalId` for its *own* result and uses
-  `trigger_signal` to notify downstream readers when it goes dirty (see
-  [Computed internals](#computed-internals)).
-
-The two tables converge at `dispatch_subs`: `trigger` looks subscribers up in
-`DEPS`, `trigger_signal` looks them up in `SIGNAL_DEPS`, and both hand the
-resulting `HashSet<EffectId>` to the same dispatch path. An effect that reads
-both a proxy field and a signal ends up with edges in `REVERSE` *and*
-`SIGNAL_REVERSE`; `clear_deps_for` clears both before every rerun.
+(Historically there were two tables — a string-keyed proxy map plus the
+id-keyed signal map — unified in RFC-095 W3a. An interning experiment that
+also cached `Key → SignalId` lookups per call site was benchmarked and
+reverted; the two-level `FIELD_SIGNALS` probe is already cheap.)
 
 ## The lifecycle of a read
 
 ```text
 directive body runs inside effect(f)
   └─ CURRENT_EFFECT = Some(id)
-     └─ Reflect::get(&proxy, "count")
-        └─ proxy get trap fires (in JS, calling back to Rust)
-           └─ track(scope_id, "count")
-              ├─ DEPS[scope_id]["count"].insert(current_effect)
-              └─ REVERSE[current_effect].insert((scope_id, "count"))
-           └─ return FIELD_CACHE[scope_id]["count"]
-              // or state.borrow().get("count") on a cache miss
+     └─ read_field_tracked(scope_id, state, "count")
+        ├─ track(scope_id, "count")          intern + subscribe (see above)
+        └─ value, in priority order:
+           ├─ typed text lane: field_as_text(key) — scalar fields
+           │  (String / numbers / bool) stringify Rust-side, zero serde
+           ├─ projection store: PROJECTIONS[sid] if its stamp == VERSIONS[sid]
+           └─ rebuild: state.borrow().get("count") → serde_wasm_bindgen,
+              stored back into PROJECTIONS at the current version
 ```
 
 `track` short-circuits when the subscription already exists — the common
 hot path of an effect re-reading fields it is already subscribed to bails
-without any allocation. Only on the first track does it own the string once
-and share the `Cow::Owned` across the `DEPS` key and the `REVERSE` entry.
+without any allocation.
 
-Field values are cached in `FIELD_CACHE` (in `scope.rs`) after the first
-serialisation. Subsequent reads of the same field within a trigger cycle
-reuse the cached `JsValue` without going through `serde_wasm_bindgen` again.
-The cache is invalidated per-field by the proxy set trap and per-scope after
-a handler invocation. Derived scopes (`SlotScope` and friends) declare
-themselves non-cacheable — they recompose their return value from a parent
-proxy on every read, so caching would freeze the value.
+Two details worth knowing:
+
+- **The typed text lane** (`pp-text` and text interpolation on scalar
+  fields) never builds a `JsValue` at all: `read_field_text` subscribes,
+  then extracts a `String` straight from Rust state via the macro-generated
+  `field_as_text` arms. The `serde_projection_count` counter exists to
+  prove this in tests.
+- **Versioned projections replace cache invalidation.** Nothing ever
+  "clears the cache" — a write bumps `VERSIONS[sid]`, and the next read
+  finds the projection's stamp stale and rebuilds. `patch_*_inline` APIs
+  write the projection in place and mark the field in `PATCHED` so the
+  next sweep re-stamps instead of bumping.
+
+Derived scopes (`SlotScope`, `LoopScope`, `PayloadScope`) declare
+themselves non-cacheable (`cacheable_fields() == false`) — they recompose
+values from a parent scope on every read, so projecting would freeze them.
+Their `get` falls through to `read_scope_key(parent_scope_id, key)` for
+anything they don't own, which keeps loop bodies and slot content
+read-complete without any proxy.
 
 ## The lifecycle of a write
 
-Two paths for proxy-backed component fields, both converging at
-`dispatch_subs`.
+Three write paths, all converging on `trigger`.
 
-**Through the proxy** — a `pp-model` input event or a direct assignment in a
-template expression:
+**Through the write mirror** — `pp-model` input events, template
+assignments (`open = !open`), and the proxy set trap all call the same
+function:
 
 ```text
-Reflect::set(&proxy, "count", 3)
-  └─ proxy set trap
-     ├─ state.borrow_mut().set("count", 3)
-     ├─ FIELD_CACHE[scope_id].remove("count")
-     └─ trigger(scope_id, "count")
-        └─ dispatch_subs(DEPS[scope_id]["count"])
+write_field_tracked(scope_id, state, "count", 3)
+  ├─ state.borrow_mut().set("count", 3)
+  ├─ VERSIONS[sid] += 1                       (projection invalidated by stamp)
+  └─ trigger(scope_id, "count")
+     └─ trigger_signal(FIELD_SIGNALS[scope]["count"])
+        └─ dispatch_subs(SIGNAL_DEPS[sid])
            ├─ effects with a custom scheduler: scheduler(effect_id) inline
            └─ remaining effects: QUEUE.insert(effect_id)
         └─ schedule_flush()
 ```
 
-When the field is a `flatten` leaf, the set trap also resolves the container
-key, invalidates its cache, and triggers it too — so `#[watch(<container>)]`
-fires alongside the per-leaf watch.
+When the field is a `flatten` leaf, the mirror also resolves the container
+key and triggers it too — so `#[watch(<container>)]` fires alongside the
+per-leaf watch.
 
-**Through a handler** — `#[handlers] fn increment(&mut self) { self.count += 1; }`
-mutates Rust state directly, bypassing the proxy. The runtime cannot know
-which fields a plain `&mut self` method changed, so `Scope::invoke` calls
-`invalidate_field_cache(id)` then `trigger_scope(id)` after the handler
-returns. `trigger_scope` clones the scope's live key list (so effect reruns
-can mutate `DEPS` mid-flush) and calls `trigger` for each — fanning out to
-every tracked key of that scope. Coarser than a single-field `trigger`, but
-correct. Targeted op APIs (`patch_*_inline`) keep the cache valid and fire
-only the named field instead of dropping the whole cache.
+**Through a handler** — `#[handlers] fn increment(&mut self)` mutates Rust
+state directly, bypassing every mirror. The runtime can't see which fields
+a `&mut self` method changed, so `Scope::invoke` brackets the call with a
+**dirty sweep** (RFC-095 W2):
 
-`Scope::invoke` also binds `CURRENT_SCOPE_ID` for the duration of the call so
-`this::<T>()` and `dispatch!` resolve to the right component; `Handle::update`
-takes the same blanket-`trigger_scope` path.
+```text
+Scope::invoke("increment")
+  ├─ DirtySweep::begin
+  │  └─ for every interned key of the scope:
+  │     before[k] = state.field_fingerprint(k)     (Fnv64 over a serde stream,
+  │                                                 no JS, no allocation)
+  ├─ state.borrow_mut().invoke("increment", args)  (your &mut self code)
+  └─ DirtySweep::finish
+     ├─ re-fingerprint; changed = keys whose hash moved
+     ├─ changed + patched   → projection re-stamped (PATCHED consumed)
+     ├─ changed + unpatched → version bump
+     └─ trigger(scope, k) for each changed k       — and ONLY those
+```
+
+A handler that touches one field out of twenty triggers exactly one field.
+Keys whose fingerprint is unavailable (`None` — computed fields, certain
+flatten shapes) are conservatively treated as changed. If the sweep can't
+even snapshot (a re-entrant invoke holding the state borrow), the runtime
+falls back to the blanket path: invalidate every projection and
+`trigger_scope` — every tracked key of the scope. The fallback is the
+exception, not the model.
+
+**`Handle::update` / `dispatch!`** take the same sweep-bracketed path as
+handler invocation.
 
 ## Dispatch and flushing
 
-`dispatch_subs` is the shared tail of both `trigger` and `trigger_signal`. It
-snapshots the subscriber set into the `TRIGGER_SCRATCH` buffer (taking
-ownership of it, so a re-entrant dispatch from an inline scheduler doesn't
-clobber the outer call's snapshot), then for each subscriber: if it has a
-custom scheduler, call it inline; otherwise push it onto `QUEUE`. If anything
-was queued and no batch is open, it calls `schedule_flush`.
+`dispatch_subs` is the shared tail of every trigger. It snapshots the
+subscriber set into the `TRIGGER_SCRATCH` buffer (taking ownership, so a
+re-entrant dispatch from an inline scheduler doesn't clobber the outer
+call's snapshot), then for each subscriber: if it has a custom scheduler,
+call it inline; otherwise push it onto `QUEUE`. If anything was queued and
+no batch is open, it calls `schedule_flush`.
 
 `schedule_flush` spawns a microtask via `wasm_bindgen_futures::spawn_local`,
-awaiting `JsFuture::from(Promise::resolve(&JsValue::NULL))`. When the resolved
-promise settles, `flush` drains the queue and reruns each pending effect.
-`FLUSH_SCHEDULED` ensures at most one such microtask is in flight at a time.
+awaiting `JsFuture::from(Promise::resolve(&JsValue::NULL))`. When the
+resolved promise settles, `flush` drains the queue and reruns each pending
+effect. `FLUSH_SCHEDULED` ensures at most one such microtask is in flight
+at a time.
 
 Re-running an effect (`run_effect`):
 
 1. Run all `on_cleanup` hooks registered during the previous run — a cleanup
    registered on iteration N belongs to N, not N+1.
-2. `clear_deps_for(id)` — removes this effect from **both** the proxy
-   (`DEPS`/`REVERSE`) and the id-keyed (`SIGNAL_DEPS`/`SIGNAL_REVERSE`)
-   tables.
+2. `clear_deps_for(id)` — removes this effect's edges from the signal graph.
 3. Set `CURRENT_EFFECT = Some(id)`, run the body, restore the previous value.
 
 The clear-before-run step keeps conditional reads correct. If the body ran
@@ -219,6 +259,28 @@ It increments `BATCHING` on entry and decrements on exit; while the counter
 is non-zero, `dispatch_subs` queues subscribers but skips `schedule_flush`.
 `batch` is nestable — only the outermost call drops the counter to zero, and
 it then schedules the deferred flush solely if the queue is non-empty.
+
+## The proxy, demoted to a shim
+
+The compiled template plan records `needs_proxy: bool`. The classifier
+marks a plan proxy-free when every install is provably servable by the
+access layer — bindings, interps, refs, listeners, native models,
+conditional chains and `pp-match` with proxy-free bodies, and `pp-for`
+sites whose items expression isn't `$`-rooted and whose `pp-key` is
+item-rooted. For those components, mount **mints nothing** — the
+`proxies_minted_count` counter stays flat, which the acceptance tests
+assert.
+
+When something genuinely dynamic needs a JS object later —
+`scope_of_element`, a delegated row listener firing, JS interop — the
+proxy is **lazy-minted** and cached on the scope. Its get trap calls
+`read_field_tracked`, its set trap calls `write_field_tracked`: the same
+mirrors everything else uses, so a proxy-mediated read/write is
+behaviorally identical to an elided one, just one JS hop slower.
+
+`js_bridge(scope_id)` is the explicit, memoized entry point for handing a
+component's state to JS code. Use it instead of fishing the proxy out of
+mount internals.
 
 ## Computed internals
 
@@ -249,10 +311,14 @@ plus a `Rc<RefCell<{ cached, dirty }>>` cell and its own `SignalId`:
   `cached`.
 
 So sources are re-evaluated only when a dep has changed **and** something
-reads the result again. The dirty-notification edge is exactly why `computed`
-needs the id-keyed signal table. Dropping the `Computed<T>` releases the
-underlying effect via `release`, so parent effect scopes stay tidy without a
-manual teardown step.
+reads the result again. Dropping the `Computed<T>` releases the underlying
+effect via `release`, so parent effect scopes stay tidy without a manual
+teardown step.
+
+(A push-pull upgrade in the style of alien-signals — colors/graph-walk
+instead of eager dirty notification — was profiled during RFC-096 S5 and
+not adopted: the dispatch tail measured 0.0ms on the heaviest benchmark
+action, so there is nothing for the added complexity to win.)
 
 ## Signals internals
 
@@ -265,8 +331,8 @@ render-loop bugs where an effect writes back a value it just read. The
 `set_force` / `update` variants fire unconditionally.
 
 Signals are the [standalone escape hatch](./02-utilities.md#advanced-standalone-signals),
-not the everyday model — but they exercise the same engine, so understanding
-the id-keyed table covers both signals and `computed`.
+not the everyday model — component fields ride the same graph, so there is
+no engine-level reason to prefer one over the other; pick by ownership.
 
 ## Stores internals
 
@@ -283,26 +349,28 @@ pub struct Preferences {
 The macro implements the `Store` trait (`STORE_NAME`, an idempotent
 `__register_store`, and `__handle`). A store's `Scope` registers in the
 name-keyed `STORE_SCOPES` table under its kebab-cased ident. In templates,
-`$store.preferences.theme` resolves through that scope's proxy and
-participates in normal proxy dep tracking — same `track` / `trigger` path as
-any component field. In Rust, `store::<Preferences>()` returns a
-`Handle<Preferences>` (the same `Handle<T>` that `this::<T>()` returns for a
-component), exposing `update` / `with` closures over the concrete state.
+`$store.preferences.theme` resolves through `magic_scope_access` — the
+same Rust-side read mirror as component fields, subscribing to the store
+scope's interned field signal; no proxy on the read path. In Rust,
+`store::<Preferences>()` returns a `Handle<Preferences>` (the same
+`Handle<T>` that `this::<T>()` returns for a component), exposing
+`update` / `with` closures that run inside a dirty sweep like any handler.
 
 ## Current constraints
 
 - **Reactivity is per field, by name.** `"count"` is a string key matched
   against the component's declared fields. There is no nested-field
-  tracking, no array-element tracking, and no index tracking in collections.
-- **Handler mutations trigger every key in scope.** Fine for small
-  components; for a component with many cold fields and one hot one, prefer a
-  `pp-model`-driven proxy assignment so the write goes through the
-  single-field `trigger` path instead of the blanket `trigger_scope`, or
-  reach for a `patch_*_inline` op to fire only the touched field.
-- **`trigger_scope` is O(k)**, not O(n), thanks to the nested `DEPS` map,
-  but it still fans out to all currently tracked keys. A handler that touches
-  one field out of twenty will still rerun all twenty effects that tracked
-  any field in the scope.
+  tracking, no array-element tracking, and no index tracking in
+  collections — but the dirty sweep means a handler mutation of
+  `self.rows[3].label` still triggers only `rows`, not the whole scope.
+- **Fingerprinting costs one serde pass per observed field per handler
+  call.** Fnv64 over a serde stream is cheap, but a scope with a huge
+  cold field (a big `Vec` nobody mutates) still pays to hash it on every
+  handler invocation. The `patch_*_inline` ops sidestep the projection
+  rebuild but not the hash.
+- **`trigger_scope` still exists as the fallback** for re-entrant invokes
+  and unfingerprintable keys — code extending the engine must keep it
+  correct even though the sweep makes it rare.
 - **Scheduler is single-tier.** Flush runs all queued effects in one
   unordered batch. There are no pre/post/idle priority groups.
 

@@ -82,8 +82,10 @@ button   { padding: 0.5rem 1rem; }
   lifecycle hook in the paired `.rs` (see below).
 * **Directive attributes** use the `pp-*` prefix:
   `pp-on:event.modifier`, `pp-bind:attr` (shorthand `:`), `pp-text`,
-  `pp-show`, `pp-if`, `pp-for`, `pp-model`, `pp-ref`, `pp-html`, etc.
-  Event bindings also accept the `@event` shorthand.
+  `pp-show`, `pp-if`/`pp-else-if`/`pp-else`, `pp-match`/`pp-case`,
+  `pp-for`, `pp-model`, `pp-ref`, `pp-html`, etc. Event bindings also
+  accept the `@event` shorthand. Structural directives and their
+  decision rules live in [`05-control-flow.md`](./05-control-flow.md).
 * **Attribute values are expressions**, not bare identifiers. `pp-text="count"`,
   `pp-text="count * 2"`, and `pp-bind:title="open ? 'close' : 'open'"` are
   all valid.

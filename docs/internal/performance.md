@@ -146,7 +146,7 @@ shape of one `pp-for` effect run:
 flowchart TB
   Start([effect re-run<br/>parent state changed]) --> Drain[drain prior into<br/>HashMap key→entry pool]
   Drain --> Loop{for i in 0..total}
-  Loop -- new key --> Mount[mint scope + clone +<br/>walker.bind / mount_row_compiled]
+  Loop -- new key --> Mount[mint scope + clone via<br/>body fragment / mount_row_compiled]
   Loop -- existing key --> Reuse[reuse: cancel any pending leave,<br/>maybe-update LoopScope, push to fresh]
   Mount --> Loop
   Reuse --> Loop
@@ -215,7 +215,7 @@ Compiled row plans whose every binding routes through the typed
 `FastExpr` evaluator never read the proxy on the hot path —
 bindings evaluate against the row's typed `LoopScope` directly.
 So if `is_proxy_elision_eligible() == true`, skip
-`Scope::into_proxy` entirely and call `walker::bind_scope_id_only`
+`Scope::into_proxy` entirely and call `mount::bind_scope_id_only`
 instead of `bind_scope_to`.
 
 Lazy-mint hook: if a delegated listener actually fires on a row,
@@ -251,18 +251,20 @@ clears collapse to a no-op for known-empty maps.
 
 ### Lever 5b — parent-level bulk-release marker (`a836353`)
 
-The framework's `MutationObserver` runs `release_subtree` on every
-removed element, walking each sub-element's side-tables. After
-`replaceChildren` removes 10k rows in one DOM op, the observer
-processes all 10k removals in one batch — and the per-element
-walk meant tens of thousands of `Reflect::get` calls.
+At the time, the framework's `MutationObserver` ran
+`release_subtree` on every removed element, walking each
+sub-element's side-tables. After `replaceChildren` removed 10k
+rows in one DOM op, the observer processed all 10k removals in
+one batch — tens of thousands of `Reflect::get` calls.
 
-Stamp **one marker** on the parent before the bulk DOM mutation
-(`__pp_bulk_release` via `Reflect::set`). The observer callback
-checks the marker on `rec.target()` and short-circuits the entire
-batch's `release_subtree` sweep, then clears the marker.
+The lever stamped **one marker** on the parent before the bulk
+DOM mutation; the observer callback checked it and
+short-circuited the batch's sweep.
 
-One `Reflect::set` per clear instead of N per-row stamps.
+*(Historical: RFC-058 Phase 6.5 later removed the
+MutationObserver-driven release entirely — the bulk-clear path
+now does synchronous bulk teardown directly, so the marker
+machinery is gone with the observer.)*
 
 ---
 
@@ -353,13 +355,38 @@ the remaining costs split roughly:
   ~50 ms tax over vanilla on Firefox that hits every WASM
   framework on the chart, not just us.
 - ~quarter is **residual Rust-side work** — `KeyResolver::resolve`
-  per row, `item_signature` JSON.stringify on reuse, the
-  `MutationObserver` ack/release on bulk paths. Each individual
-  one is small; collapsing them needs whole-loop redesign rather
-  than another pointwise lever.
+  per row, `item_signature` JSON.stringify on reuse. Each
+  individual one is small; collapsing them needs whole-loop
+  redesign rather than another pointwise lever.
 
 `docs/internal/performance-strategy.md` carries the forward roadmap for
 those.
+
+---
+
+## 8. Since this retrospective
+
+Later branches built on these patterns; this file stays as the
+RFC-054 record, with the successors documented in their RFCs:
+
+- **RFC-058** removed the runtime walker entirely — compiled
+  template plans now own every install, and the
+  MutationObserver-driven release went with it (see the Lever 5b
+  note above).
+- **RFC-095 / RFC-096** rebuilt the reactive core signals-first:
+  one interned signal graph, a per-field fingerprint sweep around
+  handlers (replacing blanket `trigger_scope`), versioned serde
+  projections (replacing the Phase A field cache), a typed text
+  lane, and **component-level** proxy elision — Lever 4's
+  row-level idea generalized to every component whose compiled
+  plan is provably proxy-free (`needs_proxy`), with `js_bridge`
+  as the explicit interop mint. Measured −6.4% geomean vs the
+  pre-branch baseline on the same harness.
+- **RFC-094** replaced structural `<template>` anchors with
+  comment anchors (`<!--pp:cond-->` / `<!--pp:match-->` /
+  `<!--pp:for-->`). The bulk-clear guard from Lever 1 learned to
+  tolerate exactly the controller's own anchor comment; the
+  migration benchmarked perf-neutral.
 
 ---
 
