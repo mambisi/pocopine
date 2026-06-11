@@ -854,7 +854,88 @@ fn doc() -> web_sys::Document {
     window().unwrap().document().unwrap()
 }
 
+/// RFC-094 — three-branch conditional chain fixture.
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "plan-cond-chain-host",
+    template_inline = r#"
+<div class="pcc-root">
+  <button class="pcc-bump" pp-on:click="bump">+</button>
+  <template pp-if="count > 5">
+    <p class="pcc-branch pcc-big">big</p>
+  </template>
+  <!-- comments between members are tolerated -->
+  <template pp-else-if="count > 0">
+    <p class="pcc-branch pcc-small">small</p>
+  </template>
+  <template pp-else>
+    <p class="pcc-branch pcc-zero">zero</p>
+  </template>
+</div>"#
+)]
+struct PlanCondChainHost {
+    count: i32,
+}
+
+#[handlers]
+impl PlanCondChainHost {
+    pub fn bump(&mut self) {
+        self.count += 1;
+    }
+}
+
+/// RFC-094 Phase 3 — externally-tagged enum driven by `pp-match`.
+#[derive(Default, Serialize, Deserialize)]
+enum MatchStatus {
+    #[default]
+    Idle,
+    Loading,
+    Ready(String),
+    Err {
+        code: i32,
+    },
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "plan-match-host",
+    template_inline = r#"
+<div class="pm-root">
+  <button class="pm-next" pp-on:click="next">next</button>
+  <template pp-match="status">
+    <template pp-case="Idle | Loading">
+      <p class="pm-arm pm-pending">pending</p>
+    </template>
+    <!-- comments between arms are tolerated -->
+    <template pp-case="Ready" pp-let="msg">
+      <p class="pm-arm pm-ready">{{msg}}</p>
+    </template>
+    <template pp-case="_">
+      <p class="pm-arm pm-other">other</p>
+    </template>
+  </template>
+</div>"#
+)]
+struct PlanMatchHost {
+    status: MatchStatus,
+}
+
+#[handlers]
+impl PlanMatchHost {
+    pub fn next(&mut self) {
+        self.status = match &self.status {
+            MatchStatus::Idle => MatchStatus::Loading,
+            MatchStatus::Loading => MatchStatus::Ready("one".into()),
+            MatchStatus::Ready(s) if s == "one" => MatchStatus::Ready("two".into()),
+            MatchStatus::Ready(_) => MatchStatus::Err { code: 7 },
+            MatchStatus::Err { .. } => MatchStatus::Idle,
+        };
+    }
+}
+
 fn register_all() {
+    PlanMatchHost::register();
+    PlanCondChainHost::register();
     PlanTextEcho::register();
     Rfc064ExprHost::register();
     PlanForLoop::register();
@@ -1184,14 +1265,12 @@ async fn svg_pp_for_mounts_rows_in_svg_namespace() {
     let rows = host.query_selector_all(".r68-row").unwrap();
     assert_eq!(rows.length(), 2, "only mounted rows should be visible");
 
-    let template = host
-        .query_selector("svg template")
-        .unwrap()
-        .expect("SVG controller anchor remains in place");
-    assert_eq!(
-        template.children().length(),
-        0,
-        "SVG template prototypes are cleared after install",
+    // RFC-094 Phase 4 — the SVG pseudo-template (a foreign
+    // element, not an HTMLTemplateElement) swaps for the comment
+    // anchor like every pp-for site; comments are valid SVG nodes.
+    assert!(
+        host.query_selector("svg template").unwrap().is_none(),
+        "the SVG controller anchor must leave the live DOM",
     );
 
     let line = host
@@ -1271,6 +1350,78 @@ async fn rfc064_keyed_remove_and_swap_reuse_dom_nodes() {
 
     assert_eq!(plan_failure_count(), 0);
     host.remove();
+}
+
+/// RFC-095 W4 — differential gate: the mutation channel's cold
+/// mount + append must produce byte-identical DOM to the direct
+/// web-sys path, with the proxy elision intact in both modes.
+#[wasm_bindgen_test]
+async fn channel_and_direct_keyed_mounts_match() {
+    register_all();
+    reset_plan_failure_count();
+
+    let render_pass = |label: &str, enabled: bool| {
+        pocopine_core::mutation_channel::set_enabled(enabled);
+        let _ = label;
+    };
+
+    // Direct pass — capture html AND node-identity behavior so
+    // the direct lane keeps real coverage while the channel is
+    // the default for every other keyed test in this module.
+    render_pass("direct", false);
+    let mints_before = pocopine_core::scope::proxies_minted_count();
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+    let first_before = host.query_selector(".r64k-row").unwrap().unwrap();
+    let append = host.query_selector(".r64k-append").unwrap().unwrap();
+    append.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert!(
+        host.query_selector(".r64k-row")
+            .unwrap()
+            .unwrap()
+            .is_same_node(Some(&first_before)),
+        "direct append must reuse existing row nodes",
+    );
+    let direct_html = host
+        .query_selector("rfc064-keyed-fast-host")
+        .unwrap()
+        .unwrap()
+        .inner_html();
+    let direct_elided = pocopine_core::scope::proxies_minted_count() == mints_before;
+    host.remove();
+    tick().await;
+    // Restore the default BEFORE asserting — a failure here must
+    // not leak channel-off into every later test in the session.
+    pocopine_core::mutation_channel::set_enabled(true);
+    assert!(direct_elided, "direct keyed mount stays proxy-elided");
+
+    // Channel pass.
+    render_pass("channel", true);
+    let mints_before = pocopine_core::scope::proxies_minted_count();
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+    let append = host.query_selector(".r64k-append").unwrap().unwrap();
+    append.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    let channel_html = host
+        .query_selector("rfc064-keyed-fast-host")
+        .unwrap()
+        .unwrap()
+        .inner_html();
+    assert_eq!(
+        pocopine_core::scope::proxies_minted_count(),
+        mints_before,
+        "channel keyed mount stays proxy-elided",
+    );
+    host.remove();
+    tick().await;
+
+    assert_eq!(
+        direct_html, channel_html,
+        "channel and direct mounts must produce identical DOM",
+    );
+    assert_eq!(plan_failure_count(), 0);
 }
 
 #[wasm_bindgen_test]
@@ -2528,5 +2679,482 @@ async fn compiled_mount_skips_recursion_for_plan_clean_subtrees() {
     tick().await;
     assert_eq!(read(&host, ".pih-bare"), "phase6");
 
+    host.remove();
+}
+
+// ─── RFC-095 W0 — keyed fast-path symmetry gates ────────────────
+//
+// The keyed reconciler has four fast paths (append, prepend,
+// single-remove, two-swap) that each reimplement a slice of the
+// general path's semantics. This gate drives a mutation whose
+// SHAPE selects each fast path, plus general-path shapes
+// (reorder+insert+remove, full replace, clear, rebuild), and
+// oracle-checks the rendered row order against the list after
+// every step. A fast path that is *almost* equivalent to the
+// general path fails here, not in an app.
+
+#[wasm_bindgen_test]
+async fn keyed_fast_paths_match_list_oracle() {
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+
+    let root = host
+        .query_selector("rfc064-keyed-fast-host")
+        .unwrap()
+        .unwrap()
+        .first_element_child()
+        .unwrap();
+    let (_id, proxy) = pocopine_core::mount::scope_of_element(&root).expect("host scope");
+
+    let write_rows = |rows: &[(u32, &str)]| {
+        let arr = js_sys::Array::new();
+        for (id, label) in rows {
+            let o = js_sys::Object::new();
+            js_sys::Reflect::set(&o, &"id".into(), &JsValue::from_f64(*id as f64)).unwrap();
+            js_sys::Reflect::set(&o, &"label".into(), &JsValue::from_str(label)).unwrap();
+            arr.push(&o);
+        }
+        js_sys::Reflect::set(&proxy, &"rows".into(), &arr).unwrap();
+    };
+    let read_rows = || -> Vec<String> {
+        let nodes = host.query_selector_all(".r64k-row").unwrap();
+        (0..nodes.length())
+            .filter_map(|i| nodes.get(i).and_then(|n| n.text_content()))
+            .collect()
+    };
+
+    // (shape that selects the path, expected labels in order)
+    let steps: &[(&str, &[(u32, &str)])] = &[
+        // on_setup seeds one/two/three — append fast path:
+        (
+            "append",
+            &[(1, "one"), (2, "two"), (3, "three"), (4, "four")],
+        ),
+        // prepend fast path:
+        (
+            "prepend",
+            &[
+                (0, "zero"),
+                (1, "one"),
+                (2, "two"),
+                (3, "three"),
+                (4, "four"),
+            ],
+        ),
+        // single-remove fast path (drop id 2):
+        (
+            "single-remove",
+            &[(0, "zero"), (1, "one"), (3, "three"), (4, "four")],
+        ),
+        // two-swap fast path (swap zero <-> four):
+        (
+            "two-swap",
+            &[(4, "four"), (1, "one"), (3, "three"), (0, "zero")],
+        ),
+        // general path: reorder + insert + remove in one shot:
+        (
+            "general",
+            &[(3, "three"), (9, "nine"), (0, "zero"), (1, "one")],
+        ),
+        // general path: same keys, every label rewritten:
+        ("relabel", &[(3, "III"), (9, "IX"), (0, "0"), (1, "I")]),
+        // clear:
+        ("clear", &[]),
+        // rebuild from empty (cold pool):
+        ("rebuild", &[(7, "seven"), (8, "eight")]),
+    ];
+
+    for (name, rows) in steps {
+        write_rows(rows);
+        tick().await;
+        let expected: Vec<String> = rows.iter().map(|(_, l)| l.to_string()).collect();
+        assert_eq!(
+            read_rows(),
+            expected,
+            "fast-path symmetry violated at step `{name}`",
+        );
+    }
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+// ─── RFC-095 W3b — plan-gated lazy proxy minting ────────────────
+
+/// A bindings/interps-only plan must mount WITHOUT a proxy (no
+/// trap closures, no `Proxy` per instance), still render through
+/// the scoped readers, and lazy-mint the proxy on first dynamic
+/// need — the RFC-054 row contract, generalized to components.
+#[wasm_bindgen_test]
+async fn proxy_elided_component_renders_and_lazy_mints() {
+    let host = mount("<plan-text-echo></plan-text-echo>");
+    tick().await;
+
+    // The plan must have been classified proxy-free…
+    let plan = template_plan_for("plan-text-echo").expect("plan registered");
+    assert!(
+        !plan.needs_proxy,
+        "a pp-text-only plan must classify as proxy-free",
+    );
+
+    // …the component must render (scoped reader, no proxy)…
+    let root = host
+        .query_selector("plan-text-echo")
+        .unwrap()
+        .unwrap()
+        .first_element_child()
+        .unwrap();
+    let msg = host.query_selector(".ple-msg").unwrap().unwrap();
+    assert_eq!(
+        msg.text_content().as_deref(),
+        Some("value: {count} ok"),
+        "elided component must render via the scoped reader",
+    );
+
+    // …with NO proxy minted at mount…
+    assert!(
+        !pocopine_core::mount::has_minted_proxy(&root),
+        "eligible plan must not mint a proxy at mount",
+    );
+
+    // …and the first dynamic consumer lazy-mints it.
+    let (_id, proxy) = pocopine_core::mount::scope_of_element(&root).expect("lazy mint");
+    assert!(!proxy.is_undefined());
+    assert!(
+        pocopine_core::mount::has_minted_proxy(&root),
+        "scope_of_element must mint + cache the proxy on demand",
+    );
+
+    // The lazily-minted proxy is fully functional: a write through
+    // its set trap re-renders the elided binding — and (RFC-096
+    // S3) the scalar update rides the typed text lane: zero serde
+    // projections are built for it.
+    let serde_before = pocopine_core::scope::serde_projection_count();
+    js_sys::Reflect::set(&proxy, &"message".into(), &JsValue::from_str("fresh")).unwrap();
+    tick().await;
+    assert_eq!(msg.text_content().as_deref(), Some("fresh"));
+    assert_eq!(
+        pocopine_core::scope::serde_projection_count(),
+        serde_before,
+        "S3: a scalar pp-text update must build no serde projection",
+    );
+
+    // RFC-096 S2 — listeners + native models are access-driven
+    // now, so a flat interactive component (input + pp-model +
+    // readout) is ALSO proxy-free…
+    let interactive = template_plan_for("start-compiled-model-host").expect("plan registered");
+    assert!(
+        !interactive.needs_proxy,
+        "S2: listener/model-only plans must classify proxy-free",
+    );
+    // …and (RFC-094 Phase 2) cond chains with proxy-free bodies
+    // are eligible too — the access-based controller closed the
+    // pp-if elision tail…
+    let chain = template_plan_for("plan-if-body-host").expect("plan registered");
+    assert!(
+        !chain.needs_proxy,
+        "RFC-094: a cond plan with proxy-free branch bodies must elide",
+    );
+    // …and (RFC-094 Phase 4) pp-for plans elide too when the items
+    // expression isn't `$`-rooted and the pp-key (if any) is
+    // item-rooted — rows bind per-row LoopScopes, never the parent
+    // proxy.
+    let structural = template_plan_for("plan-for-body-host").expect("plan registered");
+    assert!(
+        !structural.needs_proxy,
+        "RFC-094 Phase 4: an item-rooted pp-for plan must elide the parent proxy",
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+// ─── RFC-096 S4 — proxy endgame ─────────────────────────────────
+
+/// The S4 acceptance gates: an elided component's mount mints
+/// ZERO proxies; `js_bridge` is the one explicit way to get one,
+/// it memoizes, and its traps ride the shared read/write mirrors.
+#[wasm_bindgen_test]
+async fn elided_mount_mints_nothing_and_js_bridge_is_explicit() {
+    register_all();
+    let mints_before = pocopine_core::scope::proxies_minted_count();
+    let host = mount("<plan-text-echo></plan-text-echo>");
+    tick().await;
+    assert_eq!(
+        pocopine_core::scope::proxies_minted_count(),
+        mints_before,
+        "S4: mounting an elided component must mint zero proxies",
+    );
+
+    let root = host
+        .query_selector("plan-text-echo")
+        .unwrap()
+        .unwrap()
+        .first_element_child()
+        .unwrap();
+    let scope_id = {
+        // Resolve the id WITHOUT scope_of_element (which would
+        // lazy-mint): the host stamp carries it.
+        let raw = host.query_selector("plan-text-echo").unwrap().unwrap();
+        pocopine_core::mount::child_component_scope_id(&raw).expect("stamped id")
+    };
+
+    // js_bridge: mints exactly once, memoizes, and is live.
+    let b1 = pocopine_core::scope::js_bridge(scope_id).expect("bridge");
+    let b2 = pocopine_core::scope::js_bridge(scope_id).expect("bridge");
+    assert_eq!(
+        pocopine_core::scope::proxies_minted_count(),
+        mints_before + 1,
+        "js_bridge must mint exactly once",
+    );
+    assert!(js_sys::Object::is(&b1, &b2), "js_bridge must memoize");
+
+    js_sys::Reflect::set(&b1, &"message".into(), &JsValue::from_str("via bridge")).unwrap();
+    tick().await;
+    assert_eq!(
+        root.query_selector(".ple-msg")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .as_deref(),
+        Some("via bridge"),
+        "bridge writes ride the shared write mirror",
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+// ─── RFC-094 Phase 0 — structural templates carry `hidden` ─────
+
+/// Stylekit's space-*/divide-* utilities select
+/// `> :not([hidden]) ~ :not([hidden])`; a structural `<template>`
+/// is an element WITHOUT the hidden attribute, so it used to
+/// count as a phantom sibling (margins/borders around unmounted
+/// branches). Phase 0 stamps `hidden` in the cleaned HTML.
+#[wasm_bindgen_test]
+async fn structural_templates_are_hidden_stamped() {
+    // cond/match/for templates are comment-swapped at install
+    // (RFC-094 Phases 2–4); pp-teleport templates remain live-DOM
+    // anchors (origin back-link + stash), so the stamp is checked
+    // on a teleport fixture.
+    let host = mount("<plan-teleport-host></plan-teleport-host>");
+    tick().await;
+    let tpl = host
+        .query_selector("template")
+        .unwrap()
+        .expect("the pp-teleport template anchor is in the live DOM");
+    assert!(
+        tpl.has_attribute("hidden"),
+        "structural template anchors must carry `hidden` so sibling \
+         selectors skip them",
+    );
+    host.remove();
+}
+
+// ─── RFC-094 Phase 4 — pp-for comment anchor ────────────────────
+
+/// The for controller swaps its `<template>` for `<!--pp:for-->`
+/// at install: rows are the only element children of the list
+/// parent, so the `:nth-child` family (and `last:` Stylekit
+/// variants) finally line up with what's visible — the phantom
+/// trailing template used to break `li:last-child` outright.
+#[wasm_bindgen_test]
+async fn for_swaps_template_for_comment_anchor() {
+    register_all();
+    let host = mount("<plan-for-body-host></plan-for-body-host>");
+    tick().await;
+
+    assert_eq!(
+        host.query_selector_all("template").unwrap().length(),
+        0,
+        "the pp-for template must leave the live DOM",
+    );
+    let rows = host.query_selector_all(".pfbh-row").unwrap();
+    assert_eq!(rows.length(), 2);
+
+    // The comment anchor sits AFTER the rows (clones insert before
+    // it) and is invisible to CSS structural pseudo-classes.
+    let last = host
+        .query_selector("ul > li:last-child")
+        .unwrap()
+        .expect(":last-child must match the final row, not bail on the anchor");
+    assert_eq!(last.text_content().as_deref(), Some("beta"));
+    let second = host
+        .query_selector("ul > li:nth-child(2)")
+        .unwrap()
+        .expect(":nth-child must count only live rows");
+    assert_eq!(second.text_content().as_deref(), Some("beta"));
+
+    // Reconciliation keeps inserting at the anchor.
+    let add = host.query_selector(".pfbh-add").unwrap().unwrap();
+    add.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    let last = host
+        .query_selector("ul > li:last-child")
+        .unwrap()
+        .expect("anchor still positions appended rows");
+    assert_eq!(last.text_content().as_deref(), Some("row-3"));
+    assert_eq!(host.query_selector_all(".pfbh-row").unwrap().length(), 3);
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+// ─── RFC-094 Phase 2 — conditional chains ───────────────────────
+
+/// The chain contract end-to-end: one plan entry per chain,
+/// consumed member templates leave the live DOM, the head swaps
+/// for a comment anchor, exactly one branch renders, switching
+/// follows first-truthy order, and a chain with proxy-free
+/// bodies mounts elided.
+#[wasm_bindgen_test]
+async fn cond_chain_renders_exactly_one_branch_and_switches() {
+    register_all();
+    let plan = template_plan_for("plan-cond-chain-host").expect("plan registered");
+    assert_eq!(plan.if_plans.len(), 1, "one chain = one plan entry");
+    let chain = &plan.if_plans[0];
+    assert_eq!(chain.else_if.len(), 1);
+    assert!(chain.has_else);
+    assert_eq!(chain.consumed_count, 2);
+    assert!(
+        !plan.needs_proxy,
+        "chain with proxy-free bodies + listener must elide (RFC-094/096 convergence)",
+    );
+
+    let mints_before = pocopine_core::scope::proxies_minted_count();
+    let host = mount("<plan-cond-chain-host></plan-cond-chain-host>");
+    tick().await;
+    assert_eq!(
+        pocopine_core::scope::proxies_minted_count(),
+        mints_before,
+        "chain mount must mint zero proxies",
+    );
+
+    let count_all = || host.query_selector_all(".pcc-branch").unwrap().length();
+    let text_of_active = || {
+        host.query_selector(".pcc-branch")
+            .unwrap()
+            .map(|e| e.text_content().unwrap_or_default())
+            .unwrap_or_default()
+    };
+    // count = 0 → else branch, exactly one clone, no templates in
+    // the live DOM (head comment-swapped, members detached).
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "zero");
+    assert_eq!(
+        host.query_selector_all("template").unwrap().length(),
+        0,
+        "chain templates must leave the live DOM",
+    );
+
+    // Drive the chain through every branch via the handler.
+    let bump = host.query_selector(".pcc-bump").unwrap().unwrap();
+    let click = |el: &Element| {
+        el.dyn_ref::<HtmlElement>().unwrap().click();
+    };
+
+    click(&bump); // count = 1 → small
+    tick().await;
+    assert_eq!(count_all(), 1, "exactly one branch after switch");
+    assert_eq!(text_of_active(), "small");
+
+    for _ in 0..5 {
+        click(&bump); // count = 6 → big
+    }
+    tick().await;
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "big");
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn match_dispatches_arms_and_updates_payload_in_place() {
+    register_all();
+    let plan = template_plan_for("plan-match-host").expect("plan registered");
+    assert_eq!(plan.match_plans.len(), 1, "one pp-match = one plan entry");
+    let mp = &plan.match_plans[0];
+    assert_eq!(mp.cases.len(), 3);
+    assert_eq!(mp.cases[0].tags, &["Idle", "Loading"]);
+    assert_eq!(mp.cases[1].tags, &["Ready"]);
+    assert_eq!(mp.cases[1].bind_name, Some("msg"));
+    assert!(mp.cases[2].tags.is_empty(), "`_` arm has no tags");
+    assert!(
+        !plan.needs_proxy,
+        "match with proxy-free arm bodies must elide (RFC-094/096 convergence)",
+    );
+
+    let mints_before = pocopine_core::scope::proxies_minted_count();
+    let host = mount("<plan-match-host></plan-match-host>");
+    tick().await;
+    assert_eq!(
+        pocopine_core::scope::proxies_minted_count(),
+        mints_before,
+        "match mount must mint zero proxies",
+    );
+
+    let count_all = || host.query_selector_all(".pm-arm").unwrap().length();
+    let active = || host.query_selector(".pm-arm").unwrap().unwrap();
+    let text_of_active = || active().text_content().unwrap_or_default();
+
+    // Idle → first arm, exactly one clone, no live templates
+    // (the match template swapped for its comment anchor).
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "pending");
+    assert_eq!(
+        host.query_selector_all("template").unwrap().length(),
+        0,
+        "match + case templates must leave the live DOM",
+    );
+
+    let next = host.query_selector(".pm-next").unwrap().unwrap();
+    let click = |el: &Element| {
+        el.dyn_ref::<HtmlElement>().unwrap().click();
+    };
+
+    // Idle → Loading: SAME arm (`Idle | Loading`) — no remount.
+    let pending_el = active();
+    click(&next);
+    tick().await;
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "pending");
+    assert!(
+        active().is_same_node(Some(pending_el.as_ref())),
+        "same-arm switch must not remount the clone",
+    );
+
+    // Loading → Ready("one"): arm switch, pp-let payload bound.
+    click(&next);
+    tick().await;
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "one");
+
+    // Ready("one") → Ready("two"): same tag — payload updates IN
+    // PLACE through the PayloadScope, no remount.
+    let ready_el = active();
+    click(&next);
+    tick().await;
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "two");
+    assert!(
+        active().is_same_node(Some(ready_el.as_ref())),
+        "same-tag payload change must not remount the clone",
+    );
+
+    // Ready("two") → Err { code: 7 }: falls to the `_` wildcard.
+    click(&next);
+    tick().await;
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "other");
+
+    // Err → Idle: full cycle back to the first arm.
+    click(&next);
+    tick().await;
+    assert_eq!(count_all(), 1);
+    assert_eq!(text_of_active(), "pending");
+
+    assert_eq!(plan_failure_count(), 0);
     host.remove();
 }
