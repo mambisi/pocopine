@@ -508,6 +508,28 @@ Authors using `space-y-*`, `divide-*`, `odd:` / `even:` /
 silently wrong styling; that is a Stylekit-default framework
 shipping a footgun in its default styling path.
 
+**Compatibility.** No user-facing surface changes: `<template>`
+stays the authoring syntax (`.poco` sources unchanged), Rust
+component code is untouched (no supported API exposes the
+template element), and served/cleaned HTML is unchanged — the
+swap is client-side at install. The observable delta is live-DOM
+shape only. Code that can notice:
+
+- CSS that *compensated* for the phantom sibling (e.g. a
+  negative margin cancelling a phantom `space-y` gap) will
+  double-compensate once the bug is fixed — a one-line cleanup,
+  and Phase 0's `hidden` stamp surfaces most of this class
+  early, making Phase 4 itself nearly invisible.
+- Unsupported DOM spelunking (`query_selector("template[pp-if]")`,
+  hard-coded `children[i]` indices counting the template) breaks;
+  there is no supported path to the template element.
+- App test suites asserting DOM shape see mechanical snapshot
+  churn (same class as this repo's own test updates).
+
+Pre-1.0, this is a changelog entry plus a "phantom-sibling CSS
+workarounds can be removed" migration note, not a deprecation
+cycle.
+
 ### 5.10 Directive registry & LSP
 
 Four `DirectiveSpec` entries in
