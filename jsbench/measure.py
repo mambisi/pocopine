@@ -220,6 +220,14 @@ def profile_plan() -> list[tuple[str, int]]:
     ]
 
 
+def channel_init_script(page) -> None:
+    """RFC-095 W4 A/B hook: POCOPINE_CHANNEL=off disables the
+    mutation channel in the same binary."""
+    import os
+    if os.environ.get("POCOPINE_CHANNEL", "").lower() == "off":
+        page.add_init_script("window.__POCOPINE_MUTATION_CHANNEL = false;")
+
+
 def launch_browser(p, name: str):
     """Pick a Playwright browser by name. Defaults to firefox to
     preserve the historical bench numbers; --browser chromium runs
@@ -239,6 +247,7 @@ def profile_runlots(root: Path, browser_name: str) -> int:
     with serve(root) as base_url, sync_playwright() as p:
         browser = launch_browser(p, browser_name)
         page = browser.new_page(viewport={"width": 1280, "height": 1200})
+        channel_init_script(page)
         reports: list[str] = []
 
         page.add_init_script("window.__POCOPINE_MOUNT_PROFILE = true;")
@@ -277,6 +286,7 @@ def profile_bench(root: Path, browser_name: str) -> int:
     with serve(root) as base_url, sync_playwright() as p:
         browser = launch_browser(p, browser_name)
         page = browser.new_page(viewport={"width": 1280, "height": 1200})
+        channel_init_script(page)
         page.add_init_script("window.__POCOPINE_MOUNT_PROFILE = true;")
 
         # Profile reports flow in via console.log; pair them with
@@ -437,6 +447,7 @@ def main() -> int:
     with serve(root) as base_url, sync_playwright() as p:
         browser = launch_browser(p, args.browser)
         page = browser.new_page(viewport={"width": 1280, "height": 1200})
+        channel_init_script(page)
         page.on("pageerror", lambda err: print(f"[PAGE ERROR] {err}"))
         page.on(
             "console",
