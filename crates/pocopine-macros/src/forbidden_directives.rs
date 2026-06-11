@@ -69,8 +69,9 @@ fn walk(el: &Element, out: &mut TokenStream, seen: &mut HashSet<&'static str>) {
         let Some(head) = attr_name.strip_prefix("pp-") else {
             continue;
         };
-        if let Some(&(name, message)) =
-            pocopine_directives::REMOVED.iter().find(|(n, _)| *n == head)
+        if let Some(&(name, message)) = pocopine_directives::REMOVED
+            .iter()
+            .find(|(n, _)| *n == head)
         {
             if seen.insert(name) {
                 let msg = format!("pocopine: {message}");

@@ -126,7 +126,13 @@ pub(crate) fn analyze_template_plan(
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
     let slot_fragment_fns = emit_slot_fragment_fns(&emissions);
-    let if_body_fns = emit_if_body_fns(&emissions);
+    let mut if_body_fns = emit_if_body_fns(&emissions);
+    // RFC-094 — chain build errors surface as compile_error!
+    // items alongside the emitted fragments.
+    for msg in &ctx.diagnostics {
+        let lit = proc_macro2::Literal::string(msg);
+        if_body_fns.extend(quote! { ::core::compile_error!(#lit); });
+    }
     // When the only "entry" is a row-plan stamp (template has no
     // plan-eligible directive on its own), still emit cleaned HTML
     // so the row-plan attribute is baked in — but skip the
@@ -180,6 +186,8 @@ struct AnalysisCtx {
     /// parses the expression, and calls
     /// [`crate::directives::if_::install`].
     if_plans: Vec<IfPlanLite>,
+    /// RFC-094 Phase 3 — `pp-match` dispatch sites.
+    match_plans: Vec<MatchPlanLite>,
     /// RFC-058 Phase 4.2 — `pp-for` controller sites the
     /// classifier lifted out of the runtime mount's
     /// directive-dispatch path. The classifier parses
@@ -220,6 +228,14 @@ struct AnalysisCtx {
     /// without an arg) stays on `ChildHostModelLite`; this
     /// vec covers only native targets.
     native_models: Vec<NativeModelLite>,
+    /// RFC-094 — chain build errors surfaced as compile_error!
+    /// items (orphan/double/misplaced else, bad member shape).
+    diagnostics: Vec<String>,
+    /// RFC-094 — node paths of consumed pp-else-if/pp-else
+    /// member templates (kept in cleaned HTML until the
+    /// controller detaches them; the serializer stamps them
+    /// `hidden` like every structural template).
+    chain_member_paths: Vec<Vec<u16>>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -378,10 +394,30 @@ struct IfBodyEmission {
     plan: AnalysisCtx,
 }
 
+/// RFC-094 Phase 3 — one `pp-match` site.
+struct MatchPlanLite {
+    template_node_path: Vec<u16>,
+    expr_src: String,
+    teleport_selector: Option<String>,
+    /// (tags — empty = `_`, pp-let bind name, body fragment).
+    cases: Vec<(Vec<String>, Option<String>, Option<syn::Ident>)>,
+    bodies_need_proxy: bool,
+}
+
 struct IfPlanLite {
     template_node_path: Vec<u16>,
     expr_src: String,
     teleport_selector: Option<String>,
+    /// RFC-094 — pp-else-if branches: (expr_src, body fragment).
+    else_if: Vec<(String, Option<syn::Ident>)>,
+    /// RFC-094 — pp-else present? (body may still be None when
+    /// unliftable — the runtime clones the member template).
+    has_else: bool,
+    else_body: Option<syn::Ident>,
+    /// Consumed chain-member templates following the head.
+    consumed_count: u16,
+    /// Recursive proxy-need over every lifted branch body.
+    bodies_need_proxy: bool,
     /// RFC-058 Phase 4.1d — `Some` when the body subtree was
     /// lift-eligible and the macro emitted a body fragment fn
     /// the `StaticIfPlan` literal should reference. `None`
@@ -398,6 +434,10 @@ struct ForPlanLite {
     items_expr: String,
     key_expr: Option<String>,
     stagger_ms: u32,
+    /// RFC-094 parity with Cond/MatchPlanLite — the lifted row
+    /// body's own proxy need (slot outlets, child mounts, …)
+    /// must flow into the host plan's `needs_proxy`.
+    bodies_need_proxy: bool,
     /// RFC-058 Phase 4.2c — `Some` when the row body subtree
     /// was lift-eligible AND no RFC-054 row plan claimed the
     /// same site. The macro emits a body fragment fn the
@@ -509,6 +549,7 @@ impl AnalysisCtx {
             || !self.refs.is_empty()
             || !self.child_mounts.is_empty()
             || !self.if_plans.is_empty()
+            || !self.match_plans.is_empty()
             || !self.for_plans.is_empty()
             || !self.teleport_plans.is_empty()
             || !self.slot_outlets.is_empty()
@@ -600,21 +641,44 @@ impl AnalysisCtx {
             .iter()
             .enumerate()
             .map(|(idx, entry)| emit_specialized_child_mount(idx, &entry.node_path));
-        let for_plans = self
-            .for_plans
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| emit_specialized_for_plan(idx, &entry.template_node_path));
-        let teleport_plans = self
-            .teleport_plans
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| emit_specialized_teleport_plan(idx, &entry.template_node_path));
-        let if_plans = self
-            .if_plans
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| emit_specialized_if_plan(idx, &entry.template_node_path));
+        // RFC-094 §5.4 — structural controllers (for / teleport /
+        // cond) mutate element structure when their first effect
+        // run mounts a clone (or when the cond controller swaps
+        // its template for the comment anchor), which would shift
+        // the element-child indices any LATER path resolution
+        // depends on. Two defenses: every other entry resolves
+        // its path before the structural block runs (see the
+        // emission order below), and the structural installs
+        // themselves run in REVERSE document order so no
+        // install's mutation precedes a structural sibling's
+        // resolution.
+        let mut structural: Vec<(Vec<u16>, TokenStream)> = Vec::new();
+        for (idx, entry) in self.for_plans.iter().enumerate() {
+            structural.push((
+                entry.template_node_path.clone(),
+                emit_specialized_for_plan(idx, &entry.template_node_path),
+            ));
+        }
+        for (idx, entry) in self.teleport_plans.iter().enumerate() {
+            structural.push((
+                entry.template_node_path.clone(),
+                emit_specialized_teleport_plan(idx, &entry.template_node_path),
+            ));
+        }
+        for (idx, entry) in self.if_plans.iter().enumerate() {
+            structural.push((
+                entry.template_node_path.clone(),
+                emit_specialized_if_plan(idx, &entry.template_node_path),
+            ));
+        }
+        for (idx, entry) in self.match_plans.iter().enumerate() {
+            structural.push((
+                entry.template_node_path.clone(),
+                emit_specialized_match_plan(idx, &entry.template_node_path),
+            ));
+        }
+        structural.sort_by(|a, b| b.0.cmp(&a.0));
+        let structural = structural.into_iter().map(|(_, tokens)| tokens);
         let materialize_slots = (0..self.slot_outlets.len()).map(|idx| {
             let idx = syn::Index::from(idx);
             quote! {
@@ -636,6 +700,7 @@ impl AnalysisCtx {
             quote! {
                 ::pocopine::__private::install_static_interp_target(
                     &__poc_interp_targets[#idx],
+                    scope_id,
                     proxy,
                 );
             }
@@ -657,14 +722,16 @@ impl AnalysisCtx {
             #(#bindings)*
             #(#listeners)*
             #(#child_mounts)*
-            #(#for_plans)*
-            #(#teleport_plans)*
-            #(#if_plans)*
+            // RFC-094 — interp targets are CAPTURED (path-resolved)
+            // and native models installed before any structural
+            // mutation can shift element indices; this closes the
+            // resolve-after-mutate latent hole.
+            #(#interps)*
+            #(#native_models)*
+            #(#structural)*
             #(#materialize_slots)*
             #(#opaque_directives)*
-            #(#interps)*
             #(#install_interps)*
-            #(#native_models)*
         })
     }
 
@@ -704,12 +771,14 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let refs_tokens = ctx.refs.iter().map(emit_ref);
     let child_mounts_tokens = ctx.child_mounts.iter().map(emit_child_mount);
     let if_plans_tokens = ctx.if_plans.iter().map(emit_if_plan);
+    let match_plans_tokens = ctx.match_plans.iter().map(emit_match_plan);
     let for_plans_tokens = ctx.for_plans.iter().map(emit_for_plan);
     let teleport_plans_tokens = ctx.teleport_plans.iter().map(emit_teleport_plan);
     let slot_outlets_tokens = ctx.slot_outlets.iter().map(emit_slot_outlet);
     let opaque_tokens = ctx.opaque_directives.iter().map(emit_opaque_directive);
     let interp_tokens = ctx.interps.iter().map(emit_interp);
     let native_model_tokens = ctx.native_models.iter().map(emit_native_model);
+    let needs_proxy = plan_needs_proxy(ctx);
     quote! {
         ::pocopine::__private::StaticTemplatePlan {
             bindings: &[ #(#bindings_tokens),* ],
@@ -717,14 +786,72 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
             refs: &[ #(#refs_tokens),* ],
             child_mounts: &[ #(#child_mounts_tokens),* ],
             if_plans: &[ #(#if_plans_tokens),* ],
+            match_plans: &[ #(#match_plans_tokens),* ],
             for_plans: &[ #(#for_plans_tokens),* ],
             teleport_plans: &[ #(#teleport_plans_tokens),* ],
             slot_outlets: &[ #(#slot_outlets_tokens),* ],
             opaque_directives: &[ #(#opaque_tokens),* ],
             interps: &[ #(#interp_tokens),* ],
             native_models: &[ #(#native_model_tokens),* ],
+            needs_proxy: #needs_proxy,
         }
     }
+}
+
+/// RFC-095 W3b — conservative proxy-need analysis. `false` only
+/// when every install in the plan is provably proxy-free at
+/// runtime: bindings / interps / refs, with every expression
+/// `$`-free so the W1 scoped root reader owns every root segment
+/// and the evaluator's proxy fallback is unreachable. Everything
+/// else — listeners (dispatch-time evaluation), structural
+/// controllers (effects capture the proxy), child mounts (slot
+/// fragments), slot outlets, opaque directives, native models
+/// (write side goes through the set trap) — keeps the eager
+/// mint. Err on `true`: a wrong `true` costs one Proxy per
+/// mount; a wrong `false` breaks a binding.
+fn plan_needs_proxy(ctx: &AnalysisCtx) -> bool {
+    // RFC-096 S2 — the scoped access is read-complete ($-roots
+    // included) and write-complete (the S1 mirror), so listeners,
+    // native models, and $-rooted expressions no longer need an
+    // eager proxy. What remains: structural controllers (their
+    // effects and body fragments still thread the proxy value),
+    // child mounts (slot-fragment plumbing), slot outlets, and
+    // opaque directives.
+    !ctx.child_mounts.is_empty()
+        || ctx.if_plans.iter().any(|c| c.bodies_need_proxy)
+        || ctx.match_plans.iter().any(|m| m.bodies_need_proxy)
+        || ctx.for_plans.iter().any(for_plan_needs_proxy)
+        || !ctx.teleport_plans.is_empty()
+        || !ctx.slot_outlets.is_empty()
+        || !ctx.opaque_directives.is_empty()
+}
+
+/// RFC-094 Phase 4 — a `pp-for` site forces the parent's eager
+/// proxy only where the controller actually threads it: `$`-rooted
+/// items expressions (conservative — the magic fallback) and
+/// external `pp-key` expressions, which `KeyResolver` resolves
+/// against the parent proxy. Row bodies bind to per-row LoopScopes
+/// (read-complete via `read_scope_key`) and never touch the
+/// parent's proxy. The key-shape test mirrors `KeyResolver::parse`
+/// exactly: `$index`, the bare item name, and `item.path` shapes
+/// are item-rooted; everything else is `External`.
+fn for_plan_needs_proxy(f: &ForPlanLite) -> bool {
+    if f.bodies_need_proxy {
+        return true;
+    }
+    if f.items_expr.trim_start().starts_with('$') {
+        return true;
+    }
+    let Some(key) = f.key_expr.as_deref() else {
+        return false;
+    };
+    let key = key.trim();
+    let is_item_rooted = key == "$index"
+        || key == f.item_name
+        || (key.len() > f.item_name.len() + 1
+            && key.starts_with(&f.item_name)
+            && key.as_bytes().get(f.item_name.len()) == Some(&b'.'));
+    !is_item_rooted
 }
 
 fn emit_native_model(nm: &NativeModelLite) -> TokenStream {
@@ -914,6 +1041,7 @@ fn emit_specialized_binding(idx: usize, path: &[u16]) -> TokenStream {
         #resolve
         ::pocopine::__private::install_static_binding(
             &__poc_el,
+            scope_id,
             proxy,
             &__poc_plan.bindings[#idx],
             __poc_template_name,
@@ -986,8 +1114,24 @@ fn emit_specialized_if_plan(idx: usize, path: &[u16]) -> TokenStream {
         #resolve
         ::pocopine::__private::install_static_if_plan(
             &__poc_el,
+            scope_id,
             proxy,
             &__poc_plan.if_plans[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_match_plan(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_match_plan(
+            &__poc_el,
+            scope_id,
+            proxy,
+            &__poc_plan.match_plans[#idx],
             __poc_template_name,
         );
     }
@@ -1049,6 +1193,7 @@ fn emit_specialized_native_model(idx: usize, path: &[u16]) -> TokenStream {
         #resolve
         ::pocopine::__private::install_static_native_model(
             &__poc_el,
+            scope_id,
             proxy,
             &__poc_plan.native_models[#idx],
         );
@@ -1207,22 +1352,80 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
         }
         None => quote! { ::core::option::Option::None },
     };
-    // RFC-058 Phase 4.1d-c will populate `body` with a
-    // macro-emitted `IfBodyFn` when the body subtree qualifies
-    // for fragment lifting; v1 ships `None` so every site
-    // routes through the legacy `clone_template_body` +
-    // `mount::walk` path the runtime applier already drives.
-    let body_tokens = match &ip.body_fn_ident {
+    let opt_body = |ident: &Option<syn::Ident>| match ident {
         Some(ident) => quote! { ::core::option::Option::Some(#ident) },
         None => quote! { ::core::option::Option::None },
     };
+    let body_tokens = opt_body(&ip.body_fn_ident);
+    let else_if_tokens = ip.else_if.iter().map(|(expr_src, body)| {
+        let e = proc_macro2::Literal::string(expr_src);
+        let c = emit_compiled_expr_option(expr_src);
+        let b = opt_body(body);
+        quote! {
+            ::pocopine::__private::CondBranch {
+                expr_src: #e,
+                compiled: #c,
+                body: #b,
+            }
+        }
+    });
+    let has_else = ip.has_else;
+    let else_body_tokens = opt_body(&ip.else_body);
+    let consumed_count = ip.consumed_count;
     quote! {
-        ::pocopine::__private::StaticIfPlan {
+        ::pocopine::__private::StaticCondPlan {
             template_node_path: #path,
             expr_src: #expr,
             compiled: #compiled,
-            teleport_selector: #teleport_selector_tokens,
             body: #body_tokens,
+            else_if: &[ #(#else_if_tokens),* ],
+            has_else: #has_else,
+            else_body: #else_body_tokens,
+            consumed_count: #consumed_count,
+            teleport_selector: #teleport_selector_tokens,
+        }
+    }
+}
+
+fn emit_match_plan(mp: &MatchPlanLite) -> TokenStream {
+    let path = emit_node_path(&mp.template_node_path);
+    let expr = proc_macro2::Literal::string(&mp.expr_src);
+    let compiled = emit_compiled_expr_option(&mp.expr_src);
+    let teleport_selector_tokens = match mp.teleport_selector.as_deref() {
+        Some(selector) => {
+            let selector = proc_macro2::Literal::string(selector);
+            quote! { ::core::option::Option::Some(#selector) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
+    let case_tokens = mp.cases.iter().map(|(tags, bind_name, body)| {
+        let tag_lits = tags.iter().map(|t| proc_macro2::Literal::string(t));
+        let bind_tokens = match bind_name.as_deref() {
+            Some(name) => {
+                let lit = proc_macro2::Literal::string(name);
+                quote! { ::core::option::Option::Some(#lit) }
+            }
+            None => quote! { ::core::option::Option::None },
+        };
+        let body_tokens = match body {
+            Some(ident) => quote! { ::core::option::Option::Some(#ident) },
+            None => quote! { ::core::option::Option::None },
+        };
+        quote! {
+            ::pocopine::__private::MatchCase {
+                tags: &[ #(#tag_lits),* ],
+                bind_name: #bind_tokens,
+                body: #body_tokens,
+            }
+        }
+    });
+    quote! {
+        ::pocopine::__private::StaticMatchPlan {
+            template_node_path: #path,
+            expr_src: #expr,
+            compiled: #compiled,
+            cases: &[ #(#case_tokens),* ],
+            teleport_selector: #teleport_selector_tokens,
         }
     }
 }
@@ -1431,6 +1634,28 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // `data-pp-row-plan` attribute the §6.2 layering bakes
     // into the cleaned HTML stays alongside the strip so the
     // RFC-054 row-plan registry still resolves keyed lists.
+    // RFC-094 — a stray pp-case is a build error: cases only
+    // live as direct children of a `<template pp-match>`.
+    if el.attrs.iter().any(|(n, _)| n == "pp-case") {
+        ctx.diagnostics.push(
+            "`pp-case` is only valid as a direct child of a `<template pp-match>` (RFC-094)"
+                .to_string(),
+        );
+        return;
+    }
+
+    // RFC-094 — a pp-else-if / pp-else template reaching the
+    // normal walk means no adjacent chain head consumed it.
+    if let Some((is_else, _)) = chain_member_kind(el) {
+        ctx.diagnostics.push(format!(
+            "`pp-{}` has no adjacent `<template pp-if>` / `<template pp-else-if>` \
+             sibling — RFC-094 chains are contiguous <template> siblings \
+             (whitespace and comments between members are fine)",
+            if is_else { "else" } else { "else-if" },
+        ));
+        return;
+    }
+
     if let Some(for_attr) = pp_for_value(el) {
         if el.tag == "template" && !el.attrs.iter().any(|(n, _)| n == "pp-teleport") {
             if let Some((item_name, items_expr)) = parse_pp_for(&for_attr) {
@@ -1460,11 +1685,13 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 // lifting envelope — the applier surfaces it via
                 // `record_plan_failure` at install time and
                 // renders the subtree empty.
+                let mut bodies_need_proxy = false;
                 let body_fn_ident = if row_plan_claims_site {
                     None
                 } else {
                     analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
                         ctx.absorb_lifted_refs(&body_ctx);
+                        bodies_need_proxy |= plan_needs_proxy(&body_ctx);
                         let ident = emissions.alloc_if_body_ident("for_body");
                         emissions.if_bodies.push(IfBodyEmission {
                             ident: ident.clone(),
@@ -1480,6 +1707,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     items_expr,
                     key_expr,
                     stagger_ms,
+                    bodies_need_proxy,
                     body_fn_ident,
                 });
                 ctx.stripped.push(StrippedAttr {
@@ -1577,6 +1805,161 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         return;
     }
 
+    // RFC-094 Phase 3 — `pp-match` on a `<template>` host: the
+    // direct children must be `<template pp-case>` arms; each
+    // arm's body lifts like a pp-if body. The whole subtree is
+    // plan-owned; the walk does not descend.
+    if let Some(match_expr) = el
+        .attrs
+        .iter()
+        .find(|(n, _)| n == "pp-match")
+        .map(|(_, v)| v.trim().to_string())
+    {
+        if el.tag != "template" {
+            ctx.diagnostics
+                .push("`pp-match` is only valid on a `<template>` (RFC-094)".to_string());
+            return;
+        }
+        if match_expr.is_empty() || pocopine_expr::parse(&match_expr).is_err() {
+            ctx.diagnostics.push(format!(
+                "`pp-match` expression `{match_expr}` does not parse (RFC-094)",
+            ));
+            return;
+        }
+        let teleport_selector = el
+            .attrs
+            .iter()
+            .find(|(n, _)| n == "pp-teleport")
+            .map(|(_, v)| v.clone())
+            .filter(|s| !s.trim().is_empty());
+        let mut cases: Vec<(Vec<String>, Option<String>, Option<syn::Ident>)> = Vec::new();
+        let mut bodies_need_proxy = false;
+        let mut saw_wild = false;
+        let mut seen_tags: Vec<String> = Vec::new();
+        let mut case_elem_idx: u16 = 0;
+        for child in &el.children {
+            match child {
+                Node::Text(t, _) if t.trim().is_empty() => {}
+                Node::Comment(..) => {}
+                Node::Element(case_el) => {
+                    let case_path = {
+                        let mut p = path.clone();
+                        p.push(case_elem_idx);
+                        p
+                    };
+                    case_elem_idx += 1;
+                    let Some(arm_src) = case_el
+                        .attrs
+                        .iter()
+                        .find(|(n, _)| n == "pp-case")
+                        .map(|(_, v)| v.trim().to_string())
+                    else {
+                        ctx.diagnostics.push(
+                            "every direct child of `<template pp-match>` must be a \
+                             `<template pp-case>` arm (RFC-094)"
+                                .to_string(),
+                        );
+                        continue;
+                    };
+                    if case_el.tag != "template" {
+                        ctx.diagnostics.push(
+                            "`pp-case` is only valid on a `<template>` (RFC-094)".to_string(),
+                        );
+                        continue;
+                    }
+                    if saw_wild {
+                        ctx.diagnostics.push(
+                            "unreachable `pp-case` after the `_` wildcard arm (RFC-094)"
+                                .to_string(),
+                        );
+                    }
+                    let tags: Vec<String> = if arm_src == "_" {
+                        saw_wild = true;
+                        Vec::new()
+                    } else {
+                        let parsed: Vec<String> =
+                            arm_src.split('|').map(|t| t.trim().to_string()).collect();
+                        let well_formed = !parsed.is_empty()
+                            && parsed.iter().all(|t| {
+                                !t.is_empty()
+                                    && t.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                    && t.chars().next().is_some_and(|c| !c.is_ascii_digit())
+                            });
+                        if !well_formed {
+                            ctx.diagnostics.push(format!(
+                                "`pp-case=\"{arm_src}\"` — arms are literal variant names \
+                                 (`Ready`, `Idle | Loading`) or `_`, not expressions (RFC-094)",
+                            ));
+                            continue;
+                        }
+                        for t in &parsed {
+                            if seen_tags.contains(t) {
+                                ctx.diagnostics
+                                    .push(format!("duplicate `pp-case` variant `{t}` (RFC-094)",));
+                            }
+                            seen_tags.push(t.clone());
+                        }
+                        parsed
+                    };
+                    let bind_name = case_el
+                        .attrs
+                        .iter()
+                        .find(|(n, _)| n == "pp-let")
+                        .map(|(_, v)| v.trim().to_string())
+                        .filter(|v| !v.is_empty());
+                    let body_ident =
+                        analyze_lift_body(case_el, emissions).map(|(html, body_ctx)| {
+                            ctx.absorb_lifted_refs(&body_ctx);
+                            bodies_need_proxy |= plan_needs_proxy(&body_ctx);
+                            let ident = emissions.alloc_if_body_ident("case_body");
+                            emissions.if_bodies.push(IfBodyEmission {
+                                ident: ident.clone(),
+                                html,
+                                plan: body_ctx,
+                            });
+                            ident
+                        });
+                    ctx.stripped.push(StrippedAttr {
+                        node_path: case_path.clone(),
+                        name: "pp-case".to_string(),
+                    });
+                    if bind_name.is_some() {
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: case_path,
+                            name: "pp-let".to_string(),
+                        });
+                    }
+                    cases.push((tags, bind_name, body_ident));
+                }
+                _ => {
+                    ctx.diagnostics.push(
+                        "`<template pp-match>` may only contain `pp-case` arms \
+                         (and whitespace/comments) (RFC-094)"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        ctx.match_plans.push(MatchPlanLite {
+            template_node_path: path.clone(),
+            expr_src: match_expr,
+            teleport_selector: teleport_selector.clone(),
+            cases,
+            bodies_need_proxy,
+        });
+        ctx.stripped.push(StrippedAttr {
+            node_path: path.clone(),
+            name: "pp-match".to_string(),
+        });
+        if teleport_selector.is_some() {
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-teleport".to_string(),
+            });
+        }
+        return;
+    }
+
     // RFC-058 Phase 4.1b — `pp-if` on a `<template>` host
     // graduates into a `StaticIfPlan` entry. The applier
     // resolves the template + parses the expression at compile
@@ -1603,8 +1986,10 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // natives + plan-eligible directives only); when
             // the body falls outside, `body_fn_ident` stays
             // `None` and the legacy clone+walk path runs.
+            let mut bodies_need_proxy = false;
             let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
                 ctx.absorb_lifted_refs(&body_ctx);
+                bodies_need_proxy |= plan_needs_proxy(&body_ctx);
                 let ident = emissions.alloc_if_body_ident("if_body");
                 emissions.if_bodies.push(IfBodyEmission {
                     ident: ident.clone(),
@@ -1620,6 +2005,11 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 template_node_path: path.clone(),
                 expr_src: if_expr,
                 teleport_selector: teleport_selector.clone(),
+                else_if: Vec::new(),
+                has_else: false,
+                else_body: None,
+                consumed_count: 0,
+                bodies_need_proxy,
                 body_fn_ident,
             });
             ctx.stripped.push(StrippedAttr {
@@ -1882,7 +2272,11 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // *element* children only — text / comments don't shift the
     // index (matches `Element.children` in JS DOM and the
     // for_plan mount's convention).
+    let mut consumed_chain: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (i, child) in el.children.iter().enumerate() {
+        if consumed_chain.contains(&i) {
+            continue;
+        }
         if let Node::Element(child_el) = child {
             let idx = el
                 .children
@@ -1892,6 +2286,125 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 .count() as u16;
             path.push(idx);
             walk(child_el, ctx, emissions, path);
+            // RFC-094 — chain scan: if this child just classified
+            // as a chain head (an eligible `<template pp-if>`),
+            // fold the following pp-else-if / pp-else siblings
+            // into the same plan entry, skipping their walks.
+            let is_chain_head = ctx
+                .if_plans
+                .last()
+                .map(|p| p.template_node_path.as_slice() == path.as_slice())
+                .unwrap_or(false);
+            if is_chain_head {
+                let mut member_offset: u16 = 0;
+                let mut saw_else = false;
+                let mut j = i + 1;
+                while j < el.children.len() {
+                    match &el.children[j] {
+                        Node::Text(t, _) if t.trim().is_empty() => {
+                            j += 1;
+                        }
+                        Node::Comment(..) => {
+                            j += 1;
+                        }
+                        Node::Element(member) => {
+                            let Some((is_else, raw_expr)) = chain_member_kind(member) else {
+                                break;
+                            };
+                            consumed_chain.insert(j);
+                            member_offset += 1;
+                            let member_path = {
+                                let mut p = path.clone();
+                                *p.last_mut().expect("chain head has an index") =
+                                    idx + member_offset;
+                                p
+                            };
+                            let kind = if is_else { "pp-else" } else { "pp-else-if" };
+                            if member.tag != "template" {
+                                ctx.diagnostics.push(format!(
+                                    "`{kind}` is only valid on a `<template>` (RFC-094)",
+                                ));
+                                j += 1;
+                                continue;
+                            }
+                            if saw_else {
+                                ctx.diagnostics.push(format!(
+                                    "`{kind}` after `pp-else` — `pp-else` must be the \
+                                     final branch of its chain (RFC-094)",
+                                ));
+                            }
+                            if member.attrs.iter().any(|(n, _)| n == "pp-teleport") {
+                                ctx.diagnostics.push(
+                                    "`pp-teleport` belongs on the chain head only; it \
+                                     applies to every branch (RFC-094)"
+                                        .to_string(),
+                                );
+                            }
+                            if member
+                                .attrs
+                                .iter()
+                                .any(|(n, _)| n == "pp-for" || n == "pp-match" || n == "pp-if")
+                            {
+                                ctx.diagnostics.push(format!(
+                                    "chain member `{kind}` cannot also carry a structural \
+                                     directive (RFC-094)",
+                                ));
+                            }
+                            let expr_trim = raw_expr.trim().to_string();
+                            if is_else && !expr_trim.is_empty() {
+                                ctx.diagnostics.push(
+                                    "`pp-else` takes no expression — use `pp-else-if` \
+                                     (RFC-094)"
+                                        .to_string(),
+                                );
+                            }
+                            if !is_else
+                                && (expr_trim.is_empty()
+                                    || pocopine_expr::parse(&expr_trim).is_err())
+                            {
+                                ctx.diagnostics.push(format!(
+                                    "`pp-else-if` expression `{expr_trim}` does not parse \
+                                     (RFC-094)",
+                                ));
+                            }
+                            let mut member_needs = false;
+                            let body_ident =
+                                analyze_lift_body(member, emissions).map(|(html, body_ctx)| {
+                                    ctx.absorb_lifted_refs(&body_ctx);
+                                    member_needs = plan_needs_proxy(&body_ctx);
+                                    let ident = emissions.alloc_if_body_ident(if is_else {
+                                        "else_body"
+                                    } else {
+                                        "else_if_body"
+                                    });
+                                    emissions.if_bodies.push(IfBodyEmission {
+                                        ident: ident.clone(),
+                                        html,
+                                        plan: body_ctx,
+                                    });
+                                    ident
+                                });
+                            ctx.stripped.push(StrippedAttr {
+                                node_path: member_path.clone(),
+                                name: kind.to_string(),
+                            });
+                            ctx.chain_member_paths.push(member_path);
+                            let plan = ctx.if_plans.last_mut().expect("chain head pushed");
+                            plan.consumed_count += 1;
+                            plan.bodies_need_proxy |= member_needs;
+                            if is_else {
+                                saw_else = true;
+                                plan.has_else = true;
+                                plan.else_body = body_ident;
+                            } else {
+                                plan.else_if.push((expr_trim, body_ident));
+                            }
+                            j += 1;
+                        }
+                        _ => break,
+                    }
+                }
+            }
             path.pop();
         }
     }
@@ -2003,6 +2516,20 @@ fn is_svg_native(tag: &str) -> bool {
             | "use"
             | "view"
     )
+}
+
+/// RFC-094 — is `el` a chain-member template? Returns
+/// `(is_else, raw attr value)`.
+fn chain_member_kind(el: &Element) -> Option<(bool, String)> {
+    for (n, v) in &el.attrs {
+        if n == "pp-else-if" {
+            return Some((false, v.clone()));
+        }
+        if n == "pp-else" {
+            return Some((true, v.clone()));
+        }
+    }
+    None
 }
 
 fn pp_if_value(el: &Element) -> Option<String> {
@@ -2878,6 +3405,35 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
     // serialization, it owns this stamp too.
     if let Some(plan_id) = ctx.row_plan_id(path) {
         out.push_str(&format!(" data-pp-row-plan=\"{plan_id}\""));
+    }
+    // RFC-094 Phase 0 — stamp `hidden` on structural `<template>`
+    // anchors so Stylekit's `> :not([hidden]) ~ :not([hidden])`
+    // sibling selectors (space-*/divide-*) stop counting them as
+    // phantom siblings. Visually inert (templates are UA-hidden
+    // already); removed per-site as comment anchors land.
+    let is_structural_template = el.tag == "template"
+        && (ctx
+            .if_plans
+            .iter()
+            .any(|e| e.template_node_path.as_slice() == path.as_slice())
+            || ctx
+                .for_plans
+                .iter()
+                .any(|e| e.template_node_path.as_slice() == path.as_slice())
+            || ctx
+                .teleport_plans
+                .iter()
+                .any(|e| e.template_node_path.as_slice() == path.as_slice())
+            || ctx
+                .match_plans
+                .iter()
+                .any(|e| e.template_node_path.as_slice() == path.as_slice())
+            || ctx
+                .chain_member_paths
+                .iter()
+                .any(|p| p.as_slice() == path.as_slice()));
+    if is_structural_template && !el.attrs.iter().any(|(n, _)| n == "hidden") {
+        out.push_str(" hidden=\"\"");
     }
     if is_void_element(&el.tag) {
         out.push_str(" />");

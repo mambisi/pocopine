@@ -96,7 +96,7 @@ pub enum BinOp {
     /// `+` — string concatenation when either operand is a string;
     /// numeric addition when both coerce to `f64`; empty string
     /// otherwise. Matches JS coercion closely enough for templates
-    /// that compose IDs like `$id + '-title'`.
+    /// that compose strings like `$store.theme + '-title'`.
     Plus,
 }
 
@@ -1133,7 +1133,7 @@ mod tests {
 
     #[test]
     fn plus_with_string_literal_parses() {
-        let e = parse_ok("$id + '-title'");
+        let e = parse_ok("$store + '-title'");
         assert!(matches!(e.value, Expr::BinOp(BinOp::Plus, _, _)));
     }
 
