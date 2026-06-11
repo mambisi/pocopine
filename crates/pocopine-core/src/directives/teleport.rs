@@ -174,17 +174,28 @@ pub fn resolve_target(selector: &str) -> Option<Element> {
 /// `<body>` itself), so relying on the observer would leak the
 /// clone's scopes + effects.
 pub fn release(el: &Element) {
-    let Some(clone) = take_teleported(el) else {
-        return;
-    };
-    if let Some(parent) = clone.parent_node() {
-        let _ = parent.remove_child(&clone);
+    for clone in take_teleported(el) {
+        if let Some(parent) = clone.parent_node() {
+            let _ = parent.remove_child(&clone);
+        }
+        mount::release_subtree(clone.as_ref());
     }
-    mount::release_subtree(clone.as_ref());
 }
 
 fn stash_teleported(template: &Element, clone: &Element) {
-    let _ = Reflect::set(template.as_ref(), &TELEPORTED_KEY.into(), clone.as_ref());
+    // A LIST, not a single slot: with comment anchors (RFC-094)
+    // several cond/match controllers share one parent element as
+    // their stash host — a lone slot would let sibling teleports
+    // clobber each other's record and leak clones at teardown.
+    let arr = Reflect::get(template.as_ref(), &TELEPORTED_KEY.into())
+        .ok()
+        .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
+        .unwrap_or_else(|| {
+            let a = js_sys::Array::new();
+            let _ = Reflect::set(template.as_ref(), &TELEPORTED_KEY.into(), &a);
+            a
+        });
+    arr.push(clone.as_ref());
 }
 
 /// Public stash hook for `pp-if` templates that own their own mount
@@ -203,25 +214,40 @@ pub(crate) fn stash(template: &Element, clone: &Element) {
 /// Clear a previously stashed clone. Called by `pp-if` when its own
 /// leave callback successfully removes the clone, so a subsequent
 /// [`release`] doesn't try to remove an already-detached element.
-pub(crate) fn clear_stash(template: &Element) {
-    let _ = Reflect::set(
-        template.as_ref(),
-        &TELEPORTED_KEY.into(),
-        &JsValue::UNDEFINED,
-    );
+pub(crate) fn clear_stash(template: &Element, clone: &Element) {
+    let Ok(v) = Reflect::get(template.as_ref(), &TELEPORTED_KEY.into()) else {
+        return;
+    };
+    let Ok(arr) = v.dyn_into::<js_sys::Array>() else {
+        return;
+    };
+    let idx = arr.index_of(clone.as_ref(), 0);
+    if idx >= 0 {
+        arr.splice(idx as u32, 1, &JsValue::UNDEFINED);
+    }
 }
 
-fn take_teleported(template: &Element) -> Option<Element> {
-    let v = Reflect::get(template.as_ref(), &TELEPORTED_KEY.into()).ok()?;
-    if v.is_undefined() || v.is_null() {
-        return None;
-    }
+fn take_teleported(template: &Element) -> Vec<Element> {
+    use wasm_bindgen::JsCast;
+    let Ok(v) = Reflect::get(template.as_ref(), &TELEPORTED_KEY.into()) else {
+        return Vec::new();
+    };
     let _ = Reflect::set(
         template.as_ref(),
         &TELEPORTED_KEY.into(),
         &JsValue::UNDEFINED,
     );
-    v.dyn_into::<Element>().ok()
+    let mut out = Vec::new();
+    if let Ok(arr) = v.clone().dyn_into::<js_sys::Array>() {
+        for i in 0..arr.length() {
+            if let Ok(el) = arr.get(i).dyn_into::<Element>() {
+                out.push(el);
+            }
+        }
+    } else if let Ok(el) = v.dyn_into::<Element>() {
+        out.push(el);
+    }
+    out
 }
 
 fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
