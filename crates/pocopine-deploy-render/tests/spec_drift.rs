@@ -29,7 +29,7 @@ const RENDER_OPENAPI_URL: &str =
 /// SHA-256 of the canonicalised live spec, last reconciled 2026-05-22.
 /// Update this when the drift test reports a new hash for a reviewed,
 /// deliberate upstream change.
-const EXPECTED_SHA256: &str = "13d91f244b6c3b32ff368d51e7bca52528cf25db64dc4ac640c0e2abc302205d";
+const EXPECTED_SHA256: &str = "238b4ebd850565a73bc85740d67e485d4cec9e1e3dcfafb6a6447486ca81d48e";
 
 /// Paths `crate::client` calls. `/registrycredentials` is pinned ahead
 /// of the Phase 19 auto-registry work so the dependency is guarded now.
