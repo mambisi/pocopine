@@ -10,40 +10,39 @@ pub use pocopine_auth::{AuthUser, Permission, Principal, Role, Session};
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
 pub use pocopine_core::{
-    animate, dom, events, focus, id, profiler, refs, router, scroll_lock, storage, text, tick,
-    timers,
+    animate, dom, events, focus, profiler, refs, router, scroll_lock, storage, text, tick, timers,
 };
 pub use pocopine_core::{
     append_list_inline, assert_registry_clean, batch, computed, current_effect, current_scope_id,
-    dispatch_event, effect, effect_scoped, effect_with, emit, emit_cancelable,
-    emit_cancelable_from, emit_event, emit_event_from, emit_from, emit_from_host, emit_model,
-    emit_model_field, emit_raw, emit_raw_from, encode_route_fragment, encode_route_path_segment,
-    encode_route_query_part, fetch, flush_sync, go, inject, invalidate_field,
-    invalidate_field_cache, mount_profile_enabled, navigate, on_cleanup, on_scope_unmount,
-    on_scope_unmount_for, patch_list_at_inline, patch_list_indices_inline, prefetch,
-    prepend_list_inline, provide, push, reevaluate_current, registered_component_names,
-    registry_errors, release, remove_list_at_inline, replace, replace_field_inline,
-    report_mount_profile, reset_mount_profile, run_now, rw_signal, set_auto_flush, signal, spawn,
-    spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped, store,
-    swap_list_indices_inline, this, trigger_scope, verify_registry, watch, watch_field,
-    watch_field_scoped, watch_scope_field, watch_scope_field_now, watch_scope_field_scoped,
-    watch_scoped, App, AppBootCompleted, AppBootFailed, AppBootStarted, AppPlugin, Body, Component,
-    ComponentEvent, ComponentMountFn, ComponentMounted, ComponentPluginExt, ComponentReady,
-    ComponentSetup, ComponentState, ComponentUnmounted, ComponentVTable, Computed, ContextKey,
-    ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, ForComponent,
-    Handle, Hook, HostEl, Inject, IntoRouteTarget, IsTeleported, LifecycleContext, LifecyclePhase,
-    ListenerHandle, Loader, LoaderContext, LoaderError, LocalStorage, MountEpoch,
-    NavigationFailure, NavigationResult, NearestParent, PageLink, PageMeta, PageMetaContext,
-    PageMetaTag, Parent, ParentId, Plugin, PluginValidationError, Plugins, Prefetch,
-    PrefetchResult, PrefetchSkip, PrefetchTrigger, Refs, RegisteredComponent, RegistryError,
-    RegistryErrorKind, ReturnTo, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface,
-    RouteGuard, RouteGuardDecision, RouteLoader, RouteLocation, RouteMeta, RouteMetaKey, RouteName,
-    RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteQuery,
-    RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
-    RouteTarget, RouteTargetBuilder, RouteTargetError, RouteToken, RouteUrl, RwSignal, Scope,
-    ScopeId, ScopePath, ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
-    ServerFunctionClientStarted, ServerResult, Setter, Signal, SignalId, StorageError, Store,
-    StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    effect, effect_scoped, effect_with, emit, emit_cancelable, emit_cancelable_from, emit_event,
+    emit_event_from, emit_from, emit_from_host, emit_model, emit_model_field, emit_raw,
+    emit_raw_from, encode_route_fragment, encode_route_path_segment, encode_route_query_part,
+    fetch, flush_sync, go, inject, invalidate_field, invalidate_field_cache, js_bridge,
+    mount_profile_enabled, navigate, on_cleanup, on_scope_unmount, on_scope_unmount_for,
+    patch_list_at_inline, patch_list_indices_inline, prefetch, prepend_list_inline, provide, push,
+    reevaluate_current, registered_component_names, registry_errors, release,
+    remove_list_at_inline, replace, replace_field_inline, report_mount_profile,
+    reset_mount_profile, run_now, rw_signal, set_auto_flush, signal, spawn, spawn_for_scope,
+    spawn_latest, spawn_latest_for_scope, spawn_scoped, store, swap_list_indices_inline, this,
+    trigger_scope, verify_registry, watch, watch_field, watch_field_scoped, watch_scope_field,
+    watch_scope_field_now, watch_scope_field_scoped, watch_scoped, App, AppBootCompleted,
+    AppBootFailed, AppBootStarted, AppPlugin, Body, Component, ComponentEvent, ComponentMountFn,
+    ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup, ComponentState,
+    ComponentUnmounted, ComponentVTable, Computed, ContextKey, ContextMarker, Doc, DomEventName,
+    EffectId, EffectOptions, El, Elapsed, Emit, ForComponent, Handle, Hook, HostEl, Inject,
+    IntoRouteTarget, IsTeleported, LifecycleContext, LifecyclePhase, ListenerHandle, Loader,
+    LoaderContext, LoaderError, LocalStorage, MountEpoch, NavigationFailure, NavigationResult,
+    NearestParent, PageLink, PageMeta, PageMetaContext, PageMetaTag, Parent, ParentId, Plugin,
+    PluginValidationError, Plugins, Prefetch, PrefetchResult, PrefetchSkip, PrefetchTrigger, Refs,
+    RegisteredComponent, RegistryError, RegistryErrorKind, ReturnTo, RouteComponent, RouteConfig,
+    RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader, RouteLocation,
+    RouteMeta, RouteMetaKey, RouteName, RouteNavigationCompleted, RouteNavigationFailed,
+    RouteNavigationStarted, RouteQuery, RouteRejection, RouteRejectionAction,
+    RouteRejectionContext, RouteRejectionHandler, RouteTarget, RouteTargetBuilder,
+    RouteTargetError, RouteToken, RouteUrl, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    ServerFunctionClientCompleted, ServerFunctionClientFailed, ServerFunctionClientStarted,
+    ServerResult, Setter, Signal, SignalId, StorageError, Store, StoreHandle, SubtreeHandle,
+    TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -92,9 +91,9 @@ pub mod prelude {
     #[allow(deprecated)]
     pub use crate::InjectKey;
     pub use crate::{
-        batch, client_module, component, computed, create_context, cx, dispatch, dispatch_event,
-        effect, emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from,
-        emit_from, emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from,
+        batch, client_module, component, computed, create_context, cx, dispatch, effect, emit,
+        emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
+        emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from,
         encode_route_fragment, encode_route_path_segment, encode_route_query_part, go, handlers,
         inject_key, job, navigate, on, on_cleanup, on_emit, prefetch, prepend_list_inline,
         protected, push, remove_list_at_inline, replace, rw_signal, signal, spawn, spawn_for_scope,
@@ -148,6 +147,13 @@ pub mod __private {
     // `<ComponentName>Refs` struct.
     pub use pocopine_core::reactive::ScopeId;
     pub use pocopine_core::refs::RefAccessor;
+    // RFC-095 W2 — per-field dirty-check fingerprint. The macro
+    // emits one `field_fingerprint` arm per declared field.
+    pub use pocopine_core::fingerprint::fingerprint as fingerprint_value;
+    pub use pocopine_core::fingerprint::quick_len as quick_len_value;
+    // RFC-096 S3 — typed text lane: one `field_as_text` arm per
+    // declared field.
+    pub use pocopine_core::fingerprint::text_projection;
     #[cfg(not(target_arch = "wasm32"))]
     pub use pocopine_jobs as jobs;
     // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.
@@ -157,19 +163,20 @@ pub mod __private {
     // and registers it via `register_template_plan` alongside the
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
-        IfBodyFn, StaticChildHostBinding, StaticChildHostListener, StaticChildHostModel,
-        StaticChildMount, StaticForPlan, StaticIfPlan, StaticInterp, StaticNativeModel,
-        StaticOpaqueDirective, StaticRef, StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
+        CondBranch, IfBodyFn, MatchCase, StaticChildHostBinding, StaticChildHostListener,
+        StaticChildHostModel, StaticChildMount, StaticCondPlan, StaticForPlan, StaticInterp,
+        StaticMatchPlan, StaticNativeModel, StaticOpaqueDirective, StaticRef, StaticSlotFragment,
+        StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
     pub use pocopine_core::templates_plan::{
         apply_static_pp_as_plan, capture_static_interp_target, capture_static_slot_outlet,
         install_static_binding, install_static_child_mount, install_static_for_plan,
         install_static_if_plan, install_static_interp_target, install_static_listener,
-        install_static_native_model, install_static_opaque_directive, install_static_ref,
-        install_static_teleport_plan, materialize_static_slot_outlet, plan_failure_count,
-        record_plan_failure, register_template_plan, reset_plan_failure_count, stamp_if_body_with,
-        template_plan_for, StaticInterpTarget, StaticTemplatePlan,
+        install_static_match_plan, install_static_native_model, install_static_opaque_directive,
+        install_static_ref, install_static_teleport_plan, materialize_static_slot_outlet,
+        plan_failure_count, record_plan_failure, register_template_plan, reset_plan_failure_count,
+        stamp_if_body_with, template_plan_for, StaticInterpTarget, StaticTemplatePlan,
     };
     // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
