@@ -105,6 +105,14 @@ const fn d(
 pub const DIRECTIVES: &[DirectiveSpec] = &[
     d("if", None, ArgReq::Forbidden, Host::TemplateOnly,
       "**pp-if** — conditional rendering. Host: `<template>` only; body: exactly one element. Compiles to a mount/unmount plan (RFC-058 — no runtime walker).", Some("rfc-001-components")),
+    d("else-if", None, ArgReq::Forbidden, Host::TemplateOnly,
+      "**pp-else-if** — continues a `pp-if` chain. Host: `<template>` only, and it must be the immediate (whitespace/comment-tolerant) sibling of a `<template pp-if>` or `<template pp-else-if>`. Exactly one branch of the chain renders. (RFC-094)", Some("rfc-094-conditional-chains-and-enum-matching")),
+    d("else", None, ArgReq::Forbidden, Host::TemplateOnly,
+      "**pp-else** — final branch of a `pp-if` chain; takes NO expression. Host: `<template>` only, immediately after a `pp-if`/`pp-else-if` sibling. (RFC-094)", Some("rfc-094-conditional-chains-and-enum-matching")),
+    d("match", None, ArgReq::Forbidden, Host::TemplateOnly,
+      "**pp-match** — enum/value dispatch. Host: `<template>` whose direct children are `<template pp-case>` arms. Matches serde's externally-tagged encoding: unit variants by name, payload variants by tag with `pp-let` payload binding. First match wins; nothing renders without a match or `_`. (RFC-094)", Some("rfc-094-conditional-chains-and-enum-matching")),
+    d("case", None, ArgReq::Forbidden, Host::TemplateOnly,
+      "**pp-case** — one arm of a `pp-match`. Value is a LITERAL arm, not an expression: `pp-case=\"Ready\"`, multi-variant `pp-case=\"Idle | Loading\"`, or the final wildcard `pp-case=\"_\"`. Bind the payload with `pp-let=\"name\"`. (RFC-094)", Some("rfc-094-conditional-chains-and-enum-matching")),
     d("for", None, ArgReq::Forbidden, Host::TemplateOnly,
       "**pp-for** — list iteration. Syntax: `pp-for=\"item in items\"`. Host: `<template>` only. Exposes `$index`, `$first`, `$last`; pair with `pp-key` for keyed diffing.", Some("rfc-004-pp-for")),
     d("show", None, ArgReq::Forbidden, Host::Any,
@@ -156,8 +164,16 @@ pub fn lookup(head: &str) -> Option<&'static DirectiveSpec> {
 
 /// RFC-038 transition presets — valid values for `pp-transition="…"`.
 pub const TRANSITION_PRESETS: &[&str] = &[
-    "fade", "scale", "fade-scale", "zoom", "slide-up", "slide-down", "slide-left", "slide-right",
-    "collapse", "none",
+    "fade",
+    "scale",
+    "fade-scale",
+    "zoom",
+    "slide-up",
+    "slide-down",
+    "slide-left",
+    "slide-right",
+    "collapse",
+    "none",
 ];
 
 /// Enumerable `:arg` values for a directive head, for completion. Empty means
@@ -165,11 +181,28 @@ pub const TRANSITION_PRESETS: &[&str] = &[
 pub fn valid_args(head: &str) -> &'static [&'static str] {
     match head {
         "transition" => &[
-            "enter", "enter-start", "enter-end", "leave", "leave-start", "leave-end", "in", "out",
+            "enter",
+            "enter-start",
+            "enter-end",
+            "leave",
+            "leave-start",
+            "leave-end",
+            "in",
+            "out",
         ],
         "anchor" => &[
-            "top-start", "top-center", "top-end", "bottom-start", "bottom-center", "bottom-end",
-            "left-start", "left-center", "left-end", "right-start", "right-center", "right-end",
+            "top-start",
+            "top-center",
+            "top-end",
+            "bottom-start",
+            "bottom-center",
+            "bottom-end",
+            "left-start",
+            "left-center",
+            "left-end",
+            "right-start",
+            "right-center",
+            "right-end",
         ],
         "intersect" => &["enter", "leave"],
         _ => &[],
@@ -181,18 +214,54 @@ pub fn modifiers(head: &str) -> &'static [&'static str] {
     match head {
         "on" => &[
             // event-control modifiers (RFC-057)
-            "prevent", "stop", "self", "once", "window", "document", "capture", "passive",
-            "debounce", "outside", //
+            "prevent",
+            "stop",
+            "self",
+            "once",
+            "window",
+            "document",
+            "capture",
+            "passive",
+            "debounce",
+            "outside", //
             // key modifiers (RFC-013)
-            "escape", "esc", "enter", "tab", "space", "backspace", "delete", "del", "arrow-up",
-            "up", "arrow-down", "down", "arrow-left", "left", "arrow-right", "right", "home", "end",
-            "page-up", "page-down", //
+            "escape",
+            "esc",
+            "enter",
+            "tab",
+            "space",
+            "backspace",
+            "delete",
+            "del",
+            "arrow-up",
+            "up",
+            "arrow-down",
+            "down",
+            "arrow-left",
+            "left",
+            "arrow-right",
+            "right",
+            "home",
+            "end",
+            "page-up",
+            "page-down", //
             // system-key modifiers
-            "ctrl", "shift", "alt", "meta",
+            "ctrl",
+            "shift",
+            "alt",
+            "meta",
         ],
         "model" => &["number", "trim", "lazy"],
         "anchor" => &["offset", "flip", "same-width"],
-        "roving" => &["vertical", "horizontal", "both", "nowrap", "virtual", "activedescendant", "items"],
+        "roving" => &[
+            "vertical",
+            "horizontal",
+            "both",
+            "nowrap",
+            "virtual",
+            "activedescendant",
+            "items",
+        ],
         "resize" => &["content-box", "border-box", "document"],
         "intersect" => &["threshold", "margin"],
         _ => &[],

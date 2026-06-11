@@ -2100,6 +2100,41 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .chain(flatten_leaf_get_arms);
 
+    // RFC-095 W2 — per-field dirty-check fingerprints. One arm per
+    // direct field; flatten leaves / computed keys fall through to
+    // `None` (= "unknown", treated as changed by the dirty sweep —
+    // the conservative direction). Same `Serialize` bound as
+    // `get_arms`, so this compiles wherever `get` does.
+    let fingerprint_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => ::pocopine::__private::fingerprint_value(&self.#id),
+            }
+        });
+    // RFC-095 W2b — O(1) length probes for the dirty sweep's
+    // collection short-circuit.
+    let quick_len_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => ::pocopine::__private::quick_len_value(&self.#id),
+            }
+        });
+
+    // RFC-096 S3 — typed text lane. Same Serialize bound as
+    // get(); the projector itself decides scalar-vs-compound.
+    let text_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => ::pocopine::__private::text_projection(&self.#id),
+            }
+        });
+
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {
@@ -3144,6 +3179,24 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::std::boxed::Box::leak(__boxed)
                 })
             }
+            fn field_fingerprint(&self, key: &str) -> ::core::option::Option<u64> {
+                match key {
+                    #(#fingerprint_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+            fn field_quick_len(&self, key: &str) -> ::core::option::Option<u64> {
+                match key {
+                    #(#quick_len_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+            fn field_as_text(&self, key: &str) -> ::core::option::Option<::std::string::String> {
+                match key {
+                    #(#text_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
             fn is_prop(&self, key: &str) -> bool {
                 #is_prop_body
             }
@@ -4038,6 +4091,27 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
             }
         });
+    // RFC-095 W2 — stores are the heaviest `Handle::update` users;
+    // per-field fingerprints let the dirty sweep trigger only the
+    // fields an `update` closure actually moved.
+    let fingerprint_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => ::pocopine::__private::fingerprint_value(&self.#id),
+            }
+        });
+    // RFC-095 W2b — O(1) length probes for the dirty sweep's
+    // collection short-circuit.
+    let quick_len_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => ::pocopine::__private::quick_len_value(&self.#id),
+            }
+        });
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {
@@ -4092,6 +4166,18 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn keys(&self) -> &'static [&'static str] {
                 &[#(#keys_arr),*]
+            }
+            fn field_fingerprint(&self, key: &str) -> ::core::option::Option<u64> {
+                match key {
+                    #(#fingerprint_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+            fn field_quick_len(&self, key: &str) -> ::core::option::Option<u64> {
+                match key {
+                    #(#quick_len_arms)*
+                    _ => ::core::option::Option::None,
+                }
             }
             fn invoke(
                 &mut self,
