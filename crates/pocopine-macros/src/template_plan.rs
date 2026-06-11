@@ -11,11 +11,7 @@
 //!    &'static [u16]` over the cloned-template DOM, matching
 //!    the convention RFC-054 row plans already use.
 //! 2. A "cleaned HTML" string — the template re-serialised
-//!    with the classified attributes stripped, plus the
-//!    `data-pp-text-managed` marker stamped where `pp-text`
-//!    was removed (so `interp::scan_children` can still
-//!    distinguish planned text from `{...}` interpolation
-//!    sites — see RFC-058 §5.4).
+//!    with the classified attributes stripped.
 //!
 //! v1 envelope per RFC-057 §6 (deferred to RFC-058 §6.2):
 //!
@@ -212,11 +208,9 @@ struct AnalysisCtx {
     /// [`crate::directives::lookup`] after slot materialisation.
     opaque_directives: Vec<OpaqueDirectiveLite>,
     /// RFC-058 Phase 6.2 — `{{expr}}` text interpolation lifted
-    /// out of the runtime mount. Each entry pre-parses one
-    /// text-node child's segment list at compile time; the
-    /// applier installs effects per dynamic segment, and the
-    /// runtime mount's `interp::scan_children` skips the
-    /// element via the `data-pp-interp-managed` marker.
+    /// to compile time. Each entry pre-parses one text-node
+    /// child's segment list; the applier installs effects per
+    /// dynamic segment.
     interps: Vec<InterpLite>,
     /// RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
     /// native input/textarea/select. The previously mount-only
@@ -230,15 +224,6 @@ struct AnalysisCtx {
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
     stripped: Vec<StrippedAttr>,
-    /// Node paths where the macro removed `pp-text` and the
-    /// serializer should stamp `data-pp-text-managed`.
-    text_managed_paths: Vec<Vec<u16>>,
-    /// RFC-058 Phase 6.2 — node paths whose direct text children
-    /// contain `{{expr}}` interpolation the macro lifted into
-    /// `interps` entries. The cleaned-HTML serializer stamps
-    /// `data-pp-interp-managed` on each so the runtime mount's
-    /// `interp::scan_children` skips the duplicate scan.
-    interp_managed_paths: Vec<Vec<u16>>,
     /// RFC-058 §6.2 — `(template_node_path, plan_id)` pairs
     /// from the row-plan analyser. The cleaned-HTML serializer
     /// stamps `data-pp-row-plan="<id>"` onto each pp-for
@@ -246,16 +231,6 @@ struct AnalysisCtx {
     /// so the runtime row-plan registry lookup still finds its
     /// target after the template-plan rewrite.
     row_plan_assignments: Vec<(Vec<u16>, u32)>,
-    /// RFC-058 Phase 6.5 — preserved as a write-only marker so
-    /// every classifier branch that used to flip the runtime
-    /// fallback gate continues to compile without rewriting
-    /// every site. The plan literal no longer emits the field;
-    /// the mount is gone, so a "true" here just means the
-    /// classifier identified an unliftable subtree (which the
-    /// applier surfaces via `record_plan_failure` at install
-    /// time, not by re-discovering through the mount).
-    #[allow(dead_code)]
-    requires_walker: bool,
     /// RFC 081 Phase 2 Codex-P2 fix — `pp-ref` names harvested
     /// from lifted-body and slot-fragment subtrees that don't
     /// share `self.refs` (each nested `walk` collects into its
@@ -697,18 +672,6 @@ impl AnalysisCtx {
         self.stripped
             .iter()
             .any(|s| s.node_path == node_path && s.name == attr_name)
-    }
-
-    fn is_text_managed(&self, node_path: &[u16]) -> bool {
-        self.text_managed_paths
-            .iter()
-            .any(|p| p.as_slice() == node_path)
-    }
-
-    fn is_interp_managed(&self, node_path: &[u16]) -> bool {
-        self.interp_managed_paths
-            .iter()
-            .any(|p| p.as_slice() == node_path)
     }
 
     /// Returns `Some(plan_id)` when the row-plan analyser
@@ -1493,10 +1456,14 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     .row_plan_assignments
                     .iter()
                     .any(|(p, _)| p.as_slice() == path.as_slice());
+                // A `None` body means it fell outside the
+                // lifting envelope — the applier surfaces it via
+                // `record_plan_failure` at install time and
+                // renders the subtree empty.
                 let body_fn_ident = if row_plan_claims_site {
                     None
                 } else {
-                    let lifted = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                    analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
                         ctx.absorb_lifted_refs(&body_ctx);
                         let ident = emissions.alloc_if_body_ident("for_body");
                         emissions.if_bodies.push(IfBodyEmission {
@@ -1505,15 +1472,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                             plan: body_ctx,
                         });
                         ident
-                    });
-                    if lifted.is_none() {
-                        // Body fell outside the lifting envelope —
-                        // runtime falls back to `clone_template_body`
-                        // + `mount::walk`. Flag the plan so the
-                        // Pine fallback audit catches it.
-                        ctx.requires_walker = true;
-                    }
-                    lifted
+                    })
                 };
                 ctx.for_plans.push(ForPlanLite {
                     template_node_path: path.clone(),
@@ -1578,12 +1537,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 });
                 ident
             });
-            if body_fn_ident.is_none() {
-                // Body fell outside the lifting envelope — runtime
-                // falls back to `clone_template_body` + `mount::walk`.
-                // Flag the plan so the Pine fallback audit catches it.
-                ctx.requires_walker = true;
-            }
+            // A `None` body_fn means the body fell outside the
+            // lifting envelope — the applier surfaces it via
+            // `record_plan_failure` at install time.
             ctx.teleport_plans.push(TeleportPlanLite {
                 template_node_path: path.clone(),
                 selector,
@@ -1657,12 +1613,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 });
                 ident
             });
-            if body_fn_ident.is_none() {
-                // Body fell outside the lifting envelope — runtime
-                // falls back to `clone_template_body` + `mount::walk`.
-                // Flag the plan so the Pine fallback audit catches it.
-                ctx.requires_walker = true;
-            }
+            // A `None` body_fn means the body fell outside the
+            // lifting envelope — the applier surfaces it via
+            // `record_plan_failure` at install time.
             ctx.if_plans.push(IfPlanLite {
                 template_node_path: path.clone(),
                 expr_src: if_expr,
@@ -1700,15 +1653,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         let mut host_listeners = Vec::new();
         let mut host_models = Vec::new();
         let has_pp_as = el.attrs.iter().any(|(name, _)| name == "pp-as");
-        if has_pp_as {
-            if el
-                .attrs
-                .iter()
-                .any(|(name, _)| name != "pp-as" && is_framework_attr(name))
-            {
-                ctx.requires_walker = true;
-            }
-        } else {
+        if !has_pp_as {
             for (name, value) in &el.attrs {
                 match classify_child_host_attr(name, value) {
                     ChildHostAttrOutcome::Binding(binding) => {
@@ -1742,11 +1687,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                             name: ref_name,
                         });
                     }
-                    ChildHostAttrOutcome::Preserved => {
-                        if is_framework_attr(name) {
-                            ctx.requires_walker = true;
-                        }
-                    }
+                    ChildHostAttrOutcome::Preserved => {}
                 }
             }
         }
@@ -1765,9 +1706,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         // builds a `SlotScope` from the child's `<slot>`
         // bindings and invokes the fragment against the slot
         // scope's proxy. Eligibility is the same as plain
-        // named slots — the body must be plan-eligible — and
-        // bodies that can't lift still flip `requires_walker`
-        // so the legacy capture path drives them.
+        // named slots — the body must be plan-eligible —
+        // unliftable bodies surface via `record_plan_failure`
+        // at install time.
         //
         // The `<template pp-slot>` element itself stays in the
         // cleaned HTML in every case so `capture_slots` can
@@ -1820,9 +1761,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     }
                     None => {
                         // Slot body falls outside the lift
-                        // envelope — fall back to mount for
-                        // this name.
-                        ctx.requires_walker = true;
+                        // envelope — surfaced via
+                        // `record_plan_failure` at install time.
                     }
                 }
             }
@@ -1853,14 +1793,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         emissions.slot_fragments.push(emission);
                     }
                     None => {
-                        // Mirror the named-slot fallback gate:
-                        // unliftable default content must flip
-                        // requires_walker so the legacy capture
-                        // path drives the host instead of leaving
-                        // the plan in a "compiled-clean" state
-                        // while mount-owned content still rides
-                        // on the cleaned HTML.
-                        ctx.requires_walker = true;
+                        // Unliftable default slot content —
+                        // surfaced via `record_plan_failure`
+                        // at install time.
                     }
                 }
             }
@@ -1876,48 +1811,34 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         return;
     }
 
-    // Classify every attribute on this element.
+    // Classify every attribute on this element. `pp-as` hosts
+    // (outside the template root) are skipped whole-subtree —
+    // the dynamic-component path owns them.
     if el.attrs.iter().any(|(name, _)| name == "pp-as") && el.tag != "root" {
-        ctx.requires_walker = true;
         return;
     }
     let mut listener_unsupported_modifier = false;
-    let mut had_text = false;
     let host_is_native = is_plan_native(&el.tag);
     for (name, value) in &el.attrs {
         if el.tag == "root" && name == "pp-as" {
             continue;
         }
-        match classify_attr(
+        // Outcome is recorded on `ctx` (stripped entries + plan
+        // vecs); nothing branch-worthy remains at this call site.
+        let _ = classify_attr(
             name,
             value,
             path,
             ctx,
             host_is_native,
             &mut listener_unsupported_modifier,
-        ) {
-            ClassifyOutcome::Stripped { is_text } => {
-                if is_text {
-                    had_text = true;
-                }
-            }
-            ClassifyOutcome::Preserved => {
-                if is_framework_attr(name) {
-                    ctx.requires_walker = true;
-                }
-            }
-        }
-    }
-    if had_text {
-        ctx.text_managed_paths.push(path.clone());
+        );
     }
     let _ = listener_unsupported_modifier; // already handled per-attr
 
     // RFC-058 Phase 6.2 — scan direct text-node children for
-    // `{{expr}}` interpolation. The runtime mount's
-    // `interp::scan_children` does the same scan + parse;
-    // lifting it here at compile time means the mount can
-    // skip the carrier element via `data-pp-interp-managed`.
+    // `{{expr}}` interpolation and lift each into an
+    // `InterpLite` entry at compile time.
     // Skip elements that already use `pp-text` (RFC-025: the
     // directive owns the textContent, interpolation is
     // intentionally disabled for them).
@@ -1927,7 +1848,6 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         .any(|(n, _)| n == "pp-text" || n == "pp-html");
     if !owns_text {
         let mut text_index: u16 = 0;
-        let mut had_interp = false;
         for child in &el.children {
             let Node::Text(text, _) = child else { continue };
             if !text.contains("{{") {
@@ -1945,7 +1865,6 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                             text_index,
                             segments,
                         });
-                        had_interp = true;
                     }
                 }
                 _ => {
@@ -1956,9 +1875,6 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 }
             }
             text_index += 1;
-        }
-        if had_interp {
-            ctx.interp_managed_paths.push(path.clone());
         }
     }
 
@@ -2089,10 +2005,6 @@ fn is_svg_native(tag: &str) -> bool {
     )
 }
 
-fn is_framework_attr(name: &str) -> bool {
-    name.starts_with("pp-") || name.starts_with('@') || name.starts_with(':')
-}
-
 fn pp_if_value(el: &Element) -> Option<String> {
     el.attrs
         .iter()
@@ -2133,7 +2045,7 @@ fn parse_pp_for(s: &str) -> Option<(String, String)> {
 }
 
 enum ClassifyOutcome {
-    Stripped { is_text: bool },
+    Stripped,
     Preserved,
 }
 
@@ -2172,7 +2084,7 @@ fn classify_attr(
                 node_path: path.to_vec(),
                 name: name.to_string(),
             });
-            return ClassifyOutcome::Stripped { is_text: true };
+            return ClassifyOutcome::Stripped;
         }
         // pp-html="<expr>"
         if rest == "html" {
@@ -2188,7 +2100,7 @@ fn classify_attr(
                 node_path: path.to_vec(),
                 name: name.to_string(),
             });
-            return ClassifyOutcome::Stripped { is_text: false };
+            return ClassifyOutcome::Stripped;
         }
         // pp-show="<expr>"
         if rest == "show" {
@@ -2204,7 +2116,7 @@ fn classify_attr(
                 node_path: path.to_vec(),
                 name: name.to_string(),
             });
-            return ClassifyOutcome::Stripped { is_text: false };
+            return ClassifyOutcome::Stripped;
         }
         // pp-bind:<arg>="<expr>"
         if let Some(arg) = rest.strip_prefix("bind:") {
@@ -2231,7 +2143,7 @@ fn classify_attr(
                 node_path: path.to_vec(),
                 name: name.to_string(),
             });
-            return ClassifyOutcome::Stripped { is_text: false };
+            return ClassifyOutcome::Stripped;
         }
         // RFC-058 Phase 3 hardening — allowlisted runtime
         // directives (`pp-roving`, `pp-resize`, `pp-intersect`,
@@ -2258,7 +2170,7 @@ fn classify_attr(
                     node_path: path.to_vec(),
                     name: name.to_string(),
                 });
-                return ClassifyOutcome::Stripped { is_text: false };
+                return ClassifyOutcome::Stripped;
             }
         }
         // RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
@@ -2287,7 +2199,7 @@ fn classify_attr(
                 node_path: path.to_vec(),
                 name: name.to_string(),
             });
-            return ClassifyOutcome::Stripped { is_text: false };
+            return ClassifyOutcome::Stripped;
         }
         // Every other pp-* attribute (pp-cloak,
         // pp-route, pp-transition:*, pp-stagger, etc.) —
@@ -2326,7 +2238,7 @@ fn parse_pp_directive_name(rest: &str) -> Option<(String, Option<String>, Vec<St
     Some((name, arg, mods))
 }
 
-/// Compile-time twin of `crate::directives::interp::parse_segments`
+/// Compile-time `{{expr}}` tokenizer (RFC-040 grammar)
 /// in pocopine-core.
 ///
 /// Tokenises `input` into alternating static + dynamic segments;
@@ -2450,7 +2362,7 @@ fn classify_bind_inner(
         node_path: path.to_vec(),
         name: attr_to_strip.to_string(),
     });
-    ClassifyOutcome::Stripped { is_text: false }
+    ClassifyOutcome::Stripped
 }
 
 fn classify_listener(
@@ -2504,7 +2416,7 @@ fn classify_listener(
         node_path: path.to_vec(),
         name: format!("pp-on:{stripped_name}"),
     });
-    ClassifyOutcome::Stripped { is_text: false }
+    ClassifyOutcome::Stripped
 }
 
 enum ChildHostAttrOutcome {
@@ -2958,12 +2870,6 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
         out.push_str(&escape_attr(value));
         out.push('"');
     }
-    if ctx.is_text_managed(path) {
-        out.push_str(" data-pp-text-managed=\"\"");
-    }
-    if ctx.is_interp_managed(path) {
-        out.push_str(" data-pp-interp-managed=\"\"");
-    }
     // RFC-058 §6.2 layering — stamp `data-pp-row-plan="<id>"`
     // when the row-plan analyser claimed this `<template
     // pp-for>` site. Replaces the byte-position rewrite
@@ -3194,11 +3100,10 @@ mod tests {
         assert!(parse_pp_directive_name(".both").is_none());
     }
 
-    /// `parse_interp_segments` is the macro twin of
-    /// `crate::directives::interp::parse_segments` in pocopine-core.
-    /// Pin the documented edge cases so the two parsers don't
-    /// drift silently — anything that compiles here must also
-    /// resolve cleanly via the runtime's pre-existing scanner.
+    /// `parse_interp_segments` is the sole `{{expr}}` tokenizer
+    /// (the runtime scanner was removed with the walker —
+    /// RFC-058 Phase 6.5). Pin the documented RFC-040 edge
+    /// cases so the grammar doesn't drift silently.
     #[test]
     fn parse_interp_segments_handles_documented_shapes() {
         use super::{parse_interp_segments, InterpSegment};
