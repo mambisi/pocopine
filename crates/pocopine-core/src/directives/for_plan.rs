@@ -292,40 +292,64 @@ pub struct StaticSlotOutlet {
     pub name: &'static str,
 }
 
-/// Static-lifetime descriptor for a `<template pp-if="<expr>">`
-/// site. RFC-058 Phase 4.1b (controller) + 4.1d (body lifting).
-///
-/// `template_node_path` resolves the `<template>` element
-/// inside the cleaned plan root — the macro keeps the element
-/// in the rewritten HTML so `clone_template_body` still has
-/// something to clone (legacy path), but strips the `pp-if`
-/// attribute so the runtime mount's directive-dispatch path
-/// doesn't double-install the effect.
-///
-/// `expr_src` is the original truthy expression. The applier
-/// parses it via `expr::parse_cached` and hands the AST to
-/// [`crate::directives::if_::install`].
-///
-/// `teleport_selector` is `Some` for a co-occurring
-/// `pp-if` + `pp-teleport` site. The macro strips both source
-/// attributes so the runtime mount does not double-install
-/// either directive; the compiled if controller uses this
-/// selector directly when the branch mounts.
-///
-/// `body` is the macro-emitted [`IfBodyFn`] when the body
-/// subtree qualified for Phase 4.1d lifting. The runtime
-/// installer invokes the fragment to materialise the body
-/// (parses cleaned HTML, runs the macro-emitted specialized
-/// install closure against the parent scope) instead of going through the legacy
-/// `clone_template_body` + `mount::walk` path. `None` falls
-/// back to today's clone+walk — the body had something Phase
-/// 4.1d's v1 envelope can't handle.
-#[doc(hidden)]
-pub struct StaticIfPlan {
+/// RFC-094 — one conditional chain: `pp-if [pp-else-if…]
+/// [pp-else]`. A bare `pp-if` is the `else_if: &[]`,
+/// `else_body: None` case (head-branch fields stay flat so
+/// single-branch consumers read `expr_src` / `body` /
+/// `teleport_selector` unchanged). The classifier folds the
+/// whole sibling chain into ONE entry; the runtime controller
+/// owns one effect, one active index, one comment anchor.
+pub struct StaticCondPlan {
+    pub template_node_path: &'static [u16],
+    /// Head (pp-if) branch expression.
+    pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
+    /// Head branch body fragment.
+    pub body: Option<IfBodyFn>,
+    /// `pp-else-if` branches, in authored order.
+    pub else_if: &'static [CondBranch],
+    /// Whether the chain has a `pp-else` (tracked separately
+    /// from `else_body` — an else whose body fell outside the
+    /// lifting envelope still claims the fallback slot).
+    pub has_else: bool,
+    /// `pp-else` body fragment (`None` with `has_else` = legacy
+    /// clone fallback from the consumed member template).
+    pub else_body: Option<IfBodyFn>,
+    /// How many consumed chain-member `<template>`s follow the
+    /// head as element siblings in the cleaned HTML. The
+    /// controller detaches them at install (keeping them alive
+    /// for legacy clone fallback) before swapping the head for
+    /// the comment anchor.
+    pub consumed_count: u16,
+    pub teleport_selector: Option<&'static str>,
+}
+
+/// RFC-094 — one `pp-match` dispatch site. The matched value's
+/// tag is extracted per serde's externally-tagged encoding
+/// (string ⇒ the tag; one-key object ⇒ key + payload); the first
+/// case whose `tags` contains it wins; `tags: &[]` is the `_`
+/// wildcard. Nothing renders without a match.
+pub struct StaticMatchPlan {
     pub template_node_path: &'static [u16],
     pub expr_src: &'static str,
     pub compiled: Option<&'static expr::StaticExpr>,
+    pub cases: &'static [MatchCase],
     pub teleport_selector: Option<&'static str>,
+}
+
+/// One `pp-case` arm of a [`StaticMatchPlan`].
+pub struct MatchCase {
+    /// Variant names this arm matches; empty = `_` wildcard.
+    pub tags: &'static [&'static str],
+    /// `pp-let` payload binding name.
+    pub bind_name: Option<&'static str>,
+    pub body: Option<IfBodyFn>,
+}
+
+/// One `pp-else-if` branch of a [`StaticCondPlan`].
+pub struct CondBranch {
+    pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
     pub body: Option<IfBodyFn>,
 }
 
@@ -477,6 +501,17 @@ pub struct CompiledRowPlan {
     pub item_name: &'static str,
     pub(crate) bindings: Vec<CompiledBinding>,
     pub(crate) listeners: Vec<CompiledListener>,
+    /// RFC-095 W4 — lazily resolved mutation-channel descriptor
+    /// slot. `Unknown` until the first eligible mount asks.
+    pub(crate) channel: std::cell::Cell<ChannelState>,
+}
+
+/// Tri-state cache for [`CompiledRowPlan::channel`].
+#[derive(Clone, Copy)]
+pub(crate) enum ChannelState {
+    Unknown,
+    Ineligible,
+    Slot(u32),
 }
 
 impl CompiledRowPlan {
@@ -570,6 +605,7 @@ pub fn register_row_plans(component_name: &str, plans: &'static [StaticRowPlan])
                     item_name: sp.item_name,
                     bindings,
                     listeners,
+                    channel: std::cell::Cell::new(ChannelState::Unknown),
                 }),
             );
         }
@@ -799,7 +835,21 @@ fn evaluate_fast_path(path: &FastPath, loop_state: &LoopScope) -> JsValue {
         FastPathRoot::LoopIndex => JsValue::from_f64(loop_state.index as f64),
         FastPathRoot::LoopFirst => JsValue::from_bool(loop_state.index == 0),
         FastPathRoot::LoopLast => JsValue::from_bool(loop_state.index + 1 == loop_state.total),
-        FastPathRoot::Parent => loop_state.parent.clone(),
+        FastPathRoot::Parent => {
+            // RFC-096 S2 — the first key is a parent FIELD;
+            // resolve it through the shared read mirror (tracks
+            // at the parent scope, no proxy). Remaining keys walk
+            // the plain value below.
+            let mut iter = path.keys.iter();
+            let Some(first) = iter.next().and_then(|k| k.as_string()) else {
+                return JsValue::UNDEFINED;
+            };
+            let mut cur = crate::scope::read_scope_key(loop_state.parent_scope_id, &first);
+            for key in iter {
+                cur = Reflect::get(&cur, key).unwrap_or(JsValue::UNDEFINED);
+            }
+            return cur;
+        }
     };
     for key in path.keys.iter() {
         cur = Reflect::get(&cur, key).unwrap_or(JsValue::UNDEFINED);
@@ -892,7 +942,10 @@ fn dispatch_delegated_event(
             with_current_el(&route.node, || {
                 crate::scope::with_current_scope_id(scope_id, || {
                     crate::magics::with_current_event(&ev_js, || {
-                        expr::evaluate(&route.ast, &proxy);
+                        // RFC-096 S2 — delegated dispatch rides the
+                        // scoped access like every other listener.
+                        let access = crate::scope::scoped_root_reader(scope_id);
+                        expr::evaluate_with(&route.ast, &proxy, access.as_ref());
                     });
                 });
             });
@@ -1102,7 +1155,7 @@ pub(crate) fn mount_rows_compiled(
 
     let mut instances: Vec<(ScopeId, RowInstance)> = Vec::with_capacity(rows.len());
     let mut watched_members: Vec<ScopeId> = Vec::new();
-    let mut watcher: Option<(ListWatcherKey, JsValue)> = None;
+    let mut watcher: Option<ListWatcherKey> = None;
 
     let node_path_start = crate::profiler::mount::start();
     let mut resolved_binding_nodes: Vec<Box<[Element]>> = Vec::with_capacity(rows.len());
@@ -1125,13 +1178,12 @@ pub(crate) fn mount_rows_compiled(
     let binding_start = crate::profiler::mount::start();
     let mut binding_caches: Vec<Vec<Option<Rc<str>>>> = Vec::with_capacity(rows.len());
     let mut loop_states: Vec<Option<Rc<RefCell<LoopScope>>>> = Vec::with_capacity(rows.len());
-    let mut parent_links: Vec<Option<(ScopeId, JsValue)>> = Vec::with_capacity(rows.len());
+    let mut parent_links: Vec<Option<ScopeId>> = Vec::with_capacity(rows.len());
     for ((_, scope_id, proxy), binding_nodes) in rows.iter().zip(resolved_binding_nodes.iter()) {
         let loop_state = Scope::find(*scope_id).and_then(|scope| scope.typed::<LoopScope>());
-        let parent_link = loop_state.as_ref().map(|state| {
-            let borrow = state.borrow();
-            (borrow.parent_scope_id, borrow.parent.clone())
-        });
+        let parent_link = loop_state
+            .as_ref()
+            .map(|state| state.borrow().parent_scope_id);
         let mut binding_cache: Vec<Option<Rc<str>>> = vec![None; plan.bindings.len()];
         {
             let loop_borrow = loop_state.as_ref().map(|state| state.borrow());
@@ -1174,10 +1226,10 @@ pub(crate) fn mount_rows_compiled(
         let initial_proxy: RefCell<Option<JsValue>> = RefCell::new(proxy.clone());
 
         let list_key = match parent_link {
-            Some((parent_scope_id, parent_proxy)) => {
+            Some(parent_scope_id) => {
                 let list_key = ListWatcherKey::new(parent_scope_id, plan);
                 if watcher.is_none() {
-                    watcher = Some((list_key, parent_proxy));
+                    watcher = Some(list_key);
                 }
                 watched_members.push(*scope_id);
                 list_key
@@ -1206,8 +1258,8 @@ pub(crate) fn mount_rows_compiled(
         }
     });
 
-    if let Some((list_key, parent_proxy)) = watcher {
-        ensure_list_watcher(plan, list_key, parent_proxy);
+    if let Some(list_key) = watcher {
+        ensure_list_watcher(plan, list_key);
         LIST_WATCHERS.with(|m| {
             if let Some(watcher) = m.borrow_mut().get_mut(&list_key) {
                 watcher.members.extend(watched_members.iter().copied());
@@ -1249,39 +1301,30 @@ pub(crate) fn mount_rows_compiled(
 /// no new effect is allocated, and the row simply appends to
 /// `members` — subsequent parent updates re-fire the effect
 /// against the full list.
-fn ensure_list_watcher(
-    plan: &Rc<CompiledRowPlan>,
-    list_key: ListWatcherKey,
-    parent_proxy: JsValue,
-) {
+fn ensure_list_watcher(plan: &Rc<CompiledRowPlan>, list_key: ListWatcherKey) {
     let already = LIST_WATCHERS.with(|m| m.borrow().contains_key(&list_key));
     if !already {
         // Distinct top-level parent fields across all bindings
-        // in the plan. `&'static str`-style names live as
-        // owned `String` on `CompiledBinding`; we re-key as
-        // `JsValue` once at install (cheap; not in the hot
-        // re-fire loop).
-        let mut field_keys: Vec<JsValue> = Vec::new();
+        // in the plan.
+        let mut field_keys: Vec<String> = Vec::new();
         for binding in &plan.bindings {
             for name in binding.parent_field_paths.iter() {
-                let key_js = JsValue::from_str(name);
-                let already_have = field_keys
-                    .iter()
-                    .any(|existing| existing.as_string().as_deref() == Some(name.as_str()));
-                if !already_have {
-                    field_keys.push(key_js);
+                if !field_keys.iter().any(|existing| existing == name) {
+                    field_keys.push(name.clone());
                 }
             }
         }
         if field_keys.is_empty() {
             return;
         }
-        let parent_proxy_for_effect = parent_proxy.clone();
+        let parent_scope_id = list_key.parent_scope_id;
         let list_key_for_effect = list_key;
         let effect_id = crate::reactive::effect(move || {
-            // Subscribe via the parent proxy's `get` trap.
+            // RFC-096 S2 — subscribe via the shared read mirror
+            // (same tracking the parent proxy's get trap
+            // delegates to; no proxy required).
             for k in &field_keys {
-                let _ = Reflect::get(&parent_proxy_for_effect, k);
+                let _ = crate::scope::read_scope_key(parent_scope_id, k);
             }
             // Iterate this list's current rows and re-evaluate
             // their parent-touching bindings.
@@ -1532,6 +1575,224 @@ fn resolve_listener_routes(plan: &CompiledRowPlan, row_root: &Element) -> Box<[R
     routes.into_boxed_slice()
 }
 
+// ─── RFC-095 W4 — mutation-channel bridge ───────────────────────
+
+/// Resolve (and cache) the channel descriptor slot for `plan`.
+/// `None` = ineligible: a binding kind outside Text/Class, or a
+/// non-skip binding whose fast expression isn't item-rooted.
+/// Parent-dependent bindings are descriptor-marked `skip` — the
+/// interpreter resolves their node but writes nothing, exactly
+/// like the direct mount path, and the list watcher paints them
+/// right after registration.
+pub(crate) fn channel_slot(plan: &CompiledRowPlan) -> Option<u32> {
+    match plan.channel.get() {
+        ChannelState::Slot(s) => Some(s),
+        ChannelState::Ineligible => None,
+        ChannelState::Unknown => {
+            let slot = build_channel_descriptor(plan);
+            plan.channel.set(match slot {
+                Some(s) => ChannelState::Slot(s),
+                None => ChannelState::Ineligible,
+            });
+            slot
+        }
+    }
+}
+
+thread_local! {
+    /// RFC-095 W4c — per-descriptor parent-rooted fast paths,
+    /// keyed by channel slot. Row-invariant: resolved ONCE per
+    /// flush into the `parentVals` array the interpreter indexes.
+    static CHANNEL_PARENT_PATHS: RefCell<HashMap<u32, Box<[FastPath]>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Convert one fast path for the descriptor. Item-family roots
+/// carry their key chain; a Parent root is resolved Rust-side
+/// per flush, so its descriptor entry is just `{root: 4, keys:
+/// [idx]}` — an index into the flush's `parentVals`.
+fn channel_fast_path(p: &FastPath, parent_paths: &mut Vec<FastPath>) -> (u8, Vec<JsValue>) {
+    let root = match p.root {
+        FastPathRoot::LoopItem => 0,
+        FastPathRoot::LoopIndex => 1,
+        FastPathRoot::LoopFirst => 2,
+        FastPathRoot::LoopLast => 3,
+        FastPathRoot::Parent => {
+            // Magic roots ($store.x / $route.x) resolve through
+            // magic_scope_access, not ComponentState::get — the
+            // untracked flush-time resolver below can't serve
+            // them. Refuse the channel; the direct path handles
+            // these correctly.
+            if p.keys
+                .first()
+                .and_then(|k| k.as_string())
+                .is_none_or(|f| f.starts_with('$'))
+            {
+                return (255, Vec::new());
+            }
+            let idx = parent_paths.len() as f64;
+            parent_paths.push(p.clone());
+            return (4, vec![JsValue::from_f64(idx)]);
+        }
+    };
+    (root, p.keys.to_vec())
+}
+
+/// Resolve a Parent-rooted fast path WITHOUT tracking — the
+/// channel flush runs inside the pp-for effect, and a tracked
+/// read here would subscribe the whole reconcile to e.g.
+/// `selected_id` (the list watcher owns that subscription).
+fn parent_path_value_untracked(path: &FastPath, parent_scope_id: ScopeId) -> JsValue {
+    let mut keys = path.keys.iter();
+    let Some(first) = keys.next().and_then(|k| k.as_string()) else {
+        return JsValue::UNDEFINED;
+    };
+    let Some(scope) = Scope::find(parent_scope_id) else {
+        return JsValue::UNDEFINED;
+    };
+    let mut cur = scope.state.borrow().get(&first);
+    for k in keys {
+        cur = js_sys::Reflect::get(&cur, k).unwrap_or(JsValue::UNDEFINED);
+    }
+    cur
+}
+
+/// The per-flush parent values for a registered descriptor.
+pub(crate) fn channel_parent_vals(slot: u32, parent_scope_id: ScopeId) -> js_sys::Array {
+    let out = js_sys::Array::new();
+    CHANNEL_PARENT_PATHS.with(|m| {
+        if let Some(paths) = m.borrow().get(&slot) {
+            for p in paths.iter() {
+                out.push(&parent_path_value_untracked(p, parent_scope_id));
+            }
+        }
+    });
+    out
+}
+
+fn build_channel_descriptor(plan: &CompiledRowPlan) -> Option<u32> {
+    use crate::mutation_channel::{DescriptorBinding, DescriptorExpr};
+    let mut bindings: Vec<DescriptorBinding> = Vec::with_capacity(plan.bindings.len());
+    let mut parent_paths: Vec<FastPath> = Vec::new();
+    for b in &plan.bindings {
+        if !matches!(b.kind, BindingKind::Text | BindingKind::Class) {
+            return None;
+        }
+        // Parent-dependent bindings paint at mount too (W4c) —
+        // their parent side is row-invariant, resolved once per
+        // flush into `parentVals`. The list watcher still owns
+        // post-mount updates.
+        let expr = match b.fast.as_ref()? {
+            FastExpr::Path(p) => {
+                let (root, keys) = channel_fast_path(p, &mut parent_paths);
+                if root == 255 {
+                    return None;
+                }
+                DescriptorExpr::Path { root, keys }
+            }
+            FastExpr::TernaryEq {
+                lhs,
+                rhs,
+                then_value,
+                else_value,
+                invert,
+            } => {
+                let lhs = channel_fast_path(lhs, &mut parent_paths);
+                let rhs = channel_fast_path(rhs, &mut parent_paths);
+                if lhs.0 == 255 || rhs.0 == 255 {
+                    return None;
+                }
+                DescriptorExpr::TernaryEq {
+                    lhs,
+                    rhs,
+                    then_value: then_value.clone(),
+                    else_value: else_value.clone(),
+                    invert: *invert,
+                }
+            }
+        };
+        bindings.push(DescriptorBinding {
+            node_path: b.node_path,
+            kind: b.kind,
+            skip: false,
+            expr: Some(expr),
+        });
+    }
+    let listener_paths: Vec<&'static [u16]> = plan.listeners.iter().map(|l| l.node_path).collect();
+    let slot = crate::mutation_channel::register_plan(&bindings, &listener_paths);
+    CHANNEL_PARENT_PATHS.with(|m| {
+        m.borrow_mut().insert(slot, parent_paths.into_boxed_slice());
+    });
+    Some(slot)
+}
+
+/// One channel-mounted row's handles, as returned by the
+/// interpreter, plus the Rust-side scope the caller minted.
+pub(crate) struct ChannelRow {
+    pub scope_id: ScopeId,
+    pub binding_nodes: Box<[Element]>,
+    pub listener_nodes: Vec<Element>,
+    pub loop_state: Rc<RefCell<LoopScope>>,
+}
+
+/// Register channel-mounted rows: the bookkeeping half of
+/// [`mount_rows_compiled`] with the DOM half already done
+/// JS-side. Binding caches start empty (`None`) — the values
+/// were written by the interpreter; the first reuse pass
+/// re-writes once instead of comparing, which is correct and
+/// costs one DOM write per binding per row, once.
+pub(crate) fn register_channel_rows(
+    plan: &Rc<CompiledRowPlan>,
+    rows: Vec<ChannelRow>,
+    parent_scope_id: ScopeId,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let list_key = ListWatcherKey::new(parent_scope_id, plan);
+    let mut watched: Vec<ScopeId> = Vec::with_capacity(rows.len());
+    ROW_INSTANCES.with(|m| {
+        let mut map = m.borrow_mut();
+        for row in rows {
+            let listener_routes: Box<[RowListenerRoute]> = plan
+                .listeners
+                .iter()
+                .zip(row.listener_nodes)
+                .map(|(l, node)| RowListenerRoute {
+                    event: l.event,
+                    node,
+                    ast: l.ast.clone(),
+                })
+                .collect();
+            watched.push(row.scope_id);
+            crate::profiler::mount::record_compiled_row_mounted();
+            map.insert(
+                row.scope_id,
+                RowInstance {
+                    plan: plan.clone(),
+                    binding_nodes: row.binding_nodes,
+                    binding_cache: vec![None; plan.bindings.len()],
+                    proxy: RefCell::new(None),
+                    loop_state: Some(row.loop_state),
+                    listener_routes,
+                    list_key,
+                },
+            );
+        }
+    });
+    ensure_list_watcher(plan, list_key);
+    LIST_WATCHERS.with(|m| {
+        if let Some(watcher) = m.borrow_mut().get_mut(&list_key) {
+            watcher.members.extend(watched.iter().copied());
+        }
+    });
+    // No refresh_parent_bindings_many here (unlike
+    // mount_rows_compiled): the interpreter painted parent-
+    // dependent bindings with flush-time `parentVals`, so the
+    // mount-time repaint would be a 10K-row no-op walk. The
+    // watcher handles every later parent change.
+}
+
 // ─── helpers ────────────────────────────────────────────────────
 
 /// Stringify a JsValue for `pp-text`. Mirrors text.rs.
@@ -1540,7 +1801,7 @@ fn js_to_string(v: &JsValue) -> String {
         return String::new();
     }
     v.as_string()
-        .or_else(|| v.as_f64().map(|n| n.to_string()))
+        .or_else(|| v.as_f64().map(crate::text::js_number_string))
         .or_else(|| v.as_bool().map(|b| b.to_string()))
         .unwrap_or_else(|| {
             js_sys::JSON::stringify(v)
