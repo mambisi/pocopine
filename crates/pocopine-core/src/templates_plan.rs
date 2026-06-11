@@ -2,7 +2,7 @@
 //!
 //! Macro-emitted static descriptor for an entire compiled
 //! template's bindings, listeners, refs, and deferred-init
-//! entries. The runtime fast-path in [`crate::mount::mount_component`]
+//! entries. The runtime fast-path in `mount::mount_component`
 //! consumes the plan when one is registered for a component
 //! tag, calling the cleanup-safe install helpers from RFC-058
 //! Phase 1 directly instead of running the per-attribute
@@ -43,9 +43,9 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element, Node};
 
 use crate::directives::for_plan::{
-    BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInterp,
-    StaticListener, StaticNativeModel, StaticOpaqueDirective, StaticRef, StaticSlotOutlet,
-    StaticTeleportPlan,
+    BindingKind, MatchCase, StaticBinding, StaticChildMount, StaticCondPlan, StaticForPlan,
+    StaticInterp, StaticListener, StaticMatchPlan, StaticNativeModel, StaticOpaqueDirective,
+    StaticRef, StaticSlotOutlet, StaticTeleportPlan,
 };
 use crate::directives::interp::PlannedSegment;
 use crate::directives::{self};
@@ -80,14 +80,18 @@ pub struct StaticTemplatePlan {
     /// recurses. Empty for templates that contain no child
     /// components — the prior Phase 2 envelope.
     pub child_mounts: &'static [StaticChildMount],
-    /// `pp-if` controller sites the classifier lifted out of
-    /// the runtime mount's directive-dispatch path (RFC-058
-    /// Phase 4.1b). The macro strips the `pp-if` attribute from
-    /// the cleaned HTML — the applier installs the effect via
-    /// [`crate::directives::if_::install`] against the
-    /// `<template>` element resolved through `template_node_path`.
-    /// Empty for templates with no `pp-if` site.
-    pub if_plans: &'static [StaticIfPlan],
+    /// Conditional-chain controller sites (RFC-058 Phase 4.1b,
+    /// RFC-094 chains). One entry per `pp-if [pp-else-if…]
+    /// [pp-else]` chain; the applier installs the access-based
+    /// controller via [`crate::directives::if_::install_cond`]
+    /// against the chain-head `<template>`, which the controller
+    /// swaps for a `<!--pp:cond-->` comment anchor. Empty for
+    /// templates with no chain.
+    pub if_plans: &'static [StaticCondPlan],
+    /// RFC-094 Phase 3 — `pp-match` dispatch sites; same anchor
+    /// and exactly-one-clone contract as `if_plans`, selected by
+    /// serde-tag extraction.
+    pub match_plans: &'static [StaticMatchPlan],
     /// `pp-for` controller sites (RFC-058 Phase 4.2). The macro
     /// strips `pp-for` / `pp-key` / `pp-stagger` from the
     /// cleaned HTML; the applier installs the effect via
@@ -134,6 +138,17 @@ pub struct StaticTemplatePlan {
     /// without the runtime mount. Component-target `pp-model`
     /// is on `StaticChildMount` instead.
     pub native_models: &'static [StaticNativeModel],
+    /// RFC-095 W3b — `false` when the macro proved no install in
+    /// this plan ever consults the scope proxy: only bindings /
+    /// interps / refs, every expression `$`-free (so the W1
+    /// scoped root reader resolves every root and the proxy
+    /// fallback is unreachable). `mount_component` then skips
+    /// `into_proxy()` entirely — no trap closures, no `Proxy` —
+    /// and stamps only `SCOPE_ID_KEY`; `scope_of_element` /
+    /// `enclosing_scope` lazy-mint on first dynamic need
+    /// (devtools, a parent's prop write, …), the same contract
+    /// RFC-054 proxy-elided rows already live under.
+    pub needs_proxy: bool,
 }
 
 /// Captured interpolation target for RFC 062 specialized mount
@@ -261,11 +276,12 @@ pub fn install_static_ref(
 #[doc(hidden)]
 pub fn install_static_binding(
     el: &Element,
+    scope_id: ScopeId,
     proxy: &JsValue,
     entry: &'static StaticBinding,
     template_name: &str,
 ) {
-    let Some(evaluator) = static_evaluator(entry.compiled, entry.expr_src) else {
+    let Some(evaluator) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
         fail(
             "binding-parse",
             template_name,
@@ -275,7 +291,16 @@ pub fn install_static_binding(
         return;
     };
     match entry.kind {
-        BindingKind::Text => directives::text::install_eval(el, proxy, evaluator),
+        BindingKind::Text => {
+            // RFC-096 S3 — single-field pp-text takes the typed
+            // lane (track + scalar extract, no serde-to-JS);
+            // anything else keeps the evaluator path.
+            if let Some(StaticExpr::Path([key])) = entry.compiled {
+                directives::text::install_fast(el, scope_id, key, proxy, evaluator);
+            } else {
+                directives::text::install_eval(el, proxy, evaluator);
+            }
+        }
         BindingKind::Html => directives::html::install_eval(el, proxy, evaluator),
         BindingKind::Show => directives::show::install_eval(el, proxy, evaluator),
         BindingKind::Bind { arg } => directives::bind::install_eval(el, proxy, arg, evaluator),
@@ -403,13 +428,16 @@ pub fn install_static_teleport_plan(
     directives::teleport::install(template, entry.selector, entry.body);
 }
 
-/// RFC 062 Phase 2 helper used by macro-specialized mount
-/// bodies for `pp-if` controller templates.
+/// RFC 062 / RFC-094 helper used by macro-specialized mount
+/// bodies for conditional-chain controller templates. Builds one
+/// access-based evaluator per branch and hands the chain to the
+/// comment-anchored controller.
 #[doc(hidden)]
 pub fn install_static_if_plan(
     el: &Element,
+    scope_id: ScopeId,
     proxy: &JsValue,
-    entry: &'static StaticIfPlan,
+    entry: &'static StaticCondPlan,
     template_name: &str,
 ) {
     let template = match el.clone().dyn_into::<web_sys::HtmlTemplateElement>() {
@@ -424,7 +452,11 @@ pub fn install_static_if_plan(
             return;
         }
     };
-    let Some(evaluator) = static_evaluator(entry.compiled, entry.expr_src) else {
+    let mut branches: Vec<(
+        directives::if_::BranchEval,
+        Option<crate::directives::for_plan::IfBodyFn>,
+    )> = Vec::with_capacity(1 + entry.else_if.len());
+    let Some(head) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
         fail(
             "if-plan-parse",
             template_name,
@@ -433,11 +465,76 @@ pub fn install_static_if_plan(
         );
         return;
     };
-    directives::if_::install_eval(
+    branches.push((head, entry.body));
+    for b in entry.else_if {
+        let Some(eval) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
+            fail(
+                "else-if-parse",
+                template_name,
+                entry.template_node_path,
+                Some(b.expr_src),
+            );
+            return;
+        };
+        branches.push((eval, b.body));
+    }
+    directives::if_::install_cond(
         template,
+        scope_id,
+        proxy.clone(),
+        branches,
+        entry.has_else,
+        entry.else_body,
+        entry.consumed_count,
+        entry.teleport_selector,
+    );
+}
+
+/// RFC-094 Phase 3 helper for `pp-match` controller templates.
+#[doc(hidden)]
+pub fn install_static_match_plan(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticMatchPlan,
+    template_name: &str,
+) {
+    let template = match el.clone().dyn_into::<web_sys::HtmlTemplateElement>() {
+        Ok(t) => t,
+        Err(_) => {
+            fail(
+                "match-plan-template",
+                template_name,
+                entry.template_node_path,
+                Some(entry.expr_src),
+            );
+            return;
+        }
+    };
+    let Some(evaluator) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
+        fail(
+            "match-plan-parse",
+            template_name,
+            entry.template_node_path,
+            Some(entry.expr_src),
+        );
+        return;
+    };
+    let arms: Vec<directives::if_::MatchArm> = entry
+        .cases
+        .iter()
+        .map(|c: &MatchCase| directives::if_::MatchArm {
+            tags: c.tags,
+            bind_name: c.bind_name,
+            body: c.body,
+        })
+        .collect();
+    directives::if_::install_match(
+        template,
+        scope_id,
         proxy.clone(),
         evaluator,
-        entry.body,
+        arms,
         entry.teleport_selector,
     );
 }
@@ -518,10 +615,15 @@ pub fn capture_static_interp_target(
 /// RFC 062 Phase 3 helper used by macro-specialized mount
 /// bodies after every interpolation target has been captured.
 #[doc(hidden)]
-pub fn install_static_interp_target(target: &StaticInterpTarget, proxy: &JsValue) {
+pub fn install_static_interp_target(
+    target: &StaticInterpTarget,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+) {
     directives::interp::install_planned_target(
         &target.parent,
         proxy,
+        crate::scope::scoped_root_reader(scope_id),
         &target.text,
         target.segments,
     );
@@ -532,11 +634,13 @@ pub fn install_static_interp_target(target: &StaticInterpTarget, proxy: &JsValue
 #[doc(hidden)]
 pub fn install_static_native_model(
     el: &Element,
+    scope_id: ScopeId,
     proxy: &JsValue,
     entry: &'static StaticNativeModel,
 ) {
     directives::model::install_native(
         el,
+        scope_id,
         proxy,
         entry.expr_src.to_string(),
         entry.number,
@@ -590,7 +694,7 @@ pub fn apply_static_pp_as_plan(
         crate::refs::register(scope_id, r.name, root);
     }
     for b in plan.bindings.iter().filter(|b| b.node_path.is_empty()) {
-        let Some(evaluator) = static_evaluator(b.compiled, b.expr_src) else {
+        let Some(evaluator) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
             fail(
                 "pp-as-binding-parse",
                 template_name,
@@ -662,7 +766,7 @@ fn install_child_host_directives(
     template_name: &str,
 ) {
     for b in child.bindings {
-        let Some(evaluator) = static_evaluator(b.compiled, b.expr_src) else {
+        let Some(evaluator) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
             fail(
                 "child-host-binding-parse",
                 template_name,
@@ -696,8 +800,7 @@ fn install_child_host_directives(
         );
     }
     for m in child.models {
-        let _ = scope_id;
-        directives::model::install_compiled(el, proxy, m.arg, m.modifiers, m.expr_src);
+        directives::model::install_compiled(el, scope_id, proxy, m.arg, m.modifiers, m.expr_src);
     }
 }
 
@@ -864,24 +967,43 @@ fn is_svg_fragment_root_tag(tag: &str) -> bool {
 
 type StaticEvaluator = Rc<dyn Fn(&JsValue) -> JsValue>;
 
-fn static_evaluator(
+/// RFC-095 W1 — the evaluator constructor: closures carry
+/// a [`crate::expr::RootAccess`] for `scope_id`, so every effect
+/// re-run resolves root field reads Rust-side (track + field
+/// cache + `ComponentState::get`) instead of bouncing through the
+/// proxy's `get` trap. The proxy is still consulted at call time
+/// for `$`-roots, magics, and nested-object walks. A dead scope
+/// (or a `$`-root) degrades to exactly the proxy-only path.
+fn scoped_static_evaluator(
+    scope_id: ScopeId,
     compiled: Option<&'static StaticExpr>,
     expr_src: &'static str,
 ) -> Option<StaticEvaluator> {
+    let reader = crate::scope::scoped_root_reader(scope_id);
     if let Some(compiled) = compiled {
-        return Some(Rc::new(move |scope| compiled.evaluate(scope)));
+        return Some(Rc::new(move |scope| {
+            compiled.evaluate_with(scope, reader.as_ref())
+        }));
     }
-    runtime_evaluator(expr_src)
+    scoped_runtime_evaluator(reader, expr_src)
 }
 
 #[cfg(feature = "runtime-expr-fallback")]
-fn runtime_evaluator(expr_src: &'static str) -> Option<StaticEvaluator> {
+fn scoped_runtime_evaluator(
+    reader: Option<crate::expr::RootAccess>,
+    expr_src: &'static str,
+) -> Option<StaticEvaluator> {
     let ast = expr::parse_cached(expr_src).ok()?;
-    Some(Rc::new(move |scope| expr::evaluate(&ast, scope)))
+    Some(Rc::new(move |scope| {
+        expr::evaluate_with(&ast, scope, reader.as_ref())
+    }))
 }
 
 #[cfg(not(feature = "runtime-expr-fallback"))]
-fn runtime_evaluator(_expr_src: &'static str) -> Option<StaticEvaluator> {
+fn scoped_runtime_evaluator(
+    _reader: Option<crate::expr::RootAccess>,
+    _expr_src: &'static str,
+) -> Option<StaticEvaluator> {
     None
 }
 
