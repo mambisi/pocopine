@@ -414,7 +414,10 @@ fn check_editor_extension(report: &mut Report) {
                         .any(|line| line.trim().eq_ignore_ascii_case(EXT_ID))
                 });
             if installed {
-                report.ok("editor extension", "Poco LSP (pocopine.vscode-poco) installed");
+                report.ok(
+                    "editor extension",
+                    "Poco LSP (pocopine.vscode-poco) installed",
+                );
             } else {
                 report.ok(
                     "editor extension",

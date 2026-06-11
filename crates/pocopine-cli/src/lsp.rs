@@ -203,7 +203,10 @@ impl Backend {
                 )));
             }
             if comp.has_handler(&token) {
-                return Some(hover_md(format!("**{token}** — handler on `{}`.", comp.name)));
+                return Some(hover_md(format!(
+                    "**{token}** — handler on `{}`.",
+                    comp.name
+                )));
             }
         }
         None
@@ -327,7 +330,10 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _params: InitializeParams) -> tower_lsp::jsonrpc::Result<InitializeResult> {
+    async fn initialize(
+        &self,
+        _params: InitializeParams,
+    ) -> tower_lsp::jsonrpc::Result<InitializeResult> {
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "pocopine-lsp".to_string(),
@@ -468,7 +474,12 @@ impl LanguageServer for Backend {
         &self,
         params: TextDocumentPositionParams,
     ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
-        let text = self.docs.lock().await.get(&params.text_document.uri).cloned();
+        let text = self
+            .docs
+            .lock()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
         let Some(text) = text else {
             return Ok(None);
         };
@@ -477,8 +488,10 @@ impl LanguageServer for Backend {
         // handlers, and component tags need rust-analyzer (the `node` server),
         // so we decline them here rather than risk a broken `.rs`.
         let index = LineIndex::new(&text);
-        let Some((ident, start)) = ident_at(index.line_text(params.position.line), params.position.character as usize)
-        else {
+        let Some((ident, start)) = ident_at(
+            index.line_text(params.position.line),
+            params.position.character as usize,
+        ) else {
             return Ok(None);
         };
         let (ast, _) = pocopine_template_parser::parse(&text, "<editor>");
@@ -538,7 +551,12 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> tower_lsp::jsonrpc::Result<Option<DocumentSymbolResponse>> {
-        let text = self.docs.lock().await.get(&params.text_document.uri).cloned();
+        let text = self
+            .docs
+            .lock()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
         let Some(text) = text else {
             return Ok(None);
         };
@@ -576,7 +594,13 @@ fn structural_diagnostics(
     errors
         .into_iter()
         .filter(|e| !(e.byte_range.start == 0 && e.byte_range.end == 0))
-        .map(|e| diag(index.range(&e.byte_range), DiagnosticSeverity::ERROR, e.message))
+        .map(|e| {
+            diag(
+                index.range(&e.byte_range),
+                DiagnosticSeverity::ERROR,
+                e.message,
+            )
+        })
         .collect()
 }
 
@@ -638,15 +662,19 @@ fn walk_directives(
             };
 
             // Arg presence.
-            let has_arg = parsed.arg.as_deref().map(|a| !a.is_empty()).unwrap_or(false);
+            let has_arg = parsed
+                .arg
+                .as_deref()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
             match spec.takes_arg {
                 ArgReq::Required if !has_arg => out.push(diag(
-                    range.clone(),
+                    range,
                     DiagnosticSeverity::ERROR,
                     format!("pp-{} requires an arg after ':'.", spec.name),
                 )),
                 ArgReq::Forbidden if parsed.arg.is_some() => out.push(diag(
-                    range.clone(),
+                    range,
                     DiagnosticSeverity::ERROR,
                     format!(
                         "pp-{} does not take an arg (got ':{}').",
@@ -924,10 +952,7 @@ fn outline(ast: &pocopine_template_parser::TemplateAst, index: &LineIndex) -> Ve
 }
 
 #[allow(deprecated)] // `DocumentSymbol::deprecated` is a required (deprecated) field
-fn element_symbol(
-    el: &pocopine_template_parser::Element,
-    index: &LineIndex,
-) -> DocumentSymbol {
+fn element_symbol(el: &pocopine_template_parser::Element, index: &LineIndex) -> DocumentSymbol {
     let is_component = el.tag.contains('-');
     let kind = if is_component {
         SymbolKind::CLASS
@@ -943,9 +968,7 @@ fn element_symbol(
             .attrs
             .iter()
             .map(|(n, _)| n.as_str())
-            .filter(|n| {
-                n.starts_with("pp-") || n.starts_with(':') || n.starts_with('@')
-            })
+            .filter(|n| n.starts_with("pp-") || n.starts_with(':') || n.starts_with('@'))
             .collect();
         if dirs.is_empty() {
             None
@@ -1101,7 +1124,8 @@ fn current_value_attr(tag_slice: &str) -> Option<String> {
 /// start column. Token chars include the directive punctuation `: - @ . _ $`.
 fn token_at(line: &str, col: usize) -> Option<(String, usize)> {
     let chars: Vec<char> = line.chars().collect();
-    let is_tok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '@' | '.' | '$');
+    let is_tok =
+        |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '@' | '.' | '$');
     let col = col.min(chars.len());
     let mut start = col;
     while start > 0 && is_tok(chars[start - 1]) {
@@ -1284,9 +1308,25 @@ fn transition_preset_completions() -> Vec<CompletionItem> {
 
 fn common_events() -> Vec<CompletionItem> {
     [
-        "click", "dblclick", "input", "change", "submit", "focus", "blur", "keydown", "keyup",
-        "keypress", "mouseenter", "mouseleave", "mousedown", "mouseup", "mousemove", "wheel",
-        "pointerdown", "pointerup", "pointermove",
+        "click",
+        "dblclick",
+        "input",
+        "change",
+        "submit",
+        "focus",
+        "blur",
+        "keydown",
+        "keyup",
+        "keypress",
+        "mouseenter",
+        "mouseleave",
+        "mousedown",
+        "mouseup",
+        "mousemove",
+        "wheel",
+        "pointerdown",
+        "pointerup",
+        "pointermove",
     ]
     .iter()
     .map(|e| CompletionItem {
