@@ -16,7 +16,7 @@ use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::magics;
-use crate::reactive::{next_scope_id, track, trigger, trigger_scope, ScopeId};
+use crate::reactive::{next_scope_id, track, trigger, trigger_scope, ScopeId, SignalId};
 
 /// Static HTML attributes are strings, but Pocopine has historically
 /// coerced them before writing component props. The macro supplies this
@@ -37,7 +37,7 @@ pub trait ComponentState: 'static {
     fn get(&self, key: &str) -> JsValue;
 
     /// Whether this state's `get` returns values worth caching in the
-    /// per-scope `FIELD_CACHE`. Defaults to `true` for component
+    /// per-signal projection store. Defaults to `true` for component
     /// states (where `get` re-serialises Rust state through serde and
     /// the cache cuts the cost down to one allocation per trigger
     /// cycle). Override to `false` for "derived" scopes whose `get`
@@ -55,6 +55,43 @@ pub trait ComponentState: 'static {
     /// All data keys this component exposes. Used for sweep-triggers after
     /// a handler invocation.
     fn keys(&self) -> &'static [&'static str];
+
+    /// RFC-095 W2 — 64-bit dirty-check fingerprint of one declared
+    /// field's current value, computed entirely Rust-side (serde →
+    /// [`crate::fingerprint`], no bridge crossing). The per-field
+    /// dirty sweep snapshots observed fields around a handler and
+    /// triggers only the ones whose fingerprints moved.
+    ///
+    /// `None` means "unknown" — computed fields, flatten leaves,
+    /// non-field keys, derived scopes. The sweep treats unknown as
+    /// *changed*, so a `None` can only over-trigger (the pre-sweep
+    /// status quo), never miss an update.
+    fn field_fingerprint(&self, key: &str) -> Option<u64> {
+        let _ = key;
+        None
+    }
+
+    /// RFC-095 W2b — O(1) length probe of one declared field
+    /// (`Some(len)` for collection-shaped fields, `None`
+    /// otherwise — see [`crate::fingerprint::quick_len`]). The
+    /// dirty sweep short-circuits "changed" on a length move
+    /// without hashing the contents; `None`/`None` falls through
+    /// to the fingerprint compare, so the default is always
+    /// correct, just slower for big collections.
+    fn field_quick_len(&self, key: &str) -> Option<u64> {
+        let _ = key;
+        None
+    }
+
+    /// RFC-096 S3 — typed text projection of one declared field:
+    /// `Some(string)` for serde-scalar fields (rendered exactly
+    /// as `pp-text` would), `None` for compound fields and
+    /// unknown keys (which take the JsValue-projection path).
+    /// Zero serde-to-JS, zero `JsValue` on the `Some` path.
+    fn field_as_text(&self, key: &str) -> Option<String> {
+        let _ = key;
+        None
+    }
 
     /// RFC-031 — is `key` annotated `#[prop]`? Returns `false` for
     /// state fields (the default — anything not explicitly
@@ -180,7 +217,7 @@ pub trait ComponentState: 'static {
         false
     }
 
-    /// Symmetric with [`has_on_mount`]. Kept for parity; reserved
+    /// Symmetric with `has_on_mount`. Kept for parity; reserved
     /// for future devtools coverage displays.
     fn has_on_unmount(&self) -> bool {
         false
@@ -269,17 +306,26 @@ thread_local! {
     /// cache after the closure / handler runs (we don't know
     /// which fields it touched). Fields the handler explicitly
     /// kept fresh via `patch_list_at_inline` are recorded in
-    /// `FRESH_FIELDS` and survive invalidation.
-    static FIELD_CACHE: RefCell<HashMap<ScopeId, HashMap<String, JsValue>>> =
+    /// the PATCHED set and survive invalidation by version re-stamp.
+    /// RFC-096 S3 — versioned projections ON the field signal:
+    /// `PROJECTIONS[sid] = (version, JsValue)` is valid iff its
+    /// version equals `VERSIONS[sid]` (default 0). Invalidation
+    /// is a version bump; the old FIELD_CACHE map-removal dance
+    /// and the FRESH_FIELDS survive-the-blanket set are both
+    /// subsumed (PATCHED marks a projection the `patch_*` APIs
+    /// kept correct through a mutation — the sweep re-stamps it
+    /// to the new version instead of dropping it).
+    static VERSIONS: RefCell<HashMap<SignalId, u32>> = RefCell::new(HashMap::new());
+    static PROJECTIONS: RefCell<HashMap<SignalId, (u32, JsValue)>> =
         RefCell::new(HashMap::new());
-
-    /// Per-scope set of field names that were explicitly kept in
-    /// sync with Rust state by a `patch_*_inline` call. Consumed
-    /// (and cleared) by the next `invalidate_field_cache` so
-    /// only those fields survive the post-handler / post-update
-    /// blanket invalidate.
-    static FRESH_FIELDS: RefCell<HashMap<ScopeId, std::collections::HashSet<String>>> =
+    static PATCHED: RefCell<HashMap<ScopeId, std::collections::HashSet<SignalId>>> =
         RefCell::new(HashMap::new());
+    /// RFC-096 S3 — debug/devtools counter: serde projections
+    /// built (one per cache-miss field read). The S3 acceptance
+    /// gate asserts this stays flat on scalar-change paths once
+    /// the typed lane covers them.
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    static SERDE_PROJECTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 
     /// The element the current directive is running against. Set by the
     /// mount immediately around each directive call so `$el` works without
@@ -336,7 +382,6 @@ impl Scope {
         crate::refs::clear_scope(id);
         crate::mount::clear_light_dom_slots(id);
         crate::slot_fragment::clear(id);
-        crate::id::clear_scope(id);
         crate::context::clear_scope(id);
         crate::events::clear_scope(id);
         crate::reactive::clear_scope(id);
@@ -350,12 +395,14 @@ impl Scope {
         PROXY_CLOSURES.with(|m| {
             m.borrow_mut().remove(&id);
         });
-        FIELD_CACHE.with(|c| {
-            c.borrow_mut().remove(&id);
-        });
-        FRESH_FIELDS.with(|f| {
+        PATCHED.with(|f| {
             f.borrow_mut().remove(&id);
         });
+        BRIDGES.with(|b| {
+            b.borrow_mut().remove(&id);
+        });
+        // Projection storage is purged inside `reactive::clear_scope`
+        // (it drains the interned signal ids).
     }
 
     /// Bulk teardown for the RFC 054 compiled-row bulk-clear path.
@@ -380,7 +427,7 @@ impl Scope {
         });
         crate::reactive::clear_scopes(ids);
         // Compiled rows that never minted a proxy have no entry in
-        // PROXY_CLOSURES / FIELD_CACHE / FRESH_FIELDS — the
+        // PROXY_CLOSURES / PATCHED — the
         // per-id `remove` is a hash + compare with no value drop.
         // Still cheaper than 10K thread_local::with calls.
         PROXY_CLOSURES.with(|m| {
@@ -391,15 +438,18 @@ impl Scope {
                 }
             }
         });
-        FIELD_CACHE.with(|c| {
-            let mut map = c.borrow_mut();
+        // RFC-096 S4 — js_bridge proxies minted over row scopes
+        // must die with the scope, or the cached bridge keeps
+        // re-interning reactive state for a dead ScopeId.
+        BRIDGES.with(|m| {
+            let mut map = m.borrow_mut();
             if !map.is_empty() {
                 for id in ids {
                     map.remove(id);
                 }
             }
         });
-        FRESH_FIELDS.with(|f| {
+        PATCHED.with(|f| {
             let mut map = f.borrow_mut();
             if !map.is_empty() {
                 for id in ids {
@@ -407,6 +457,7 @@ impl Scope {
                 }
             }
         });
+        // Projection storage rides `reactive::clear_scopes` above.
         crate::lifecycle::__clear_mount_epochs(ids);
     }
 
@@ -416,91 +467,338 @@ impl Scope {
         self.typed.downcast_ref::<Rc<RefCell<T>>>().cloned()
     }
 
-    /// Read the cached `JsValue` for `field`, or `None` if no
-    /// reader has populated the cache yet (or it was just
-    /// invalidated). Used by [`patch_list_at`] and friends to
-    /// apply targeted patches against the live JS object that
-    /// effects are reading.
-    pub fn cached_field(&self, field: &str) -> Option<JsValue> {
-        FIELD_CACHE.with(|c| c.borrow().get(&self.id).and_then(|m| m.get(field).cloned()))
-    }
-
-    /// Replace the cached `JsValue` for `field`. Mostly used by
-    /// targeted op APIs after they patch the cached value via
-    /// `Reflect::set` and want subsequent readers to see the
-    /// patched object identity.
-    pub fn set_cached_field(&self, field: &str, value: JsValue) {
-        FIELD_CACHE.with(|c| {
-            c.borrow_mut()
-                .entry(self.id)
-                .or_default()
-                .insert(field.to_string(), value);
-        });
-    }
-
     /// Build a `js_sys::Proxy` whose `get` trap records dependencies and
     /// whose `set` trap triggers them. The proxy is what every directive
     /// reads through.
     pub fn into_proxy(&self) -> JsValue {
+        Self::mint_proxy(self.id, &self.state)
+    }
+}
+
+/// RFC-095 W1 — the tracked-read core shared by the proxy `get`
+/// trap and [`scoped_root_reader`]: track the dependency, honor
+/// `cacheable_fields`, serve from / populate the projection store,
+/// fall through to `ComponentState::get`. One implementation so
+/// the proxy path and the proxy-free path cannot diverge.
+fn read_field_tracked(
+    scope_id: ScopeId,
+    state: &Rc<RefCell<dyn ComponentState>>,
+    key: &str,
+) -> JsValue {
+    track(scope_id, key);
+    // Derived scopes (`SlotScope`, etc.) compose their return value
+    // from a parent proxy on every read — caching would freeze the
+    // value at the first call. Skip the cache lookup AND the cache
+    // write for those; the trigger that matters lands on the parent
+    // scope's key, picked up via the inner `Reflect::get` inside
+    // `state.get`.
+    let cacheable = state.borrow().cacheable_fields();
+    if !cacheable {
+        return state.borrow().get(key);
+    }
+    // RFC 054 phase A — field cache short-circuit. The first `get`
+    // for a field invokes the macro-emitted `ComponentState::get`
+    // (which serialises via `serde_wasm_bindgen`); subsequent reads
+    // of the same field by other effects in the same trigger cycle
+    // reuse the cached JsValue. Targeted `patch_*` ops keep the
+    // cache valid across mutations so Vec fields don't pay the full
+    // re-serialise tax on every reactive cycle.
+    if let Some(cached) = projection_read(scope_id, key) {
+        return cached;
+    }
+    let v = state.borrow().get(key);
+    count_serde_projection();
+    projection_store(scope_id, key, v.clone());
+    v
+}
+
+/// RFC-095 W1 / RFC-096 S1 — the [`crate::expr::ScopeAccess`]
+/// over a component scope: reads via [`read_field_tracked`]
+/// (track + cache + `ComponentState::get`, all Rust-side),
+/// writes via [`write_field_tracked`] (the set trap's body).
+/// `$`-prefixed names belong to the proxy trap on both sides.
+struct ScopedFieldAccess {
+    scope_id: ScopeId,
+    state: Rc<RefCell<dyn ComponentState>>,
+}
+
+impl crate::expr::ScopeAccess for ScopedFieldAccess {
+    fn read(&self, key: &str) -> Option<JsValue> {
+        // RFC-096 S2 — $-roots resolve here too (loop locals,
+        // magics): the access is read-complete, so the proxy
+        // fallback is unreachable for reads.
+        Some(read_scope_key_with(self.scope_id, &self.state, key))
+    }
+    fn write(&self, key: &str, value: &JsValue) -> bool {
+        if key.starts_with('$') {
+            return false;
+        }
+        write_field_tracked(self.scope_id, &self.state, key, value.clone());
+        true
+    }
+}
+
+/// Build a [`crate::expr::RootAccess`] for `scope_id` — root
+/// reads AND writes resolve against the Rust state directly; no
+/// proxy trap, no `Reflect`, no wasm→JS→wasm bounce. Returns
+/// `None` when the scope is already gone — callers then evaluate
+/// against the proxy alone, exactly the pre-W1 behavior.
+pub fn scoped_root_reader(scope_id: ScopeId) -> Option<crate::expr::RootAccess> {
+    let scope = Scope::find(scope_id)?;
+    Some(Rc::new(ScopedFieldAccess {
+        scope_id,
+        state: scope.state,
+    }))
+}
+
+/// RFC-096 S3 — the typed text lane's tracked read: subscribe,
+/// then extract the scalar string straight from Rust state.
+/// `None` (scope gone) → caller bails; `Some(None)` (compound or
+/// unknown field) → caller falls back to the JsValue projection
+/// path. No serde-to-JS on the scalar path.
+pub(crate) fn read_field_text(scope_id: ScopeId, key: &str) -> Option<Option<String>> {
+    let scope = Scope::find(scope_id)?;
+    track(scope_id, key);
+    let text = scope.state.borrow().field_as_text(key);
+    Some(text)
+}
+
+/// RFC-096 S3 — projection-store primitives. Projections live on
+/// the field's interned signal, stamped with the version current
+/// at build time; a version bump is the invalidation.
+fn projection_read(scope_id: ScopeId, field: &str) -> Option<JsValue> {
+    let sid = crate::reactive::ensure_field_signal(scope_id, field);
+    let ver = VERSIONS.with(|v| v.borrow().get(&sid).copied().unwrap_or(0));
+    PROJECTIONS.with(|p| {
+        p.borrow()
+            .get(&sid)
+            .filter(|(stamp, _)| *stamp == ver)
+            .map(|(_, js)| js.clone())
+    })
+}
+
+fn projection_store(scope_id: ScopeId, field: &str, js: JsValue) {
+    let sid = crate::reactive::ensure_field_signal(scope_id, field);
+    let ver = VERSIONS.with(|v| v.borrow().get(&sid).copied().unwrap_or(0));
+    PROJECTIONS.with(|p| {
+        p.borrow_mut().insert(sid, (ver, js));
+    });
+}
+
+fn projection_invalidate(sid: SignalId) {
+    VERSIONS.with(|v| {
+        let mut v = v.borrow_mut();
+        *v.entry(sid).or_insert(0) += 1;
+    });
+    PROJECTIONS.with(|p| {
+        p.borrow_mut().remove(&sid);
+    });
+}
+
+/// A `patch_*` API kept this projection correct through the
+/// mutation: bump the version AND re-stamp the (already correct)
+/// projection so it survives, instead of dropping it.
+fn projection_confirm_patched(sid: SignalId) {
+    let ver = VERSIONS.with(|v| {
+        let mut v = v.borrow_mut();
+        let e = v.entry(sid).or_insert(0);
+        *e += 1;
+        *e
+    });
+    PROJECTIONS.with(|p| {
+        if let Some(entry) = p.borrow_mut().get_mut(&sid) {
+            entry.0 = ver;
+        }
+    });
+}
+
+fn count_serde_projection() {
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    SERDE_PROJECTIONS.with(|c| c.set(c.get() + 1));
+}
+
+/// Debug/devtools reader for the serde-projection counter (RFC-096
+/// S3 acceptance gate).
+#[cfg(any(debug_assertions, feature = "devtools"))]
+pub fn serde_projection_count() -> u64 {
+    SERDE_PROJECTIONS.with(|c| c.get())
+}
+
+/// RFC-096 S3 — drop the projection storage for the given signal
+/// ids. Called from `reactive::clear_scope(s)` alongside the
+/// dependency teardown.
+pub(crate) fn purge_field_storage(sids: &[SignalId]) {
+    VERSIONS.with(|v| {
+        let mut v = v.borrow_mut();
+        for sid in sids {
+            v.remove(sid);
+        }
+    });
+    PROJECTIONS.with(|p| {
+        let mut p = p.borrow_mut();
+        for sid in sids {
+            p.remove(sid);
+        }
+    });
+}
+
+/// RFC-096 S2 — the read mirror, completed: the proxy GET trap's
+/// full body as a plain function — loop-local `$` names first,
+/// magics for other `$` names, tracked field read for everything
+/// else. Shared by the trap (which delegates here), the
+/// [`ScopedFieldAccess`] reader, and the derived scopes
+/// (`LoopScope` / `SlotScope` fall-throughs), so no path can
+/// diverge from the trap's semantics.
+pub(crate) fn read_scope_key_with(
+    scope_id: ScopeId,
+    state: &Rc<RefCell<dyn ComponentState>>,
+    key: &str,
+) -> JsValue {
+    if key.starts_with('$') {
+        // Loop scopes own these names; other `$...` reads stay on
+        // the magic resolver.
+        if matches!(key, "$index" | "$first" | "$last") {
+            let local = state.borrow().get(key);
+            if !local.is_undefined() {
+                track(scope_id, key);
+                return local;
+            }
+        }
+        return magics::resolve(key, scope_id);
+    }
+    read_field_tracked(scope_id, state, key)
+}
+
+/// `read_scope_key_with` with the state resolved from the scope
+/// registry — the entry point for derived scopes that hold only a
+/// parent `ScopeId`.
+pub fn read_scope_key(scope_id: ScopeId, key: &str) -> JsValue {
+    let Some(scope) = Scope::find(scope_id) else {
+        return JsValue::UNDEFINED;
+    };
+    read_scope_key_with(scope_id, &scope.state, key)
+}
+
+/// RFC-096 S2 — resolve a `$store.<name>` / `$route` expression
+/// root to the backing scope's [`crate::expr::RootAccess`], so
+/// magic-rooted paths ride the readers/writers instead of proxy
+/// objects. Returns the access plus the number of leading
+/// segments it consumed; `None` falls back to the proxy-object
+/// path (unknown store, bare `$store`, other magics).
+pub(crate) fn magic_scope_access(
+    first: &str,
+    second: Option<&str>,
+) -> Option<(crate::expr::RootAccess, usize)> {
+    match first {
+        "$store" => {
+            let name = second?;
+            let scope = crate::store::store_scope(name)?;
+            Some((scoped_root_reader(scope.id)?, 2))
+        }
+        "$route" => Some((scoped_root_reader(crate::router::route_scope_id()?)?, 1)),
+        _ => None,
+    }
+}
+
+/// RFC-096 S1 — the write mirror: the proxy set trap's body as a
+/// plain function, shared by the trap itself (which delegates
+/// here), template assignment expressions, and the parent→child
+/// prop/model write paths — one implementation, so the trap and
+/// the proxy-free path cannot diverge.
+pub fn write_field_tracked(
+    scope_id: ScopeId,
+    state: &Rc<RefCell<dyn ComponentState>>,
+    key: &str,
+    value: JsValue,
+) {
+    let origin = crate::model_runtime::current_write_origin();
+    crate::model_runtime::with_scope_write(scope_id, origin, || {
+        state.borrow_mut().set(key, value);
+    });
+    // RFC-044 §5.10 — a write to a `flatten` leaf mutates the
+    // whole container field. Resolve the container key (short
+    // borrow, released before the triggers below) so its cache is
+    // invalidated and `#[watch(<container>)]` fires alongside the
+    // per-leaf watch.
+    let flatten_container = state.borrow().flatten_container_of(key);
+    // RFC-096 S3 — invalidation is a version bump on the field's
+    // signal (and the container's, if any). The next reader
+    // rebuilds the projection from Rust state.
+    projection_invalidate(crate::reactive::ensure_field_signal(scope_id, key));
+    if let Some(container) = flatten_container {
+        projection_invalidate(crate::reactive::ensure_field_signal(scope_id, container));
+    }
+    trigger(scope_id, key);
+    if let Some(container) = flatten_container {
+        trigger(scope_id, container);
+    }
+}
+
+/// [`write_field_tracked`] with the state resolved from the scope
+/// registry — the entry point for callers that hold only a
+/// `ScopeId` (pp-bind child-prop writes, pp-model mirror-in).
+/// Returns `false` (write dropped) when the scope is gone.
+pub fn write_field(scope_id: ScopeId, key: &str, value: &JsValue) -> bool {
+    let Some(scope) = Scope::find(scope_id) else {
+        return false;
+    };
+    write_field_tracked(scope_id, &scope.state, key, value.clone());
+    true
+}
+
+thread_local! {
+    /// RFC-096 S4 — memoized `js_bridge` proxies, one per scope,
+    /// purged at scope removal.
+    static BRIDGES: RefCell<HashMap<ScopeId, JsValue>> = RefCell::new(HashMap::new());
+    /// Debug/devtools counter: proxies minted (the S4 acceptance
+    /// gate asserts zero on elided paths without `js_bridge`).
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    static PROXIES_MINTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Debug/devtools reader for the proxy-mint counter (RFC-096 S4
+/// acceptance gate).
+#[cfg(any(debug_assertions, feature = "devtools"))]
+pub fn proxies_minted_count() -> u64 {
+    PROXIES_MINTED.with(|c| c.get())
+}
+
+/// RFC-096 S4 — the explicit JS interop shim: mint (once, cached)
+/// a `js_sys::Proxy` over `scope_id` whose get/set traps delegate
+/// to the shared read/write mirrors, for foreign JS that must
+/// touch component state directly. Everything pocopine ships
+/// works without it; nothing in the framework calls it. Returns
+/// `None` when the scope is gone.
+pub fn js_bridge(scope_id: ScopeId) -> Option<JsValue> {
+    if let Some(cached) = BRIDGES.with(|b| b.borrow().get(&scope_id).cloned()) {
+        return Some(cached);
+    }
+    let scope = Scope::find(scope_id)?;
+    let proxy = scope.into_proxy();
+    BRIDGES.with(|b| {
+        b.borrow_mut().insert(scope_id, proxy.clone());
+    });
+    Some(proxy)
+}
+
+impl Scope {
+    fn mint_proxy(scope_id: ScopeId, state: &Rc<RefCell<dyn ComponentState>>) -> JsValue {
+        #[cfg(any(debug_assertions, feature = "devtools"))]
+        PROXIES_MINTED.with(|c| c.set(c.get() + 1));
         let target = Object::new();
         let handler = Object::new();
-        let scope_id = self.id;
-        let state_for_get = self.state.clone();
-        let state_for_set = self.state.clone();
+        let state_for_get = state.clone();
+        let state_for_set = state.clone();
 
         let get_closure = Closure::wrap(Box::new(
             move |_target: JsValue, key: JsValue, _receiver: JsValue| -> JsValue {
                 let Some(key_str) = key.as_string() else {
                     return JsValue::UNDEFINED;
                 };
-                if key_str.starts_with('$') {
-                    // Loop scopes own these names; other `$...`
-                    // reads stay on the magic resolver.
-                    if matches!(key_str.as_str(), "$index" | "$first" | "$last") {
-                        let local = state_for_get.borrow().get(&key_str);
-                        if !local.is_undefined() {
-                            track(scope_id, &key_str);
-                            return local;
-                        }
-                    }
-                    return magics::resolve(&key_str, scope_id);
-                }
-                track(scope_id, &key_str);
-                // Derived scopes (`SlotScope`, etc.) compose their
-                // return value from a parent proxy on every read —
-                // caching would freeze the value at the first call.
-                // Skip the cache lookup AND the cache write for
-                // those; the trigger that matters lands on the
-                // parent scope's key, picked up via the inner
-                // `Reflect::get` inside `state.get`.
-                let cacheable = state_for_get.borrow().cacheable_fields();
-                if !cacheable {
-                    return state_for_get.borrow().get(&key_str);
-                }
-                // RFC 054 phase A — field cache short-circuit. The
-                // first `get` for a field invokes the macro-emitted
-                // `ComponentState::get` (which serialises via
-                // `serde_wasm_bindgen`); subsequent reads of the
-                // same field by other effects in the same trigger
-                // cycle reuse the cached JsValue. Targeted
-                // `patch_*` ops keep the cache valid across
-                // mutations so Vec fields don't pay the full
-                // re-serialise tax on every reactive cycle.
-                if let Some(cached) = FIELD_CACHE.with(|c| {
-                    c.borrow()
-                        .get(&scope_id)
-                        .and_then(|m| m.get(&key_str).cloned())
-                }) {
-                    return cached;
-                }
-                let v = state_for_get.borrow().get(&key_str);
-                FIELD_CACHE.with(|c| {
-                    c.borrow_mut()
-                        .entry(scope_id)
-                        .or_default()
-                        .insert(key_str.clone(), v.clone());
-                });
-                v
+                // RFC-096 S2 — the trap delegates to the shared
+                // read mirror (loop locals + magics + tracked
+                // field read in one place).
+                read_scope_key_with(scope_id, &state_for_get, &key_str)
             },
         )
             as Box<dyn Fn(JsValue, JsValue, JsValue) -> JsValue>);
@@ -510,32 +808,10 @@ impl Scope {
                 let Some(key_str) = key.as_string() else {
                     return false;
                 };
-                let origin = crate::model_runtime::current_write_origin();
-                crate::model_runtime::with_scope_write(scope_id, origin, || {
-                    state_for_set.borrow_mut().set(&key_str, value);
-                });
-                // RFC-044 §5.10 — a write to a `flatten` leaf mutates
-                // the whole container field. Resolve the container key
-                // (short borrow, released before the triggers below)
-                // so its cache is invalidated and `#[watch(<container>)]`
-                // fires alongside the per-leaf watch.
-                let flatten_container = state_for_set.borrow().flatten_container_of(&key_str);
-                // RFC 054 phase A — invalidate the field's cached
-                // JsValue (and the container's, if any). Next reader
-                // will re-serialise from Rust state, picking up the
-                // write the `set_closure` just applied.
-                FIELD_CACHE.with(|c| {
-                    if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
-                        m.remove(&key_str);
-                        if let Some(container) = flatten_container {
-                            m.remove(container);
-                        }
-                    }
-                });
-                trigger(scope_id, &key_str);
-                if let Some(container) = flatten_container {
-                    trigger(scope_id, container);
-                }
+                // RFC-096 S1 — the trap delegates to the shared
+                // write mirror; one implementation for trap and
+                // proxy-free writes alike.
+                write_field_tracked(scope_id, &state_for_set, &key_str, value);
                 true
             },
         )
@@ -570,25 +846,33 @@ impl Scope {
         Proxy::new(&target, &handler).into()
     }
 
-    /// Invoke a handler by name. Mutates Rust state directly, then sweep-
-    /// triggers every key on this scope so effects re-evaluate.
+    /// Invoke a handler by name. Mutates Rust state directly, then
+    /// runs the RFC-095 per-field dirty sweep: only fields whose
+    /// fingerprints moved get their cache slot dropped and their
+    /// subscribers triggered. Falls back to the blanket
+    /// invalidate + scope-wide trigger when the sweep can't
+    /// snapshot (re-entrant invoke holding the state borrow).
     pub fn invoke(&self, key: &str, args: &Array) -> JsValue {
         let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
         #[cfg(feature = "devtools")]
         let start = crate::devtools::ring::now_ms_for_scope();
+        let sweep = DirtySweep::begin(self.id, &self.state);
         let out = crate::model_runtime::with_scope_write(
             self.id,
             crate::model_runtime::WriteOrigin::LocalHandler,
             || self.state.borrow_mut().invoke(key, args),
         );
         CURRENT_SCOPE_ID.with(|c| c.set(prev));
-        // RFC 054 phase A — handler may have mutated arbitrary
-        // fields directly through `&mut self`; without targeted
-        // hints we have to drop the whole cache so the next
-        // proxy reads pick up the fresh state. Targeted ops
-        // (`patch_list_at`) keep the cache valid.
-        invalidate_field_cache(self.id);
-        trigger_scope(self.id);
+        match sweep {
+            Some(sweep) => sweep.finish(&self.state),
+            None => {
+                // Handler may have mutated arbitrary fields through
+                // `&mut self` and we couldn't snapshot — drop the
+                // whole cache and trigger every tracked key.
+                invalidate_field_cache(self.id);
+                trigger_scope(self.id);
+            }
+        }
         // Devtools hook — fired after trigger_scope so any effect
         // runs scheduled by this handler are visible on the timeline
         // with a seq > this handler's.
@@ -610,19 +894,124 @@ impl Scope {
 /// they keep the cache valid by patching it in lockstep with
 /// the Rust mutation, which is the whole point of the API.
 pub fn invalidate_field_cache(scope_id: ScopeId) {
-    let fresh = FRESH_FIELDS.with(|f| {
-        let mut map = f.borrow_mut();
-        map.remove(&scope_id).unwrap_or_default()
-    });
-    FIELD_CACHE.with(|c| {
-        if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
-            if fresh.is_empty() {
-                m.clear();
-            } else {
-                m.retain(|k, _| fresh.contains(k));
+    let patched = PATCHED.with(|f| f.borrow_mut().remove(&scope_id).unwrap_or_default());
+    for sid in crate::reactive::interned_signal_ids(scope_id) {
+        if patched.contains(&sid) {
+            projection_confirm_patched(sid);
+        } else {
+            projection_invalidate(sid);
+        }
+    }
+}
+
+/// RFC-095 W2 — per-field dirty sweep around a `&mut self`
+/// mutation (`Scope::invoke`, `Handle::update`).
+///
+/// [`DirtySweep::begin`] fingerprints every *observed* key — every
+/// key interned for the scope (`reactive::tracked_keys`; RFC-096
+/// S3: projection reads intern too, so this covers cached-but-
+/// untracked keys) — via [`ComponentState::field_fingerprint`],
+/// entirely Rust-side. After the mutation, [`DirtySweep::finish`]
+/// re-fingerprints and:
+///
+/// - **bumps versions** only on the changed keys' projections (a
+///   key surgically patched via `patch_*_inline` gets its
+///   projection re-stamped to the new version instead — the patch
+///   wrote it correctly; the PATCHED mark is consumed here),
+/// - **triggers** only the changed keys' subscribers.
+///
+/// A key whose fingerprint is unknown (`None` — computed fields,
+/// flatten leaves, non-field keys) is treated as changed, which
+/// reproduces the pre-sweep behavior for exactly those keys. A
+/// scope whose state is mid-borrow (re-entrant invoke) yields
+/// `None` from `begin`; callers fall back to the blanket
+/// invalidate + scope-wide trigger.
+pub(crate) struct DirtySweep {
+    scope_id: ScopeId,
+    keys: Vec<crate::reactive::Key>,
+    before: Vec<Option<u64>>,
+    /// RFC-095 W2b — O(1) length probes captured alongside the
+    /// fingerprints. A probe that moves (or flips `Some`/`None`)
+    /// proves the field changed without re-hashing its contents
+    /// — the whole win for `rows = vec![...10K]`-style writes.
+    lens_before: Vec<Option<u64>>,
+}
+
+impl DirtySweep {
+    pub(crate) fn begin(
+        scope_id: ScopeId,
+        state: &Rc<RefCell<dyn ComponentState>>,
+    ) -> Option<DirtySweep> {
+        let state = state.try_borrow().ok()?;
+        // RFC-096 S3 — interned keys cover both tracked reads and
+        // projection-only reads (projection access interns the
+        // signal), so the old FIELD_CACHE union is unnecessary.
+        let keys = crate::reactive::tracked_keys(scope_id);
+        let before = keys
+            .iter()
+            .map(|k| state.field_fingerprint(k.as_ref()))
+            .collect();
+        let lens_before = keys
+            .iter()
+            .map(|k| state.field_quick_len(k.as_ref()))
+            .collect();
+        Some(DirtySweep {
+            scope_id,
+            keys,
+            before,
+            lens_before,
+        })
+    }
+
+    pub(crate) fn finish(self, state: &Rc<RefCell<dyn ComponentState>>) {
+        let Ok(state_ref) = state.try_borrow() else {
+            // Mutation left the state borrowed (shouldn't happen —
+            // the handler returned) — degrade to the blanket path.
+            invalidate_field_cache(self.scope_id);
+            crate::reactive::trigger_scope(self.scope_id);
+            return;
+        };
+        let mut changed: Vec<crate::reactive::Key> = Vec::new();
+        for ((k, before), len_before) in self
+            .keys
+            .iter()
+            .zip(self.before.iter())
+            .zip(self.lens_before.iter())
+        {
+            // Length probe first: a moved (or flipped) probe is
+            // proof of change with no content hash. Equal probes
+            // prove nothing (same-length edits) — fall through.
+            let len_after = state_ref.field_quick_len(k.as_ref());
+            if *len_before != len_after {
+                changed.push(k.clone());
+                continue;
+            }
+            let after = state_ref.field_fingerprint(k.as_ref());
+            let unchanged = matches!((before, &after), (Some(b), Some(a)) if b == a);
+            if !unchanged {
+                changed.push(k.clone());
             }
         }
-    });
+        drop(state_ref);
+        // Consume the patched marks — projections the `patch_*`
+        // APIs kept correct survive via a version re-stamp; every
+        // other changed projection is invalidated by version bump.
+        let patched = PATCHED.with(|f| f.borrow_mut().remove(&self.scope_id).unwrap_or_default());
+        if changed.is_empty() {
+            return;
+        }
+        for k in &changed {
+            let sid = crate::reactive::ensure_field_signal(self.scope_id, k.as_ref());
+            if patched.contains(&sid) {
+                projection_confirm_patched(sid);
+            } else {
+                projection_invalidate(sid);
+            }
+        }
+        for k in &changed {
+            crate::reactive::trigger(self.scope_id, k.as_ref());
+        }
+    }
 }
 
 /// Drop one field's cache slot. Call this from inside a
@@ -632,11 +1021,7 @@ pub fn invalidate_field_cache(scope_id: ScopeId) {
 /// change). Reactivity does NOT fire here — call `trigger` (or
 /// the caller's `Handle::update` boundary) for that.
 pub fn invalidate_field(scope_id: ScopeId, field: &str) {
-    FIELD_CACHE.with(|c| {
-        if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
-            m.remove(field);
-        }
-    });
+    projection_invalidate(crate::reactive::ensure_field_signal(scope_id, field));
 }
 
 /// Patch one element of a `Vec<T>`-style field's cached
@@ -670,20 +1055,15 @@ pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object() {
             if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
                 let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
             }
         }
-        // Keep the slot alive across the post-handler invalidate.
-        FRESH_FIELDS.with(|f| {
-            f.borrow_mut()
-                .entry(sid)
-                .or_default()
-                .insert(field.to_string());
-        });
+        // Keep the projection alive across the post-handler sweep.
+        keep_field_fresh(sid, field);
     }
     crate::reactive::trigger(sid, field);
 }
@@ -696,7 +1076,7 @@ pub fn patch_list_indices_inline<T: serde::Serialize>(field: &str, patches: &[(u
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object() {
             for (idx, row) in patches {
@@ -711,11 +1091,12 @@ pub fn patch_list_indices_inline<T: serde::Serialize>(field: &str, patches: &[(u
 }
 
 fn keep_field_fresh(scope_id: ScopeId, field: &str) {
-    FRESH_FIELDS.with(|f| {
-        f.borrow_mut()
-            .entry(scope_id)
-            .or_default()
-            .insert(field.to_string());
+    // RFC-096 S3 — mark the projection as patch-maintained: the
+    // post-handler sweep re-stamps it to the new version instead
+    // of dropping it.
+    let sid = crate::reactive::ensure_field_signal(scope_id, field);
+    PATCHED.with(|f| {
+        f.borrow_mut().entry(scope_id).or_default().insert(sid);
     });
 }
 
@@ -727,7 +1108,7 @@ pub fn swap_list_indices_inline(field: &str, a: usize, b: usize) {
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object() {
             let a_key = JsValue::from_f64(a as f64);
@@ -749,7 +1130,7 @@ pub fn remove_list_at_inline(field: &str, idx: usize) {
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object() {
             let array = js_sys::Array::from(&arr);
@@ -781,7 +1162,7 @@ pub fn append_list_inline<T: serde::Serialize>(field: &str, start_idx: usize, ro
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object() {
             for (offset, row) in rows.iter().enumerate() {
@@ -803,7 +1184,7 @@ pub fn prepend_list_inline<T: serde::Serialize>(field: &str, rows: &[T]) {
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object() {
             let array = js_sys::Array::from(&arr);
@@ -836,18 +1217,8 @@ pub fn replace_field_inline<T: serde::Serialize>(field: &str, value: &T) {
     };
     match serde_wasm_bindgen::to_value(value) {
         Ok(new_js) => {
-            FIELD_CACHE.with(|c| {
-                c.borrow_mut()
-                    .entry(sid)
-                    .or_default()
-                    .insert(field.to_string(), new_js);
-            });
-            FRESH_FIELDS.with(|f| {
-                f.borrow_mut()
-                    .entry(sid)
-                    .or_default()
-                    .insert(field.to_string());
-            });
+            projection_store(sid, field, new_js);
+            keep_field_fresh(sid, field);
         }
         Err(_) => invalidate_field(sid, field),
     }

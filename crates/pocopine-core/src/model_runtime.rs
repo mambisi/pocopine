@@ -90,7 +90,22 @@ pub fn with_scope_write<R>(scope_id: ScopeId, origin: WriteOrigin, f: impl FnOnc
     out
 }
 
-fn snapshot_models(scope_id: ScopeId) -> HashMap<String, (String, JsValue, String)> {
+/// Change-detection token for one `#[model]` field. RFC-095 W2 —
+/// the common path is `Fast`: a Rust-side 64-bit fingerprint of
+/// the field (`ComponentState::field_fingerprint`), zero bridge
+/// crossings and no value serialization. Keys the state can't
+/// fingerprint (flatten model leaves) keep the legacy path: a
+/// serialized `JsValue` + `JSON.stringify` string. The serialized
+/// detail for the `pp:update:*` event is computed lazily in
+/// `queue_changed_models`, for changed keys only — pre-W2 every
+/// model field was serialized twice per handler regardless.
+#[derive(PartialEq)]
+enum ModelFp {
+    Fast(u64),
+    Json(String),
+}
+
+fn snapshot_models(scope_id: ScopeId) -> HashMap<String, (String, ModelFp)> {
     let Some(scope) = Scope::find(scope_id) else {
         return HashMap::new();
     };
@@ -110,17 +125,28 @@ fn snapshot_models(scope_id: ScopeId) -> HashMap<String, (String, JsValue, Strin
         if !state.is_model(key) {
             continue;
         }
-        let value = state.get_model_value(key);
-        let Some(fingerprint) = fingerprint(&value) else {
-            continue;
+        // `field_fingerprint` hashes the same direct-field serde
+        // stream `get_model_value` serializes (both deliberately
+        // bypass field-level attr wrappers — see the macro's
+        // model_value_arms comment), so Fast and Json agree on
+        // what counts as a change.
+        let fp = match state.field_fingerprint(key) {
+            Some(h) => ModelFp::Fast(h),
+            None => {
+                let value = state.get_model_value(key);
+                let Some(json) = json_fingerprint(&value) else {
+                    continue;
+                };
+                ModelFp::Json(json)
+            }
         };
         let wire_name = state.model_name(key).unwrap_or(key).to_string();
-        out.insert((*key).to_string(), (wire_name, value, fingerprint));
+        out.insert((*key).to_string(), (wire_name, fp));
     }
     out
 }
 
-fn fingerprint(value: &JsValue) -> Option<String> {
+fn json_fingerprint(value: &JsValue) -> Option<String> {
     if value.is_undefined() {
         return Some("undefined".into());
     }
@@ -130,20 +156,34 @@ fn fingerprint(value: &JsValue) -> Option<String> {
 fn queue_changed_models(
     scope_id: ScopeId,
     origin: WriteOrigin,
-    before: HashMap<String, (String, JsValue, String)>,
-    after: HashMap<String, (String, JsValue, String)>,
+    before: HashMap<String, (String, ModelFp)>,
+    after: HashMap<String, (String, ModelFp)>,
 ) {
-    MODEL_RUNTIME.with(|m| {
-        let mut map = m.borrow_mut();
-        let runtime = map.entry(scope_id).or_default();
-        for (key, (wire_name, detail, after_fp)) in after {
-            let changed = before
-                .get(&key)
-                .map(|(_, _, before_fp)| before_fp != &after_fp)
-                .unwrap_or(true);
-            if !changed {
-                continue;
-            }
+    let mut queued = false;
+    for (key, (wire_name, after_fp)) in after {
+        let changed = before
+            .get(&key)
+            .map(|(_, before_fp)| before_fp != &after_fp)
+            .unwrap_or(true);
+        if !changed {
+            continue;
+        }
+        // Serialize the detail only now that the key is known to
+        // have changed. The handler has returned, so the state
+        // borrow is free; a re-entrant edge degrades to skipping
+        // this key's event, same as the snapshot above.
+        let Some(detail) = Scope::find(scope_id).and_then(|scope| {
+            scope
+                .state
+                .try_borrow()
+                .ok()
+                .map(|state| state.get_model_value(&key))
+        }) else {
+            continue;
+        };
+        MODEL_RUNTIME.with(|m| {
+            let mut map = m.borrow_mut();
+            let runtime = map.entry(scope_id).or_default();
             runtime.pending.insert(
                 key,
                 PendingModel {
@@ -152,9 +192,12 @@ fn queue_changed_models(
                     origin,
                 },
             );
-        }
-    });
-    schedule_flush(scope_id);
+        });
+        queued = true;
+    }
+    if queued {
+        schedule_flush(scope_id);
+    }
 }
 
 fn schedule_flush(scope_id: ScopeId) {

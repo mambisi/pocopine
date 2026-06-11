@@ -25,10 +25,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::Element;
 
-use crate::expr::{self, Spanned};
 use crate::mount::track_effect_on;
 use crate::reactive::effect;
-use crate::scope::with_current_el;
 
 fn normalize_prop_name(name: &str) -> String {
     name.replace('-', "_")
@@ -48,15 +46,6 @@ fn normalize_prop_name(name: &str) -> String {
 ///   memoisation.
 ///
 /// Cleanup-safe install entry point.
-pub fn install(el: &Element, parent_proxy: &JsValue, attr: &str, ast: Spanned<expr::Expr>) {
-    install_eval(
-        el,
-        parent_proxy,
-        attr,
-        Rc::new(move |scope| expr::evaluate(&ast, scope)),
-    );
-}
-
 #[doc(hidden)]
 pub fn install_eval(
     el: &Element,
@@ -71,7 +60,10 @@ pub fn install_eval(
     // scope id is stable for the lifetime of the element; we use
     // it at each effect tick to consult `is_prop` on the child's
     // state so parents can't write through to `#[state]` fields.
-    let child_target = crate::mount::child_component_scope(el);
+    // RFC-096 S1 — only the child's scope ID is captured; the
+    // write goes through the scoped writer, so no proxy is ever
+    // minted onto the (possibly W3b-elided) child.
+    let child_target = crate::mount::child_component_scope_id(el);
     let child_field = normalize_prop_name(attr);
 
     // Memo of the last value written to this attribute. Serialised
@@ -81,33 +73,33 @@ pub fn install_eval(
     let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     let id = effect(move || {
-        with_current_el(&el_owned.clone(), || {
-            let v = evaluator(&parent_proxy_owned);
-            match &child_target {
-                Some((child_scope_id, cp)) => {
-                    let target_field =
-                        crate::model_runtime::resolve_model_key(*child_scope_id, &child_field)
-                            .unwrap_or_else(|| child_field.clone());
-                    // RFC-031 — only `#[prop]` fields are writable
-                    // from the parent. Silently drop writes to
-                    // state fields so accidental `<pine-thing
-                    // loaded="true">` doesn't clobber child state.
-                    let is_prop = crate::scope::Scope::find(*child_scope_id)
-                        .map(|s| s.state.borrow().is_prop(&target_field))
-                        .unwrap_or(false);
-                    if !is_prop {
-                        return;
-                    }
-                    crate::model_runtime::with_write_origin(
-                        crate::model_runtime::WriteOrigin::ParentModelIn,
-                        || {
-                            let _ = Reflect::set(cp, &JsValue::from_str(&target_field), &v);
-                        },
-                    );
+        let v = evaluator(&parent_proxy_owned);
+        match &child_target {
+            Some(child_scope_id) => {
+                let target_field =
+                    crate::model_runtime::resolve_model_key(*child_scope_id, &child_field)
+                        .unwrap_or_else(|| child_field.clone());
+                // RFC-031 — only `#[prop]` fields are writable
+                // from the parent. Silently drop writes to
+                // state fields so accidental `<pine-thing
+                // loaded="true">` doesn't clobber child state.
+                let is_prop = crate::scope::Scope::find(*child_scope_id)
+                    .map(|s| s.state.borrow().is_prop(&target_field))
+                    .unwrap_or(false);
+                if !is_prop {
+                    return;
                 }
-                None => apply_memoised(&el_owned, &attr_owned, &v, &prev),
+                crate::model_runtime::with_write_origin(
+                    crate::model_runtime::WriteOrigin::ParentModelIn,
+                    || {
+                        // RFC-096 S1 — the scoped writer: same
+                        // body the child's set trap delegates to.
+                        let _ = crate::scope::write_field(*child_scope_id, &target_field, &v);
+                    },
+                );
             }
-        });
+            None => apply_memoised(&el_owned, &attr_owned, &v, &prev),
+        }
     });
     track_effect_on(el, id);
 }

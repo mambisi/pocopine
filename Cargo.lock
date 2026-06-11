@@ -5837,13 +5837,14 @@ dependencies = [
 
 [[package]]
 name = "pocopine-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "once_cell",
  "phf 0.13.1",
  "pocopine-codec",
+ "pocopine-crypto",
  "pocopine-expr",
  "serde",
  "serde-wasm-bindgen 0.6.5",

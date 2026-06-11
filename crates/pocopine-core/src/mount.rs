@@ -52,7 +52,7 @@ use crate::scope::{Scope, StaticPropKind};
 use crate::slot_scope::SlotScope;
 use crate::templates::{is_registered, template_for};
 
-const SCOPE_ID_KEY: &str = "__pp_scope_id";
+pub(crate) const SCOPE_ID_KEY: &str = "__pp_scope_id";
 const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
 const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 /// RFC 081 — stamped on a child component's custom-element
@@ -131,6 +131,15 @@ pub fn bind_scope_id_only(el: &Element, scope_id: ScopeId) {
     set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
 }
 
+/// RFC-094 — mark an element's scope OWNED, overriding a
+/// `bind_borrowed_scope_to` stamp left by a body-fragment
+/// builder. Owned scopes are removed by `release_subtree`;
+/// without clearing the borrowed flag, a per-mount scope (e.g. a
+/// pp-let `PayloadScope`) leaks on every remount.
+pub(crate) fn mark_scope_owned(el: &Element) {
+    set_private(el, SCOPE_BORROWED_KEY, &JsValue::FALSE);
+}
+
 /// Read just the scope id without forcing proxy lazy-mint. Used by
 /// the compiled-row mount loop in `for_.rs::run_keyed`, which has
 /// the proxy-or-None decision already made and shouldn't pay for a
@@ -176,7 +185,13 @@ pub fn bind_host_child_scope(el: &Element, scope_id: ScopeId) {
 /// subtree.
 pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) {
     set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
-    set_private(el, SCOPE_PROXY_KEY, proxy);
+    // RFC-096 — proxy-elided owners pass UNDEFINED; stamping that
+    // would make `enclosing_scope` return a junk proxy. Id +
+    // borrowed flag alone keep teardown semantics; the lazy-mint
+    // path covers any later dynamic need.
+    if !proxy.is_undefined() {
+        set_private(el, SCOPE_PROXY_KEY, proxy);
+    }
     set_private(el, SCOPE_BORROWED_KEY, &JsValue::TRUE);
 }
 
@@ -382,14 +397,34 @@ fn mount_component(
             );
         });
     }
-    let proxy = scope.into_proxy();
+    // RFC-095 W3b — plan-gated lazy proxy. When the compiled plan
+    // proves nothing consults the proxy (bindings/interps/refs
+    // only, all `$`-free), skip `into_proxy()` — no trap
+    // closures, no `Proxy` per instance. The install body then
+    // receives `UNDEFINED`, which the W1 scoped evaluators never
+    // touch. Anything dynamic later (devtools, a parent prop
+    // write) lazy-mints via `scope_of_element` /
+    // `enclosing_scope`, the RFC-054 row contract. Unplanned
+    // components conservatively keep the eager mint.
+    let needs_proxy = crate::templates_plan::template_plan_for(tag)
+        .map(|p| p.needs_proxy)
+        .unwrap_or(true);
+    let proxy = if needs_proxy {
+        scope.into_proxy()
+    } else {
+        JsValue::UNDEFINED
+    };
     crate::model_runtime::capture_emit_el(scope.id, el);
 
-    let light_dom_slots = capture_light_dom_slots(el, scope.id, &proxy);
-    if !light_dom_slots.is_empty() {
-        LIGHT_DOM_SLOTS.with(|stores| {
-            stores.borrow_mut().insert(scope.id, light_dom_slots);
-        });
+    // A proxy-free plan has no `<slot>` outlets (slot outlets flip
+    // `needs_proxy`), so there is no light-DOM content to capture.
+    if needs_proxy {
+        let light_dom_slots = capture_light_dom_slots(el, scope.id, &proxy);
+        if !light_dom_slots.is_empty() {
+            LIGHT_DOM_SLOTS.with(|stores| {
+                stores.borrow_mut().insert(scope.id, light_dom_slots);
+            });
+        }
     }
     if let Some((slots, parent_scope_id, parent_proxy)) = supplied_slots {
         crate::slot_fragment::install(scope.id, slots, parent_scope_id, parent_proxy);
@@ -410,7 +445,9 @@ fn mount_component(
     // data-pp-scope-id so nothing later tries to re-instantiate it.
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
-        set_private(&root, SCOPE_PROXY_KEY, &proxy);
+        if needs_proxy {
+            set_private(&root, SCOPE_PROXY_KEY, &proxy);
+        }
         stamp_plugin_metadata(&root, tag, scope.id, plugin_hooks, mount_start_ms);
         let _ = root.remove_attribute("data-pp-scope-id");
 
@@ -559,7 +596,16 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
             );
         });
     }
-    let proxy = scope.into_proxy();
+    // RFC-096 S4 — same plan-gated lazy proxy as the normal mount
+    // path: a proxy-free pp-as plan never mints.
+    let needs_proxy = crate::templates_plan::template_plan_for(tag)
+        .map(|p| p.needs_proxy)
+        .unwrap_or(true);
+    let proxy = if needs_proxy {
+        scope.into_proxy()
+    } else {
+        JsValue::UNDEFINED
+    };
     crate::model_runtime::capture_emit_el(scope.id, el);
 
     let Some(html) = template_for(tag) else {
@@ -954,7 +1000,6 @@ fn materialize_slot(slot_el: &Element) {
             &slot_name,
             &bindings,
             owner_scope_id,
-            &owner_proxy,
         ) {
             return;
         }
@@ -978,8 +1023,7 @@ fn materialize_slot(slot_el: &Element) {
                 let slot_state = SlotScope {
                     ident: let_ident.to_string(),
                     bindings: bindings.clone(),
-                    bind_source: owner_proxy.clone(),
-                    caller: parent_proxy.clone(),
+                    bind_source_scope_id: owner_scope_id,
                     caller_scope_id: parent_scope_id,
                 };
                 let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
@@ -1073,7 +1117,6 @@ fn materialize_captured_light_dom_slot(
     slot_name: &str,
     bindings: &[(String, String)],
     owner_scope_id: ScopeId,
-    owner_proxy: &JsValue,
 ) -> bool {
     let captured = LIGHT_DOM_SLOTS.with(|stores| {
         stores
@@ -1109,8 +1152,7 @@ fn materialize_captured_light_dom_slot(
         let slot_state = SlotScope {
             ident: captured.ident,
             bindings: bindings.to_vec(),
-            bind_source: owner_proxy.clone(),
-            caller: captured.owner_proxy.clone(),
+            bind_source_scope_id: owner_scope_id,
             caller_scope_id: captured.owner_scope_id,
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
@@ -1228,22 +1270,30 @@ fn materialize_slot_default(
     }
 }
 
-/// If `el` is a registered-component tag with its scope mounted on the
-/// template root, return the child component's proxy so directives like
-/// `pp-bind:` can write props directly.
-pub fn child_component_proxy(el: &Element) -> Option<JsValue> {
-    child_component_scope(el).map(|(_, p)| p)
-}
-
-/// RFC-031 — like [`child_component_proxy`] but also returns the
-/// child's scope id, so callers can consult `is_prop` on the
-/// child's `ComponentState` before writing through the proxy.
+/// RFC-031 — return the child component's scope id AND proxy so
+/// callers can consult `is_prop` on the child's `ComponentState`.
+/// Lazy-mints the proxy; prefer [`child_component_scope_id`] +
+/// the scoped writer where the proxy isn't actually needed.
 pub fn child_component_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     if !is_registered(&el.local_name()) {
         return None;
     }
     let root = first_element_child(el)?;
     scope_of_element(&root)
+}
+
+/// RFC-096 S1 — [`child_component_scope`] minus the proxy: reads
+/// the stamped `SCOPE_ID_KEY` without lazy-minting. The write
+/// mirror (`scope::write_field`) only needs the id, so callers
+/// that switched to it stop forcing a proxy onto (possibly
+/// W3b-elided) children.
+pub fn child_component_scope_id(el: &Element) -> Option<ScopeId> {
+    if !is_registered(&el.local_name()) {
+        return None;
+    }
+    let root = first_element_child(el)?;
+    let id = get_private(&root, SCOPE_ID_KEY).and_then(|v| v.as_f64())?;
+    Some(ScopeId(id as u64))
 }
 
 /// Climb the parent chain until we find an element with a bound scope.
@@ -1304,6 +1354,14 @@ fn enclosing_inject_parent(el: &Element) -> Option<ScopeId> {
         cur = e.parent_element();
     }
     None
+}
+
+/// RFC-095 W3b — test/diagnostic probe: has this element's scope
+/// proxy been minted? Proxy-elided components answer `false`
+/// until something dynamic forces a lazy mint.
+#[doc(hidden)]
+pub fn has_minted_proxy(el: &Element) -> bool {
+    get_private(el, SCOPE_PROXY_KEY).is_some()
 }
 
 /// If `el` itself owns a scope (i.e. it's a component root), return it.

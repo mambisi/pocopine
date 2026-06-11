@@ -915,6 +915,13 @@ fn ensure_route_scope() {
     });
 }
 
+/// RFC-096 S2 — the `$route` scope's id, for proxy-free reads
+/// through the scoped access.
+pub(crate) fn route_scope_id() -> Option<crate::reactive::ScopeId> {
+    ensure_route_scope();
+    ROUTE_SCOPE.with(|cell| cell.get().map(|s| s.id))
+}
+
 /// Read-only proxy onto the `$route` scope. Magic resolver uses this.
 pub fn route_proxy() -> JsValue {
     ensure_route_scope();

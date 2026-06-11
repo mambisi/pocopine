@@ -77,21 +77,35 @@ impl<T: 'static> Handle<T> {
         let sid = self.scope_id;
         let origin = crate::model_runtime::current_write_origin();
         let total_start = crate::profiler::state_sync::start();
+        // RFC-095 W2 — fingerprint observed fields before the
+        // closure runs so only genuinely-changed fields get
+        // invalidated + triggered afterwards. `Scope::find`
+        // resolves the type-erased state (same RefCell as
+        // `self.inner`); a dead scope or mid-borrow state falls
+        // back to the blanket sweep.
+        let invalidate_start = crate::profiler::state_sync::start();
+        let sweep = Scope::find(sid).map(|scope| {
+            let state = scope.state;
+            (crate::scope::DirtySweep::begin(sid, &state), state)
+        });
+        crate::profiler::state_sync::record_invalidate(invalidate_start);
         let closure_start = crate::profiler::state_sync::start();
         let out = crate::model_runtime::with_scope_write(sid, origin, || {
             with_current_scope_id(sid, || f(&mut self.inner.borrow_mut()))
         });
         crate::profiler::state_sync::record_closure(closure_start);
-        // RFC 054 phase A — the closure may have mutated arbitrary
-        // fields directly through `&mut T`. We don't know which
-        // fields were touched, so drop the whole field cache;
-        // next proxy reads pick up the fresh state. Targeted
-        // `patch_*` ops keep the cache valid.
-        let invalidate_start = crate::profiler::state_sync::start();
-        invalidate_field_cache(sid);
-        crate::profiler::state_sync::record_invalidate(invalidate_start);
         let trigger_start = crate::profiler::state_sync::start();
-        trigger_scope(sid);
+        match sweep {
+            Some((Some(sweep), state)) => sweep.finish(&state),
+            _ => {
+                // The closure may have mutated arbitrary fields
+                // directly through `&mut T` and we couldn't
+                // snapshot — drop the whole field cache and
+                // trigger every tracked key.
+                invalidate_field_cache(sid);
+                trigger_scope(sid);
+            }
+        }
         crate::profiler::state_sync::record_trigger(trigger_start);
         crate::profiler::state_sync::record_total(total_start);
         out

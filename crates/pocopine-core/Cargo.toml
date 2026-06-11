@@ -1,6 +1,11 @@
 [package]
 name = "pocopine-core"
-version.workspace = true
+# 0.2.0 — RFC-095/096: signals-first reactive core. Field signals
+# with versioned projections replace the Alpine-era proxy hot path
+# (FIELD_CACHE/FRESH_FIELDS deleted, DEPS/REVERSE deleted, magics
+# $el/$refs/$dispatch/$id removed, js_bridge is the one explicit
+# proxy door). Diverges from the workspace version line.
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,7 +27,16 @@ runtime-expr-fallback = []
 
 [dependencies]
 pocopine-codec = { workspace = true }
+# RFC-095 W2 — Fnv64 backs the per-field dirty-tracking
+# fingerprints (`fingerprint` module).
+pocopine-crypto = { workspace = true }
 pocopine-expr = { workspace = true }
+# NOTE: wasm-bindgen's `enable-interning` feature was tried (RFC-095
+# W5) and reverted: its per-crossing cache check taxes every DYNAMIC
+# string (10k row labels) to speed up a handful of short static
+# names — jsbench runLots(10000) regressed +7% with it on, and the
+# full geomean was 4% better with it off. Don't re-enable without a
+# benchmark showing otherwise.
 wasm-bindgen = { workspace = true }
 # Hooks `std::panic` so wasm panics surface their message via
 # `console.error` instead of the browser-default
@@ -53,6 +67,7 @@ features = [
     "AbortSignal",
     "Attr",
     "Clipboard",
+    "Comment",
     "ClipboardEvent",
     "CompositionEvent",
     "console",

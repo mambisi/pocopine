@@ -567,3 +567,447 @@ mod devtools_hooks {
         teardown();
     }
 }
+
+// ─── RFC-095 W2 — per-field dirty sweep ─────────────────────────
+
+/// Two independent fields with real fingerprints. The dirty sweep
+/// must trigger only the effects subscribed to the field a
+/// handler actually changed.
+#[derive(Default, Serialize, Deserialize)]
+struct DirtyState {
+    a: u32,
+    b: u32,
+}
+
+impl pocopine_core::ComponentState for DirtyState {
+    fn get(&self, key: &str) -> JsValue {
+        match key {
+            "a" => JsValue::from_f64(self.a as f64),
+            "b" => JsValue::from_f64(self.b as f64),
+            _ => JsValue::UNDEFINED,
+        }
+    }
+    fn set(&mut self, key: &str, value: JsValue) {
+        let v = value.as_f64().unwrap_or_default() as u32;
+        match key {
+            "a" => self.a = v,
+            "b" => self.b = v,
+            _ => {}
+        }
+    }
+    fn keys(&self) -> &'static [&'static str] {
+        &["a", "b"]
+    }
+    fn field_fingerprint(&self, key: &str) -> Option<u64> {
+        match key {
+            "a" => pocopine_core::fingerprint::fingerprint(&self.a),
+            "b" => pocopine_core::fingerprint::fingerprint(&self.b),
+            _ => None,
+        }
+    }
+    fn invoke(&mut self, key: &str, _args: &js_sys::Array) -> JsValue {
+        match key {
+            "bump_a" => self.a += 1,
+            "noop" => {}
+            _ => {}
+        }
+        JsValue::UNDEFINED
+    }
+}
+
+/// Same shape, but fingerprints are unknown — the sweep must fall
+/// back to triggering every tracked key (pre-W2 behavior).
+#[derive(Default, Serialize, Deserialize)]
+struct OpaqueState {
+    a: u32,
+    b: u32,
+}
+
+impl pocopine_core::ComponentState for OpaqueState {
+    fn get(&self, key: &str) -> JsValue {
+        match key {
+            "a" => JsValue::from_f64(self.a as f64),
+            "b" => JsValue::from_f64(self.b as f64),
+            _ => JsValue::UNDEFINED,
+        }
+    }
+    fn set(&mut self, _key: &str, _value: JsValue) {}
+    fn keys(&self) -> &'static [&'static str] {
+        &["a", "b"]
+    }
+    // field_fingerprint: default None — "unknown".
+    fn invoke(&mut self, key: &str, _args: &js_sys::Array) -> JsValue {
+        if key == "bump_a" {
+            self.a += 1;
+        }
+        JsValue::UNDEFINED
+    }
+}
+
+/// Track one effect per field; return (hits_a, hits_b) counters.
+fn install_field_effects(proxy: &JsValue) -> (Rc<Cell<u32>>, Rc<Cell<u32>>) {
+    let hits_a = Rc::new(Cell::new(0));
+    let hits_b = Rc::new(Cell::new(0));
+    let (p, h) = (proxy.clone(), hits_a.clone());
+    effect(move || {
+        let _ = Reflect::get(&p, &JsValue::from_str("a"));
+        h.set(h.get() + 1);
+    });
+    let (p, h) = (proxy.clone(), hits_b.clone());
+    effect(move || {
+        let _ = Reflect::get(&p, &JsValue::from_str("b"));
+        h.set(h.get() + 1);
+    });
+    (hits_a, hits_b)
+}
+
+#[wasm_bindgen_test]
+fn dirty_sweep_triggers_only_changed_fields() {
+    setup();
+    let scope = Scope::new(Rc::new(std::cell::RefCell::new(DirtyState::default())));
+    let proxy = scope.into_proxy();
+    let (hits_a, hits_b) = install_field_effects(&proxy);
+    assert_eq!((hits_a.get(), hits_b.get()), (1, 1), "initial runs");
+
+    scope.invoke("bump_a", &js_sys::Array::new());
+    flush_sync();
+    assert_eq!(hits_a.get(), 2, "effect on changed field `a` must re-run");
+    assert_eq!(
+        hits_b.get(),
+        1,
+        "effect on untouched field `b` must NOT re-run",
+    );
+}
+
+#[wasm_bindgen_test]
+fn dirty_sweep_no_change_no_trigger() {
+    setup();
+    let scope = Scope::new(Rc::new(std::cell::RefCell::new(DirtyState::default())));
+    let proxy = scope.into_proxy();
+    let (hits_a, hits_b) = install_field_effects(&proxy);
+
+    scope.invoke("noop", &js_sys::Array::new());
+    flush_sync();
+    assert_eq!(
+        (hits_a.get(), hits_b.get()),
+        (1, 1),
+        "a handler that mutates nothing must trigger nothing",
+    );
+}
+
+#[wasm_bindgen_test]
+fn dirty_sweep_unknown_fingerprints_fall_back_to_full_trigger() {
+    setup();
+    let scope = Scope::new(Rc::new(std::cell::RefCell::new(OpaqueState::default())));
+    let proxy = scope.into_proxy();
+    let (hits_a, hits_b) = install_field_effects(&proxy);
+
+    scope.invoke("bump_a", &js_sys::Array::new());
+    flush_sync();
+    assert_eq!(
+        (hits_a.get(), hits_b.get()),
+        (2, 2),
+        "unknown fingerprints must conservatively re-run every tracked effect",
+    );
+}
+
+#[wasm_bindgen_test]
+fn handle_update_triggers_only_changed_fields() {
+    setup();
+    let state = Rc::new(std::cell::RefCell::new(DirtyState::default()));
+    let scope = Scope::new(state.clone());
+    let proxy = scope.into_proxy();
+    let (hits_a, hits_b) = install_field_effects(&proxy);
+
+    let handle = pocopine_core::Handle::new(state, scope.id);
+    handle.update(|s| s.b = 99);
+    flush_sync();
+    assert_eq!(
+        hits_a.get(),
+        1,
+        "Handle::update must not re-run effects on untouched field `a`",
+    );
+    assert_eq!(hits_b.get(), 2, "effect on changed field `b` must re-run");
+
+    // And the no-op update: nothing re-runs.
+    handle.update(|_| {});
+    flush_sync();
+    assert_eq!((hits_a.get(), hits_b.get()), (1, 2));
+}
+
+/// The stale-cache half of the sweep: an unchanged field's cached
+/// JsValue survives the handler (no re-serialization), while the
+/// changed field's slot is dropped so the next read is fresh.
+#[wasm_bindgen_test]
+fn dirty_sweep_keeps_unchanged_field_cache_and_drops_changed() {
+    setup();
+    let scope = Scope::new(Rc::new(std::cell::RefCell::new(DirtyState::default())));
+    let proxy = scope.into_proxy();
+    let (_hits_a, _hits_b) = install_field_effects(&proxy);
+
+    scope.invoke("bump_a", &js_sys::Array::new());
+    flush_sync();
+    // Changed field reads fresh through the (invalidated) cache.
+    let a = Reflect::get(&proxy, &JsValue::from_str("a")).unwrap();
+    assert_eq!(a.as_f64(), Some(1.0), "changed field must read fresh value");
+    let b = Reflect::get(&proxy, &JsValue::from_str("b")).unwrap();
+    assert_eq!(b.as_f64(), Some(0.0), "unchanged field stays readable");
+}
+
+// ─── RFC-095 W1 — proxy-free root reads ─────────────────────────
+
+/// `evaluate_with` + `scoped_root_reader` must (a) resolve field
+/// values without touching the proxy and (b) register the same
+/// dependencies the proxy path would — the effect re-runs when
+/// the field triggers.
+#[wasm_bindgen_test]
+fn scoped_root_reader_resolves_and_tracks() {
+    setup();
+    let scope = Scope::new(Rc::new(std::cell::RefCell::new(DirtyState::default())));
+    let reader = pocopine_core::scope::scoped_root_reader(scope.id).expect("live scope");
+
+    let ast = pocopine_core::expr::parse_cached("a").expect("parses");
+    let hits = Rc::new(Cell::new(0));
+    let (h, r) = (hits.clone(), reader.clone());
+    let seen = Rc::new(Cell::new(-1.0));
+    let seen_c = seen.clone();
+    // Proxy deliberately UNDEFINED: resolution must come from the
+    // reader alone — a fallback to the proxy would read undefined.
+    effect(move || {
+        let v = pocopine_core::expr::evaluate_with(&ast, &JsValue::UNDEFINED, Some(&r));
+        seen_c.set(v.as_f64().unwrap_or(f64::NAN));
+        h.set(h.get() + 1);
+    });
+    assert_eq!(hits.get(), 1);
+    assert_eq!(seen.get(), 0.0, "reader must resolve the field value");
+
+    scope.invoke("bump_a", &js_sys::Array::new());
+    flush_sync();
+    assert_eq!(
+        hits.get(),
+        2,
+        "reader read must subscribe like a proxy read"
+    );
+    assert_eq!(seen.get(), 1.0, "re-run must observe the new value");
+}
+
+// ─── RFC-095 W0 — differential fuzz harness ─────────────────────
+//
+// The correctness gate for the fine-grained pipeline (W1 scoped
+// reads + W2 dirty sweep + W3a unified graph): drive random
+// mutation sequences through every write path the framework has
+// (handler invoke, Handle::update, proxy set-trap) and after
+// every flush compare what each effect last observed against a
+// re-evaluate-from-state oracle. Deterministic LCG seeds — a
+// failure reproduces from its seed printout.
+
+#[derive(Default, Serialize, Deserialize)]
+struct FuzzState {
+    a: i32,
+    b: i32,
+    c: i32,
+    items: Vec<i32>,
+}
+
+impl pocopine_core::ComponentState for FuzzState {
+    fn get(&self, key: &str) -> JsValue {
+        match key {
+            "a" => JsValue::from_f64(self.a as f64),
+            "b" => JsValue::from_f64(self.b as f64),
+            "c" => JsValue::from_f64(self.c as f64),
+            "items" => serde_wasm_bindgen::to_value(&self.items).unwrap_or(JsValue::NULL),
+            _ => JsValue::UNDEFINED,
+        }
+    }
+    fn set(&mut self, key: &str, value: JsValue) {
+        let n = value.as_f64().unwrap_or_default() as i32;
+        match key {
+            "a" => self.a = n,
+            "b" => self.b = n,
+            "c" => self.c = n,
+            _ => {}
+        }
+    }
+    fn keys(&self) -> &'static [&'static str] {
+        &["a", "b", "c", "items"]
+    }
+    fn field_fingerprint(&self, key: &str) -> Option<u64> {
+        match key {
+            "a" => pocopine_core::fingerprint::fingerprint(&self.a),
+            "b" => pocopine_core::fingerprint::fingerprint(&self.b),
+            "c" => pocopine_core::fingerprint::fingerprint(&self.c),
+            "items" => pocopine_core::fingerprint::fingerprint(&self.items),
+            _ => None,
+        }
+    }
+    fn invoke(&mut self, key: &str, args: &js_sys::Array) -> JsValue {
+        let arg = args.get(0).as_f64().unwrap_or_default() as i32;
+        match key {
+            "set_a" => self.a = arg,
+            "set_b" => self.b = arg,
+            "bump_all" => {
+                self.a += 1;
+                self.b += 1;
+                self.c += 1;
+            }
+            "push_item" => self.items.push(arg),
+            "pop_item" => {
+                self.items.pop();
+            }
+            "write_same_a" => {
+                // Mutate-and-restore: net no change. The sweep
+                // must NOT trigger anything for this.
+                self.a += 1;
+                self.a -= 1;
+            }
+            "noop" => {}
+            _ => {}
+        }
+        JsValue::UNDEFINED
+    }
+}
+
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self, bound: u64) -> u64 {
+        // Numerical Recipes LCG — deterministic across runs.
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 33) % bound
+    }
+}
+
+#[wasm_bindgen_test]
+fn differential_fuzz_fine_grained_matches_oracle() {
+    setup();
+    for seed in [1u64, 7, 42, 1234, 99999] {
+        let state = Rc::new(std::cell::RefCell::new(FuzzState::default()));
+        let scope = Scope::new(state.clone());
+        let proxy = scope.into_proxy();
+        let handle = pocopine_core::Handle::new(state.clone(), scope.id);
+
+        // Observers: each records the value it last computed.
+        // Mix of single-field, cross-field, and collection reads.
+        let read = |p: &JsValue, k: &str| {
+            Reflect::get(p, &JsValue::from_str(k)).unwrap_or(JsValue::UNDEFINED)
+        };
+        let obs_a = Rc::new(Cell::new(f64::NAN));
+        let obs_sum = Rc::new(Cell::new(f64::NAN));
+        let obs_len = Rc::new(Cell::new(f64::NAN));
+        let runs = Rc::new(Cell::new(0u32));
+        {
+            let (p, o) = (proxy.clone(), obs_a.clone());
+            let r = runs.clone();
+            effect(move || {
+                o.set(read(&p, "a").as_f64().unwrap_or(f64::NAN));
+                r.set(r.get() + 1);
+            });
+        }
+        {
+            let (p, o) = (proxy.clone(), obs_sum.clone());
+            effect(move || {
+                let a = read(&p, "a").as_f64().unwrap_or(0.0);
+                let b = read(&p, "b").as_f64().unwrap_or(0.0);
+                o.set(a + b);
+            });
+        }
+        {
+            let (p, o) = (proxy.clone(), obs_len.clone());
+            effect(move || {
+                let items = read(&p, "items");
+                let len = js_sys::Array::from(&items).length() as f64;
+                o.set(len);
+            });
+        }
+
+        // RFC-096 S1 — the write mirror under fuzz: template-style
+        // assignments evaluated with the scoped access and a
+        // deliberately-UNDEFINED proxy (a fallback would explode),
+        // plus direct scoped-writer prop writes.
+        let access = pocopine_core::scope::scoped_root_reader(scope.id).expect("live scope");
+        let assign_b = pocopine_core::expr::parse_cached("b = a + 1").expect("parses");
+
+        let mut rng = Lcg(seed);
+        let mut runs_before_noop;
+        for step in 0..200 {
+            let op = rng.next(11);
+            let arg = rng.next(100) as f64;
+            match op {
+                0 => {
+                    scope.invoke("set_a", &js_sys::Array::of1(&JsValue::from_f64(arg)));
+                }
+                1 => {
+                    scope.invoke("set_b", &js_sys::Array::of1(&JsValue::from_f64(arg)));
+                }
+                2 => {
+                    scope.invoke("bump_all", &js_sys::Array::new());
+                }
+                3 => {
+                    scope.invoke("push_item", &js_sys::Array::of1(&JsValue::from_f64(arg)));
+                }
+                4 => {
+                    scope.invoke("pop_item", &js_sys::Array::new());
+                }
+                5 => {
+                    // Template-style write through the set trap.
+                    let _ = Reflect::set(&proxy, &JsValue::from_str("a"), &JsValue::from_f64(arg));
+                }
+                6 => {
+                    handle.update(|s| s.c = arg as i32);
+                }
+                7 => {
+                    // Precision probe: a handler that nets no change
+                    // must not re-run anything.
+                    flush_sync();
+                    runs_before_noop = runs.get();
+                    scope.invoke("write_same_a", &js_sys::Array::new());
+                    flush_sync();
+                    assert_eq!(
+                        runs.get(),
+                        runs_before_noop,
+                        "seed {seed} step {step}: no-net-change handler re-ran an effect",
+                    );
+                }
+                8 => {
+                    // Template assignment through the write
+                    // mirror — `@click="b = a + 1"` with no proxy.
+                    let _ = pocopine_core::expr::evaluate_with(
+                        &assign_b,
+                        &JsValue::UNDEFINED,
+                        Some(&access),
+                    );
+                }
+                9 => {
+                    // Parent-style prop write through the scoped
+                    // writer (the pp-bind/pp-model path).
+                    pocopine_core::scope::write_field(scope.id, "c", &JsValue::from_f64(arg));
+                }
+                _ => {
+                    scope.invoke("noop", &js_sys::Array::new());
+                }
+            }
+            flush_sync();
+
+            // Oracle: recompute every observed value from Rust
+            // state and compare with what the effects last wrote.
+            let s = state.borrow();
+            assert_eq!(
+                obs_a.get(),
+                s.a as f64,
+                "seed {seed} step {step} op {op}: obs_a diverged from state.a",
+            );
+            assert_eq!(
+                obs_sum.get(),
+                (s.a + s.b) as f64,
+                "seed {seed} step {step} op {op}: obs_sum diverged from a+b",
+            );
+            assert_eq!(
+                obs_len.get(),
+                s.items.len() as f64,
+                "seed {seed} step {step} op {op}: obs_len diverged from items.len()",
+            );
+        }
+    }
+}
