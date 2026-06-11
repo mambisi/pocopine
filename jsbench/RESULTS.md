@@ -9,6 +9,30 @@ chains/match/comment anchors). Earlier records below are from
 different machine sessions — compare within a section, never
 across sections.
 
+## 2026-06-11 — 0.2.0 release run, all harnesses
+
+Final branch state (channel + review fixes), five harnesses
+back-to-back, same session, headless Firefox, mean ms:
+
+| action | vanilla | pocopine | Vue | Yew | Leptos |
+|---|---:|---:|---:|---:|---:|
+| run(1000) | 165.14 | 192.72 | 193.89 | 216.68 | 222.48 |
+| update every 10th | 144.40 | 157.76 | 149.74 | 162.26 | 141.94 |
+| select | 110.47 | 125.43 | 114.57 | 128.99 | 994.06 |
+| swapRows | 146.46 | 149.85 | 144.92 | 163.06 | 155.49 |
+| remove | 161.86 | 170.47 | 168.75 | 187.67 | 166.72 |
+| clear | 165.37 | 195.12 | 177.84 | 219.03 | 213.28 |
+| runLots(10000) | 586.20 | 687.84 | 720.51 | 852.00 | 899.08 |
+| add(1000) | 226.16 | 230.21 | 258.61 | 273.15 | 267.76 |
+| **geomean** | **184.95** | **204.09** | 201.29 | 227.10 | 283.55 |
+
+Geomean vs vanilla: pocopine **1.10×**, Vue 1.09× (statistical
+tie), Yew 1.23×, Leptos 1.53×. The channel's signature is the
+creation rows: pocopine beats Vue on runLots (687.8 vs 720.5;
+**1.17× vanilla**, the A/B-predicted figure) and add (230.2 vs
+258.6 — within 2% of vanilla). Machine faster than the 06-10
+sessions — compare within this section only.
+
 ## 2026-06-10 — W4 mutation channel, same-binary A/B
 
 RFC-095 W4 landed as a descriptor-variant channel (one JS
