@@ -7,7 +7,7 @@ description: "Which reactive primitives are shipped, which are in progress, and 
 
 This page tracks the state of the reactive layer — what's implemented in
 `pocopine-core`, what's still pending, and why each item is scoped the way
-it is. The model is proxy-scoped struct fields; see
+it is. The model is signal-backed struct fields; see
 [Overview](./README.md) for the shape, [Essentials](./01-essentials.md)
 for the everyday API, and [Internals](./03-internals.md) for the deep
 mechanics.
@@ -16,14 +16,26 @@ mechanics.
 
 These are live in `crates/pocopine-core/src/`.
 
-### Proxy-scoped fields
+### Signal-backed fields
 
-Each `#[component]` is wrapped in a `js_sys::Proxy`. Reads through the
-proxy `track(scope_id, key)`; writes `trigger(scope_id, key)`. A plain
-`pub` struct field is the reactive unit — no wrapper, no cell. Handler
-mutations on `&mut self` bypass the proxy and fan out via `trigger_scope`
-after the method returns. See `scope.rs` and `reactive.rs`, or
-[Internals](./03-internals.md) for the read/write lifecycle.
+Each field of a `#[component]` is backed by an interned signal in one
+unified dependency graph. Reads `track(scope_id, key)` through the
+Rust-side access layer; writes `trigger(scope_id, key)`. A plain `pub`
+struct field is the reactive unit — no wrapper, no cell. A `js_sys::Proxy`
+exists only as a lazily-minted JS-interop shim (`js_bridge`); components
+whose compiled plan is proxy-free mount without one. See `scope.rs` and
+`reactive.rs`, or [Internals](./03-internals.md) for the read/write
+lifecycle.
+
+### Per-field handler triggers (dirty sweep)
+
+Handler mutations on `&mut self` bypass the access layer, so
+`Scope::invoke` fingerprints every observed field before the call (Fnv64
+over a serde stream, entirely Rust-side) and re-fingerprints after: only
+fields whose hash moved are invalidated and triggered. A handler touching
+one field out of twenty re-runs one field's effects. The blanket
+`trigger_scope` survives only as the fallback for re-entrant invokes and
+unfingerprintable keys. Shipped in RFC-095 W2.
 
 ### Derived fields — `#[computed]`
 
@@ -106,9 +118,9 @@ See `reactive.rs`.
 
 `#[store]` declares a singleton component scope accessible as
 `$store.<name>` in templates and as `store::<T>()` in Rust. Reactivity
-works unchanged — the store's proxy `get` trap tracks dependencies so any
-directive reading `$store.preferences.theme` re-evaluates when the field
-changes.
+works unchanged — `$store.<name>.<field>` reads resolve through the same
+Rust-side access layer as component fields, so any directive reading
+`$store.preferences.theme` re-evaluates when the field changes.
 
 ```rust
 #[store]
@@ -142,20 +154,6 @@ surgically so reconcile skips unchanged rows entirely — see
 
 ## Still pending
 
-### Fine-grained handler triggers
-
-After a `#[handlers]` method returns, `Scope::invoke` calls
-`trigger_scope`, which notifies every currently-tracked key on the scope.
-That is correct but coarser than necessary: a handler that touches only
-`count` still re-evaluates effects subscribed to `title`, `items`, and
-every other field.
-
-The fix requires the `#[handlers]` macro to analyse `&mut self.field`
-assignments and emit per-field `trigger` calls instead of a blanket
-`trigger_scope`. The main constraint is reliable pattern matching across
-all assignment forms — direct field writes, nested method calls, `Deref`
-targets.
-
 ### Scheduler tiers
 
 The effect queue is single-tier today. `tick::next` (microtask),
@@ -166,8 +164,19 @@ settled.
 
 ### Nested reactivity
 
-Field tracking is flat: `self.title` is one reactive key; writing
-`self.user.name.first` does not automatically invalidate a subscriber of
-`self.user`. Nested reactivity requires deep proxy wrapping with an
-"iteration" synthetic key so inserts and deletes re-notify loop effects.
-This is on the critical path for per-row reactive fields inside `pp-for`.
+Field tracking is flat: `self.title` is one reactive key. Writing
+`self.user.name.first` inside a handler correctly triggers `user` (the
+dirty sweep sees the fingerprint move) but cannot notify a subscriber of
+just that leaf — every `user` reader re-evaluates. True nested reactivity
+requires per-path subscriptions with an "iteration" synthetic key so
+inserts and deletes re-notify loop effects. This is on the critical path
+for per-row reactive fields inside `pp-for`.
+
+### Cheaper sweeps for huge cold fields
+
+The dirty sweep hashes every observed field on every handler call. That
+is one serde pass per field — cheap for scalars, measurable for a scope
+holding a very large `Vec` nobody mutates. Possible follow-ups: skip-list
+hints from the `#[handlers]` macro (static analysis of which fields a
+method can touch), or length+generation short-circuits for collection
+fields.

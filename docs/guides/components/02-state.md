@@ -205,10 +205,11 @@ impl ThemeButton {
 }
 ```
 
-`update` triggers every effect subscribed to any of the store's
-fields, exactly like a handler invocation on a component scope.
+`update` is dirty-swept exactly like a handler invocation on a
+component scope: the runtime fingerprints the store's observed fields
+around the closure and triggers only the ones that actually changed.
 Reads via `store::<T>().with(|p| ...)` are non-reactive (Rust-side);
-in templates, reads always go through the proxy and track deps.
+in templates, `$store.<name>` reads are tracked and subscribe normally.
 
 **Do:** name stores after the *thing* they represent (`preferences`,
 `session`, `cart`), not the action (`theme-toggler`).
@@ -298,8 +299,9 @@ directly.
 
 Frameworks like React (`useState`) and Solid (signals) make you wrap
 each piece of state in a cell. Pocopine doesn't: a `pub` struct field
-*is* the reactive unit, tracked through the scope proxy. There is no
-`.value`, no read/write split, no cell to construct.
+*is* the reactive unit — the runtime interns a signal for it behind the
+scenes, so you get fine-grained signal updates without ever seeing a
+cell. There is no `.value`, no read/write split, nothing to construct.
 
 That keeps async updates clean:
 
@@ -339,13 +341,14 @@ need a long one:
 1. **Global mutable state outside a store.** Any `static mut`,
    `OnceCell<RefCell<...>>`, or similar, used for app state. Promote
    to a store or move it into a component scope.
-2. **Component fields that aren't serializable.** They won't round-trip
-   through the proxy's get/set. If you need a non-Serialize handle
-   (e.g., a JS object), stash it in a separate `thread_local` keyed by
-   `ScopeId` — but the *public, reactive* fields must be Serialize.
+2. **Component fields that aren't serializable.** Serde is how fields
+   reach templates and how the dirty sweep fingerprints them. If you
+   need a non-Serialize handle (e.g., a JS object), stash it in a
+   separate `thread_local` keyed by `ScopeId` — but the *public,
+   reactive* fields must be Serialize.
 3. **Talking to another component's scope from outside.** Scopes are
-   addressed by `ScopeId` through the walker; user code doesn't get
-   scope ids. If you're tempted, promote to a store.
+   addressed by `ScopeId` internally; user code doesn't get scope ids.
+   If you're tempted, promote to a store.
 4. **Derived state stored as a field you manually keep in sync.**
    Don't write `progress_label` updates into every handler that
    touches `progress`. Use `#[computed]` for pure derivations and

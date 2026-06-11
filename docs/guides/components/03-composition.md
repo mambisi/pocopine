@@ -88,7 +88,7 @@ mutates:
 ```
 
 Under the hood, `pp-bind:X` on a custom-element tag writes to
-the child's proxy field inside an `effect()` — it rides the existing
+the child's reactive field inside an `effect()` — it rides the existing
 reactivity engine, no new machinery.
 
 **Rules:**
@@ -493,7 +493,7 @@ time, the lookup can't accidentally fire on a real HTML element.
 * `pp-for` on custom elements — blocked by array reactivity.
 * Scoped CSS cascading into slot content (slot content stays in the
   parent's scope attribute, so its styles come from the parent).
-* Event-based child→parent callbacks beyond `$dispatch`. Props don't
+* Event-based child→parent callbacks beyond `emit`. Props don't
   accept callbacks today; use event dispatch instead
   (see `02-state.md`).
 * Two-way prop binding (`pp-model:prop`). Use parent-side state + event

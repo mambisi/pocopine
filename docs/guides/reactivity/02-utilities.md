@@ -141,10 +141,10 @@ watch(
 ```
 
 `watch_field::<V>("field", cb)` is the ergonomic sugar for "watch one named
-field on the current component." It reads the field **through the scope proxy**
-so the effect subscribes correctly — the common pitfall with a hand-rolled
-`watch(|| handle.with(|s| s.field), …)` is that `Handle::with` bypasses the
-proxy, so the watch silently never fires.
+field on the current component." It reads the field **through the tracked
+access layer** so the effect subscribes correctly — the common pitfall with a
+hand-rolled `watch(|| handle.with(|s| s.field), …)` is that `Handle::with`
+bypasses tracking, so the watch silently never fires.
 
 ```rust
 use pocopine::watch_field;
@@ -337,12 +337,12 @@ at the type level, so the value type is checked at both ends. For cross-componen
 
 ## Surgical list updates — `scope::*_inline`
 
-A handler mutation fires `trigger_scope`, which re-evaluates **every** effect
-tracking any field in the scope. For a big `Vec<T>` field where you changed one
-row, that's wasteful — and it re-serialises the whole field. The `*_inline`
-helpers patch the cached JS `Array` in lockstep with the Rust mutation and fire
-only the **named field**, leaving every other row's object identity stable (so a
-keyed `pp-for` reconcile skips the untouched rows).
+A handler mutation of a `Vec<T>` field triggers that field (the dirty sweep
+sees the fingerprint move) — but the next read re-serialises the **whole**
+field into a fresh JS `Array`, giving every row a new object identity. The
+`*_inline` helpers instead patch the cached JS `Array` in lockstep with the
+Rust mutation, so a keyed `pp-for` reconcile sees the same Array with one
+updated cell and skips the untouched rows entirely.
 
 Call them from inside a `&mut self` handler, *after* the Rust-side mutation:
 
@@ -367,9 +367,9 @@ pub fn touch_row(&mut self, idx: usize) {
 | `replace_field_inline(field, &value)` | structural reshape — re-serialise the whole field once |
 
 These are a perf escape hatch — only worth it for large lists under reactive
-pressure. A plain `self.rows[idx] = …` is correct everywhere else; it just goes
-through the blanket `trigger_scope` path. See [Internals](./03-internals.md) for
-the field-cache mechanics.
+pressure. A plain `self.rows[idx] = …` is correct everywhere else; it just
+pays one whole-field re-serialisation on the next read. See
+[Internals](./03-internals.md) for the projection-store mechanics.
 
 ## Testing the reactive loop — `set_auto_flush` + `flush_sync`
 
@@ -438,8 +438,8 @@ set_count.set(1);   // same value → no trigger
 
 `set` skips the trigger when the new value equals the old; `set_force` re-fires
 unconditionally; `update(|v| …)` mutates in place and always fires (a closure
-can't prove it didn't change the value). Signals share the effect engine, queue,
-flush, and batching with proxy-scoped fields — they just key dependency tracking
-on a numeric `SignalId` instead of a `(ScopeId, key)` pair. That dedicated dep
-table is what `computed` rides on; see [Internals](./03-internals.md) for the
-signal dep table and how it joins the same flush.
+can't prove it didn't change the value). Signals and component fields share
+ONE dependency graph: a field is just a signal the runtime interned for its
+`(ScopeId, key)` pair, while `signal()` allocates the id directly. Same
+effect engine, queue, flush, and batching; `computed` rides the same graph.
+See [Internals](./03-internals.md).

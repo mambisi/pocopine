@@ -16,23 +16,28 @@ maps each concept to its current implementation.
 | Concept | Vue 3 | pocopine |
 |---|---|---|
 | "currently running effect" | global `activeEffect` | `CURRENT_EFFECT: Cell<Option<EffectId>>` |
-| proxy trap on read | `get(target, key)` → `dep.depend()` | `get` closure → `track(scope_id, key)` |
-| proxy trap on write | `set(target, key, val)` → `dep.notify()` | `set` closure → `trigger(scope_id, key)` |
-| "the subscribers of a (target, key)" | `WeakMap<obj, Map<key, Set<Effect>>>` | `HashMap<ScopeId, HashMap<Key, HashSet<EffectId>>>` |
+| read tracks | proxy `get(target, key)` → `dep.depend()` | `read_field_tracked` → `track(scope_id, key)` (Rust-side; the lazy proxy's get trap calls the same fn) |
+| write triggers | proxy `set(target, key, val)` → `dep.notify()` | `write_field_tracked` → `trigger(scope_id, key)` (ditto for the set trap) |
+| "the subscribers of a (target, key)" | `WeakMap<obj, Map<key, Set<Effect>>>` | intern `(ScopeId, key)` → `SignalId`, then `SIGNAL_DEPS[sid]: HashSet<EffectId>` |
 | effect rerun | `subscribers.forEach(e => e())` | drain `QUEUE` in microtask |
 | boxed single value | `ref(value)` → `.value` get/set | `signal(value)` → `Signal::get` / `Setter::set` (advanced) |
 
-The shape is the same. pocopine keys by `(ScopeId, key)` instead of `(raw_object, key)` because
-Rust cannot hash a `JsValue` by identity, and each component scope already has a stable numeric id.
+The contract is the same — read-tracks, write-triggers, per-`(target, key)`
+subscriber sets. The implementation diverges in one important way: Vue's
+engine IS the proxy, while pocopine's engine is a **signal graph** that the
+proxy merely forwards into. Component fields are interned into numeric
+`SignalId`s (`FIELD_SIGNALS[scope][key]` — a two-level map so `&str`
+lookups need no compound-key allocation), and fields, stores, standalone
+signals, and `computed` results all share the single `SIGNAL_DEPS` /
+`SIGNAL_REVERSE` table, one effect engine, one queue, one flush. That puts
+the runtime closer to Solid or Leptos under the hood, with Vue's
+`reactive()` ergonomics on top.
 
-The dependency table uses a two-level nested map — `DEPS[scope_id][key]` — rather than a flat
-`HashMap<(ScopeId, Key), _>`. The two-level layout lets `HashMap` resolve a `&str` lookup directly
-(via `Cow<'static, str>: Borrow<str>`) without allocating a compound key, and makes
-`trigger_scope` O(k) in the scope's live keys rather than O(|DEPS|).
-
-A second, id-keyed table (`SIGNAL_DEPS` / `SIGNAL_REVERSE`) keys subscriptions on a numeric id
-directly — no per-access string conversion. `computed` rides on it for its dirty-notification
-edges. Both tables share the same effect engine, queue, flush, and batching machinery.
+A second divergence: Vue must route every mutation through the proxy to
+see it. Pocopine handlers mutate `&mut self` directly, so the runtime
+brackets each handler call with a **fingerprint sweep** — hash every
+observed field before and after, trigger only the fields whose hash moved.
+Vue has no analog because it never lets you bypass the proxy.
 
 ## reactive() by default, ref() as an escape hatch
 
@@ -40,10 +45,13 @@ Vue 3 ships two reactive primitives: `reactive(obj)` wraps an object in a proxy,
 boxes a single value in a `.value` cell. pocopine leads with **the proxy** and treats the boxed
 cell as a rarely-needed advanced tool.
 
-A `#[component]` *is* a `reactive()` object. Its fields are tracked through the scope proxy exactly
-like properties of a Vue `reactive` target — there is no `.value`, no read/write split, no cell to
-construct. This is the **default mental model**: a Rust struct field is already a typed, named,
-tool-visible value, so for component state you never wrap anything.
+A `#[component]` *is* a `reactive()` object — ergonomically. Its fields
+track and trigger exactly like properties of a Vue `reactive` target:
+there is no `.value`, no read/write split, no cell to construct. (Under
+the hood each field is an interned signal and the tracking is Rust-side;
+the JS proxy only exists for interop and is usually never minted.) This is
+the **default mental model**: a Rust struct field is already a typed,
+named, tool-visible value, so for component state you never wrap anything.
 
 ```rust
 // Vue: const state = reactive({ count: 0 }); state.count++
@@ -80,8 +88,9 @@ count.set(count.get() + 1);
 
 Unlike Vue, this is **not** the everyday path. Signals are a deliberately **rare escape hatch** for
 standalone reactive state that is *not* owned by a component — library code, a module-level reactive
-value, a bridge over an external source. For ordinary application state prefer proxy-scoped struct
-fields, or `#[store]` for the app-wide case. See
+value, a bridge over an external source. (Component fields ride the same signal graph internally,
+so there is no performance reason to prefer one; pick by ownership.) For ordinary application state
+prefer component struct fields, or `#[store]` for the app-wide case. See
 [Utilities — Advanced: standalone signals](./02-utilities.md#advanced-standalone-signals) for when
 the escape hatch is the right call.
 
@@ -151,9 +160,12 @@ Vue's `reactive(obj)` wraps recursively — reading `user.address.street` return
 `address` that tracks `.street`. `shallowReactive` stops at the first level; `readonly` forbids
 `set`.
 
-pocopine's proxy scope is currently flat: a component is a single struct with primitive or
-owned fields, so there is no recursive proxy chain. Per-item reactivity on a `Vec<TodoItem>`
-field — and the `pp-for` directive that needs it — is the gate for this work.
+pocopine's field tracking is currently flat: a component is a single struct whose top-level
+fields are the reactive unit. There is no recursive tracking chain — though the handler
+fingerprint sweep means a nested mutation (`self.user.address.street = …` inside a handler)
+still triggers exactly the `user` field, and `pp-for` reconciles rows by key over the whole
+list value. True per-item subscriptions on a `Vec<TodoItem>` field remain the gate for this
+work.
 
 ### Collection handlers
 
@@ -163,8 +175,8 @@ any insert or delete also triggers a synthetic "iteration" key so observers iter
 collection are notified.
 
 pocopine's equivalent would build tracking around macro-generated accessors on `Vec<T>` /
-`HashMap<K, V>` fields rather than JS proxy traps, but the iteration-key concept carries over
-directly. This is gated behind deep reactive support.
+`HashMap<K, V>` fields rather than JS proxy traps (the engine is already proxy-free), but the
+iteration-key concept carries over directly. This is gated behind deep reactive support.
 
 ### `effectScope()`
 
@@ -189,7 +201,9 @@ Timing tiers become relevant once transitions or async components require post-f
 
 | Feature | Status |
 |---|---|
-| Proxy-scoped fields (`reactive`) | Shipped (default) |
+| Signal-backed fields (`reactive` ergonomics) | Shipped (default) |
+| Per-field handler dirty sweep | Shipped (RFC-095) |
+| Plan-gated proxy elision + `js_bridge` | Shipped (RFC-096) |
 | `signal` / `rw_signal` (`ref`) | Shipped (advanced escape hatch) |
 | `#[computed]` (lazy + scheduler) | Shipped |
 | `#[watch(field)]` / `watch` / `watch_field` | Shipped |
@@ -214,5 +228,5 @@ Then map the concepts onto the live API:
 - [Overview](./README.md) — the mental model and the "what to reach for" routing table.
 - [Essentials](./01-essentials.md) — the everyday `#[component]` / `#[computed]` / `#[watch]` / `#[store]` cookbook.
 - [Utilities](./02-utilities.md) — the free-fn toolbox, including [Advanced: standalone signals](./02-utilities.md#advanced-standalone-signals) (the `ref()` escape hatch).
-- [Internals](./03-internals.md) — the proxy `(ScopeId, key)` table and the id-keyed signal table `computed` rides on.
+- [Internals](./03-internals.md) — the interned signal graph, the projection store, and the handler dirty sweep.
 - [Roadmap](./05-roadmap.md) — what is shipped vs. pending of the items above.

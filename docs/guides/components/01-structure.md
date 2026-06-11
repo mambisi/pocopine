@@ -178,7 +178,8 @@ impl TodoItem {
   genuinely private (e.g., a cache handle), it lives as local state
   inside a handler, not on the struct.
 * **`Default + Serialize + Deserialize` are always derived.** The
-  macro needs them for instantiation and the proxy `get`/`set` path.
+  macro needs them for instantiation, template projection, and the
+  handler dirty-sweep fingerprints.
 * **Non-Serialize handles** (e.g., JS objects, tokio channels in
   native builds) don't belong on the struct. Stash them in a
   `thread_local` keyed by scope id, or promote the need to a store.

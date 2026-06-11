@@ -29,3 +29,6 @@ In this section:
    surface inside `pp-*="..."` attributes, what doesn't belong
    there, and the `#[computed]` / `#[watch]` patterns for
    derived state.
+5. [`05-control-flow.md`](./05-control-flow.md) — `pp-show`,
+   `pp-if`/`pp-else-if`/`pp-else` chains, `pp-match` enum
+   dispatch, `pp-for`, and the comment anchors behind them.

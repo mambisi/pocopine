@@ -176,7 +176,7 @@ impl Preferences {}
 Register it on the app and use it two ways.
 
 **In templates** — the `$store.<name>` magic resolves through the store's
-proxy, so reads participate in normal dep tracking:
+scope, so reads participate in normal dep tracking:
 
 ```poco
 <input pp-model="$store.preferences.theme" />
