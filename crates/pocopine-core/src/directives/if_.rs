@@ -113,11 +113,12 @@ pub fn install_eval(
                 // RFC-058 Phase 4.1d body fragment fast-path —
                 // when the macro emitted a body fragment, build
                 // the clone root via that fragment (which calls
-                // generated fragment install against the parent scope
-                // to install every directive without going
-                // through `mount::walk`). Otherwise fall back
-                // to the legacy `clone_template_body` +
-                // `mount::walk` path.
+                // generated fragment install against the parent
+                // scope to install every directive). Otherwise
+                // the body fell outside the lifting envelope:
+                // `clone_template_body` produces an uninstalled
+                // clone and the failure surfaces via
+                // `record_plan_failure`.
                 let (clone_root, fragment_built) = match body_fn {
                     Some(f) => {
                         // The fragment installs directives against

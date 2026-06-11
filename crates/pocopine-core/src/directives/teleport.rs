@@ -69,8 +69,9 @@ pub fn host_of(el: &Element) -> Option<Element> {
 /// RFC-058 Phase 4.3c. When `Some`, the clone root is built via
 /// the fragment (which stamps cleaned HTML + installs every
 /// directive against the enclosing scope via the Phase 1
-/// helpers — no `mount::walk` involvement). When `None`, the
-/// legacy `clone_template_body` + `mount::walk` path runs.
+/// helpers). When `None`, the body fell outside the lifting
+/// envelope: `clone_template_body` produces an uninstalled
+/// clone and the failure surfaces via `record_plan_failure`.
 pub fn install(
     template: HtmlTemplateElement,
     selector: &str,

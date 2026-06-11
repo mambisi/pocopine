@@ -2604,7 +2604,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Build the literal to feed into `compile_template`:
     //
     //   * Template plan present  → cleaned HTML with classified
-    //     attributes stripped + `data-pp-text-managed` markers.
+    //     attributes stripped.
     //   * Else row stamps present → original source with
     //     `data-pp-row-plan="<id>"` spliced into each
     //     `<template pp-for>` opening tag.

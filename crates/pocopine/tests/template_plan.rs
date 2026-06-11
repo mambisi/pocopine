@@ -1,22 +1,17 @@
 //! RFC-058 Phase 2 — compiled-view evidence tests.
 //!
 //! Phase 2 ships a macro-emitted `&'static StaticTemplatePlan`
-//! per plan-eligible component plus a runtime fast-path
-//! (specialized install entries) the mount calls without a recursive
-//! directive walk. The mount test suite already exercises end-to-end
-//! behaviour for the components on the plan path; this file
-//! pins the parts of the §6 envelope that are easy to lose
-//! silently.
+//! per plan-eligible component plus specialized install entries
+//! applied without a recursive directive walk (the runtime
+//! walker is gone — RFC-058 Phase 6.5). This file pins the
+//! parts of the §6 envelope that are easy to lose silently.
 //!
 //! Plan-eligible templates register a plan and the registry
 //! survives a mount/unmount cycle without the fail-fast counter
 //! ticking. A planned `pp-text` whose evaluated value contains
-//! literal braces does not get re-interpolated by the
-//! surrounding text scanner — the `data-pp-text-managed`
-//! marker the macro stamps on the stripped element keeps
-//! `interp::scan_children` away. A template containing `pp-for` is left
-//! whole-subtree mount-owned — the v1 emitter skips template
-//! plans when row plans exist (RFC-058 §6.2 layering trade-off).
+//! literal braces stays byte-exact — the plan owns the
+//! element's text and no runtime interpolation pass exists to
+//! re-scan it.
 //!
 //! Run with:
 //!   `wasm-pack test --firefox --headless crates/pocopine --test template_plan`
@@ -29,18 +24,6 @@ use pocopine_core::templates_plan::{
 };
 use serde::{Deserialize, Serialize};
 
-// Walker-removed helpers — RFC-058 Phase 6.5. The counters used to
-// gate the migration off the runtime mount; the mount is gone, so
-// the counters always read zero. Stubs keep the existing test
-// scaffolding compiling without rewriting every call site.
-fn compiled_fallback_walk_count() -> u32 {
-    0
-}
-fn reset_compiled_fallback_walk_count() {}
-fn bind_call_count() -> u32 {
-    0
-}
-fn reset_bind_call_count() {}
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement};
@@ -61,10 +44,9 @@ struct PlanTextEcho {
 #[handlers]
 impl PlanTextEcho {
     pub fn on_setup(&mut self) {
-        // A value with literal `{...}` braces — exactly the
-        // case that re-interpolation by `interp::scan_children`
-        // would corrupt. The plan stamps `data-pp-text-managed`
-        // on the carrier so the scanner skips it.
+        // A value with literal `{...}` braces — the planned
+        // `pp-text` write must keep them byte-exact (no
+        // interpolation pass may re-scan plan-owned text).
         self.message = "value: {count} ok".into();
     }
 }
@@ -492,9 +474,7 @@ impl PlanTeleportHost {}
 /// in two siblings (one mixed with static text, one bare) and
 /// a third sibling with no interp. The macro lifts each
 /// interpolated text node into a `StaticInterp` entry; the
-/// applier installs effects per dynamic segment; the runtime
-/// mount's `interp::scan_children` skips the carrier elements
-/// via `data-pp-interp-managed`.
+/// applier installs effects per dynamic segment.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanInterpHost.html")]
 struct PlanInterpHost {
@@ -582,7 +562,7 @@ impl PlanOpaqueDirectiveHost {}
 /// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed list
 /// with one `pp-text` binding per row. The macro emits a body
 /// fragment fn that installs `pp-text` against the row's
-/// `LoopScope` per iteration — no `mount::walk` on row clones.
+/// `LoopScope` per iteration — no recursive walk on row clones.
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct PfbhRow {
     label: String,
@@ -791,7 +771,7 @@ impl Rfc064GenericPrependHost {
 /// qualifies for fragment lifting (HTML5-native, plan-eligible
 /// directives only), so the macro emits a body fragment fn that
 /// installs both directives via the Phase 1 helpers — no
-/// `mount::walk` involvement on the cloned body.
+/// recursive walk involvement on the cloned body.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanIfBodyHost.html")]
 struct PlanIfBodyHost {
@@ -1091,12 +1071,9 @@ async fn rfc064_compiles_safe_expression_envelope_and_preserves_fallback() {
 }
 
 /// A planned `pp-text` whose bound value contains literal
-/// `{ ... }` braces must render the braces as-is. The macro
-/// stamps `data-pp-text-managed` on the carrier element so the
-/// `interp::scan_children` text scanner skips it — without
-/// that, `value: {count} ok` would be re-tokenised on every
-/// reactive update and either fail to parse or hijack the
-/// brace content.
+/// `{ ... }` braces must render the braces as-is — the plan
+/// owns the element's text and nothing may re-tokenise
+/// `value: {count} ok` on a reactive update.
 #[wasm_bindgen_test]
 async fn planned_pp_text_does_not_reinterpolate_brace_payload() {
     let host = mount("<plan-text-echo></plan-text-echo>");
@@ -1138,8 +1115,8 @@ async fn template_with_only_pp_for_emits_for_plan() {
 
 /// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed
 /// list with no row plan; the macro emits a body fragment fn
-/// the runtime invokes per row instead of `clone_template_body`
-/// + `mount::walk`. The fragment installs `pp-text` against
+/// the runtime invokes per row instead of the legacy
+/// clone-and-walk path. The fragment installs `pp-text` against
 /// the row's `LoopScope` per iteration; appending a new row
 /// drives the effect to mount + bind a fresh `<li>` without
 /// the mount touching the row.
@@ -1147,7 +1124,6 @@ async fn template_with_only_pp_for_emits_for_plan() {
 async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-for-body-host")
         .expect("plan-for-body-host registers a template plan");
@@ -1185,11 +1161,6 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     );
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "native-only lifted pp-for bodies should not use mount fallback",
-    );
 
     host.remove();
 }
@@ -1410,7 +1381,6 @@ async fn rfc064_generic_prepend_refreshes_reused_row_indexes() {
 async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-slot-dynamic-host")
         .expect("plan-slot-dynamic-host has plan-eligible directives");
@@ -1446,11 +1416,6 @@ async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
     );
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "native-only dynamic slot fragments should not use mount fallback",
-    );
 
     host.remove();
 }
@@ -1467,7 +1432,6 @@ async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
 async fn macro_emitted_pp_if_body_fragment_installs_directives() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-if-body-host")
         .expect("plan-if-body-host registers a template plan");
@@ -1515,11 +1479,6 @@ async fn macro_emitted_pp_if_body_fragment_installs_directives() {
     assert!(host.query_selector(".pibh-label").unwrap().is_none());
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "native-only lifted pp-if bodies should not use mount fallback",
-    );
 
     host.remove();
 }
@@ -1533,7 +1492,6 @@ async fn macro_emitted_pp_if_body_fragment_installs_directives() {
 async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-if-child-host")
         .expect("plan-if-child-host registers a template plan");
@@ -1560,11 +1518,6 @@ async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
         "child on_mount should fire through compiled finalization",
     );
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "planned child mount in lifted pp-if body should not need mount fallback",
-    );
 
     host.remove();
 }
@@ -1577,7 +1530,6 @@ async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
 async fn lifted_child_host_bind_and_listener_install_without_fallback_walk() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-if-host-directive-host")
         .expect("plan-if-host-directive-host registers a template plan");
@@ -1608,11 +1560,6 @@ async fn lifted_child_host_bind_and_listener_install_without_fallback_walk() {
         "custom-tag @click should dispatch to parent and :label should update child prop",
     );
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "planned child host directives should not need mount fallback",
-    );
 
     host.remove();
 }
@@ -1625,7 +1572,6 @@ async fn lifted_child_host_bind_and_listener_install_without_fallback_walk() {
 async fn lifted_child_host_model_installs_without_fallback_walk() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-if-model-directive-host")
         .expect("plan-if-model-directive-host registers a template plan");
@@ -1688,11 +1634,6 @@ async fn lifted_child_host_model_installs_without_fallback_walk() {
         "empty string model updates should not be dropped",
     );
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "planned child host pp-model should not need mount fallback",
-    );
 
     host.remove();
 }
@@ -1704,7 +1645,6 @@ async fn lifted_child_host_model_installs_without_fallback_walk() {
 async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let _child_plan = template_plan_for("plan-as-directive-child")
         .expect("pp-as child should register a root template plan");
@@ -1748,11 +1688,6 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
         "compiled root listener should run in the child scope",
     );
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "compiled pp-as child should not need mount fallback",
-    );
 
     host.remove();
 }
@@ -1767,7 +1702,6 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
 async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-teleport-host")
         .expect("plan-teleport-host has one pp-teleport site");
@@ -1792,11 +1726,6 @@ async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
     // The portal must NOT be inside the host (it was teleported out).
     assert!(host.query_selector(".pth-portal").unwrap().is_none());
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "native-only lifted pp-teleport bodies should not use mount fallback",
-    );
 
     // Manual cleanup so the portal doesn't leak into sibling
     // tests on `body` (the test's mount observer is rooted at
@@ -1886,7 +1815,6 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
 
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let child_plan = template_plan_for("plan-slot-child")
         .expect("slot-bearing child must register a compiled slot-outlet plan");
@@ -1938,11 +1866,6 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     // by name), so finding it here is positive evidence the
     // fragment hook fired.
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "compiled slot-outlet materialisation should not need fallback for a static fragment",
-    );
 
     host.remove();
 }
@@ -2016,7 +1939,6 @@ async fn macro_emitted_if_plan_drives_pp_if_controller() {
 async fn macro_emitted_slot_fragment_renders_static_slot_content() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let child_plan =
         template_plan_for("plan-slot-child").expect("plan-slot-child has a compiled <slot> outlet");
@@ -2051,11 +1973,6 @@ async fn macro_emitted_slot_fragment_renders_static_slot_content() {
         Some("macro-emitted-static-fragment"),
     );
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "static slot fragment + compiled slot outlet should avoid mount fallback",
-    );
 
     host.remove();
 }
@@ -2111,7 +2028,6 @@ async fn parent_plan_drives_child_mount_via_static_child_mount() {
 async fn macro_emits_named_slot_fragment() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-named-slot-host")
         .expect("plan-named-slot-host has one nested non-HTML5 tag");
@@ -2161,11 +2077,6 @@ async fn macro_emits_named_slot_fragment() {
     // Pin: the lifted named slots take the same compiled path as
     // the default lift — no mount fallback for any slot.
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "named slot fragments must take the compiled path, not mount fallback",
-    );
 
     host.remove();
 }
@@ -2181,7 +2092,6 @@ async fn macro_emits_named_slot_fragment() {
 async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-scoped-slot-host")
         .expect("plan-scoped-slot-host has one nested non-HTML5 tag");
@@ -2246,11 +2156,6 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     );
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "scoped slot fragments must take the compiled path, not mount fallback",
-    );
 
     host.remove();
 }
@@ -2265,7 +2170,6 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
 async fn macro_lifts_opaque_runtime_directive() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-opaque-directive-host")
         .expect("plan-opaque-directive-host registers a template plan");
@@ -2311,11 +2215,6 @@ async fn macro_lifts_opaque_runtime_directive() {
     );
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "lifting pp-roving must remove the mount fallback that previously drove it",
-    );
 
     host.remove();
 }
@@ -2352,7 +2251,6 @@ async fn opaque_lift_allowlist_documented() {
 async fn macro_lifts_pp_ref_on_custom_child_host() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-child-host-ref-host")
         .expect("plan-child-host-ref-host registers a template plan");
@@ -2403,11 +2301,6 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
     );
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "lifting pp-ref on a custom host must remove the previous mount fallback",
-    );
 
     host.remove();
 }
@@ -2415,14 +2308,11 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
 /// RFC-058 Phase 6.2 — `{{expr}}` text interpolation lifts into
 /// `StaticInterp` plan entries. The applier installs effects
 /// per dynamic segment using the same install path the runtime
-/// scanner produced; the mount's `interp::scan_children`
-/// honours `data-pp-interp-managed` so the duplicate scan
-/// doesn't double-install.
+/// scanner produced.
 #[wasm_bindgen_test]
 async fn macro_lifts_text_interpolation() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan =
         template_plan_for("plan-interp-host").expect("plan-interp-host registers a template plan");
@@ -2464,11 +2354,6 @@ async fn macro_lifts_text_interpolation() {
     assert_eq!(read(&host, ".pih-bare"), "there");
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "lifted interp must take the compiled path with no mount fallback",
-    );
 
     host.remove();
 }
@@ -2541,9 +2426,7 @@ async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
 #[wasm_bindgen_test]
 async fn compiled_root_discovery_skips_runtime_recursion_for_registered_tags() {
     register_all();
-    reset_bind_call_count();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let body = doc().body().unwrap();
     let host = doc().create_element("div").unwrap();
@@ -2554,26 +2437,14 @@ async fn compiled_root_discovery_skips_runtime_recursion_for_registered_tags() {
            </section>"#,
     );
     body.append_child(&host).unwrap();
-    let baseline = bind_call_count();
     mount_registered_tags(&host);
     tick().await;
-
-    let post = bind_call_count() - baseline;
-    assert_eq!(
-        post, 0,
-        "compiled-mount path mounts via compiled entries directly — no bind call on the wrapper, section, or component tag",
-    );
 
     assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
     assert_eq!(read(&host, ".pih-bare"), "world");
     assert_eq!(read(&host, ".pih-static"), "no interp here");
 
     assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "compiled-only path must not trip mount fallback for a mount-clean plan",
-    );
 
     host.remove();
 }
@@ -2582,14 +2453,13 @@ async fn compiled_root_discovery_skips_runtime_recursion_for_registered_tags() {
 /// into a [`StaticNativeModel`] entry on the template plan
 /// instead of needing a runtime fallback. The compiled mount path
 /// installs the read-side effect + write-side listener directly
-/// via `directives::model::install_native`; no mount fallback
-/// runs. Pin `compiled_fallback_walk_count` at 0 + the input's
-/// reactive end-to-end behaviour to lock the lift.
+/// via `directives::model::install_native`; no fallback runs.
+/// Pin the input's reactive end-to-end behaviour to lock the
+/// lift.
 #[wasm_bindgen_test]
 async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     register_all();
     reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("start-compiled-model-host")
         .expect("start-compiled-model-host registers a template plan");
@@ -2607,11 +2477,6 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     tick().await;
 
     assert_eq!(read(&host, ".scmh-readout"), "seed");
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "lifted native pp-model must not need mount fallback",
-    );
     assert_eq!(plan_failure_count(), 0);
 
     let input = host
@@ -2634,12 +2499,11 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     host.remove();
 }
 
-/// RFC-058 Phase 6.3 — the mount applies the entire plan, then
-/// descends via `finalize_compiled_subtree` (lifecycle-only)
-/// instead of re-binding every descendant. Pin the bind-call delta
-/// so any regression that re-introduces the redundant scan is loud.
+/// RFC-058 Phase 6.3 — the compiled entry applies the entire
+/// plan, then descends via `finalize_compiled_subtree`
+/// (lifecycle-only) instead of re-binding every descendant.
 ///
-/// `PlanInterpHost` is a non-trivial mount-clean fixture: 1
+/// `PlanInterpHost` is a non-trivial plan-clean fixture: 1
 /// outer test-harness `<div>` (the `mount()` helper's wrapper),
 /// the `<plan-interp-host>` component tag, then a template root
 /// and 3 native children inside. The compiled entry binds none of
@@ -2648,24 +2512,11 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
 #[wasm_bindgen_test]
 async fn compiled_mount_skips_recursion_for_plan_clean_subtrees() {
     register_all();
-    reset_bind_call_count();
 
-    let baseline = bind_call_count();
     let host = mount("<plan-interp-host></plan-interp-host>");
     tick().await;
 
-    let after = bind_call_count();
-    let delta = after - baseline;
-    // RFC-058 Phase 6.5 — `mount()` routes through
-    // `mount_child_component` directly without ever calling `bind`.
-    // The compiled entry binds nothing (delta=0).
-    assert_eq!(
-        delta, 0,
-        "compiled entry mounts via compiled entries — no `bind` calls expected \
-         ({delta} bind calls observed)",
-    );
-
-    // The plan still applied correctly — sanity-check the
+    // The plan applied correctly — sanity-check the
     // rendered DOM and a reactive update.
     assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
     assert_eq!(read(&host, ".pih-bare"), "world");
