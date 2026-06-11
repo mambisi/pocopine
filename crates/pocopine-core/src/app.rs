@@ -2287,6 +2287,12 @@ fn collect_plan_store_names(
     }
     for p in plan.if_plans {
         collect_store_names(p.expr_src, into);
+        for b in p.else_if {
+            collect_store_names(b.expr_src, into);
+        }
+    }
+    for m in plan.match_plans {
+        collect_store_names(m.expr_src, into);
     }
     for m in plan.native_models {
         collect_store_names(m.expr_src, into);
