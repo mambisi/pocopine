@@ -4,7 +4,7 @@
 //!
 //! * **Native input** (`<input>`, `<textarea>`, `<select>`). Effect
 //!   writes element value from `proxy[key]`; `input`/`change`
-//!   listener writes element value back through `write_path`.
+//!   listener writes element value back through the scoped writer.
 //! * **Registered component tag** (`<pine-input pp-model="name">`).
 //!   Per [RFC-009](../../../../rfcs/rfc-009-pp-model-components.md):
 //!   effect mirrors parent's `proxy[key]` into the child's
@@ -17,7 +17,6 @@
 //! child's `open` field — Vue-3-style `v-model:prop` shape. Without
 //! the arg, the child field is `model` for backward compatibility.
 
-use js_sys::Reflect;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
@@ -25,10 +24,8 @@ use web_sys::{
     CustomEvent, Element, Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement,
 };
 
-use crate::mount::{child_component_proxy, track_effect_on, track_listener_on};
-use crate::path::{resolve_path, write_path};
+use crate::mount::{track_effect_on, track_listener_on};
 use crate::reactive::effect;
-use crate::scope::with_current_el;
 
 /// Compiled-path entry used by compiled child-host
 /// child-host model dispatch. Routes through the component or
@@ -36,17 +33,20 @@ use crate::scope::with_current_el;
 /// registered child component tag.
 pub fn install_compiled(
     el: &Element,
+    scope_id: crate::reactive::ScopeId,
     proxy: &JsValue,
     arg: Option<&str>,
     modifiers: &[&str],
     value: &str,
 ) {
-    if let Some(child_proxy) = child_component_proxy(el) {
-        install_component(el, proxy, arg, value, child_proxy);
+    // RFC-096 S1 — route off the stamped child scope ID; no proxy
+    // is minted onto the child just to decide the path.
+    if let Some(child_scope_id) = crate::mount::child_component_scope_id(el) {
+        install_component(el, scope_id, proxy, arg, value, child_scope_id);
     } else {
         let number = modifiers.contains(&"number");
         let lazy = modifiers.contains(&"lazy");
-        install_native(el, proxy, value.to_string(), number, lazy);
+        install_native(el, scope_id, proxy, value.to_string(), number, lazy);
     }
 }
 
@@ -54,10 +54,11 @@ pub fn install_compiled(
 
 fn install_component(
     el: &Element,
+    parent_scope_id: crate::reactive::ScopeId,
     parent_proxy: &JsValue,
     arg: Option<&str>,
     value: &str,
-    child_proxy: JsValue,
+    child_scope_id: crate::reactive::ScopeId,
 ) {
     let parent_proxy = parent_proxy.clone();
     let key = value.to_string();
@@ -66,10 +67,7 @@ fn install_component(
     // `model` so plain `pp-model="name"` keeps working unchanged.
     let child_field = arg.map(|s| s.to_string()).unwrap_or_else(|| "model".into());
     let child_field = child_field.replace('-', "_");
-
-    // Resolve the child's scope id once — we need it to consult
-    // `is_prop` per RFC-031 before every mirror-in write.
-    let child_scope_id = crate::mount::child_component_scope(&el).map(|(id, _)| id);
+    let parent_access = crate::scope::scoped_root_reader(parent_scope_id);
 
     // Parent → child: mirror proxy[key] into the child's
     // `<child_field>` prop. Same shape as pp-bind's child-prop path,
@@ -78,41 +76,37 @@ fn install_component(
     // fresh CustomEvent, not a proxy write, and stays unaffected.
     let parent_r = parent_proxy.clone();
     let key_r = key.clone();
-    let child_r = child_proxy.clone();
-    let el_for_track = el.clone();
+    let access_r = parent_access.clone();
     let child_field_w = child_field.clone();
     let id = effect(move || {
-        with_current_el(&el_for_track.clone(), || {
-            let v = resolve_path(&parent_r, &key_r);
-            if let Some(cid) = child_scope_id {
-                let target_field = crate::model_runtime::resolve_model_key(cid, &child_field_w)
-                    .unwrap_or_else(|| child_field_w.clone());
-                let is_prop = crate::scope::Scope::find(cid)
-                    .map(|s| s.state.borrow().is_prop(&target_field))
-                    .unwrap_or(false);
-                if !is_prop {
-                    return;
-                }
-                crate::model_runtime::with_write_origin(
-                    crate::model_runtime::WriteOrigin::ParentModelIn,
-                    || {
-                        let _ = Reflect::set(&child_r, &JsValue::from_str(&target_field), &v);
-                    },
-                );
-                return;
-            }
-            let _ = Reflect::set(&child_r, &JsValue::from_str(&child_field_w), &v);
-        });
+        let v = crate::path::resolve_path_with(&parent_r, access_r.as_ref(), &key_r);
+        let target_field = crate::model_runtime::resolve_model_key(child_scope_id, &child_field_w)
+            .unwrap_or_else(|| child_field_w.clone());
+        let is_prop = crate::scope::Scope::find(child_scope_id)
+            .map(|s| s.state.borrow().is_prop(&target_field))
+            .unwrap_or(false);
+        if !is_prop {
+            return;
+        }
+        crate::model_runtime::with_write_origin(
+            crate::model_runtime::WriteOrigin::ParentModelIn,
+            || {
+                // RFC-096 S1 — the scoped writer; same body the
+                // child's set trap delegates to.
+                let _ = crate::scope::write_field(child_scope_id, &target_field, &v);
+            },
+        );
     });
     track_effect_on(&el, id);
 
     // Child → parent: named `pp:update:<field>` channel for
     // `pp-model:<field>`, falling back to `pp:update:model` for the
     // arg-less default. `event.detail` is the new value. Write it
-    // back through `write_path` so dotted keys (`$store.foo.bar`)
+    // back through the scoped writer so dotted keys (`$store.foo.bar`)
     // continue to work.
     let parent_w = parent_proxy;
     let key_w = key;
+    let access_w = parent_access;
     let update_event = if child_field == "model" {
         "pp:update:model".to_string()
     } else {
@@ -123,7 +117,7 @@ fn install_component(
             return;
         };
         let detail = ce.detail();
-        let _ = write_path(&parent_w, &key_w, &detail);
+        let _ = crate::path::write_path_with(&parent_w, access_w.as_ref(), &key_w, &detail);
     }) as Box<dyn FnMut(Event)>);
     let target: web_sys::EventTarget = el.clone().into();
     track_listener_on(&el, target, &update_event, false, listener);
@@ -142,6 +136,7 @@ fn install_component(
 /// for native model bindings.
 pub fn install_native(
     el: &web_sys::Element,
+    scope_id: crate::reactive::ScopeId,
     proxy: &JsValue,
     key: String,
     number: bool,
@@ -149,26 +144,29 @@ pub fn install_native(
 ) {
     let proxy = proxy.clone();
     let el = el.clone();
+    let access = crate::scope::scoped_root_reader(scope_id);
 
-    // Read side: proxy[key] -> element value.
+    // Read side: field -> element value, through the scoped
+    // reader (`$`-roots fall back to the proxy).
     let proxy_r = proxy.clone();
     let key_r = key.clone();
+    let access_r = access.clone();
     let el_r = el.clone();
     let id = effect(move || {
-        with_current_el(&el_r.clone(), || {
-            let v = resolve_path(&proxy_r, &key_r);
-            write_to_element(&el_r, &v);
-        });
+        let v = crate::path::resolve_path_with(&proxy_r, access_r.as_ref(), &key_r);
+        write_to_element(&el_r, &v);
     });
     track_effect_on(&el, id);
 
-    // Write side: input event -> proxy[key] = element value.
+    // Write side: input event -> field, through the scoped
+    // writer (RFC-096 S1).
     let proxy_w = proxy.clone();
     let key_w = key.clone();
+    let access_w = access;
     let el_w = el.clone();
     let handler = Closure::wrap(Box::new(move |_ev: Event| {
         let v = read_from_element(&el_w, number);
-        let _ = write_path(&proxy_w, &key_w, &v);
+        let _ = crate::path::write_path_with(&proxy_w, access_w.as_ref(), &key_w, &v);
     }) as Box<dyn FnMut(Event)>);
 
     let event_name = if lazy { "change" } else { "input" };

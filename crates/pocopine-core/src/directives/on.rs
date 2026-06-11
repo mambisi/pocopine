@@ -52,6 +52,10 @@ pub fn install(
     let event = event.to_string();
     let el = el.clone();
     let proxy = proxy.clone();
+    // RFC-096 S2 — dispatch-time evaluation rides the scoped
+    // access (reads incl. `$`-roots, writes via the mirror); the
+    // proxy is the residual fallback only.
+    let access = crate::scope::scoped_root_reader(scope_id);
 
     let prevent = modifiers.contains(&"prevent");
     let stop = modifiers.contains(&"stop");
@@ -81,6 +85,7 @@ pub fn install(
         let last_event = last_event.clone();
         let el_for_debounce = el.clone();
         let proxy_for_debounce = proxy.clone();
+        let access_for_debounce = access.clone();
         let c = Closure::wrap(Box::new(move || {
             let ev = last_event.borrow().clone();
             let ev_js: JsValue = match &ev {
@@ -93,7 +98,11 @@ pub fn install(
             with_current_el(&el_for_debounce, || {
                 crate::scope::with_current_scope_id(scope_id, || {
                     with_current_event(&ev_js, || {
-                        expr::evaluate(&ast, &proxy_for_debounce);
+                        expr::evaluate_with(
+                            &ast,
+                            &proxy_for_debounce,
+                            access_for_debounce.as_ref(),
+                        );
                     });
                 });
             });
@@ -215,7 +224,7 @@ pub fn install(
                 with_current_el(&el_for_closure, || {
                     crate::scope::with_current_scope_id(scope_id, || {
                         with_current_event(&ev_js, || {
-                            expr::evaluate(&ast, &proxy);
+                            expr::evaluate_with(&ast, &proxy, access.as_ref());
                         });
                     });
                 });

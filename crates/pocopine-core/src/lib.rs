@@ -4,10 +4,12 @@
 //! template lifts via `#[component]` into a static template plan;
 //! mounting walks that plan instead of scanning the DOM for `pp-*`
 //! directives. Reactivity is implemented against a real
-//! `js_sys::Proxy` so `get`/`set` traps match Alpine-style semantics
-//! for dependency tracking; signals, computed values, and watchers
-//! compose with the same engine via a synthetic
-//! [`reactive::SIGNAL_SCOPE`].
+//! signals-first reactive engine (RFC-095/096): component fields
+//! are interned signals with versioned projections; reads and
+//! writes resolve through the scoped access; signals, computed
+//! values, and watchers compose on the same u64-keyed graph. The
+//! JS `Proxy` survives only as the explicit [`scope::js_bridge`]
+//! interop shim.
 
 pub mod animate;
 pub mod app;
@@ -24,16 +26,18 @@ pub mod events;
 pub mod expr;
 pub mod extractors;
 pub mod fetch;
+pub mod fingerprint;
 pub mod focus;
 pub mod handle;
 pub mod handler;
-pub mod id;
 pub mod lifecycle;
 pub mod loop_scope;
 pub mod magics;
 pub mod model_runtime;
 pub mod mount;
+pub mod mutation_channel;
 pub mod path;
+pub mod payload_scope;
 pub mod plugin;
 pub mod profiler;
 pub mod props;
@@ -89,7 +93,6 @@ pub use lifecycle::{
     Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, LifecyclePhase, MountEpoch,
     ParentId, Refs, ScopePath, TagName, TeleportHost, TypedEl, Win,
 };
-pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};
 pub use plugin::{
     AppBootCompleted, AppBootFailed, AppBootStarted, ComponentEvent, ComponentMounted,
@@ -105,7 +108,6 @@ pub use props::{PropValue, Props};
 pub use reactive::{
     batch, current_effect, effect, effect_scoped, effect_with, flush_sync, on_cleanup, release,
     run_now, set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,
-    SIGNAL_SCOPE,
 };
 pub use registry::{
     assert_registry_clean, canonical_component_name, mark_registered, register_component,
@@ -119,7 +121,7 @@ pub use router::{
     NavigationResult, PrefetchResult, PrefetchSkip, ReturnTo, RouteLocation, RouteToken,
 };
 pub use scope::{
-    append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache,
+    append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache, js_bridge,
     patch_list_at_inline, patch_list_indices_inline, prepend_list_inline, remove_list_at_inline,
     replace_field_inline, swap_list_indices_inline, ComponentState, Scope, StaticPropKind,
 };

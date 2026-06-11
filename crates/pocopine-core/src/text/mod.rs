@@ -39,3 +39,29 @@ pub use layout::{layout, layout_with_lines, LayoutLine, LayoutResult};
 pub use line_break::LayoutCursor;
 pub use measure::{CanvasMeasurer, Measurer};
 pub use prepare::{prepare, Font, PrepareOptions, PreparedText, WhiteSpace};
+
+/// Canonical number→text used by every text-rendering path
+/// (pp-text, interpolation, row plans, the typed text lane, and
+/// the mutation-channel interpreter's `String(v)`): JS `String()`
+/// semantics, so 1e21 → "1e+21", Infinity → "Infinity", and the
+/// channel/direct paths can never disagree on a number's text.
+/// Host (non-wasm) builds approximate with Rust Display plus the
+/// integral `.0`-strip — identical for every value the host test
+/// suite exercises.
+pub(crate) fn js_number_string(n: f64) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Number::from(n)
+            .to_string_with_radix(10)
+            .map(String::from)
+            .unwrap_or_else(|_| n.to_string())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if n.fract() == 0.0 && n.is_finite() && n.abs() < 9.0e15 {
+            format!("{}", n as i64)
+        } else {
+            n.to_string()
+        }
+    }
+}

@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use js_sys::{Array, Reflect};
+use js_sys::Array;
 use wasm_bindgen::JsValue;
 
 use crate::reactive::ScopeId;
@@ -28,13 +28,10 @@ pub struct LoopScope {
     pub index: usize,
     /// Total length of the collection being iterated.
     pub total: usize,
-    /// The parent (enclosing component or outer loop) proxy. Used for
-    /// fall-through reads of keys that aren't loop-local.
-    pub parent: JsValue,
-    /// Scope id of the enclosing component / outer loop. Used for
-    /// `invoke()` fall-through so `@click="bump"` inside a `pp-for`
-    /// calls the enclosing component's `bump` handler instead of
-    /// silently no-op'ing.
+    /// Scope id of the enclosing component / outer loop. RFC-096
+    /// S2 — fall-through reads of non-loop-local keys AND
+    /// `invoke()` dispatch both chain through this id via the
+    /// shared read mirror; the parent proxy is no longer held.
     pub parent_scope_id: ScopeId,
 }
 
@@ -49,9 +46,10 @@ impl ComponentState for LoopScope {
             "$last" => JsValue::from_bool(self.index + 1 == self.total),
             _ => {
                 // Fall through — `$store`, `$route`, magics, and any
-                // parent-scope field resolve via the parent proxy's
-                // get trap (which also tracks the dep at that scope).
-                Reflect::get(&self.parent, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+                // parent-scope field resolve via the shared read
+                // mirror (RFC-096 S2): same semantics the parent
+                // proxy's get trap delegates to, no proxy needed.
+                crate::scope::read_scope_key(self.parent_scope_id, key)
             }
         }
     }

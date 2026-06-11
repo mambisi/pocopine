@@ -9,14 +9,14 @@
 //! the runtime-only pieces:
 //!
 //! * [`parse_cached`] — thread-local memo over `pocopine_expr::parse`.
-//! * [`evaluate`] / [`evaluate_truthy`] — JsValue-returning
-//!   evaluator that walks the AST against a scope proxy and
-//!   tracks dependencies via `Reflect::get`.
+//! * [`evaluate`] / [`evaluate_with`] — JsValue-returning
+//!   evaluator; roots resolve through the scoped access
+//!   ([`ScopeAccess`]) with the proxy as residual fallback.
 
 use std::{cell::RefCell, collections::HashMap};
 
 use js_sys::Reflect;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::JsValue;
 
 pub use pocopine_expr::{parse, BinOp, Expr, Literal, ParseError, Span, Spanned};
 
@@ -58,30 +58,39 @@ pub enum StaticExpr {
 impl StaticExpr {
     #[doc(hidden)]
     pub fn evaluate(&'static self, scope: &JsValue) -> JsValue {
+        self.evaluate_with(scope, None)
+    }
+
+    /// [`Self::evaluate`] with an optional [`RootAccess`] for
+    /// proxy-free root-path resolution (RFC-095 W1).
+    #[doc(hidden)]
+    pub fn evaluate_with(&'static self, scope: &JsValue, root: Option<&RootAccess>) -> JsValue {
         match self {
             StaticExpr::Literal(lit) => static_lit_to_js(lit),
-            StaticExpr::Path(segments) => resolve_static_segments(scope, segments),
-            StaticExpr::Not(inner) => JsValue::from_bool(inner.evaluate(scope).is_falsy()),
+            StaticExpr::Path(segments) => resolve_static_segments_with(scope, segments, root),
+            StaticExpr::Not(inner) => {
+                JsValue::from_bool(inner.evaluate_with(scope, root).is_falsy())
+            }
             StaticExpr::BinOp { op, lhs, rhs } => match op {
                 StaticBinOp::And => {
-                    let l = lhs.evaluate(scope);
+                    let l = lhs.evaluate_with(scope, root);
                     if l.is_falsy() {
                         l
                     } else {
-                        rhs.evaluate(scope)
+                        rhs.evaluate_with(scope, root)
                     }
                 }
                 StaticBinOp::Or => {
-                    let l = lhs.evaluate(scope);
+                    let l = lhs.evaluate_with(scope, root);
                     if !l.is_falsy() {
                         l
                     } else {
-                        rhs.evaluate(scope)
+                        rhs.evaluate_with(scope, root)
                     }
                 }
                 StaticBinOp::Eq | StaticBinOp::Ne => {
-                    let l = lhs.evaluate(scope);
-                    let r = rhs.evaluate(scope);
+                    let l = lhs.evaluate_with(scope, root);
+                    let r = rhs.evaluate_with(scope, root);
                     let eq = js_strict_eq(&l, &r);
                     JsValue::from_bool(if matches!(op, StaticBinOp::Eq) {
                         eq
@@ -90,8 +99,8 @@ impl StaticExpr {
                     })
                 }
                 StaticBinOp::Lt | StaticBinOp::Le | StaticBinOp::Gt | StaticBinOp::Ge => {
-                    let l = lhs.evaluate(scope);
-                    let r = rhs.evaluate(scope);
+                    let l = lhs.evaluate_with(scope, root);
+                    let r = rhs.evaluate_with(scope, root);
                     match (l.as_f64(), r.as_f64()) {
                         (Some(a), Some(b)) => JsValue::from_bool(match op {
                             StaticBinOp::Lt => a < b,
@@ -132,41 +141,68 @@ pub fn parse_cached(src: &str) -> Result<Spanned<Expr>, ParseError> {
 
 // ─── evaluator ────────────────────────────────────────────────────
 
+/// RFC-095 W1 / RFC-096 S1 — pluggable root-segment access.
+///
+/// `read` returns `Some(value)` to resolve an expression path's
+/// FIRST segment Rust-side (track + cache + `ComponentState::get`,
+/// no proxy trap), or `None` to fall back to `Reflect::get`
+/// against the scope proxy (magics, `$`-names). Nested segments
+/// always walk the resolved plain value with `Reflect`.
+///
+/// `write` (RFC-096 S1 — the write mirror) commits a root-field
+/// assignment through `scope::write_field_tracked` — the set
+/// trap's body as a plain function — returning `false` for keys
+/// the access doesn't own (`$`-names), in which case the caller
+/// falls back to `Reflect::set` on the proxy (the trap).
+pub trait ScopeAccess {
+    fn read(&self, key: &str) -> Option<JsValue>;
+    fn write(&self, key: &str, value: &JsValue) -> bool;
+}
+
+pub type RootAccess = std::rc::Rc<dyn ScopeAccess>;
+
 /// Evaluate the AST against a scope proxy. The evaluator tracks deps
 /// as a side effect of `Reflect::get` calls — short-circuited
 /// branches don't run and therefore don't subscribe.
 pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
+    evaluate_with(expr, scope, None)
+}
+
+/// [`evaluate`] with an optional [`RootAccess`] for proxy-free
+/// root-path resolution (RFC-095 W1). `evaluate(e, s)` ≡
+/// `evaluate_with(e, s, None)`.
+pub fn evaluate_with(expr: &Spanned<Expr>, scope: &JsValue, root: Option<&RootAccess>) -> JsValue {
     match &expr.value {
         Expr::Literal(l) => lit_to_js(l),
-        Expr::Path(segs) => resolve_segments(scope, segs),
-        Expr::Not(inner) => JsValue::from_bool(evaluate(inner, scope).is_falsy()),
+        Expr::Path(segs) => resolve_segments_with(scope, segs, root),
+        Expr::Not(inner) => JsValue::from_bool(evaluate_with(inner, scope, root).is_falsy()),
         Expr::BinOp(op, lhs, rhs) => match op {
             BinOp::And => {
-                let l = evaluate(lhs, scope);
+                let l = evaluate_with(lhs, scope, root);
                 if l.is_falsy() {
                     l
                 } else {
-                    evaluate(rhs, scope)
+                    evaluate_with(rhs, scope, root)
                 }
             }
             BinOp::Or => {
-                let l = evaluate(lhs, scope);
+                let l = evaluate_with(lhs, scope, root);
                 if !l.is_falsy() {
                     l
                 } else {
-                    evaluate(rhs, scope)
+                    evaluate_with(rhs, scope, root)
                 }
             }
             BinOp::Eq | BinOp::Ne => {
-                let l = evaluate(lhs, scope);
-                let r = evaluate(rhs, scope);
+                let l = evaluate_with(lhs, scope, root);
+                let r = evaluate_with(rhs, scope, root);
                 let eq = js_strict_eq(&l, &r);
                 let out = if matches!(op, BinOp::Eq) { eq } else { !eq };
                 JsValue::from_bool(out)
             }
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                let l = evaluate(lhs, scope);
-                let r = evaluate(rhs, scope);
+                let l = evaluate_with(lhs, scope, root);
+                let r = evaluate_with(rhs, scope, root);
                 match (l.as_f64(), r.as_f64()) {
                     (Some(a), Some(b)) => JsValue::from_bool(match op {
                         BinOp::Lt => a < b,
@@ -179,8 +215,8 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
                 }
             }
             BinOp::Plus => {
-                let l = evaluate(lhs, scope);
-                let r = evaluate(rhs, scope);
+                let l = evaluate_with(lhs, scope, root);
+                let r = evaluate_with(rhs, scope, root);
                 if l.as_string().is_some() || r.as_string().is_some() {
                     let ls = js_to_string(&l);
                     let rs = js_to_string(&r);
@@ -193,10 +229,10 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
             }
         },
         Expr::Ternary(cond, then_e, else_e) => {
-            if !evaluate(cond, scope).is_falsy() {
-                evaluate(then_e, scope)
+            if !evaluate_with(cond, scope, root).is_falsy() {
+                evaluate_with(then_e, scope, root)
             } else {
-                evaluate(else_e, scope)
+                evaluate_with(else_e, scope, root)
             }
         }
         Expr::Call(name, args) => {
@@ -204,23 +240,19 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
             // `invoke_handler` can pass through `FromHandlerArg`.
             let arr = js_sys::Array::new();
             for a in args {
-                arr.push(&evaluate(a, scope));
+                arr.push(&evaluate_with(a, scope, root));
             }
-            // Magics in call position: `$dispatch(name, detail)` —
-            // `magics::resolve` returns a JS `Function`, which we
-            // `.apply()` with the evaluated args. Without this branch
-            // the lookup went through `invoke_handler` and silently
-            // returned `undefined` because there's no user handler
-            // named `$dispatch`.
+            // RFC-095 — no magic resolves to a callable anymore
+            // (`$dispatch` was the only one; removed in favor of
+            // the Rust-side `emit*` family). Guard the `$`-call
+            // shape with a loud warning instead of routing it to
+            // `invoke_handler`, which would silently return
+            // `undefined` for a name no user handler can have.
             if name.starts_with('$') {
-                if let Some(id) = scope_id_for(scope) {
-                    let fn_val = crate::magics::resolve(name, id);
-                    if let Some(f) = fn_val.dyn_ref::<js_sys::Function>() {
-                        return f
-                            .apply(&JsValue::UNDEFINED, &arr)
-                            .unwrap_or(JsValue::UNDEFINED);
-                    }
-                }
+                web_sys::console::warn_1(&JsValue::from_str(&format!(
+                    "pocopine: `{name}(...)` — callable magics were removed; \
+                     dispatch events from a Rust handler via `emit` instead"
+                )));
                 return JsValue::UNDEFINED;
             }
             match scope_id_for(scope) {
@@ -229,14 +261,19 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
             }
         }
         Expr::Assign(path, rhs) => {
-            let v = evaluate(rhs, scope);
-            write_assign_path(scope, path, &v);
+            // RFC-096 S1 — assignments route through the scoped
+            // writer when an access owns the root key; the proxy
+            // set trap remains the fallback (and itself delegates
+            // to the same `write_field_tracked`, so the two paths
+            // cannot diverge).
+            let v = evaluate_with(rhs, scope, root);
+            write_assign_path_with(scope, path, &v, root);
             v
         }
         Expr::Seq(stmts) => {
             let mut last = JsValue::UNDEFINED;
             for s in stmts {
-                last = evaluate(s, scope);
+                last = evaluate_with(s, scope, root);
             }
             last
         }
@@ -259,16 +296,72 @@ fn scope_id_for(_proxy: &JsValue) -> Option<crate::reactive::ScopeId> {
 /// and set the final segment in place — reactivity fires on the
 /// outer object's `set` only if the author surfaces the write by
 /// rewriting the field, per RFC-024 §7.
-fn write_assign_path(proxy: &JsValue, segments: &[String], value: &JsValue) {
+fn write_assign_path_with(
+    proxy: &JsValue,
+    segments: &[String],
+    value: &JsValue,
+    root: Option<&RootAccess>,
+) {
     if segments.is_empty() {
         return;
     }
     if segments.len() == 1 {
+        // Single-segment: full reactivity. Scoped writer first;
+        // proxy set trap as the `$`-name / no-access fallback.
+        if let Some(a) = root {
+            if a.write(&segments[0], value) {
+                return;
+            }
+        }
         let _ = Reflect::set(proxy, &JsValue::from_str(&segments[0]), value);
         return;
     }
-    let mut cur = proxy.clone();
-    for seg in &segments[..segments.len() - 1] {
+    // RFC-096 S2 — magic-rooted assigns: the field under the
+    // store/route scope writes through that scope's writer (full
+    // reactivity); deeper paths read the field and set the leaf
+    // in place, mirroring the plain-field dotted rule below.
+    if segments[0].starts_with('$') {
+        if let Some((access, consumed)) =
+            crate::scope::magic_scope_access(&segments[0], segments.get(1).map(|s| s.as_str()))
+        {
+            match &segments[consumed..] {
+                [] => {}
+                [field] => {
+                    if access.write(field, value) {
+                        return;
+                    }
+                }
+                [field, middle @ .., last] => {
+                    let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
+                    for seg in middle {
+                        cur = Reflect::get(&cur, &JsValue::from_str(seg))
+                            .unwrap_or(JsValue::UNDEFINED);
+                        if !cur.is_object() {
+                            return;
+                        }
+                    }
+                    if cur.is_object() {
+                        let _ = Reflect::set(&cur, &JsValue::from_str(last), value);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    // Multi-segment (RFC-024 §7): read the penultimate object
+    // (the root via the access — the same cached projection the
+    // proxy would return — subscribing along the way) and set the
+    // final segment in place. Reactivity fires on the outer field
+    // only if the author surfaces the write by rewriting it.
+    let first = &segments[0];
+    let mut cur = match root.and_then(|a| a.read(first)) {
+        Some(v) => v,
+        None => Reflect::get(proxy, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),
+    };
+    if !cur.is_object() {
+        return;
+    }
+    for seg in &segments[1..segments.len() - 1] {
         cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
         if !cur.is_object() {
             return;
@@ -296,17 +389,70 @@ fn static_lit_to_js(l: &StaticLiteral) -> JsValue {
     }
 }
 
-fn resolve_segments(root: &JsValue, segments: &[String]) -> JsValue {
-    let mut cur = root.clone();
-    for seg in segments {
+fn resolve_segments_with(
+    scope: &JsValue,
+    segments: &[String],
+    root: Option<&RootAccess>,
+) -> JsValue {
+    let Some((first, rest)) = segments.split_first() else {
+        return JsValue::UNDEFINED;
+    };
+    // RFC-096 S2 — `$store.<name>.field…` / `$route.field…` ride
+    // the backing scope's reader instead of proxy objects, when a
+    // field segment exists past the magic root.
+    if first.starts_with('$') {
+        if let Some((access, consumed)) =
+            crate::scope::magic_scope_access(first, segments.get(1).map(|s| s.as_str()))
+        {
+            if let Some(field) = segments.get(consumed) {
+                let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
+                for seg in &segments[consumed + 1..] {
+                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+                }
+                return cur;
+            }
+        }
+    }
+    // RFC-095 W1 — the root segment is the only one that touches
+    // scope state; resolve it Rust-side when a reader owns it.
+    // The resolved value is a plain JsValue (cached serde output),
+    // so the remaining segments walk it with trap-free `Reflect`.
+    let mut cur = match root.and_then(|a| a.read(first)) {
+        Some(v) => v,
+        None => Reflect::get(scope, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),
+    };
+    for seg in rest {
         cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
     }
     cur
 }
 
-fn resolve_static_segments(root: &JsValue, segments: &[&'static str]) -> JsValue {
-    let mut cur = root.clone();
-    for seg in segments {
+fn resolve_static_segments_with(
+    scope: &JsValue,
+    segments: &[&'static str],
+    root: Option<&RootAccess>,
+) -> JsValue {
+    let Some((first, rest)) = segments.split_first() else {
+        return JsValue::UNDEFINED;
+    };
+    if first.starts_with('$') {
+        if let Some((access, consumed)) =
+            crate::scope::magic_scope_access(first, segments.get(1).copied())
+        {
+            if let Some(field) = segments.get(consumed) {
+                let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
+                for seg in &segments[consumed + 1..] {
+                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+                }
+                return cur;
+            }
+        }
+    }
+    let mut cur = match root.and_then(|a| a.read(first)) {
+        Some(v) => v,
+        None => Reflect::get(scope, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),
+    };
+    for seg in rest {
         cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
     }
     cur
@@ -320,12 +466,10 @@ fn js_to_string(v: &JsValue) -> String {
         return s;
     }
     if let Some(n) = v.as_f64() {
-        // Strip the `.0` for integers so `$id + '-' + 3` reads
+        // JS String() semantics via the shared helper — also
+        // strips the `.0` for integers so `$id + '-' + 3` reads
         // `pp-1-3`, not `pp-1-3.0`.
-        if n.fract() == 0.0 && n.is_finite() {
-            return format!("{}", n as i64);
-        }
-        return n.to_string();
+        return crate::text::js_number_string(n);
     }
     if let Some(b) = v.as_bool() {
         return if b { "true".into() } else { "false".into() };
@@ -360,10 +504,4 @@ fn js_strict_eq(a: &JsValue, b: &JsValue) -> bool {
     }
     // Fall back to referential equality via js_sys::Object::is.
     js_sys::Object::is(a, b)
-}
-
-/// Top-level truthiness evaluation — convenience for
-/// `pp-show` / `pp-if`. Short form of `parse` + `evaluate` + `!is_falsy`.
-pub fn evaluate_truthy(expr: &Spanned<Expr>, scope: &JsValue) -> bool {
-    !evaluate(expr, scope).is_falsy()
 }

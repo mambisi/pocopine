@@ -12,8 +12,9 @@
 //! must dispatch from their host tag because the teleported
 //! content sits outside the host's bubbling path.
 //!
-//! Separate from [`crate::magics::dispatch_event`], which backs
-//! the synchronous template-expression magic `$dispatch`. Same
+//! The template-expression magic `$dispatch` (and its
+//! `magics::dispatch_event` backer) was removed in RFC-095 —
+//! this module is the one event-emission surface. Same
 //! underlying primitive; different ergonomic shape.
 
 use serde::Serialize;

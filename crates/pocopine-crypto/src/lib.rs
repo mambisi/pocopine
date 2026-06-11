@@ -180,6 +180,68 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     out
 }
 
+/// Streaming FNV-1a 64-bit hash — **non-cryptographic**.
+///
+/// For in-memory equality fingerprints (dirty-checking reactive
+/// state, cache keys, dedup) where speed on small inputs matters
+/// and an adversary is not in the threat model. Never use this
+/// for signing, content addressing, or anything security-bearing
+/// — that's [`sha256`] / [`hmac_sha256`] territory.
+///
+/// Implements [`core::hash::Hasher`], so it plugs into anything
+/// that feeds a standard hasher:
+///
+/// ```
+/// use core::hash::Hasher as _;
+/// let mut h = pocopine_crypto::Fnv64::new();
+/// h.write(b"hello");
+/// assert_eq!(h.finish(), pocopine_crypto::fnv64(b"hello"));
+/// ```
+///
+/// Deterministic across processes and platforms (fixed offset
+/// basis / prime, no per-instance keying) — equal byte streams
+/// always produce equal fingerprints.
+#[derive(Clone, Copy, Debug)]
+pub struct Fnv64(u64);
+
+const FNV64_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV64_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+impl Fnv64 {
+    pub fn new() -> Self {
+        Fnv64(FNV64_OFFSET_BASIS)
+    }
+}
+
+impl Default for Fnv64 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl core::hash::Hasher for Fnv64 {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut state = self.0;
+        for &b in bytes {
+            state ^= u64::from(b);
+            state = state.wrapping_mul(FNV64_PRIME);
+        }
+        self.0 = state;
+    }
+}
+
+/// One-shot [`Fnv64`] over `bytes`. Non-cryptographic — see the
+/// type docs for the intended (and forbidden) uses.
+pub fn fnv64(bytes: &[u8]) -> u64 {
+    use core::hash::Hasher as _;
+    let mut h = Fnv64::new();
+    h.write(bytes);
+    h.finish()
+}
+
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     use core::fmt::Write as _;
     let bytes = bytes.as_ref();
@@ -261,5 +323,22 @@ mod tests {
             hex(hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    #[test]
+    fn fnv64_known_vectors() {
+        // Canonical FNV-1a 64 vectors (Landon Curt Noll's reference set).
+        assert_eq!(fnv64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv64(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn fnv64_streaming_matches_one_shot() {
+        use core::hash::Hasher as _;
+        let mut h = Fnv64::new();
+        h.write(b"hello ");
+        h.write(b"world");
+        assert_eq!(h.finish(), fnv64(b"hello world"));
     }
 }

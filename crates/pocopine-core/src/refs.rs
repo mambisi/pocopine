@@ -203,8 +203,9 @@ impl RefAccessor {
 }
 
 /// Build a plain JS object snapshot of every ref registered on
-/// `scope_id`. Used to resolve the `$refs` magic — templates can read
-/// `$refs.search` without importing anything.
+/// `scope_id`. Consumed by the devtools scope panel (the `$refs`
+/// template magic it once backed was removed — RFC-095; Rust code
+/// uses the typed `Refs` accessors instead).
 pub fn as_object(scope_id: ScopeId) -> wasm_bindgen::JsValue {
     let obj = js_sys::Object::new();
     REFS.with(|r| {

@@ -24,7 +24,6 @@ use web_sys::{console, Element, Node, Text};
 use crate::expr::{self, Spanned};
 use crate::mount::track_effect_on;
 use crate::reactive::effect;
-use crate::scope::with_current_el;
 
 enum Segment {
     Static(String),
@@ -84,6 +83,7 @@ pub fn resolve_text_target(parent: &Element, text_index: usize) -> Option<Text> 
 pub fn install_planned_target(
     parent: &Element,
     proxy: &JsValue,
+    root: Option<crate::expr::RootAccess>,
     target: &Text,
     segments: &'static [PlannedSegment],
 ) {
@@ -94,10 +94,16 @@ pub fn install_planned_target(
             PlannedSegment::Dynamic(src) => Segment::Dynamic((*src).to_string()),
         })
         .collect();
-    install(parent, proxy, target, runtime_segments);
+    install(parent, proxy, root, target, runtime_segments);
 }
 
-fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Segment>) {
+fn install(
+    parent: &Element,
+    proxy: &JsValue,
+    root: Option<crate::expr::RootAccess>,
+    original: &Text,
+    segments: Vec<Segment>,
+) {
     let parent_node: &Node = parent.as_ref();
     for seg in segments {
         match seg {
@@ -132,13 +138,11 @@ fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Seg
                 let _ = parent_node.insert_before(node.as_ref(), Some(original.as_ref()));
 
                 let proxy = proxy.clone();
+                let root = root.clone();
                 let node_clone = node.clone();
-                let el_for_magic = parent.clone();
                 let id = effect(move || {
-                    with_current_el(&el_for_magic, || {
-                        let v = expr::evaluate(&ast, &proxy);
-                        node_clone.set_data(&js_to_string(&v));
-                    });
+                    let v = expr::evaluate_with(&ast, &proxy, root.as_ref());
+                    node_clone.set_data(&js_to_string(&v));
                 });
                 track_effect_on(parent, id);
             }
@@ -153,7 +157,7 @@ fn js_to_string(v: &JsValue) -> String {
         return String::new();
     }
     v.as_string()
-        .or_else(|| v.as_f64().map(|n| n.to_string()))
+        .or_else(|| v.as_f64().map(crate::text::js_number_string))
         .or_else(|| v.as_bool().map(|b| b.to_string()))
         .unwrap_or_else(|| {
             js_sys::JSON::stringify(v)

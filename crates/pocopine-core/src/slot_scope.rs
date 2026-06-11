@@ -2,19 +2,18 @@
 //! content. Per RFC-011.
 //!
 //! Exposes a single user-named identifier (the `pp-let` value) whose
-//! JS-object shape is `{ prop_1: resolve_path(owner, path_1), ... }`
+//! JS-object shape is `{ prop_1: <owner-scope read of path_1>, ... }`
 //! — i.e. the `:prop="path"` bindings the component author declared
 //! on the `<slot>` element. Everything else falls through to the
 //! owner scope, so a scoped-slot template can still reach `$store`,
 //! `$route`, and the component's own fields.
 //!
 //! Read-only: slot scopes don't write. Mutating the bound values
-//! flows through the owner component's `$dispatch` / handler surface.
+//! flows through the owner component's handler / `emit` surface.
 
 use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::JsValue;
 
-use crate::path::resolve_path;
 use crate::reactive::ScopeId;
 use crate::scope::ComponentState;
 
@@ -29,12 +28,9 @@ pub struct SlotScope {
     /// to resolve `:prop="path"` binding paths — `path` was
     /// authored in that scope (e.g. `<slot :ctx="current">` reads
     /// `current` from the component that declared the slot).
-    pub bind_source: JsValue,
-    /// The scope whose template *authored* the slot content. Used
-    /// for fall-through identifier reads — `@click="parent_handler"`
-    /// inside the slot has to resolve against the caller, not the
-    /// component that declared the slot.
-    pub caller: JsValue,
+    /// RFC-096 S2 — held as the OWNER's scope id; publication
+    /// expressions resolve through the shared read mirror.
+    pub bind_source_scope_id: ScopeId,
     /// Scope id of the caller — `caller`'s proxy alone isn't enough
     /// to dispatch handlers because [`crate::scope::invoke_handler`]
     /// works off ids, not proxies. Without this, `@click="handler"`
@@ -48,15 +44,30 @@ impl ComponentState for SlotScope {
         if key == self.ident.as_str() {
             let obj = Object::new();
             for (prop, path) in &self.bindings {
-                let val = resolve_path(&self.bind_source, path);
+                // RFC-096 S2 — resolve the publication path
+                // against the OWNER scope via the read mirror
+                // (root segment tracked at the owner; deeper
+                // segments walk the plain value).
+                let mut segs = path.split('.').filter(|s| !s.is_empty());
+                let val = match segs.next() {
+                    None => JsValue::UNDEFINED,
+                    Some(first) => {
+                        let mut cur =
+                            crate::scope::read_scope_key(self.bind_source_scope_id, first);
+                        for seg in segs {
+                            cur = Reflect::get(&cur, &JsValue::from_str(seg))
+                                .unwrap_or(JsValue::UNDEFINED);
+                        }
+                        cur
+                    }
+                };
                 let _ = Reflect::set(&obj, &JsValue::from_str(prop), &val);
             }
             return obj.into();
         }
         // Fall through to the caller for everything else — handlers,
-        // parent-scope fields, magics. This is what makes
-        // `@click="parent_handler"` work inside a slot's template.
-        Reflect::get(&self.caller, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+        // parent-scope fields, magics — via the shared read mirror.
+        crate::scope::read_scope_key(self.caller_scope_id, key)
     }
 
     // Slot scopes derive their value from a parent proxy on every
