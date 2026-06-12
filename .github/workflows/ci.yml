@@ -163,6 +163,7 @@ jobs:
           --exclude pocopine-storage-azure
           --exclude pocopine-storage-gcs
           --exclude pocopine-storage-s3
+          --exclude pocopine-assets
           --exclude pocopine-sync
           --exclude pocopine-sync-sqlite
           --exclude blog
