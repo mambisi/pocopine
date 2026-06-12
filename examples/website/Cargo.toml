@@ -9,6 +9,11 @@ publish = false
 bin = "server"
 port = 3001
 
+[package.metadata.pocopine.assets]
+bucket = "pocopinedev-assets"
+endpoint = "https://87f4ebd172bae793c02371ac18760868.r2.cloudflarestorage.com"
+public-base = "https://assets.pocopine.dev"
+
 [package.metadata.pocopine.deploy]
 mode = "fullstack"
 # Everything the server serves out of POCOPINE_DIST. The default is just
