@@ -13,6 +13,8 @@
 
 pub mod animate;
 pub mod app;
+// RFC-100 — content-addressed asset URLs.
+pub mod assets;
 pub mod client_module;
 pub mod component_computed;
 pub mod computed;

@@ -32,6 +32,10 @@ pub enum Cmd {
     Skills(SkillsArgs),
     /// Deploy to a registered host adapter (RFC 080).
     Deploy(DeployArgs),
+    /// RFC-100 asset pipeline: sync `assets/` to the configured
+    /// S3-compatible bucket under content-addressed keys, and manage
+    /// the bucket access keys.
+    Assets(AssetsArgs),
     /// Managed JavaScript toolkit commands for typed `.client.ts` modules.
     Js(JsArgs),
     /// Manage the project's `.env` file (dev-only environment variables).
@@ -169,6 +173,29 @@ pub struct JsArgs {
     pub path: PathBuf,
     #[command(subcommand)]
     pub cmd: JsCmd,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct AssetsArgs {
+    /// Path to the project crate (defaults to current dir).
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+    #[command(subcommand)]
+    pub cmd: AssetsCmd,
+}
+
+#[derive(Subcommand, Debug, Clone, Copy)]
+pub enum AssetsCmd {
+    /// Hash-diff sync `assets/` to the bucket declared in
+    /// `[package.metadata.pocopine.assets]`: every file uploads to
+    /// `assets/<hash8>/<path>` with its MIME type and an immutable
+    /// cache header; keys that already exist are skipped. Also runs
+    /// automatically during `pocopine deploy`, before the app flip.
+    Push,
+    /// Store the bucket access keys (`~/.pocopine/credentials.toml`,
+    /// mode 0600). `POCOPINE_ASSETS_ACCESS_KEY_ID` /
+    /// `POCOPINE_ASSETS_SECRET_ACCESS_KEY` override the file in CI.
+    Auth,
 }
 
 #[derive(Parser, Debug, Clone)]

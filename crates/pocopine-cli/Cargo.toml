@@ -29,6 +29,13 @@ syn = { workspace = true }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
+# RFC-100 — the dev server verifies `/assets/<hash>/<path>` URLs
+# against the file bytes (8-hex sha256 prefix, same shape as
+# `pocopine_core::assets::asset_hash`); the build paths fingerprint
+# the assets/ tree; `pocopine assets push` hash-diff-syncs it to the
+# configured S3-compatible bucket through the shared AssetStore.
+pocopine-assets = { workspace = true }
+pocopine-crypto = { workspace = true }
 pocopine-deploy = { workspace = true }
 pocopine-deploy-railway = { workspace = true }
 pocopine-deploy-render = { workspace = true }
@@ -40,6 +47,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"
+# RFC-100 — `tests/assets_push_minio.rs` drives the real binary
+# against a MinIO testcontainer (same pattern as
+# pocopine-storage-s3/tests/minio.rs). Needs a Docker daemon.
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["minio"] }
 
 # The CLI itself is host-only; reqwest is only used when downloading
 # the Tailwind standalone binary. Target-gated so `cargo check

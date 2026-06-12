@@ -27,6 +27,45 @@ pub struct PocopineConfig {
     /// A project with a `[tailwind]` block but no `[stylekit]` block
     /// defers to Tailwind instead.
     pub stylekit: Option<StylekitConfig>,
+    /// RFC-100 asset pipeline. When present, `pocopine assets push`
+    /// (and `pocopine deploy`, before the app flip) syncs the
+    /// project's `assets/` tree to the configured S3-compatible
+    /// bucket under content-addressed keys.
+    pub assets: Option<AssetsConfig>,
+}
+
+/// `[package.metadata.pocopine.assets]` — the RFC-100 asset bucket.
+/// (RFC 080 §4.1 note applies: `Pocopine.toml` is the long-term home
+/// for project config; cargo metadata is what exists today.)
+///
+/// ```toml
+/// [package.metadata.pocopine.assets]
+/// endpoint = "https://<account>.r2.cloudflarestorage.com"  # omit for AWS S3
+/// bucket = "myapp-assets"
+/// region = "auto"                                # optional
+/// public-base = "https://assets.example.com"     # optional → Mode A
+/// ```
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct AssetsConfig {
+    /// S3-compatible endpoint URL (Railway Bucket endpoint, R2, MinIO,
+    /// …). Omit for AWS S3 itself — the SDK then derives the endpoint
+    /// from `region`. Custom endpoints are addressed path-style.
+    pub endpoint: Option<String>,
+    /// Bucket name holding the `assets/<hash8>/<path>` keys. Required.
+    pub bucket: String,
+    /// Bucket region. Optional; defaults to `us-east-1`, which is what
+    /// most S3-compatible stores (MinIO, R2 with `auto`, Railway)
+    /// accept for signing.
+    pub region: Option<String>,
+    /// Public base URL under which the bucket contents are reachable
+    /// without credentials (public bucket or CDN in front of it).
+    /// Presence selects **Mode A**: deploys set
+    /// `POCOPINE_ASSET_BASE = public-base` and the app's asset URLs
+    /// point straight at the CDN. Absent → **Mode B**: URLs stay on
+    /// the default `/assets` base and the web service proxies them
+    /// from the (private) bucket.
+    pub public_base: Option<String>,
 }
 
 /// `[package.metadata.pocopine.stylekit]` - configure the in-process

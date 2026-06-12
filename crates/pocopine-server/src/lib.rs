@@ -30,11 +30,18 @@ pub use tower;
 pub use tower_http;
 pub use tracing;
 
+// RFC-100 Mode B — env-enabled `/assets/<hash>/<path>` private-bucket
+// proxy; installed automatically by `Server::new`.
+mod assets;
 mod observability;
 pub mod plugin;
 mod server;
 mod server_functions;
 
+pub use assets::{
+    ASSETS_ACCESS_KEY_ID_ENV, ASSETS_BUCKET_ENV, ASSETS_ENDPOINT_ENV, ASSETS_REGION_ENV,
+    ASSETS_SECRET_ACCESS_KEY_ENV,
+};
 pub use observability::request_event_layer;
 pub use plugin::{
     active_plugin, emit, has_http_request_completed_hooks, has_http_request_failed_hooks,

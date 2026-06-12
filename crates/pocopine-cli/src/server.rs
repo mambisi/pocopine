@@ -529,6 +529,14 @@ fn handle(root: &Path, request: tiny_http::Request) {
     let rel = url.split('?').next().unwrap_or("/").trim_start_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
 
+    // RFC-100 — content-addressed asset route:
+    // GET /assets/<hash>/<path...> serves `assets/<path...>` as
+    // immutable after verifying <hash> against the file bytes.
+    if let Some(response) = asset_route_response(root, rel) {
+        let _ = request.respond(response);
+        return;
+    }
+
     let candidate = root.join(rel);
     let looks_like_asset = looks_like_asset_path(rel);
 
@@ -573,6 +581,81 @@ fn handle(root: &Path, request: tiny_http::Request) {
     let _ = request.respond(tiny_http::Response::from_string("not found").with_status_code(404));
 }
 
+/// RFC-100 — match `assets/<hash>/<path...>` and serve
+/// `assets/<path...>` from the root with an immutable cache header.
+///
+/// `None` when the URL is not an asset URL (no 8-hex hash segment)
+/// or the file does not exist — both fall through to the normal
+/// static handler, so plain `/assets/logo.svg` paths keep working.
+/// A hash that does not match the file bytes answers `409` with an
+/// explanation: the `asset!` macro hashes at compile time, so
+/// editing an asset without recompiling the calling crate leaves a
+/// stale hash in the binary (RFC-100 gives `pocopine build` a
+/// fingerprint env to own invalidation).
+fn asset_route_response(
+    root: &Path,
+    rel: &str,
+) -> Option<tiny_http::Response<std::io::Cursor<Vec<u8>>>> {
+    let rest = rel.strip_prefix("assets/")?;
+    let (hash, path) = rest.split_once('/')?;
+    if !is_asset_hash(hash) || path.is_empty() {
+        return None;
+    }
+
+    let candidate = root.join("assets").join(path);
+    let canonical = candidate
+        .canonicalize()
+        .ok()
+        .filter(|p| p.starts_with(root))?;
+    let body = std::fs::read(&canonical).ok()?;
+
+    let actual = asset_hash_prefix(&body);
+    if actual != hash {
+        let message = format!(
+            "stale asset hash: /assets/{hash}/{path} was built against \
+             different bytes (the file currently hashes to {actual}).\n\
+             The `asset!` macro hashes at compile time and asset edits do \
+             not dirty the calling crate, so the binary still holds the \
+             old hash. Rebuild the crate that calls asset!(\"{path}\") \
+             (touch the .rs or `cargo clean -p <crate>`). RFC-100: \
+             `pocopine build` will own invalidation via a fingerprint env."
+        );
+        return Some(tiny_http::Response::from_string(message).with_status_code(409));
+    }
+
+    let content_type =
+        tiny_http::Header::from_bytes(&b"Content-Type"[..], mime_of(&canonical).as_bytes())
+            .unwrap();
+    let cache_control = tiny_http::Header::from_bytes(
+        &b"Cache-Control"[..],
+        &b"public,max-age=31536000,immutable"[..],
+    )
+    .unwrap();
+    Some(
+        tiny_http::Response::from_data(body)
+            .with_header(content_type)
+            .with_header(cache_control),
+    )
+}
+
+/// RFC-100 — true for an 8-char lowercase-hex hash segment.
+fn is_asset_hash(segment: &str) -> bool {
+    segment.len() == 8
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// RFC-100 — 8-hex-char content hash; same shape as
+/// `pocopine_core::assets::asset_hash` (prefix of
+/// `pocopine_crypto::sha256_hex`), duplicated because the CLI does
+/// not link the wasm runtime crate.
+fn asset_hash_prefix(bytes: &[u8]) -> String {
+    let mut hex = pocopine_crypto::sha256_hex(bytes);
+    hex.truncate(8);
+    hex
+}
+
 /// True when the last URL segment has a file extension. Used to decide
 /// whether an unmatched path should 404 or fall back to index.html:
 /// `/pkg/spa.js` -> 404, `/blog/42` -> index.html.
@@ -582,22 +665,10 @@ fn looks_like_asset_path(rel: &str) -> bool {
         .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
 }
 
-fn mime_of(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "js" | "mjs" => "application/javascript; charset=utf-8",
-        "wasm" => "application/wasm",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "ico" => "image/x-icon",
-        "map" => "application/json",
-        _ => "application/octet-stream",
-    }
-}
+// The MIME table lives in `assets_sync` (RFC-100: one canonical table
+// for the dev server, the bucket sync, and — via stored content
+// types — the Mode B proxy).
+use crate::assets_sync::mime_of;
 
 #[cfg(test)]
 mod tests {
@@ -615,6 +686,60 @@ mod tests {
 
         let path = bin_executable_path(Path::new("/tmp/pocopine-target"), "server", true);
         assert!(path.ends_with(Path::new("release").join(executable)));
+    }
+
+    // RFC-100 — content-addressed asset route.
+    #[test]
+    fn asset_route_serves_immutable_on_hash_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("assets/blog")).unwrap();
+        std::fs::write(root.join("assets/blog/clip.webm"), b"hello world").unwrap();
+
+        // sha256("hello world") = b94d27b9…
+        let response = asset_route_response(&root, "assets/b94d27b9/blog/clip.webm").unwrap();
+        assert_eq!(response.status_code().0, 200);
+        let headers: Vec<String> = response.headers().iter().map(|h| h.to_string()).collect();
+        assert!(headers.contains(&"Content-Type: video/webm".to_string()));
+        assert!(headers.contains(&"Cache-Control: public,max-age=31536000,immutable".to_string()));
+    }
+
+    #[test]
+    fn asset_route_answers_409_on_stale_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/logo.svg"), b"hello world").unwrap();
+
+        let response = asset_route_response(&root, "assets/deadbeef/logo.svg").unwrap();
+        assert_eq!(response.status_code().0, 409);
+    }
+
+    #[test]
+    fn asset_route_ignores_non_hash_and_missing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/logo.svg"), b"hello world").unwrap();
+
+        // Plain asset path (no hash segment) → normal static handler.
+        assert!(asset_route_response(&root, "assets/logo.svg").is_none());
+        // Hash-shaped but uppercase / wrong length → not an asset URL.
+        assert!(asset_route_response(&root, "assets/DEADBEEF/logo.svg").is_none());
+        assert!(asset_route_response(&root, "assets/abc/logo.svg").is_none());
+        // Missing file → fall through (404 via looks_like_asset_path).
+        assert!(asset_route_response(&root, "assets/b94d27b9/missing.svg").is_none());
+        // Traversal out of the root → fall through.
+        assert!(asset_route_response(&root, "assets/b94d27b9/../../etc/passwd").is_none());
+    }
+
+    #[test]
+    fn mime_table_covers_video_types() {
+        // Browsers refuse `<video>` sources served with the octet-stream
+        // fallback (Chromium never starts muted autoplay for them), so
+        // the table must map the video extensions explicitly.
+        assert_eq!(mime_of(Path::new("assets/blog/clip.webm")), "video/webm");
+        assert_eq!(mime_of(Path::new("assets/blog/clip.mp4")), "video/mp4");
     }
 
     #[test]
