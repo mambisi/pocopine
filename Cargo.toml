@@ -9,6 +9,7 @@ members = [
     "crates/pine-richtext",
     "crates/pocopine",
     "crates/pocopine-analytics",
+    "crates/pocopine-assets",
     "crates/pocopine-auth",
     "crates/pocopine-auth-client",
     "crates/pocopine-auth-credentials",
@@ -90,6 +91,7 @@ repository = "https://github.com/mambisi/pocopine"
 # of `pocopine` get devtools on by default via its own `default`
 # feature, which forwards `pocopine-core/devtools`.
 pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
+pocopine-assets = { path = "crates/pocopine-assets", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
 pocopine-auth-client = { path = "crates/pocopine-auth-client", version = "0.1.0" }
 pocopine-auth-credentials = { path = "crates/pocopine-auth-credentials", version = "0.1.0" }

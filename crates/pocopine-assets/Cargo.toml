@@ -1,0 +1,20 @@
+[package]
+name = "pocopine-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RFC-100 content-addressed asset-bucket client, shared by the CLI sync and the server proxy."
+
+# Deliberately a LEAF crate: pocopine-server must consume the
+# AssetStore, and pocopine-storage(-s3) sits *above* pocopine-server
+# in the dependency graph (the upload protocol uses its axum
+# re-exports), so the asset client cannot live there without a cycle.
+[dependencies]
+aws-sdk-s3 = "1"
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["minio"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

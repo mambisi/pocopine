@@ -55,7 +55,7 @@ pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{
-    app, client_module, component, handlers, job, protected, server, store, Emit, Props,
+    app, asset, client_module, component, handlers, job, protected, server, store, Emit, Props,
 };
 
 pub mod auth {
@@ -121,6 +121,9 @@ pub mod prelude {
 pub mod __private {
     //! Internals used by macro-generated code. Not a stable API.
     pub use js_sys;
+    // RFC-100 — `asset!` expands to a call through this
+    // runtime URL builder (base resolution stays in pocopine-core).
+    pub use pocopine_core::assets::asset_url;
     pub use pocopine_core::registry::{
         clear_active_phf_registry_for_test, set_active_phf_registry,
     };

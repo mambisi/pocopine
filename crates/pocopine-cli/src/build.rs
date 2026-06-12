@@ -20,6 +20,9 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
         cmd.arg("--dev");
     }
     cmd.current_dir(&path);
+    // RFC-100 §6 — export the assets/ fingerprint so `asset!`
+    // re-expands (and re-hashes) when the assets tree changed.
+    crate::assets_sync::apply_fingerprint_env(&mut cmd, &path);
     let status = cmd
         .status()
         .context("failed to invoke wasm-pack (is it on $PATH?)")?;
@@ -60,6 +63,9 @@ fn build_bin(path: &Path, bin: &str, release: bool) -> Result<()> {
         cmd.arg("--release");
     }
     cmd.current_dir(&project);
+    // RFC-100 §6 — same fingerprint export as the wasm build; server
+    // bins can call `asset!` too.
+    crate::assets_sync::apply_fingerprint_env(&mut cmd, &project);
     println!("▶ building `{bin}`");
     let output = cmd
         .output()

@@ -100,6 +100,18 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
         None
     };
     let mut spec = spec::parse(deploy_table.clone(), app_name, git_sha, environment)?;
+    // RFC-100 Mode A — a public bucket/CDN base in
+    // `[package.metadata.pocopine.assets] public-base` becomes the
+    // server-side asset base. Explicit [deploy.env] declarations win.
+    if let Some(public_base) = crate::config::load(project)?
+        .assets
+        .as_ref()
+        .and_then(|a| a.public_base.clone())
+    {
+        spec.env
+            .entry("POCOPINE_ASSET_BASE".to_owned())
+            .or_insert(pocopine_deploy::EnvValue::Literal(public_base));
+    }
     // first_deploy is per-(target, env) so prod and staging track separately.
     let state_basename = match spec.environment.as_deref() {
         Some(env) => format!("{target}-{env}.toml"),
@@ -192,6 +204,22 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
         crate::build::configured_bins(project, &cfg, true)?;
         if let Some(tw) = cfg.tailwind.as_ref() {
             crate::tailwind::run_once(project, tw, true)?;
+        }
+    }
+
+    // 4.5 RFC-100 §7 — sync content-addressed assets BEFORE the app
+    //     flip. New keys land beside the old ones (hashes never
+    //     collide), so a half-finished sync can't break the running
+    //     deploy; only after the sync succeeds does the new app — and
+    //     with it the new URLs — go live. Runs in both normal and
+    //     --skip-build deploys: CI may have built the image, but the
+    //     bucket still has to be brought up to date.
+    {
+        let cfg = crate::config::load(project)?;
+        if let Some(assets_cfg) = cfg.assets.as_ref() {
+            eprintln!("▶ syncing assets to bucket `{}`", assets_cfg.bucket);
+            crate::assets_sync::push(project, assets_cfg)
+                .context("asset sync failed; aborting before the app flip")?;
         }
     }
 

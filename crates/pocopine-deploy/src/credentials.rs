@@ -1,4 +1,5 @@
-//! Credentials store for host API tokens (RFC 080 §5.5).
+//! Credentials store for host API tokens (RFC 080 §5.5) and the
+//! asset-bucket access keys (RFC 100 §5).
 //!
 //! Tokens live in `~/.pocopine/credentials.toml` with mode `0600`. Env
 //! vars (`POCOPINE_<HOST>_TOKEN`) take precedence over the file so CI
@@ -12,10 +13,20 @@
 //!
 //! [railway]
 //! token = "rw_..."
+//!
+//! # RFC 100 — asset-bucket keys (`pocopine assets auth`). The
+//! # `assets` table name is reserved: it is not a deploy host.
+//! [assets]
+//! access_key_id = "AKIA..."
+//! secret_access_key = "..."
 //! ```
 //!
 //! Hosts not present in this file fall back to env, then to a hard
-//! error pointing the user at `pocopine deploy auth <host>`.
+//! error pointing the user at `pocopine deploy auth <host>`. Asset
+//! keys fall back to `POCOPINE_ASSETS_ACCESS_KEY_ID` /
+//! `POCOPINE_ASSETS_SECRET_ACCESS_KEY` (the same env vars the Mode B
+//! serving proxy reads), then to a hard error pointing at
+//! `pocopine assets auth`.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -77,6 +88,111 @@ pub const KNOWN_HOSTS: &[&str] = &[
     "render",
     "vercel",
 ];
+
+// ─── RFC 100 — asset-bucket access keys ────────────────────────────────
+
+/// Static S3 access keys for the RFC-100 asset bucket. Deploy-time
+/// auth only — `pocopine assets push` signs uploads with these; app
+/// runtime secrets never live in `credentials.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetsCredentials {
+    /// S3 access key id.
+    pub access_key_id: String,
+    /// S3 secret access key.
+    pub secret_access_key: String,
+}
+
+/// Env var overriding the stored asset access key id. Shared with the
+/// Mode B serving proxy (`pocopine-server`), so CI and the deployed
+/// web service speak the same names.
+pub const ASSETS_ACCESS_KEY_ID_ENV: &str = "POCOPINE_ASSETS_ACCESS_KEY_ID";
+/// Env var overriding the stored asset secret access key.
+pub const ASSETS_SECRET_ACCESS_KEY_ENV: &str = "POCOPINE_ASSETS_SECRET_ACCESS_KEY";
+
+/// Look up the asset-bucket access keys. Both env vars set and
+/// non-empty win over the file (mixed env/file is rejected as a
+/// misconfiguration rather than silently half-applied); otherwise the
+/// `[assets]` entry in `~/.pocopine/credentials.toml`; otherwise an
+/// error suggesting `pocopine assets auth`.
+pub fn load_assets() -> Result<AssetsCredentials> {
+    load_assets_inner(&home()?, env_lookup)
+}
+
+/// Persist the asset-bucket keys to the credentials file (mode
+/// `0600`). Host token entries are preserved.
+pub fn store_assets(credentials: &AssetsCredentials) -> Result<()> {
+    store_assets_inner(&home()?, credentials)
+}
+
+/// Remove the stored asset-bucket keys. Idempotent.
+pub fn revoke_assets() -> Result<()> {
+    revoke_assets_inner(&home()?)
+}
+
+fn load_assets_inner<F>(home: &Path, env: F) -> Result<AssetsCredentials>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let env_id = env(ASSETS_ACCESS_KEY_ID_ENV).filter(|v| !v.is_empty());
+    let env_secret = env(ASSETS_SECRET_ACCESS_KEY_ENV).filter(|v| !v.is_empty());
+    match (env_id, env_secret) {
+        (Some(access_key_id), Some(secret_access_key)) => {
+            return Ok(AssetsCredentials {
+                access_key_id,
+                secret_access_key,
+            });
+        }
+        (None, None) => {}
+        (Some(_), None) | (None, Some(_)) => bail!(
+            "only one of ${ASSETS_ACCESS_KEY_ID_ENV} / ${ASSETS_SECRET_ACCESS_KEY_ENV} is set — \
+             set both (or neither, to use ~/.pocopine/credentials.toml)."
+        ),
+    }
+
+    let path = home.join(REL_PATH);
+    let hint = format!(
+        "Set ${ASSETS_ACCESS_KEY_ID_ENV} + ${ASSETS_SECRET_ACCESS_KEY_ENV} or run \
+         `pocopine assets auth` to store keys."
+    );
+    if !path.exists() {
+        bail!("no asset-bucket credentials. {hint}");
+    }
+    let store = read_or_default(&path)?;
+    let entry = store
+        .assets
+        .with_context(|| format!("no `[assets]` entry in {}. {hint}", path.display()))?;
+    Ok(AssetsCredentials {
+        access_key_id: entry.access_key_id,
+        secret_access_key: entry.secret_access_key,
+    })
+}
+
+fn store_assets_inner(home: &Path, credentials: &AssetsCredentials) -> Result<()> {
+    let path = home.join(REL_PATH);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("creating directory {}", dir.display()))?;
+    }
+    let mut store = read_or_default(&path)?;
+    store.assets = Some(AssetsEntry {
+        access_key_id: credentials.access_key_id.clone(),
+        secret_access_key: credentials.secret_access_key.clone(),
+    });
+    let raw = toml::to_string_pretty(&store).context("serialising credentials")?;
+    write_secure(&path, raw.as_bytes())
+}
+
+fn revoke_assets_inner(home: &Path) -> Result<()> {
+    let path = home.join(REL_PATH);
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut store = read_or_default(&path)?;
+    if store.assets.take().is_none() {
+        return Ok(());
+    }
+    let raw = toml::to_string_pretty(&store).context("serialising credentials")?;
+    write_secure(&path, raw.as_bytes())
+}
 
 // ─── Internal seams (used by tests) ─────────────────────────────────────
 
@@ -266,6 +382,11 @@ fn write_secure(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Store {
+    /// RFC 100 — asset-bucket access keys. A named field so the
+    /// reserved `[assets]` table never lands in the flattened host
+    /// map (its schema differs from a host token entry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    assets: Option<AssetsEntry>,
     #[serde(flatten)]
     hosts: BTreeMap<String, Entry>,
 }
@@ -273,6 +394,12 @@ struct Store {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Entry {
     token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AssetsEntry {
+    access_key_id: String,
+    secret_access_key: String,
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────
@@ -466,5 +593,95 @@ mod tests {
         assert_eq!(entries.len(), 1);
         // Canonical host name preserved (the hyphen survives).
         assert_eq!(entries[0], ("cf-pages".into(), Source::Env));
+    }
+
+    // ─── RFC 100 — asset-bucket access keys ────────────────────────────
+
+    fn assets_creds() -> AssetsCredentials {
+        AssetsCredentials {
+            access_key_id: "AKIA-test".into(),
+            secret_access_key: "shh-test".into(),
+        }
+    }
+
+    #[test]
+    fn assets_store_then_load_roundtrip() {
+        let home = temp_home();
+        store_assets_inner(home.path(), &assets_creds()).unwrap();
+        let got = load_assets_inner(home.path(), no_env).unwrap();
+        assert_eq!(got, assets_creds());
+    }
+
+    #[test]
+    fn assets_entry_coexists_with_host_tokens() {
+        let home = temp_home();
+        store_inner(home.path(), "railway", "rw-tok").unwrap();
+        store_assets_inner(home.path(), &assets_creds()).unwrap();
+        // Both survive each other's writes...
+        assert_eq!(
+            load_inner(home.path(), "railway", no_env).unwrap(),
+            "rw-tok"
+        );
+        assert_eq!(
+            load_assets_inner(home.path(), no_env)
+                .unwrap()
+                .access_key_id,
+            "AKIA-test"
+        );
+        // ...and the reserved `assets` table does not leak into the
+        // host list.
+        let hosts = list_inner(home.path(), no_env).unwrap();
+        assert_eq!(hosts, vec![("railway".into(), Source::File)]);
+    }
+
+    #[test]
+    fn assets_env_pair_overrides_file() {
+        let home = temp_home();
+        store_assets_inner(home.path(), &assets_creds()).unwrap();
+        let env = std::collections::BTreeMap::from([
+            (ASSETS_ACCESS_KEY_ID_ENV.to_owned(), "env-id".to_owned()),
+            (
+                ASSETS_SECRET_ACCESS_KEY_ENV.to_owned(),
+                "env-secret".to_owned(),
+            ),
+        ]);
+        let got = load_assets_inner(home.path(), |k| env.get(k).cloned()).unwrap();
+        assert_eq!(got.access_key_id, "env-id");
+        assert_eq!(got.secret_access_key, "env-secret");
+    }
+
+    #[test]
+    fn assets_half_set_env_pair_is_an_error() {
+        let home = temp_home();
+        store_assets_inner(home.path(), &assets_creds()).unwrap();
+        let env = std::collections::BTreeMap::from([(
+            ASSETS_ACCESS_KEY_ID_ENV.to_owned(),
+            "env-id".to_owned(),
+        )]);
+        let err = load_assets_inner(home.path(), |k| env.get(k).cloned())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("only one of"));
+    }
+
+    #[test]
+    fn assets_missing_errors_with_auth_hint() {
+        let home = temp_home();
+        let err = load_assets_inner(home.path(), no_env)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pocopine assets auth"));
+        assert!(err.contains(ASSETS_ACCESS_KEY_ID_ENV));
+    }
+
+    #[test]
+    fn assets_revoke_is_idempotent_and_preserves_hosts() {
+        let home = temp_home();
+        store_inner(home.path(), "render", "tok").unwrap();
+        store_assets_inner(home.path(), &assets_creds()).unwrap();
+        revoke_assets_inner(home.path()).unwrap();
+        assert!(load_assets_inner(home.path(), no_env).is_err());
+        assert_eq!(load_inner(home.path(), "render", no_env).unwrap(), "tok");
+        revoke_assets_inner(home.path()).unwrap(); // second time: no-op
     }
 }

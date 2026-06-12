@@ -17,6 +17,7 @@
 //! `examples/blog/Cargo.toml` for a complete server-bin example.
 
 mod args;
+mod assets_sync;
 mod build;
 mod client_modules;
 mod component_index;
@@ -37,7 +38,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::io::{self, Read as _};
 
-use args::{Cli, Cmd, EnvArgs, EnvCmd, JsCmd};
+use args::{AssetsCmd, Cli, Cmd, EnvArgs, EnvCmd, JsCmd};
 
 /// Install a `tracing` subscriber so `tracing::info!`/`warn!` from
 /// every dependency (including the deploy adapters) actually surfaces
@@ -69,12 +70,29 @@ fn main() -> Result<()> {
         Cmd::Doctor(args) => doctor::run(&args),
         Cmd::Skills(args) => skills::run(&args),
         Cmd::Deploy(args) => deploy::run(&args),
+        Cmd::Assets(args) => run_assets(args),
         Cmd::Js(args) => run_js(args),
         Cmd::Env(args) => run_env(args),
         Cmd::Stylekit(args) => {
             stylekit::run_command(&args.path, args.dump, args.docs, args.metadata)
         }
         Cmd::Lsp(args) => lsp::run(args),
+    }
+}
+
+/// `pocopine assets <push|auth>` — the RFC-100 write path.
+fn run_assets(args: args::AssetsArgs) -> Result<()> {
+    match args.cmd {
+        AssetsCmd::Push => {
+            let project = args.path.canonicalize().with_context(|| {
+                format!("could not resolve project path {}", args.path.display())
+            })?;
+            let cfg = config::load(&project)?;
+            let assets_cfg = assets_sync::require_config(&cfg)?;
+            assets_sync::push(&project, assets_cfg)?;
+            Ok(())
+        }
+        AssetsCmd::Auth => assets_sync::auth(),
     }
 }
 

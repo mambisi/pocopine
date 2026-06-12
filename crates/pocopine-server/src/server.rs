@@ -95,8 +95,14 @@ impl Server {
     ///
     /// All linked `#[server]` functions are installed before plugin
     /// work starts, so later [`Self::layer`] calls wrap those routes.
+    ///
+    /// When `POCOPINE_ASSETS_BUCKET` is set, the RFC-100 Mode B asset
+    /// proxy (`GET /assets/<hash>/<path>`, serving the private bucket)
+    /// is installed automatically — zero code in the app's `main`; see
+    /// the env contract on [`crate::ASSETS_BUCKET_ENV`].
     pub fn new(router: Router) -> Self {
         let (router, server_function_conflicts) = install_server_functions(router);
+        let router = crate::assets::install_assets_proxy(router);
         Self {
             router,
             plugins: PluginRegistry::default(),

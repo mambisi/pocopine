@@ -17,6 +17,12 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 serde_json = "1"
 tracing = { workspace = true }
 inventory = { workspace = true }
+# RFC-100 Mode B — the `/assets/<hash>/<path>` private-bucket proxy
+# (src/assets.rs) reads objects through the shared AssetStore. Pulls
+# the aws-sdk-s3 stack into every server build; accepted cost for the
+# zero-config asset tier (the route only activates when
+# POCOPINE_ASSETS_BUCKET is set).
+pocopine-assets = { workspace = true }
 
 [dependencies]
 pocopine-auth = { workspace = true }

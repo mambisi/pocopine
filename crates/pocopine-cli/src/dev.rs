@@ -280,6 +280,15 @@ fn start_poll_watcher(
 fn watch_dev_paths(watcher: &mut DevWatcher, project: &Path, src_dir: &Path) -> notify::Result<()> {
     watcher.watch(src_dir, RecursiveMode::Recursive)?;
     watcher.watch(project, RecursiveMode::NonRecursive)?;
+    // RFC-100 — asset edits must rebuild wasm + server bins: the
+    // rebuild re-exports POCOPINE_ASSETS_FINGERPRINT, which
+    // re-expands `asset!` with the fresh content hash. Only watched
+    // when the directory exists at dev start; a dir created
+    // mid-session needs a dev restart (documented in RFC-100 §6).
+    let assets_dir = project.join("assets");
+    if assets_dir.is_dir() {
+        watcher.watch(&assets_dir, RecursiveMode::Recursive)?;
+    }
     Ok(())
 }
 
@@ -350,6 +359,16 @@ impl Change {
     }
 
     fn from_path(project: &Path, path: &Path) -> Option<Self> {
+        // RFC-100 — anything under assets/ rebuilds both targets so
+        // every `asset!` expansion (wasm or server bin) re-hashes.
+        if path.starts_with(project.join("assets")) {
+            return Some(Self {
+                wasm: true,
+                server: true,
+                ..Self::default()
+            });
+        }
+
         let src = project.join("src");
         if path.starts_with(&src) {
             if is_client_module_path(path) || is_unsupported_client_module_path(path) {
@@ -454,6 +473,20 @@ mod tests {
             Some(Change {
                 wasm: true,
                 client: true,
+                ..Change::default()
+            })
+        );
+    }
+
+    #[test]
+    fn asset_edits_rebuild_wasm_and_server_bin() {
+        // RFC-100 — the rebuild re-exports the assets fingerprint,
+        // which re-expands `asset!` everywhere it appears.
+        assert_eq!(
+            Change::from_path(&project(), &project().join("assets/blog/clip.webm")),
+            Some(Change {
+                wasm: true,
+                server: true,
                 ..Change::default()
             })
         );

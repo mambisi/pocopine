@@ -70,6 +70,8 @@ mod for_plan;
 mod forbidden_directives;
 mod pp_for_diagnostics;
 mod template_plan;
+// RFC-100 — `asset!` content-addressed asset references.
+mod assets;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -5965,4 +5967,47 @@ pub fn app(input: TokenStream) -> TokenStream {
         }
     };
     out.into()
+}
+
+/// RFC-100 — `asset!("blog/video.webm")` expands to a
+/// content-addressed asset URL.
+///
+/// At expansion time the macro resolves the path against the calling
+/// crate's `assets/` directory (`$CARGO_MANIFEST_DIR/assets/<path>`),
+/// reads the file, and hashes it (8-lowercase-hex sha256 prefix via
+/// `pocopine-crypto`). Absolute paths, `..` segments, and missing
+/// files are compile errors. The expansion is:
+///
+/// ```ignore
+/// ::pocopine::__private::asset_url("blog/video.webm", "a3f81c2d")
+/// ```
+///
+/// `asset_url` resolves the base at **runtime**
+/// (`window.__POCOPINE_ASSET_BASE` on wasm, the `POCOPINE_ASSET_BASE`
+/// env var on the server, `/assets` default), so the same expansion
+/// serves dev, SSR, and a CDN-fronted deploy.
+///
+/// # Rebuild correctness (RFC-100 §6)
+///
+/// The hash is computed when the calling crate compiles. The macro
+/// deliberately does **not** emit `include_bytes!` to register the
+/// asset as a rebuild dependency — that would embed arbitrarily large
+/// files in the rlib/wasm just for dependency tracking. Instead,
+/// `pocopine build`/`run`/`dev`/`deploy` set
+/// `POCOPINE_ASSETS_FINGERPRINT` (a combined hash of the app's
+/// `assets/` tree) before every cargo invocation, and — when that env
+/// is set at expansion time — the macro emits an
+/// `option_env!("POCOPINE_ASSETS_FINGERPRINT")` reference that rustc
+/// records as an env dependency of the calling crate. Editing any
+/// asset changes the fingerprint, which makes cargo recompile the
+/// crate and re-expand `asset!` with the fresh hash (mechanism proven
+/// end-to-end in `crates/pocopine-cli/tests/fingerprint_tracking.rs`).
+///
+/// Builds driven by **bare cargo** (or rust-analyzer) don't set the
+/// fingerprint env, emit no tracking, and can therefore hold a stale
+/// hash after an asset edit; the dev server answers stale hashes with
+/// `409` and an explanation as the backstop.
+#[proc_macro]
+pub fn asset(input: TokenStream) -> TokenStream {
+    assets::expand(input)
 }

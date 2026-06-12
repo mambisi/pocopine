@@ -27,3 +27,7 @@ pocopine-directives = { workspace = true }
 annotate-snippets = "0.11"
 cron = { workspace = true }
 pocopine-client-codegen = { workspace = true }
+# RFC-100 — `asset!` hashes the referenced file at
+# expansion time (8-hex sha256 prefix, same shape as
+# `pocopine_core::assets::asset_hash`).
+pocopine-crypto = { workspace = true }

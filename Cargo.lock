@@ -5714,6 +5714,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-assets"
+version = "0.1.1"
+dependencies = [
+ "aws-sdk-s3",
+ "testcontainers",
+ "testcontainers-modules",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "pocopine-auth"
 version = "0.1.1"
 dependencies = [
@@ -5790,7 +5801,9 @@ dependencies = [
  "clap",
  "comfy-table",
  "notify",
+ "pocopine-assets",
  "pocopine-client-codegen",
+ "pocopine-crypto",
  "pocopine-deploy",
  "pocopine-deploy-railway",
  "pocopine-deploy-render",
@@ -5804,6 +5817,8 @@ dependencies = [
  "serde_json",
  "syn 2.0.117",
  "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
  "tiny_http",
  "tokio",
  "toml 0.8.23",
@@ -6002,6 +6017,7 @@ dependencies = [
  "annotate-snippets",
  "cron",
  "pocopine-client-codegen",
+ "pocopine-crypto",
  "pocopine-directives",
  "pocopine-expr",
  "pocopine-template-parser",
@@ -6026,6 +6042,7 @@ version = "0.1.1"
 dependencies = [
  "axum 0.7.9",
  "inventory",
+ "pocopine-assets",
  "pocopine-auth",
  "serde",
  "serde_json",

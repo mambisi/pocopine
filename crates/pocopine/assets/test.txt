@@ -1,0 +1,1 @@
+RFC-100 prototype asset fixture — bytes hashed by asset! at macro expansion.
