@@ -46,16 +46,30 @@ impl BlogPage {
         let url = format!("/static-docs/blogs/{slug}.html");
         spawn_local(async move {
             let fetched = crate::components::fetch_text(&url).await;
-            handle.update(move |s: &mut BlogPage| {
+            let injected = handle.update(move |s: &mut BlogPage| {
                 s.loading = false;
                 match fetched {
                     Some(ref h) if !h.trim().is_empty() => {
                         s.html = h.clone();
                         s.not_found = false;
+                        true
                     }
-                    _ => s.not_found = true,
+                    _ => {
+                        s.not_found = true;
+                        false
+                    }
                 }
             });
+            if injected {
+                // The `pp-html` effect runs in the reactive flush, which
+                // is itself a queued microtask chain — a plain
+                // `tick::next` here would fire *before* the innerHTML
+                // write. `after_flush` (macrotask) is strictly later
+                // than the whole flush. Plain document queries only —
+                // no refs/scope lookups (scope context dies across
+                // tick).
+                pocopine::tick::after_flush(hydrate_videos);
+            }
         });
     }
 
@@ -63,6 +77,42 @@ impl BlogPage {
     /// body so they route client-side.
     pub fn on_nav(&mut self, ev: web_sys::MouseEvent) {
         crate::components::delegate_nav(&ev);
+    }
+}
+
+/// Kick muted autoplay on the `<video>` tags inside the injected post.
+///
+/// Chrome does not reliably reflect the `muted` *attribute* of a
+/// fragment-parsed `<video>` (innerHTML via `pp-html`) onto the IDL
+/// property, so the muted-autoplay policy silently blocks playback.
+/// Re-assert the properties imperatively and call `play()`; the
+/// returned promise (and any policy rejection) is ignored — the tags
+/// carry `controls` as the user-visible fallback.
+fn hydrate_videos() {
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(Some(article)) = doc.query_selector(".blog-layout article.doc-body") else {
+        return;
+    };
+    let Ok(videos) = article.query_selector_all("video") else {
+        return;
+    };
+    for i in 0..videos.length() {
+        let Some(node) = videos.item(i) else {
+            continue;
+        };
+        let video = JsValue::from(node);
+        let _ = js_sys::Reflect::set(&video, &"muted".into(), &true.into());
+        let _ = js_sys::Reflect::set(&video, &"playsInline".into(), &true.into());
+        let Ok(play) = js_sys::Reflect::get(&video, &"play".into()) else {
+            continue;
+        };
+        if let Ok(play) = play.dyn_into::<js_sys::Function>() {
+            let _ = play.call0(&video);
+        }
     }
 }
 
