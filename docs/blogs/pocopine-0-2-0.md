@@ -51,7 +51,7 @@ the first `track(scope, "count")` allocates a numeric `SignalId` for
 that `(scope, field)` pair; from then on, fields and signals are
 indistinguishable to the dispatcher.
 
-<video autoplay loop muted playsinline width="100%"><source src="/assets/blog/signal-graph.webm" type="video/webm"><source src="/assets/blog/signal-graph.mp4" type="video/mp4"></video>
+<video autoplay loop muted playsinline controls width="100%"><source src="/assets/blog/signal-graph.webm" type="video/webm"><source src="/assets/blog/signal-graph.mp4" type="video/mp4"></video>
 
 ```text
 read  →  track(scope, key)            intern (scope,key) → SignalId
@@ -86,7 +86,7 @@ trade and instead **measure the state**.
 `Scope::invoke` wraps every handler call (and `Handle::update`, and
 store `update`):
 
-<video autoplay loop muted playsinline width="100%"><source src="/assets/blog/dirty-sweep.webm" type="video/webm"><source src="/assets/blog/dirty-sweep.mp4" type="video/mp4"></video>
+<video autoplay loop muted playsinline controls width="100%"><source src="/assets/blog/dirty-sweep.webm" type="video/webm"><source src="/assets/blog/dirty-sweep.mp4" type="video/mp4"></video>
 
 ```text
 DirtySweep::begin                     before[k] = fingerprint(field k)
@@ -282,7 +282,7 @@ Structural `<template>`s used to stay in the live DOM. A template is
 invisible, but it is an **element**, and CSS structural selectors
 count elements:
 
-<video autoplay loop muted playsinline width="100%"><source src="/assets/blog/comment-anchor.webm" type="video/webm"><source src="/assets/blog/comment-anchor.mp4" type="video/mp4"></video>
+<video autoplay loop muted playsinline controls width="100%"><source src="/assets/blog/comment-anchor.webm" type="video/webm"><source src="/assets/blog/comment-anchor.mp4" type="video/mp4"></video>
 
 ```text
 before 0.2.0:                       0.2.0:
@@ -333,7 +333,7 @@ fix had to change how many times we cross it.
 0.2.0 mounts a keyed batch with a single call into a ~150-line JS
 interpreter that ships beside the wasm:
 
-<video autoplay loop muted playsinline width="100%"><source src="/assets/blog/mutation-channel.webm" type="video/webm"><source src="/assets/blog/mutation-channel.mp4" type="video/mp4"></video>
+<video autoplay loop muted playsinline controls width="100%"><source src="/assets/blog/mutation-channel.webm" type="video/webm"><source src="/assets/blog/mutation-channel.mp4" type="video/mp4"></video>
 
 ```text
 wasm (Rust)                            JS interpreter (ONE call)
