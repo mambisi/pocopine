@@ -1,0 +1,13 @@
+<root class="blogs-layout" pp-on:click="on_nav">
+  <main class="blogs-main">
+    <h1 class="blogs-title">Blog</h1>
+    <p class="blogs-intro">Release deep-dives and engineering notes from the pocopine team.</p>
+    <template pp-for="p in posts" pp-key="p.href">
+      <a class="blog-card" :href="p.href">
+        <span class="blog-card-date" pp-text="p.date"></span>
+        <span class="blog-card-title" pp-text="p.title"></span>
+        <span class="blog-card-desc" pp-text="p.description"></span>
+      </a>
+    </template>
+  </main>
+</root>

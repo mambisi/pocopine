@@ -1,0 +1,57 @@
+/* ─── Blog index (single centered column of post cards) ──────── */
+
+.blogs-layout {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2.5rem var(--site-padding-x) 5rem;
+}
+
+.blogs-title {
+  font-size: 2rem;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.02em;
+}
+
+.blogs-intro {
+  color: var(--fg-muted);
+  margin: 0 0 2rem;
+}
+
+.blog-card {
+  display: block;
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--fg);
+  margin-bottom: 1rem;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.blog-card:hover {
+  border-color: var(--brand);
+  background: var(--bg-subtle);
+}
+
+.blog-card-date {
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.4rem;
+}
+
+.blog-card-title {
+  display: block;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.4rem;
+}
+
+.blog-card-desc {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}

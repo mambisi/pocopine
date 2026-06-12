@@ -9,6 +9,8 @@
 //!   /components           → ComponentsIndex (Phase 2)
 //!   /components/:name      → ComponentPage (Phase 2)
 //!   /docs/*slug            → DocPage (Phase 3)
+//!   /blogs                 → BlogsIndex (post list)
+//!   /blogs/*slug           → BlogPage (one post)
 
 pub mod components;
 
@@ -36,9 +38,9 @@ use components::showcase::{
     TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{
-    ChartsPage, ComponentPage, ComponentsIndex, DocPage, EasingPlayground, Hero, IconsPage,
-    InstallCmd, IssueFlowDemo, Landing, MotionPage, SecureSection, ShowcaseCard, SiteHeader,
-    StackFlow, StackShowcase, Tutorial,
+    BlogPage, BlogsIndex, ChartsPage, ComponentPage, ComponentsIndex, DocPage, EasingPlayground,
+    Hero, IconsPage, InstallCmd, IssueFlowDemo, Landing, MotionPage, SecureSection, ShowcaseCard,
+    SiteHeader, StackFlow, StackShowcase, Tutorial,
 };
 
 /// One searchable entry in the ⌘K palette — a doc page, a component,
@@ -192,6 +194,16 @@ fn build_search_index() -> Vec<SearchEntry> {
             n.group,
         );
     }
+    push(&mut out, &mut seen, "Blog".into(), "/blogs".into(), "Page");
+    for b in docs_data::BLOGS {
+        push(
+            &mut out,
+            &mut seen,
+            b.title.into(),
+            format!("/blogs/{}", b.slug),
+            "Blog",
+        );
+    }
     out
 }
 
@@ -279,5 +291,7 @@ pub fn main() {
         .route::<ChartsPage>("/charts/:name")
         .route::<MotionPage>("/motion/:name")
         .route::<DocPage>("/docs/*slug")
+        .route::<BlogsIndex>("/blogs")
+        .route::<BlogPage>("/blogs/*slug")
         .run();
 }

@@ -2,6 +2,8 @@
 //! plus its sibling `.poco` template — the same layout the `hn`
 //! example uses.
 
+pub mod blog_page;
+pub mod blogs_index;
 pub mod charts_page;
 pub mod component_meta;
 pub mod components_index;
@@ -22,6 +24,8 @@ pub mod stack_flow;
 pub mod stack_showcase;
 pub mod tutorial;
 
+pub use blog_page::BlogPage;
+pub use blogs_index::BlogsIndex;
 pub use charts_page::ChartsPage;
 pub use components_index::ComponentsIndex;
 pub use components_page::ComponentPage;
@@ -40,6 +44,22 @@ pub use site_header::SiteHeader;
 pub use stack_flow::StackFlow;
 pub use stack_showcase::StackShowcase;
 pub use tutorial::Tutorial;
+
+/// Fetch a text resource (a pre-rendered docs/blog fragment) via the
+/// browser `fetch` API. Returns `None` on any network/4xx failure.
+pub async fn fetch_text(url: &str) -> Option<String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let win = web_sys::window()?;
+    let resp = JsFuture::from(win.fetch_with_str(url)).await.ok()?;
+    let resp: web_sys::Response = resp.dyn_into().ok()?;
+    if !resp.ok() {
+        return None;
+    }
+    let text = JsFuture::from(resp.text().ok()?).await.ok()?;
+    text.as_string()
+}
 
 /// Shared SPA-navigation click delegate.
 ///
