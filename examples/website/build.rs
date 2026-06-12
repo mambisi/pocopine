@@ -166,27 +166,82 @@ fn main() {
                 continue;
             }
             let raw = fs::read_to_string(docs_dir.join(&p.path)).unwrap_or_default();
-            let body = strip_frontmatter(&raw);
+            let (_, body) = parse_frontmatter(&raw);
             let body = inject_generated(&body, &manifest);
-            let (page_html, toc) = render(&hl, &body, &p.path);
-            let frag = static_docs.join(format!("{slug}.html"));
-            if let Some(parent) = frag.parent() {
-                fs::create_dir_all(parent).ok();
-            }
-            fs::write(&frag, &page_html).ok();
-            title_arms.push_str(&format!("        {:?} => {:?},\n", slug, p.title));
-            let mut toc_lit = String::from("&[");
-            for (depth, text, id) in &toc {
-                toc_lit.push_str(&format!(
-                    "TocItem {{ depth: {}, text: {:?}, id: {:?} }}, ",
-                    depth, text, id
-                ));
-            }
-            toc_lit.push(']');
-            toc_arms.push_str(&format!("        {:?} => {},\n", slug, toc_lit));
+            emit_page(
+                &hl,
+                &body,
+                &p.path,
+                slug,
+                &p.title,
+                &static_docs,
+                &mut title_arms,
+                &mut toc_arms,
+            );
         }
     }
     nav.push_str("];\n");
+
+    // ── Blog posts: every `docs/blogs/*.md` (discovered by listing the
+    // directory — no manifest) renders through the same pipeline as the
+    // docs pages. Fragments land in `static-docs/blogs/<slug>.html` and
+    // the title/TOC tables share the `blogs/<slug>` key, so `BlogPage`
+    // reuses the `page_title` / `page_toc` machinery. The small BLOGS
+    // index (front-matter title / description / date) is what
+    // `BlogsIndex` lists — a new post appears there automatically. ──
+    code.push_str(
+        "pub struct BlogPost { pub slug: &'static str, pub title: &'static str, \
+         pub description: &'static str, pub date: &'static str, \
+         pub date_display: &'static str }\n",
+    );
+    let mut posts: Vec<(String, HashMap<String, String>, String)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(docs_dir.join("blogs")) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(slug) = p.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+                continue;
+            };
+            let raw = fs::read_to_string(&p).unwrap_or_default();
+            let (fm, body) = parse_frontmatter(&raw);
+            posts.push((slug, fm, body));
+        }
+    }
+    // Newest first on the index; slug breaks date ties deterministically.
+    posts.sort_by(|a, b| {
+        let (da, db) = (a.1.get("date"), b.1.get("date"));
+        db.cmp(&da).then_with(|| a.0.cmp(&b.0))
+    });
+    let mut blogs = String::from("pub static BLOGS: &[BlogPost] = &[\n");
+    for (slug, fm, body) in &posts {
+        let key = format!("blogs/{slug}");
+        let title = fm.get("title").cloned().unwrap_or_else(|| slug.clone());
+        let desc = fm.get("description").cloned().unwrap_or_default();
+        let date = fm.get("date").cloned().unwrap_or_default();
+        let body = inject_generated(body, &manifest);
+        emit_page(
+            &hl,
+            &body,
+            &format!("{key}.md"),
+            &key,
+            &title,
+            &static_docs,
+            &mut title_arms,
+            &mut toc_arms,
+        );
+        blogs.push_str(&format!(
+            "  BlogPost {{ slug: {:?}, title: {:?}, description: {:?}, \
+             date: {:?}, date_display: {:?} }},\n",
+            slug,
+            title,
+            desc,
+            date,
+            human_date(&date)
+        ));
+    }
+    blogs.push_str("];\n");
 
     code.push_str(&nav);
     code.push_str(&format!(
@@ -197,10 +252,38 @@ fn main() {
         "pub fn page_toc(slug: &str) -> &'static [TocItem] {{\n    match slug {{\n{}        _ => &[],\n    }}\n}}\n",
         toc_arms
     ));
+    code.push_str(&blogs);
 
     fs::write(&dest, code).unwrap();
 
+    // ── Blog media: stage docs/assets/blog (the Remotion renders from
+    // tools/blog-motion) into a served static dir, mirroring the icon
+    // staging below. Pages reference them as `/assets/blog/<file>`;
+    // `assets` is listed in the deploy `static_files`. ──
+    stage_dir(
+        &docs_dir.join("assets/blog"),
+        &Path::new(&manifest).join("assets/blog"),
+    );
+
     emit_snippets(&hl, &manifest, &out_dir);
+}
+
+/// Copy every regular file in `src` into `dst` (flat, non-recursive).
+/// Unconditional: the staged dirs hold a handful of small media files,
+/// so a fresh copy per build keeps re-renders picked up.
+fn stage_dir(src: &Path, dst: &Path) {
+    let Ok(entries) = fs::read_dir(src) else {
+        return;
+    };
+    fs::create_dir_all(dst).ok();
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_file() {
+            if let Some(name) = p.file_name() {
+                let _ = fs::copy(&p, dst.join(name));
+            }
+        }
+    }
 }
 
 /// Pre-highlight the home-page showcase snippets into `gen_code.rs`.
@@ -951,17 +1034,98 @@ const SHOWCASE_FEATS: &[ShowcaseFeat] = &[
     },
 ];
 
-/// Strip a leading `---\n … \n---\n` YAML front-matter block.
-fn strip_frontmatter(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---\n") {
-            return rest[end + 5..].to_string();
-        }
-        if let Some(end) = rest.find("\n---") {
-            return rest[end + 4..].to_string();
-        }
+/// Split a leading `---\n … \n---\n` YAML front-matter block off a
+/// markdown document. Returns the front-matter as a flat key → value
+/// map (values may be double-quoted) plus the body. The docs pages
+/// only use the body; blog posts read `title` / `description` / `date`
+/// off the map.
+fn parse_frontmatter(s: &str) -> (HashMap<String, String>, String) {
+    let mut map = HashMap::new();
+    let Some(rest) = s.strip_prefix("---\n") else {
+        return (map, s.to_string());
+    };
+    let (block, body) = match rest.find("\n---\n") {
+        Some(end) => (&rest[..end], rest[end + 5..].to_string()),
+        None => match rest.find("\n---") {
+            Some(end) => (&rest[..end], rest[end + 4..].to_string()),
+            None => return (map, s.to_string()),
+        },
+    };
+    for line in block.lines() {
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        let v = v.trim();
+        let v = v
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(v);
+        map.insert(k.trim().to_string(), v.to_string());
     }
-    s.to_string()
+    (map, body)
+}
+
+/// Render one markdown body through the shared docs pipeline: write the
+/// HTML fragment to `static-docs/<key>.html` and append the matching
+/// `page_title` / `page_toc` arms under `key`. Shared by the site.toml
+/// docs pages and the discovered blog posts.
+#[allow(clippy::too_many_arguments)]
+fn emit_page(
+    hl: &Hl,
+    body: &str,
+    page_path: &str,
+    key: &str,
+    title: &str,
+    static_docs: &Path,
+    title_arms: &mut String,
+    toc_arms: &mut String,
+) {
+    let (page_html, toc) = render(hl, body, page_path);
+    let frag = static_docs.join(format!("{key}.html"));
+    if let Some(parent) = frag.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(&frag, &page_html).ok();
+    title_arms.push_str(&format!("        {:?} => {:?},\n", key, title));
+    let mut toc_lit = String::from("&[");
+    for (depth, text, id) in &toc {
+        toc_lit.push_str(&format!(
+            "TocItem {{ depth: {}, text: {:?}, id: {:?} }}, ",
+            depth, text, id
+        ));
+    }
+    toc_lit.push(']');
+    toc_arms.push_str(&format!("        {:?} => {},\n", key, toc_lit));
+}
+
+/// `2026-06-11` → `June 11, 2026`. Falls back to the raw string when
+/// the front-matter date isn't ISO `YYYY-MM-DD`.
+fn human_date(iso: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let mut it = iso.split('-');
+    let (Some(y), Some(m), Some(d)) = (it.next(), it.next(), it.next()) else {
+        return iso.to_string();
+    };
+    let (Ok(m), Ok(d)) = (m.parse::<usize>(), d.parse::<u32>()) else {
+        return iso.to_string();
+    };
+    if !(1..=12).contains(&m) {
+        return iso.to_string();
+    }
+    format!("{} {}, {}", MONTHS[m - 1], d, y)
 }
 
 /// Render markdown → HTML, assigning slug ids to h2/h3 (for anchors)

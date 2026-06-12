@@ -9,7 +9,13 @@
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use pocopine_logging::init_default;
-    use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
+    use pocopine_server::axum::{
+        handler::HandlerWithoutStateExt,
+        http::{header, StatusCode, Uri},
+        response::IntoResponse,
+        Router,
+    };
+    use pocopine_server::{serve, static_files};
     use website as _;
 
     init_default().map_err(std::io::Error::other)?;
@@ -20,9 +26,33 @@ async fn main() -> std::io::Result<()> {
     // fallback — that's where `index.html` and `pkg/` live in source.
     let static_root =
         std::env::var("POCOPINE_DIST").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_owned());
-    let index_path = format!("{static_root}/index.html");
+    let index_path = std::path::PathBuf::from(format!("{static_root}/index.html"));
 
-    let static_service = static_files(&static_root).fallback(ServeFile::new(index_path));
+    // SPA history fallback — but only for route-looking paths. Asset-
+    // looking misses (last segment has a file extension) get a real 404
+    // instead of the index.html shell, matching the CLI dev server: a
+    // `text/html` body on e.g. a missing `.webm` makes `<video>` fail
+    // with an opaque decoder error rather than a visible 404.
+    let spa_fallback = move |uri: Uri| {
+        let index = index_path.clone();
+        async move {
+            let last = uri.path().rsplit('/').next().unwrap_or("");
+            let looks_like_asset = last
+                .rsplit_once('.')
+                .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty());
+            if looks_like_asset {
+                return (StatusCode::NOT_FOUND, "not found").into_response();
+            }
+            match tokio::fs::read(&index).await {
+                Ok(body) => {
+                    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
+                }
+                Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+            }
+        }
+    };
+
+    let static_service = static_files(&static_root).fallback(spa_fallback.into_service());
     let router = Router::new().fallback_service(static_service);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_owned());

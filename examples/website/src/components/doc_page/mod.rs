@@ -104,7 +104,7 @@ impl DocPage {
         let handle = this::<Self>();
         let url = format!("/static-docs/{slug}.html");
         spawn_local(async move {
-            let fetched = fetch_text(&url).await;
+            let fetched = crate::components::fetch_text(&url).await;
             handle.update(move |s: &mut DocPage| {
                 s.loading = false;
                 match fetched {
@@ -126,19 +126,3 @@ impl DocPage {
 }
 
 impl RouteComponent for DocPage {}
-
-/// Fetch a text resource (the pre-rendered doc fragment) via the
-/// browser `fetch` API. Returns `None` on any network/4xx failure.
-async fn fetch_text(url: &str) -> Option<String> {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-
-    let win = web_sys::window()?;
-    let resp = JsFuture::from(win.fetch_with_str(url)).await.ok()?;
-    let resp: web_sys::Response = resp.dyn_into().ok()?;
-    if !resp.ok() {
-        return None;
-    }
-    let text = JsFuture::from(resp.text().ok()?).await.ok()?;
-    text.as_string()
-}

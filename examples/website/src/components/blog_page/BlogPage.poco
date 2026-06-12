@@ -1,0 +1,14 @@
+<root class="blog-layout" pp-on:click="on_nav">
+  <main class="blog-main">
+    <span class="blog-date" pp-show="has_date" pp-text="date"></span>
+    <div class="blog-loading" pp-show="loading">Loading…</div>
+    <article class="doc-body" pp-html="html"></article>
+    <div class="blog-notfound" pp-show="not_found">
+      <h1>Post not found</h1>
+      <p>
+        There's no blog post at this path.
+        <a href="/blogs" pp-route>Back to the blog</a>.
+      </p>
+    </div>
+  </main>
+</root>

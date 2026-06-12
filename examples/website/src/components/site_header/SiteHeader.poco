@@ -17,6 +17,7 @@
           </pine-hover-card-content>
         </pine-hover-card-portal>
       </pine-hover-card-root>
+      <a href="/blogs" pp-route>Blog</a>
     </nav>
 
     <div class="site-header-actions">
