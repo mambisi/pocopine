@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (revised post-RFC-058 Phase 6.5) |
+| **Status** | Superseded by [RFC-099](./rfc-099-ssr-hydration.md) — the shipping SSR design is the simpler "stamp on the server, claim on the client" model. Retained as the reference for the 0.3+ deferred features this RFC researched (streaming, event replay, the mismatch-policy gradient) and for the comment-marker scheme. |
 | **Author** | pocopine team |
 | **Created** | 2026-04-26 |
 | **Revised** | 2026-04-27 |

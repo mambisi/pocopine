@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | In progress (Phase 1 parity foundations + Phase 2 server-render & binding/interp/listener hydration landed, differential-harness-gated; structural-controller hydration, zero-initial-write, and `App::hydrate` entry pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-06-12 |
 | **Related** | [`rfc-058`] (compiled plans — the shared artifact), [`rfc-094-conditional-chains-and-enum-matching.md`](./rfc-094-conditional-chains-and-enum-matching.md) (comment anchors = hydration claim positions), [`rfc-092`] (Stylekit — inlined critical CSS), [`rfc-080`] (deploy: the `web` process), [`project_template_size_strategy`] (two-tier templates) |
