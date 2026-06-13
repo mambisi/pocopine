@@ -75,6 +75,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # pulldown-cmark does not target wasm, so this runs on the build host
 # and the output is embedded via include! (see build.rs).
 [build-dependencies]
+# Asset hashing for RFC-100 Mode A: rendered fragments bake the
+# content-addressed bucket URL (`assets/<hash8>/<rel>`) at build time.
+pocopine-crypto = { workspace = true }
 pulldown-cmark = "0.13"
 toml = "0.8"
 serde = { workspace = true }

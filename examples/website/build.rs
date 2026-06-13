@@ -14,7 +14,8 @@
 //!   pub fn page_toc(slug)  -> &'static [TocItem]
 
 use std::collections::{HashMap, HashSet};
-use std::{env, fs, path::Path};
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use pulldown_cmark::{
     html, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
@@ -139,6 +140,18 @@ fn main() {
         .and_then(|s| toml::from_str(&s).ok())
         .unwrap_or(Site { group: vec![] });
 
+    // ── Blog media: stage docs/assets/blog (the Remotion renders from
+    // tools/blog-motion) into a served static dir, mirroring the icon
+    // staging below. Pages reference them as `/assets/blog/<file>`;
+    // `assets` is listed in the deploy `static_files`. Staged BEFORE
+    // rendering so the asset-URL rewriter below hashes the exact bytes
+    // `pocopine assets push` later scans out of `assets/`. ──
+    stage_dir(
+        &docs_dir.join("assets/blog"),
+        &Path::new(&manifest).join("assets/blog"),
+    );
+    let asset_urls = AssetUrls::new(&manifest, &docs_dir);
+
     let hl = Hl::new();
 
     let mut code = String::new();
@@ -170,6 +183,7 @@ fn main() {
             let body = inject_generated(&body, &manifest);
             emit_page(
                 &hl,
+                &asset_urls,
                 &body,
                 &p.path,
                 slug,
@@ -223,6 +237,7 @@ fn main() {
         let body = inject_generated(body, &manifest);
         emit_page(
             &hl,
+            &asset_urls,
             &body,
             &format!("{key}.md"),
             &key,
@@ -256,15 +271,6 @@ fn main() {
 
     fs::write(&dest, code).unwrap();
 
-    // ── Blog media: stage docs/assets/blog (the Remotion renders from
-    // tools/blog-motion) into a served static dir, mirroring the icon
-    // staging below. Pages reference them as `/assets/blog/<file>`;
-    // `assets` is listed in the deploy `static_files`. ──
-    stage_dir(
-        &docs_dir.join("assets/blog"),
-        &Path::new(&manifest).join("assets/blog"),
-    );
-
     emit_snippets(&hl, &manifest, &out_dir);
 }
 
@@ -283,6 +289,124 @@ fn stage_dir(src: &Path, dst: &Path) {
                 let _ = fs::copy(&p, dst.join(name));
             }
         }
+    }
+}
+
+/// RFC-100 Mode A for the build-time-rendered fragments.
+///
+/// The `asset!` macro resolves its base at runtime, but the docs/blog
+/// fragments are static HTML rendered here — so the content-addressed
+/// bucket URL is baked in at build time instead. Every
+/// `src="/assets/<rel>"` in a rendered fragment becomes
+/// `<public-base>/assets/<hash8>/<rel>`, which is byte-for-byte the
+/// object key layout `pocopine assets push` uploads (`assets_sync.rs`
+/// scans `<project>/assets`, keys `assets/<hash8>/<rel>`): the hash is
+/// computed from the staged file the push will read.
+///
+/// Without a `public-base` in `[package.metadata.pocopine.assets]`
+/// references are left on the plain staged path. The dev server also
+/// serves hashed `/assets/<hash8>/…` routes, but rewriting to them
+/// would make the no-bucket build diverge from the on-disk staging for
+/// no gain — plain `/assets/<rel>` is served from the staged dir either
+/// way, so dev stays on the unhashed path and only a configured public
+/// bucket changes the emitted URLs.
+struct AssetUrls {
+    /// `public-base` from `[package.metadata.pocopine.assets]`,
+    /// trailing-slash-trimmed. `None` → no rewriting.
+    public_base: Option<String>,
+    /// `<manifest>/assets` — the staged dir `pocopine assets push`
+    /// scans; hashes are computed from these bytes.
+    staged: PathBuf,
+    /// `docs/assets` — the staging *source*. rerun-if-changed points
+    /// here (the staged copy is rewritten by this script every build,
+    /// so tracking it would re-dirty the build each run).
+    source: PathBuf,
+}
+
+impl AssetUrls {
+    fn new(manifest: &str, docs_dir: &Path) -> Self {
+        let cargo_toml = Path::new(manifest).join("Cargo.toml");
+        println!("cargo:rerun-if-changed={}", cargo_toml.display());
+        let public_base = fs::read_to_string(&cargo_toml)
+            .ok()
+            .and_then(|s| s.parse::<toml::Value>().ok())
+            .and_then(|v| {
+                Some(
+                    v.get("package")?
+                        .get("metadata")?
+                        .get("pocopine")?
+                        .get("assets")?
+                        .get("public-base")?
+                        .as_str()?
+                        .trim_end_matches('/')
+                        .to_string(),
+                )
+            })
+            .filter(|base| !base.is_empty());
+        Self {
+            public_base,
+            staged: Path::new(manifest).join("assets"),
+            source: docs_dir.join("assets"),
+        }
+    }
+
+    /// Rewrite every `src="/assets/<rel>"` in a rendered fragment to
+    /// the hashed bucket URL. References whose staged file is missing
+    /// are left untouched (they would 404 either way; the plain path
+    /// at least names the intended file).
+    fn rewrite(&self, html: &str) -> String {
+        const NEEDLE: &str = "src=\"/assets/";
+        let Some(base) = &self.public_base else {
+            return html.to_string();
+        };
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html;
+        while let Some(at) = rest.find(NEEDLE) {
+            out.push_str(&rest[..at]);
+            let tail = &rest[at + NEEDLE.len()..];
+            let Some(end) = tail.find('"') else {
+                // Unterminated attribute — emit the tail verbatim.
+                rest = &rest[at..];
+                break;
+            };
+            let rel = &tail[..end];
+            match self.hashed_url(base, rel) {
+                Some(url) => out.push_str(&format!("src=\"{url}\"")),
+                None => {
+                    out.push_str(NEEDLE);
+                    out.push_str(rel);
+                    out.push('"');
+                }
+            }
+            rest = &tail[end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// `blog/clip.webm` → `<base>/assets/<hash8>/blog/clip.webm`, or
+    /// `None` when the path is suspicious or the staged file is absent.
+    fn hashed_url(&self, base: &str, rel: &str) -> Option<String> {
+        if rel.is_empty()
+            || rel
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            return None;
+        }
+        let bytes = fs::read(self.staged.join(rel)).ok()?;
+        // 8-hex sha256 prefix — the shared asset-hash shape
+        // (`pocopine_core::assets::asset_hash`; the runtime crate is
+        // not a build-dependency, so the 2-line prefix is reproduced
+        // here the same way `assets_sync.rs` does in the CLI).
+        let mut hash = pocopine_crypto::sha256_hex(&bytes);
+        hash.truncate(8);
+        // Rebuild when the staging *source* changes (see field doc).
+        let source = self.source.join(rel);
+        if source.is_file() {
+            println!("cargo:rerun-if-changed={}", source.display());
+        }
+        Some(format!("{base}/assets/{hash}/{rel}"))
     }
 }
 
@@ -1072,6 +1196,7 @@ fn parse_frontmatter(s: &str) -> (HashMap<String, String>, String) {
 #[allow(clippy::too_many_arguments)]
 fn emit_page(
     hl: &Hl,
+    asset_urls: &AssetUrls,
     body: &str,
     page_path: &str,
     key: &str,
@@ -1081,6 +1206,7 @@ fn emit_page(
     toc_arms: &mut String,
 ) {
     let (page_html, toc) = render(hl, body, page_path);
+    let page_html = asset_urls.rewrite(&page_html);
     let frag = static_docs.join(format!("{key}.html"));
     if let Some(parent) = frag.parent() {
         fs::create_dir_all(parent).ok();
