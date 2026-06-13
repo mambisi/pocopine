@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (revised 2026-04-29 per council feedback) |
+| **Status** | Implemented (roadmap delivered across RFC-094/095/096/101) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-29 |
 | **Supersedes** | — |

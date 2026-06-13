@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-05-24 |
 | **Related** | [RFC 002 - Application framework, stores, server functions](./rfc-002-app-stores-servers.md), [RFC 023 - Pine MVP](./rfc-023-pine-mvp.md), [RFC 066 - Server-function auth and access policy](./rfc-066-server-function-auth.md), [RFC 076 - App plugin lifecycle](./rfc-076-app-plugin-lifecycle.md), [RFC 077 - Server plugin lifecycle](./rfc-077-server-plugin-lifecycle.md), [RFC 080 - Heroku-style deploy contract](./rfc-080-deploy-contract.md) |

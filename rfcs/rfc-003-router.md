@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-04-18 |
 | **Supersedes** | — |

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Implemented — `provide`/`inject` shipped; the string-key surface in this doc was later superseded by the typed `ContextKey` of RFC-030/056. |
 | **Author** | pocopine team |
 | **Created** | 2026-04-19 |
 | **Supersedes** | — |

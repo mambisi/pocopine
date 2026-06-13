@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Superseded by RFC-095 — the `$id` magic was removed in the signals rewrite (zero usage; `ctx.scope_id` covers it). Only the `+` string-concat operator from this RFC survives. |
 | **Author** | pocopine team |
 | **Created** | 2026-04-19 |
 | **Supersedes** | — |

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted (v1 pipeline landed — see the §12 implementation-state table for per-feature status) |
 | **Author** | pocopine team |
 | **Created** | 2026-06-12 |
 | **Related** | [`rfc-080-deploy-contract.md`](./rfc-080-deploy-contract.md) (deploy orchestration, credentials.toml, adapter API doctrine), [`rfc-082-pocopine-storage.md`](./rfc-082-pocopine-storage.md) (upload protocol — *not* this pipeline; see §3), [`rfc-099-ssr-hydration.md`](./rfc-099-ssr-hydration.md) (SSR serves the same URLs), `docs/internal/roadmap-0.2.x.md` (0.2.1 publishing pipeline) |
