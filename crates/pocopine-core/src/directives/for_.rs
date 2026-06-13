@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use js_sys::{Array, Object, Reflect};
+use smallvec::SmallVec;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
@@ -648,10 +649,10 @@ fn channel_mount_range(
     for (r, (scope_id, key, item, loop_rc)) in metas.into_iter().enumerate() {
         let base = (r * stride) as u32;
         let root: Element = out.get(base).unchecked_into();
-        let binding_nodes: Box<[Element]> = (0..b)
+        let binding_nodes: SmallVec<[Element; 4]> = (0..b)
             .map(|j| out.get(base + 1 + j as u32).unchecked_into())
             .collect();
-        let listener_nodes: Vec<Element> = (0..l)
+        let listener_nodes: SmallVec<[Element; 2]> = (0..l)
             .map(|j| out.get(base + 1 + (b + j) as u32).unchecked_into())
             .collect();
         channel_rows.push(crate::directives::for_plan::ChannelRow {
