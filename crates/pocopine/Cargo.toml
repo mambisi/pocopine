@@ -42,6 +42,9 @@ phf = { version = "0.13", features = ["macros"] }
 
 [dev-dependencies]
 pocopine-server = { path = "../pocopine-server" }
+# RFC-099 — the SSR stamper, used by the hydration differential harness
+# (render server-side, then hydrate the same HTML on the client).
+pocopine-ssr = { path = "../pocopine-ssr" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 tower = { version = "0.5", features = ["util"] }

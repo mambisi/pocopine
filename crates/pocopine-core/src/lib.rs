@@ -36,6 +36,9 @@ pub mod handler;
 /// `serde_json::Value` (the SSR render backend), parity-gated against
 /// the wasm `JsValue` evaluator.
 pub mod host_eval;
+/// RFC-099 Phase 2c — client-side hydration: attach reactivity to a
+/// server-rendered subtree (the "claim" walk).
+pub mod hydrate;
 /// RFC-099 Phase 1 — JS-identical number formatting, shared by the
 /// wasm client and the SSR host renderer.
 pub mod js_number;

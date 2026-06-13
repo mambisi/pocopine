@@ -294,6 +294,62 @@ pub fn resolve_node_path(root: &Element, path: &[u16]) -> Option<Element> {
     Some(cur)
 }
 
+/// RFC-099 Phase 2c — attach reactivity to a **server-rendered** subtree
+/// under `root` without creating any DOM (the "claim" walk). For each
+/// binding / interpolation / listener / ref the plan records, it
+/// resolves the existing node by `node_path` and installs the directive
+/// on it. Structural controllers (`pp-if` / `pp-for` / `pp-match`),
+/// child-component mounts, and slots resolve **client-side** in Phase 2
+/// and are skipped here.
+///
+/// Correctness: the installed binding effects re-evaluate the same state
+/// the server rendered from, so their first run writes identical values
+/// — the DOM stays byte-equal to the server output (verified by the
+/// differential harness). The zero-initial-DOM-write refinement (via
+/// [`crate::reactive::effect_hydrating`]) layers on top later.
+pub fn hydrate_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    plan: &'static StaticTemplatePlan,
+    template_name: &str,
+) {
+    for r in plan.refs {
+        if let Some(el) = resolve_node_path(root, r.node_path) {
+            crate::refs::register(scope_id, r.name, &el);
+        }
+    }
+    for b in plan.bindings {
+        if let Some(el) = resolve_node_path(root, b.node_path) {
+            install_static_binding(&el, scope_id, proxy, b, template_name);
+        }
+    }
+    for it in plan.interps {
+        if let Some(parent) = resolve_node_path(root, it.node_path) {
+            if let Some(target) =
+                directives::interp::resolve_text_target(&parent, it.text_index as usize)
+            {
+                // Resolve through the scope's proxy-free reader — same as
+                // the binding evaluators and the client mount path. (A
+                // `None` root + an elided `UNDEFINED` proxy would leave
+                // dynamic segments unresolvable.)
+                directives::interp::install_planned_target(
+                    &parent,
+                    proxy,
+                    crate::scope::scoped_root_reader(scope_id),
+                    &target,
+                    it.segments,
+                );
+            }
+        }
+    }
+    for l in plan.listeners {
+        if let Some(el) = resolve_node_path(root, l.node_path) {
+            install_static_listener(&el, scope_id, proxy, l, template_name);
+        }
+    }
+}
+
 pub fn install_static_binding(
     el: &Element,
     scope_id: ScopeId,
