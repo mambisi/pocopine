@@ -86,6 +86,12 @@ in:
 </html>
 ```
 
+After a build the script reference reads `/pkg/hello_pine.<hash>.js` —
+`pocopine build` content-hashes the JS + wasm pair (one hash, the
+wasm's) and rewrites this line, so browsers and CDNs can cache the
+bundle forever (`immutable`) while `index.html` itself always
+revalidates. Leave the hashed name alone; every build keeps it current.
+
 ## 3. Run it
 
 `just dev` (which wraps `pocopine dev`) builds the wasm bundle, serves it

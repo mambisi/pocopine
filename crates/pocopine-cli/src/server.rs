@@ -557,7 +557,12 @@ fn handle(root: &Path, request: tiny_http::Request) {
             let body = client_modules::inject_html_if_needed(root, &target, body);
             let header =
                 tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap();
-            let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
+            let mut response = tiny_http::Response::from_data(body).with_header(header);
+            let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if let Some(cache) = cache_control_for(name, mime) {
+                response = response.with_header(cache_control_header(cache));
+            }
+            let _ = request.respond(response);
             return;
         }
     }
@@ -573,7 +578,11 @@ fn handle(root: &Path, request: tiny_http::Request) {
                 &b"text/html; charset=utf-8"[..],
             )
             .unwrap();
-            let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
+            let _ = request.respond(
+                tiny_http::Response::from_data(body)
+                    .with_header(header)
+                    .with_header(cache_control_header(CACHE_NO_CACHE)),
+            );
             return;
         }
     }
@@ -638,12 +647,51 @@ fn asset_route_response(
     )
 }
 
-/// RFC-100 — true for an 8-char lowercase-hex hash segment.
-fn is_asset_hash(segment: &str) -> bool {
+/// RFC-100 — true for an 8-char lowercase-hex hash segment. Also the
+/// hash shape of the content-hashed bundle pair `build::hash_pkg_bundle`
+/// writes.
+pub(crate) fn is_asset_hash(segment: &str) -> bool {
     segment.len() == 8
         && segment
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+const CACHE_IMMUTABLE: &str = "public,max-age=31536000,immutable";
+const CACHE_NO_CACHE: &str = "no-cache";
+
+fn cache_control_header(value: &str) -> tiny_http::Header {
+    tiny_http::Header::from_bytes(&b"Cache-Control"[..], value.as_bytes()).unwrap()
+}
+
+/// Cache policy for a directly served file, mirroring production
+/// (`pocopine_server::static_files`): the content-hashed bundle pair
+/// (`<name>.<hash8>.js` / `<name>_bg.<hash8>.wasm`, written by
+/// `build::hash_pkg_bundle`) never changes under its URL → immutable;
+/// HTML is the mutable entry point that names the current pair →
+/// revalidate every load. Everything else keeps no explicit header.
+fn cache_control_for(file_name: &str, mime: &str) -> Option<&'static str> {
+    if is_hashed_bundle_name(file_name) {
+        return Some(CACHE_IMMUTABLE);
+    }
+    if mime.starts_with("text/html") {
+        return Some(CACHE_NO_CACHE);
+    }
+    None
+}
+
+/// `website.0a1b2c3d.js` / `website_bg.0a1b2c3d.wasm` → true. Only the
+/// bundle-pair extensions count, so a user file with a hex-looking
+/// name segment doesn't silently become immutable.
+fn is_hashed_bundle_name(file_name: &str) -> bool {
+    let Some((stem, ext)) = file_name.rsplit_once('.') else {
+        return false;
+    };
+    if ext != "js" && ext != "wasm" {
+        return false;
+    }
+    stem.rsplit_once('.')
+        .is_some_and(|(_, hash)| is_asset_hash(hash))
 }
 
 /// RFC-100 — 8-hex-char content hash; same shape as
@@ -731,6 +779,36 @@ mod tests {
         assert!(asset_route_response(&root, "assets/b94d27b9/missing.svg").is_none());
         // Traversal out of the root → fall through.
         assert!(asset_route_response(&root, "assets/b94d27b9/../../etc/passwd").is_none());
+    }
+
+    #[test]
+    fn cache_policy_pins_hashed_bundles_and_revalidates_html() {
+        // The hashed pair → immutable.
+        assert_eq!(
+            cache_control_for("website.0a1b2c3d.js", "text/javascript"),
+            Some(CACHE_IMMUTABLE)
+        );
+        assert_eq!(
+            cache_control_for("website_bg.0a1b2c3d.wasm", "application/wasm"),
+            Some(CACHE_IMMUTABLE)
+        );
+        // HTML always revalidates.
+        assert_eq!(
+            cache_control_for("index.html", "text/html; charset=utf-8"),
+            Some(CACHE_NO_CACHE)
+        );
+        // Unhashed bundle names and other files keep no explicit policy.
+        assert_eq!(cache_control_for("website.js", "text/javascript"), None);
+        assert_eq!(
+            cache_control_for("website_bg.wasm", "application/wasm"),
+            None
+        );
+        assert_eq!(cache_control_for("styles.css", "text/css"), None);
+        assert_eq!(cache_control_for("photo.0a1b2c3d.png", "image/png"), None);
+        assert_eq!(
+            cache_control_for("website.DEADBEEF.js", "text/javascript"),
+            None
+        );
     }
 
     #[test]
