@@ -99,6 +99,16 @@ thread_local! {
     static CLEANUPS: RefCell<HashMap<EffectId, Vec<CleanupFn>>> = RefCell::new(HashMap::new());
     static BATCHING: Cell<u32> = const { Cell::new(0) };
     static AUTO_FLUSH: Cell<bool> = const { Cell::new(true) };
+
+    /// RFC-098 H3 — trampoline state. `dispatch_signal` is
+    /// non-reentrant: the outermost call sets `DISPATCH_DEPTH` to 1 and
+    /// owns the `WORKLIST` drain loop. A trigger fired by an inline
+    /// scheduler re-enters with depth > 0, appends its signal to the
+    /// worklist, and unwinds — dispatch never recurses, so the
+    /// re-entrancy the old scratch dance defended against is
+    /// structurally impossible.
+    static DISPATCH_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static WORKLIST: RefCell<Vec<SignalId>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Toggle the automatic microtask flush. Production code leaves this at
@@ -356,48 +366,83 @@ pub fn track_signal(signal_id: SignalId) {
 /// `trigger` and `trigger_signal`, which diverge only on how they find
 /// `sid`.
 ///
-/// RFC-098 H1 — ONE copy. The old path cloned the subscriber set in
-/// the caller AND copied that clone into a thread-local scratch (whose
-/// only purpose was avoiding the clone the caller had just made); a
-/// `mem::take`/restore dance protected the shared scratch from
-/// re-entrant dispatch. Here the single snapshot `Vec` is local, and
-/// the `SIGNAL_DEPS` borrow is released before any effect runs — so a
-/// scheduler that re-triggers (re-entering `dispatch_signal`) neither
-/// clobbers a shared buffer nor hits a borrow conflict, with no scratch
-/// to manage.
+/// RFC-098 H1 — ONE copy per signal (a local snapshot `Vec`, borrow
+/// dropped before any effect runs); H3 — a trampoline, so dispatch
+/// never recurses.
+///
+/// A trigger fired by an inline scheduler re-enters here with
+/// `DISPATCH_DEPTH > 0`: it appends its signal to the `WORKLIST` and
+/// unwinds. The outermost frame owns the drain loop, popping the
+/// worklist until empty. Schedulers still run inline (computed
+/// laziness needs the `dirty` mark to be synchronous); only the
+/// downstream triggers they fire are deferred. Net effect: the old
+/// `mem::take` scratch dance — and the two re-entrancy crashes its
+/// comments commemorated — are deleted, not defended.
 fn dispatch_signal(sid: SignalId) {
-    // Snapshot subscriber ids in insertion order (H4) under a borrow
-    // that ends with this `with` — running an effect/scheduler below
-    // can mutate `SIGNAL_DEPS` (via `clear_deps_for`), so the borrow
-    // must not outlive the copy.
-    let local: Vec<EffectId> = SIGNAL_DEPS.with(|d| {
-        d.borrow()
-            .get(&sid)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default()
-    });
-    if local.is_empty() {
+    if DISPATCH_DEPTH.with(|d| d.get()) > 0 {
+        // Re-entrant: a scheduler triggered another signal. Enqueue and
+        // unwind — the outermost frame drives the loop.
+        WORKLIST.with(|w| w.borrow_mut().push(sid));
         return;
     }
+    DISPATCH_DEPTH.with(|d| d.set(1));
+
     let mut any_queued = false;
-    // Devtools — collect the just-queued ids so the hook sees the
-    // delta, not the whole queue. Empty when feature is off.
+    // Devtools — collect the just-queued ids across the whole drain so
+    // the hook fires once per outermost dispatch. Empty when off.
     #[cfg(feature = "devtools")]
     let mut newly_queued: Vec<EffectId> = Vec::new();
-    for eid in local {
-        let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
-        match sched {
-            Some(s) => s(eid),
-            None => {
-                QUEUE.with(|q| {
-                    q.borrow_mut().insert(eid);
-                });
-                any_queued = true;
-                #[cfg(feature = "devtools")]
-                newly_queued.push(eid);
+    // Debug-only drain bound: a true dependency cycle (a scheduler
+    // re-triggering a signal upstream of itself) would grow the
+    // worklist without end — convert that hang into a loud failure.
+    #[cfg(debug_assertions)]
+    let mut drains: usize = 0;
+
+    let mut cursor = sid;
+    loop {
+        // Snapshot `cursor`'s subscribers in insertion order (H4) under
+        // a borrow that ends with this `with` — running an effect or
+        // scheduler below can mutate `SIGNAL_DEPS` (via
+        // `clear_deps_for`), so the borrow must not outlive the copy.
+        let local: Vec<EffectId> = SIGNAL_DEPS.with(|d| {
+            d.borrow()
+                .get(&cursor)
+                .map(|set| set.iter().copied().collect())
+                .unwrap_or_default()
+        });
+        for eid in local {
+            let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
+            match sched {
+                // Inline; any trigger it fires lands in WORKLIST above.
+                Some(s) => s(eid),
+                None => {
+                    QUEUE.with(|q| {
+                        q.borrow_mut().insert(eid);
+                    });
+                    any_queued = true;
+                    #[cfg(feature = "devtools")]
+                    newly_queued.push(eid);
+                }
             }
         }
+        match WORKLIST.with(|w| w.borrow_mut().pop()) {
+            Some(next) => cursor = next,
+            None => break,
+        }
+        #[cfg(debug_assertions)]
+        {
+            drains += 1;
+            debug_assert!(
+                drains < 1_000_000,
+                "RFC-098 H3: dispatch worklist exceeded 1e6 drains — likely a \
+                 reactive dependency cycle (a scheduler re-triggering a signal \
+                 upstream of itself)"
+            );
+        }
     }
+
+    DISPATCH_DEPTH.with(|d| d.set(0));
+
     #[cfg(feature = "devtools")]
     if !newly_queued.is_empty() {
         crate::devtools::hooks::fire_queue_change(&newly_queued);
