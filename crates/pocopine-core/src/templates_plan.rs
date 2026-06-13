@@ -274,6 +274,26 @@ pub fn install_static_ref(
 /// bodies. Parsing and fail-fast behaviour intentionally match
 /// the generic applier.
 #[doc(hidden)]
+/// RFC-099 Phase 2c — resolve a `node_path` against an **existing** DOM
+/// root, walking **element children only** (text/comment nodes don't
+/// shift the index) — the same convention the macro's
+/// `emit_specialized_resolve` and the row-plan resolver use, and which
+/// matches the element-only `node_path` the plan records. An empty path
+/// is the root itself. Used by the hydration claim walk to attach
+/// bindings to server-rendered nodes without re-creating them.
+///
+/// `Element::children()` is the live HTMLCollection of element children
+/// (the browser excludes text/comment nodes), so `.item(idx)` indexes
+/// exactly as the client's `first_element_child`/`next_element_sibling`
+/// walk does.
+pub fn resolve_node_path(root: &Element, path: &[u16]) -> Option<Element> {
+    let mut cur = root.clone();
+    for &idx in path {
+        cur = cur.children().item(idx as u32)?;
+    }
+    Some(cur)
+}
+
 pub fn install_static_binding(
     el: &Element,
     scope_id: ScopeId,
