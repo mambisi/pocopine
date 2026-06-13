@@ -796,11 +796,33 @@ pub fn run_now(id: EffectId) {
     }
 }
 
-/// Drain the queue right now. Exposed so tests can drive the effect loop
-/// without spinning the JS event loop; production code should rely on
-/// [`trigger`]'s automatic microtask flush.
+/// Drain the queue right now, to **quiescence**. Exposed so tests can
+/// drive the effect loop without spinning the JS event loop; production
+/// code should rely on [`trigger`]'s automatic microtask flush.
+///
+/// Effects re-triggered *during* a batch land in the queue for the NEXT
+/// batch (glitch avoidance — see [`flush`]), so a single pass
+/// under-drains multi-level effect chains (e.g. a structural controller
+/// whose run triggers a body binding's effect, as `pp-match`'s `pp-let`
+/// same-tag update does). Loop until the queue empties — the synchronous
+/// equivalent of the microtask scheduler draining successive batches.
+/// Bounded so a pathological re-trigger cycle fails loudly (debug) or
+/// bails (release) instead of hanging.
 pub fn flush_sync() {
-    flush();
+    let mut batches = 0usize;
+    loop {
+        flush();
+        if QUEUE.with(|q| q.borrow().is_empty()) {
+            break;
+        }
+        batches += 1;
+        if batches > 100_000 {
+            #[cfg(debug_assertions)]
+            panic!("flush_sync: effect queue never reached quiescence (re-trigger cycle?)");
+            #[cfg(not(debug_assertions))]
+            break;
+        }
+    }
 }
 
 /// `(effect_count, dep_count)` — cheap health counters consumed by

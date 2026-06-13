@@ -272,7 +272,33 @@ fn server_render_hydrates_pp_match_byte_equal_and_stays_reactive() {
         "pp-match hydration mutated the DOM (claim not byte-equal)"
     );
 
-    // 4. Structural reactivity: a tag change makes the controller swap
+    // 4. SAME-TAG in-place pp-let update after claim: Ready("hi") →
+    //    Ready("yo") with no intervening tag change. The controller
+    //    updates the claimed PayloadScope's value + triggers its ident;
+    //    the adopted body's pp-text re-renders in place (no remount).
+    //    (This is the 2-level effect chain — controller effect triggers
+    //    the body binding's effect — that `flush_sync` now drains fully.)
+    let same_tag = js_sys::Object::new();
+    js_sys::Reflect::set(&same_tag, &"Ready".into(), &"yo".into()).unwrap();
+    let ready_el = root.query_selector(".ready").unwrap().unwrap();
+    pocopine_core::scope::write_field(scope_id, "phase", &same_tag);
+    flush_sync();
+    assert_eq!(
+        root.query_selector(".ready")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "yo",
+        "same-tag pp-let payload not reactive after claim: {}",
+        root.outer_html()
+    );
+    assert!(
+        ready_el.is_same_node(root.query_selector(".ready").unwrap().as_deref()),
+        "same-tag update must update in place, not remount the arm",
+    );
+
+    // 5. Structural reactivity: a tag change makes the controller swap
     //    to the matching arm (created via its macro body fn).
     pocopine_core::scope::write_field(scope_id, "phase", &JsValue::from_str("Loading"));
     flush_sync();
