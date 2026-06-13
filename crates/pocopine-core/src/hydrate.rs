@@ -17,6 +17,37 @@ use wasm_bindgen::JsValue;
 
 use crate::reactive::ScopeId;
 
+/// Hydrate a server-rendered component root `host` by reading its own
+/// `data-pp-state` island from the DOM — the document-level entry that
+/// closes the SSR loop (the server emits the island via
+/// [`RenderedPage::into_fragment`](../../pocopine_ssr/struct.RenderedPage.html);
+/// this consumes it). The component tag comes from the root's
+/// `data-pp-scope-id`; the state from the adjacent
+/// `<script type="application/json" data-pp-state>` sibling (absent ⇒
+/// hydrate against default state). Returns the scope id, or `None` if
+/// `host` carries no scope-id stamp or the tag isn't registered.
+pub fn hydrate_root(host: &web_sys::Element) -> Option<ScopeId> {
+    let tag = host.get_attribute("data-pp-scope-id")?;
+    let state = read_state_island(host).unwrap_or(Value::Null);
+    hydrate_subtree(host, &tag, &state)
+}
+
+/// Parse the `<script data-pp-state>` island that follows a server-
+/// rendered component root (the [`RenderedPage::into_fragment`] layout:
+/// `body` then island, as element siblings). Returns `None` when no
+/// island is present (e.g. a stateless component).
+fn read_state_island(host: &web_sys::Element) -> Option<Value> {
+    let mut sib = host.next_element_sibling();
+    while let Some(el) = sib {
+        if el.local_name() == "script" && el.has_attribute("data-pp-state") {
+            let text = el.text_content().unwrap_or_default();
+            return serde_json::from_str(&text).ok();
+        }
+        sib = el.next_element_sibling();
+    }
+    None
+}
+
 /// Hydrate the server-rendered `host` element as component `tag`,
 /// loading `state` (the deserialized island) into the scope. Returns the
 /// new scope id, or `None` if `tag` isn't registered (no plan).

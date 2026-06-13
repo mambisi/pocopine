@@ -110,6 +110,53 @@ fn server_render_hydrates_byte_equal_and_stays_reactive() {
     );
 }
 
+#[wasm_bindgen_test]
+fn server_fragment_hydrates_via_state_island() {
+    SsrDemo::register();
+    let demo = SsrDemo {
+        title: "Doc".into(),
+        count: 3.0,
+        hidden: false,
+        label: "x".into(),
+    };
+
+    // The full fragment = rendered body + the <script data-pp-state>
+    // island. This is what a server ships in the document.
+    let fragment = pocopine_ssr::render_to_string(&demo)
+        .expect("registered")
+        .into_fragment();
+    assert!(
+        fragment.contains("data-pp-state"),
+        "fragment carries the state island: {fragment}"
+    );
+
+    let doc = window().unwrap().document().unwrap();
+    let container = doc.create_element("div").unwrap();
+    container.set_inner_html(&fragment);
+    let root: Element = container.first_element_child().expect("root");
+    let before = root.outer_html();
+
+    // hydrate_root reads the island from the DOM itself — NO explicit
+    // state passed (the document-level SSR loop closes here).
+    let scope_id =
+        pocopine_core::hydrate::hydrate_root(&root).expect("hydrated via the state island");
+    flush_sync();
+    assert_eq!(
+        before,
+        root.outer_html(),
+        "island-driven hydration mutated the DOM"
+    );
+
+    // Reactive after island-hydrate.
+    pocopine_core::scope::write_field(scope_id, "count", &JsValue::from_f64(9.0));
+    flush_sync();
+    assert!(
+        root.outer_html().contains("data-n=\"9\""),
+        "binding not live after island hydrate: {}",
+        root.outer_html()
+    );
+}
+
 // ─── RFC-099 Phase 3 — structural claim (pp-if) ─────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
