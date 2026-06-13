@@ -85,9 +85,9 @@ impl BlogPage {
 /// Chrome does not reliably reflect the `muted` *attribute* of a
 /// fragment-parsed `<video>` (innerHTML via `pp-html`) onto the IDL
 /// property, so the muted-autoplay policy silently blocks playback.
-/// Re-assert the properties imperatively and call `play()`; the
-/// returned promise (and any policy rejection) is ignored — the tags
-/// carry `controls` as the user-visible fallback.
+/// Re-assert the properties imperatively and call `play()`; any
+/// rejection of the returned promise is swallowed with a no-op
+/// `catch` — the tags carry `controls` as the user-visible fallback.
 fn hydrate_videos() {
     use wasm_bindgen::{JsCast, JsValue};
 
@@ -100,6 +100,17 @@ fn hydrate_videos() {
     let Ok(videos) = article.query_selector_all("video") else {
         return;
     };
+    if videos.length() == 0 {
+        return;
+    }
+    // `play()` returns a promise that *rejects* when the play request
+    // is interrupted (a pause()/load()/source-change racing the async
+    // playback start) — see
+    // https://developer.chrome.com/blog/play-request-was-interrupted
+    // Dropping that rejection logs an unhandled-rejection error, so
+    // attach a no-op catch. One shared closure, forgotten once per
+    // page view — a tiny deliberate leak.
+    let noop = wasm_bindgen::closure::Closure::new(|_: JsValue| {});
     for i in 0..videos.length() {
         let Some(node) = videos.item(i) else {
             continue;
@@ -111,7 +122,13 @@ fn hydrate_videos() {
             continue;
         };
         if let Ok(play) = play.dyn_into::<js_sys::Function>() {
-            let _ = play.call0(&video);
+            let Ok(ret) = play.call0(&video) else {
+                continue;
+            };
+            if let Ok(promise) = ret.dyn_into::<js_sys::Promise>() {
+                let _ = promise.catch(&noop);
+            }
         }
     }
+    noop.forget();
 }

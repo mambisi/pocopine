@@ -329,10 +329,14 @@ app, templates, or HTML rewrites.
    welcome).
 3. **No LFS / large-file source management** — `assets/` is plain
    files; how they get into the tree is out of scope.
-4. **`.poco` `asset()` syntax is phase 2** — v1 is Rust-side only
-   (`asset!` into a field/prop, bound in the template). The template
-   expression hook rides a later RFC once SSR (RFC-099) settles
-   expression evaluation on both sides.
+4. **`.poco` `$asset()` syntax is phase 2** — v1 is Rust-side only
+   (`asset!` into a field/prop, bound in the template). Decided
+   syntax: **`$asset("path")`** — it wears the `$` framework
+   namespace (`$store`/`$route`/`$index`) but, unlike those runtime
+   magics, is resolved at template compile time by `#[component]`
+   (hash baked in; missing file = compile error) — a build-time
+   intrinsic in magic syntax. The hook rides a later RFC once SSR
+   (RFC-099) settles expression evaluation on both sides.
 5. **No bucket GC** — unreferenced old hashes are kept (see §5.3).
 6. **Streaming/Range in the Mode B proxy** — v1 buffers full bodies
    and answers `Range` requests with a `200` full body (HTTP
@@ -368,4 +372,4 @@ release.
 | Railway adapter bucket auto-provisioning (§9) | **follow-up** |
 | `window.__POCOPINE_ASSET_BASE` injection into served `index.html` (Mode A in-browser base) | **follow-up** — until then Mode A is fully effective for SSR-emitted URLs; pure-client apps on Mode A need the global set in their `index.html` |
 | streaming/Range proxy reads | follow-up (§10.6) |
-| `.poco` `asset()` syntax | phase 2 (§10.4) |
+| `.poco` `$asset("path")` syntax | phase 2 (§10.4) |
