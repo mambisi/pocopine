@@ -14,8 +14,7 @@ ghcr.io/pocopine/build:<pocopine-cli-version>-rust-<rust-version>
 Examples:
 
 ```
-ghcr.io/pocopine/build:0.1.0-rust-1.84
-ghcr.io/pocopine/build:0.1.0-rust-1.85    # bumped toolchain
+ghcr.io/pocopine/build:0.1.0-rust-1.85    # edition-2024 floor
 ghcr.io/pocopine/build:0.2.0-rust-1.85    # bumped pocopine release
 ```
 
@@ -32,9 +31,9 @@ ghcr.io/pocopine/build:0.2.0-rust-1.85    # bumped pocopine release
 
 ```sh
 docker buildx build \
-  --build-arg RUST_VERSION=1.84 \
+  --build-arg RUST_VERSION=1.85 \
   --build-arg POCOPINE_REV=$(git rev-parse HEAD) \
-  -t ghcr.io/pocopine/build:0.1.0-rust-1.84 \
+  -t ghcr.io/pocopine/build:0.1.0-rust-1.85 \
   -f docker/build/Dockerfile .
 ```
 
