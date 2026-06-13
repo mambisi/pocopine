@@ -150,6 +150,16 @@ pub trait ComponentState: 'static {
     /// Returns a JsValue (or `JsValue::UNDEFINED` for void methods).
     fn invoke(&mut self, key: &str, args: &Array) -> JsValue;
 
+    /// RFC-097 §3.3 — does the handler named `key` take `&self` (an
+    /// immutable receiver)? Such a handler provably cannot mutate
+    /// component state, so [`Scope::invoke`] skips the [`DirtySweep`]
+    /// and model-write bracket for it. `#[component]`/`#[store]` delegate
+    /// this to the receiver partition the `#[handlers]` macro computes;
+    /// derived scopes keep the default (`false` → always swept).
+    fn is_readonly_handler(&self, _key: &str) -> bool {
+        false
+    }
+
     /// Lifecycle — called once right after the scope is minted and
     /// its RFC-027 parent is set, *before* the template's children
     /// walk. Lets compound-component children initialise fields
@@ -900,23 +910,37 @@ impl Scope {
         let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
         #[cfg(feature = "devtools")]
         let start = crate::devtools::ring::now_ms_for_scope();
-        let sweep = DirtySweep::begin(self.id, &self.state);
-        let out = crate::model_runtime::with_scope_write(
-            self.id,
-            crate::model_runtime::WriteOrigin::LocalHandler,
-            || self.state.borrow_mut().invoke(key, args),
-        );
-        CURRENT_SCOPE_ID.with(|c| c.set(prev));
-        match sweep {
-            Some(sweep) => sweep.finish(&self.state),
-            None => {
-                // Handler may have mutated arbitrary fields through
-                // `&mut self` and we couldn't snapshot — drop the
-                // whole cache and trigger every tracked key.
-                invalidate_field_cache(self.id);
-                trigger_scope(self.id);
+        // RFC-097 §3.3 — a `&self` handler provably cannot mutate state
+        // (macro-enforced receiver + the interior-mutability field
+        // rejection), so skip the whole sweep + model-write bracket:
+        // no fingerprints, no model snapshot, no trigger. Just bind the
+        // scope and run it. (`invoke` still takes `&mut self` as the
+        // type-erased dispatch entry; the user method is `&self`.)
+        let readonly = self.state.borrow().is_readonly_handler(key);
+        let out = if readonly {
+            let out = self.state.borrow_mut().invoke(key, args);
+            CURRENT_SCOPE_ID.with(|c| c.set(prev));
+            out
+        } else {
+            let sweep = DirtySweep::begin(self.id, &self.state);
+            let out = crate::model_runtime::with_scope_write(
+                self.id,
+                crate::model_runtime::WriteOrigin::LocalHandler,
+                || self.state.borrow_mut().invoke(key, args),
+            );
+            CURRENT_SCOPE_ID.with(|c| c.set(prev));
+            match sweep {
+                Some(sweep) => sweep.finish(&self.state),
+                None => {
+                    // Handler may have mutated arbitrary fields through
+                    // `&mut self` and we couldn't snapshot — drop the
+                    // whole cache and trigger every tracked key.
+                    invalidate_field_cache(self.id);
+                    trigger_scope(self.id);
+                }
             }
-        }
+            out
+        };
         // Devtools hook — fired after trigger_scope so any effect
         // runs scheduled by this handler are visible on the timeline
         // with a seq > this handler's.

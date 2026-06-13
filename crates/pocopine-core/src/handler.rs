@@ -18,6 +18,16 @@ use web_sys::{
 pub trait HandlerDispatch {
     fn invoke_handler(&mut self, key: &str, args: &Array) -> JsValue;
 
+    /// RFC-097 §3.3 — is the handler named `key` declared with a `&self`
+    /// receiver? `#[handlers]` overrides this with a `match` over the
+    /// immutable-receiver handler names; the runtime
+    /// ([`crate::scope::Scope::invoke`], via the `ComponentState`
+    /// delegation) uses it to skip the dirty sweep for read-only
+    /// handlers. Default `false` keeps every handler swept.
+    fn is_readonly_handler(&self, _key: &str) -> bool {
+        false
+    }
+
     /// Called once after the scope is minted and the parent-context
     /// chain (RFC-027) is set up, **before** the template's children
     /// walk. The place to initialise fields that depend on injected

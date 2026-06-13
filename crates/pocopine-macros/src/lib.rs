@@ -1414,6 +1414,140 @@ fn type_path_last_segment(ty: &Type) -> Option<&syn::PathSegment> {
     }
 }
 
+/// RFC-097 §3.3 — outer type constructors that grant interior
+/// mutability. A `#[component]`/`#[store]` field of one of these can be
+/// mutated through `&self`, which would make the `&self`-handlers-skip-
+/// the-sweep optimisation unsound, so the macros reject them. (A type
+/// alias can still smuggle one past this syntactic check — documented
+/// as forfeiting the guarantee, same standing as `#[serde(skip)]`.)
+const INTERIOR_MUT_TYPES: &[&str] = &["Cell", "RefCell", "Mutex", "RwLock", "UnsafeCell"];
+
+/// RFC-097 §3.2 — `Handle<T>`'s inherent method names. A field whose
+/// generated accessor would collide with one of these is rejected: the
+/// inherent method wins method resolution, so the accessor would
+/// silently never be called. Kept in sync with the inherent surface by
+/// a parity test in `pocopine-core` (the "W2c lesson applied to
+/// ourselves" — the list must not drift).
+const FIELD_HANDLE_RESERVED: &[&str] = &[
+    "new",
+    "with",
+    "update",
+    "borrow",
+    "borrow_mut",
+    "try_borrow_mut",
+    "scope_id",
+    "watch_field",
+    "observe",
+];
+
+/// RFC-097 §3.3 — reject any field whose outer type is an interior-
+/// mutability constructor. Returns `Some(compile_error tokens)` on the
+/// first offending field.
+fn interior_mut_rejection(
+    field_idents: &[syn::Ident],
+    field_types: &[Type],
+) -> Option<TokenStream2> {
+    for (ident, ty) in field_idents.iter().zip(field_types.iter()) {
+        let seg = type_path_last_segment(ty)?;
+        let name = seg.ident.to_string();
+        if INTERIOR_MUT_TYPES.contains(&name.as_str()) {
+            let msg = format!(
+                "RFC-097: field `{ident}` has interior-mutability type `{name}`. Component/store \
+                 fields must be plain value-semantics data — interior mutability would let a \
+                 `&self` handler mutate state, breaking the no-sweep optimisation. Move the cell \
+                 out of component state (e.g. a `thread_local!` keyed by `ScopeId`)."
+            );
+            return Some(syn::Error::new_spanned(ty, msg).to_compile_error());
+        }
+    }
+    None
+}
+
+/// RFC-097 §3.2 — reject any serde-visible field whose generated
+/// accessor name collides with a `Handle` inherent method (the
+/// inherent method wins resolution, silently shadowing the accessor).
+/// Returns `Some(compile_error)` on the first collision.
+fn reserved_name_rejection(
+    field_idents: &[syn::Ident],
+    field_names: &[String],
+    field_is_serde_skip: &[bool],
+) -> Option<TokenStream2> {
+    for ((ident, name), skip) in field_idents
+        .iter()
+        .zip(field_names.iter())
+        .zip(field_is_serde_skip.iter())
+    {
+        if *skip {
+            continue;
+        }
+        if FIELD_HANDLE_RESERVED.contains(&name.as_str()) {
+            let msg = format!(
+                "RFC-097: field `{name}` collides with the inherent `Handle::{name}` method, so \
+                 the generated field accessor `Handle::{name}()` would be silently unreachable \
+                 (the inherent method wins resolution). Rename the field."
+            );
+            return Some(syn::Error::new_spanned(ident, msg).to_compile_error());
+        }
+    }
+    None
+}
+
+/// RFC-097 §3.2 — emit the `<Name>Fields` extension trait + its
+/// `impl … for Handle<Name>`, one `FieldHandle<FieldTy>` accessor per
+/// serde-visible field. Shared by `#[component]` and `#[store]`.
+/// Reserved-name collisions are rejected up front by
+/// [`reserved_name_rejection`], so every field here is emittable.
+fn field_handles_tokens(
+    struct_ident: &syn::Ident,
+    ident_str: &str,
+    field_idents: &[syn::Ident],
+    field_names: &[String],
+    field_types: &[Type],
+    field_is_serde_skip: &[bool],
+) -> TokenStream2 {
+    let trait_ident = proc_macro2::Ident::new(&format!("{ident_str}Fields"), struct_ident.span());
+    let mut trait_methods: Vec<TokenStream2> = Vec::new();
+    let mut impl_methods: Vec<TokenStream2> = Vec::new();
+    for (((ident, name), ty), skip) in field_idents
+        .iter()
+        .zip(field_names.iter())
+        .zip(field_types.iter())
+        .zip(field_is_serde_skip.iter())
+    {
+        if *skip {
+            continue;
+        }
+        let name_lit = proc_macro2::Literal::string(name);
+        let doc = format!("Field handle for `{name}` — single-field reactive writes (no sweep).");
+        trait_methods.push(quote! {
+            #[doc = #doc]
+            fn #ident(&self) -> ::pocopine::__private::FieldHandle<#ty>;
+        });
+        impl_methods.push(quote! {
+            fn #ident(&self) -> ::pocopine::__private::FieldHandle<#ty> {
+                ::pocopine::__private::FieldHandle::__new(
+                    ::pocopine::Handle::scope_id(self),
+                    #name_lit,
+                )
+            }
+        });
+    }
+    let trait_doc = format!(
+        "RFC-097 field handles for [`{ident_str}`]. Bring into scope (`use …::{trait_ident};`) to \
+         call `this::<{ident_str}>().<field>()` → `FieldHandle<_>` for single-field reactive \
+         writes from async tasks. One accessor per serde-visible field."
+    );
+    quote! {
+        #[doc = #trait_doc]
+        pub trait #trait_ident {
+            #(#trait_methods)*
+        }
+        impl #trait_ident for ::pocopine::Handle<#struct_ident> {
+            #(#impl_methods)*
+        }
+    }
+}
+
 #[proc_macro_attribute]
 pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = match ComponentArgs::parse.parse(attr) {
@@ -1603,6 +1737,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut field_types: Vec<Type> = Vec::new();
     let mut field_is_prop: Vec<bool> = Vec::new();
     let mut field_is_model: Vec<bool> = Vec::new();
+    // RFC-097 — fields hidden from serde get no `FieldHandle` accessor
+    // (the projection read/write round-trips through serde).
+    let mut field_is_serde_skip: Vec<bool> = Vec::new();
     let mut field_model_names: Vec<Option<String>> = Vec::new();
     let mut observes: Vec<ObserveEntry> = Vec::new();
     // RFC-044 §5.10 — `flatten` fields (role-agnostic). Each entry
@@ -1634,6 +1771,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         let mut model_name: Option<String> = None;
         let mut observe_spec: Option<(Path, Option<String>)> = None;
         let mut observe_err: Option<syn::Error> = None;
+        let mut is_serde_skip = false;
         field.attrs.retain(|a| {
             if a.path().is_ident("prop") {
                 // Shapes accepted:
@@ -1884,6 +2022,27 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 return false;
             }
+            // RFC-097 — note (don't strip) serde-skip so the field-handle
+            // emission can exclude fields that won't round-trip through
+            // the projection serde path. `serde` derive still needs the
+            // attribute, so keep it (`return true`).
+            if a.path().is_ident("serde") {
+                let _ = a.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("skip")
+                        || meta.path.is_ident("skip_serializing")
+                        || meta.path.is_ident("skip_deserializing")
+                    {
+                        is_serde_skip = true;
+                    }
+                    // Consume any `= value` (rename/with/…) so nested-meta
+                    // parsing of other serde keys doesn't error.
+                    if meta.input.peek(Token![=]) {
+                        let _ = meta.value().and_then(|v| v.parse::<Expr>());
+                    }
+                    Ok(())
+                });
+                return true;
+            }
             true
         });
         if let Some(err) = observe_err {
@@ -1905,7 +2064,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         field_idents.push(ident);
         field_is_prop.push(is_prop);
         field_is_model.push(is_model);
+        field_is_serde_skip.push(is_serde_skip);
         field_model_names.push(model_name.or_else(|| is_model.then_some(rust_name)));
+    }
+
+    // RFC-097 §3.3 — reject interior-mutability field types up front so
+    // the `&self`-skips-the-sweep optimisation stays sound.
+    if let Some(err) = interior_mut_rejection(&field_idents, &field_types) {
+        return quote! { #input #err }.into();
+    }
+    // RFC-097 §3.2 — reject field names that would shadow a `Handle`
+    // inherent method (the generated accessor would be unreachable).
+    if let Some(err) = reserved_name_rejection(&field_idents, &field_names, &field_is_serde_skip) {
+        return quote! { #input #err }.into();
     }
 
     // RFC-044 §5.10 — collision rule. A flatten leaf must not shadow
@@ -3107,10 +3278,22 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // RFC-097 §3.2 — the `<Name>Fields` extension trait of typed
+    // single-field handles, impl'd for `Handle<Name>`.
+    let field_handles_tokens = field_handles_tokens(
+        &struct_ident,
+        &ident_str,
+        &field_idents,
+        &field_names,
+        &field_types,
+        &field_is_serde_skip,
+    );
+
     let out = quote! {
         #input
         #template_plan_item_tokens
         #refs_struct_tokens
+        #field_handles_tokens
 
         // RFC 049 — marker traits + blanket impls for each
         // #[slot(accepts=...)] / #[slot(only=...)] declared on
@@ -3268,6 +3451,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::pocopine::__private::JsValue {
                 <Self as ::pocopine::__private::HandlerDispatch>::invoke_handler(self, key, args)
             }
+            // RFC-097 §3.3 — surface the `#[handlers]` receiver partition
+            // to the runtime so `Scope::invoke` can skip the sweep for
+            // `&self` handlers.
+            fn is_readonly_handler(&self, key: &str) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::is_readonly_handler(self, key)
+            }
             fn setup(
                 &mut self,
                 ctx: ::pocopine::__private::LifecycleContext<'_>,
@@ -3414,6 +3603,9 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     ));
 
     let mut arms = Vec::new();
+    // RFC-097 §3.3 — names of `&self` (read-only) handlers; the runtime
+    // skips the dirty sweep for these.
+    let mut readonly_names: Vec<String> = Vec::new();
     let mut has_on_setup = false;
     let mut has_on_mount = false;
     let mut has_on_ready = false;
@@ -3553,7 +3745,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for item in &input.items {
         let ImplItem::Fn(method) = item else { continue };
-        let Some(_receiver) = method.sig.receiver() else {
+        let Some(receiver) = method.sig.receiver() else {
             continue;
         };
         let ident = method.sig.ident.clone();
@@ -3644,6 +3836,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 ::pocopine::__private::JsValue::UNDEFINED
             }
         });
+        // RFC-097 §3.3 — `&self` (immutable reference, no `mut`) is a
+        // read-only handler. By-value `self` and `&mut self` stay swept.
+        if receiver.reference.is_some() && receiver.mutability.is_none() {
+            readonly_names.push(name.clone());
+        }
     }
 
     // Always wrap setup with the observe seed + install calls the
@@ -4000,6 +4197,19 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
+    // RFC-097 §3.3 — override the read-only classifier only when there
+    // is at least one `&self` handler; otherwise the default (`false`)
+    // stands and every handler stays swept.
+    let readonly_impl = if readonly_names.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn is_readonly_handler(&self, key: &str) -> bool {
+                matches!(key, #(#readonly_names)|*)
+            }
+        }
+    };
+
     let out = quote! {
         #input
 
@@ -4016,6 +4226,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     _ => ::pocopine::__private::JsValue::UNDEFINED,
                 }
             }
+            #readonly_impl
             #setup_impl
             #mount_impl
             #on_ready_impl
@@ -4094,6 +4305,46 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .map(|i| i.to_string().trim_start_matches("r#").to_string())
         .collect();
+    // RFC-097 — stores get the same `<Name>Fields` extension trait, so
+    // collect field types + serde-skip (the store loop didn't need
+    // either before).
+    let field_types: Vec<Type> = input
+        .fields
+        .iter()
+        .filter(|f| f.ident.is_some())
+        .map(|f| f.ty.clone())
+        .collect();
+    let field_is_serde_skip: Vec<bool> = input
+        .fields
+        .iter()
+        .filter(|f| f.ident.is_some())
+        .map(|f| {
+            let mut skip = false;
+            for a in &f.attrs {
+                if a.path().is_ident("serde") {
+                    let _ = a.parse_nested_meta(|meta| {
+                        if meta.path.is_ident("skip")
+                            || meta.path.is_ident("skip_serializing")
+                            || meta.path.is_ident("skip_deserializing")
+                        {
+                            skip = true;
+                        }
+                        if meta.input.peek(Token![=]) {
+                            let _ = meta.value().and_then(|v| v.parse::<Expr>());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+            skip
+        })
+        .collect();
+    if let Some(err) = interior_mut_rejection(&field_idents, &field_types) {
+        return quote! { #input #err }.into();
+    }
+    if let Some(err) = reserved_name_rejection(&field_idents, &field_names, &field_is_serde_skip) {
+        return quote! { #input #err }.into();
+    }
 
     let get_arms = field_idents
         .iter()
@@ -4137,8 +4388,19 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
     });
     let keys_arr = field_names.iter().map(|n| quote! { #n });
 
+    // RFC-097 §3.2 — store field handles (`store::<Name>().field()`).
+    let field_handles_tokens = field_handles_tokens(
+        &struct_ident,
+        &ident_str,
+        &field_idents,
+        &field_names,
+        &field_types,
+        &field_is_serde_skip,
+    );
+
     let out = quote! {
         #input
+        #field_handles_tokens
 
         impl #struct_ident {
             // RFC-036 — stores don't support `#[observe(KEY)]`
@@ -4192,6 +4454,12 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
                 args: &::pocopine::__private::js_sys::Array,
             ) -> ::pocopine::__private::JsValue {
                 <Self as ::pocopine::__private::HandlerDispatch>::invoke_handler(self, key, args)
+            }
+            // RFC-097 §3.3 — surface the `#[handlers]` receiver partition
+            // to the runtime so `Scope::invoke` can skip the sweep for
+            // `&self` handlers.
+            fn is_readonly_handler(&self, key: &str) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::is_readonly_handler(self, key)
             }
             fn type_name(&self) -> &'static str {
                 #name_str
