@@ -1171,3 +1171,48 @@ fn slab_generation_reuse_rejects_stale_id() {
         "fresh effect at the reused slot still reacts"
     );
 }
+
+/// H3 + H4 — when inline schedulers defer downstream signals to the
+/// worklist, sibling branches drain FIFO (trigger order). With the old
+/// LIFO drain the two branches would queue in reverse; this asserts the
+/// registration-order guarantee across a diamond. (Single-signal order
+/// is covered by `dispatch_runs_effects_in_subscription_order`.)
+#[wasm_bindgen_test]
+fn worklist_preserves_fifo_sibling_order() {
+    setup();
+    let (s, set_s) = signal(0_i32);
+
+    // Two computeds read `s`; created C1 then C2.
+    let s_1 = s.clone();
+    let c1 = Rc::new(computed(move || s_1.get() + 1));
+    let s_2 = s.clone();
+    let c2 = Rc::new(computed(move || s_2.get() + 1));
+
+    let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+
+    // E_x reads C1, E_y reads C2 — created in that order, so `s`'s
+    // subscriber order (and thus the worklist push order) is [C1, C2].
+    let c1_e = c1.clone();
+    let order_x = order.clone();
+    effect(move || {
+        c1_e.get();
+        order_x.borrow_mut().push("x");
+    });
+    let c2_e = c2.clone();
+    let order_y = order.clone();
+    effect(move || {
+        c2_e.get();
+        order_y.borrow_mut().push("y");
+    });
+
+    order.borrow_mut().clear(); // discard initial-run records
+    set_s.set(5);
+    flush_sync();
+    // C1 deferred before C2; FIFO drain dispatches C1 first, so E_x
+    // queues and runs before E_y. (LIFO would give ["y", "x"].)
+    assert_eq!(
+        *order.borrow(),
+        vec!["x", "y"],
+        "cross-branch sibling effects must keep FIFO trigger order"
+    );
+}

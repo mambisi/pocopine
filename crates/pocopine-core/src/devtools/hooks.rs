@@ -109,9 +109,10 @@ pub(crate) fn fire_handler_invoke(scope: ScopeId, name: &str, args: &Array, dura
     }
 }
 
-/// Fired after `dispatch_subs` extends QUEUE. Receives a snapshot
-/// of the effect ids that were just queued (not the full queue) so
-/// the handler doesn't have to diff.
+/// Fired once per outermost `dispatch_signal`, after its worklist
+/// drain has queued effects. Receives the snapshot of effect ids
+/// queued across the whole drain (not the full queue) so the handler
+/// doesn't have to diff.
 pub(crate) fn fire_queue_change(added: &[EffectId]) {
     let hook = HOOKS.with(|h| h.borrow().on_queue_change.clone());
     if let Some(f) = hook {

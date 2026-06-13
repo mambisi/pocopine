@@ -23,7 +23,7 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 // RFC-098 H4 — `IndexSet` gives HashSet's API with deterministic
@@ -91,8 +91,10 @@ pub struct EffectOptions {
 }
 
 thread_local! {
-    // Ids start at 1 — 0 stays unallocated as an easy-to-spot
-    // "never minted" value in debugger output.
+    // Scope/Signal ids start at 1 (0 stays an easy-to-spot
+    // "never minted" sentinel for them). Effect ids are NOT drawn from
+    // here post-RFC-098 — they're slab slots, so the first effect is
+    // legitimately `EffectId(0)`.
     static NEXT_ID: Cell<u64> = const { Cell::new(1) };
     static CURRENT_EFFECT: Cell<Option<EffectId>> = const { Cell::new(None) };
     /// RFC-098 H2 — the one effect table. `EffectId = generation<<32 |
@@ -139,8 +141,13 @@ thread_local! {
     /// worklist, and unwinds — dispatch never recurses, so the
     /// re-entrancy the old scratch dance defended against is
     /// structurally impossible.
+    ///
+    /// The worklist is a FIFO `VecDeque` (push_back / pop_front): a
+    /// signal deferred earlier is dispatched earlier, so cross-branch
+    /// sibling effects keep trigger order — matching the old recursive
+    /// dispatch and honoring H4's registration-order invariant.
     static DISPATCH_DEPTH: Cell<u32> = const { Cell::new(0) };
-    static WORKLIST: RefCell<Vec<SignalId>> = const { RefCell::new(Vec::new()) };
+    static WORKLIST: RefCell<VecDeque<SignalId>> = const { RefCell::new(VecDeque::new()) };
 }
 
 /// Toggle the automatic microtask flush. Production code leaves this at
@@ -172,11 +179,15 @@ fn pack_effect_id(slot: usize, generation: u32) -> EffectId {
     debug_assert!(slot <= u32::MAX as usize, "effect slot exceeds u32");
     let packed = ((generation as u64) << 32) | (slot as u64 & 0xFFFF_FFFF);
     // The teardown lists round-trip an EffectId through `f64`
-    // (`mount.rs` stores `id.0 as f64`), exact only below 2^53 —
-    // which holds while generation < 2^21 (~2M reuses of one slot).
-    debug_assert!(
+    // (`mount.rs` stores `id.0 as f64`), exact only below 2^53 — which
+    // holds while generation < 2^21 (~2M reuses of one slot). A hard
+    // (release-mode) assert: past that bound the round-trip would lose
+    // precision and corrupt DOM-expando teardown SILENTLY, so fail
+    // loud instead. One `u64 < const` compare per effect mint —
+    // negligible beside the slab insert.
+    assert!(
         packed < (1u64 << 53),
-        "EffectId {packed:#x} exceeds f64-exact range — slot reused >2^21 times (generation overflow)"
+        "EffectId {packed:#x} exceeds f64-exact range — a slab slot was reused >2^21 times (generation overflow)"
     );
     EffectId(packed)
 }
@@ -510,7 +521,7 @@ fn dispatch_signal(sid: SignalId) {
     if DISPATCH_DEPTH.with(|d| d.get()) > 0 {
         // Re-entrant: a scheduler triggered another signal. Enqueue and
         // unwind — the outermost frame drives the loop.
-        WORKLIST.with(|w| w.borrow_mut().push(sid));
+        WORKLIST.with(|w| w.borrow_mut().push_back(sid));
         return;
     }
     DISPATCH_DEPTH.with(|d| d.set(1));
@@ -559,7 +570,7 @@ fn dispatch_signal(sid: SignalId) {
                 }
             }
         }
-        match WORKLIST.with(|w| w.borrow_mut().pop()) {
+        match WORKLIST.with(|w| w.borrow_mut().pop_front()) {
             Some(next) => cursor = next,
             None => break,
         }
