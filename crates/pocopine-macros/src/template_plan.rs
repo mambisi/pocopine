@@ -881,6 +881,15 @@ fn emit_native_model(nm: &NativeModelLite) -> TokenStream {
 fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
     let items = emissions.if_bodies.iter().map(|emission| {
         let ident = &emission.ident;
+        // RFC-099 Phase 3 — lift the body's cleaned HTML and its
+        // per-fragment plan into module-level consts so BOTH the
+        // create-path body fn AND the structural plan's
+        // `body_plan` / `body_html` fields can reference the same
+        // data (no duplication: the html/plan are needed in the
+        // bundle for the client create path regardless, and the
+        // host SSR stamper + client claimer read them through the
+        // plan fields). See `body_const_idents`.
+        let (html_const, plan_const) = body_const_idents(ident);
         let html_lit = proc_macro2::Literal::string(&emission.html);
         let plan_literal = emit_static_template_plan_literal(&emission.plan);
         // RFC 064 §5.1 (Phase 1) — inline the unrolled install
@@ -889,12 +898,11 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
         // pp-for, or pp-teleport body fragments; the
         // per-fragment closure uses `emit_specialized_install_pass`
         // (the same code path RFC 062 component mount
-        // specialization uses) against a local `const PLAN`.
+        // specialization uses) against the body's plan const.
         let install_pass = emission
             .plan
             .emit_specialized_install_pass(quote! {
-                const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
-                let __poc_plan = &PLAN;
+                let __poc_plan = &#plan_const;
                 let __poc_template_name = "<pp-if body>";
             })
             .unwrap_or_else(|| {
@@ -905,13 +913,15 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
                 quote! {}
             });
         quote! {
+            const #html_const: &'static str = #html_lit;
+            const #plan_const: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
             fn #ident(
                 scope_id: ::pocopine::ScopeId,
                 proxy: &::pocopine::__private::JsValue,
                 ctx_parent_id: ::pocopine::ScopeId,
             ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
                 ::pocopine::__private::stamp_if_body_with(
-                    #html_lit,
+                    #html_const,
                     scope_id,
                     proxy,
                     ctx_parent_id,
@@ -926,6 +936,43 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
         }
     });
     quote! { #(#items)* }
+}
+
+/// RFC-099 Phase 3 — the per-body `_HTML` / `_PLAN` const idents
+/// derived from a body fragment fn ident. Emitted alongside the
+/// body fn in [`emit_if_body_fns`]; referenced from the structural
+/// plan literals (`emit_if_plan` / `emit_match_plan` /
+/// `emit_for_plan`) so the SSR stamper and client claimer can read
+/// the body as data. Const-to-const references resolve
+/// order-independently, so nested controllers inside a body work
+/// without ordering constraints.
+fn body_const_idents(body_fn_ident: &syn::Ident) -> (syn::Ident, syn::Ident) {
+    (
+        format_ident!("{}_HTML", body_fn_ident),
+        format_ident!("{}_PLAN", body_fn_ident),
+    )
+}
+
+/// RFC-099 Phase 3 — `(body_plan, body_html)` field token pair for
+/// a structural body, given its body fragment fn ident. `Some(id)`
+/// references the `_PLAN` / `_HTML` consts emitted in
+/// [`emit_if_body_fns`]; `None` (body outside the lift envelope)
+/// yields `None` fields and the SSR stamper leaves the construct
+/// unexpanded (the client mounts it client-side, as before).
+fn body_data_tokens(body_fn_ident: &Option<syn::Ident>) -> (TokenStream, TokenStream) {
+    match body_fn_ident {
+        Some(id) => {
+            let (html_const, plan_const) = body_const_idents(id);
+            (
+                quote! { ::core::option::Option::Some(&#plan_const) },
+                quote! { ::core::option::Option::Some(#html_const) },
+            )
+        }
+        None => (
+            quote! { ::core::option::Option::None },
+            quote! { ::core::option::Option::None },
+        ),
+    }
 }
 
 /// Generate `fn` items for every accumulated slot fragment.
@@ -1357,20 +1404,25 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
         None => quote! { ::core::option::Option::None },
     };
     let body_tokens = opt_body(&ip.body_fn_ident);
+    let (body_plan_tokens, body_html_tokens) = body_data_tokens(&ip.body_fn_ident);
     let else_if_tokens = ip.else_if.iter().map(|(expr_src, body)| {
         let e = proc_macro2::Literal::string(expr_src);
         let c = emit_compiled_expr_option(expr_src);
         let b = opt_body(body);
+        let (bp, bh) = body_data_tokens(body);
         quote! {
             ::pocopine::__private::CondBranch {
                 expr_src: #e,
                 compiled: #c,
                 body: #b,
+                body_plan: #bp,
+                body_html: #bh,
             }
         }
     });
     let has_else = ip.has_else;
     let else_body_tokens = opt_body(&ip.else_body);
+    let (else_body_plan_tokens, else_body_html_tokens) = body_data_tokens(&ip.else_body);
     let consumed_count = ip.consumed_count;
     quote! {
         ::pocopine::__private::StaticCondPlan {
@@ -1378,9 +1430,13 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
             expr_src: #expr,
             compiled: #compiled,
             body: #body_tokens,
+            body_plan: #body_plan_tokens,
+            body_html: #body_html_tokens,
             else_if: &[ #(#else_if_tokens),* ],
             has_else: #has_else,
             else_body: #else_body_tokens,
+            else_body_plan: #else_body_plan_tokens,
+            else_body_html: #else_body_html_tokens,
             consumed_count: #consumed_count,
             teleport_selector: #teleport_selector_tokens,
         }
@@ -1411,11 +1467,14 @@ fn emit_match_plan(mp: &MatchPlanLite) -> TokenStream {
             Some(ident) => quote! { ::core::option::Option::Some(#ident) },
             None => quote! { ::core::option::Option::None },
         };
+        let (bp, bh) = body_data_tokens(body);
         quote! {
             ::pocopine::__private::MatchCase {
                 tags: &[ #(#tag_lits),* ],
                 bind_name: #bind_tokens,
                 body: #body_tokens,
+                body_plan: #bp,
+                body_html: #bh,
             }
         }
     });
@@ -1462,6 +1521,7 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
         Some(ident) => quote! { ::core::option::Option::Some(#ident) },
         None => quote! { ::core::option::Option::None },
     };
+    let (body_plan_tokens, body_html_tokens) = body_data_tokens(&fp.body_fn_ident);
     quote! {
         ::pocopine::__private::StaticForPlan {
             template_node_path: #path,
@@ -1470,6 +1530,8 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
             key_expr: #key_tokens,
             stagger_ms: #stagger,
             body: #body_tokens,
+            body_plan: #body_plan_tokens,
+            body_html: #body_html_tokens,
         }
     }
 }
