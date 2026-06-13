@@ -305,7 +305,16 @@ developer desktop:
 The `src-tauri` host crate is **excluded from the workspace members** so
 a stock `cargo build`/CI never attempts to link the webview. The example
 documents the host prerequisites (`libwebkit2gtk-4.1-dev` + friends on
-Linux; nothing extra on macOS/Windows).
+Linux; nothing extra on macOS/Windows), and `pocopine doctor` checks them
+per-OS — on Linux it probes the GTK/WebKitGTK `.pc` files and prints the
+distro-specific install command when any are missing.
+
+**Linux runtime note.** WebKitGTK's DMABUF renderer SIGSEGVs on many
+Linux setups with NVIDIA / hybrid GPUs under Wayland (a WebKit/driver
+bug, not framework code). The shell defaults
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` when the user hasn't set it, so the
+native app runs out of the box there; `WEBKIT_DISABLE_DMABUF_RENDERER=0`
+re-enables it.
 
 ## 9. Implementation plan
 
