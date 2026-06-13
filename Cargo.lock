@@ -6058,6 +6058,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-ssr"
+version = "0.1.0"
+dependencies = [
+ "html5ever",
+ "markup5ever_rcdom",
+ "pocopine-core",
+ "pocopine-expr",
+ "serde_json",
+]
+
+[[package]]
 name = "pocopine-storage"
 version = "0.1.1"
 dependencies = [

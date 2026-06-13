@@ -32,6 +32,7 @@ members = [
     "crates/pocopine-macros",
     "crates/pocopine-observe",
     "crates/pocopine-server",
+    "crates/pocopine-ssr",
     "crates/pocopine-storage",
     "crates/pocopine-storage-azure",
     "crates/pocopine-storage-gcs",
