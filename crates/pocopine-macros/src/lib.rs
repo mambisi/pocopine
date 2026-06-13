@@ -993,6 +993,26 @@ pub(crate) fn kebab_case(ident: &str) -> String {
     out
 }
 
+/// Build `#name => #call(&self.#id),` match arms — one per direct
+/// field. Shared by `#[component]` and `#[store]` for the per-field
+/// projection lanes (fingerprint, quick-len, text) that each wrap a
+/// single `::pocopine::__private` call around the field reference, so
+/// the two macros can't drift on the arm shape.
+fn field_call_arms<'a>(
+    field_idents: &'a [syn::Ident],
+    field_names: &'a [String],
+    call: TokenStream2,
+) -> impl Iterator<Item = TokenStream2> + 'a {
+    field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(move |(id, name)| {
+            quote! {
+                #name => #call(&self.#id),
+            }
+        })
+}
+
 /// RFC 081 — convert a `pp-ref` name to a valid Rust method
 /// identifier for the generated `<ComponentName>Refs` struct.
 /// Kebab/dot/colon to underscore, leading non-alpha to a
@@ -2107,35 +2127,26 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // `None` (= "unknown", treated as changed by the dirty sweep —
     // the conservative direction). Same `Serialize` bound as
     // `get_arms`, so this compiles wherever `get` does.
-    let fingerprint_arms = field_idents
-        .iter()
-        .zip(field_names.iter())
-        .map(|(id, name)| {
-            quote! {
-                #name => ::pocopine::__private::fingerprint_value(&self.#id),
-            }
-        });
+    let fingerprint_arms = field_call_arms(
+        &field_idents,
+        &field_names,
+        quote! { ::pocopine::__private::fingerprint_value },
+    );
     // RFC-095 W2b — O(1) length probes for the dirty sweep's
     // collection short-circuit.
-    let quick_len_arms = field_idents
-        .iter()
-        .zip(field_names.iter())
-        .map(|(id, name)| {
-            quote! {
-                #name => ::pocopine::__private::quick_len_value(&self.#id),
-            }
-        });
+    let quick_len_arms = field_call_arms(
+        &field_idents,
+        &field_names,
+        quote! { ::pocopine::__private::quick_len_value },
+    );
 
     // RFC-096 S3 — typed text lane. Same Serialize bound as
     // get(); the projector itself decides scalar-vs-compound.
-    let text_arms = field_idents
-        .iter()
-        .zip(field_names.iter())
-        .map(|(id, name)| {
-            quote! {
-                #name => ::pocopine::__private::text_projection(&self.#id),
-            }
-        });
+    let text_arms = field_call_arms(
+        &field_idents,
+        &field_names,
+        quote! { ::pocopine::__private::text_projection },
+    );
 
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
@@ -4096,24 +4107,18 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
     // RFC-095 W2 — stores are the heaviest `Handle::update` users;
     // per-field fingerprints let the dirty sweep trigger only the
     // fields an `update` closure actually moved.
-    let fingerprint_arms = field_idents
-        .iter()
-        .zip(field_names.iter())
-        .map(|(id, name)| {
-            quote! {
-                #name => ::pocopine::__private::fingerprint_value(&self.#id),
-            }
-        });
+    let fingerprint_arms = field_call_arms(
+        &field_idents,
+        &field_names,
+        quote! { ::pocopine::__private::fingerprint_value },
+    );
     // RFC-095 W2b — O(1) length probes for the dirty sweep's
     // collection short-circuit.
-    let quick_len_arms = field_idents
-        .iter()
-        .zip(field_names.iter())
-        .map(|(id, name)| {
-            quote! {
-                #name => ::pocopine::__private::quick_len_value(&self.#id),
-            }
-        });
+    let quick_len_arms = field_call_arms(
+        &field_idents,
+        &field_names,
+        quote! { ::pocopine::__private::quick_len_value },
+    );
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {

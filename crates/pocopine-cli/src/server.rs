@@ -9,6 +9,11 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
+use pocopine_assets::{is_hashed_bundle_name, ASSET_CACHE_CONTROL};
+// Re-export so `crate::server::is_asset_hash` keeps resolving for
+// `build.rs`; the shared predicate lives in `pocopine-assets`.
+pub(crate) use pocopine_assets::is_asset_hash;
+
 use crate::client_modules;
 use crate::config::PocopineConfig;
 use crate::tools;
@@ -655,11 +660,9 @@ fn asset_route_response(
     let content_type =
         tiny_http::Header::from_bytes(&b"Content-Type"[..], mime_of(&canonical).as_bytes())
             .unwrap();
-    let cache_control = tiny_http::Header::from_bytes(
-        &b"Cache-Control"[..],
-        &b"public,max-age=31536000,immutable"[..],
-    )
-    .unwrap();
+    let cache_control =
+        tiny_http::Header::from_bytes(&b"Cache-Control"[..], ASSET_CACHE_CONTROL.as_bytes())
+            .unwrap();
     Some(
         tiny_http::Response::from_data(body)
             .with_header(content_type)
@@ -667,17 +670,6 @@ fn asset_route_response(
     )
 }
 
-/// RFC-100 — true for an 8-char lowercase-hex hash segment. Also the
-/// hash shape of the content-hashed bundle pair `build::hash_pkg_bundle`
-/// writes.
-pub(crate) fn is_asset_hash(segment: &str) -> bool {
-    segment.len() == 8
-        && segment
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-const CACHE_IMMUTABLE: &str = "public,max-age=31536000,immutable";
 const CACHE_NO_CACHE: &str = "no-cache";
 
 fn cache_control_header(value: &str) -> tiny_http::Header {
@@ -692,36 +684,12 @@ fn cache_control_header(value: &str) -> tiny_http::Header {
 /// revalidate every load. Everything else keeps no explicit header.
 fn cache_control_for(file_name: &str, mime: &str) -> Option<&'static str> {
     if is_hashed_bundle_name(file_name) {
-        return Some(CACHE_IMMUTABLE);
+        return Some(ASSET_CACHE_CONTROL);
     }
     if mime.starts_with("text/html") {
         return Some(CACHE_NO_CACHE);
     }
     None
-}
-
-/// `website.0a1b2c3d.js` / `website_bg.0a1b2c3d.wasm` → true. Only the
-/// bundle-pair extensions count, so a user file with a hex-looking
-/// name segment doesn't silently become immutable.
-fn is_hashed_bundle_name(file_name: &str) -> bool {
-    let Some((stem, ext)) = file_name.rsplit_once('.') else {
-        return false;
-    };
-    if ext != "js" && ext != "wasm" {
-        return false;
-    }
-    stem.rsplit_once('.')
-        .is_some_and(|(_, hash)| is_asset_hash(hash))
-}
-
-/// RFC-100 — 8-hex-char content hash; same shape as
-/// `pocopine_core::assets::asset_hash` (prefix of
-/// `pocopine_crypto::sha256_hex`), duplicated because the CLI does
-/// not link the wasm runtime crate.
-fn asset_hash_prefix(bytes: &[u8]) -> String {
-    let mut hex = pocopine_crypto::sha256_hex(bytes);
-    hex.truncate(8);
-    hex
 }
 
 /// True when the last URL segment has a file extension. Used to decide
@@ -736,7 +704,7 @@ fn looks_like_asset_path(rel: &str) -> bool {
 // The MIME table lives in `assets_sync` (RFC-100: one canonical table
 // for the dev server, the bucket sync, and — via stored content
 // types — the Mode B proxy).
-use crate::assets_sync::mime_of;
+use crate::assets_sync::{asset_hash_prefix, mime_of};
 
 #[cfg(test)]
 mod tests {
@@ -820,11 +788,11 @@ mod tests {
         // The hashed pair → immutable.
         assert_eq!(
             cache_control_for("website.0a1b2c3d.js", "text/javascript"),
-            Some(CACHE_IMMUTABLE)
+            Some(ASSET_CACHE_CONTROL)
         );
         assert_eq!(
             cache_control_for("website_bg.0a1b2c3d.wasm", "application/wasm"),
-            Some(CACHE_IMMUTABLE)
+            Some(ASSET_CACHE_CONTROL)
         );
         // HTML always revalidates.
         assert_eq!(

@@ -493,7 +493,10 @@ pub(crate) struct CompiledBinding {
 pub(crate) struct CompiledListener {
     pub node_path: &'static [u16],
     pub event: &'static str,
-    pub ast: Spanned<Expr>,
+    /// Shared across every row of the plan — the AST is identical for
+    /// all rows and only ever read, so rows clone the `Rc` (pointer
+    /// bump) rather than deep-copying the parsed expression per row.
+    pub ast: Rc<Spanned<Expr>>,
 }
 
 pub struct CompiledRowPlan {
@@ -583,7 +586,7 @@ pub fn register_row_plans(component_name: &str, plans: &'static [StaticRowPlan])
                     Ok(ast) => listeners.push(CompiledListener {
                         node_path: l.node_path,
                         event: l.event,
-                        ast,
+                        ast: Rc::new(ast),
                     }),
                     Err(e) => {
                         console::error_1(&JsValue::from_str(&format!(
@@ -1043,7 +1046,9 @@ struct RowInstance {
 struct RowListenerRoute {
     event: &'static str,
     node: Element,
-    ast: Spanned<Expr>,
+    /// Shared `Rc` from the plan's [`CompiledListener`]; cloning a row
+    /// route is a pointer bump, not an AST deep-copy.
+    ast: Rc<Spanned<Expr>>,
 }
 
 /// Key for the per-(parent_scope, plan) list-level watcher
