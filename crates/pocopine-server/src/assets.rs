@@ -52,7 +52,9 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use pocopine_assets::{AssetStore, AssetStoreConfig, FetchedAsset, ASSET_CACHE_CONTROL};
+use pocopine_assets::{
+    is_asset_hash, AssetStore, AssetStoreConfig, FetchedAsset, ASSET_CACHE_CONTROL,
+};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -195,15 +197,6 @@ async fn serve_asset(
     }
 }
 
-/// True for an 8-char lowercase-hex hash segment — the shape
-/// `pocopine_core::assets::asset_hash` produces.
-fn is_asset_hash(segment: &str) -> bool {
-    segment.len() == 8
-        && segment
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,14 +300,5 @@ mod tests {
         let (status, _) =
             get_status_and_headers(stub_router(true), "/assets/b94d27b9/blog/clip.webm").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
-    }
-
-    #[test]
-    fn hash_segment_shape() {
-        assert!(is_asset_hash("b94d27b9"));
-        assert!(!is_asset_hash("B94D27B9"));
-        assert!(!is_asset_hash("b94d27b"));
-        assert!(!is_asset_hash("b94d27b9a"));
-        assert!(!is_asset_hash("b94d27bg"));
     }
 }

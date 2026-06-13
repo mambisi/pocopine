@@ -461,16 +461,23 @@ pub fn clear_scope(scope_id: ScopeId) {
             .map(|inner| inner.into_values().collect())
             .unwrap_or_default()
     });
+    release_field_signals(&sids);
+}
+
+/// Evict the subscriber lists (`SIGNAL_DEPS`) and projection/version
+/// storage for a batch of interned field signals already removed from
+/// `FIELD_SIGNALS`. Shared tail of [`clear_scope`] and [`clear_scopes`].
+fn release_field_signals(sids: &[SignalId]) {
     if sids.is_empty() {
         return;
     }
     SIGNAL_DEPS.with(|d| {
         let mut d = d.borrow_mut();
-        for sid in &sids {
+        for sid in sids {
             d.remove(sid);
         }
     });
-    crate::scope::purge_field_storage(&sids);
+    crate::scope::purge_field_storage(sids);
 }
 
 /// Bulk variant for the RFC 054 compiled-row bulk-clear path.
@@ -490,16 +497,7 @@ pub fn clear_scopes(scope_ids: &[ScopeId]) {
         }
         out
     });
-    if sids.is_empty() {
-        return;
-    }
-    SIGNAL_DEPS.with(|d| {
-        let mut d = d.borrow_mut();
-        for sid in &sids {
-            d.remove(sid);
-        }
-    });
-    crate::scope::purge_field_storage(&sids);
+    release_field_signals(&sids);
 }
 
 /// Trigger every key currently tracked for this scope. RFC-095 W2

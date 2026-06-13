@@ -38,6 +38,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use axum::http::{header, HeaderValue, Request, Response, Uri};
+use pocopine_assets::{is_hashed_bundle_name, ASSET_CACHE_CONTROL};
 use tower::Service;
 use tower_http::services::fs::{DefaultServeDirFallback, ServeFileSystemResponseBody};
 use tower_http::services::ServeDir;
@@ -142,15 +143,15 @@ where
     }
 }
 
-const IMMUTABLE: &str = "public,max-age=31536000,immutable";
-
 fn apply_cache_policy(immutable: bool, res: &mut Response<ServeFileSystemResponseBody>) {
     if res.headers().contains_key(header::CACHE_CONTROL) {
         return;
     }
     if immutable && res.status().is_success() {
-        res.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
+        res.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(ASSET_CACHE_CONTROL),
+        );
         return;
     }
     let is_html = res
@@ -164,29 +165,13 @@ fn apply_cache_policy(immutable: bool, res: &mut Response<ServeFileSystemRespons
     }
 }
 
-/// True for the content-hashed bundle pair `pocopine build` emits:
-/// the last path segment is `<stem>.<hash8>.js` or `<stem>.<hash8>.wasm`.
-/// Other extensions are excluded so a user file that happens to contain
-/// a hex-looking segment doesn't silently become immutable.
+/// True when the request path's last segment is the content-hashed
+/// bundle pair `pocopine build` emits (`<stem>.<hash8>.js` / `.wasm`).
+/// Delegates the name-shape test to [`pocopine_assets::is_hashed_bundle_name`]
+/// so the dev server and this production path can never disagree.
 fn is_content_hashed_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    let Some((stem, ext)) = name.rsplit_once('.') else {
-        return false;
-    };
-    if ext != "js" && ext != "wasm" {
-        return false;
-    }
-    stem.rsplit_once('.')
-        .is_some_and(|(_, hash)| is_hash8(hash))
-}
-
-/// 8-char lowercase-hex segment — the shared asset-hash shape
-/// (prefix of `pocopine_crypto::sha256_hex`).
-fn is_hash8(segment: &str) -> bool {
-    segment.len() == 8
-        && segment
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    is_hashed_bundle_name(name)
 }
 
 #[cfg(test)]

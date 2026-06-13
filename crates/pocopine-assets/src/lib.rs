@@ -60,6 +60,34 @@ pub const ASSET_CACHE_CONTROL: &str = "public,max-age=31536000,immutable";
 /// `assets/<hash8>/<relative-path>`.
 pub const ASSET_KEY_PREFIX: &str = "assets/";
 
+/// True for an 8-char lowercase-hex hash segment — the canonical
+/// asset-hash shape, a prefix of [`pocopine_crypto::sha256_hex`] (see
+/// `pocopine_core::assets::asset_hash` and the CLI/build hashers, which
+/// all truncate to 8). Every serve path that recognises a hashed key or
+/// bundle name routes through this one predicate so they cannot drift.
+pub fn is_asset_hash(segment: &str) -> bool {
+    segment.len() == 8
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// True for the content-hashed bundle pair `pocopine build` emits: the
+/// file name is `<stem>.<hash8>.js` or `<stem>.<hash8>.wasm`. Only the
+/// bundle-pair extensions count, so a user file whose name happens to
+/// contain a hex-looking segment doesn't silently become immutable.
+/// Callers that hold a URL path should pass only the last segment.
+pub fn is_hashed_bundle_name(file_name: &str) -> bool {
+    let Some((stem, ext)) = file_name.rsplit_once('.') else {
+        return false;
+    };
+    if ext != "js" && ext != "wasm" {
+        return false;
+    }
+    stem.rsplit_once('.')
+        .is_some_and(|(_, hash)| is_asset_hash(hash))
+}
+
 /// Connection settings for an [`AssetStore`].
 ///
 /// The CLI fills this from `[package.metadata.pocopine.assets]` +
@@ -340,5 +368,31 @@ impl AssetStore {
             content_type,
             cache_control,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_hash_shape() {
+        assert!(is_asset_hash("b94d27b9"));
+        assert!(!is_asset_hash("B94D27B9")); // uppercase
+        assert!(!is_asset_hash("b94d27b")); // too short
+        assert!(!is_asset_hash("b94d27b9a")); // too long
+        assert!(!is_asset_hash("b94d27bg")); // non-hex
+    }
+
+    #[test]
+    fn hashed_bundle_name_matches_pair_only() {
+        assert!(is_hashed_bundle_name("website.0a1b2c3d.js"));
+        assert!(is_hashed_bundle_name("website_bg.0a1b2c3d.wasm"));
+        // Unhashed pair, wrong hash shape, other extensions.
+        assert!(!is_hashed_bundle_name("website.js"));
+        assert!(!is_hashed_bundle_name("website_bg.wasm"));
+        assert!(!is_hashed_bundle_name("website.0A1B2C3D.js"));
+        assert!(!is_hashed_bundle_name("website.abc.js"));
+        assert!(!is_hashed_bundle_name("photo.0a1b2c3d.png"));
     }
 }
