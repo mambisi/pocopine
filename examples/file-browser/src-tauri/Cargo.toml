@@ -1,3 +1,10 @@
+# Own workspace so this nested crate builds standalone. It lives inside
+# the `examples/file-browser` workspace member but is intentionally NOT
+# part of the pocopine workspace (the webview backend must never be built
+# by a stock `cargo build`/CI). Without this, Cargo walks up to the root
+# manifest and errors with "believes it's in a workspace when it's not".
+[workspace]
+
 [package]
 name = "file-browser-tauri"
 version = "0.1.0"
