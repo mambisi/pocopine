@@ -361,7 +361,13 @@ impl Scope {
     pub fn new<T: ComponentState + 'static>(state: Rc<RefCell<T>>) -> Self {
         let id = next_scope_id();
         let erased: Rc<RefCell<dyn ComponentState>> = state.clone();
-        let typed: Rc<dyn Any> = Rc::new(state);
+        // RFC-101 P4 — erase `state` straight to `Rc<dyn Any>` via an
+        // unsizing coercion (a fat-pointer rebind, no heap block)
+        // instead of `Rc::new(state)`, which boxed the already-`Rc`
+        // state inside a SECOND `Rc` purely to satisfy `Any`. Saves one
+        // allocation per scope mint — per pp-for row, on the hot path.
+        // `typed()` now recovers it with `Rc::downcast` (see below).
+        let typed: Rc<dyn Any> = state;
         let scope = Scope {
             id,
             state: erased,
@@ -477,7 +483,11 @@ impl Scope {
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct
     /// this scope was created with. `None` on type mismatch.
     pub fn typed<T: 'static>(&self) -> Option<Rc<RefCell<T>>> {
-        self.typed.downcast_ref::<Rc<RefCell<T>>>().cloned()
+        // RFC-101 P4 — `typed` now stores the state's own
+        // `Rc<RefCell<T>>` erased as `Rc<dyn Any>` (no double-Rc), so
+        // recover it by downcasting the `Rc` itself. Returns `None` on
+        // type mismatch, exactly as the old `downcast_ref` did.
+        self.typed.clone().downcast::<RefCell<T>>().ok()
     }
 
     /// Build a `js_sys::Proxy` whose `get` trap records dependencies and
