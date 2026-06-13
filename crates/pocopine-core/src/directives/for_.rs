@@ -120,9 +120,14 @@ fn first_layout_child(el: &Element) -> Option<Element> {
     children.item(0)
 }
 
-fn retract_from_prior(prior: &Rc<RefCell<Vec<PrevItem>>>, key: &Rc<str>) {
+fn retract_from_prior(prior: &Rc<RefCell<Vec<PrevItem>>>, key: &RowKey) {
     let mut p = prior.borrow_mut();
-    p.retain(|item| !(Rc::ptr_eq(&item.key, key) && item.leaving));
+    // RFC-101 P3 — value equality, not `Rc::ptr_eq`: `RowKey::Int`
+    // has no pointer identity. The retract callback is handed a clone
+    // of the leaver's own key (`key_for_retract`), so `==` matches the
+    // same logical row; this is strictly more correct than pointer
+    // identity and only runs on the (cold) leave path.
+    p.retain(|item| !(item.key == *key && item.leaving));
 }
 
 /// Fire enter-subtree on every `el` in `clones`, spacing them by
@@ -549,9 +554,9 @@ fn run_naive(
 /// `LoopScope` in place on reuse without serializing through JS.
 ///
 /// The key is shared between `PrevItem`, the pool lookup, and the
-/// dedup-tracking set via `Rc<str>` — one allocation per unique
-/// key per reconcile instead of two (the HashSet insert used to
-/// clone a fresh `String`).
+/// dedup-tracking set via [`RowKey`] — integer keys (the common
+/// case) cost zero heap allocations; the dup-set insert clones an
+/// `i64`, not a fresh `String`.
 ///
 /// `leaving` is true while the clone is mid-leave (its transition
 /// is playing; the remove-from-DOM callback hasn't fired). We keep
@@ -562,7 +567,7 @@ struct PrevItem {
     element: Element,
     scope_id: ScopeId,
     loop_state: Rc<RefCell<LoopScope>>,
-    key: Rc<str>,
+    key: RowKey,
     item_value: JsValue,
     item_sig: String,
     leaving: bool,
@@ -570,7 +575,7 @@ struct PrevItem {
 
 /// One minted-but-unmounted channel row: scope id, pool key,
 /// item value, and the row's LoopScope.
-type ChannelRowMeta = (ScopeId, Rc<str>, JsValue, Rc<RefCell<LoopScope>>);
+type ChannelRowMeta = (ScopeId, RowKey, JsValue, Rc<RefCell<LoopScope>>);
 
 /// RFC-095 W4 — mount `pairs.len()` fresh rows (indices
 /// `start..start+pairs.len()` of `arr`) through the mutation
@@ -588,7 +593,7 @@ fn channel_mount_range(
     arr: &Array,
     start: usize,
     total: usize,
-    pairs: Vec<(Rc<str>, JsValue)>,
+    pairs: Vec<(RowKey, JsValue)>,
     item_name: &Rc<str>,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
@@ -694,7 +699,7 @@ fn create_keyed_prev_item(
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
     template: &ForTemplate,
-    key: Rc<str>,
+    key: RowKey,
     body: Option<crate::directives::for_plan::ForBodyFn>,
     elide_proxy: bool,
 ) -> Option<PrevItem> {
@@ -790,7 +795,7 @@ fn try_append_fast_path(
     arr: &Array,
     total: usize,
     mut old_prior: Vec<PrevItem>,
-    seen_cell: &Rc<RefCell<HashSet<Rc<str>>>>,
+    seen_cell: &Rc<RefCell<HashSet<RowKey>>>,
     key_resolver: &KeyResolver,
     item_name: &Rc<str>,
     parent_proxy: &JsValue,
@@ -849,22 +854,11 @@ fn try_append_fast_path(
     if elide_proxy && crate::mutation_channel::enabled() {
         if let (Some(plan), Some(proto)) = (row_plan, template.prototype()) {
             if let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
-                let mut pairs: Vec<(Rc<str>, JsValue)> = Vec::with_capacity(total - old_len);
+                let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total - old_len);
                 for i in old_len..total {
                     let item = arr.get(i as u32);
                     let key_val = key_resolver.resolve(&item, i, parent_proxy);
-                    let raw_key: Rc<str> = stringify_key(&key_val).into();
-                    let key = if seen.insert(raw_key.clone()) {
-                        raw_key
-                    } else {
-                        console::warn_1(&JsValue::from_str(&format!(
-                            "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
-                            &*raw_key
-                        )));
-                        let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
-                        seen.insert(dup.clone());
-                        dup
-                    };
+                    let key = dedup_row_key(&key_val, &mut seen, i);
                     pairs.push((key, item));
                 }
                 crate::profiler::reconcile::record_row_iter(row_iter_start);
@@ -904,18 +898,7 @@ fn try_append_fast_path(
     for i in old_len..total {
         let item = arr.get(i as u32);
         let key_val = key_resolver.resolve(&item, i, parent_proxy);
-        let raw_key: Rc<str> = stringify_key(&key_val).into();
-        let key = if seen.insert(raw_key.clone()) {
-            raw_key
-        } else {
-            console::warn_1(&JsValue::from_str(&format!(
-                "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
-                &*raw_key
-            )));
-            let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
-            seen.insert(dup.clone());
-            dup
-        };
+        let key = dedup_row_key(&key_val, &mut seen, i);
         let Some(entry) = create_keyed_prev_item(
             item_name,
             item,
@@ -984,7 +967,7 @@ fn try_prepend_fast_path(
     arr: &Array,
     total: usize,
     old_prior: Vec<PrevItem>,
-    seen_cell: &Rc<RefCell<HashSet<Rc<str>>>>,
+    seen_cell: &Rc<RefCell<HashSet<RowKey>>>,
     key_resolver: &KeyResolver,
     item_name: &Rc<str>,
     parent_proxy: &JsValue,
@@ -1046,18 +1029,7 @@ fn try_prepend_fast_path(
     for i in 0..added {
         let item = arr.get(i as u32);
         let key_val = key_resolver.resolve(&item, i, parent_proxy);
-        let raw_key: Rc<str> = stringify_key(&key_val).into();
-        let key = if seen.insert(raw_key.clone()) {
-            raw_key
-        } else {
-            console::warn_1(&JsValue::from_str(&format!(
-                "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
-                &*raw_key
-            )));
-            let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
-            seen.insert(dup.clone());
-            dup
-        };
+        let key = dedup_row_key(&key_val, &mut seen, i);
         let Some(entry) = create_keyed_prev_item(
             item_name,
             item,
@@ -1344,8 +1316,8 @@ fn run_keyed(
     // reusing them keeps rehash / grow costs out of the hot path
     // for long-lived lists (N items reconciled K times allocates
     // once, not K times).
-    let pool_cell: Rc<RefCell<HashMap<Rc<str>, PrevItem>>> = Rc::new(RefCell::new(HashMap::new()));
-    let seen_cell: Rc<RefCell<HashSet<Rc<str>>>> = Rc::new(RefCell::new(HashSet::new()));
+    let pool_cell: Rc<RefCell<HashMap<RowKey, PrevItem>>> = Rc::new(RefCell::new(HashMap::new()));
+    let seen_cell: Rc<RefCell<HashSet<RowKey>>> = Rc::new(RefCell::new(HashSet::new()));
     // RFC-095 W1 — see run_naive's items_reader note.
     let items_reader = crate::scope::scoped_root_reader(parent_scope_id);
 
@@ -1527,22 +1499,11 @@ fn run_keyed(
         if pool_initially_empty && total > 0 && elide_proxy && crate::mutation_channel::enabled() {
             if let (Some(plan), Some(proto)) = (row_plan.as_ref(), template.prototype()) {
                 if let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
-                    let mut pairs: Vec<(Rc<str>, JsValue)> = Vec::with_capacity(total);
+                    let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total);
                     for i in 0..total {
                         let item = arr.get(i as u32);
                         let key_val = key_resolver.resolve(&item, i, &parent_proxy);
-                        let raw_key: Rc<str> = stringify_key(&key_val).into();
-                        let key: Rc<str> = if seen.insert(raw_key.clone()) {
-                            raw_key
-                        } else {
-                            console::warn_1(&JsValue::from_str(&format!(
-                                "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
-                                &*raw_key
-                            )));
-                            let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
-                            seen.insert(dup.clone());
-                            dup
-                        };
+                        let key = dedup_row_key(&key_val, &mut seen, i);
                         pairs.push((key, item));
                     }
                     crate::profiler::reconcile::record_row_iter(row_iter_start);
@@ -1577,7 +1538,6 @@ fn run_keyed(
         for i in 0..total {
             let item = arr.get(i as u32);
             let key_val = key_resolver.resolve(&item, i, &parent_proxy);
-            let raw_key: Rc<str> = stringify_key(&key_val).into();
             // Cold-pool optimisation: skip the `item_signature`
             // (only meaningful across reconciles) and the
             // `pool.remove` (always None when pool is empty).
@@ -1595,17 +1555,7 @@ fn run_keyed(
                 // DOM's point of view and JSON.stringify is pure waste.
                 String::new()
             };
-            let key: Rc<str> = if seen.insert(raw_key.clone()) {
-                raw_key
-            } else {
-                console::warn_1(&JsValue::from_str(&format!(
-                    "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
-                    &*raw_key
-                )));
-                let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
-                seen.insert(dup.clone());
-                dup
-            };
+            let key = dedup_row_key(&key_val, &mut seen, i);
 
             let pool_lookup = if pool_initially_empty {
                 None
@@ -1767,7 +1717,7 @@ fn run_keyed(
         // reuses the clone — instead of spawning a duplicate next to
         // the still-leaving original. The remove callback retracts
         // the entry from `prior` once the clone is truly gone.
-        let mut leaver_flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> =
+        let mut leaver_flip_snapshots: HashMap<RowKey, (Element, web_sys::DomRect)> =
             if pool.is_empty() {
                 HashMap::new()
             } else {
@@ -1874,7 +1824,7 @@ fn run_keyed(
                 let el = entry.element.clone();
                 let el_for_cb = el.clone();
                 let scope_id_for_unmount = entry.scope_id;
-                let key_for_retract = Rc::clone(&entry.key);
+                let key_for_retract = entry.key.clone();
                 let prior_for_retract = prior.clone();
                 if !crate::directives::transition::has_transition_in_subtree(&el) {
                     if let Some(parent) = el.parent_node() {
@@ -1965,7 +1915,7 @@ fn run_keyed(
         // `getBoundingClientRect` on it returns zero. The visible
         // layout box lives on the inner rendered root (the first
         // element child). Snapshot + animate that.
-        let mut flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> = HashMap::new();
+        let mut flip_snapshots: HashMap<RowKey, (Element, web_sys::DomRect)> = HashMap::new();
         if has_leavers {
             flip_snapshots = std::mem::take(&mut leaver_flip_snapshots);
         } else if !already_ordered {
@@ -2250,6 +2200,68 @@ impl KeyResolver {
 /// Canonicalise a key value to a string. Strings come through
 /// unwrapped so adjacent hashes (`123` as number vs. string) don't
 /// collide with their JSON-quoted form.
+/// RFC-101 P3 — a row's reconcile key. The common case (`pp-key`
+/// over numeric ids, e.g. jsbench `Row.id: usize`) is an integer that
+/// carries NO heap allocation; everything else falls back to the
+/// canonical string form (byte-identical to [`stringify_key`], so
+/// string keys are unchanged on the wire).
+///
+/// Derived `Eq`/`Hash` discriminate on the variant first, so `Int(5)`
+/// and `Str("5")` never compare equal or collide — which is also the
+/// correct semantics (a stable `pp-key` expression keys a given list
+/// on one shape, never both) and removes a latent collision the
+/// all-`String` form had (numeric `5` stringified to `"5"` and *would*
+/// have aliased a string key `"5"`).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum RowKey {
+    Int(i64),
+    Str(Rc<str>),
+}
+
+impl std::fmt::Display for RowKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RowKey::Int(n) => write!(f, "{n}"),
+            RowKey::Str(s) => f.write_str(s),
+        }
+    }
+}
+
+/// Largest f64 that round-trips exactly through an integer (2^53).
+/// JS numbers beyond this lose integer precision, so two distinct ids
+/// could alias to the same `i64` — those fall back to the string form.
+const MAX_EXACT_INT_F64: f64 = 9_007_199_254_740_992.0;
+
+/// Resolve a JS key value to a [`RowKey`]. Integral, in-range numbers
+/// take the zero-alloc `Int` path; strings/bools/null/objects reuse
+/// [`stringify_key`] verbatim for a byte-identical `Str` key.
+fn row_key(v: &JsValue) -> RowKey {
+    if let Some(n) = v.as_f64() {
+        if n.is_finite() && n.fract() == 0.0 && n.abs() < MAX_EXACT_INT_F64 {
+            return RowKey::Int(n as i64);
+        }
+    }
+    RowKey::Str(stringify_key(v).into())
+}
+
+/// Resolve a row's key and disambiguate duplicates against `seen`,
+/// matching the prior inline behaviour: a repeat key warns and is
+/// re-mounted under a synthetic `…__dup_<i>` string key. Shared by
+/// every append/prepend/mount construction site.
+fn dedup_row_key(key_val: &JsValue, seen: &mut HashSet<RowKey>, i: usize) -> RowKey {
+    let raw_key = row_key(key_val);
+    if seen.insert(raw_key.clone()) {
+        raw_key
+    } else {
+        console::warn_1(&JsValue::from_str(&format!(
+            "pp-for: duplicate pp-key {raw_key} at index {i}; treating as new"
+        )));
+        let dup = RowKey::Str(format!("{raw_key}__dup_{i}").into());
+        seen.insert(dup.clone());
+        dup
+    }
+}
+
 fn stringify_key(v: &JsValue) -> String {
     if v.is_undefined() || v.is_null() {
         return String::new();
