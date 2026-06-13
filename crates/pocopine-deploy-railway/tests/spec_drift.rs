@@ -12,13 +12,14 @@
 //! Nothing is committed to the repo: the live schema is the source of
 //! truth, checked fresh each run.
 //!
-//! Gating — introspection requires auth, so:
-//!   * no token  → the test SKIPS (keeps offline `cargo test` green),
-//!   * token set → it runs and FAILS on drift.
+//! Gating — Railway's introspection endpoint is **unauthenticated**
+//! (same endpoint `build.rs` fetches `schema.json` from), so this test
+//! needs no token. It SKIPS only when the endpoint is unreachable, to
+//! keep offline `cargo test` green.
 //!
-//! Set `POCOPINE_REQUIRE_SPEC_DRIFT=1` (CI's spec-drift job) to turn a
-//! missing token or an unreachable endpoint into a hard failure, so
-//! drift can't slip through a silent skip.
+//! Set `POCOPINE_REQUIRE_SPEC_DRIFT=1` (CI's spec-drift job) to turn an
+//! unreachable endpoint into a hard failure, so drift can't slip
+//! through a silent skip.
 
 use std::collections::HashSet;
 
@@ -46,23 +47,8 @@ const REQUIRED_INPUT_TYPES: &[&str] = &[
     "ServiceDomainCreateInput",
 ];
 
-fn railway_token() -> Option<String> {
-    for var in [
-        "RAILWAY_API_TOKEN",
-        "POCOPINE_RAILWAY_TOKEN",
-        "RAILWAY_TOKEN",
-    ] {
-        if let Ok(t) = std::env::var(var) {
-            if !t.is_empty() {
-                return Some(t);
-            }
-        }
-    }
-    None
-}
-
-/// CI's spec-drift job sets this so a missing token / unreachable
-/// endpoint fails instead of skipping.
+/// CI's spec-drift job sets this so an unreachable endpoint fails
+/// instead of skipping.
 fn require_drift() -> bool {
     std::env::var("POCOPINE_REQUIRE_SPEC_DRIFT")
         .map(|v| !v.is_empty())
@@ -71,22 +57,12 @@ fn require_drift() -> bool {
 
 #[test]
 fn railway_schema_still_defines_the_operations_we_use() {
-    let Some(token) = railway_token() else {
-        let msg =
-            "railway spec-drift: no RAILWAY_API_TOKEN / POCOPINE_RAILWAY_TOKEN / RAILWAY_TOKEN set";
-        assert!(
-            !require_drift(),
-            "{msg} (POCOPINE_REQUIRE_SPEC_DRIFT is set)"
-        );
-        eprintln!("skipping {msg}");
-        return;
-    };
-
     let introspection = r#"{"query":"query { __schema { queryType { fields { name } } mutationType { fields { name } } types { name } } }"}"#;
 
+    // Unauthenticated — Railway's introspection endpoint needs no token
+    // (this is the same endpoint `build.rs` fetches the schema from).
     let resp = reqwest::blocking::Client::new()
         .post(RAILWAY_GRAPHQL)
-        .bearer_auth(&token)
         .header("content-type", "application/json")
         .body(introspection)
         .send();

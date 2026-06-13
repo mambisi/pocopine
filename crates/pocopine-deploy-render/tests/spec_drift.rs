@@ -26,10 +26,11 @@ use sha2::{Digest, Sha256};
 const RENDER_OPENAPI_URL: &str =
     "https://api-docs.render.com/v1.0/openapi/render-public-api-1.json";
 
-/// SHA-256 of the canonicalised live spec, last reconciled 2026-05-22.
+/// SHA-256 of the canonicalised live spec, last reconciled 2026-06-13.
 /// Update this when the drift test reports a new hash for a reviewed,
-/// deliberate upstream change.
-const EXPECTED_SHA256: &str = "238b4ebd850565a73bc85740d67e485d4cec9e1e3dcfafb6a6447486ca81d48e";
+/// deliberate upstream change. (2026-06-13: benign content churn —
+/// every `REQUIRED_PATHS` endpoint still present, so no client change.)
+const EXPECTED_SHA256: &str = "770ea59aaf7a2565fb5ba598e81917206d4b663e0cf331f14988aa5b5cd5a8c4";
 
 /// Paths `crate::client` calls. `/registrycredentials` is pinned ahead
 /// of the Phase 19 auto-registry work so the dependency is guarded now.
