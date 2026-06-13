@@ -89,7 +89,7 @@ pub use emit::{
 pub use events::{on_scope_unmount, on_scope_unmount_for, DomEventName, ListenerHandle};
 pub use expr::{StaticBinOp, StaticExpr, StaticLiteral};
 pub use extractors::{Inject, NearestParent, Parent};
-pub use handle::{this, Handle};
+pub use handle::{this, FieldHandle, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use lifecycle::{
     Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, LifecyclePhase, MountEpoch,

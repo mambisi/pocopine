@@ -10,7 +10,7 @@ use js_sys::Reflect;
 use pocopine_core::{
     batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, run_now,
     rw_signal, set_auto_flush, signal, spawn_for_scope, spawn_latest, spawn_latest_for_scope,
-    spawn_scoped, watch, watch_scope_field_now, Scope,
+    spawn_scoped, watch, watch_scope_field_now, FieldHandle, Handle, Scope,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -306,6 +306,67 @@ fn watch_scope_field_now_reads_existing_value_on_install() {
 
     assert_eq!(hits.get(), 1);
     assert_eq!(seen.borrow().as_str(), "2024-06-15");
+}
+
+// RFC-097 — FieldHandle::set writes one field with NO dirty sweep.
+#[wasm_bindgen_test]
+fn field_handle_set_writes_one_field_without_a_sweep() {
+    setup();
+    let state = Rc::new(RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state.clone());
+    let me: Handle<TestScopeState> = Handle::new(state, scope.id);
+    let fh: FieldHandle<String> = FieldHandle::__new(scope.id, "value");
+
+    // An effect subscribed to exactly this field.
+    let runs = Rc::new(Cell::new(0));
+    let seen = Rc::new(RefCell::new(String::new()));
+    {
+        let runs = runs.clone();
+        let seen = seen.clone();
+        effect(move || {
+            runs.set(runs.get() + 1);
+            *seen.borrow_mut() = fh.get();
+        });
+    }
+    assert_eq!(runs.get(), 1, "effect runs once on install");
+
+    // A swept Handle::update DOES fingerprint (proves the counter is live).
+    let fp0 = pocopine_core::scope::fingerprint_count();
+    me.update(|s| s.value = "via_update".into());
+    flush_sync();
+    let fp1 = pocopine_core::scope::fingerprint_count();
+    assert!(fp1 > fp0, "a swept update must run fingerprints");
+    assert_eq!(runs.get(), 2);
+    assert_eq!(seen.borrow().as_str(), "via_update");
+
+    // FieldHandle::set must run ZERO fingerprints (no sweep) yet still
+    // trigger exactly this field's effect.
+    fh.set("via_set".into());
+    flush_sync();
+    let fp2 = pocopine_core::scope::fingerprint_count();
+    assert_eq!(fp2, fp1, "FieldHandle::set must run no fingerprints");
+    assert_eq!(runs.get(), 3, "the field's effect re-ran exactly once");
+    assert_eq!(seen.borrow().as_str(), "via_set");
+    assert_eq!(fh.get(), "via_set".to_string(), "get reflects the write");
+}
+
+// RFC-097 — FieldHandle::update is a read-modify-write of one field.
+#[wasm_bindgen_test]
+fn field_handle_update_read_modify_writes_one_field() {
+    setup();
+    let state = Rc::new(RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let fh: FieldHandle<String> = FieldHandle::__new(scope.id, "value");
+    fh.set("ab".into());
+    flush_sync();
+
+    let fp0 = pocopine_core::scope::fingerprint_count();
+    fh.update(|v| v.push('c'));
+    flush_sync();
+    let fp1 = pocopine_core::scope::fingerprint_count();
+
+    assert_eq!(fh.get(), "abc".to_string());
+    assert_eq!(fp1, fp0, "FieldHandle::update must run no fingerprints");
 }
 
 #[wasm_bindgen_test]

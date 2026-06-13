@@ -340,6 +340,14 @@ thread_local! {
     #[cfg(any(debug_assertions, feature = "devtools"))]
     static SERDE_PROJECTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 
+    /// RFC-097 §6 — debug/devtools counter: field fingerprints computed
+    /// (every observed field, twice per swept `Handle::update`/handler
+    /// dispatch). The acceptance gate asserts this stays flat across a
+    /// `FieldHandle::set` and a `&self` handler invocation — both of
+    /// which deliberately run no [`DirtySweep`].
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    static FINGERPRINTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
     /// The element the current directive is running against. Set by the
     /// mount immediately around each directive call so `$el` works without
     /// threading the element through every call site.
@@ -647,6 +655,22 @@ fn count_serde_projection() {
 #[cfg(any(debug_assertions, feature = "devtools"))]
 pub fn serde_projection_count() -> u64 {
     SERDE_PROJECTIONS.with(|c| c.get())
+}
+
+/// RFC-097 §6 — increment the field-fingerprint counter. Called at
+/// every [`DirtySweep`] `field_fingerprint` site so a test can prove a
+/// sweep-free write path issues zero fingerprints.
+#[inline]
+fn count_fingerprint() {
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    FINGERPRINTS.with(|c| c.set(c.get() + 1));
+}
+
+/// Debug/devtools reader for the field-fingerprint counter (RFC-097
+/// §6 acceptance gate). Reads a running total; tests assert deltas.
+#[cfg(any(debug_assertions, feature = "devtools"))]
+pub fn fingerprint_count() -> u64 {
+    FINGERPRINTS.with(|c| c.get())
 }
 
 /// RFC-096 S3 — drop the projection storage for the given signal
@@ -969,7 +993,10 @@ impl DirtySweep {
         let keys = crate::reactive::tracked_keys(scope_id);
         let before = keys
             .iter()
-            .map(|k| state.field_fingerprint(k.as_ref()))
+            .map(|k| {
+                count_fingerprint();
+                state.field_fingerprint(k.as_ref())
+            })
             .collect();
         let lens_before = keys
             .iter()
@@ -1006,6 +1033,7 @@ impl DirtySweep {
                 changed.push(k.clone());
                 continue;
             }
+            count_fingerprint();
             let after = state_ref.field_fingerprint(k.as_ref());
             let unchanged = matches!((before, &after), (Some(b), Some(a)) if b == a);
             if !unchanged {
