@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-06-12 |
 | **Related** | [`rfc-095-reactive-core-de-alpine.md`](./rfc-095-reactive-core-de-alpine.md) (dirty sweep, W2c touch-hints post-mortem), [`rfc-096-signals-first-reactive-core.md`](./rfc-096-signals-first-reactive-core.md) (write mirror, typed text lane), [`rfc-081`] (generated typed ref accessors — the codegen precedent), issue #198 (signals are not the authoring surface) |
@@ -232,20 +232,45 @@ only that field.
 - Dead-scope `set`/`get` no-op semantics match `Handle`'s existing
   tests.
 
-## 7. Open questions
+## 7. Open questions (resolved at implementation)
 
-1. **Equality guard on `set`** — `Setter::set` (signals) skips
-   triggers on `PartialEq`-equal writes; `self.x =` does not.
-   `FieldHandle::set` follows the field (unconditional) in v1;
-   revisit if stream sources re-send identical values in practice.
-2. **Flatten-leaf handles** — leaves are tracked keys; per-leaf
-   handles are mechanical to add but expand the generated surface.
-   Wait for demand.
-3. **Computed read-handles** — useful for passing derived state into
-   tasks; phase 2.
-4. **`update` naming** — `update` on `FieldHandle` vs `Handle::update`
-   read differently (one field vs whole struct). Alternatives:
-   `modify`, `mutate`. Decide in review.
+1. **Equality guard on `set`** — **unconditional in v1** (follows
+   `self.x =` semantics), as proposed. The write mirror's projection
+   versioning already collapses redundant DOM work downstream; revisit
+   only if a stream source re-sending identical values shows up in a
+   profile.
+2. **Flatten-leaf handles** — **not in v1.** The container field gets a
+   handle; leaf-level handles wait for demand.
+3. **Computed read-handles** — **not in v1** (phase 2). v1 generates
+   accessors for struct fields only.
+4. **`update` naming** — **kept `update`.** `FieldHandle::update(|v| …)`
+   takes `&mut T` (one field) where `Handle::update(|s| …)` takes
+   `&mut Self` (whole struct); the receiver type at the call site makes
+   the scope unambiguous, and a second verb (`modify`/`mutate`) would be
+   one more thing to remember for no clarity gain.
+
+## 8a. Implementation notes (as shipped)
+
+- `FieldHandle<T>` lives in `pocopine-core/src/handle.rs`; `set`/`update`
+  route through `scope::write_field` (dead-scope-safe, one trigger, no
+  sweep), `get` through `read_scope_key` + serde (`unwrap_or_default`,
+  so a dead scope reads as `T::default()` — `get`/`update` therefore
+  require `T: Default`, `set` does not).
+- `#[component]`/`#[store]` share three macro helpers
+  (`field_handles_tokens`, `interior_mut_rejection`,
+  `reserved_name_rejection`); both rejections early-return a single
+  `compile_error!` (trybuild-pinned).
+- The `&self`-skip is **runtime-gated, not arm-emitted**: the macro
+  partitions handlers by receiver into `HandlerDispatch::
+  is_readonly_handler`, `#[component]`/`#[store]` delegate it onto
+  `ComponentState`, and `Scope::invoke` consults it to skip the
+  `DirtySweep` + `with_scope_write` bracket. (`DirtySweep` was always
+  runtime-side, never in the emitted arm.)
+- A `fingerprint_count` debug/devtools counter (beside
+  `serde_projection_count`) backs the acceptance tests: `FieldHandle::
+  set`/`update` and `&self`-handler dispatch are asserted to issue zero
+  fingerprints, while a swept `Handle::update`/`&mut self` handler
+  issues > 0.
 
 ## 8. Compatibility
 
