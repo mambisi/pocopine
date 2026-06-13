@@ -64,6 +64,9 @@ indexmap = { workspace = true }
 # (body + scheduler + cleanups + signal deps), replacing four parallel
 # tables. EffectId = generation<<32 | slot; stale ids resolve to None.
 slab = { workspace = true }
+# RFC-101 P1 — inline the per-row RowInstance vecs (binding_cache,
+# listener_routes) so a small row mounts with zero heap blocks.
+smallvec = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3"

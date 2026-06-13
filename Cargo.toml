@@ -131,6 +131,9 @@ pine-richtext = { path = "crates/pine-richtext", version = "0.1.0" }
 # insertion-ordered regardless of hasher. Both are wasm32-proven.
 indexmap = { version = "2" }
 slab = { version = "0.4" }
+# RFC-101 P1 — inline per-row RowInstance vecs (binding_cache,
+# listener_routes) so the common small row mounts with zero heap blocks.
+smallvec = { version = "1" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

@@ -5866,6 +5866,7 @@ dependencies = [
  "serde-wasm-bindgen 0.6.5",
  "serde_json",
  "slab",
+ "smallvec",
  "unicode-segmentation",
  "wasm-bindgen",
  "wasm-bindgen-futures",
