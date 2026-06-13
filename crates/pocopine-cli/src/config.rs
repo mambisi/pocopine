@@ -37,6 +37,53 @@ pub struct PocopineConfig {
     /// default; customize the logo / splash, or opt out via
     /// `enabled = false`.
     pub loader: Option<LoaderConfig>,
+    /// RFC-104 native desktop target. Customizes where the Tauri host
+    /// crate lives and how `pocopine native dev`/`build` invoke it.
+    /// Absent = defaults (`src-tauri/`, no extra cargo features).
+    pub native: Option<NativeConfig>,
+}
+
+/// `[package.metadata.pocopine.native]` — the RFC-104 Tauri target.
+///
+/// ```toml
+/// [package.metadata.pocopine.native]
+/// src-tauri = "src-tauri"   # host crate directory (default)
+/// bin = "app-native"        # host bin to run/build (default: the crate's only bin)
+/// features = ["tauri"]      # cargo features to enable (default: none)
+/// title = "My App"          # scaffolded window title (default: crate name)
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct NativeConfig {
+    /// Directory holding the Tauri host crate, relative to the project
+    /// root. Defaults to `src-tauri`.
+    #[serde(default = "default_src_tauri")]
+    pub src_tauri: String,
+    /// Host binary to `cargo run`/`cargo build`. When unset, cargo runs
+    /// the host crate's single default bin.
+    pub bin: Option<String>,
+    /// Cargo features to enable on the host crate. Empty by default —
+    /// the scaffolded `src-tauri` crate enables `pocopine-tauri/tauri`
+    /// unconditionally, so no feature flag is needed.
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// Window title used when scaffolding. Defaults to the crate name.
+    pub title: Option<String>,
+}
+
+impl Default for NativeConfig {
+    fn default() -> Self {
+        Self {
+            src_tauri: default_src_tauri(),
+            bin: None,
+            features: Vec::new(),
+            title: None,
+        }
+    }
+}
+
+fn default_src_tauri() -> String {
+    "src-tauri".into()
 }
 
 /// `[package.metadata.pocopine.assets]` — the RFC-100 asset bucket.

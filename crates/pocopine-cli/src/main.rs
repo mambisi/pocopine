@@ -28,6 +28,7 @@ mod dev;
 mod doctor;
 mod env;
 mod lsp;
+mod native;
 mod server;
 mod skills;
 mod stylekit;
@@ -67,6 +68,7 @@ fn main() -> Result<()> {
         Cmd::Build(args) => run_build(args),
         Cmd::Run(args) => run_project(args),
         Cmd::Dev(args) => dev::run(&args),
+        Cmd::Native(args) => native::run(args),
         Cmd::Doctor(args) => doctor::run(&args),
         Cmd::Skills(args) => skills::run(&args),
         Cmd::Deploy(args) => deploy::run(&args),
