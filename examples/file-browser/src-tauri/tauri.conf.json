@@ -17,7 +17,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": ["icons/icon.png"],
     "resources": {
       "../index.html": "index.html",
       "../pkg": "pkg"

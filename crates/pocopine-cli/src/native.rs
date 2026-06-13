@@ -222,6 +222,18 @@ fn scaffold(project: &Path, native: &NativeConfig) -> Result<Vec<PathBuf>> {
         std::fs::write(&path, contents).with_context(|| format!("write {}", path.display()))?;
         created.push(path);
     }
+
+    // Tauri's `generate_context!` embeds a window icon at compile time and
+    // fails if none exists, so ship a placeholder. Replace it (and add the
+    // platform formats) with `cargo tauri icon <your-icon.png>`.
+    let icon = dir.join("icons/icon.png");
+    if !icon.exists() {
+        std::fs::create_dir_all(dir.join("icons"))
+            .with_context(|| format!("create {}", dir.join("icons").display()))?;
+        std::fs::write(&icon, NATIVE_ICON).with_context(|| format!("write {}", icon.display()))?;
+        created.push(icon);
+    }
+
     Ok(created)
 }
 
@@ -266,6 +278,11 @@ fn crate_name(project: &Path) -> Result<String> {
 const BUILD_RS: &str = "fn main() {\n    tauri_build::build();\n}\n";
 
 const GITIGNORE: &str = "/target\n/gen\n";
+
+/// Placeholder window icon written into a scaffolded `src-tauri/icons/`.
+/// Tauri's `generate_context!` requires one at compile time; users swap
+/// in their own with `cargo tauri icon`.
+const NATIVE_ICON: &[u8] = include_bytes!("../assets/native-icon.png");
 
 /// `src-tauri/Cargo.toml` for an external project (published crates). The
 /// in-repo `examples/file-browser/src-tauri` uses path dependencies.
@@ -342,7 +359,7 @@ fn render_tauri_conf(app_ident: &str, title: &str) -> String {
   "bundle": {{
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": ["icons/icon.png"],
     "resources": {{
       "../index.html": "index.html",
       "../pkg": "pkg"
@@ -371,9 +388,14 @@ mod tests {
         let created = scaffold(project, &native).unwrap();
         assert_eq!(
             created.len(),
-            5,
-            "Cargo.toml, build.rs, conf, main.rs, gitignore"
+            6,
+            "Cargo.toml, build.rs, conf, main.rs, gitignore, icons/icon.png"
         );
+
+        // A window icon is shipped so `generate_context!` can embed one.
+        let icon = project.join("src-tauri/icons/icon.png");
+        assert!(icon.is_file());
+        assert_eq!(&std::fs::read(&icon).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
 
         let main_rs = std::fs::read_to_string(project.join("src-tauri/src/main.rs")).unwrap();
         // crate name `my-app` → ident `my_app` in the `use … as _;` link.

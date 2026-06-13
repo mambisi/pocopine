@@ -1,2 +1,5 @@
 /target
 /gen
+# In-repo demo: the Tauri lockfile is regenerated on build and not worth
+# committing here. Real scaffolded apps DO commit their Cargo.lock.
+/Cargo.lock
