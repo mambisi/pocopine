@@ -20,6 +20,12 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+// RFC-098 H4 — `IndexSet` gives HashSet's API with deterministic
+// (insertion-ordered) iteration, so dispatch + flush order is
+// replayable from a fuzz seed. `SIGNAL_REVERSE` stays a `HashSet`:
+// its iteration is never observable (it only drives removals).
+use indexmap::IndexSet;
+
 use js_sys::Promise;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsValue;
@@ -78,10 +84,17 @@ thread_local! {
     /// THE dependency table (RFC-095 W3a): subscriber lists for
     /// signals — which, post-unification, includes every tracked
     /// component field via `FIELD_SIGNALS` interning.
-    static SIGNAL_DEPS: RefCell<HashMap<SignalId, HashSet<EffectId>>> = RefCell::new(HashMap::new());
+    // RFC-098 H4 — subscriber sets are `IndexSet` so dispatch visits
+    // effects in registration order, deterministically. Removal MUST
+    // use `shift_remove` (not the default swap-remove) to keep the
+    // surviving order stable.
+    static SIGNAL_DEPS: RefCell<HashMap<SignalId, IndexSet<EffectId>>> = RefCell::new(HashMap::new());
     static SIGNAL_REVERSE: RefCell<HashMap<EffectId, HashSet<SignalId>>> = RefCell::new(HashMap::new());
 
-    static QUEUE: RefCell<HashSet<EffectId>> = RefCell::new(HashSet::new());
+    // RFC-098 H4 — `IndexSet` so `flush` drains in the order effects
+    // were queued; set semantics still dedupe an effect a single
+    // dispatch queues twice.
+    static QUEUE: RefCell<IndexSet<EffectId>> = RefCell::new(IndexSet::new());
     static FLUSH_SCHEDULED: Cell<bool> = const { Cell::new(false) };
     static CLEANUPS: RefCell<HashMap<EffectId, Vec<CleanupFn>>> = RefCell::new(HashMap::new());
     static BATCHING: Cell<u32> = const { Cell::new(0) };
@@ -227,7 +240,10 @@ fn clear_deps_for(id: EffectId) {
             let mut d = d.borrow_mut();
             for sid in sig_keys {
                 if let Some(set) = d.get_mut(&sid) {
-                    set.remove(&id);
+                    // shift_remove (not swap_remove) keeps survivors in
+                    // registration order — H4 determinism (else a teardown
+                    // reorders the next dispatch).
+                    set.shift_remove(&id);
                     if set.is_empty() {
                         d.remove(&sid);
                     }
@@ -255,7 +271,8 @@ pub fn release(id: EffectId) {
     EFFECTS.with(|e| e.borrow_mut().remove(&id));
     SCHEDULERS.with(|s| s.borrow_mut().remove(&id));
     QUEUE.with(|q| {
-        q.borrow_mut().remove(&id);
+        // shift_remove keeps any concurrently-queued effects in order.
+        q.borrow_mut().shift_remove(&id);
     });
 }
 
@@ -345,7 +362,7 @@ pub fn track_signal(signal_id: SignalId) {
 /// queue, schedule flush if needed. Factored out so `trigger` and
 /// `trigger_signal` share the dispatch path — they diverge only on
 /// how they look up subscribers.
-fn dispatch_subs(subs: &HashSet<EffectId>) {
+fn dispatch_subs(subs: &IndexSet<EffectId>) {
     if subs.is_empty() {
         return;
     }
@@ -427,7 +444,7 @@ pub fn trigger(scope_id: ScopeId, key: &str) {
     let Some(sid) = field_signal(scope_id, key, false) else {
         return;
     };
-    let subs: Option<HashSet<EffectId>> = SIGNAL_DEPS.with(|d| d.borrow().get(&sid).cloned());
+    let subs: Option<IndexSet<EffectId>> = SIGNAL_DEPS.with(|d| d.borrow().get(&sid).cloned());
     if let Some(subs) = subs {
         dispatch_subs(&subs);
     }
@@ -436,7 +453,8 @@ pub fn trigger(scope_id: ScopeId, key: &str) {
 /// Signal-targeted trigger. Skips the `(scope_id, key)` lookup path
 /// entirely — signal deps live in their own table keyed on `SignalId`.
 pub fn trigger_signal(signal_id: SignalId) {
-    let subs: Option<HashSet<EffectId>> = SIGNAL_DEPS.with(|d| d.borrow().get(&signal_id).cloned());
+    let subs: Option<IndexSet<EffectId>> =
+        SIGNAL_DEPS.with(|d| d.borrow().get(&signal_id).cloned());
     if let Some(subs) = subs {
         dispatch_subs(&subs);
     }
@@ -571,7 +589,7 @@ fn flush() {
     FLUSH_SCHEDULED.with(|f| f.set(false));
     // Snapshot and clear so effects that re-trigger during their run land
     // in the next batch, not the current one.
-    let ids: Vec<EffectId> = QUEUE.with(|q| q.borrow_mut().drain().collect());
+    let ids: Vec<EffectId> = QUEUE.with(|q| q.borrow_mut().drain(..).collect());
     for id in ids {
         let f = EFFECTS.with(|e| e.borrow().get(&id).cloned());
         if let Some(f) = f {
@@ -615,10 +633,9 @@ pub fn stats() -> (usize, usize) {
 // panels (PR D onwards). Gated behind the devtools feature so they
 // don't contribute to default-feature-off release binaries.
 
-/// Snapshot of the effect ids currently queued for the next flush.
-/// Order is unspecified — `QUEUE` is a `HashSet`. Consumers that
-/// need deterministic ordering should sort by id at the display
-/// boundary.
+/// Snapshot of the effect ids currently queued for the next flush,
+/// in the order the next flush will run them — `QUEUE` is insertion-
+/// ordered (RFC-098 H4), so this is deterministic and replayable.
 #[cfg(feature = "devtools")]
 pub fn queue_snapshot() -> Vec<EffectId> {
     QUEUE.with(|q| q.borrow().iter().copied().collect())
