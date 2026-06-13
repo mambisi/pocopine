@@ -99,14 +99,6 @@ thread_local! {
     static CLEANUPS: RefCell<HashMap<EffectId, Vec<CleanupFn>>> = RefCell::new(HashMap::new());
     static BATCHING: Cell<u32> = const { Cell::new(0) };
     static AUTO_FLUSH: Cell<bool> = const { Cell::new(true) };
-
-    /// Reusable scratch buffer for `trigger`'s subscriber snapshot.
-    /// `trigger` must iterate subscribers outside the `DEPS` borrow
-    /// because running an effect can mutate `DEPS` (via
-    /// `clear_deps_for`). A per-thread scratch `Vec` avoids the
-    /// `HashSet::clone()` allocation every hot-path `trigger` used
-    /// to pay.
-    static TRIGGER_SCRATCH: RefCell<Vec<EffectId>> = RefCell::new(Vec::with_capacity(16));
 }
 
 /// Toggle the automatic microtask flush. Production code leaves this at
@@ -358,45 +350,41 @@ pub fn track_signal(signal_id: SignalId) {
     });
 }
 
-/// Snapshot `subs` into a local buffer, route per-effect scheduler or
-/// queue, schedule flush if needed. Factored out so `trigger` and
-/// `trigger_signal` share the dispatch path — they diverge only on
-/// how they look up subscribers.
-fn dispatch_subs(subs: &IndexSet<EffectId>) {
-    if subs.is_empty() {
+/// Dispatch signal `sid`: snapshot its subscribers under a short
+/// borrow, drop the borrow, then route each — schedulers fire inline,
+/// the rest accumulate in `QUEUE` for the next flush. Shared by
+/// `trigger` and `trigger_signal`, which diverge only on how they find
+/// `sid`.
+///
+/// RFC-098 H1 — ONE copy. The old path cloned the subscriber set in
+/// the caller AND copied that clone into a thread-local scratch (whose
+/// only purpose was avoiding the clone the caller had just made); a
+/// `mem::take`/restore dance protected the shared scratch from
+/// re-entrant dispatch. Here the single snapshot `Vec` is local, and
+/// the `SIGNAL_DEPS` borrow is released before any effect runs — so a
+/// scheduler that re-triggers (re-entering `dispatch_signal`) neither
+/// clobbers a shared buffer nor hits a borrow conflict, with no scratch
+/// to manage.
+fn dispatch_signal(sid: SignalId) {
+    // Snapshot subscriber ids in insertion order (H4) under a borrow
+    // that ends with this `with` — running an effect/scheduler below
+    // can mutate `SIGNAL_DEPS` (via `clear_deps_for`), so the borrow
+    // must not outlive the copy.
+    let local: Vec<EffectId> = SIGNAL_DEPS.with(|d| {
+        d.borrow()
+            .get(&sid)
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default()
+    });
+    if local.is_empty() {
         return;
     }
-    // Take ownership of the thread-local scratch so re-entrant
-    // dispatch_subs calls (an inline scheduler that mutates a signal
-    // and triggers another dispatch) don't clobber our buffer
-    // mid-iteration. Pre-fix, the shared scratch surfaced as
-    // "RefCell already borrowed" or "index out of bounds: len 0
-    // index N" deep in the trigger path — both symptoms of the inner
-    // call having `clear()`ed the outer call's snapshot.
-    let mut local = TRIGGER_SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    local.clear();
-    local.extend(subs.iter().copied());
-    let ids_len = local.len();
-    if ids_len == 0 {
-        // Restore the (empty, possibly pre-grown) buffer for reuse.
-        TRIGGER_SCRATCH.with(|s| {
-            let mut current = s.borrow_mut();
-            if local.capacity() > current.capacity() {
-                *current = local;
-            }
-        });
-        return;
-    }
-    // Drain the local buffer into dispatch. Schedulers fire inline;
-    // the rest accumulate in QUEUE. No intermediate HashSet<EffectId>
-    // clone, and re-entry is safe because each dispatch owns its
-    // own buffer.
     let mut any_queued = false;
     // Devtools — collect the just-queued ids so the hook sees the
     // delta, not the whole queue. Empty when feature is off.
     #[cfg(feature = "devtools")]
     let mut newly_queued: Vec<EffectId> = Vec::new();
-    for &eid in local.iter().take(ids_len) {
+    for eid in local {
         let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
         match sched {
             Some(s) => s(eid),
@@ -410,16 +398,6 @@ fn dispatch_subs(subs: &IndexSet<EffectId>) {
             }
         }
     }
-    local.clear();
-    // Return the buffer for the next non-reentrant call to reuse —
-    // keep whichever copy has the larger capacity so we don't lose
-    // the pre-grown allocation.
-    TRIGGER_SCRATCH.with(|s| {
-        let mut current = s.borrow_mut();
-        if local.capacity() > current.capacity() {
-            *current = local;
-        }
-    });
     #[cfg(feature = "devtools")]
     if !newly_queued.is_empty() {
         crate::devtools::hooks::fire_queue_change(&newly_queued);
@@ -444,20 +422,13 @@ pub fn trigger(scope_id: ScopeId, key: &str) {
     let Some(sid) = field_signal(scope_id, key, false) else {
         return;
     };
-    let subs: Option<IndexSet<EffectId>> = SIGNAL_DEPS.with(|d| d.borrow().get(&sid).cloned());
-    if let Some(subs) = subs {
-        dispatch_subs(&subs);
-    }
+    dispatch_signal(sid);
 }
 
 /// Signal-targeted trigger. Skips the `(scope_id, key)` lookup path
 /// entirely — signal deps live in their own table keyed on `SignalId`.
 pub fn trigger_signal(signal_id: SignalId) {
-    let subs: Option<IndexSet<EffectId>> =
-        SIGNAL_DEPS.with(|d| d.borrow().get(&signal_id).cloned());
-    if let Some(subs) = subs {
-        dispatch_subs(&subs);
-    }
+    dispatch_signal(signal_id);
     // Devtools hook — fires on every signal trigger regardless of
     // whether there are subscribers, so `last_changed` still updates
     // for "unread" signals the graph panel displays.
