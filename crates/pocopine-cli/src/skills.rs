@@ -123,11 +123,10 @@ fn installed_skills(dir: &Path) -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
-            if entry.path().join("SKILL.md").is_file() {
-                if let Some(name) = entry.file_name().to_str() {
+            if entry.path().join("SKILL.md").is_file()
+                && let Some(name) = entry.file_name().to_str() {
                     names.push(name.to_string());
                 }
-            }
         }
     }
     names.sort();

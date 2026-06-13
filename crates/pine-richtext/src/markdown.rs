@@ -1021,12 +1021,11 @@ impl<'a> ParseWalker<'a> {
         // Extension-contributed rule for atomic events takes
         // precedence. Tag-level rules are handled inside
         // open_tag / close_tag.
-        if let Some(kind) = atomic_event_kind(&event) {
-            if let Some(rule) = self.rules.get(&ParseMatch::Event(kind)).cloned() {
+        if let Some(kind) = atomic_event_kind(&event)
+            && let Some(rule) = self.rules.get(&ParseMatch::Event(kind)).cloned() {
                 let owned = event.clone().into_static();
                 return self.apply_rule_open(&rule, &owned);
             }
-        }
         match event {
             Event::Start(tag) => self.open_tag(tag)?,
             Event::End(end) => self.close_tag(end)?,

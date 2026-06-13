@@ -63,25 +63,21 @@ pub fn resolve_with_source(
     project: Option<&str>,
 ) -> Option<(String, Source)> {
     // Tier 1: env var.
-    if let Ok(v) = std::env::var(env_var_name(host, field)) {
-        if !v.is_empty() {
+    if let Ok(v) = std::env::var(env_var_name(host, field))
+        && !v.is_empty() {
             return Some((v, Source::Env));
         }
-    }
     // Tier 2: project Cargo.toml.
-    if let Some(v) = project {
-        if !v.is_empty() {
+    if let Some(v) = project
+        && !v.is_empty() {
             return Some((v.to_owned(), Source::Project));
         }
-    }
     // Tier 3: ~/.pocopine/config.toml.
-    if let Ok(fields) = load_host(host) {
-        if let Some(v) = fields.get(field) {
-            if !v.is_empty() {
+    if let Ok(fields) = load_host(host)
+        && let Some(v) = fields.get(field)
+            && !v.is_empty() {
                 return Some((v.clone(), Source::File));
             }
-        }
-    }
     None
 }
 

@@ -109,8 +109,8 @@ impl KeepStore {
             KeepViewMode::List => {
                 self.clear_selection();
                 self.cancel_composer();
-                if !self.editor_open {
-                    if let Some(first) = self
+                if !self.editor_open
+                    && let Some(first) = self
                         .pinned_notes
                         .first()
                         .map(|row| row.value.id.clone())
@@ -118,7 +118,6 @@ impl KeepStore {
                     {
                         self.open_editor(first);
                     }
-                }
             }
             KeepViewMode::Masonry => {
                 if self.editor_open {

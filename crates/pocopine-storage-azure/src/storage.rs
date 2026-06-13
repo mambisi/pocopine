@@ -480,11 +480,10 @@ impl AzureBlobStorageBackend {
     }
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
-        if let Some(size) = size {
-            if size > self.max_proxy_upload_bytes {
+        if let Some(size) = size
+            && size > self.max_proxy_upload_bytes {
                 return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
             }
-        }
         Ok(())
     }
 
@@ -731,13 +730,12 @@ impl AzureBlobStorageBackend {
         provided_checksum: Option<ObjectChecksum>,
     ) -> StorageResult<ObjectRef> {
         let total = stored.public.next_offset.unwrap_or(0);
-        if let Some(expected) = stored.public.size {
-            if total != expected {
+        if let Some(expected) = stored.public.size
+            && total != expected {
                 return Err(StorageError::policy_rejected(format!(
                     "upload is incomplete: expected {expected} bytes, got {total}"
                 )));
             }
-        }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
 
@@ -1060,13 +1058,12 @@ impl AzureBlobStorageBackend {
         // GC'd) — otherwise it would be stuck, rejecting both part uploads and
         // abort. `reopen_if_object_absent` only reopens when the blob is truly
         // absent/foreign, so an already-committed object is never reopened.
-        if count > 0 {
-            if let Err(err) = self.ensure_blocks_staged(&object_key, session, count).await {
+        if count > 0
+            && let Err(err) = self.ensure_blocks_staged(&object_key, session, count).await {
                 self.reopen_if_object_absent(session, &mut stored, &object_key)
                     .await;
                 return Err(err);
             }
-        }
 
         // Fence: persist Completing before the commit so a concurrent abort is
         // refused and a crash leaves a recoverable (re-adoptable) session.

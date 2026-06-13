@@ -121,20 +121,19 @@ impl JwksResolver {
             let stale = state
                 .last_fetch
                 .is_none_or(|t| now.saturating_duration_since(t) >= self.inner.cache_ttl);
-            if !stale {
-                if let Some(jwk) = jwks.find(kid) {
+            if !stale
+                && let Some(jwk) = jwks.find(kid) {
                     return DecodingKey::from_jwk(jwk).map_err(|e| {
                         JwtAuthError::KeyResolutionFailed {
                             reason: format!("decode jwk for kid `{kid}`: {e}"),
                         }
                     });
                 }
-            }
         }
 
         // Slow path: refresh, but respect the cooldown.
-        if let Some(last) = state.last_attempt {
-            if now.saturating_duration_since(last) < self.inner.refresh_cooldown {
+        if let Some(last) = state.last_attempt
+            && now.saturating_duration_since(last) < self.inner.refresh_cooldown {
                 return Err(JwtAuthError::KeyResolutionFailed {
                     reason: format!(
                         "kid `{kid}` not in cache and refresh rate-limited; \
@@ -143,7 +142,6 @@ impl JwksResolver {
                     ),
                 });
             }
-        }
         state.last_attempt = Some(now);
         let fetched = fetch_jwks(&self.inner.http, &self.inner.url).await?;
         state.jwks = Some(fetched);

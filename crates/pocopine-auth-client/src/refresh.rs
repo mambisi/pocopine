@@ -335,22 +335,18 @@ mod tests {
         type Output = (A::Output, B::Output);
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.get_mut();
-            if this.a_out.is_none() {
-                if let Some(fut) = this.a.as_mut() {
-                    if let Poll::Ready(v) = fut.as_mut().poll(cx) {
+            if this.a_out.is_none()
+                && let Some(fut) = this.a.as_mut()
+                    && let Poll::Ready(v) = fut.as_mut().poll(cx) {
                         this.a_out = Some(v);
                         this.a = None;
                     }
-                }
-            }
-            if this.b_out.is_none() {
-                if let Some(fut) = this.b.as_mut() {
-                    if let Poll::Ready(v) = fut.as_mut().poll(cx) {
+            if this.b_out.is_none()
+                && let Some(fut) = this.b.as_mut()
+                    && let Poll::Ready(v) = fut.as_mut().poll(cx) {
                         this.b_out = Some(v);
                         this.b = None;
                     }
-                }
-            }
             match (this.a_out.take(), this.b_out.take()) {
                 (Some(a), Some(b)) => Poll::Ready((a, b)),
                 (a, b) => {

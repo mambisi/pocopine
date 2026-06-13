@@ -107,11 +107,10 @@ where
                     }
                 }
             }
-            if cfg.once && any_triggered {
-                if let Some(obs) = observer_slot_for_cb.borrow_mut().take() {
+            if cfg.once && any_triggered
+                && let Some(obs) = observer_slot_for_cb.borrow_mut().take() {
                     obs.disconnect();
                 }
-            }
         },
     );
 

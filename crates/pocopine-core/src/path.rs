@@ -92,9 +92,9 @@ pub fn write_path_with(
     let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
     // RFC-096 S2 — magic-rooted writes go through the backing
     // scope's writer (e.g. `pp-model="$store.user.name"`).
-    if let Some(first) = segments.first() {
-        if first.starts_with('$') {
-            if let Some((macc, consumed)) =
+    if let Some(first) = segments.first()
+        && first.starts_with('$')
+            && let Some((macc, consumed)) =
                 crate::scope::magic_scope_access(first, segments.get(1).copied())
             {
                 match &segments[consumed..] {
@@ -117,16 +117,13 @@ pub fn write_path_with(
                     }
                 }
             }
-        }
-    }
     match segments.as_slice() {
         [] => false,
         [single] => {
-            if let Some(a) = access {
-                if a.write(single, value) {
+            if let Some(a) = access
+                && a.write(single, value) {
                     return true;
                 }
-            }
             Reflect::set(root, &JsValue::from_str(single), value).unwrap_or(false)
         }
         [first, middle @ .., last] => {

@@ -69,12 +69,11 @@ fn attach_hover(root: &Element) {
         };
         let mut cur = Some(start);
         while let Some(el) = cur {
-            if let Some(id_str) = el.get_attribute("data-scope-id") {
-                if let Ok(n) = id_str.parse::<u64>() {
+            if let Some(id_str) = el.get_attribute("data-scope-id")
+                && let Ok(n) = id_str.parse::<u64>() {
                     highlight::set_from_scope(Some(ScopeId(n)));
                     return;
                 }
-            }
             cur = el.parent_element();
         }
     }));
@@ -110,13 +109,12 @@ fn handle_action(action: &str, el: &Element) {
             return;
         }
         "select-panel" => {
-            if let Some(idx_str) = el.get_attribute("data-panel-idx") {
-                if let Ok(idx) = idx_str.parse::<usize>() {
+            if let Some(idx_str) = el.get_attribute("data-panel-idx")
+                && let Ok(idx) = idx_str.parse::<usize>() {
                     panel::set_active(idx);
                     panel::invalidate_active();
                     super::render();
                 }
-            }
             return;
         }
         _ => {}

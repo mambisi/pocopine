@@ -209,12 +209,11 @@ impl SyncLocalStore for MemoryLocalStore {
                     row.pending = false;
                     row.conflict = true;
                     state.rows.insert(row.key.clone(), row);
-                } else if let Some(key) = conflict.key {
-                    if let Some(row) = state.rows.get_mut(&key) {
+                } else if let Some(key) = conflict.key
+                    && let Some(row) = state.rows.get_mut(&key) {
                         row.pending = false;
                         row.conflict = true;
                     }
-                }
             }
 
             for mut row in result.rows {
@@ -231,11 +230,10 @@ impl SyncLocalStore for MemoryLocalStore {
         let stream = stream.clone();
         let key = key.clone();
         Self::ready(self.with_inner(|inner| {
-            if let Some(state) = inner.streams.get_mut(&stream) {
-                if let Some(row) = state.rows.get_mut(&key) {
+            if let Some(state) = inner.streams.get_mut(&stream)
+                && let Some(row) = state.rows.get_mut(&key) {
                     row.conflict = false;
                 }
-            }
             Ok(())
         }))
     }

@@ -404,11 +404,10 @@ where
                     row.pending = true;
                     row.conflict = self.canonical_conflict(&row.key);
                     self.upsert_row(row);
-                } else if let Some(key) = &pending.key {
-                    if let Some(row) = self.row_mut(key) {
+                } else if let Some(key) = &pending.key
+                    && let Some(row) = self.row_mut(key) {
                         row.pending = true;
                     }
-                }
             }
             SyncOp::Delete => {
                 if let Some(key) = &pending.key {
@@ -593,18 +592,16 @@ where
         let dropped_pending = self.pending_mutations.len() != before;
 
         let mut cleared_conflict = false;
-        if let Some(row) = self.canonical_row_mut(key) {
-            if row.conflict {
+        if let Some(row) = self.canonical_row_mut(key)
+            && row.conflict {
                 row.conflict = false;
                 cleared_conflict = true;
             }
-        }
-        if let Some(row) = self.row_mut(key) {
-            if row.conflict {
+        if let Some(row) = self.row_mut(key)
+            && row.conflict {
                 row.conflict = false;
                 cleared_conflict = true;
             }
-        }
 
         let changed = dropped_pending || cleared_conflict;
         if changed {
@@ -626,19 +623,17 @@ where
     pub fn clear_conflict(&mut self, key: &RowKey) -> bool {
         let mut changed = false;
 
-        if let Some(row) = self.canonical_row_mut(key) {
-            if row.conflict {
+        if let Some(row) = self.canonical_row_mut(key)
+            && row.conflict {
                 row.conflict = false;
                 changed = true;
             }
-        }
 
-        if let Some(row) = self.row_mut(key) {
-            if row.conflict {
+        if let Some(row) = self.row_mut(key)
+            && row.conflict {
                 row.conflict = false;
                 changed = true;
             }
-        }
 
         if changed {
             self.last_reason = SyncReason::Manual;

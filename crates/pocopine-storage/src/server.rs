@@ -1886,8 +1886,8 @@ fn set_response_header(
 }
 
 fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
-    if let Some(set_cookie) = set_cookie {
-        if let Ok(value) = HeaderValue::from_str(&set_cookie) {
+    if let Some(set_cookie) = set_cookie
+        && let Ok(value) = HeaderValue::from_str(&set_cookie) {
             let headers = response.headers_mut();
             headers.insert(SET_COOKIE, value);
             // Lock the cookie-bearing response out of shared caches: a CDN
@@ -1896,7 +1896,6 @@ fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
             headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
             headers.insert(VARY, HeaderValue::from_static("Cookie"));
         }
-    }
 }
 
 /// Derive an opaque, stable anonymous binding id from a cookie value.
@@ -2063,11 +2062,10 @@ where
     // so wrap unconditionally — a shared cache that stored an anonymous-binding
     // Set-Cookie would otherwise replay it to a different visitor.
     let mut response = no_store_response(response);
-    if let Some(set_cookie) = set_cookie {
-        if let Ok(value) = HeaderValue::from_str(&set_cookie) {
+    if let Some(set_cookie) = set_cookie
+        && let Ok(value) = HeaderValue::from_str(&set_cookie) {
             response.headers_mut().insert(SET_COOKIE, value);
         }
-    }
     response
 }
 

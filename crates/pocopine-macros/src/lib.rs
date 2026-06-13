@@ -368,11 +368,10 @@ fn is_lenient_mode() -> bool {
 /// Compute a display path relative to `CARGO_MANIFEST_DIR`
 /// when we can; fall back to the raw absolute path otherwise.
 fn manifest_relative(path: &std::path::Path) -> String {
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        if let Ok(rel) = path.strip_prefix(&manifest_dir) {
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
+        && let Ok(rel) = path.strip_prefix(&manifest_dir) {
             return rel.to_string_lossy().to_string();
         }
-    }
     path.to_string_lossy().to_string()
 }
 
@@ -1387,14 +1386,13 @@ fn classify_static_prop_type(ty: &Type) -> StaticPropKindCode {
     };
     let ident = segment.ident.to_string();
     if ident == "Option" {
-        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-            if let Some(inner) = args.args.iter().find_map(|arg| match arg {
+        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(inner) = args.args.iter().find_map(|arg| match arg {
                 syn::GenericArgument::Type(inner) => Some(inner),
                 _ => None,
             }) {
                 return classify_static_prop_type(inner);
             }
-        }
         return StaticPropKindCode::Auto;
     }
 
@@ -1438,11 +1436,10 @@ fn find_interior_mut(ty: &Type) -> Option<String> {
             }
             if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
                 for arg in &args.args {
-                    if let syn::GenericArgument::Type(inner) = arg {
-                        if let Some(found) = find_interior_mut(inner) {
+                    if let syn::GenericArgument::Type(inner) = arg
+                        && let Some(found) = find_interior_mut(inner) {
                             return Some(found);
                         }
-                    }
                 }
             }
             None
@@ -1614,8 +1611,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // bundle (registers nothing) and is rejected upfront so the
     // author isn't routed into the non-bundle path with a
     // missing-template diagnostic.
-    if let Some(paths) = args.extends.as_ref() {
-        if paths.is_empty() {
+    if let Some(paths) = args.extends.as_ref()
+        && paths.is_empty() {
             return syn::Error::new_spanned(
                 &struct_ident,
                 "`extends = []` is empty — bundle markers must list at least one member, \
@@ -1624,7 +1621,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-    }
     let is_bundle = args.extends.is_some();
     if is_bundle {
         // Reject every component-body-only option in bundle

@@ -124,11 +124,10 @@ impl RequestContext {
     pub fn cookie(&self, name: &str) -> Option<&str> {
         let cookies = self.header("cookie")?;
         for part in cookies.split(';') {
-            if let Some((key, value)) = part.trim().split_once('=') {
-                if key.trim() == name {
+            if let Some((key, value)) = part.trim().split_once('=')
+                && key.trim() == name {
                     return Some(value.trim());
                 }
-            }
         }
         None
     }

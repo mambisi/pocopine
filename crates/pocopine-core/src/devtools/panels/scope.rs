@@ -131,12 +131,11 @@ impl Panel for ScopeInspector {
                 true
             }
             "select-scope" => {
-                if let Some(id_str) = el.get_attribute("data-scope-id") {
-                    if let Ok(n) = id_str.parse::<u64>() {
+                if let Some(id_str) = el.get_attribute("data-scope-id")
+                    && let Ok(n) = id_str.parse::<u64>() {
                         SELECTED.with(|c| c.set(Some(ScopeId(n))));
                         super::super::panel::invalidate_active();
                     }
-                }
                 true
             }
             _ => false,

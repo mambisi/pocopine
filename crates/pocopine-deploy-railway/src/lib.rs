@@ -627,11 +627,10 @@ impl DeployAdapter for RailwayAdapter {
 
             // Generate a public domain for the web-facing service —
             // only after we've confirmed a real, non-failed deployment.
-            if proc.is_public() && !matches!(outcome, client::DeploymentOutcome::Failed(_)) {
-                if let Some(domain) = client.create_service_domain(&service.id, &environment.id) {
+            if proc.is_public() && !matches!(outcome, client::DeploymentOutcome::Failed(_))
+                && let Some(domain) = client.create_service_domain(&service.id, &environment.id) {
                     public_url = Some(domain);
                 }
-            }
         }
 
         let url = match public_url {
@@ -787,11 +786,10 @@ fn load_railway_token() -> Result<String> {
     if let Ok(t) = credentials::load("railway") {
         return Ok(t);
     }
-    if let Ok(t) = std::env::var("RAILWAY_API_TOKEN") {
-        if !t.is_empty() {
+    if let Ok(t) = std::env::var("RAILWAY_API_TOKEN")
+        && !t.is_empty() {
             return Ok(t);
         }
-    }
     anyhow::bail!(
         "railway: no API token. Run `pocopine deploy auth railway`, or export $POCOPINE_RAILWAY_TOKEN or $RAILWAY_API_TOKEN (an account or team token — project-scoped tokens are not supported).",
     )

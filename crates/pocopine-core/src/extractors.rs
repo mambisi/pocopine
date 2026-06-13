@@ -155,11 +155,10 @@ fn resolve_immediate_parent<T: 'static>(child: ScopeId) -> Option<Handle<T>> {
 fn resolve_nearest_ancestor<T: 'static>(child: ScopeId) -> Option<Handle<T>> {
     let mut cur = child;
     while let Some(parent_id) = crate::context::parent_of(cur) {
-        if let Some(scope) = Scope::find(parent_id) {
-            if let Some(rc) = scope.typed::<T>() {
+        if let Some(scope) = Scope::find(parent_id)
+            && let Some(rc) = scope.typed::<T>() {
                 return Some(Handle::new(rc, parent_id));
             }
-        }
         cur = parent_id;
     }
     None

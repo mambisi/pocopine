@@ -137,11 +137,10 @@ pub fn install_cond(
             // Same branch still mounted (or still nothing to
             // mount). Mid-leave on the same branch: cancel and
             // re-enter in lock-step.
-            if let Some(clone) = current.borrow().as_ref() {
-                if transition::is_subtree_leaving(clone) {
+            if let Some(clone) = current.borrow().as_ref()
+                && transition::is_subtree_leaving(clone) {
                     transition::enter_subtree(clone, || {});
                 }
-            }
             return;
         }
 
@@ -196,11 +195,10 @@ pub fn install_cond(
                     // this clone — a rapid branch switch may have
                     // replaced it already.
                     let mut slot = slot_cap.borrow_mut();
-                    if let Some(cur) = slot.as_ref() {
-                        if cur.is_same_node(Some(clone_cap.as_ref())) {
+                    if let Some(cur) = slot.as_ref()
+                        && cur.is_same_node(Some(clone_cap.as_ref())) {
                             *slot = None;
                         }
-                    }
                 });
             }
             *current.borrow_mut() = None;
@@ -292,11 +290,10 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
     let fragment: web_sys::Node = template.content().clone_node_with_deep(true).ok()?;
     let children = fragment.child_nodes();
     for i in 0..children.length() {
-        if let Some(n) = children.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
+        if let Some(n) = children.item(i)
+            && let Ok(el) = n.dyn_into::<Element>() {
                 return Some(el);
             }
-        }
     }
     None
 }
@@ -405,8 +402,8 @@ pub fn install_match(
             // payload scope's value in place and trigger its
             // ident — the body's own bindings re-render without
             // a remount (Solid's non-keyed Match semantics).
-            if let Some(scope) = payload_scope.borrow().as_ref() {
-                if let Some(state) = scope.typed::<crate::payload_scope::PayloadScope>() {
+            if let Some(scope) = payload_scope.borrow().as_ref()
+                && let Some(state) = scope.typed::<crate::payload_scope::PayloadScope>() {
                     let ident = {
                         let mut st = state.borrow_mut();
                         st.value = if arms
@@ -422,12 +419,10 @@ pub fn install_match(
                     };
                     crate::reactive::trigger(scope.id, &ident);
                 }
-            }
-            if let Some(clone) = current.borrow().as_ref() {
-                if transition::is_subtree_leaving(clone) {
+            if let Some(clone) = current.borrow().as_ref()
+                && transition::is_subtree_leaving(clone) {
                     transition::enter_subtree(clone, || {});
                 }
-            }
             return;
         }
 
@@ -485,11 +480,10 @@ pub fn install_match(
                         }
                     }
                     let mut slot = slot_cap.borrow_mut();
-                    if let Some(cur) = slot.as_ref() {
-                        if cur.is_same_node(Some(clone_cap.as_ref())) {
+                    if let Some(cur) = slot.as_ref()
+                        && cur.is_same_node(Some(clone_cap.as_ref())) {
                             *slot = None;
                         }
-                    }
                 });
             }
             *current.borrow_mut() = None;

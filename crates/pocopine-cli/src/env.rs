@@ -70,13 +70,11 @@ pub fn set(project: &Path, key: &str, value: &str) -> Result<bool> {
             key: existing,
             value: existing_value,
         } = line
-        {
-            if existing == key {
+            && existing == key {
                 *existing_value = value.to_string();
                 replaced = true;
                 break;
             }
-        }
     }
     if !replaced {
         lines.push(Line::Pair {
@@ -210,12 +208,11 @@ fn decode_escapes(raw: &str) -> String {
 
 fn write_lines(project: &Path, lines: &[Line]) -> Result<()> {
     let path = env_path(project);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create parent of {}", path.display()))?;
         }
-    }
     let mut buf = String::new();
     for (index, line) in lines.iter().enumerate() {
         match line {

@@ -468,11 +468,10 @@ impl GcsStorageBackend {
         bytes: &Bytes,
     ) -> StorageResult<Option<GcsObjectWrite>> {
         let metadata = self.get_object_metadata(key).await?;
-        if let Some(size) = metadata.size {
-            if size != bytes.len() as u64 && (size != 0 || bytes.is_empty()) {
+        if let Some(size) = metadata.size
+            && size != bytes.len() as u64 && (size != 0 || bytes.is_empty()) {
                 return Ok(None);
             }
-        }
         let existing = self
             .get_object_bytes_with_limit(key, bytes.len() as u64)
             .await?;
@@ -699,11 +698,10 @@ impl GcsStorageBackend {
     }
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
-        if let Some(size) = size {
-            if size > self.max_proxy_upload_bytes {
+        if let Some(size) = size
+            && size > self.max_proxy_upload_bytes {
                 return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
             }
-        }
         Ok(())
     }
 
@@ -807,13 +805,12 @@ impl GcsStorageBackend {
         provided_checksum: Option<ObjectChecksum>,
     ) -> StorageResult<ObjectRef> {
         let total = stored.public.next_offset.unwrap_or(0);
-        if let Some(expected) = stored.public.size {
-            if total != expected {
+        if let Some(expected) = stored.public.size
+            && total != expected {
                 return Err(StorageError::policy_rejected(format!(
                     "upload is incomplete: expected {expected} bytes, got {total}"
                 )));
             }
-        }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         // Reject a missing-required / disallowed-algorithm checksum before any
         // finalize work, while the session is still resumable.

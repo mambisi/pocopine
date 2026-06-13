@@ -1085,17 +1085,15 @@ impl Mapping {
         while index < self.maps.len() {
             let map = &self.maps[index];
             let result = map.map_result(pos, assoc);
-            if let Some(recover) = result.recover {
-                if let Some(corresponding) = self.get_mirror(index).filter(|corresponding| {
+            if let Some(recover) = result.recover
+                && let Some(corresponding) = self.get_mirror(index).filter(|corresponding| {
                     *corresponding > index && *corresponding < self.maps.len()
-                }) {
-                    if let Some(recovered) = self.maps[corresponding].recover(recover) {
+                })
+                    && let Some(recovered) = self.maps[corresponding].recover(recover) {
                         index = corresponding + 1;
                         pos = recovered;
                         continue;
                     }
-                }
-            }
             pos = result.pos;
             deleted |= result.deleted;
             deleted_before |= result.deleted_before;
@@ -3569,13 +3567,11 @@ fn add_range(
             .ok_or_else(|| replace_error("range child index outside node"))?;
         add_replace_node(child.clone(), target);
     }
-    if let Some(end) = end {
-        if end.depth() == depth && end.text_offset() != 0 {
-            if let Some(before) = end.node_before() {
+    if let Some(end) = end
+        && end.depth() == depth && end.text_offset() != 0
+            && let Some(before) = end.node_before() {
                 add_replace_node(before, target);
             }
-        }
-    }
     Ok(())
 }
 
@@ -3609,18 +3605,15 @@ fn close_node(node: &Node, content: Fragment, schema: &Schema) -> RichTextResult
 }
 
 fn add_replace_node(child: Node, target: &mut Vec<Node>) {
-    if let Some(last) = target.last_mut() {
-        if last.is_text()
+    if let Some(last) = target.last_mut()
+        && last.is_text()
             && child.is_text()
             && last.marks() == child.marks()
             && last.attrs() == child.attrs()
-        {
-            if let (Some(left), Some(right)) = (&mut last.text, child.text()) {
+            && let (Some(left), Some(right)) = (&mut last.text, child.text()) {
                 left.push_str(right);
                 return;
             }
-        }
-    }
     target.push(child);
 }
 

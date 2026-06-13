@@ -844,11 +844,10 @@ pub fn stamp_if_body_with(
     // Slot-transparent recovery (see `stamp_if_body` doc).
     let kids = content_parent.child_nodes();
     for i in 0..kids.length() {
-        if let Some(n) = kids.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
+        if let Some(n) = kids.item(i)
+            && let Ok(el) = n.dyn_into::<Element>() {
                 return Some(el);
             }
-        }
     }
     None
 }
@@ -876,11 +875,10 @@ fn parse_body_fragment_root(doc: &web_sys::Document, html: &str) -> Option<(Elem
 fn first_element_child(parent: &Node) -> Option<Element> {
     let kids = parent.child_nodes();
     for i in 0..kids.length() {
-        if let Some(n) = kids.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
+        if let Some(n) = kids.item(i)
+            && let Ok(el) = n.dyn_into::<Element>() {
                 return Some(el);
             }
-        }
     }
     None
 }

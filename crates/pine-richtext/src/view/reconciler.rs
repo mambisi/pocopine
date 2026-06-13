@@ -403,11 +403,10 @@ impl<'a> Reconciler<'a> {
     }
 
     fn content_root_for_node(&self, dom: &Element, node: &RichNode) -> Result<Element, ()> {
-        if let Some(spec) = self.runtime.lookup_node_view(node.type_name()) {
-            if let Some(selector) = &spec.content_selector {
+        if let Some(spec) = self.runtime.lookup_node_view(node.type_name())
+            && let Some(selector) = &spec.content_selector {
                 return dom.query_selector(selector).map_err(|_| ())?.ok_or(());
             }
-        }
         Ok(dom.clone())
     }
 

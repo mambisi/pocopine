@@ -1269,8 +1269,8 @@ fn finish_route_mount(
         // to a `*` wildcard route), mount it here. Otherwise the
         // outlet is left in its prior state — guards / loader
         // never ran because the route doesn't exist.
-        if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get()) {
-            if mount_component_into_outlet(fallback) && has_route_hooks {
+        if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get())
+            && mount_component_into_outlet(fallback) && has_route_hooks {
                 apply_page_meta(None);
                 crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                     path: path.to_string(),
@@ -1280,7 +1280,6 @@ fn finish_route_mount(
                 });
                 return None;
             }
-        }
         apply_page_meta(None);
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
@@ -1662,11 +1661,10 @@ fn paint_route_error_surface(surface: &RouteErrorSurface) {
     // App-configured override wins. Mount the user's component
     // through the normal route-mount path so it has a full
     // `#[component]` surface (template, handlers, lifecycle).
-    if let Some(name) = ROUTE_ERROR_COMPONENT.with(|cell| cell.get()) {
-        if mount_component_into_outlet(name) {
+    if let Some(name) = ROUTE_ERROR_COMPONENT.with(|cell| cell.get())
+        && mount_component_into_outlet(name) {
             return;
         }
-    }
     paint_default_route_error_surface(surface);
 }
 

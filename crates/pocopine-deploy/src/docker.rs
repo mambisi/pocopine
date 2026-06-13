@@ -174,11 +174,10 @@ pub fn docker_config_has_auth(config_json: &str, registry_host: &str) -> bool {
         return true;
     }
     for field in ["credHelpers", "auths"] {
-        if let Some(map) = cfg.get(field).and_then(|m| m.as_object()) {
-            if map.keys().any(|k| registry_key_matches(k, registry_host)) {
+        if let Some(map) = cfg.get(field).and_then(|m| m.as_object())
+            && map.keys().any(|k| registry_key_matches(k, registry_host)) {
                 return true;
             }
-        }
     }
     false
 }

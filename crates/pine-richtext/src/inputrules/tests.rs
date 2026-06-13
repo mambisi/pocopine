@@ -483,11 +483,10 @@ fn replacement_inherits_marks_at_mark_boundary() {
     let mut found_strong_em_dash = false;
     for i in 0..para.child_count() {
         let child = para.child(i).unwrap();
-        if let Some(text) = child.text() {
-            if text.contains('—') && child.marks().iter().any(|m| m.type_name() == "strong") {
+        if let Some(text) = child.text()
+            && text.contains('—') && child.marks().iter().any(|m| m.type_name() == "strong") {
                 found_strong_em_dash = true;
             }
-        }
     }
     assert!(
         found_strong_em_dash,
@@ -578,11 +577,10 @@ fn replacement_inherits_marks_from_cursor_position() {
     let mut found_em_dash_with_strong = false;
     for i in 0..para.child_count() {
         let child = para.child(i).unwrap();
-        if let Some(text) = child.text() {
-            if text.contains('—') && child.marks().iter().any(|m| m.type_name() == "strong") {
+        if let Some(text) = child.text()
+            && text.contains('—') && child.marks().iter().any(|m| m.type_name() == "strong") {
                 found_em_dash_with_strong = true;
             }
-        }
     }
     assert!(
         found_em_dash_with_strong,
@@ -993,12 +991,11 @@ fn markdown_bullet_shortcut_places_cursor_inside_joined_list_item() {
     let resolved = next.doc().resolve(head).unwrap();
     let mut found_list_item = false;
     for depth in 0..=resolved.depth() {
-        if let Some(node) = resolved.node(depth) {
-            if node.type_name() == "list_item" {
+        if let Some(node) = resolved.node(depth)
+            && node.type_name() == "list_item" {
                 found_list_item = true;
                 break;
             }
-        }
     }
     assert!(
         found_list_item,

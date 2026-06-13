@@ -299,11 +299,10 @@ fn watcher_callback(
     move |res: notify::Result<Event>| {
         if let Ok(ev) = res {
             use notify::EventKind::*;
-            if matches!(ev.kind, Modify(_) | Create(_) | Remove(_)) {
-                if let Some(change) = Change::from_event(&project, &ev) {
+            if matches!(ev.kind, Modify(_) | Create(_) | Remove(_))
+                && let Some(change) = Change::from_event(&project, &ev) {
                     let _ = tx.send(change);
                 }
-            }
         }
     }
 }

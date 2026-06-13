@@ -458,8 +458,8 @@ fn schedule_save_then_load(
             // the typed Node (canonical) and derive
             // `title` / `body` from it; markdown stays an
             // export-only format.
-            if form.kind == "text" {
-                if let Some(state) = body.clone().and_then(read_surface_doc_state) {
+            if form.kind == "text"
+                && let Some(state) = body.clone().and_then(read_surface_doc_state) {
                     form.title = crate::components::note_body::doc_to_title(&state)
                         .unwrap_or_else(|| form.title.clone());
                     form.body = crate::components::note_body::doc_to_preview_text(&state)
@@ -467,7 +467,6 @@ fn schedule_save_then_load(
                         .unwrap_or_default();
                     form.body_state = Some(state);
                 }
-            }
             let snapshot = form.collect_fields();
             if !snapshot.note_id.is_empty() {
                 pocopine::store::<KeepStore>().update(move |s| s.save_form_note(snapshot));

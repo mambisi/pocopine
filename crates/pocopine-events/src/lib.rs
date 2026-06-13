@@ -796,8 +796,8 @@ mod host {
                 .front()
                 .map(|event| parse_memory_cursor(&event.cursor))
                 .transpose()?;
-            if let (Some(after_seq), Some(oldest_seq)) = (after_seq, oldest_seq) {
-                if after_seq < oldest_seq.saturating_sub(1) {
+            if let (Some(after_seq), Some(oldest_seq)) = (after_seq, oldest_seq)
+                && after_seq < oldest_seq.saturating_sub(1) {
                     tracing::debug!(
                         target: TRACE_TARGET,
                         event_name = "pocopine.events.memory.replay_gap",
@@ -806,7 +806,6 @@ mod host {
                     );
                     return Ok(ReplayBatch::from_events(Vec::new(), true));
                 }
-            }
 
             let mut events = Vec::new();
             for event in &state.events {

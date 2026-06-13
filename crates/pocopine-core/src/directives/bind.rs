@@ -275,11 +275,10 @@ fn serialise_class(v: &JsValue) -> Option<String> {
             let truthy = Reflect::get(&obj, &k)
                 .map(|val| val.as_bool().unwrap_or(!val.is_falsy()))
                 .unwrap_or(false);
-            if truthy {
-                if let Some(s) = k.as_string() {
+            if truthy
+                && let Some(s) = k.as_string() {
                     out.push(s);
                 }
-            }
         }
         return Some(out.join(" "));
     }

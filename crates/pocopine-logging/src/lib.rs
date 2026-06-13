@@ -1093,13 +1093,12 @@ mod web {
                 component_ready,
             } = self.config;
 
-            if let Some(console_config) = console_logging {
-                if let Err(err) = init_console_logging(console_config) {
+            if let Some(console_config) = console_logging
+                && let Err(err) = init_console_logging(console_config) {
                     web_sys::console::warn_1(&JsValue::from_str(&format!(
                         "pocopine: frontend observability could not initialize console logging: {err}"
                     )));
                 }
-            }
 
             let mut app = app
                 .provide_plugin(FrontendObservability {

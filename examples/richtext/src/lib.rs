@@ -197,11 +197,10 @@ impl Editor {
         if md.is_empty() {
             return;
         }
-        if let Some(editor) = self.editor_handle() {
-            if let Err(err) = editor.set::<Markdown>(&md) {
+        if let Some(editor) = self.editor_handle()
+            && let Err(err) = editor.set::<Markdown>(&md) {
                 self.exported_markdown = format!("(import error: {err})");
             }
-        }
     }
 
     /// Snapshot the surface's current doc to markdown and render

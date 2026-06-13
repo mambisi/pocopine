@@ -106,8 +106,8 @@ impl RailwayClient {
             )
             .with_context(|| format!("railway graphql `{op}`: request failed"))?;
 
-        if let Some(errors) = resp.errors {
-            if !errors.is_empty() {
+        if let Some(errors) = resp.errors
+            && !errors.is_empty() {
                 bail!(
                     "railway graphql `{op}`: {}",
                     errors
@@ -117,7 +117,6 @@ impl RailwayClient {
                         .join("; "),
                 );
             }
-        }
         resp.data
             .with_context(|| format!("railway graphql `{op}`: response carried no data"))
     }

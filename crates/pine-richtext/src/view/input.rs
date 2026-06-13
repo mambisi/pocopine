@@ -428,8 +428,8 @@ where
                     let cursor_from = state.selection().from(state.doc());
                     let cursor_to = state.selection().to(state.doc());
                     let rules = runtime_for_input.input_rules();
-                    if !rules.is_empty() {
-                        if let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
+                    if !rules.is_empty()
+                        && let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
                         {
                             let mut tr = fire.transaction;
                             if fire.undoable {
@@ -482,7 +482,6 @@ where
                             );
                             return;
                         }
-                    }
 
                     ev.prevent_default();
                     let transaction_started_at = perf_now_ms();
@@ -873,8 +872,8 @@ fn state_with_text_selection(state: EditorState, from: usize, to: usize) -> Opti
 /// `window.getSelection()` scan on the hot typing/deletion path.
 fn target_range_only_to_model(surface: &Element, event: &InputEvent) -> Option<(usize, usize)> {
     let ranges = event.get_target_ranges();
-    if ranges.length() > 0 {
-        if let Ok(range) = ranges.get(0).dyn_into::<StaticRange>() {
+    if ranges.length() > 0
+        && let Ok(range) = ranges.get(0).dyn_into::<StaticRange>() {
             let start = dom_pos_to_model(surface, &range.start_container(), range.start_offset());
             let end = dom_pos_to_model(surface, &range.end_container(), range.end_offset());
             if let (Some(a), Some(b)) = (start, end) {
@@ -882,7 +881,6 @@ fn target_range_only_to_model(surface: &Element, event: &InputEvent) -> Option<(
                 return Some((from, to));
             }
         }
-    }
     None
 }
 

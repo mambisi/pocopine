@@ -82,21 +82,18 @@ impl TimeSegments {
     pub fn parse(value: &str) -> Self {
         let mut s = Self::default();
         let mut parts = value.split(':');
-        if let Some(h) = parts.next().and_then(|p| p.trim().parse::<u8>().ok()) {
-            if h <= 23 {
+        if let Some(h) = parts.next().and_then(|p| p.trim().parse::<u8>().ok())
+            && h <= 23 {
                 s.hour = Some(h);
             }
-        }
-        if let Some(m) = parts.next().and_then(|p| p.trim().parse::<u8>().ok()) {
-            if m <= 59 {
+        if let Some(m) = parts.next().and_then(|p| p.trim().parse::<u8>().ok())
+            && m <= 59 {
                 s.minute = Some(m);
             }
-        }
-        if let Some(sec) = parts.next().and_then(|p| p.trim().parse::<u8>().ok()) {
-            if sec <= 59 {
+        if let Some(sec) = parts.next().and_then(|p| p.trim().parse::<u8>().ok())
+            && sec <= 59 {
                 s.second = Some(sec);
             }
-        }
         s
     }
 

@@ -140,8 +140,8 @@ fn emit_assertions_for_parent(
         // <ActualChild/> </template>` — the actual slotted
         // children are this template's element children. RFC
         // 011 syntax.
-        if child_el.tag == "template" {
-            if let Some(slot_name) = pp_slot_name(child_el) {
+        if child_el.tag == "template"
+            && let Some(slot_name) = pp_slot_name(child_el) {
                 let site = SlotName::Named(slot_name);
                 for slotted in &child_el.children {
                     if let Node::Element(slotted_el) = slotted {
@@ -150,7 +150,6 @@ fn emit_assertions_for_parent(
                 }
                 continue;
             }
-        }
 
         // Default slot — any non-template-wrapped direct child.
         emit_one_assertion(parent_path, &SlotName::Default, child_el, uses, out);

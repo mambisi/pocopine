@@ -210,14 +210,13 @@ impl AnimationDemo {
             .is_some()
         {
             let handle = scroll_progress(|progress| {
-                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                    if let Ok(Some(fill)) = doc.query_selector(".pm-scroll-fill") {
+                if let Some(doc) = web_sys::window().and_then(|w| w.document())
+                    && let Ok(Some(fill)) = doc.query_selector(".pm-scroll-fill") {
                         let _ = fill.set_attribute(
                             "style",
                             &format!("width:{}%", (progress * 100.0).round()),
                         );
                     }
-                }
             });
             SCROLL_PROGRESS_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
         }

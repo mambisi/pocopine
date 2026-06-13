@@ -212,11 +212,10 @@ fn read_from_element(el: &web_sys::Element, number: bool) -> JsValue {
 }
 
 fn coerce(s: String, number: bool) -> JsValue {
-    if number {
-        if let Ok(n) = s.parse::<f64>() {
+    if number
+        && let Ok(n) = s.parse::<f64>() {
             return JsValue::from_f64(n);
         }
-    }
     JsValue::from_str(&s)
 }
 

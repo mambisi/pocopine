@@ -284,11 +284,10 @@ fn stage_dir(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).ok();
     for e in entries.flatten() {
         let p = e.path();
-        if p.is_file() {
-            if let Some(name) = p.file_name() {
+        if p.is_file()
+            && let Some(name) = p.file_name() {
                 let _ = fs::copy(&p, dst.join(name));
             }
-        }
     }
 }
 
@@ -540,14 +539,13 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
         if let Some((_, html)) = installs.iter().find(|(s, _)| s == slug) {
             install_arms.push_str(&format!("            {slug:?} => {html:?},\n"));
         }
-        if let Some(anatomy) = meta_anatomy.get(slug) {
-            if !anatomy.is_empty() {
+        if let Some(anatomy) = meta_anatomy.get(slug)
+            && !anatomy.is_empty() {
                 anatomy_arms.push_str(&format!(
                     "            {slug:?} => {:?},\n",
                     hl.code(anatomy, "poco")
                 ));
             }
-        }
     }
     s.push_str("pub mod api {\n");
     s.push_str(
@@ -641,11 +639,10 @@ fn stage_icons(src: &Path, dst: &Path, expected: usize) {
     if let Ok(entries) = fs::read_dir(src) {
         for e in entries.flatten() {
             let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("svg") {
-                if let Some(name) = p.file_name() {
+            if p.extension().and_then(|x| x.to_str()) == Some("svg")
+                && let Some(name) = p.file_name() {
                     let _ = fs::copy(&p, dst.join(name));
                 }
-            }
         }
     }
 }
@@ -729,15 +726,14 @@ fn doc_of(attrs: &[syn::Attribute]) -> String {
         if !a.path().is_ident("doc") {
             continue;
         }
-        if let syn::Meta::NameValue(nv) = &a.meta {
-            if let syn::Expr::Lit(syn::ExprLit {
+        if let syn::Meta::NameValue(nv) = &a.meta
+            && let syn::Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Str(s),
                 ..
             }) = &nv.value
             {
                 lines.push(s.value().trim().to_string());
             }
-        }
     }
     lines
         .join(" ")
@@ -1531,8 +1527,8 @@ fn emit_type(
     methods: &HashMap<String, Vec<(String, String)>>,
 ) {
     out.push_str(&format!("#### `{name}` ({kind})\n\n{doc}\n\n"));
-    if let Some(ms) = methods.get(name) {
-        if !ms.is_empty() {
+    if let Some(ms) = methods.get(name)
+        && !ms.is_empty() {
             out.push_str("Methods:\n\n");
             for (sig, mdoc) in ms {
                 if mdoc.is_empty() {
@@ -1543,7 +1539,6 @@ fn emit_type(
             }
             out.push('\n');
         }
-    }
 }
 
 fn doc_or(attrs: &[syn::Attribute]) -> String {

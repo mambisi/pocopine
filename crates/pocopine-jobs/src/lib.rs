@@ -854,11 +854,10 @@ return redis.call(
                     .arg("MKSTREAM")
                     .query_async(conn)
                     .await;
-                if let Err(err) = result {
-                    if !err.to_string().contains("BUSYGROUP") {
+                if let Err(err) = result
+                    && !err.to_string().contains("BUSYGROUP") {
                         return Err(err.into());
                     }
-                }
             }
             Ok(())
         }

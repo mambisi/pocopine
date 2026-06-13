@@ -38,11 +38,10 @@ fn replace_url(path: &str) {
 fn remove_existing_app_roots() {
     let roots = doc().query_selector_all("[pp-app]").unwrap();
     for i in 0..roots.length() {
-        if let Some(node) = roots.item(i) {
-            if let Ok(el) = node.dyn_into::<web_sys::Element>() {
+        if let Some(node) = roots.item(i)
+            && let Ok(el) = node.dyn_into::<web_sys::Element>() {
                 el.remove();
             }
-        }
     }
 }
 
