@@ -271,6 +271,56 @@ features = []
 title = "My App"
 ```
 
+### 6.2 Build channels — standalone vs server
+
+Where the app's `#[server]` calls run is a **build choice**, expressed as
+named channels (not a code change — the wasm UI is identical either way):
+
+```toml
+# No channel selected → "standalone": #[server] functions run in-process
+# (the default; nothing to deploy).
+[package.metadata.pocopine.native]
+# default-channel = "server"          # optional: channel when --channel is omitted
+
+# A channel that names a deployed backend → "server": the native shell
+# forwards #[server] calls to that URL. The server URL comes straight from
+# `pocopine deploy status`.
+[package.metadata.pocopine.native.channels.server]
+backend = "https://myapp.up.railway.app"
+```
+
+```sh
+pocopine native build                       # standalone (in-process)
+pocopine native build --channel server      # desktop client of the deployed server
+pocopine native dev   --channel server --backend http://localhost:3024   # dev override
+```
+
+The mode is **emergent**: a channel with no `backend` is standalone; a
+channel with a `backend` is server. The CLI resolves the active channel
+(`--backend` override → `--channel` → `default-channel` → none) and passes
+the URL to the shell via `POCOPINE_NATIVE_BACKEND`.
+
+**How "server" works (host-side proxy).** The shell keeps serving the
+document + wasm + CSS locally over the custom scheme, but forwards the
+`#[server]`/storage routes (`/_pocopine/*`, `/__pocopine/*`) to the
+backend with an HTTP client (`reqwest`). Because the forward is
+**host-to-host**, not a browser request:
+
+- there is **no browser CORS** to configure on the server;
+- the webview stays same-origin (it only ever talks to the custom scheme);
+- auth headers the app already sets flow through unchanged.
+
+End-to-end it dovetails with deploy:
+
+```text
+pocopine deploy            # ship the server
+pocopine deploy status     # copy the printed URL → channels.server.backend
+pocopine native build --channel server      # desktop client points at it
+```
+
+Channels double as release flavors: a `staging` channel with its own
+`backend` (and, later, its own identifier for side-by-side installs).
+
 ## 7. Interaction with RFC-099 (SSR) — future, not a dependency
 
 In a Tauri app the "server" and the webview host are the **same native

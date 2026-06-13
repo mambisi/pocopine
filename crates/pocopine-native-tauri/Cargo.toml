@@ -18,7 +18,9 @@ description = "Tauri backend for the pocopine native target: webview window + cu
 default = []
 # Pull in the real Tauri webview runtime. Links system webview
 # libraries (webkit2gtk-4.1 on Linux); enable on a desktop host.
-tauri = ["dep:tauri"]
+# `reqwest` is the server-channel proxy client (RFC-104) and rides the
+# same feature — it's only used when a window actually runs.
+tauri = ["dep:tauri", "dep:reqwest"]
 
 [dependencies]
 pocopine-native = { path = "../pocopine-native" }
@@ -26,3 +28,6 @@ pocopine-server = { workspace = true }
 http = { workspace = true }
 tracing = { workspace = true }
 tauri = { version = "2", optional = true }
+# Forwards `#[server]` calls to a deployed backend in the "server"
+# channel. Host-side (no browser CORS); rustls to avoid OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
