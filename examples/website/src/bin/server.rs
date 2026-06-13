@@ -26,7 +26,7 @@ async fn main() -> std::io::Result<()> {
     // fallback — that's where `index.html` and `pkg/` live in source.
     let static_root =
         std::env::var("POCOPINE_DIST").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_owned());
-    let index_path = std::path::PathBuf::from(format!("{static_root}/index.html"));
+    let fallback_root = static_root.clone();
 
     // SPA history fallback — but only for route-looking paths. Asset-
     // looking misses (last segment has a file extension) get a real 404
@@ -34,7 +34,7 @@ async fn main() -> std::io::Result<()> {
     // `text/html` body on e.g. a missing `.webm` makes `<video>` fail
     // with an opaque decoder error rather than a visible 404.
     let spa_fallback = move |uri: Uri| {
-        let index = index_path.clone();
+        let root = fallback_root.clone();
         async move {
             let last = uri.path().rsplit('/').next().unwrap_or("");
             let looks_like_asset = last
@@ -43,6 +43,11 @@ async fn main() -> std::io::Result<()> {
             if looks_like_asset {
                 return (StatusCode::NOT_FOUND, "not found").into_response();
             }
+            // `index_file` prefers the GENERATED `pkg/index.html` (the
+            // copy `pocopine build` writes with the hashed bundle
+            // reference) over the source index.html; resolved per
+            // request so a fresh build is picked up without a restart.
+            let index = pocopine_server::index_file(&root);
             match tokio::fs::read(&index).await {
                 Ok(body) => {
                     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()

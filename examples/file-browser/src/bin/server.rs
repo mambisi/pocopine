@@ -3,15 +3,19 @@
 async fn main() -> std::io::Result<()> {
     use file_browser_example as _;
     use pocopine_logging::init_default;
-    use pocopine_server::{axum::Router, static_files, tower_http::services::ServeFile, Server};
+    use pocopine_server::{
+        axum::Router, index_file, static_files, tower_http::services::ServeFile, Server,
+    };
     use pocopine_storage::storage_server_plugin;
 
     init_default().map_err(std::io::Error::other)?;
 
     let static_dir =
         std::env::var("POCOPINE_DIST").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
-    let index_path = format!("{static_dir}/index.html");
-    let static_service = static_files(&static_dir).fallback(ServeFile::new(index_path));
+    // SPA fallback — `index_file` prefers the generated
+    // `pkg/index.html` (hashed bundle reference) over the source one.
+    let static_service =
+        static_files(&static_dir).fallback(ServeFile::new(index_file(&static_dir)));
     let router = Router::new().fallback_service(static_service);
     let storage = file_browser_example::storage_server().map_err(std::io::Error::other)?;
 

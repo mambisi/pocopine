@@ -22,14 +22,22 @@
 //! [`StaticFiles`] wraps [`ServeDir`] and applies that policy to every
 //! response, fallback responses included. Responses that already carry
 //! a `Cache-Control` header are left untouched.
+//!
+//! It also serves the GENERATED index: `pocopine build` writes the
+//! hash-rewritten entry point to `pkg/index.html` (the source
+//! `index.html` keeps the stable unhashed `pkg/<name>.js` reference —
+//! the hash is build output, not source). Requests for `/` or
+//! `/index.html` answer with `pkg/index.html` when it exists and fall
+//! back to the source file otherwise, so an unbuilt checkout still
+//! serves.
 
 use std::convert::Infallible;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use axum::http::{header, HeaderValue, Request, Response};
+use axum::http::{header, HeaderValue, Request, Response, Uri};
 use tower::Service;
 use tower_http::services::fs::{DefaultServeDirFallback, ServeFileSystemResponseBody};
 use tower_http::services::ServeDir;
@@ -39,12 +47,14 @@ use tower_http::services::ServeDir;
 #[derive(Clone, Debug)]
 pub struct StaticFiles<F = DefaultServeDirFallback> {
     inner: ServeDir<F>,
+    root: PathBuf,
 }
 
 impl StaticFiles {
     pub(crate) fn new(dir: impl AsRef<Path>) -> Self {
         Self {
-            inner: ServeDir::new(dir),
+            inner: ServeDir::new(&dir),
+            root: dir.as_ref().to_path_buf(),
         }
     }
 }
@@ -57,7 +67,35 @@ impl<F> StaticFiles<F> {
     pub fn fallback<F2>(self, new_fallback: F2) -> StaticFiles<F2> {
         StaticFiles {
             inner: self.inner.fallback(new_fallback),
+            root: self.root,
         }
+    }
+}
+
+/// Where `pocopine build` writes the hash-rewritten index.html,
+/// relative to the static root (module docs).
+const GENERATED_INDEX: &str = "pkg/index.html";
+
+/// True when `path` asks for the entry-point index and the build has
+/// generated `pkg/index.html` under `root` — the request is then
+/// re-pointed at the generated copy.
+fn prefers_generated_index(root: &Path, path: &str) -> bool {
+    matches!(path, "/" | "/index.html") && root.join(GENERATED_INDEX).is_file()
+}
+
+/// Resolve the index.html a server should hand out as its SPA history
+/// fallback: the generated `pkg/index.html` when a build has produced
+/// one (it carries the hashed bundle reference), else the source
+/// `index.html` (stable unhashed reference — a checkout without a
+/// build). Pair it with `tower_http::services::ServeFile`, or call it
+/// per request to pick up a build landing under a running server.
+pub fn index_file(dir: impl AsRef<Path>) -> PathBuf {
+    let root = dir.as_ref();
+    let generated = root.join(GENERATED_INDEX);
+    if generated.is_file() {
+        generated
+    } else {
+        root.join("index.html")
     }
 }
 
@@ -80,6 +118,15 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let mut req = req;
+        // Entry-point requests serve the generated `pkg/index.html`
+        // (hashed bundle reference) when a build has produced one;
+        // otherwise the source index.html resolves as usual. Checked
+        // per request so a build landing under a running server takes
+        // effect without a restart.
+        if prefers_generated_index(&self.root, req.uri().path()) {
+            *req.uri_mut() = Uri::from_static("/pkg/index.html");
+        }
         // The hashed-name decision needs the request path; the HTML
         // decision needs the response content-type (an SPA fallback
         // serves index.html under a route-shaped path) — so the path
@@ -158,6 +205,12 @@ mod tests {
             .map(|value| value.to_str().unwrap().to_string())
     }
 
+    async fn body_string(res: Response<ServeFileSystemResponseBody>) -> String {
+        let body = axum::body::Body::new(res.into_body());
+        let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
     #[test]
     fn content_hashed_path_matches_bundle_pair_only() {
         assert!(is_content_hashed_path("/pkg/website.0a1b2c3d.js"));
@@ -218,6 +271,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cache_control(&res), None);
+    }
+
+    #[tokio::test]
+    async fn entry_point_prefers_the_generated_pkg_index_when_built() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "source").unwrap();
+        let svc = StaticFiles::new(dir.path());
+
+        // No build output — the source index serves (dev without a
+        // build still works).
+        for path in ["/", "/index.html"] {
+            let res = svc.clone().oneshot(request(path)).await.unwrap();
+            assert_eq!(body_string(res).await, "source");
+        }
+
+        // `pocopine build` wrote the hash-rewritten copy — entry-point
+        // requests flip to it without a restart, still `no-cache`.
+        std::fs::create_dir(dir.path().join("pkg")).unwrap();
+        std::fs::write(dir.path().join("pkg/index.html"), "generated").unwrap();
+        for path in ["/", "/index.html"] {
+            let res = svc.clone().oneshot(request(path)).await.unwrap();
+            assert_eq!(cache_control(&res).as_deref(), Some("no-cache"));
+            assert_eq!(body_string(res).await, "generated");
+        }
+
+        // Non-entry-point paths are not re-pointed.
+        let res = svc.clone().oneshot(request("/index.htm")).await.unwrap();
+        assert_ne!(body_string(res).await, "generated");
     }
 
     #[tokio::test]

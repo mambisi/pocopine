@@ -30,6 +30,12 @@ class Q(http.server.SimpleHTTPRequestHandler):
         p = self.path.split("?")[0]
         if not (ROOT / p.lstrip("/")).exists() and "." not in Path(p).name:
             self.path = "/index.html"
+        # `pocopine build` writes the hash-rewritten entry point to
+        # pkg/index.html (the source index.html keeps the stable
+        # unhashed bundle reference); prefer the generated copy like
+        # pocopine's real servers do.
+        if self.path in ("/", "/index.html") and (ROOT / "pkg" / "index.html").is_file():
+            self.path = "/pkg/index.html"
         return super().do_GET()
 
 
