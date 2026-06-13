@@ -419,14 +419,103 @@ pub fn install(
             parent_proxy,
             parent_scope_id,
             inject_parent_id,
-            template,
+            Some(template),
             anchor,
             stagger_ms,
             body,
+            Vec::new(),
         ),
     };
 
     track_effect_on(&track_el, effect_id);
+}
+
+/// RFC-099 Phase 3 — hydrate (claim) path for an UNKEYED `pp-for`. The
+/// server rendered `[row0]…[rowN]<!--pp:for:idx-->`; this adopts those
+/// N row elements (the element siblings before the anchor), wraps each
+/// in a fresh `LoopScope` + hydrates its `body_plan` onto it, then
+/// seeds [`run_naive`] so its first run is a no-op and later `items`
+/// changes reconcile normally. Keyed `pp-for` is not server-expanded
+/// yet, so it never reaches here (it falls back to a client mount).
+#[allow(clippy::too_many_arguments)]
+pub fn hydrate_naive(
+    anchor: Node,
+    item_name: &'static str,
+    items_expr: &'static str,
+    parent_proxy: JsValue,
+    parent_scope_id: ScopeId,
+    stagger_ms: u32,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
+    body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+) {
+    let Some(parent_el) = anchor
+        .parent_node()
+        .and_then(|n| n.dyn_into::<Element>().ok())
+    else {
+        return;
+    };
+    let inject_parent_id =
+        crate::mount::inherited_ctx_parent_of(&parent_el).unwrap_or(parent_scope_id);
+
+    // Resolve items so each adopted row gets the right `LoopScope`.
+    let items_reader = crate::scope::scoped_root_reader(parent_scope_id);
+    let items_js = crate::path::resolve_path_with(&parent_proxy, items_reader.as_ref(), items_expr);
+    let arr: Array = items_js
+        .dyn_into::<Array>()
+        .unwrap_or_else(|_| Array::new());
+    let total = arr.length() as usize;
+    let item_name_rc: Rc<str> = item_name.into();
+
+    // Adopt the `total` element siblings immediately before the anchor
+    // (the rows, in document order).
+    let mut rows: Vec<Element> = Vec::with_capacity(total);
+    let mut node = anchor.previous_sibling();
+    while rows.len() < total {
+        let Some(n) = node else { break };
+        let prev = n.previous_sibling();
+        if n.node_type() == Node::ELEMENT_NODE {
+            if let Ok(el) = n.dyn_into::<Element>() {
+                rows.push(el);
+            }
+        }
+        node = prev;
+    }
+    rows.reverse();
+
+    // Wrap each adopted row in a LoopScope and hydrate its body.
+    let mut prior: Vec<Element> = Vec::with_capacity(rows.len());
+    for (i, row) in rows.into_iter().enumerate() {
+        let item = arr.get(i as u32);
+        let loop_state = LoopScope {
+            item_name: Rc::clone(&item_name_rc),
+            item,
+            index: i,
+            total,
+            parent_scope_id,
+        };
+        let scope = Scope::new(Rc::new(RefCell::new(loop_state)));
+        crate::context::set_parent(scope.id, inject_parent_id);
+        let proxy = scope.into_proxy();
+        bind_scope_to(&row, scope.id, &proxy);
+        if let Some(bp) = body_plan {
+            crate::templates_plan::hydrate_plan(&row, scope.id, &proxy, bp, "<pp-for row>");
+        }
+        prior.push(row);
+    }
+
+    let effect_id = run_naive(
+        item_name,
+        items_expr,
+        parent_proxy,
+        parent_scope_id,
+        inject_parent_id,
+        None,
+        anchor,
+        stagger_ms,
+        body,
+        prior,
+    );
+    track_effect_on(&parent_el, effect_id);
 }
 
 /// Whole-rebuild iteration (no `pp-key`). Keeps the original
@@ -438,13 +527,20 @@ fn run_naive(
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: ForTemplate,
+    template: Option<ForTemplate>,
     anchor: Node,
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
+    // RFC-099 Phase 3 — hydrate (claim) seed: the server-rendered rows
+    // already adopted + body-hydrated by `hydrate_naive`. When
+    // non-empty, the first effect run skips the rebuild (the rows are
+    // already in the DOM and reactive) and only subscribes to `items`;
+    // later runs reconcile normally.
+    seed_prior: Vec<Element>,
 ) -> crate::reactive::EffectId {
     let item_name: Rc<str> = item_name.into();
-    let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(Vec::new()));
+    let claim_first = std::cell::Cell::new(!seed_prior.is_empty());
+    let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(seed_prior));
     // RFC-095 W1 — items reads resolve Rust-side (track + cache)
     // unless the path roots at a `$`-name (e.g. `$store.items`),
     // which falls back to the proxy.
@@ -457,6 +553,13 @@ fn run_naive(
             .dyn_into::<Array>()
             .unwrap_or_else(|_| Array::new());
         let total = arr.length() as usize;
+
+        // Claim first run: rows are already adopted into `prior` and
+        // reactive — subscribe to `items` (done above) but don't touch
+        // the DOM. Clears the flag so the next change reconciles.
+        if claim_first.replace(false) {
+            return;
+        }
 
         {
             let mut prior = prior.borrow_mut();
@@ -503,7 +606,7 @@ fn run_naive(
                         break;
                     }
                 },
-                None => match template.clone_body() {
+                None => match template.as_ref().and_then(|t| t.clone_body()) {
                     Some(root) => (root, false),
                     None => {
                         console::error_1(&JsValue::from_str(

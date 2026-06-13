@@ -358,6 +358,9 @@ pub fn hydrate_plan(
     for (idx, mp) in plan.match_plans.iter().enumerate() {
         hydrate_static_match_plan(root, scope_id, proxy, idx, mp, template_name);
     }
+    for (idx, fp) in plan.for_plans.iter().enumerate() {
+        hydrate_static_for_plan(root, scope_id, proxy, idx, fp, template_name);
+    }
 }
 
 /// Find the `<!--label-->` comment among `parent`'s child nodes (the
@@ -570,6 +573,46 @@ fn hydrate_static_match_plan(
         evaluator,
         arms,
         entry.teleport_selector,
+    );
+}
+
+/// RFC-099 Phase 3 — claim a server-stamped UNKEYED `pp-for`. Find the
+/// labelled `<!--pp:for:idx-->` anchor and hand it to
+/// [`directives::for_::hydrate_naive`], which adopts the rendered rows
+/// and seeds the controller. Anchor absent (keyed lists — not
+/// server-expanded yet — or an unliftable row body) → fall back to a
+/// normal client mount on the surviving `<template>`.
+fn hydrate_static_for_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    idx: usize,
+    entry: &'static StaticForPlan,
+    template_name: &str,
+) {
+    let path = entry.template_node_path;
+    if path.is_empty() {
+        return;
+    }
+    let Some(parent) = resolve_node_path(root, &path[..path.len() - 1]) else {
+        return;
+    };
+    let label = format!("pp:for:{idx}");
+    let Some(anchor) = find_comment_anchor(&parent, &label) else {
+        if let Some(tpl_el) = resolve_node_path(root, path) {
+            install_static_for_plan(&tpl_el, scope_id, proxy, entry, template_name);
+        }
+        return;
+    };
+    directives::for_::hydrate_naive(
+        anchor,
+        entry.item_name,
+        entry.items_expr,
+        proxy.clone(),
+        scope_id,
+        entry.stagger_ms,
+        entry.body,
+        entry.body_plan,
     );
 }
 

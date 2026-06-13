@@ -299,3 +299,107 @@ fn server_render_hydrates_pp_match_byte_equal_and_stays_reactive() {
         root.outer_html()
     );
 }
+
+// ─── RFC-099 Phase 3 — structural claim (unkeyed pp-for) ────────────
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct ForItem {
+    id: u32,
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-for-demo",
+    template_inline = r#"<ul class="root">
+        <template pp-for="item in items"><li class="row" pp-text="item.label"></li></template>
+    </ul>"#
+)]
+struct SsrForDemo {
+    items: Vec<ForItem>,
+}
+
+#[handlers]
+impl SsrForDemo {}
+
+fn for_item(arr: &js_sys::Array, id: u32, label: &str) {
+    let o = js_sys::Object::new();
+    js_sys::Reflect::set(&o, &"id".into(), &JsValue::from_f64(id as f64)).unwrap();
+    js_sys::Reflect::set(&o, &"label".into(), &label.into()).unwrap();
+    arr.push(&o);
+}
+
+#[wasm_bindgen_test]
+fn server_render_hydrates_pp_for_byte_equal_and_stays_reactive() {
+    SsrForDemo::register();
+    let demo = SsrForDemo {
+        items: vec![
+            ForItem {
+                id: 1,
+                label: "alpha".into(),
+            },
+            ForItem {
+                id: 2,
+                label: "beta".into(),
+            },
+        ],
+    };
+
+    // 1. Server render — one row clone per item + the labelled anchor.
+    let page = pocopine_ssr::render_to_string(&demo).expect("registered");
+    assert!(
+        page.body.contains(r#"<li class="row">alpha</li>"#)
+            && page.body.contains(r#"<li class="row">beta</li>"#),
+        "server stamped rows: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("<!--pp:for:0-->"),
+        "anchor: {}",
+        page.body
+    );
+
+    // 2. Into the DOM.
+    let doc = window().unwrap().document().unwrap();
+    let container = doc.create_element("div").unwrap();
+    container.set_inner_html(&page.body);
+    let root: Element = container.first_element_child().expect("root");
+    let before = root.outer_html();
+
+    // 3. Hydrate — adopt the rows (each in a fresh LoopScope), seed the
+    //    controller. No DOM mutation.
+    let state = serde_json::to_value(&demo).unwrap();
+    let scope_id =
+        pocopine_core::hydrate::hydrate_subtree(&root, SsrForDemo::NAME, &state).expect("scope");
+    flush_sync();
+    assert_eq!(
+        before,
+        root.outer_html(),
+        "pp-for hydration mutated the DOM (claim not byte-equal)"
+    );
+
+    // 4. List reactivity: reassign `items` → the controller reconciles
+    //    (drops the adopted rows, rebuilds from the new list).
+    let next = js_sys::Array::new();
+    for_item(&next, 10, "x");
+    for_item(&next, 11, "y");
+    for_item(&next, 12, "z");
+    pocopine_core::scope::write_field(scope_id, "items", &next);
+    flush_sync();
+    let html = root.outer_html();
+    assert!(
+        html.contains(r#"<li class="row">x</li>"#)
+            && html.contains(r#"<li class="row">y</li>"#)
+            && html.contains(r#"<li class="row">z</li>"#),
+        "rows did not reconcile after list change: {html}"
+    );
+    assert_eq!(
+        html.matches(r#"class="row""#).count(),
+        3,
+        "exactly three rows after change: {html}"
+    );
+    assert!(
+        !html.contains(">alpha<") && !html.contains(">beta<"),
+        "old rows remain: {html}"
+    );
+}
