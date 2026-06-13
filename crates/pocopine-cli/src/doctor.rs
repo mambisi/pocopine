@@ -501,11 +501,10 @@ fn cargo_metadata_bins(project: &Path, project_tools: &tools::ProjectTools) -> R
                 .get("kind")
                 .and_then(Value::as_array)
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")));
-            if is_bin {
-                if let Some(name) = target.get("name").and_then(Value::as_str) {
+            if is_bin
+                && let Some(name) = target.get("name").and_then(Value::as_str) {
                     bins.push(name.to_string());
                 }
-            }
         }
     }
     bins.sort();

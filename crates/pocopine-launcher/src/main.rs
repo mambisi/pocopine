@@ -43,11 +43,10 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let key = env_var_name(process);
-    if let Some(path) = env(&key) {
-        if !path.is_empty() {
+    if let Some(path) = env(&key)
+        && !path.is_empty() {
             return Some(path);
         }
-    }
     // Legacy fallback so images built before Phase 6 still launch.
     match process {
         "web" => Some("/usr/local/bin/server".into()),

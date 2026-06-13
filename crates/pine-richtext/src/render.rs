@@ -281,13 +281,12 @@ impl<'a> Renderer<'a> {
         out.push_str("<ol data-pos=\"");
         out.push_str(&outer_pos.to_string());
         out.push('"');
-        if let Some(order) = node.attrs().get("order").and_then(|v| v.as_i64()) {
-            if order != 1 {
+        if let Some(order) = node.attrs().get("order").and_then(|v| v.as_i64())
+            && order != 1 {
                 out.push_str(" start=\"");
                 out.push_str(&order.to_string());
                 out.push('"');
             }
-        }
         out.push('>');
         if node.content().size() == 0 {
             out.push_str("<br/>");

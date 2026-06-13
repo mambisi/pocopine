@@ -488,8 +488,8 @@ impl PineRichTextRoot {
                 // inside the surface (e.g., the user clicked outside), keep
                 // the model's stored selection.
                 let selection_started_at = perf_now_ms();
-                if live_selection {
-                    if let Some(live) = read_dom_selection(&surface_for_provider) {
+                if live_selection
+                    && let Some(live) = read_dom_selection(&surface_for_provider) {
                         let live = normalize_live_selection(&state, live);
                         // `with_selection` substitutes the selection without
                         // running the plugin state-field loop or the
@@ -526,7 +526,6 @@ impl PineRichTextRoot {
                             return Some(next);
                         }
                     }
-                }
                 log_perf(
                     debug_perf,
                     "state_provider",

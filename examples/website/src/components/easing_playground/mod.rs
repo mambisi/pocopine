@@ -157,11 +157,10 @@ impl EasingPlayground {
         if channels.is_empty() {
             return;
         }
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Ok(Some(el)) = doc.query_selector(".ce-preview-box") {
+        if let Some(doc) = web_sys::window().and_then(|w| w.document())
+            && let Ok(Some(el)) = doc.query_selector(".ce-preview-box") {
                 animate(&el, &channels, Tween::new().duration(900.0).easing(easing));
             }
-        }
     }
 
     pub fn preset_ease(&mut self) {

@@ -433,14 +433,13 @@ fn parse_placement(raw: Option<&str>) -> Placement {
 /// integers (`-4`). Returns `0.0` when absent or unparseable.
 fn parse_offset(modifiers: &[impl AsRef<str>]) -> f64 {
     for (i, m) in modifiers.iter().enumerate() {
-        if m.as_ref() == "offset" {
-            if let Some(n) = modifiers
+        if m.as_ref() == "offset"
+            && let Some(n) = modifiers
                 .get(i + 1)
                 .and_then(|s| s.as_ref().parse::<f64>().ok())
             {
                 return n;
             }
-        }
     }
     0.0
 }
@@ -465,11 +464,10 @@ fn resolve_anchor(
     if raw.is_empty() {
         return None;
     }
-    if is_identifier(raw) {
-        if let Some(el) = refs::get_on(scope_id, raw) {
+    if is_identifier(raw)
+        && let Some(el) = refs::get_on(scope_id, raw) {
             return Some(el);
         }
-    }
     let doc = web_sys::window()?.document()?;
     if let Some(el) = doc.query_selector(raw).ok().flatten() {
         return Some(el);
@@ -482,11 +480,10 @@ fn resolve_anchor(
         if let Some(s) = v.as_string() {
             let s = s.trim();
             if !s.is_empty() {
-                if is_identifier(s) {
-                    if let Some(el) = refs::get_on(scope_id, s) {
+                if is_identifier(s)
+                    && let Some(el) = refs::get_on(scope_id, s) {
                         return Some(el);
                     }
-                }
                 return doc.query_selector(s).ok().flatten();
             }
         }

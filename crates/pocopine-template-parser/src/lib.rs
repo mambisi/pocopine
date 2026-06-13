@@ -547,11 +547,10 @@ fn find_close_tag(bytes: &[u8], start: usize, tag: &str) -> Option<Range<usize>>
                 if matches {
                     // Next byte should be whitespace or `>`.
                     let next = bytes.get(name_start + tag_bytes.len()).copied();
-                    if matches!(next, Some(c) if c == b'>' || c.is_ascii_whitespace()) {
-                        if let Some(gt) = find_byte(bytes, name_start, b'>') {
+                    if matches!(next, Some(c) if c == b'>' || c.is_ascii_whitespace())
+                        && let Some(gt) = find_byte(bytes, name_start, b'>') {
                             return Some(i..gt + 1);
                         }
-                    }
                 }
             }
         }
@@ -641,11 +640,10 @@ fn detect_forbidden_self_close(source: &str, errors: &mut Vec<ParseError>) {
         if i + 1 < len && bytes[i + 1] == b'/' {
             let name_start = i + 2;
             let name_end = read_tag_name_end(bytes, name_start);
-            if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end]) {
-                if is_foreign_content_root(name) && foreign_depth > 0 {
+            if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end])
+                && is_foreign_content_root(name) && foreign_depth > 0 {
                     foreign_depth -= 1;
                 }
-            }
             i = find_byte(bytes, i, b'>').map(|e| e + 1).unwrap_or(i + 1);
             continue;
         }
@@ -786,8 +784,8 @@ fn collect_fragment_roots(
 ) -> Vec<Node> {
     let doc = document.children.borrow();
     for doc_child in doc.iter() {
-        if let NodeData::Element { ref name, .. } = doc_child.data {
-            if name.local == local_name!("html") {
+        if let NodeData::Element { ref name, .. } = doc_child.data
+            && name.local == local_name!("html") {
                 let html_children = doc_child.children.borrow();
                 let mut out = Vec::with_capacity(html_children.len());
                 for child in html_children.iter() {
@@ -797,7 +795,6 @@ fn collect_fragment_roots(
                 }
                 return out;
             }
-        }
     }
     // Defensive fallback — document contained no `<html>` wrapper.
     let mut out = Vec::new();

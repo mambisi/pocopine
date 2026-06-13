@@ -150,11 +150,10 @@ where
             let Some(st) = state.borrow_mut().take() else {
                 return;
             };
-            if st.started {
-                if let Ok(mut f) = cb.try_borrow_mut() {
+            if st.started
+                && let Ok(mut f) = cb.try_borrow_mut() {
                     f(PanEvent::Cancel);
                 }
-            }
         });
     }
 

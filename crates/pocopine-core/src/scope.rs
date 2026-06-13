@@ -1129,11 +1129,10 @@ pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object() {
-            if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
+        if arr.is_object()
+            && let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
                 let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
             }
-        }
         // Keep the projection alive across the post-handler sweep.
         keep_field_fresh(sid, field);
     }
@@ -1208,8 +1207,8 @@ pub fn remove_list_at_inline(field: &str, idx: usize) {
             let array = js_sys::Array::from(&arr);
             let len = array.length();
             let idx = idx as u32;
-            if idx < len {
-                if let Ok(splice) = Reflect::get(&arr, &JsValue::from_str("splice")).and_then(|v| {
+            if idx < len
+                && let Ok(splice) = Reflect::get(&arr, &JsValue::from_str("splice")).and_then(|v| {
                     v.dyn_into::<Function>()
                         .map_err(|_| JsValue::from_str("Array.splice is not callable"))
                 }) {
@@ -1219,7 +1218,6 @@ pub fn remove_list_at_inline(field: &str, idx: usize) {
                         &JsValue::from_f64(1.0),
                     );
                 }
-            }
         }
         keep_field_fresh(sid, field);
     }

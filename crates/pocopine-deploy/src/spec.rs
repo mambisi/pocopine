@@ -322,11 +322,10 @@ pub fn parse(
         build_dir: raw.build_dir,
     };
 
-    if let Some(env) = environment.as_deref() {
-        if let Some(env_block) = spec.host_overrides.remove(env) {
+    if let Some(env) = environment.as_deref()
+        && let Some(env_block) = spec.host_overrides.remove(env) {
             apply_env_overrides(&mut spec, env_block)?;
         }
-    }
 
     Ok(spec)
 }

@@ -60,11 +60,10 @@ pub fn run(args: &NewArgs) -> Result<()> {
         .status();
 
     // 5. optionally fetch the living skills now.
-    if args.skills {
-        if let Err(e) = skills::install(&target, false) {
+    if args.skills
+        && let Err(e) = skills::install(&target, false) {
             eprintln!("  ! skipped --skills: {e}");
         }
-    }
 
     println!("✓ created {}", target.display());
     println!();

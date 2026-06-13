@@ -102,8 +102,8 @@ pub(crate) fn walk<F: FnMut(InternalLine)>(
         let w = seg.width;
 
         if !has_content {
-            if matches!(seg.kind, SegmentKind::Text) && w > fit_limit {
-                if let Some(gw) = &seg.grapheme_widths {
+            if matches!(seg.kind, SegmentKind::Text) && w > fit_limit
+                && let Some(gw) = &seg.grapheme_widths {
                     // Per-grapheme fallback for an oversize word.
                     let seg_idx = i as u32;
                     let mut acc = 0.0_f64;
@@ -147,7 +147,6 @@ pub(crate) fn walk<F: FnMut(InternalLine)>(
                     i += 1;
                     continue;
                 }
-            }
             line_w = w;
             line_end = LayoutCursor {
                 segment_index: (i + 1) as u32,

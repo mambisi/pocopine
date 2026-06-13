@@ -1208,14 +1208,13 @@ mod wasm {
         }
 
         fn validate_head_length(&self, head: &UploadHead) -> StorageResult<()> {
-            if let Some(length) = head.length {
-                if length != self.source.size {
+            if let Some(length) = head.length
+                && length != self.source.size {
                     return Err(StorageError::client(format!(
                         "upload length mismatch: remote {length}, local {}",
                         self.source.size
                     )));
                 }
-            }
             Ok(())
         }
 

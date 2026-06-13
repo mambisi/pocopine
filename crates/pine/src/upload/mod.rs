@@ -374,13 +374,11 @@ impl PineUploadRoot {
     pub fn open_picker(&mut self) {
         if !self.disabled {
             #[cfg(target_arch = "wasm32")]
-            if let Some(scope_id) = current_scope_id() {
-                if let Some(el) = refs::get_on(scope_id, "input") {
-                    if let Ok(input) = el.dyn_into::<HtmlInputElement>() {
+            if let Some(scope_id) = current_scope_id()
+                && let Some(el) = refs::get_on(scope_id, "input")
+                    && let Ok(input) = el.dyn_into::<HtmlInputElement>() {
                         input.click();
                     }
-                }
-            }
         }
     }
 
@@ -411,12 +409,11 @@ impl PineUploadRoot {
         if id.is_empty() {
             return;
         }
-        if let Some(file) = self.files.iter().find(|f| f.id == id) {
-            if file.status == "uploading" {
+        if let Some(file) = self.files.iter().find(|f| f.id == id)
+            && file.status == "uploading" {
                 #[cfg(target_arch = "wasm32")]
                 abort_one(current_scope_id(), &id);
             }
-        }
     }
 
     /// Reset an errored or canceled item to `queued` and kick the
@@ -829,11 +826,10 @@ impl PineUploadRoot {
         self.status_label = compose_status(count, done, error, uploading, queued);
 
         #[cfg(target_arch = "wasm32")]
-        if !self.busy && error == 0 && count > 0 && done == count {
-            if let Some(scope_id) = current_scope_id() {
+        if !self.busy && error == 0 && count > 0 && done == count
+            && let Some(scope_id) = current_scope_id() {
                 emit_root_event(scope_id, "pp:upload:all-complete", done);
             }
-        }
     }
 }
 
@@ -975,11 +971,10 @@ fn log_upload_error(file_id: &str, file_name: &str, message: &str) {
 fn abort_one(scope_id: Option<ScopeId>, file_id: &str) {
     let Some(scope_id) = scope_id else { return };
     ABORT_CONTROLLERS.with(|controllers| {
-        if let Some(map) = controllers.borrow().get(&scope_id) {
-            if let Some(controller) = map.get(file_id) {
+        if let Some(map) = controllers.borrow().get(&scope_id)
+            && let Some(controller) = map.get(file_id) {
                 controller.abort();
             }
-        }
     });
 }
 
@@ -1094,8 +1089,8 @@ impl PineUploadDropzone {
         // Skip click-through coming from a nested Trigger button —
         // it opens the picker on its own and would otherwise fire
         // twice.
-        if let Some(target) = ev.target().and_then(|t| t.dyn_into::<HtmlElement>().ok()) {
-            if target
+        if let Some(target) = ev.target().and_then(|t| t.dyn_into::<HtmlElement>().ok())
+            && target
                 .closest("pine-upload-trigger,button,a,input")
                 .ok()
                 .flatten()
@@ -1103,7 +1098,6 @@ impl PineUploadDropzone {
             {
                 return;
             }
-        }
         if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineUploadRoot| r.open_picker());
         }
@@ -1129,16 +1123,13 @@ impl PineUploadDropzone {
 
     pub fn on_drop(&mut self, _ev: Event) {
         #[cfg(target_arch = "wasm32")]
-        if let Ok(drag) = _ev.dyn_into::<DragEvent>() {
-            if let Some(transfer) = drag.data_transfer() {
-                if let Some(list) = transfer.files() {
-                    if let Some(root) = ROOT.inject() {
+        if let Ok(drag) = _ev.dyn_into::<DragEvent>()
+            && let Some(transfer) = drag.data_transfer()
+                && let Some(list) = transfer.files()
+                    && let Some(root) = ROOT.inject() {
                         root.update(|r: &mut PineUploadRoot| r.add_files(list));
                         return;
                     }
-                }
-            }
-        }
         // Even when the drop carried no files, clear the dragover
         // flag so the surface doesn't get stuck looking active.
         if let Some(root) = ROOT.inject() {

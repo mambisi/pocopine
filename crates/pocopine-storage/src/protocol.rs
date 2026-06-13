@@ -548,44 +548,39 @@ impl UploadPolicy {
                 "upload policy max_concurrent_parts must be greater than zero",
             ));
         }
-        if let Some(max_parts) = self.max_parts {
-            if max_parts == 0 {
+        if let Some(max_parts) = self.max_parts
+            && max_parts == 0 {
                 return Err(StorageError::policy_rejected(
                     "upload policy max_parts must be greater than zero",
                 ));
             }
-        }
-        if let (Some(min), Some(preferred)) = (self.min_part_size, self.preferred_chunk_size) {
-            if min > preferred {
+        if let (Some(min), Some(preferred)) = (self.min_part_size, self.preferred_chunk_size)
+            && min > preferred {
                 return Err(StorageError::policy_rejected(
                     "upload policy min_part_size cannot exceed preferred_chunk_size",
                 ));
             }
-        }
-        if let (Some(preferred), Some(max)) = (self.preferred_chunk_size, self.max_part_size) {
-            if preferred > max {
+        if let (Some(preferred), Some(max)) = (self.preferred_chunk_size, self.max_part_size)
+            && preferred > max {
                 return Err(StorageError::policy_rejected(
                     "upload policy preferred_chunk_size cannot exceed max_part_size",
                 ));
             }
-        }
-        if let (Some(min), Some(max)) = (self.min_part_size, self.max_part_size) {
-            if min > max {
+        if let (Some(min), Some(max)) = (self.min_part_size, self.max_part_size)
+            && min > max {
                 return Err(StorageError::policy_rejected(
                     "upload policy min_part_size cannot exceed max_part_size",
                 ));
             }
-        }
         Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn validate_initiate(&self, request: &InitiateUploadRequest) -> StorageResult<()> {
-        if let Some(size) = request.size {
-            if size > self.max_bytes {
+        if let Some(size) = request.size
+            && size > self.max_bytes {
                 return Err(StorageError::payload_too_large(self.max_bytes));
             }
-        }
 
         if !self.allowed_content_types.is_empty() {
             let content_type = request

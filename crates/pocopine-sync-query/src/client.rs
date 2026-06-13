@@ -1187,11 +1187,10 @@ impl QueryClient {
                 // consistency via the next `/pull` handles any
                 // genuine divergence.
                 for overlay in &overlays {
-                    if let Some(restored) = overlay.deleted_row.clone() {
-                        if !state.canonical_contains(&restored.key) {
+                    if let Some(restored) = overlay.deleted_row.clone()
+                        && !state.canonical_contains(&restored.key) {
                             state.upsert_canonical(restored);
                         }
-                    }
                 }
                 overlays
             };
@@ -1710,11 +1709,10 @@ impl QueryClient {
                 // lets the newer canonical stand; the next /pull
                 // will reconcile.
                 for overlay in &overlays {
-                    if let Some(restored) = overlay.deleted_row.clone() {
-                        if !state.canonical_contains(&restored.key) {
+                    if let Some(restored) = overlay.deleted_row.clone()
+                        && !state.canonical_contains(&restored.key) {
                             state.upsert_canonical(restored);
                         }
-                    }
                 }
                 overlays
             };

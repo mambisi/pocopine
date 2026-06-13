@@ -195,12 +195,11 @@ fn enclosing_list_ancestor(doc: &Node, pos: usize) -> Option<(usize, usize, Node
     let resolved = doc.resolve(pos).ok()?;
     for depth in (1..=resolved.depth()).rev() {
         let ancestor = resolved.node(depth)?;
-        if let Some(first_child) = ancestor.content().child(0) {
-            if is_list_item_type(first_child.type_name()) {
+        if let Some(first_child) = ancestor.content().child(0)
+            && is_list_item_type(first_child.type_name()) {
                 let outer = resolved.before(depth)?;
                 return Some((outer, ancestor.node_size(), ancestor.clone()));
             }
-        }
     }
     None
 }

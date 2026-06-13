@@ -200,11 +200,10 @@ fn load_inner<F>(home: &Path, host: &str, env: F) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
 {
-    if let Some(t) = env(&env_var_name(host)) {
-        if !t.is_empty() {
+    if let Some(t) = env(&env_var_name(host))
+        && !t.is_empty() {
             return Ok(t);
         }
-    }
 
     let path = home.join(REL_PATH);
     if !path.exists() {

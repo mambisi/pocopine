@@ -167,11 +167,10 @@ fn profile_name(release: bool) -> &'static str {
 }
 
 pub fn check_configured_port_available(cfg: &PocopineConfig) -> Result<()> {
-    if cfg.bin.is_some() {
-        if let Some(port) = cfg.port {
+    if cfg.bin.is_some()
+        && let Some(port) = cfg.port {
             ensure_port_available(port)?;
         }
-    }
     Ok(())
 }
 

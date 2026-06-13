@@ -799,11 +799,10 @@ impl S3StorageBackend {
         stored: &mut StoredUploadSession,
         object_key: &str,
     ) -> StorageResult<String> {
-        if let Some(state) = stored.native.multipart() {
-            if let Some(upload_id) = &state.upload_id {
+        if let Some(state) = stored.native.multipart()
+            && let Some(upload_id) = &state.upload_id {
                 return Ok(upload_id.clone());
             }
-        }
         let upload_id = self
             .create_multipart(object_key, stored.public.content_type.as_deref(), session)
             .await?;
@@ -815,11 +814,10 @@ impl S3StorageBackend {
     }
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
-        if let Some(size) = size {
-            if size > self.max_proxy_upload_bytes {
+        if let Some(size) = size
+            && size > self.max_proxy_upload_bytes {
                 return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
             }
-        }
         Ok(())
     }
 
@@ -957,13 +955,12 @@ impl S3StorageBackend {
         request: CompleteUpload,
     ) -> StorageResult<ObjectRef> {
         let total = stored.public.next_offset.unwrap_or(0);
-        if let Some(expected) = stored.public.size {
-            if total != expected {
+        if let Some(expected) = stored.public.size
+            && total != expected {
                 return Err(StorageError::policy_rejected(format!(
                     "upload is incomplete: expected {expected} bytes, got {total}"
                 )));
             }
-        }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         // Reject a missing-required or disallowed-algorithm checksum up front, so
         // a config error never assembles (and then deletes) the object.
@@ -1273,12 +1270,11 @@ impl S3StorageBackend {
     }
 
     async fn abort_multipart_session(&self, stored: &StoredUploadSession) -> StorageResult<()> {
-        if let Some(state) = stored.native.multipart() {
-            if let Some(upload_id) = &state.upload_id {
+        if let Some(state) = stored.native.multipart()
+            && let Some(upload_id) = &state.upload_id {
                 let object_key = self.layout.object_key(stored.storage_key.key.as_str());
                 self.abort_multipart(&object_key, upload_id).await?;
             }
-        }
         Ok(())
     }
 }

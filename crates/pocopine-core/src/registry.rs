@@ -230,8 +230,8 @@ pub fn register_component_with_mount(
     REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         // alias-by-this-name owned by someone else first wins
-        if let Some(&(_canon, alias_owner)) = reg.aliases.get(canonical) {
-            if alias_owner != owner {
+        if let Some(&(_canon, alias_owner)) = reg.aliases.get(canonical)
+            && alias_owner != owner {
                 reg.errors.push(RegistryError {
                     kind: RegistryErrorKind::CanonicalConflictsWithAlias,
                     tag: canonical,
@@ -240,7 +240,6 @@ pub fn register_component_with_mount(
                 });
                 return;
             }
-        }
         if let Some(existing_owner) = reg.canonical.get(canonical).map(|e| e.owner) {
             if existing_owner == owner {
                 // idempotent re-registration — no-op
@@ -333,11 +332,10 @@ pub fn instantiate(name: &str) -> Option<Scope> {
         if let Some(entry) = reg.canonical.get(name) {
             return Some((entry.ctor)());
         }
-        if let Some(&(canon, _)) = reg.aliases.get(name) {
-            if let Some(entry) = reg.canonical.get(canon) {
+        if let Some(&(canon, _)) = reg.aliases.get(name)
+            && let Some(entry) = reg.canonical.get(canon) {
                 return Some((entry.ctor)());
             }
-        }
         None
     })
 }
@@ -348,11 +346,10 @@ pub fn mount_template_for(name: &str) -> Option<ComponentMountFn> {
         if let Some(entry) = reg.canonical.get(name) {
             return entry.mount_template;
         }
-        if let Some(&(canon, _)) = reg.aliases.get(name) {
-            if let Some(entry) = reg.canonical.get(canon) {
+        if let Some(&(canon, _)) = reg.aliases.get(name)
+            && let Some(entry) = reg.canonical.get(canon) {
                 return entry.mount_template;
             }
-        }
         None
     })
 }
@@ -363,11 +360,10 @@ pub fn canonical_component_name(name: &str) -> Option<&'static str> {
         if let Some(entry) = reg.canonical.get(name) {
             return Some(entry.canonical);
         }
-        if let Some(&(canon, _)) = reg.aliases.get(name) {
-            if let Some(entry) = reg.canonical.get(canon) {
+        if let Some(&(canon, _)) = reg.aliases.get(name)
+            && let Some(entry) = reg.canonical.get(canon) {
                 return Some(entry.canonical);
             }
-        }
         None
     })
 }

@@ -273,11 +273,10 @@ mod wasm {
         if let Some(message) = value.as_string() {
             return message;
         }
-        if let Ok(message) = Reflect::get(&value, &JsValue::from_str("message")) {
-            if let Some(message) = message.as_string() {
+        if let Ok(message) = Reflect::get(&value, &JsValue::from_str("message"))
+            && let Some(message) = message.as_string() {
                 return message;
             }
-        }
         fallback.to_string()
     }
 }

@@ -52,11 +52,10 @@ impl ThemeTokens {
                     continue;
                 };
                 let (name, value) = (name.trim(), value.trim());
-                if let Some(key) = name.strip_prefix("--") {
-                    if !key.is_empty() && !value.is_empty() {
+                if let Some(key) = name.strip_prefix("--")
+                    && !key.is_empty() && !value.is_empty() {
                         tokens.insert(key, value);
                     }
-                }
             }
         }
         tokens
@@ -160,8 +159,8 @@ pub fn non_theme_css(css: &str) -> String {
             i += end;
             continue;
         }
-        if rest.starts_with("@theme") {
-            if let Some(open) = rest.find('{') {
+        if rest.starts_with("@theme")
+            && let Some(open) = rest.find('{') {
                 let rb = rest.as_bytes();
                 let mut depth = 1i32;
                 let mut j = open + 1;
@@ -182,13 +181,11 @@ pub fn non_theme_css(css: &str) -> String {
                 i += j;
                 continue;
             }
-        }
-        if rest.starts_with("@import") || rest.starts_with("@source") {
-            if let Some(semi) = rest.find(';') {
+        if (rest.starts_with("@import") || rest.starts_with("@source"))
+            && let Some(semi) = rest.find(';') {
                 i += semi + 1;
                 continue;
             }
-        }
         let ch = rest.chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();

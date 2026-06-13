@@ -359,12 +359,11 @@ async fn mark_push_result(database_name: String, result: LocalPushResult) -> Syn
             row.pending = false;
             row.conflict = true;
             rows.insert(row.key.clone(), row);
-        } else if let Some(key) = conflict.key {
-            if let Some(row) = rows.get_mut(&key) {
+        } else if let Some(key) = conflict.key
+            && let Some(row) = rows.get_mut(&key) {
                 row.pending = false;
                 row.conflict = true;
             }
-        }
     }
 
     for mut row in result.rows {
@@ -678,11 +677,10 @@ fn js_value_to_string(value: &JsValue) -> String {
         return string;
     }
 
-    if let Ok(message) = Reflect::get(value, &JsValue::from_str("message")) {
-        if let Some(message) = message.as_string() {
+    if let Ok(message) = Reflect::get(value, &JsValue::from_str("message"))
+        && let Some(message) = message.as_string() {
             return message;
         }
-    }
 
     js_sys::JSON::stringify(value)
         .ok()

@@ -851,9 +851,9 @@ fn try_append_fast_path(
     // RFC-095 W4 — append the new suffix through the mutation
     // channel when eligible: same key dedup, one crossing for the
     // whole batch instead of per-row clone + mount.
-    if elide_proxy && crate::mutation_channel::enabled() {
-        if let (Some(plan), Some(proto)) = (row_plan, template.prototype()) {
-            if let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
+    if elide_proxy && crate::mutation_channel::enabled()
+        && let (Some(plan), Some(proto)) = (row_plan, template.prototype())
+            && let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
                 let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total - old_len);
                 for i in old_len..total {
                     let item = arr.get(i as u32);
@@ -890,8 +890,6 @@ fn try_append_fast_path(
                     seen.insert(entry.key.clone());
                 }
             }
-        }
-    }
 
     let mut appended: Vec<PrevItem> = Vec::with_capacity(total - old_len);
     let create_body = if row_plan.is_none() { body } else { None };
@@ -932,8 +930,8 @@ fn try_append_fast_path(
     crate::profiler::mount::record_dom_insertion(dom_insert_start);
 
     for entry in &appended {
-        if let Some(plan) = row_plan {
-            if let Some(sid) = mount::scope_id_of_element(&entry.element) {
+        if let Some(plan) = row_plan
+            && let Some(sid) = mount::scope_id_of_element(&entry.element) {
                 let proxy_for_mount = if elide_proxy {
                     None
                 } else {
@@ -947,7 +945,6 @@ fn try_append_fast_path(
                 );
                 continue;
             }
-        }
         crate::profiler::mount::record_generic_row_mounted();
         mount::finalize_compiled_subtree(&entry.element);
     }
@@ -1067,8 +1064,8 @@ fn try_prepend_fast_path(
     crate::profiler::mount::record_dom_insertion(dom_insert_start);
 
     for entry in &prepended {
-        if let Some(plan) = row_plan {
-            if let Some(sid) = mount::scope_id_of_element(&entry.element) {
+        if let Some(plan) = row_plan
+            && let Some(sid) = mount::scope_id_of_element(&entry.element) {
                 let proxy_for_mount = if elide_proxy {
                     None
                 } else {
@@ -1082,7 +1079,6 @@ fn try_prepend_fast_path(
                 );
                 continue;
             }
-        }
         crate::profiler::mount::record_generic_row_mounted();
         mount::finalize_compiled_subtree(&entry.element);
     }
@@ -1184,14 +1180,13 @@ fn try_single_remove_fast_path(
     crate::profiler::reconcile::record_row_iter(row_iter_start);
 
     let leaver_drain_start = crate::profiler::reconcile::start();
-    if let Some(entry) = removed {
-        if !entry.leaving {
+    if let Some(entry) = removed
+        && !entry.leaving {
             if let Some(parent) = entry.element.parent_node() {
                 let _ = parent.remove_child(&entry.element);
             }
             crate::directives::for_plan::unmount_row_compiled(entry.scope_id);
         }
-    }
     crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
 
     Ok(fresh)
@@ -1443,8 +1438,8 @@ fn run_keyed(
         // every prior row is leaving. Try the same safe bulk teardown
         // before hashing 10K keys into `pool`; fall back to the normal
         // reconcile path if transitions or sibling structure require it.
-        if total == 0 && row_plan.is_some() {
-            if let Some(parent_el) = parent_node.dyn_ref::<Element>() {
+        if total == 0 && row_plan.is_some()
+            && let Some(parent_el) = parent_node.dyn_ref::<Element>() {
                 crate::profiler::reconcile::record_pool_build(pool_build_start);
                 let leaver_drain_start = crate::profiler::reconcile::start();
                 if bulk_clear_compiled(parent_el, &old_prior, &anchor) {
@@ -1454,7 +1449,6 @@ fn run_keyed(
                     return;
                 }
             }
-        }
         for entry in old_prior {
             pool.insert(entry.key.clone(), entry);
         }
@@ -1496,9 +1490,9 @@ fn run_keyed(
         // scope stamp, binding writes, fragment append, insert)
         // collapses into one interpreter crossing. Key resolution
         // and dedup stay Rust-side, identical to the loop below.
-        if pool_initially_empty && total > 0 && elide_proxy && crate::mutation_channel::enabled() {
-            if let (Some(plan), Some(proto)) = (row_plan.as_ref(), template.prototype()) {
-                if let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
+        if pool_initially_empty && total > 0 && elide_proxy && crate::mutation_channel::enabled()
+            && let (Some(plan), Some(proto)) = (row_plan.as_ref(), template.prototype())
+                && let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
                     let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total);
                     for i in 0..total {
                         let item = arr.get(i as u32);
@@ -1533,8 +1527,6 @@ fn run_keyed(
                     // fall through to the direct mount loop below.
                     seen.clear();
                 }
-            }
-        }
         for i in 0..total {
             let item = arr.get(i as u32);
             let key_val = key_resolver.resolve(&item, i, &parent_proxy);
@@ -1758,8 +1750,8 @@ fn run_keyed(
         // not to register any of those side-tables; generic rows
         // can. Routing generic rows here would leak every one of
         // those tables for the entire torn-down list.
-        if total == 0 && !pool.is_empty() && row_plan.is_some() {
-            if let Some(parent_el) = parent_node.dyn_ref::<Element>() {
+        if total == 0 && !pool.is_empty() && row_plan.is_some()
+            && let Some(parent_el) = parent_node.dyn_ref::<Element>() {
                 let pool_count = pool.len();
                 // Strict guard: `parent_node` owns *exactly* the
                 // pool's clones plus the anchor, and any other
@@ -1815,7 +1807,6 @@ fn run_keyed(
                     return;
                 }
             }
-        }
 
         for (_, mut entry) in pool.drain() {
             if !entry.leaving {
@@ -1876,12 +1867,11 @@ fn run_keyed(
         fn next_non_leaving(node: Option<web_sys::Node>) -> Option<web_sys::Node> {
             let mut cursor = node;
             while let Some(n) = cursor.clone() {
-                if let Ok(el) = n.dyn_into::<Element>() {
-                    if crate::directives::transition::is_leaving(&el) {
+                if let Ok(el) = n.dyn_into::<Element>()
+                    && crate::directives::transition::is_leaving(&el) {
                         cursor = el.next_sibling();
                         continue;
                     }
-                }
                 return cursor;
             }
             None
@@ -2236,11 +2226,10 @@ const MAX_EXACT_INT_F64: f64 = 9_007_199_254_740_992.0;
 /// take the zero-alloc `Int` path; strings/bools/null/objects reuse
 /// [`stringify_key`] verbatim for a byte-identical `Str` key.
 fn row_key(v: &JsValue) -> RowKey {
-    if let Some(n) = v.as_f64() {
-        if n.is_finite() && n.fract() == 0.0 && n.abs() < MAX_EXACT_INT_F64 {
+    if let Some(n) = v.as_f64()
+        && n.is_finite() && n.fract() == 0.0 && n.abs() < MAX_EXACT_INT_F64 {
             return RowKey::Int(n as i64);
         }
-    }
     RowKey::Str(stringify_key(v).into())
 }
 

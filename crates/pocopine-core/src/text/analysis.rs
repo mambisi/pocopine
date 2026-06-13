@@ -76,8 +76,8 @@ pub(crate) fn segment(text: &str) -> Vec<RawSegment> {
         // exactly one of the single-char markers. Combining
         // sequences that happen to start with a space are rare and
         // would break text runs incorrectly if we split eagerly.
-        if g.chars().count() == 1 {
-            if let Some(kind) = special_kind(g.chars().next().unwrap()) {
+        if g.chars().count() == 1
+            && let Some(kind) = special_kind(g.chars().next().unwrap()) {
                 if !buf.is_empty() {
                     out.push(RawSegment {
                         kind: SegmentKind::Text,
@@ -90,7 +90,6 @@ pub(crate) fn segment(text: &str) -> Vec<RawSegment> {
                 });
                 continue;
             }
-        }
         buf.push_str(g);
     }
     if !buf.is_empty() {

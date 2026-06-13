@@ -517,13 +517,11 @@ impl PineComboboxItem {
             // Also sync the DOM input's `.value` so the typed
             // string matches the chosen label.
             let scope = root.scope_id();
-            if let Some(input_scope) = find_input_scope(scope) {
-                if let Some(input_el) = refs::get_on(input_scope, "input") {
-                    if let Ok(input) = input_el.dyn_into::<web_sys::HtmlInputElement>() {
+            if let Some(input_scope) = find_input_scope(scope)
+                && let Some(input_el) = refs::get_on(input_scope, "input")
+                    && let Ok(input) = input_el.dyn_into::<web_sys::HtmlInputElement>() {
                         input.set_value(&self.label);
                     }
-                }
-            }
         }
     }
 }
@@ -574,19 +572,14 @@ fn refresh_match_state(root: &Handle<PineComboboxRoot>) {
             continue;
         }
         // `pp-show="false"` sets `display:none` via style.
-        if let Ok(html) = el.dyn_into::<HtmlElement>() {
-            if html.offset_parent().is_none() {
-                if let Some(win) = web_sys::window() {
-                    if let Ok(Some(style)) = win.get_computed_style(&html) {
-                        if let Ok(display) = style.get_property_value("display") {
-                            if display == "none" {
+        if let Ok(html) = el.dyn_into::<HtmlElement>()
+            && html.offset_parent().is_none()
+                && let Some(win) = web_sys::window()
+                    && let Ok(Some(style)) = win.get_computed_style(&html)
+                        && let Ok(display) = style.get_property_value("display")
+                            && display == "none" {
                                 continue;
                             }
-                        }
-                    }
-                }
-            }
-        }
         any = true;
         break;
     }

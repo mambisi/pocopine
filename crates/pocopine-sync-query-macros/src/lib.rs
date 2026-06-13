@@ -484,15 +484,12 @@ fn raw_ident_body(name: &Ident) -> String {
 
 /// If `ty` is `Option<T>`, return `(T, true)`. Otherwise `(ty, false)`.
 fn unwrap_option_type(ty: &Type) -> (Type, bool) {
-    if let Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
-            if seg.ident == "Option" {
-                if let Some(inner) = extract_single_generic_type(seg) {
+    if let Type::Path(tp) = ty
+        && let Some(seg) = tp.path.segments.last()
+            && seg.ident == "Option"
+                && let Some(inner) = extract_single_generic_type(seg) {
                     return (inner, true);
                 }
-            }
-        }
-    }
     (ty.clone(), false)
 }
 

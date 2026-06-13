@@ -1657,8 +1657,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     }
 
     if let Some(for_attr) = pp_for_value(el) {
-        if el.tag == "template" && !el.attrs.iter().any(|(n, _)| n == "pp-teleport") {
-            if let Some((item_name, items_expr)) = parse_pp_for(&for_attr) {
+        if el.tag == "template" && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
+            && let Some((item_name, items_expr)) = parse_pp_for(&for_attr) {
                 let key_expr = el
                     .attrs
                     .iter()
@@ -1728,7 +1728,6 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 // classifier doesn't follow `<template>` content.
                 return;
             }
-        }
         // Ineligible (wrong host, has pp-teleport, or expr
         // doesn't parse) — fall through to block-boundary skip
         // so today's mount dispatch handles it.
@@ -2684,8 +2683,8 @@ fn classify_attr(
         // allowlist. Anything else (pp-route / pp-cloak
         // / pp-stagger / pp-transition / unknown) stays preserved
         // and forces requires_walker.
-        if let Some((head, arg, modifiers)) = parse_pp_directive_name(rest) {
-            if is_lift_eligible_opaque(&head) {
+        if let Some((head, arg, modifiers)) = parse_pp_directive_name(rest)
+            && is_lift_eligible_opaque(&head) {
                 ctx.opaque_directives.push(OpaqueDirectiveLite {
                     node_path: path.to_vec(),
                     name: head,
@@ -2699,7 +2698,6 @@ fn classify_attr(
                 });
                 return ClassifyOutcome::Stripped;
             }
-        }
         // RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
         // native input/textarea/select. Component-target
         // `pp-model` (registered tag, with or without a `:arg`)
@@ -3121,11 +3119,10 @@ fn is_debounce_ms(m: &str) -> bool {
 fn if_body_subtree_is_eligible(el: &Element) -> bool {
     if el.synthetic {
         for child in &el.children {
-            if let Node::Element(child_el) = child {
-                if !if_body_subtree_is_eligible(child_el) {
+            if let Node::Element(child_el) = child
+                && !if_body_subtree_is_eligible(child_el) {
                     return false;
                 }
-            }
         }
         return true;
     }
@@ -3145,11 +3142,10 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
         // `ChildHostModelLite`. No need to gate either form.
     }
     for child in &el.children {
-        if let Node::Element(child_el) = child {
-            if !if_body_subtree_is_eligible(child_el) {
+        if let Node::Element(child_el) = child
+            && !if_body_subtree_is_eligible(child_el) {
                 return false;
             }
-        }
     }
     true
 }

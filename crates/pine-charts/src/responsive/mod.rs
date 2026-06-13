@@ -367,8 +367,8 @@ fn apply_child_size(root: &Element, size: ResponsiveChartSize) {
         let _ = child.set_attribute(HEIGHT_FIELD, &trim_float(size.height));
     }
 
-    if !wrote_width || !wrote_height {
-        if let Some(svg) = chart_svg(&child) {
+    if (!wrote_width || !wrote_height)
+        && let Some(svg) = chart_svg(&child) {
             if !wrote_width {
                 let _ = svg.set_attribute(WIDTH_FIELD, &trim_float(size.width));
             }
@@ -376,7 +376,6 @@ fn apply_child_size(root: &Element, size: ResponsiveChartSize) {
                 let _ = svg.set_attribute(HEIGHT_FIELD, &trim_float(size.height));
             }
         }
-    }
 }
 
 fn write_child_prop(child: &Element, field: &str, value: f64) -> bool {

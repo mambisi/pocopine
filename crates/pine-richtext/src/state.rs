@@ -496,9 +496,9 @@ impl Transaction {
     /// Set selection.
     pub fn set_selection(&mut self, selection: Selection) -> RichTextResult<&mut Self> {
         selection.validate(self.doc())?;
-        if let Selection::Node { anchor } = &selection {
-            if let Some(node) = node_after(self.doc(), *anchor) {
-                if !self
+        if let Selection::Node { anchor } = &selection
+            && let Some(node) = node_after(self.doc(), *anchor)
+                && !self
                     .transform
                     .schema()
                     .node_type(node.type_name())?
@@ -509,8 +509,6 @@ impl Transaction {
                         node.type_name()
                     )));
                 }
-            }
-        }
         self.selection = Some(selection);
         self.stored_marks = None;
         Ok(self)
@@ -1042,11 +1040,10 @@ impl EditorState {
         allow_append: bool,
     ) -> RichTextResult<(Self, Vec<Transaction>)> {
         for plugin in &self.plugins {
-            if let Some(filter) = &plugin.filter_transaction {
-                if !(filter)(&transaction, self)? {
+            if let Some(filter) = &plugin.filter_transaction
+                && !(filter)(&transaction, self)? {
                     return Ok((self.clone(), Vec::new()));
                 }
-            }
         }
 
         let mut next = self.apply_without_append(&transaction)?;
@@ -1056,12 +1053,11 @@ impl EditorState {
             for _ in 0..16 {
                 let mut appended = None;
                 for plugin in &next.plugins {
-                    if let Some(append) = &plugin.append_transaction {
-                        if let Some(transaction) = (append)(&transactions, self, &next)? {
+                    if let Some(append) = &plugin.append_transaction
+                        && let Some(transaction) = (append)(&transactions, self, &next)? {
                             appended = Some(transaction);
                             break;
                         }
-                    }
                 }
 
                 let Some(mut transaction) = appended else {

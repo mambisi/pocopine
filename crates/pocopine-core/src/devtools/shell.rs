@@ -166,11 +166,10 @@ pub(super) fn update_meta_line(root: &Element, scopes: &[Scope]) {
             false
         }
     });
-    if needs_write {
-        if let Some(meta) = root.query_selector(&format!("#{META_ID}")).ok().flatten() {
+    if needs_write
+        && let Some(meta) = root.query_selector(&format!("#{META_ID}")).ok().flatten() {
             meta.set_text_content(Some(&meta_text));
         }
-    }
 }
 
 /// Paint the tab strip when ≥2 panels are registered; hide it when
@@ -179,11 +178,10 @@ pub(super) fn update_meta_line(root: &Element, scopes: &[Scope]) {
 pub(super) fn update_tab_strip(root: &Element) {
     let summary = panel::summary();
     if summary.len() < 2 {
-        if let Some(tabs) = root.query_selector(&format!("#{TABS_ID}")).ok().flatten() {
-            if let Ok(html_el) = tabs.dyn_into::<HtmlElement>() {
+        if let Some(tabs) = root.query_selector(&format!("#{TABS_ID}")).ok().flatten()
+            && let Ok(html_el) = tabs.dyn_into::<HtmlElement>() {
                 let _ = html_el.style().set_property("display", "none");
             }
-        }
         return;
     }
     let fp = summary

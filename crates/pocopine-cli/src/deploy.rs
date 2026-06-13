@@ -423,8 +423,8 @@ fn read_project_field(project: &Path, host: &str, field: &str, prod: bool) -> Re
     // `[deploy.production.<host>]` overlay on top of the base
     // `[deploy.<host>]`. The `get` command must do the same so its
     // "source" report matches what an actual --prod deploy resolves.
-    if prod {
-        if let Some(v) = deploy
+    if prod
+        && let Some(v) = deploy
             .get("production")
             .and_then(|p| p.get(host))
             .and_then(|h| h.get(field))
@@ -432,7 +432,6 @@ fn read_project_field(project: &Path, host: &str, field: &str, prod: bool) -> Re
         {
             return Ok(v.to_owned());
         }
-    }
     deploy
         .get(host)
         .and_then(|h| h.get(field))

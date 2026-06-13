@@ -133,8 +133,8 @@ pub fn scan(root: &Path) -> ComponentIndex {
                 Item::Impl(im) => {
                     if let Some(target) = impl_self_name(&im.self_ty) {
                         for impl_item in &im.items {
-                            if let ImplItem::Fn(f) = impl_item {
-                                if matches!(f.vis, Visibility::Public(_)) {
+                            if let ImplItem::Fn(f) = impl_item
+                                && matches!(f.vis, Visibility::Public(_)) {
                                     handlers
                                         .entry(target.clone())
                                         .or_default()
@@ -144,7 +144,6 @@ pub fn scan(root: &Path) -> ComponentIndex {
                                             pos: Pos::from_span(f.sig.ident.span()),
                                         });
                                 }
-                            }
                         }
                     }
                 }

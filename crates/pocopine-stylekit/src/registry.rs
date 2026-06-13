@@ -256,12 +256,11 @@ fn negate_decls(pos: &str, decls: Decls) -> Result<Decls, Diagnostic> {
     let out: Decls = decls
         .into_iter()
         .map(|(p, v)| {
-            if negatable_prop(&p) {
-                if let Some(nv) = negate_value(&v) {
+            if negatable_prop(&p)
+                && let Some(nv) = negate_value(&v) {
                     negated = true;
                     return (p, nv);
                 }
-            }
             (p, v)
         })
         .collect();
@@ -2185,11 +2184,10 @@ fn try_misc(base: &str, tokens: &ThemeTokens) -> Resolved {
             if name == "none" {
                 return Some(Ok(decl(prop, "none")));
             }
-            if prop == "stroke" {
-                if let Ok(n) = name.parse::<u32>() {
+            if prop == "stroke"
+                && let Ok(n) = name.parse::<u32>() {
                     return Some(Ok(decl("stroke-width", &n.to_string())));
                 }
-            }
             if prop == "accent-color" && name == "auto" {
                 return Some(Ok(decl(prop, "auto")));
             }
@@ -2332,29 +2330,27 @@ fn try_mask(base: &str, tokens: &ThemeTokens) -> Resolved {
 
     // Linear edges: mask-{t,b,l,r,x,y}-{from,to}-<value>.
     for key in ["t", "b", "l", "r", "x", "y"] {
-        if let Some(tail) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-')) {
-            if let Some((kind, raw)) = split_from_to(tail) {
+        if let Some(tail) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-'))
+            && let Some((kind, raw)) = split_from_to(tail) {
                 let edges = mask_edges(key).unwrap();
                 return Some(match mask_value(raw, tokens) {
                     Some((slot, val)) => Ok(mask_edge_decls(edges, kind, slot, &val)),
                     None => Err(mask_err(base, raw)),
                 });
             }
-        }
     }
 
     // Linear-angle / radial / conic layers.
     for layer in ["linear", "radial", "conic"] {
         if let Some(tail) = rest.strip_prefix(layer).and_then(|r| r.strip_prefix('-')) {
-            if layer == "radial" {
-                if let Some(pos) = tail.strip_prefix("at-") {
+            if layer == "radial"
+                && let Some(pos) = tail.strip_prefix("at-") {
                     let set = (
                         "--pp-mask-radial-position".to_string(),
                         pos.replace('-', " "),
                     );
                     return Some(Ok(mask_layer_decls("radial", set)));
                 }
-            }
             return Some(match mask_gradient_var(layer, tail, tokens) {
                 Some(Ok(set)) => Ok(mask_layer_decls(layer, set)),
                 Some(Err(e)) => Err(e),
@@ -2381,8 +2377,8 @@ fn mask_arbitrary(base: &str, value: &str) -> Option<Decls> {
         ));
     }
     for key in ["t", "b", "l", "r", "x", "y"] {
-        if let Some(kind) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-')) {
-            if kind == "from" || kind == "to" {
+        if let Some(kind) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-'))
+            && (kind == "from" || kind == "to") {
                 return Some(mask_edge_decls(
                     mask_edges(key).unwrap(),
                     kind,
@@ -2390,7 +2386,6 @@ fn mask_arbitrary(base: &str, value: &str) -> Option<Decls> {
                     value,
                 ));
             }
-        }
     }
     for layer in ["linear", "radial", "conic"] {
         if let Some(tail) = rest.strip_prefix(layer).and_then(|r| r.strip_prefix('-')) {
@@ -2436,14 +2431,13 @@ fn mask_gradient_var(
         });
     }
     // Bare angle for linear/conic → the layer position.
-    if layer != "radial" {
-        if let Ok(deg) = tail.parse::<f64>() {
+    if layer != "radial"
+        && let Ok(deg) = tail.parse::<f64>() {
             return Some(Ok((
                 format!("--pp-mask-{layer}-position"),
                 format!("{}deg", trim_num(deg)),
             )));
         }
-    }
     None
 }
 
@@ -2515,16 +2509,15 @@ fn try_scroll(base: &str, _t: &ThemeTokens) -> Resolved {
 /// `--pp-grad-*` vars consumed by `bg-linear-to-*`.
 fn try_gradient(base: &str, tokens: &ThemeTokens) -> Resolved {
     // Angled gradients: `bg-linear-45`, `bg-conic-180`.
-    if let Some(a) = base.strip_prefix("bg-linear-") {
-        if let Ok(n) = a.parse::<f64>() {
+    if let Some(a) = base.strip_prefix("bg-linear-")
+        && let Ok(n) = a.parse::<f64>() {
             return Some(Ok(decl(
                 "background-image",
                 &format!("linear-gradient({}deg, var(--pp-grad-stops))", trim_num(n)),
             )));
         }
-    }
-    if let Some(a) = base.strip_prefix("bg-conic-") {
-        if let Ok(n) = a.parse::<f64>() {
+    if let Some(a) = base.strip_prefix("bg-conic-")
+        && let Ok(n) = a.parse::<f64>() {
             return Some(Ok(decl(
                 "background-image",
                 &format!(
@@ -2533,18 +2526,16 @@ fn try_gradient(base: &str, tokens: &ThemeTokens) -> Resolved {
                 ),
             )));
         }
-    }
     // `from-50%` / `via-30%` / `to-90%` set a gradient-stop *position*.
     for (pfx, var) in [
         ("from-", "--pp-grad-from-position"),
         ("via-", "--pp-grad-via-position"),
         ("to-", "--pp-grad-to-position"),
     ] {
-        if let Some(p) = base.strip_prefix(pfx) {
-            if p.ends_with('%') && p[..p.len() - 1].parse::<f64>().is_ok() {
+        if let Some(p) = base.strip_prefix(pfx)
+            && p.ends_with('%') && p[..p.len() - 1].parse::<f64>().is_ok() {
                 return Some(Ok(decl(var, p)));
             }
-        }
     }
     if let Some(c) = base.strip_prefix("from-") {
         return Some(resolve_color_string(c, tokens, base).map(|v| {
@@ -2594,16 +2585,14 @@ fn try_filter(base: &str, _t: &ThemeTokens) -> Resolved {
 /// `divide-x-N` / `divide-y-N` widths and `divide-{color}` (applied to
 /// children via the `emit_into` child-combinator tail).
 fn try_divide(base: &str, tokens: &ThemeTokens) -> Resolved {
-    if let Some(v) = base.strip_prefix("divide-x-") {
-        if let Ok(n) = v.parse::<u32>() {
+    if let Some(v) = base.strip_prefix("divide-x-")
+        && let Ok(n) = v.parse::<u32>() {
             return Some(Ok(decl("border-left-width", &format!("{n}px"))));
         }
-    }
-    if let Some(v) = base.strip_prefix("divide-y-") {
-        if let Ok(n) = v.parse::<u32>() {
+    if let Some(v) = base.strip_prefix("divide-y-")
+        && let Ok(n) = v.parse::<u32>() {
             return Some(Ok(decl("border-top-width", &format!("{n}px"))));
         }
-    }
     if let Some(c) = base.strip_prefix("divide-") {
         return Some(resolve_color_value("border-color", c, tokens, base));
     }
@@ -3303,11 +3292,9 @@ fn resolve_variant(variant: &str) -> VariantResolution {
     if let Some(s) = variant
         .strip_prefix("aria-")
         .filter(|s| !s.starts_with('['))
-    {
-        if let Some(a) = aria_pseudo(s) {
+        && let Some(a) = aria_pseudo(s) {
             return Pseudo(a);
         }
-    }
     // `has-{state}` → `:has(:state)` (bare; `has-[…]` is below).
     if let Some(hs) = variant.strip_prefix("has-").and_then(state_pseudo) {
         return Pseudo(format!(":has({hs})"));
