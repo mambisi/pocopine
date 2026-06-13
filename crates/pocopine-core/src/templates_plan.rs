@@ -361,6 +361,48 @@ pub fn hydrate_plan(
     for (idx, fp) in plan.for_plans.iter().enumerate() {
         hydrate_static_for_plan(root, scope_id, proxy, idx, fp, template_name);
     }
+    // RFC-099 Phase 4 — claim each server-rendered child component
+    // recursively (the stamper rendered it INTO the host tag + emitted
+    // its state island). Slotted children weren't server-rendered yet,
+    // so they mount fresh client-side.
+    for cm in plan.child_mounts {
+        hydrate_static_child_mount(root, scope_id, proxy, cm, template_name);
+    }
+}
+
+/// RFC-099 Phase 4 — claim a server-rendered child-component mount.
+/// Non-slotted: the child's root + `data-pp-state` island live INSIDE
+/// the host tag, so claim it via [`crate::hydrate::hydrate_root`]
+/// (which recurses into the child's own children). Slotted children
+/// weren't server-rendered (slot SSR pending) → mount fresh. Either
+/// way the parent-scope host directives (`:prop` / `@event` / pp-model)
+/// are wired afterward; `child_component_scope_id` finds the claimed
+/// child via the inner root's `SCOPE_ID_KEY`.
+fn hydrate_static_child_mount(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticChildMount,
+    template_name: &str,
+) {
+    let Some(host) = resolve_node_path(root, entry.node_path) else {
+        return;
+    };
+    if !entry.slots.is_empty() {
+        // Slotted child: server left the host's parent-authored content
+        // in place — mount fresh so slots materialize (also wires the
+        // host directives via install_static_child_mount).
+        install_static_child_mount(&host, scope_id, proxy, entry, template_name);
+        return;
+    }
+    match host.first_element_child() {
+        Some(inner) => {
+            crate::hydrate::hydrate_root(&inner);
+        }
+        // No server content (child wasn't server-rendered) — mount fresh.
+        None => crate::mount::mount_child_component(&host, entry.tag),
+    }
+    install_child_host_directives(&host, scope_id, proxy, entry, template_name);
 }
 
 /// Find the `<!--label-->` comment among `parent`'s child nodes (the

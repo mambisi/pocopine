@@ -653,3 +653,81 @@ fn server_render_hydrates_keyed_pp_for_byte_equal_and_preserves_identity() {
         "marked alpha row moved to second position (not rebuilt)"
     );
 }
+
+// ─── RFC-099 Phase 4 — recursive child-component round-trip ─────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "hydr-kid",
+    template_inline = r#"<span class="hk" pp-text="caption"></span>"#
+)]
+struct HydrKid {
+    #[prop]
+    caption: String,
+}
+#[handlers]
+impl HydrKid {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "hydr-host",
+    template_inline = r#"<div class="hh"><b class="t" pp-text="title"></b><hydr-kid caption="kidcap"></hydr-kid></div>"#
+)]
+struct HydrHost {
+    title: String,
+}
+#[handlers]
+impl HydrHost {}
+
+#[wasm_bindgen_test]
+fn server_render_hydrates_child_component_byte_equal() {
+    HydrKid::register();
+    HydrHost::register();
+    let demo = HydrHost {
+        title: "Parent".into(),
+    };
+
+    // 1. Server render — parent binding + the child rendered INTO its
+    //    host tag with its prop + scope-id + island.
+    let page = pocopine_ssr::render_to_string(&demo).expect("registered");
+    assert!(
+        page.body.contains(">Parent</b>"),
+        "parent binding: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains(">kidcap</span>"),
+        "child prop rendered: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains(r#"data-pp-scope-id="hydr-kid""#),
+        "child root scope id: {}",
+        page.body
+    );
+
+    // 2. Into the DOM + claim the parent (recursively claims the child).
+    let doc = window().unwrap().document().unwrap();
+    let container = doc.create_element("div").unwrap();
+    container.set_inner_html(&page.body);
+    let root: Element = container.first_element_child().expect("root");
+    let before = root.outer_html();
+    let state = serde_json::to_value(&demo).unwrap();
+    let scope_id =
+        pocopine_core::hydrate::hydrate_subtree(&root, HydrHost::NAME, &state).expect("scope");
+    flush_sync();
+    assert_eq!(
+        before,
+        root.outer_html(),
+        "recursive child hydration mutated the DOM (claim not byte-equal)"
+    );
+
+    // 3. Parent reactivity still live after the recursive claim.
+    pocopine_core::scope::write_field(scope_id, "title", &JsValue::from_str("Changed"));
+    flush_sync();
+    assert!(
+        root.outer_html().contains(">Changed</b>"),
+        "parent binding not live after child claim: {}",
+        root.outer_html()
+    );
+}
