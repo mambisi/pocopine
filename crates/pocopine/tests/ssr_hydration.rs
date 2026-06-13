@@ -199,3 +199,103 @@ fn server_render_hydrates_pp_if_chain_byte_equal_and_stays_reactive() {
         "head branch not removed: {html}"
     );
 }
+
+// ─── RFC-099 Phase 3 — structural claim (pp-match + pp-let) ──────────
+
+#[derive(Serialize, Deserialize)]
+enum Phase {
+    Idle,
+    Loading,
+    Ready(String),
+}
+
+impl Default for Phase {
+    fn default() -> Self {
+        Phase::Idle
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-match-demo",
+    template_inline = r#"<div class="root">
+        <template pp-match="phase">
+            <template pp-case="Idle | Loading"><p class="pending">wait</p></template>
+            <template pp-case="Ready" pp-let="msg"><p class="ready" pp-text="msg"></p></template>
+            <template pp-case="_"><p class="other">other</p></template>
+        </template>
+    </div>"#
+)]
+struct SsrMatchDemo {
+    phase: Phase,
+}
+
+#[handlers]
+impl SsrMatchDemo {}
+
+#[wasm_bindgen_test]
+fn server_render_hydrates_pp_match_byte_equal_and_stays_reactive() {
+    SsrMatchDemo::register();
+    let demo = SsrMatchDemo {
+        phase: Phase::Ready("hi".into()),
+    };
+
+    // 1. Server render — the `Ready` arm with its pp-let payload stamped.
+    let page = pocopine_ssr::render_to_string(&demo).expect("registered");
+    assert!(
+        page.body.contains(r#"<p class="ready">hi</p>"#),
+        "server stamped pp-let case: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("<!--pp:match:0-->"),
+        "decision anchor: {}",
+        page.body
+    );
+
+    // 2. Into the DOM.
+    let doc = window().unwrap().document().unwrap();
+    let container = doc.create_element("div").unwrap();
+    container.set_inner_html(&page.body);
+    let root: Element = container.first_element_child().expect("root");
+    let before = root.outer_html();
+
+    // 3. Hydrate — claim the case, rebuild the payload scope, install the
+    //    body. No DOM mutation.
+    let state = serde_json::to_value(&demo).unwrap();
+    let scope_id =
+        pocopine_core::hydrate::hydrate_subtree(&root, SsrMatchDemo::NAME, &state).expect("scope");
+    flush_sync();
+    assert_eq!(
+        before,
+        root.outer_html(),
+        "pp-match hydration mutated the DOM (claim not byte-equal)"
+    );
+
+    // 4. Structural reactivity: a tag change makes the controller swap
+    //    to the matching arm (created via its macro body fn).
+    pocopine_core::scope::write_field(scope_id, "phase", &JsValue::from_str("Loading"));
+    flush_sync();
+    let html = root.outer_html();
+    assert!(
+        html.contains(r#"<p class="pending">wait</p>"#),
+        "arm did not swap after tag change: {html}"
+    );
+    assert!(
+        !html.contains("class=\"ready\""),
+        "old arm not removed: {html}"
+    );
+
+    // 5. Flip back to a payload arm → the body re-mounts with the new
+    //    payload (fresh PayloadScope), proving the claimed controller
+    //    drives normal mounts after hydrate.
+    let ready_yo = js_sys::Object::new();
+    js_sys::Reflect::set(&ready_yo, &"Ready".into(), &"yo".into()).unwrap();
+    pocopine_core::scope::write_field(scope_id, "phase", &ready_yo);
+    flush_sync();
+    assert!(
+        root.outer_html().contains(r#"<p class="ready">yo</p>"#),
+        "payload arm did not re-mount after flip: {}",
+        root.outer_html()
+    );
+}

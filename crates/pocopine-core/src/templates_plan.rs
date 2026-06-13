@@ -355,6 +355,9 @@ pub fn hydrate_plan(
     for (idx, cp) in plan.if_plans.iter().enumerate() {
         hydrate_static_if_plan(root, scope_id, proxy, idx, cp, template_name);
     }
+    for (idx, mp) in plan.match_plans.iter().enumerate() {
+        hydrate_static_match_plan(root, scope_id, proxy, idx, mp, template_name);
+    }
 }
 
 /// Find the `<!--label-->` comment among `parent`'s child nodes (the
@@ -461,6 +464,111 @@ fn hydrate_static_if_plan(
         branches,
         entry.has_else,
         entry.else_body,
+        entry.teleport_selector,
+    );
+}
+
+/// RFC-099 Phase 3 — claim a server-stamped `pp-match`. Find the
+/// labelled anchor, adopt the rendered case clone, build the per-mount
+/// `PayloadScope` for a `pp-let` arm (so the body's `pp-let` name
+/// resolves), hydrate the body onto the clone against that scope, and
+/// hand the seeded controller to [`directives::if_::hydrate_match`].
+/// Anchor absent → fall back to a normal client mount.
+fn hydrate_static_match_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    idx: usize,
+    entry: &'static StaticMatchPlan,
+    template_name: &str,
+) {
+    let path = entry.template_node_path;
+    if path.is_empty() {
+        return;
+    }
+    let Some(parent) = resolve_node_path(root, &path[..path.len() - 1]) else {
+        return;
+    };
+    let label = format!("pp:match:{idx}");
+    let Some(anchor) = find_comment_anchor(&parent, &label) else {
+        if let Some(tpl_el) = resolve_node_path(root, path) {
+            install_static_match_plan(&tpl_el, scope_id, proxy, entry, template_name);
+        }
+        return;
+    };
+    let Some(evaluator) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
+        fail(
+            "hydrate-match-parse",
+            template_name,
+            path,
+            Some(entry.expr_src),
+        );
+        return;
+    };
+
+    // Active arm + payload — client eval against the same state the
+    // server rendered from, mirroring `install_match`/`extract_tag`.
+    let value = evaluator(proxy);
+    let (tag, payload_val) = directives::if_::extract_tag(&value);
+    let active = entry.cases.iter().position(|c| {
+        c.tags.is_empty() || tag.as_deref().map(|t| c.tags.contains(&t)).unwrap_or(false)
+    });
+    let adopted = anchor
+        .previous_sibling()
+        .and_then(|n| n.dyn_into::<Element>().ok());
+
+    // pp-let arm → a per-mount PayloadScope (same as install_match); the
+    // body's bindings install against it so `bind_name` resolves.
+    let ctx_parent_id = crate::mount::inherited_ctx_parent_of(&parent).unwrap_or(scope_id);
+    let (body_scope_id, payload_scope) = match active.map(|i| &entry.cases[i]) {
+        Some(case) => match case.bind_name {
+            Some(name) => {
+                let bound = if case.tags.is_empty() {
+                    value.clone()
+                } else {
+                    payload_val.clone()
+                };
+                let scope = crate::scope::Scope::new(Rc::new(RefCell::new(
+                    crate::payload_scope::PayloadScope {
+                        ident: name.to_string(),
+                        value: bound,
+                        parent_scope_id: scope_id,
+                    },
+                )));
+                crate::context::set_parent(scope.id, ctx_parent_id);
+                let id = scope.id;
+                (id, Some(scope))
+            }
+            None => (scope_id, None),
+        },
+        None => (scope_id, None),
+    };
+
+    if let (Some(el), Some(bp)) = (
+        adopted.as_ref(),
+        active.and_then(|i| entry.cases[i].body_plan),
+    ) {
+        hydrate_plan(el, body_scope_id, proxy, bp, template_name);
+    }
+
+    let arms: Vec<directives::if_::MatchArm> = entry
+        .cases
+        .iter()
+        .map(|c| directives::if_::MatchArm {
+            tags: c.tags,
+            bind_name: c.bind_name,
+            body: c.body,
+        })
+        .collect();
+    directives::if_::hydrate_match(
+        anchor,
+        active,
+        adopted,
+        payload_scope,
+        scope_id,
+        proxy.clone(),
+        evaluator,
+        arms,
         entry.teleport_selector,
     );
 }
