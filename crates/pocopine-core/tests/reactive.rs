@@ -3,14 +3,14 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::Reflect;
 use pocopine_core::{
-    batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, rw_signal,
-    set_auto_flush, signal, spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped,
-    watch, watch_scope_field_now, Scope,
+    batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, run_now,
+    rw_signal, set_auto_flush, signal, spawn_for_scope, spawn_latest, spawn_latest_for_scope,
+    spawn_scoped, watch, watch_scope_field_now, Scope,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -1010,4 +1010,164 @@ fn differential_fuzz_fine_grained_matches_oracle() {
             );
         }
     }
+}
+
+// ── RFC-098 core-hardening gates ─────────────────────────────────
+
+/// H4 — dispatch + flush visit subscribers in registration order,
+/// deterministically (was `HashSet`, varied per run). The observable
+/// guarantee that makes a fuzz failure replay from its seed.
+#[wasm_bindgen_test]
+fn dispatch_runs_effects_in_subscription_order() {
+    setup();
+    let (s, setter) = signal(0_i32);
+    let order: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    // Five effects subscribe to `s` in order 0..5 (subscription order
+    // == creation order, since each tracks on its initial run).
+    for k in 0..5 {
+        let order_w = order.clone();
+        let s_k = s.clone();
+        effect(move || {
+            s_k.get();
+            order_w.borrow_mut().push(k);
+        });
+    }
+    order.borrow_mut().clear(); // discard the initial-run records
+    setter.set(1);
+    flush_sync();
+    assert_eq!(
+        *order.borrow(),
+        vec![0, 1, 2, 3, 4],
+        "H4: effects must dispatch in registration order"
+    );
+}
+
+/// H1 + H2 — an effect released by another effect mid-flush is safe:
+/// no panic (the snapshot borrow is dropped before bodies run), and
+/// the released effect's id resolves to None (never reruns, stale ops
+/// are inert).
+#[wasm_bindgen_test]
+fn release_during_dispatch_is_safe() {
+    setup();
+    let (s, setter) = signal(0_i32);
+    let a_runs = Rc::new(Cell::new(0));
+    let b_runs = Rc::new(Cell::new(0));
+
+    // A subscribes first, so it dispatches first (H4). When armed, A's
+    // rerun releases B before B's turn in the same flush.
+    let target: Rc<Cell<Option<pocopine_core::EffectId>>> = Rc::new(Cell::new(None));
+    let a_runs_w = a_runs.clone();
+    let s_a = s.clone();
+    let target_a = target.clone();
+    effect(move || {
+        s_a.get();
+        a_runs_w.set(a_runs_w.get() + 1);
+        if let Some(b) = target_a.take() {
+            release(b);
+        }
+    });
+
+    let b_runs_w = b_runs.clone();
+    let s_b = s.clone();
+    let b_id = effect(move || {
+        s_b.get();
+        b_runs_w.set(b_runs_w.get() + 1);
+    });
+
+    assert_eq!(a_runs.get(), 1);
+    assert_eq!(b_runs.get(), 1); // both ran once on creation
+
+    // Arm the release, then trigger: A reruns and releases B mid-flush.
+    target.set(Some(b_id));
+    setter.set(1);
+    flush_sync();
+    assert_eq!(a_runs.get(), 2);
+    assert_eq!(
+        b_runs.get(),
+        1,
+        "B must not rerun after release mid-dispatch"
+    );
+
+    // The stale id is inert and does not touch A; A still reacts.
+    release(b_id); // no-op, no panic
+    run_now(b_id); // no-op, no panic
+    setter.set(2);
+    flush_sync();
+    assert_eq!(a_runs.get(), 3);
+    assert_eq!(b_runs.get(), 1);
+}
+
+/// H3 — a chain of computeds (A→B→C) propagates through the trampoline
+/// without recursion: an inline scheduler's downstream trigger lands on
+/// the worklist, drained by the outermost dispatch. The reading effect
+/// sees the fully-propagated value, each computed recomputes lazily.
+#[wasm_bindgen_test]
+fn scheduler_triggers_scheduler_three_deep() {
+    setup();
+    let (src, set_src) = signal(2_i32);
+
+    let src_a = src.clone();
+    let a = Rc::new(computed(move || src_a.get() + 1)); // 3
+    let a_b = a.clone();
+    let b = Rc::new(computed(move || a_b.get() * 2)); // 6
+    let b_c = b.clone();
+    let c = Rc::new(computed(move || b_c.get() + 10)); // 16
+
+    let seen = Rc::new(Cell::new(0));
+    let evals = Rc::new(Cell::new(0));
+    let seen_w = seen.clone();
+    let evals_w = evals.clone();
+    let c_eff = c.clone();
+    effect(move || {
+        evals_w.set(evals_w.get() + 1);
+        seen_w.set(c_eff.get());
+    });
+    assert_eq!(seen.get(), 16);
+    let evals_after_init = evals.get();
+
+    // One source mutation propagates A→B→C→effect in a single dispatch.
+    set_src.set(5);
+    flush_sync();
+    assert_eq!(seen.get(), (5 + 1) * 2 + 10); // 22
+    assert_eq!(
+        evals.get(),
+        evals_after_init + 1,
+        "the reading effect must rerun exactly once for a 3-deep chain"
+    );
+}
+
+/// H2 — releasing an effect frees its slab slot; the next effect reuses
+/// it under a bumped generation, so the freed id is distinct and stays
+/// inert (ABA safety).
+#[wasm_bindgen_test]
+fn slab_generation_reuse_rejects_stale_id() {
+    setup();
+    let stale = effect(|| {});
+    release(stale);
+
+    // The next effect reuses the freed slot with generation + 1.
+    let (s, setter) = signal(0_i32);
+    let runs = Rc::new(Cell::new(0));
+    let runs_w = runs.clone();
+    let s_c = s.clone();
+    let fresh = effect(move || {
+        s_c.get();
+        runs_w.set(runs_w.get() + 1);
+    });
+    assert_ne!(
+        stale, fresh,
+        "reused slot must mint a distinct id (generation bump)"
+    );
+    assert_eq!(runs.get(), 1);
+
+    // Stale-id operations are no-ops and must not disturb `fresh`.
+    release(stale);
+    run_now(stale);
+    setter.set(1);
+    flush_sync();
+    assert_eq!(
+        runs.get(),
+        2,
+        "fresh effect at the reused slot still reacts"
+    );
 }
