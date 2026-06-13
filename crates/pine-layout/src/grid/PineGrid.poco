@@ -1,0 +1,5 @@
+<root class="pine-grid"
+      :data-cols="cols"
+      :data-gap="gap">
+  <slot></slot>
+</root>

@@ -1,0 +1,3 @@
+<root class="pine-app-shell-header" role="banner">
+  <slot></slot>
+</root>

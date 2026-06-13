@@ -1,0 +1,51 @@
+[package]
+name = "pine-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Headless, responsive layout primitives for Pine and pocopine."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+js-sys = { workspace = true }
+pocopine = { path = "../pocopine" }
+pocopine-core = { workspace = true }
+serde = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlElement",
+    "MediaQueryList",
+    "Node",
+    "Window",
+]
+
+[dev-dependencies]
+js-sys = { workspace = true }
+pocopine-core = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = "0.3"
+
+[dev-dependencies.web-sys]
+version = "0.3"
+features = [
+    "CustomEvent",
+    "Document",
+    "Element",
+    "Event",
+    "HtmlElement",
+    "KeyboardEvent",
+    "KeyboardEventInit",
+    "MediaQueryList",
+    "Node",
+    "Window",
+]

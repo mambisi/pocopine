@@ -1,0 +1,6 @@
+<root class="pine-stack"
+      :data-gap="gap"
+      :data-align="align"
+      :data-justify="justify">
+  <slot></slot>
+</root>

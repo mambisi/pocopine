@@ -5538,6 +5538,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pine-layout"
+version = "0.1.1"
+dependencies = [
+ "js-sys",
+ "pocopine",
+ "pocopine-core",
+ "serde",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
 name = "pine-motion"
 version = "0.1.1"
 dependencies = [

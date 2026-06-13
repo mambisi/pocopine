@@ -1,0 +1,7 @@
+<root class="pine-inline"
+      :data-gap="gap"
+      :data-align="align"
+      :data-justify="justify"
+      :data-wrap="wrap">
+  <slot></slot>
+</root>
