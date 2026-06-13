@@ -1019,12 +1019,21 @@ type BindingCache = SmallVec<[Option<Rc<str>>; 4]>;
 /// RFC-101 P1 — per-row delegated listener routes, inline for ≤2
 /// listeners (jsbench rows have 2: select + remove).
 type ListenerRoutes = SmallVec<[RowListenerRoute; 2]>;
+/// RFC-101 P2 — the per-row binding-node handles resolved at mount,
+/// inline for ≤4 bindings so the common row holds them with no heap
+/// block (was `Box<[Element]>`, one allocation per row). Spills only
+/// for wide rows.
+pub(crate) type BindingNodes = SmallVec<[Element; 4]>;
+/// RFC-101 P2 — the transient per-row listener-node handles the
+/// channel returns, inline for ≤2 listeners (was `Vec<Element>`, one
+/// allocation per row, consumed building [`ListenerRoutes`]).
+pub(crate) type ListenerNodes = SmallVec<[Element; 2]>;
 
 struct RowInstance {
     plan: Rc<CompiledRowPlan>,
     /// Element handles resolved from `plan.bindings[i].node_path`
-    /// once at mount.
-    binding_nodes: Box<[Element]>,
+    /// once at mount. RFC-101 P2 — inline for ≤4 bindings.
+    binding_nodes: BindingNodes,
     /// Last serialised value written per binding. `None` means
     /// the slot is currently absent / not-yet-written. Compared
     /// against the new evaluation each tick to skip DOM writes
@@ -1172,9 +1181,9 @@ pub(crate) fn mount_rows_compiled(
     let mut watcher: Option<ListWatcherKey> = None;
 
     let node_path_start = crate::profiler::mount::start();
-    let mut resolved_binding_nodes: Vec<Box<[Element]>> = Vec::with_capacity(rows.len());
+    let mut resolved_binding_nodes: Vec<BindingNodes> = Vec::with_capacity(rows.len());
     for (row_root, _, _) in rows {
-        let mut binding_nodes: Vec<Element> = Vec::with_capacity(plan.bindings.len());
+        let mut binding_nodes: BindingNodes = SmallVec::with_capacity(plan.bindings.len());
         for b in &plan.bindings {
             let Some(node) = resolve_node_path(row_root, b.node_path) else {
                 console::warn_1(&JsValue::from_str(&format!(
@@ -1185,7 +1194,7 @@ pub(crate) fn mount_rows_compiled(
             };
             binding_nodes.push(node);
         }
-        resolved_binding_nodes.push(binding_nodes.into_boxed_slice());
+        resolved_binding_nodes.push(binding_nodes);
     }
     crate::profiler::mount::record_node_path_resolution(node_path_start);
 
@@ -1744,8 +1753,8 @@ fn build_channel_descriptor(plan: &CompiledRowPlan) -> Option<u32> {
 /// interpreter, plus the Rust-side scope the caller minted.
 pub(crate) struct ChannelRow {
     pub scope_id: ScopeId,
-    pub binding_nodes: Box<[Element]>,
-    pub listener_nodes: Vec<Element>,
+    pub binding_nodes: BindingNodes,
+    pub listener_nodes: ListenerNodes,
     pub loop_state: Rc<RefCell<LoopScope>>,
 }
 
