@@ -1,0 +1,23 @@
+[package]
+name = "layout-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+port = 3011
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pine-layout = { path = "../../crates/pine-layout" }
+pine-motion = { path = "../../crates/pine-motion" }
+pocopine = { path = "../../crates/pocopine" }
+serde = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["Animation", "Document", "Element", "Window"]

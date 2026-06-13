@@ -1,0 +1,84 @@
+<div class="demo-root">
+  <pine-app-shell class="demo-shell" pp-model:breakpoint="bp" pp-model:nav_open="nav_open">
+
+    <pine-app-shell-header class="demo-header">
+      <pine-app-shell-trigger class="demo-burger" aria-label="Toggle navigation">
+        <span class="demo-burger-bars"></span>
+      </pine-app-shell-trigger>
+      <span class="demo-brand"><span class="demo-logo">◆</span> Pine&nbsp;Layout</span>
+      <span class="demo-hint">resize the window →</span>
+    </pine-app-shell-header>
+
+    <pine-app-shell-sidebar class="demo-sidebar" label="Primary navigation">
+      <nav class="demo-nav">
+        <a class="demo-nav-item is-active" href="#"><span class="demo-ico">▦</span><span class="nav-label">Dashboard</span></a>
+        <a class="demo-nav-item" href="#"><span class="demo-ico">◷</span><span class="nav-label">Activity</span></a>
+        <a class="demo-nav-item" href="#"><span class="demo-ico">⬡</span><span class="nav-label">Projects</span></a>
+        <a class="demo-nav-item" href="#"><span class="demo-ico">◐</span><span class="nav-label">Reports</span></a>
+        <a class="demo-nav-item" href="#"><span class="demo-ico">⚙</span><span class="nav-label">Settings</span></a>
+      </nav>
+    </pine-app-shell-sidebar>
+
+    <pine-app-shell-content class="demo-content">
+      <pine-container class="demo-container" size="lg">
+        <pine-stack class="demo-stack" gap="6">
+
+          <header class="demo-page-head">
+            <h1>Responsive app shell</h1>
+            <p>
+              The navigation is one <code>&lt;pine-app-shell&gt;</code>. It swaps between an off-canvas
+              <strong>drawer</strong>, an icon <strong>rail</strong>, and a full <strong>sidebar</strong>
+              as the viewport crosses the Stylekit breakpoints — driven entirely by the CSS in
+              <code>styles.css</code>. The library ships none.
+            </p>
+          </header>
+
+          <pine-inline class="demo-chips" gap="2" wrap="true">
+            <span class="demo-chip">base &lt; 640</span>
+            <span class="demo-chip">sm · 640</span>
+            <span class="demo-chip">md · 768 → rail</span>
+            <span class="demo-chip">lg · 1024 → rail</span>
+            <span class="demo-chip">xl · 1280 → sidebar</span>
+            <span class="demo-chip">2xl · 1536</span>
+          </pine-inline>
+
+          <pine-grid class="demo-grid" cols="12" gap="4">
+            <pine-grid-item class="demo-card" span="4">
+              <span class="demo-card-label">Nav mode</span>
+              <span class="demo-card-value">drawer · rail · sidebar</span>
+              <span class="demo-card-foot">derived from <code>data-breakpoint</code></span>
+            </pine-grid-item>
+            <pine-grid-item class="demo-card" span="4">
+              <span class="demo-card-label">Drawer a11y</span>
+              <span class="demo-card-value">focus trap · scroll lock</span>
+              <span class="demo-card-foot">Escape closes · ARIA wired</span>
+            </pine-grid-item>
+            <pine-grid-item class="demo-card" span="4">
+              <span class="demo-card-label">Styling</span>
+              <span class="demo-card-value">100% yours</span>
+              <span class="demo-card-foot">class + <code>data-*</code> hooks</span>
+            </pine-grid-item>
+          </pine-grid>
+
+          <section class="demo-note">
+            <h2>Try it</h2>
+            <ul>
+              <li>Narrow window → the hamburger appears; tap it to slide the <strong>drawer</strong> in, <kbd>Esc</kbd> to close.</li>
+              <li>Medium width → the drawer collapses to an icon <strong>rail</strong> (labels hidden by CSS).</li>
+              <li>Wide → a full <strong>sidebar</strong> with labels. The badge in the corner shows the live tier.</li>
+            </ul>
+          </section>
+
+        </pine-stack>
+      </pine-container>
+    </pine-app-shell-content>
+
+    <pine-app-shell-footer class="demo-footer">
+      <span>pine-layout — headless responsive primitives</span>
+      <span class="demo-footer-rfc">RFC-103</span>
+    </pine-app-shell-footer>
+
+  </pine-app-shell>
+
+  <span class="demo-bp" aria-hidden="true" pp-text="bp"></span>
+</div>

@@ -1,0 +1,247 @@
+/* ===========================================================================
+   pine-layout demo — ALL of the layout lives here, none of it in the library.
+   Every rule keys off a headless hook the components emit:
+     .demo-shell[data-nav-mode="drawer|rail|sidebar"]   ← adaptive nav
+     .demo-sidebar[data-state="open|closed"]            ← drawer slide
+     .demo-burger[data-nav-mode="drawer"]               ← show hamburger only when useful
+   =========================================================================== */
+
+:root {
+  --cocoa: #1a130c;
+  --cocoa-2: #241a10;
+  --amber: #f8ae45;
+  --amber-ink: #3a2a10;
+  --cream: #fbf7f0;
+  --card: #ffffff;
+  --ink: #2a2018;
+  --muted: #8a7d6d;
+  --line: #ece4d8;
+  --line-dark: #3a2c1c;
+  --sidebar-w: 16rem;
+  --rail-w: 4.5rem;
+  --header-h: 3.5rem;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--cream);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, kbd { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85em; }
+code { color: #b5560f; background: #fff3e2; padding: 0.05em 0.35em; border-radius: 4px; }
+kbd { background: var(--cocoa); color: var(--cream); padding: 0.1em 0.4em; border-radius: 4px; }
+a { color: inherit; text-decoration: none; }
+
+/* ── shell grid — the only thing that changes per nav mode ──────────────── */
+
+.demo-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-rows: var(--header-h) 1fr auto;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-areas:
+    "header  header"
+    "sidebar content"
+    "footer  footer";
+  /* Animate the rail <-> sidebar width reflow (same track count, so
+     the columns interpolate). drawer mode is a single column — a
+     different track count — so that boundary snaps, which is fine. */
+  transition: grid-template-columns 0.32s ease;
+}
+.demo-shell[data-nav-mode="rail"]    { grid-template-columns: var(--rail-w) 1fr; }
+.demo-shell[data-nav-mode="drawer"] {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "header"
+    "content"
+    "footer";
+}
+
+.demo-header  { grid-area: header; }
+.demo-sidebar { grid-area: sidebar; }
+.demo-content { grid-area: content; }
+.demo-footer  { grid-area: footer; }
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+
+.demo-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0 1.1rem;
+  background: color-mix(in oklab, var(--card) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.demo-brand { font-weight: 650; letter-spacing: -0.01em; display: flex; align-items: center; gap: 0.5rem; }
+.demo-logo  { color: var(--amber); font-size: 1.15rem; }
+.demo-hint  { margin-left: auto; color: var(--muted); font-size: 0.8rem; }
+
+/* hamburger — only meaningful (and only shown) in drawer mode */
+.demo-burger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+}
+.demo-burger[data-nav-mode="drawer"] { display: inline-flex; }
+.demo-burger:hover { background: #fff7ec; border-color: var(--amber); }
+.demo-burger-bars,
+.demo-burger-bars::before,
+.demo-burger-bars::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.demo-burger-bars { position: relative; }
+.demo-burger-bars::before { position: absolute; top: -6px; }
+.demo-burger-bars::after  { position: absolute; top: 6px; }
+
+/* ── sidebar — cocoa surface, amber accents ─────────────────────────────── */
+
+.demo-sidebar {
+  background: var(--cocoa);
+  color: #cdbfab;
+  border-right: 1px solid var(--line-dark);
+  padding: 0.85rem 0.6rem;
+  overflow-y: auto;
+}
+.demo-nav { display: flex; flex-direction: column; gap: 0.2rem; }
+.demo-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 9px;
+  color: #cdbfab;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.demo-ico { width: 1.25rem; text-align: center; font-size: 1.05rem; flex: none; }
+.demo-nav-item:hover { background: var(--cocoa-2); color: var(--cream); }
+.demo-nav-item.is-active { background: var(--amber); color: var(--amber-ink); font-weight: 600; }
+
+/* RAIL: collapse to icons only */
+.demo-sidebar[data-nav-mode="rail"] .nav-label { display: none; }
+.demo-sidebar[data-nav-mode="rail"] .demo-nav-item { justify-content: center; padding: 0.6rem 0; }
+
+/* DRAWER: off-canvas. data-state drives the resting transform
+   instantly (no CSS transition) — so a breakpoint reflow into drawer
+   width just snaps. The slide between these two states is animated
+   imperatively by pine-motion in lib.rs, fired only on a user toggle. */
+.demo-sidebar[data-nav-mode="drawer"] {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--sidebar-w);
+  z-index: 40;
+  transform: translateX(-100%);
+  box-shadow: 0 0 0 100vmax transparent;
+}
+.demo-sidebar[data-nav-mode="drawer"][data-state="open"] {
+  transform: translateX(0);
+  box-shadow: 0.5rem 0 2.5rem rgba(0, 0, 0, 0.35), 0 0 0 100vmax rgba(26, 19, 12, 0.45);
+}
+
+/* ── content ────────────────────────────────────────────────────────────── */
+
+.demo-content { padding: 1.75rem 1.25rem 2.5rem; }
+.demo-container { max-width: 72rem; margin-inline: auto; width: 100%; }
+.demo-stack { display: flex; flex-direction: column; gap: 1.6rem; }
+
+.demo-page-head h1 { margin: 0 0 0.4rem; font-size: 1.7rem; letter-spacing: -0.02em; }
+.demo-page-head p  { margin: 0; max-width: 60ch; color: #5b4f40; }
+
+.demo-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.demo-chip {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: #6b5d4c;
+}
+
+/* responsive 12-col grid (author-written — the library only emits data-cols) */
+.demo-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1rem; }
+.demo-card {
+  grid-column: span 4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(26, 19, 12, 0.04);
+}
+.demo-card-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.demo-card-value { font-size: 1.1rem; font-weight: 650; color: var(--cocoa); }
+.demo-card-foot  { font-size: 0.8rem; color: #6b5d4c; }
+@media (max-width: 720px) {
+  .demo-grid { grid-template-columns: 1fr; }
+  .demo-card { grid-column: auto; }
+}
+
+.demo-note {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem;
+}
+.demo-note h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.demo-note ul { margin: 0; padding-left: 1.1rem; color: #5b4f40; }
+.demo-note li { margin: 0.3rem 0; }
+
+/* ── footer ─────────────────────────────────────────────────────────────── */
+
+.demo-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.demo-footer-rfc { margin-left: auto; font-family: ui-monospace, monospace; color: #b5560f; }
+
+/* ── live breakpoint badge (fixed corner) ───────────────────────────────── */
+
+.demo-bp {
+  position: fixed;
+  right: 0.9rem;
+  bottom: 0.9rem;
+  z-index: 60;
+  min-width: 2.5rem;
+  padding: 0.3rem 0.65rem;
+  text-align: center;
+  font: 600 0.8rem/1 ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--amber-ink);
+  background: var(--amber);
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(26, 19, 12, 0.25);
+}
+.demo-bp:empty::before { content: "…"; }

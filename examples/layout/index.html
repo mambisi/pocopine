@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pine-layout — responsive app shell</title>
+  <!-- Hand-written CSS: pine-layout ships zero CSS, so the whole look
+       lives here, keyed off the components' data-* hooks. -->
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div pp-app>
+    <layout-demo></layout-demo>
+  </div>
+  <script type="module">
+    import init from "/pkg/layout_demo.js";
+    init();
+  </script>
+</body>
+</html>
