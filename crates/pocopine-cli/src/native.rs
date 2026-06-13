@@ -269,9 +269,16 @@ const GITIGNORE: &str = "/target\n/gen\n";
 
 /// `src-tauri/Cargo.toml` for an external project (published crates). The
 /// in-repo `examples/file-browser/src-tauri` uses path dependencies.
+///
+/// The empty `[workspace]` table makes the crate its own workspace so it
+/// builds standalone even when the app lives inside a larger Cargo
+/// workspace (otherwise Cargo errors "believes it's in a workspace when
+/// it's not" when `pocopine native` builds from this directory).
 fn render_cargo_toml(app: &str) -> String {
     format!(
-        r#"[package]
+        r#"[workspace]
+
+[package]
 name = "{app}-native"
 version = "0.1.0"
 edition = "2021"
@@ -377,6 +384,8 @@ mod tests {
         assert!(cargo.contains("name = \"my-app-native\""));
         assert!(cargo.contains("pocopine-native-tauri"));
         assert!(cargo.contains(r#"my-app = { path = ".." }"#));
+        // Own workspace so it builds standalone inside any parent repo.
+        assert!(cargo.contains("[workspace]"));
 
         let conf = std::fs::read_to_string(project.join("src-tauri/tauri.conf.json")).unwrap();
         assert!(conf.contains("\"identifier\": \"com.pocopine.my_app\""));
