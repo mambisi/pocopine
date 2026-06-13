@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented (P1–P4), measured |
 | **Author** | pocopine team |
 | **Created** | 2026-06-13 |
 | **Related** | [`rfc-054`] (the compiled-row mutation channel being measured), [`rfc-096-signals-first-reactive-core.md`](./rfc-096-signals-first-reactive-core.md) (typed text lane), [`rfc-097-field-handles.md`](./rfc-097-field-handles.md) (per-field-typed codegen — the rail the typed key reuses), [`rfc-098-core-hardening.md`](./rfc-098-core-hardening.md) (the prior reactive-core hardening pass) |
@@ -15,6 +15,15 @@ Mounting a `pp-for` list costs **~10 Rust heap allocations per row**
 only to stay **neutral** and correctness gated on the W0 battery +
 keyed-symmetry. It is a follow-on to RFC-098 (which hardened the
 reactive *core*); this hardens the per-row *mount path*.
+
+**Outcome (P1–P4 shipped).** The four per-row buckets were removed in
+sequence, each measured before/after on the same harness:
+`runLots(10000)` total Rust allocations **118134 → 41133** (the
+framework's channel-mount cost dropped from **~10/row to 1/row** — the
+single remaining alloc is the genuine `LoopScope` reactive identity).
+Wall-clock stayed neutral (release A/B: mean 426.3 ms vs baseline
+427.6 ms, inside a ±50 ms noise band), wasm grew **+4.4 KB**, and every
+phase held the full reactive + keyed-symmetry batteries green.
 
 The headline of this RFC is the **measurement, not a hunch**. An
 allocation-attribution harness (a counting `#[global_allocator]` read at
@@ -56,35 +65,66 @@ its construction/access sites; the API (`binding_cache[j]`, iterate
 `listener_routes`) is unchanged (SmallVec is Deref-compatible). Lowest
 risk; ships first as the template for the harness-driven before/after.
 
-### P2 — SoA the `ChannelRow` build
+### P2 — Inline the `ChannelRow` node vecs (SmallVec) ✅
 
-Each `ChannelRow` carries `binding_nodes: Box<[Element]>` +
-`listener_nodes: Vec<Element>` — two heap blocks per row. But the
-channel's `out` array is **already columnar** (`out.get(row*stride+j)`).
-So a row can hold a `(base, stride)` offset into shared per-list buffers
-instead of N per-row boxes, collapsing 2 allocs/row to a handful per
-*list*. Resident-memory win too (these live for the row's lifetime).
-Medium risk (touches the channel mount + `RowInstance` access).
+Each `ChannelRow` carries `binding_nodes: Box<[Element]>` (resident in
+`RowInstance`) + `listener_nodes: Vec<Element>` (transient, consumed
+building `listener_routes`) — two heap blocks per row. **Shipped as the
+SmallVec completion of P1** (`SmallVec<[Element; 4]>` / `<[Element; 2]>`,
+inline for the common 3-binding/2-listener row). **~2 allocs/row → ~0**
+(measured: ChannelRow bucket 20006 → 6 on runLots).
 
-### P3 — Typed key
+*Rejected the full columnar SoA* (a `(base, stride)` offset into shared
+per-list buffers, what this section originally proposed): it reintroduces
+an index-invalidation problem the keyed swap/remove reconcile would have
+to maintain (tombstones / offset shifts on row removal), for no resident
+win over inline storage. Inline `SmallVec` captures the same allocation
+*and* resident win with no offset bookkeeping. Indexing is unchanged
+(`SmallVec` Derefs to a slice).
 
-`stringify_key` allocates a `String` + `Rc<str>` **per row** even when
-`pp-key="item.id"` is a `usize`. A typed key —
-`enum RowKey { Int(u64), Str(Rc<str>) }`, `Hash + Eq + Clone` — skips
-both for numeric keys. **~2 allocs/row → ~0 for numeric keys.** This is
-where the *typed-field-access* capability (RFC-096 `field_as_text`,
-RFC-097's per-field codegen) actually pays — not in marshalling. Higher
-effort: `RowKey` threads through the keyed-diff machinery (`PrevItem`,
-the pool, the `seen` set, dedup — ~80 sites in `for_.rs`); gated on the
-keyed-symmetry battery + the differential fuzz.
+### P3 — Typed key ✅
 
-### P4 — Per-row scope-mint reduction (open / hard)
+`stringify_key` allocated a `String` + `Rc<str>` **per row** even when
+`pp-key="item.id"` is a `usize`. Shipped `enum RowKey { Int(i64), Str(Rc<str>) }`
+(`Hash + Eq + Clone`): an integral, exact-range JS number takes the
+zero-alloc `Int` path; everything else reuses `stringify_key` verbatim
+for a byte-identical `Str` key. **~2 allocs/row → ~0 for numeric keys**
+(measured: keying bucket 20001 → 1 on runLots; string-key lists keep
+their one `Rc<str>` alloc, as expected). `i64` (not `u64`) so negative
+ids round-trip; gated to the f64 exact-integer range (2⁵³) so large ids
+fall back to `Str` rather than aliasing.
 
-`Scope::new` + `LoopScope` `Rc` + `set_parent` is 2 allocs/row of
-*per-row reactive identity*. Reducing it means pooling/reusing scopes or
-a lighter `LoopScope` representation — the deepest change, and **not
-larger than the others**, so it is last. Likely its own follow-up RFC;
-listed here for completeness of the attribution.
+Derived `Eq`/`Hash` discriminate on the variant, so `Int(5)` and
+`Str("5")` never collide — which also **fixes a latent aliasing bug** the
+all-`String` form had. `RowKey` threads through the keyed-diff machinery
+(`PrevItem`, the pool `HashMap<RowKey,_>`, the `seen` `HashSet<RowKey>`,
+the two flip-snapshot maps, dedup — **53 sites**, all private to
+`for_.rs`). The one genuinely-risky edit: `retract_from_prior` switches
+`Rc::ptr_eq` → value `==` (an `Int` has no pointer identity) — strictly
+more correct, on the cold leave path only. The 5 near-identical
+construction sites collapsed into one `dedup_row_key` helper.
+
+### P4 — Erase scope state without the double-Rc box ✅
+
+`Scope::new` is 2 allocs/row of per-row reactive identity:
+`Rc::new(RefCell::new(LoopScope{…}))` (the genuine identity) **and**
+`Rc::new(state)` — which boxed the *already-`Rc`* state inside a **second
+`Rc`** purely to satisfy the `Rc<dyn Any>` erasure. The second box is
+removable with **zero plumbing**: erase `state` directly to `Rc<dyn Any>`
+via an unsizing coercion (a fat-pointer rebind, no heap block) and
+recover it in `typed::<T>()` with `Rc::downcast::<RefCell<T>>` instead of
+`downcast_ref::<Rc<…>>`. Identical contract; every consumer goes through
+the `typed()` method (no direct field access anywhere), so it is fully
+encapsulated and benefits **all** scopes, not just rows. **~2 → ~1
+alloc/row** (measured: scope-mint bucket 20009 → 10009).
+
+*Rejected scope pooling* (this section's original "reuse scopes" idea):
+reusing a `ScopeId` across reconciles is a use-after-logical-free —
+`FIELD_SIGNALS` / `SIGNAL_DEPS` / `PROJECTIONS` / `PARENTS` /
+`ROW_INSTANCES` are all keyed by a bare, non-generational `u64`, and an
+in-flight leave callback / queued effect / delegated listener can still
+hold an `Rc` clone of the recycled `LoopScope`. The remaining 1 alloc/row
+(the `LoopScope` `Rc` itself) is therefore left in place by design.
 
 ## 4. Non-goals (binding)
 
@@ -114,17 +154,30 @@ listed here for completeness of the attribution.
 - **Neutrality:** a chromium A/B (`select`/`update`/`runLots`/`clear`)
   within ±2% geomean, reversed double-run (the RFC-098 protocol).
 
-## 6. Phasing
+## 6. Phasing (measured)
 
-| phase | change | allocs/row | risk |
-|---|---|---|---|
-| P1 | `RowInstance` SmallVec | ~2 → 0 | low |
-| P2 | `ChannelRow` SoA (offsets into the columnar `out`) | ~2 → ~0 | medium |
-| P3 | typed `RowKey` | ~2 → ~0 (numeric) | medium (keyed-diff surface) |
-| P4 | per-row scope-mint reduction | ~2 → ? | high / open |
+Each phase landed independently, gated on the harness before/after + the
+full battery. `runLots(10000)` total Rust allocations, measured on the
+attribution branch after each cherry-pick:
 
-Each phase lands independently, gated on the harness before/after + the
-full battery + an A/B. P1 first (lowest risk, validates the loop).
+| phase | change | bucket allocs/row | runLots total | risk | status |
+|---|---|---|---:|---|---|
+| — | baseline (`main`) | — | 118134 | — | — |
+| P1 | `RowInstance` SmallVec (`binding_cache` + `listener_routes`) | 2.0 → 0 | 96134 | low | ✅ |
+| P2 | `ChannelRow` SmallVec (`binding_nodes` + `listener_nodes`) | 2.0 → 0 | 74134 | low | ✅ |
+| P3 | typed `RowKey` (`Int` no-alloc for numeric keys) | 2.0 → 0 | 52134 | medium | ✅ |
+| P4 | scope state erased without the double-`Rc` box | 2.0 → 1.0 | 41133 | medium | ✅ |
+
+The framework's per-row channel-mount allocation went **~10/row → 1/row**
+(the surviving alloc is the `LoopScope` `Rc`, kept by design — see P4).
+Full-stack release wall-clock A/B: mean **426.3 ms** vs baseline
+**427.6 ms** on `runLots(10000) ×25` — neutral within the metric's
+±50 ms noise floor (the ~100K-alloc reduction is sub-millisecond and
+below resolution; the A/B's role is to rule out a regression). wasm
+**+4.4 KB**. Reactive battery 30/30 + 9/9 and the firefox
+keyed-symmetry battery (`template_plan` 43/43, plus `refs_typed`,
+`component_refs`, `typed_slot_props` for P4's `typed()` change) green at
+every phase.
 
 ## 7. Relation to RFC-097
 
