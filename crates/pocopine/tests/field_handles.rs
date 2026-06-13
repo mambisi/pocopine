@@ -95,7 +95,7 @@ fn generated_field_handle_accessor_writes_reactively() {
         .with(|h| h.borrow().clone())
         .expect("on_mount stored a handle");
 
-    let progress: FieldHandle<f64> = handle.progress();
+    let progress: FieldHandle<f64> = handle.fields().progress;
     progress.set(0.5);
     flush_sync();
 
@@ -116,7 +116,7 @@ fn readonly_handler_skips_the_sweep() {
     let handle = HANDLE.with(|h| h.borrow().clone()).expect("handle");
     let scope = Scope::find(handle.scope_id()).expect("scope live");
 
-    handle.progress().set(2.0);
+    handle.fields().progress.set(2.0);
     flush_sync();
 
     // `peek(&self)` → ZERO fingerprints, but it still runs.
@@ -130,5 +130,5 @@ fn readonly_handler_skips_the_sweep() {
     scope.invoke("bump", &Array::new());
     let fp2 = pocopine_core::scope::fingerprint_count();
     assert!(fp2 > fp1, "a &mut self handler must run fingerprints");
-    assert_eq!(handle.progress().get(), 3.0);
+    assert_eq!(handle.fields().progress.get(), 3.0);
 }

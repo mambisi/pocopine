@@ -14,7 +14,7 @@ ergonomic/performance gap in the signals-first core:
 
 1. **`FieldHandle<T>`** — a macro-generated, field-typed projection
    of one component field, obtained **from a `Handle<T>`** (never
-   from `self`): `this::<Uploader>().progress()` →
+   from `self`): `this::<Uploader>().fields().progress` →
    `FieldHandle<f64>`. `set` writes exactly one field through the
    write mirror — one version bump, one trigger, **no dirty sweep**
    — making high-frequency single-field updates from async tasks
@@ -58,7 +58,7 @@ unmaintainable method-name heuristic. The principled fix is to let
 the caller **declare** the field at an API seam:
 
 ```rust
-let progress = this::<Uploader>().progress();   // FieldHandle<f64>
+let progress = this::<Uploader>().fields().progress;   // FieldHandle<f64>
 spawn_scoped(async move {
     while let Some(pct) = stream.next().await {
         progress.set(pct);          // write mirror → bump → trigger("progress")
@@ -127,32 +127,48 @@ Semantics:
 
 ### 3.2 Codegen
 
-`#[component]` (and `#[store]`) emit one extension trait per type,
-implemented for `Handle<T>`:
+`#[component]` (and `#[store]`) emit, per type, a **`<Name>Fields`
+struct whose public fields are the typed handles**, plus a one-method
+`<Name>FieldsExt` trait that hands it back from a `Handle<T>`:
 
 ```rust
-pub trait UploaderFields {
-    fn progress(&self) -> FieldHandle<f64>;
-    fn status(&self) -> FieldHandle<String>;
+#[derive(Clone, Copy)]
+pub struct UploaderFields {
+    pub progress: FieldHandle<f64>,
+    pub status:   FieldHandle<String>,
     …
 }
-impl UploaderFields for pocopine::Handle<Uploader> { … }
+pub trait UploaderFieldsExt { fn fields(&self) -> UploaderFields; }
+impl UploaderFieldsExt for pocopine::Handle<Uploader> { … }
 ```
 
-- One method per **declared serde-visible field** (skipping
+Reached as `this::<Uploader>().fields().progress.set(v)` — one `.fields()`
+hop, then field access (no per-field call). The struct is `Copy`, built
+eagerly (each `FieldHandle` is a `ScopeId` + `&'static str`).
+
+- One field per **declared serde-visible field** (skipping
   `#[serde(skip)]`). Props included — writing a prop locally is
-  already possible via `update`; same rules apply.
+  already possible via `update`; same rules apply. (Note: *fields* is
+  the superset — props, models, and plain state; the canonical
+  `FieldHandle` target, e.g. upload `progress`, is plain state, **not**
+  a prop. Hence `.fields()`, never `.props()`.)
 - `#[computed]` fields get **read-only** handles (`get` only) in a
   later phase; v1 generates accessors for struct fields only.
 - Bare-flatten leaves: **not** in v1 (the container field gets the
   handle; leaf-level handles are an open question, §7).
-- **Reserved-name collisions:** a field named `update`, `with`,
-  `scope_id`, or any inherent `Handle` method name would silently
-  resolve to the inherent method at call sites. The macro emits a
-  compile error naming the conflict and the rename expectation. The
-  reserved list lives beside `Handle`'s impl with a test asserting
-  it matches the inherent surface (so it cannot drift silently —
-  the W2c lesson applied to ourselves).
+- **No reserved-name list.** Because the handles live as fields on a
+  *dedicated* struct rather than methods on `Handle`, accessor names
+  share no namespace with `Handle`'s inherent methods — a field named
+  `update`/`with`/`scope_id` is fine. This deliberately avoids a
+  hand-maintained collision list: a proc macro can't introspect
+  `Handle`'s method set, so any such list would have to be
+  hand-maintained and kept in sync — the exact anti-pattern the W2c
+  revert warned against. The only name added to `Handle` is `fields`,
+  which we own and which cannot collide with a field accessor (the
+  accessor lives on `<Name>Fields`, a different receiver type). An
+  earlier draft put the accessors directly on `Handle<T>` and needed
+  such a list; the struct hop removes both the list and the
+  field-naming restriction.
 
 ### 3.3 `&self` handlers skip the sweep
 
@@ -209,12 +225,11 @@ only that field.
 
 - `pocopine-core/src/handle.rs`: `FieldHandle<T>` (~80 lines) over
   `write_field_tracked` / `read_scope_key`.
-- `pocopine-macros`: emit the extension trait in `#[component]` /
-  `#[store]` (mirrors the RFC-081 ref-accessor emission); reserved-
-  name check; interior-mutability field rejection; `&self` receiver
+- `pocopine-macros`: emit the `<Name>Fields` struct + `<Name>FieldsExt`
+  trait in `#[component]` / `#[store]` (mirrors the RFC-081 ref-accessor
+  struct); interior-mutability field rejection; `&self` receiver
   branch in the `#[handlers]` arm emission.
-- Reserved-name parity test in core; trybuild cases for the two new
-  compile errors.
+- trybuild case for the interior-mutability compile error.
 
 ## 6. Verification
 
@@ -256,10 +271,12 @@ only that field.
   sweep), `get` through `read_scope_key` + serde (`unwrap_or_default`,
   so a dead scope reads as `T::default()` — `get`/`update` therefore
   require `T: Default`, `set` does not).
-- `#[component]`/`#[store]` share three macro helpers
-  (`field_handles_tokens`, `interior_mut_rejection`,
-  `reserved_name_rejection`); both rejections early-return a single
-  `compile_error!` (trybuild-pinned).
+- `#[component]`/`#[store]` share two macro helpers
+  (`field_handles_tokens` — the struct + ext trait — and
+  `interior_mut_rejection`, which early-returns a single
+  `compile_error!`, trybuild-pinned). There is **no** reserved-name
+  check: the `.fields()` struct hop removes the collision surface, so
+  no list to maintain.
 - The `&self`-skip is **runtime-gated, not arm-emitted**: the macro
   partitions handlers by receiver into `HandlerDispatch::
   is_readonly_handler`, `#[component]`/`#[store]` delegate it onto
