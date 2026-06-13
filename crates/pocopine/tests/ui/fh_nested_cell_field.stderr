@@ -1,0 +1,5 @@
+error: RFC-097: field `guard` reaches interior-mutability type `Cell`. Component/store fields must be plain value-semantics data — interior mutability would let a `&self` handler mutate state, breaking the no-sweep optimisation. Move the cell out of component state (e.g. a `thread_local!` keyed by `ScopeId`).
+  --> tests/ui/fh_nested_cell_field.rs:14:12
+   |
+14 |     guard: Option<std::cell::Cell<u32>>,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

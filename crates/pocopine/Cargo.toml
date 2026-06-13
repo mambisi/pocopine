@@ -44,7 +44,6 @@ phf = { version = "0.13", features = ["macros"] }
 pocopine-server = { path = "../pocopine-server" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
-trybuild = "1"
 tower = { version = "0.5", features = ["util"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
@@ -69,6 +68,10 @@ web-sys = { version = "0.3", features = [
 # Host-only — the wasm32 test build can't reach Docker, and tokio's
 # `rt-multi-thread` feature is incompatible with the wasm target.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# trybuild shells out to cargo (std::process::Command) and reads files
+# — host-only; the RFC-097 compile-fail driver (field_handles_ui.rs) is
+# gated to non-wasm to match.
+trybuild = "1"
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["redis"] }
 redis = { version = "0.27", features = ["tokio-comp"] }

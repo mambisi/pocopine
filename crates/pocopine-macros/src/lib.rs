@@ -1414,27 +1414,61 @@ fn type_path_last_segment(ty: &Type) -> Option<&syn::PathSegment> {
     }
 }
 
-/// RFC-097 §3.3 — outer type constructors that grant interior
-/// mutability. A `#[component]`/`#[store]` field of one of these can be
-/// mutated through `&self`, which would make the `&self`-handlers-skip-
-/// the-sweep optimisation unsound, so the macros reject them. (A type
-/// alias can still smuggle one past this syntactic check — documented
-/// as forfeiting the guarantee, same standing as `#[serde(skip)]`.)
+/// RFC-097 §3.3 — type constructors that grant interior mutability. A
+/// `#[component]`/`#[store]` field that *reaches* one of these (anywhere
+/// in its type tree) can be mutated through `&self`, which would make
+/// the `&self`-handlers-skip-the-sweep optimisation unsound, so the
+/// macros reject them. (A type *alias* can still smuggle one past this
+/// syntactic check — documented as forfeiting the guarantee, same
+/// standing as `#[serde(skip)]`.)
 const INTERIOR_MUT_TYPES: &[&str] = &["Cell", "RefCell", "Mutex", "RwLock", "UnsafeCell"];
 
-/// RFC-097 §3.3 — reject any field whose outer type is an interior-
+/// Recursively search a type tree for an interior-mutability
+/// constructor, returning its name. Walks generic arguments
+/// (`Vec<Cell<_>>`, `Option<RefCell<_>>`, `Rc<RefCell<_>>`, …) and
+/// tuple/array/slice/reference element types — NOT just the outermost
+/// constructor — so a cell nested under any wrapper is still caught.
+fn find_interior_mut(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Path(tp) if tp.qself.is_none() => {
+            let seg = tp.path.segments.last()?;
+            let name = seg.ident.to_string();
+            if INTERIOR_MUT_TYPES.contains(&name.as_str()) {
+                return Some(name);
+            }
+            if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                for arg in &args.args {
+                    if let syn::GenericArgument::Type(inner) = arg {
+                        if let Some(found) = find_interior_mut(inner) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        Type::Tuple(t) => t.elems.iter().find_map(find_interior_mut),
+        Type::Array(a) => find_interior_mut(&a.elem),
+        Type::Slice(s) => find_interior_mut(&s.elem),
+        Type::Reference(r) => find_interior_mut(&r.elem),
+        Type::Group(g) => find_interior_mut(&g.elem),
+        Type::Paren(p) => find_interior_mut(&p.elem),
+        _ => None,
+    }
+}
+
+/// RFC-097 §3.3 — reject any field whose type reaches an interior-
 /// mutability constructor. Returns `Some(compile_error tokens)` on the
-/// first offending field.
+/// first offending field. Checks EVERY field (a non-path field type
+/// such as a tuple is skipped, not treated as end-of-scan).
 fn interior_mut_rejection(
     field_idents: &[syn::Ident],
     field_types: &[Type],
 ) -> Option<TokenStream2> {
     for (ident, ty) in field_idents.iter().zip(field_types.iter()) {
-        let seg = type_path_last_segment(ty)?;
-        let name = seg.ident.to_string();
-        if INTERIOR_MUT_TYPES.contains(&name.as_str()) {
+        if let Some(name) = find_interior_mut(ty) {
             let msg = format!(
-                "RFC-097: field `{ident}` has interior-mutability type `{name}`. Component/store \
+                "RFC-097: field `{ident}` reaches interior-mutability type `{name}`. Component/store \
                  fields must be plain value-semantics data — interior mutability would let a \
                  `&self` handler mutate state, breaking the no-sweep optimisation. Move the cell \
                  out of component state (e.g. a `thread_local!` keyed by `ScopeId`)."
@@ -2009,10 +2043,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     {
                         is_serde_skip = true;
                     }
-                    // Consume any `= value` (rename/with/…) so nested-meta
-                    // parsing of other serde keys doesn't error.
+                    // Consume any `= value` (rename/with/…) OR a `(…)`
+                    // group (`rename(serialize=…, deserialize=…)`) so
+                    // parsing later serde keys in the same attr doesn't
+                    // error and silently drop a trailing `skip`.
                     if meta.input.peek(Token![=]) {
                         let _ = meta.value().and_then(|v| v.parse::<Expr>());
+                    } else if meta.input.peek(syn::token::Paren) {
+                        let _ = meta.parse_nested_meta(|_| Ok(()));
                     }
                     Ok(())
                 });
@@ -4301,6 +4339,8 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                         if meta.input.peek(Token![=]) {
                             let _ = meta.value().and_then(|v| v.parse::<Expr>());
+                        } else if meta.input.peek(syn::token::Paren) {
+                            let _ = meta.parse_nested_meta(|_| Ok(()));
                         }
                         Ok(())
                     });

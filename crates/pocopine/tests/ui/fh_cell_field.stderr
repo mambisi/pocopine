@@ -1,4 +1,4 @@
-error: RFC-097: field `count` has interior-mutability type `Cell`. Component/store fields must be plain value-semantics data — interior mutability would let a `&self` handler mutate state, breaking the no-sweep optimisation. Move the cell out of component state (e.g. a `thread_local!` keyed by `ScopeId`).
+error: RFC-097: field `count` reaches interior-mutability type `Cell`. Component/store fields must be plain value-semantics data — interior mutability would let a `&self` handler mutate state, breaking the no-sweep optimisation. Move the cell out of component state (e.g. a `thread_local!` keyed by `ScopeId`).
   --> tests/ui/fh_cell_field.rs:10:12
    |
 10 |     count: std::cell::Cell<u32>,
