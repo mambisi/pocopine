@@ -9413,6 +9413,7 @@ dependencies = [
  "pine-motion",
  "pine-ui",
  "pocopine",
+ "pocopine-crypto",
  "pocopine-logging",
  "pocopine-server",
  "pulldown-cmark",
