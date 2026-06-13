@@ -1422,24 +1422,6 @@ fn type_path_last_segment(ty: &Type) -> Option<&syn::PathSegment> {
 /// as forfeiting the guarantee, same standing as `#[serde(skip)]`.)
 const INTERIOR_MUT_TYPES: &[&str] = &["Cell", "RefCell", "Mutex", "RwLock", "UnsafeCell"];
 
-/// RFC-097 §3.2 — `Handle<T>`'s inherent method names. A field whose
-/// generated accessor would collide with one of these is rejected: the
-/// inherent method wins method resolution, so the accessor would
-/// silently never be called. Kept in sync with the inherent surface by
-/// a parity test in `pocopine-core` (the "W2c lesson applied to
-/// ourselves" — the list must not drift).
-const FIELD_HANDLE_RESERVED: &[&str] = &[
-    "new",
-    "with",
-    "update",
-    "borrow",
-    "borrow_mut",
-    "try_borrow_mut",
-    "scope_id",
-    "watch_field",
-    "observe",
-];
-
 /// RFC-097 §3.3 — reject any field whose outer type is an interior-
 /// mutability constructor. Returns `Some(compile_error tokens)` on the
 /// first offending field.
@@ -1463,40 +1445,24 @@ fn interior_mut_rejection(
     None
 }
 
-/// RFC-097 §3.2 — reject any serde-visible field whose generated
-/// accessor name collides with a `Handle` inherent method (the
-/// inherent method wins resolution, silently shadowing the accessor).
-/// Returns `Some(compile_error)` on the first collision.
-fn reserved_name_rejection(
-    field_idents: &[syn::Ident],
-    field_names: &[String],
-    field_is_serde_skip: &[bool],
-) -> Option<TokenStream2> {
-    for ((ident, name), skip) in field_idents
-        .iter()
-        .zip(field_names.iter())
-        .zip(field_is_serde_skip.iter())
-    {
-        if *skip {
-            continue;
-        }
-        if FIELD_HANDLE_RESERVED.contains(&name.as_str()) {
-            let msg = format!(
-                "RFC-097: field `{name}` collides with the inherent `Handle::{name}` method, so \
-                 the generated field accessor `Handle::{name}()` would be silently unreachable \
-                 (the inherent method wins resolution). Rename the field."
-            );
-            return Some(syn::Error::new_spanned(ident, msg).to_compile_error());
-        }
-    }
-    None
-}
-
-/// RFC-097 §3.2 — emit the `<Name>Fields` extension trait + its
-/// `impl … for Handle<Name>`, one `FieldHandle<FieldTy>` accessor per
-/// serde-visible field. Shared by `#[component]` and `#[store]`.
-/// Reserved-name collisions are rejected up front by
-/// [`reserved_name_rejection`], so every field here is emittable.
+/// RFC-097 §3.2 — emit the field-projection surface for a component/
+/// store:
+///
+/// * a `<Name>Fields` struct whose **public fields are the typed
+///   [`FieldHandle`]s**, one per serde-visible field;
+/// * a `<Name>FieldsExt` trait with a single `fn fields(&self) ->
+///   <Name>Fields`, impl'd for `Handle<Name>`.
+///
+/// Reached as `this::<Name>().fields().<field>.set(v)`. Because the
+/// handles live as fields on a *dedicated* struct (not methods on
+/// `Handle`), accessor names share no namespace with `Handle`'s
+/// inherent methods — a field named `update`/`with`/`scope_id` is
+/// fine, so there is **no reserved-name list to maintain** (a proc
+/// macro can't introspect `Handle`'s methods, so any such list would
+/// have to be hand-maintained — the very thing we avoid). The only
+/// name we add to `Handle` is `fields`, which we own and which can't
+/// collide with a field accessor (different receiver type). Shared by
+/// `#[component]` and `#[store]`.
 fn field_handles_tokens(
     struct_ident: &syn::Ident,
     ident_str: &str,
@@ -1505,9 +1471,10 @@ fn field_handles_tokens(
     field_types: &[Type],
     field_is_serde_skip: &[bool],
 ) -> TokenStream2 {
-    let trait_ident = proc_macro2::Ident::new(&format!("{ident_str}Fields"), struct_ident.span());
-    let mut trait_methods: Vec<TokenStream2> = Vec::new();
-    let mut impl_methods: Vec<TokenStream2> = Vec::new();
+    let fields_struct = proc_macro2::Ident::new(&format!("{ident_str}Fields"), struct_ident.span());
+    let ext_trait = proc_macro2::Ident::new(&format!("{ident_str}FieldsExt"), struct_ident.span());
+    let mut struct_fields: Vec<TokenStream2> = Vec::new();
+    let mut inits: Vec<TokenStream2> = Vec::new();
     for (((ident, name), ty), skip) in field_idents
         .iter()
         .zip(field_names.iter())
@@ -1518,32 +1485,40 @@ fn field_handles_tokens(
             continue;
         }
         let name_lit = proc_macro2::Literal::string(name);
-        let doc = format!("Field handle for `{name}` — single-field reactive writes (no sweep).");
-        trait_methods.push(quote! {
+        let doc =
+            format!("Handle to the `{name}` field — single-field reactive writes (no sweep).");
+        struct_fields.push(quote! {
             #[doc = #doc]
-            fn #ident(&self) -> ::pocopine::__private::FieldHandle<#ty>;
+            pub #ident: ::pocopine::__private::FieldHandle<#ty>,
         });
-        impl_methods.push(quote! {
-            fn #ident(&self) -> ::pocopine::__private::FieldHandle<#ty> {
-                ::pocopine::__private::FieldHandle::__new(
-                    ::pocopine::Handle::scope_id(self),
-                    #name_lit,
-                )
-            }
+        inits.push(quote! {
+            #ident: ::pocopine::__private::FieldHandle::__new(__poc_sid, #name_lit),
         });
     }
-    let trait_doc = format!(
-        "RFC-097 field handles for [`{ident_str}`]. Bring into scope (`use …::{trait_ident};`) to \
-         call `this::<{ident_str}>().<field>()` → `FieldHandle<_>` for single-field reactive \
-         writes from async tasks. One accessor per serde-visible field."
+    let struct_doc = format!(
+        "RFC-097 field handles for [`{ident_str}`]. Obtain via \
+         `this::<{ident_str}>().fields()` (or `store::<{ident_str}>().fields()`); each public \
+         field is a `FieldHandle<_>` for single-field reactive writes from async tasks."
     );
     quote! {
-        #[doc = #trait_doc]
-        pub trait #trait_ident {
-            #(#trait_methods)*
+        #[doc = #struct_doc]
+        #[derive(Clone, Copy)]
+        pub struct #fields_struct {
+            #(#struct_fields)*
         }
-        impl #trait_ident for ::pocopine::Handle<#struct_ident> {
-            #(#impl_methods)*
+
+        /// RFC-097 — brings `Handle::fields()` into scope for this type.
+        pub trait #ext_trait {
+            /// Typed single-field handles for this scope's fields.
+            fn fields(&self) -> #fields_struct;
+        }
+        impl #ext_trait for ::pocopine::Handle<#struct_ident> {
+            fn fields(&self) -> #fields_struct {
+                let __poc_sid = ::pocopine::Handle::scope_id(self);
+                #fields_struct {
+                    #(#inits)*
+                }
+            }
         }
     }
 }
@@ -2071,11 +2046,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // RFC-097 §3.3 — reject interior-mutability field types up front so
     // the `&self`-skips-the-sweep optimisation stays sound.
     if let Some(err) = interior_mut_rejection(&field_idents, &field_types) {
-        return quote! { #input #err }.into();
-    }
-    // RFC-097 §3.2 — reject field names that would shadow a `Handle`
-    // inherent method (the generated accessor would be unreachable).
-    if let Some(err) = reserved_name_rejection(&field_idents, &field_names, &field_is_serde_skip) {
         return quote! { #input #err }.into();
     }
 
@@ -4340,9 +4310,6 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
     if let Some(err) = interior_mut_rejection(&field_idents, &field_types) {
-        return quote! { #input #err }.into();
-    }
-    if let Some(err) = reserved_name_rejection(&field_idents, &field_names, &field_is_serde_skip) {
         return quote! { #input #err }.into();
     }
 

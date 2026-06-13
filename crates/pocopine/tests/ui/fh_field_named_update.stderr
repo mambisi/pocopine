@@ -1,5 +1,0 @@
-error: RFC-097: field `update` collides with the inherent `Handle::update` method, so the generated field accessor `Handle::update()` would be silently unreachable (the inherent method wins resolution). Rename the field.
-  --> tests/ui/fh_field_named_update.rs:10:5
-   |
-10 |     update: u32,
-   |     ^^^^^^
