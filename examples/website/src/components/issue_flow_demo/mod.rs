@@ -110,12 +110,22 @@ impl IssueFlowDemo {
         // Simulate live sync — the server pushes new issues to every
         // client. `server_push` no-ops until the "live" step is on
         // screen; when it does push, spin the badge briefly.
+        //
+        // The 900ms badge-reset uses a `Debounced` slot, NOT
+        // `after_scoped`: a timer callback fires with no current
+        // scope, so the `on_scope_unmount` inside `after_scoped`
+        // would panic ("called outside a handler / lifecycle
+        // context"). The (unscoped) `Debounced` keeps its own closure
+        // alive to fire, cancels any prior pending reset on each push,
+        // and — captured by the scope-bound interval's closure —
+        // cancels any in-flight reset when it drops at unmount.
         let handle = this::<Self>();
+        let sync_reset = pocopine::timers::Debounced::new();
         pocopine::timers::every_scoped(3200, move || {
             if handle.update(|c| c.server_push()) {
                 handle.update(|c| c.syncing = true);
                 let h = handle.clone();
-                pocopine::timers::after_scoped(900, move || h.update(|c| c.syncing = false));
+                sync_reset.schedule(900, move || h.update(|c| c.syncing = false));
             }
         });
     }
