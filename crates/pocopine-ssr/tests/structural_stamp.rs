@@ -218,3 +218,50 @@ fn for_resolves_index_loop_local() {
     assert!(body.contains("<li>1</li>"), "index 1: {body}");
     assert!(body.contains("<li>2</li>"), "index 2: {body}");
 }
+
+// ─── RFC-099 Phase 4 — recursive child-component SSR ────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-kid",
+    template_inline = r#"<span class="kid" pp-text="caption"></span>"#
+)]
+struct SsrKid {
+    #[prop]
+    caption: String,
+}
+#[handlers]
+impl SsrKid {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-host",
+    template_inline = r#"<div class="host"><ssr-kid caption="hello"></ssr-kid></div>"#
+)]
+struct SsrHost {}
+#[handlers]
+impl SsrHost {}
+
+#[test]
+fn recursive_child_ssr_renders_child_into_host_with_island() {
+    SsrKid::register();
+    SsrHost::register();
+    let body = render_to_string(&SsrHost::default()).unwrap().body;
+
+    // The <ssr-kid> host tag is still present, now containing the
+    // recursively-rendered child root (with its prop stamped) + the
+    // child's own data-pp-state island.
+    assert!(body.contains("<ssr-kid"), "host tag present: {body}");
+    assert!(
+        body.contains(r#"data-pp-scope-id="ssr-kid""#),
+        "child root carries its scope id: {body}"
+    );
+    assert!(
+        body.contains(">hello</span>"),
+        "child prop rendered: {body}"
+    );
+    assert!(
+        body.contains("data-pp-state") && body.contains(r#""caption":"hello""#),
+        "child state island present: {body}"
+    );
+}

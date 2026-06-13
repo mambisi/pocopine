@@ -56,7 +56,8 @@ use html5ever::{
 };
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use pocopine_core::directives::for_plan::{
-    BindingKind, StaticBinding, StaticCondPlan, StaticForPlan, StaticInterp, StaticMatchPlan,
+    BindingKind, StaticBinding, StaticChildMount, StaticCondPlan, StaticForPlan, StaticInterp,
+    StaticMatchPlan,
 };
 use pocopine_core::directives::interp::PlannedSegment;
 use pocopine_core::templates::template_for;
@@ -130,6 +131,7 @@ fn stamp_fragment(
 ) -> Option<Handle> {
     let root = parse_root(html, keep)?;
     apply_flat(&root, plan.bindings, plan.interps, state, keep);
+    expand_child_mounts(&root, plan, state, keep);
     expand_structural(&root, plan, state, keep);
     Some(root)
 }
@@ -704,6 +706,123 @@ fn replace_template_chain(tpl: &Handle, consumed_count: u16, new_nodes: Vec<Hand
         n.parent.set(Some(Rc::downgrade(&parent)));
     }
     children.splice(start..=end, new_nodes);
+}
+
+// ─── child components (recursive SSR) ──────────────────────────────
+
+/// Recursively render each child-component mount site in `plan` whose
+/// content is server-renderable (no parent-authored slots — slots stay
+/// client-materialized for now: their fragments are wasm-only `fn`s).
+/// For each: build the child's state from its host attributes (static
+/// props) + the parent-scope `:prop` binds, look up the child's cleaned
+/// HTML + plan, stamp it recursively INTO the host tag (mirroring
+/// mount's `host.innerHTML = template`), and append the child's own
+/// `data-pp-state` island so the client can claim it.
+fn expand_child_mounts(
+    root: &Handle,
+    plan: &StaticTemplatePlan,
+    parent_state: &Value,
+    keep: &mut Vec<RcDom>,
+) {
+    for cm in plan.child_mounts {
+        if !cm.slots.is_empty() {
+            continue;
+        }
+        let Some(host) = walk_element_path(root, cm.node_path) else {
+            continue;
+        };
+        let (Some(child_html), Some(child_plan)) =
+            (template_for(cm.tag), template_plan_for(cm.tag))
+        else {
+            continue;
+        };
+        let child_state = child_state_value(&host, cm, parent_state);
+        let Some(child_root) = stamp_fragment(&child_html, child_plan, &child_state, keep) else {
+            continue;
+        };
+        let island = state_island_node(&child_state);
+        child_root.parent.set(Some(Rc::downgrade(&host)));
+        island.parent.set(Some(Rc::downgrade(&host)));
+        *host.children.borrow_mut() = vec![child_root, island];
+    }
+}
+
+/// Build a child component's render state: static props from the host
+/// element's plain attributes (kebab→snake, coerced) overlaid with the
+/// parent-scope `:prop` / `pp-bind:prop` binds (evaluated against the
+/// parent state). Own `#[state]` fields default to absent (the binding
+/// evaluators read them as null) — host-side default-state execution is
+/// a later layer.
+fn child_state_value(host: &Handle, cm: &StaticChildMount, parent_state: &Value) -> Value {
+    let mut props = serde_json::Map::new();
+    if let NodeData::Element { attrs, .. } = &host.data {
+        for a in attrs.borrow().iter() {
+            let name = a.name.local.as_ref();
+            if name.starts_with("pp-") || name.starts_with("data-pp-") || name.starts_with("__pp") {
+                continue;
+            }
+            props.insert(prop_field(name), coerce_attr(&a.value));
+        }
+    }
+    for b in cm.bindings {
+        props.insert(prop_field(b.arg), eval_src(b.expr_src, parent_state));
+    }
+    Value::Object(props)
+}
+
+/// kebab-case attribute → snake_case field (mirrors `normalize_prop_name`).
+fn prop_field(name: &str) -> String {
+    name.replace('-', "_")
+}
+
+/// Coerce a static HTML attribute string to a JSON value: bool / number
+/// literals parse, everything else stays a string. (Loosely mirrors
+/// `coerce_attr_value`'s Auto kind — host-side we lack the per-prop
+/// declared kind, so a `String` prop whose value is literally `"true"`
+/// would coerce to a bool; rare, documented.)
+fn coerce_attr(raw: &str) -> Value {
+    match raw {
+        "true" => Value::Bool(true),
+        "false" => Value::Bool(false),
+        _ => raw
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(raw.to_string())),
+    }
+}
+
+/// `<script type="application/json" data-pp-state>JSON</script>` element
+/// node carrying the (script-safe) state for a server-rendered child
+/// root, so the client's `hydrate_root` can claim it.
+fn state_island_node(state: &Value) -> Handle {
+    let script = element_node(
+        "script",
+        &[("type", "application/json"), ("data-pp-state", "")],
+    );
+    let text = text_node(&script_safe_json(state));
+    text.parent.set(Some(Rc::downgrade(&script)));
+    *script.children.borrow_mut() = vec![text];
+    script
+}
+
+/// Create an html5ever element node with the given local name + attrs.
+fn element_node(name: &str, attrs: &[(&str, &str)]) -> Handle {
+    Node::new(NodeData::Element {
+        name: QualName::new(None, ns!(html), LocalName::from(name)),
+        attrs: RefCell::new(
+            attrs
+                .iter()
+                .map(|(n, v)| Attribute {
+                    name: attr_qual(n),
+                    value: StrTendril::from(*v),
+                })
+                .collect(),
+        ),
+        template_contents: RefCell::new(None),
+        mathml_annotation_xml_integration_point: false,
+    })
 }
 
 // ─── attribute helpers ─────────────────────────────────────────────
