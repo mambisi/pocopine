@@ -31,6 +31,8 @@ const SCHEME: &str = "pocopine";
 /// event loop until the last window closes. Called via the
 /// [`crate::run!`] macro.
 pub fn run(app: NativeApp, context: tauri::Context<tauri::Wry>) -> tauri::Result<()> {
+    apply_linux_webview_workarounds();
+
     let NativeAppParts {
         title,
         inner_size,
@@ -105,3 +107,19 @@ fn service_unavailable() -> http::Response<Cow<'static, [u8]>> {
         .body(Cow::Owned(b"native router not ready".to_vec()))
         .expect("static 503 response is well-formed")
 }
+
+/// Disable WebKitGTK's DMABUF renderer, which SIGSEGVs on many Linux
+/// setups with NVIDIA / hybrid GPUs under Wayland (WebKitGTK 2.4x+). The
+/// fallback compositing path is correct, just slightly slower, so this is
+/// safe to default on. Set only when the user hasn't chosen explicitly —
+/// `WEBKIT_DISABLE_DMABUF_RENDERER=0` re-enables it. Runs at the top of
+/// `run`, before any GTK/WebKit thread starts, so the `set_var` is sound.
+#[cfg(target_os = "linux")]
+fn apply_linux_webview_workarounds() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_linux_webview_workarounds() {}
