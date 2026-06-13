@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -69,6 +70,30 @@ pub struct NativeConfig {
     pub features: Vec<String>,
     /// Window title used when scaffolding. Defaults to the crate name.
     pub title: Option<String>,
+    /// Named build channels (RFC-104). A channel selects where the app's
+    /// `#[server]` calls go:
+    ///
+    /// * a channel with **no `backend`** → **standalone**: the functions
+    ///   run in-process (the default when no channel is selected);
+    /// * a channel with **`backend = "<url>"`** → **server**: the native
+    ///   shell forwards `#[server]` calls to that deployed pocopine
+    ///   server.
+    ///
+    /// Selected with `pocopine native dev|build --channel <name>`.
+    #[serde(default)]
+    pub channels: BTreeMap<String, NativeChannel>,
+    /// Channel used when `--channel` is omitted. Unset → standalone.
+    pub default_channel: Option<String>,
+}
+
+/// A `[package.metadata.pocopine.native.channels.<name>]` entry.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct NativeChannel {
+    /// Deployed pocopine server URL this channel targets. Absent → this
+    /// channel is standalone (in-process). Trailing slashes are trimmed
+    /// when the URL is used.
+    pub backend: Option<String>,
 }
 
 impl Default for NativeConfig {
@@ -78,6 +103,8 @@ impl Default for NativeConfig {
             bin: None,
             features: Vec::new(),
             title: None,
+            channels: BTreeMap::new(),
+            default_channel: None,
         }
     }
 }

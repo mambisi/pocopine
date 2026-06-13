@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
 use crate::args::{NativeArgs, NativeBuildArgs, NativeCmd, NativeDevArgs};
@@ -31,6 +31,11 @@ use crate::{build, client_modules, stylekit, tailwind};
 /// does not depend on the native crate, so the string is duplicated here
 /// deliberately.
 const DEV_DIR_ENV: &str = "POCOPINE_NATIVE_DEV_DIR";
+
+/// Environment variable carrying the selected channel's server backend
+/// URL. When set, the native shell forwards `#[server]` calls there
+/// (RFC-104 "server" channel); unset → standalone (in-process).
+const BACKEND_ENV: &str = "POCOPINE_NATIVE_BACKEND";
 
 pub fn run(args: NativeArgs) -> Result<()> {
     let project = args
@@ -58,9 +63,17 @@ fn dev(
     args: &NativeDevArgs,
 ) -> Result<()> {
     ensure_src_tauri(project, native)?;
+    let backend = resolve_backend(native, args.channel.as_deref(), args.backend.as_deref())?;
     wasm_and_css(project, cfg, args.release, args.stylekit, args.no_stylekit)?;
     let src_tauri = project.join(&native.src_tauri);
-    cargo_drive(&src_tauri, native, "run", args.release, Some(project))
+    cargo_drive(
+        &src_tauri,
+        native,
+        "run",
+        args.release,
+        Some(project),
+        backend.as_deref(),
+    )
 }
 
 fn build_native(
@@ -70,12 +83,13 @@ fn build_native(
     args: &NativeBuildArgs,
 ) -> Result<()> {
     ensure_src_tauri(project, native)?;
+    let backend = resolve_backend(native, args.channel.as_deref(), args.backend.as_deref())?;
     let release = !args.debug;
     wasm_and_css(project, cfg, release, args.stylekit, args.no_stylekit)?;
     let src_tauri = project.join(&native.src_tauri);
 
     if !args.no_bundle && tauri_cli_available() {
-        tauri_cli_build(&src_tauri, native, release)
+        tauri_cli_build(&src_tauri, native, release, backend.as_deref())
     } else {
         if !args.no_bundle {
             println!(
@@ -83,8 +97,46 @@ fn build_native(
                  Install it with `cargo install tauri-cli` to produce installers."
             );
         }
-        cargo_drive(&src_tauri, native, "build", release, None)
+        cargo_drive(
+            &src_tauri,
+            native,
+            "build",
+            release,
+            None,
+            backend.as_deref(),
+        )
     }
+}
+
+/// Resolve the server backend URL for this run: the `--backend` override
+/// wins; otherwise the selected (or `default-channel`) channel's
+/// `backend`; otherwise `None` (standalone, in-process). Errors if a
+/// named channel doesn't exist.
+fn resolve_backend(
+    native: &NativeConfig,
+    channel: Option<&str>,
+    backend_override: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(url) = backend_override {
+        return Ok(Some(normalize_backend(url)));
+    }
+    let Some(name) = channel.or(native.default_channel.as_deref()) else {
+        return Ok(None);
+    };
+    let channel = native.channels.get(name).ok_or_else(|| {
+        let known: Vec<&str> = native.channels.keys().map(String::as_str).collect();
+        let known = if known.is_empty() {
+            "(none defined)".to_string()
+        } else {
+            known.join(", ")
+        };
+        anyhow!("unknown native channel `{name}`. Defined channels: {known}")
+    })?;
+    Ok(channel.backend.as_deref().map(normalize_backend))
+}
+
+fn normalize_backend(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
 }
 
 /// Build the wasm bundle and CSS — the same stages `pocopine build` runs.
@@ -115,6 +167,7 @@ fn cargo_drive(
     subcommand: &str,
     release: bool,
     dev_dir: Option<&Path>,
+    backend: Option<&str>,
 ) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg(subcommand);
@@ -131,13 +184,20 @@ fn cargo_drive(
     if let Some(dir) = dev_dir {
         cmd.env(DEV_DIR_ENV, dir);
     }
+    if let Some(url) = backend {
+        cmd.env(BACKEND_ENV, url);
+    }
 
     let verb = if dev_dir.is_some() {
         "running"
     } else {
         "building"
     };
-    println!("▶ {verb} native host crate ({})", src_tauri.display());
+    println!(
+        "▶ {verb} native host crate ({}, {})",
+        src_tauri.display(),
+        backend_label(backend),
+    );
     let status = cmd.status().with_context(|| {
         "failed to invoke cargo for the native host crate (is the Rust toolchain installed?)"
     })?;
@@ -147,7 +207,12 @@ fn cargo_drive(
     Ok(())
 }
 
-fn tauri_cli_build(src_tauri: &Path, native: &NativeConfig, release: bool) -> Result<()> {
+fn tauri_cli_build(
+    src_tauri: &Path,
+    native: &NativeConfig,
+    release: bool,
+    backend: Option<&str>,
+) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("tauri").arg("build");
     if !release {
@@ -157,8 +222,15 @@ fn tauri_cli_build(src_tauri: &Path, native: &NativeConfig, release: bool) -> Re
         cmd.arg("--features").arg(native.features.join(","));
     }
     cmd.current_dir(src_tauri);
+    if let Some(url) = backend {
+        cmd.env(BACKEND_ENV, url);
+    }
 
-    println!("▶ cargo tauri build ({})", src_tauri.display());
+    println!(
+        "▶ cargo tauri build ({}, {})",
+        src_tauri.display(),
+        backend_label(backend),
+    );
     let status = cmd
         .status()
         .context("failed to invoke `cargo tauri build`")?;
@@ -166,6 +238,14 @@ fn tauri_cli_build(src_tauri: &Path, native: &NativeConfig, release: bool) -> Re
         bail!("`cargo tauri build` failed with {status}");
     }
     Ok(())
+}
+
+/// Human-readable channel mode for build logs.
+fn backend_label(backend: Option<&str>) -> String {
+    match backend {
+        Some(url) => format!("server → {url}"),
+        None => "standalone".to_string(),
+    }
 }
 
 fn tauri_cli_available() -> bool {
@@ -418,6 +498,81 @@ mod tests {
             again.is_empty(),
             "scaffold must not overwrite existing files"
         );
+    }
+
+    fn channel(backend: Option<&str>) -> config::NativeChannel {
+        config::NativeChannel {
+            backend: backend.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn resolve_backend_is_standalone_by_default() {
+        let native = NativeConfig::default();
+        assert_eq!(resolve_backend(&native, None, None).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_backend_uses_named_channel_and_trims_slash() {
+        let mut native = NativeConfig::default();
+        native
+            .channels
+            .insert("server".into(), channel(Some("https://api.example.com/")));
+        assert_eq!(
+            resolve_backend(&native, Some("server"), None)
+                .unwrap()
+                .as_deref(),
+            Some("https://api.example.com"),
+        );
+    }
+
+    #[test]
+    fn resolve_backend_falls_back_to_default_channel() {
+        let mut channels = std::collections::BTreeMap::new();
+        channels.insert(
+            "server".to_string(),
+            channel(Some("https://api.example.com")),
+        );
+        let native = NativeConfig {
+            channels,
+            default_channel: Some("server".into()),
+            ..NativeConfig::default()
+        };
+        assert_eq!(
+            resolve_backend(&native, None, None).unwrap().as_deref(),
+            Some("https://api.example.com"),
+        );
+    }
+
+    #[test]
+    fn resolve_backend_override_beats_channel() {
+        let mut native = NativeConfig::default();
+        native
+            .channels
+            .insert("server".into(), channel(Some("https://api.example.com")));
+        assert_eq!(
+            resolve_backend(&native, Some("server"), Some("http://localhost:3024/"))
+                .unwrap()
+                .as_deref(),
+            Some("http://localhost:3024"),
+        );
+    }
+
+    #[test]
+    fn resolve_backend_channel_without_url_is_standalone() {
+        let mut native = NativeConfig::default();
+        native.channels.insert("offline".into(), channel(None));
+        assert_eq!(
+            resolve_backend(&native, Some("offline"), None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_backend_unknown_channel_errors() {
+        let native = NativeConfig::default();
+        let err = resolve_backend(&native, Some("nope"), None).unwrap_err();
+        assert!(err.to_string().contains("unknown native channel `nope`"));
     }
 
     #[test]

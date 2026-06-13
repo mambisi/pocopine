@@ -7224,6 +7224,7 @@ dependencies = [
  "http 1.4.0",
  "pocopine-native",
  "pocopine-server",
+ "reqwest 0.12.28",
  "tauri",
  "tracing",
 ]
