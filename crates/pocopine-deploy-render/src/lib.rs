@@ -27,8 +27,8 @@ use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use pocopine_deploy::DeployState;
 use pocopine_deploy::{
-    common, AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint,
-    Mode, ProcessStatus, StagedFiles,
+    AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint, Mode,
+    ProcessStatus, StagedFiles, common,
 };
 use serde::Deserialize;
 
@@ -343,12 +343,15 @@ impl DeployAdapter for RenderAdapter {
                     // in place. Refuse with a clear next step so we
                     // don't silently deploy a worker into a web slot.
                     if let Some(t) = s.service_type.as_deref()
-                        && t != desired_type {
-                            anyhow::bail!(
-                                "render service `{}` exists as `{}` but the spec now requires `{}`. Delete the service via the Render dashboard and rerun the deploy.",
-                                service_name, t, desired_type,
-                            );
-                        }
+                        && t != desired_type
+                    {
+                        anyhow::bail!(
+                            "render service `{}` exists as `{}` but the spec now requires `{}`. Delete the service via the Render dashboard and rerun the deploy.",
+                            service_name,
+                            t,
+                            desired_type,
+                        );
+                    }
                     client.update_service_image(
                         &s.id,
                         tag,
@@ -594,9 +597,10 @@ fn load_render_token() -> Result<String> {
         return Ok(t);
     }
     if let Ok(t) = std::env::var("RENDER_API_KEY")
-        && !t.is_empty() {
-            return Ok(t);
-        }
+        && !t.is_empty()
+    {
+        return Ok(t);
+    }
     anyhow::bail!(
         "render: no API token. Run `pocopine deploy auth render`, or export $POCOPINE_RENDER_TOKEN or $RENDER_API_KEY.",
     )
@@ -824,9 +828,10 @@ mod tests {
         spec.git_remote = Some("https://github.com/acme/myapp.git".into());
 
         let cs = RenderAdapter.detect_constraints(&spec);
-        assert!(!cs
-            .iter()
-            .any(|c| matches!(c, Constraint::Refuse(s) if s.contains("registry"))));
+        assert!(
+            !cs.iter()
+                .any(|c| matches!(c, Constraint::Refuse(s) if s.contains("registry")))
+        );
         assert_eq!(image_tag(&spec), "ghcr.io/acme/test-app:abc1234");
     }
 

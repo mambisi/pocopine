@@ -8,7 +8,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use pocopine_auth::AuthUser;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::builder::CredentialsHandle;
 use crate::error::CredentialsError;

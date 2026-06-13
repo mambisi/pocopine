@@ -21,25 +21,25 @@ mod server;
 pub use error::{SyncError, SyncResult};
 pub use local_memory::MemoryLocalStore;
 pub use local_store::{
-    generate_sync_device_id, LocalChangeBatch, LocalPendingMutation, LocalPushResult,
-    LocalSnapshotBatch, LocalStreamSnapshot, MutationIdGenerator, SyncLocalFuture,
-    SyncLocalIdentity, SyncLocalStore,
+    LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationIdGenerator, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore,
+    generate_sync_device_id,
 };
 pub use protocol::{
-    default_schema_version_one, local_stream_key, stream_params_hash, sync_stream_params_tag,
-    sync_stream_tag, ClientMutation, ClientMutationDraft, MigrationOutcome, MutationId, RowKey,
-    RowVersion, StreamParams, SyncChange, SyncCollectionName, SyncConflict, SyncCursor,
-    SyncDeviceId, SyncOp, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullMode,
-    SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation,
-    SyncRow, SyncSessionId, SyncStreamName, SyncStreamSubscription, MAX_SYNC_TOKEN_LEN,
-    PARAMS_HASH_HEX_LEN, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH,
-    SYNC_PUSH_PATH,
+    ClientMutation, ClientMutationDraft, MAX_SYNC_TOKEN_LEN, MigrationOutcome, MutationId,
+    PARAMS_HASH_HEX_LEN, RowKey, RowVersion, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH,
+    SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH, StreamParams, SyncChange, SyncCollectionName,
+    SyncConflict, SyncCursor, SyncDeviceId, SyncOp, SyncOpenRequest, SyncOpenResponse,
+    SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, SyncRejectedMutation, SyncRow, SyncSessionId, SyncStreamName,
+    SyncStreamSubscription, default_schema_version_one, local_stream_key, stream_params_hash,
+    sync_stream_params_tag, sync_stream_tag,
 };
 pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};
 
 pub use client::{
-    sync_plugin, CollectionSelector, SyncClient, SyncClientPlugin, SyncCollection,
-    SyncLocalStoreHandle,
+    CollectionSelector, SyncClient, SyncClientPlugin, SyncCollection, SyncLocalStoreHandle,
+    sync_plugin,
 };
 pub use pocopine_core::Handle;
 pub use sign_out::SignOutSubscription;
@@ -49,6 +49,6 @@ pub use memory::{MemorySyncState, MemorySyncStream};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    sync_server_plugin, SyncBoxFuture, SyncGuardFuture, SyncServer, SyncServerBuilder,
-    SyncServerPlugin, SyncStreamGuard, SyncStreamSource,
+    SyncBoxFuture, SyncGuardFuture, SyncServer, SyncServerBuilder, SyncServerPlugin,
+    SyncStreamGuard, SyncStreamSource, sync_server_plugin,
 };

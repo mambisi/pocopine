@@ -5,10 +5,10 @@
 //! re-derives content from `:name`.
 
 use pine_charts::{
-    area_legend_items, bar_legend_items, line_legend_items, pie_legend_items,
-    radial_bar_legend_items, scatter_legend_items, ChartAreaSeries, ChartBar, ChartBarSeries,
-    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartRadialBar,
-    ChartScatterSeries, LegendItem,
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLayerPoint, ChartLineSeries, ChartPieSlice,
+    ChartPoint, ChartRadialBar, ChartScatterSeries, LegendItem, area_legend_items,
+    bar_legend_items, line_legend_items, pie_legend_items, radial_bar_legend_items,
+    scatter_legend_items,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -72,8 +72,7 @@ const CHARTS: &[ChartMeta] = &[
         slug: "radial",
         title: "Radial bars",
         tag: "<pine-radial-bar-chart>",
-        blurb:
-            "Concentric rings compare a few metrics against their max — great for KPI readiness.",
+        blurb: "Concentric rings compare a few metrics against their max — great for KPI readiness.",
     },
     ChartMeta {
         slug: "cartesian",

@@ -1,13 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use pocopine::ServerResult;
+use pocopine_server::Server;
 use pocopine_server::axum::{
-    body::{to_bytes, Body},
-    http::{Method, Request},
     Router,
+    body::{Body, to_bytes},
+    http::{Method, Request},
 };
 use pocopine_server::tower::ServiceExt;
-use pocopine_server::Server;
 
 #[pocopine::server(public)]
 async fn auto_echo(value: String) -> ServerResult<String> {

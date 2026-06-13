@@ -125,13 +125,13 @@ impl Spring {
 
     fn solve(&self) -> SpringSolver {
         let initial_delta = 1.0_f64; // we always normalize to origin=0, target=1
-                                     // Motion convention: convert user's units/sec to internal
-                                     // units/ms and negate. Positive user velocity then reads as
-                                     // "faster initial movement toward target", which is what
-                                     // authors expect when handing off drag momentum into a
-                                     // spring. See `motion-dom/src/animation/generators/spring.ts`
-                                     // line ~256 where the same conversion happens before the
-                                     // A-coefficient is built.
+        // Motion convention: convert user's units/sec to internal
+        // units/ms and negate. Positive user velocity then reads as
+        // "faster initial movement toward target", which is what
+        // authors expect when handing off drag momentum into a
+        // spring. See `motion-dom/src/animation/generators/spring.ts`
+        // line ~256 where the same conversion happens before the
+        // A-coefficient is built.
         let initial_velocity = -self.velocity / 1000.0;
         let undamped_angular_freq = (self.stiffness / self.mass).sqrt() / 1000.0;
         let damping_ratio = self.damping / (2.0 * (self.stiffness * self.mass).sqrt());

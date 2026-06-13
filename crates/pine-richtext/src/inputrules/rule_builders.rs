@@ -108,19 +108,20 @@ where
         let mut joined = false;
         let pre_join_doc = tr.doc().clone();
         if let Ok(join_resolved) = pre_join_doc.resolve(range_start)
-            && let Some(before) = join_resolved.node_before() {
-                let allow = join_predicate
-                    .as_ref()
-                    .map(|pred| pred(captures, &before))
-                    .unwrap_or(true);
-                if allow
-                    && before.type_name() == node_type_name
-                    && can_join(tr.doc(), range_start, state.schema())
-                    && tr.join(range_start).is_ok()
-                {
-                    joined = true;
-                }
+            && let Some(before) = join_resolved.node_before()
+        {
+            let allow = join_predicate
+                .as_ref()
+                .map(|pred| pred(captures, &before))
+                .unwrap_or(true);
+            if allow
+                && before.type_name() == node_type_name
+                && can_join(tr.doc(), range_start, state.schema())
+                && tr.join(range_start).is_ok()
+            {
+                joined = true;
             }
+        }
 
         // Place the cursor INSIDE the now-empty wrapped paragraph
         // so the next keystroke types into the new item. We set

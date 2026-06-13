@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use serde::de::DeserializeOwned;
 
-use crate::reactive::{effect, track, EffectId, ScopeId};
-use crate::scope::{current_scope_id, Scope};
+use crate::reactive::{EffectId, ScopeId, effect, track};
+use crate::scope::{Scope, current_scope_id};
 
 /// Watch `source` and call `cb` whenever its value changes.
 ///

@@ -19,18 +19,18 @@ use std::sync::{Arc, Mutex};
 
 use http_body_util::BodyExt;
 use pocopine_auth::RequestContext;
+use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
-use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncResult, SyncServer,
-    SyncStreamName, SYNC_PULL_PATH,
-};
-use pocopine_sync_query::source::{
-    query_from_pull_request, source as build_source, DeleteResult, Source, SourceFuture,
-    SourceStream, WriteResult,
+    SYNC_PULL_PATH, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncResult, SyncServer,
+    SyncStreamName, sync_server_plugin,
 };
 use pocopine_sync_query::Query;
+use pocopine_sync_query::source::{
+    DeleteResult, Source, SourceFuture, SourceStream, WriteResult, query_from_pull_request,
+    source as build_source,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower::ServiceExt;

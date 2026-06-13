@@ -29,15 +29,15 @@ use std::rc::Rc;
 
 use js_sys::{Object, Reflect};
 use smallvec::SmallVec;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
-use web_sys::{console, Element, Event, EventTarget};
+use wasm_bindgen::closure::Closure;
+use web_sys::{Element, Event, EventTarget, console};
 
 use crate::expr::{self, Expr, Spanned};
 use crate::loop_scope::LoopScope;
 use crate::reactive::ScopeId;
-use crate::scope::{with_current_el, Scope};
+use crate::scope::{Scope, with_current_el};
 
 // ─── macro-emitted static shape ─────────────────────────────────
 
@@ -1860,10 +1860,9 @@ fn serialise_class_value(v: &JsValue) -> Option<String> {
             let truthy = Reflect::get(&obj, &k)
                 .map(|val| val.as_bool().unwrap_or(!val.is_falsy()))
                 .unwrap_or(false);
-            if truthy
-                && let Some(s) = k.as_string() {
-                    out.push(s);
-                }
+            if truthy && let Some(s) = k.as_string() {
+                out.push(s);
+            }
         }
         return Some(out.join(" "));
     }

@@ -210,11 +210,10 @@ impl PineDateField {
                 let advanced = segs.type_digit(part, digit as u8);
                 self.part_selected = false;
                 self.commit_segments(&segs);
-                if advanced
-                    && let Some(next) = part.next() {
-                        self.set_active_part(Some(next), true);
-                        self.focus_segment_in_dom(next);
-                    }
+                if advanced && let Some(next) = part.next() {
+                    self.set_active_part(Some(next), true);
+                    self.focus_segment_in_dom(next);
+                }
                 return;
             }
             _ => return,
@@ -317,13 +316,15 @@ impl PineDateField {
             return false;
         };
         if let Some(min) = self.min_value
-            && d < min {
-                return true;
-            }
+            && d < min
+        {
+            return true;
+        }
         if let Some(max) = self.max_value
-            && d > max {
-                return true;
-            }
+            && d > max
+        {
+            return true;
+        }
         false
     }
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::config::TailwindConfig;
 use crate::tools;

@@ -3,10 +3,10 @@ use pocopine::prelude::*;
 use crate::KeepTodo;
 
 use super::{
-    theme::{load_theme_preference, save_theme_preference},
-    view::{format_todo_line, parse_todo_line, KeepEditorData},
-    view_mode::save_view_mode_preference,
     KeepStore, KeepViewMode,
+    theme::{load_theme_preference, save_theme_preference},
+    view::{KeepEditorData, format_todo_line, parse_todo_line},
+    view_mode::save_view_mode_preference,
 };
 
 #[handlers]
@@ -115,9 +115,9 @@ impl KeepStore {
                         .first()
                         .map(|row| row.value.id.clone())
                         .or_else(|| self.other_notes.first().map(|row| row.value.id.clone()))
-                    {
-                        self.open_editor(first);
-                    }
+                {
+                    self.open_editor(first);
+                }
             }
             KeepViewMode::Masonry => {
                 if self.editor_open {

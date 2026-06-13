@@ -15,9 +15,9 @@
 #![cfg(target_arch = "wasm32")]
 
 use pocopine_core::{
-    assert_registry_clean, register_component, register_component_as, register_component_prefixed,
-    registered_component_names, registry_errors, verify_registry, ContextKey, Emit,
-    RegistryErrorKind, Scope,
+    ContextKey, Emit, RegistryErrorKind, Scope, assert_registry_clean, register_component,
+    register_component_as, register_component_prefixed, registered_component_names,
+    registry_errors, verify_registry,
 };
 use wasm_bindgen_test::wasm_bindgen_test;
 

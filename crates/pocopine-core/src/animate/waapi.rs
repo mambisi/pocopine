@@ -19,9 +19,9 @@
 use js_sys::{Array, Object, Reflect};
 use std::borrow::Cow;
 use std::future::Future;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
 use web_sys::Element;
 
 /// One entry in a WAAPI keyframe list — a bundle of CSS property

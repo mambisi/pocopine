@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "wasm32")]
 use {
-    pocopine_core::{current_scope_id, Handle, Scope},
+    pocopine_core::{Handle, Scope, current_scope_id},
     std::{future::Future, rc::Rc},
 };
 
 use crate::LiveClientError;
 
 #[cfg(any(test, target_arch = "wasm32"))]
-use crate::{live_refresh_targets, LiveEvent};
+use crate::{LiveEvent, live_refresh_targets};
 
 /// Reason attached to the most recent query state transition.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

@@ -234,27 +234,29 @@ fn load_string(kind: BrowserStorageKind, key: &str) -> Option<String> {
 #[cfg(target_arch = "wasm32")]
 fn save_string(kind: BrowserStorageKind, key: &str, value: &str) {
     if let Some(storage) = browser_storage(kind)
-        && let Err(err) = storage.set_item(key, value) {
-            tracing::warn!(
-                target: "pocopine.log",
-                key,
-                error = ?err,
-                "failed to write pocopine auth storage"
-            );
-        }
+        && let Err(err) = storage.set_item(key, value)
+    {
+        tracing::warn!(
+            target: "pocopine.log",
+            key,
+            error = ?err,
+            "failed to write pocopine auth storage"
+        );
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn clear_string(kind: BrowserStorageKind, key: &str) {
     if let Some(storage) = browser_storage(kind)
-        && let Err(err) = storage.remove_item(key) {
-            tracing::warn!(
-                target: "pocopine.log",
-                key,
-                error = ?err,
-                "failed to clear pocopine auth storage"
-            );
-        }
+        && let Err(err) = storage.remove_item(key)
+    {
+        tracing::warn!(
+            target: "pocopine.log",
+            key,
+            error = ?err,
+            "failed to clear pocopine auth storage"
+        );
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

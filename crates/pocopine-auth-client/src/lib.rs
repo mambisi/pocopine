@@ -125,18 +125,18 @@ pub mod storage;
 #[cfg(test)]
 mod test_util;
 
-pub use plugin::{auth_plugin, predicate_guard, AuthPluginBuilder, DEFAULT_RETURN_TO_PARAM};
+pub use plugin::{AuthPluginBuilder, DEFAULT_RETURN_TO_PARAM, auth_plugin, predicate_guard};
 pub use refresh::{TokenRefresh, TokenRefreshFuture};
-pub use session::{active_principal, active_session, AuthSession, AuthSessionSnapshot};
+pub use session::{AuthSession, AuthSessionSnapshot, active_principal, active_session};
 pub use storage::{SessionSnapshotStorage, TokenStorage};
 
 use std::cell::Cell;
 use std::sync::Mutex;
 
-use pocopine_core::fetch::{
-    install_middleware, FetchMiddleware, FetchMiddlewareFuture, FetchNext, FetchRequest,
-};
 use pocopine_core::ServerError;
+use pocopine_core::fetch::{
+    FetchMiddleware, FetchMiddlewareFuture, FetchNext, FetchRequest, install_middleware,
+};
 
 /// Process-global bearer token. `Mutex` is portable across host (where
 /// unit tests live) and wasm (where the real runtime is single-threaded
@@ -320,7 +320,7 @@ mod tests {
     use crate::test_util::{block_on, noop_waker, yield_once};
     use pocopine_auth::{AuthUser, Principal};
     use pocopine_core::fetch::{
-        __reset_middleware_chain_for_test, freeze_middleware_chain, FetchResponse,
+        __reset_middleware_chain_for_test, FetchResponse, freeze_middleware_chain,
     };
     use std::cell::RefCell;
     use std::future::Future;

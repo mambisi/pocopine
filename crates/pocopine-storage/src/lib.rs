@@ -20,29 +20,29 @@ mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 mod server;
 
-pub use client::{
-    storage_plugin, upload_plugin, ResumableUpload, ResumableUploadBuilder, StorageClient,
-    StorageClientPlugin, StorageScopeClient, UploadBuilder, UploadClient, UploadClientPlugin,
-    UploadScopeClient,
-};
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 pub use client::{BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport};
+pub use client::{
+    ResumableUpload, ResumableUploadBuilder, StorageClient, StorageClientPlugin,
+    StorageScopeClient, UploadBuilder, UploadClient, UploadClientPlugin, UploadScopeClient,
+    storage_plugin, upload_plugin,
+};
 
 #[cfg(all(target_arch = "wasm32", any(test, feature = "test-utils")))]
 #[doc(hidden)]
 pub use client::{__reset_browser_transport_for_test, __set_browser_transport_for_test};
 pub use error::{StorageError, StorageResult};
 pub use protocol::{
-    plan_parts, AnonymousUploadBinding, BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy,
-    CompleteUpload, CompleteUploadRequest, InitiateUpload, InitiateUploadRequest, MetadataSchema,
-    ObjectChecksum, ObjectMetadata, ObjectOwnerRef, ObjectRef, ObjectVisibility, PartSpec,
-    PrincipalRef, SafeObjectKey, SignedRead, StorageBackendName, StorageKey, StorageResponse,
-    TransferPlan, UploadIntent, UploadPhase, UploadPolicy, UploadPolicyDescriptor, UploadProgress,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, UploadTarget,
-    UploadedPartStatus, UploadedPartView, MAX_STORAGE_TOKEN_LEN, STORAGE_ANON_COOKIE,
-    STORAGE_ENDPOINT_PREFIX, STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX,
-    STORAGE_TUS_ENDPOINT_PREFIX, STORAGE_UPLOADS_PATH, STORAGE_UPLOADS_PREFIX,
+    AnonymousUploadBinding, BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload,
+    CompleteUploadRequest, InitiateUpload, InitiateUploadRequest, MAX_STORAGE_TOKEN_LEN,
+    MetadataSchema, ObjectChecksum, ObjectMetadata, ObjectOwnerRef, ObjectRef, ObjectVisibility,
+    PartSpec, PrincipalRef, STORAGE_ANON_COOKIE, STORAGE_ENDPOINT_PREFIX, STORAGE_PROTOCOL_V1,
+    STORAGE_SCOPES_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX, STORAGE_UPLOADS_PATH,
+    STORAGE_UPLOADS_PREFIX, SafeObjectKey, SignedRead, StorageBackendName, StorageKey,
+    StorageResponse, TransferPlan, UploadIntent, UploadPhase, UploadPolicy, UploadPolicyDescriptor,
+    UploadProgress, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    UploadTarget, UploadedPartStatus, UploadedPartView, plan_parts,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,8 +53,8 @@ pub use memory::MemoryStorageBackend;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    storage_server_plugin, storage_tus_server_plugin, StorageActor, StorageBackend,
-    StorageBoxFuture, StorageContext, StorageGuardFuture, StorageKeyFuture, StorageKeyResolver,
-    StorageScope, StorageScopeBuilder, StorageScopeGuard, StorageServer, StorageServerBuilder,
-    StorageServerPlugin, StorageTusServerPlugin, UploadBody, UploadByteStream,
+    StorageActor, StorageBackend, StorageBoxFuture, StorageContext, StorageGuardFuture,
+    StorageKeyFuture, StorageKeyResolver, StorageScope, StorageScopeBuilder, StorageScopeGuard,
+    StorageServer, StorageServerBuilder, StorageServerPlugin, StorageTusServerPlugin, UploadBody,
+    UploadByteStream, storage_server_plugin, storage_tus_server_plugin,
 };

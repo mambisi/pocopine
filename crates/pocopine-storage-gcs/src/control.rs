@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use google_cloud_gax::options::RequestOptionsBuilder;
 use google_cloud_storage::client::StorageControl;
-use google_cloud_storage::model::compose_object_request::SourceObject;
 use google_cloud_storage::model::Object;
-use pocopine_codec::{percent_encode_set, AsciiSet, CONTROLS};
+use google_cloud_storage::model::compose_object_request::SourceObject;
+use pocopine_codec::{AsciiSet, CONTROLS, percent_encode_set};
 use pocopine_storage::{StorageError, StorageResult};
 
 use crate::layout::GcsKeyLayout;

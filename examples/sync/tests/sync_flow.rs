@@ -1,16 +1,16 @@
 #![cfg(pocopine_host)]
 
 use http_body_util::BodyExt;
-use pocopine_live::{build_live_stream_url, routes, LiveHub, LIVE_STREAM_PATH};
+use pocopine_live::{LIVE_STREAM_PATH, LiveHub, build_live_stream_url, routes};
+use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
-use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, sync_stream_tag, ClientMutation, MutationId, RowKey, SyncOp, SyncPullMode,
+    ClientMutation, MutationId, RowKey, SYNC_PULL_PATH, SYNC_PUSH_PATH, SyncOp, SyncPullMode,
     SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncStreamName,
-    SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    sync_server_plugin, sync_stream_tag,
 };
-use sync_example::{live_backend, sync_server, Post, POSTS_STREAM};
+use sync_example::{POSTS_STREAM, Post, live_backend, sync_server};
 use tower::ServiceExt;
 
 #[tokio::test]

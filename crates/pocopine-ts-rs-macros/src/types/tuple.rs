@@ -1,12 +1,12 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{spanned::Spanned, Expr, Field, FieldsUnnamed, Path, Result};
+use syn::{Expr, Field, FieldsUnnamed, Path, Result, spanned::Spanned};
 
 use crate::{
+    DerivedTS,
     attr::{Attr, ContainerAttr, FieldAttr, StructAttr},
     deps::Dependencies,
     optional::Optional,
-    DerivedTS,
 };
 
 pub(crate) fn tuple(attr: &StructAttr, ts_name: Expr, fields: &FieldsUnnamed) -> Result<DerivedTS> {

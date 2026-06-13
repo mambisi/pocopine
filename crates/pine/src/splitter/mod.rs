@@ -30,7 +30,7 @@
 //! </pine-splitter-group>
 //! ```
 
-use pocopine::events::{self, ev, ListenerHandle};
+use pocopine::events::{self, ListenerHandle, ev};
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};

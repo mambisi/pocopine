@@ -10,13 +10,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use js_sys::{Array, Function, Object, Proxy, Reflect};
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::magics;
-use crate::reactive::{next_scope_id, track, trigger, trigger_scope, ScopeId, SignalId};
+use crate::reactive::{ScopeId, SignalId, next_scope_id, track, trigger, trigger_scope};
 
 /// Static HTML attributes are strings, but Pocopine has historically
 /// coerced them before writing component props. The macro supplies this
@@ -1130,9 +1130,10 @@ pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
         if arr.is_object()
-            && let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
-                let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
-            }
+            && let Ok(new_js) = serde_wasm_bindgen::to_value(row)
+        {
+            let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
+        }
         // Keep the projection alive across the post-handler sweep.
         keep_field_fresh(sid, field);
     }
@@ -1211,13 +1212,14 @@ pub fn remove_list_at_inline(field: &str, idx: usize) {
                 && let Ok(splice) = Reflect::get(&arr, &JsValue::from_str("splice")).and_then(|v| {
                     v.dyn_into::<Function>()
                         .map_err(|_| JsValue::from_str("Array.splice is not callable"))
-                }) {
-                    let _ = splice.call2(
-                        &arr,
-                        &JsValue::from_f64(idx as f64),
-                        &JsValue::from_f64(1.0),
-                    );
-                }
+                })
+            {
+                let _ = splice.call2(
+                    &arr,
+                    &JsValue::from_f64(idx as f64),
+                    &JsValue::from_f64(1.0),
+                );
+            }
         }
         keep_field_fresh(sid, field);
     }

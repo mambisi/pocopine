@@ -2,9 +2,9 @@ use quote::quote;
 use syn::Expr;
 
 use crate::{
+    DerivedTS,
     attr::{ContainerAttr, StructAttr},
     deps::Dependencies,
-    DerivedTS,
 };
 
 pub(crate) fn empty_object(attr: &StructAttr, ts_name: Expr) -> DerivedTS {

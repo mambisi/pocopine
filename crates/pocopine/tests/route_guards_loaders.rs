@@ -9,8 +9,8 @@
 #![cfg(target_arch = "wasm32")]
 
 use js_sys::Promise;
-use pocopine::prelude::*;
 use pocopine::App;
+use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::{JsCast, JsValue};
@@ -39,9 +39,10 @@ fn remove_existing_app_roots() {
     let roots = doc().query_selector_all("[pp-app]").unwrap();
     for i in 0..roots.length() {
         if let Some(node) = roots.item(i)
-            && let Ok(el) = node.dyn_into::<web_sys::Element>() {
-                el.remove();
-            }
+            && let Ok(el) = node.dyn_into::<web_sys::Element>()
+        {
+            el.remove();
+        }
     }
 }
 

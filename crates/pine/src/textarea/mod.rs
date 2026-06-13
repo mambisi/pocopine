@@ -122,9 +122,10 @@ impl PineTextarea {
     pub fn on_focus(&mut self) {
         self.focused = true;
         if self.autosize
-            && let Some(textarea) = root_textarea() {
-                autosize_textarea(&textarea);
-            }
+            && let Some(textarea) = root_textarea()
+        {
+            autosize_textarea(&textarea);
+        }
     }
 
     pub fn on_blur(&mut self) {

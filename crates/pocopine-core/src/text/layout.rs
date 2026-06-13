@@ -5,7 +5,7 @@
 //! a materialized line list ([`layout_with_lines`]).
 
 use crate::text::analysis::SegmentKind;
-use crate::text::line_break::{walk, InternalLine, LayoutCursor};
+use crate::text::line_break::{InternalLine, LayoutCursor, walk};
 use crate::text::prepare::PreparedText;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -160,7 +160,7 @@ fn append_range(segment_text: &str, start_g: usize, end_g: usize, out: &mut Stri
 mod tests {
     use super::*;
     use crate::text::measure::Measurer;
-    use crate::text::prepare::{prepare, Font, PrepareOptions};
+    use crate::text::prepare::{Font, PrepareOptions, prepare};
 
     struct Mock;
     impl Measurer for Mock {

@@ -125,9 +125,10 @@ impl RequestContext {
         let cookies = self.header("cookie")?;
         for part in cookies.split(';') {
             if let Some((key, value)) = part.trim().split_once('=')
-                && key.trim() == name {
-                    return Some(value.trim());
-                }
+                && key.trim() == name
+            {
+                return Some(value.trim());
+            }
         }
         None
     }

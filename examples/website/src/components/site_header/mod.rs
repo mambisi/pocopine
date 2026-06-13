@@ -8,7 +8,7 @@ use pocopine::inject;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{WebsiteApp, WEBSITE_APP};
+use crate::{WEBSITE_APP, WebsiteApp};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(

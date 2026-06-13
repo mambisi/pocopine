@@ -28,7 +28,7 @@ mod user;
 mod context;
 
 pub use predicate::{
-    all_of, any_of, require_auth, require_permission, require_role, Decision, DenyReason, Predicate,
+    Decision, DenyReason, Predicate, all_of, any_of, require_auth, require_permission, require_role,
 };
 pub use principal::{Principal, Session};
 pub use role::{Permission, Role};
@@ -36,8 +36,8 @@ pub use user::AuthUser;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use context::{
-    ensure_login, ensure_permission, ensure_role, require_admin, require_login, require_staff,
-    RequestContext, SESSION_COOKIE,
+    RequestContext, SESSION_COOKIE, ensure_login, ensure_permission, ensure_role, require_admin,
+    require_login, require_staff,
 };
 pub use provider::{AuthError, AuthResult};
 #[cfg(not(target_arch = "wasm32"))]

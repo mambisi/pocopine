@@ -10,9 +10,23 @@ pub use pocopine_auth::{AuthUser, Permission, Principal, Role, Session};
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
 pub use pocopine_core::{
-    animate, dom, events, focus, profiler, refs, router, scroll_lock, storage, text, tick, timers,
-};
-pub use pocopine_core::{
+    App, AppBootCompleted, AppBootFailed, AppBootStarted, AppPlugin, Body, Component,
+    ComponentEvent, ComponentMountFn, ComponentMounted, ComponentPluginExt, ComponentReady,
+    ComponentSetup, ComponentState, ComponentUnmounted, ComponentVTable, Computed, ContextKey,
+    ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, FieldHandle,
+    ForComponent, Handle, Hook, HostEl, Inject, IntoRouteTarget, IsTeleported, LifecycleContext,
+    LifecyclePhase, ListenerHandle, Loader, LoaderContext, LoaderError, LocalStorage, MountEpoch,
+    NavigationFailure, NavigationResult, NearestParent, PageLink, PageMeta, PageMetaContext,
+    PageMetaTag, Parent, ParentId, Plugin, PluginValidationError, Plugins, Prefetch,
+    PrefetchResult, PrefetchSkip, PrefetchTrigger, Refs, RegisteredComponent, RegistryError,
+    RegistryErrorKind, ReturnTo, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface,
+    RouteGuard, RouteGuardDecision, RouteLoader, RouteLocation, RouteMeta, RouteMetaKey, RouteName,
+    RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteQuery,
+    RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
+    RouteTarget, RouteTargetBuilder, RouteTargetError, RouteToken, RouteUrl, RwSignal, Scope,
+    ScopeId, ScopePath, ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
+    ServerFunctionClientStarted, ServerResult, Setter, Signal, SignalId, StorageError, Store,
+    StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
     append_list_inline, assert_registry_clean, batch, computed, current_effect, current_scope_id,
     effect, effect_scoped, effect_with, emit, emit_cancelable, emit_cancelable_from, emit_event,
     emit_event_from, emit_from, emit_from_host, emit_model, emit_model_field, emit_raw,
@@ -25,24 +39,10 @@ pub use pocopine_core::{
     reset_mount_profile, run_now, rw_signal, set_auto_flush, signal, spawn, spawn_for_scope,
     spawn_latest, spawn_latest_for_scope, spawn_scoped, store, swap_list_indices_inline, this,
     trigger_scope, verify_registry, watch, watch_field, watch_field_scoped, watch_scope_field,
-    watch_scope_field_now, watch_scope_field_scoped, watch_scoped, App, AppBootCompleted,
-    AppBootFailed, AppBootStarted, AppPlugin, Body, Component, ComponentEvent, ComponentMountFn,
-    ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup, ComponentState,
-    ComponentUnmounted, ComponentVTable, Computed, ContextKey, ContextMarker, Doc, DomEventName,
-    EffectId, EffectOptions, El, Elapsed, Emit, FieldHandle, ForComponent, Handle, Hook, HostEl,
-    Inject, IntoRouteTarget, IsTeleported, LifecycleContext, LifecyclePhase, ListenerHandle,
-    Loader, LoaderContext, LoaderError, LocalStorage, MountEpoch, NavigationFailure,
-    NavigationResult, NearestParent, PageLink, PageMeta, PageMetaContext, PageMetaTag, Parent,
-    ParentId, Plugin, PluginValidationError, Plugins, Prefetch, PrefetchResult, PrefetchSkip,
-    PrefetchTrigger, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, ReturnTo,
-    RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision,
-    RouteLoader, RouteLocation, RouteMeta, RouteMetaKey, RouteName, RouteNavigationCompleted,
-    RouteNavigationFailed, RouteNavigationStarted, RouteQuery, RouteRejection,
-    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetBuilder, RouteTargetError, RouteToken, RouteUrl, RwSignal, Scope, ScopeId,
-    ScopePath, ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
-    ServerFunctionClientStarted, ServerResult, Setter, Signal, SignalId, StorageError, Store,
-    StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    watch_scope_field_now, watch_scope_field_scoped, watch_scoped,
+};
+pub use pocopine_core::{
+    animate, dom, events, focus, profiler, refs, router, scroll_lock, storage, text, tick, timers,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -55,8 +55,8 @@ pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{
-    app, asset, client_module, component, handlers, job, protected, server, store, Emit, Props,
-    RouteComponent,
+    Emit, Props, RouteComponent, app, asset, client_module, component, handlers, job, protected,
+    server, store,
 };
 
 pub mod auth {
@@ -92,14 +92,7 @@ pub mod prelude {
     #[allow(deprecated)]
     pub use crate::InjectKey;
     pub use crate::{
-        batch, client_module, component, computed, create_context, cx, dispatch, effect, emit,
-        emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
-        emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from,
-        encode_route_fragment, encode_route_path_segment, encode_route_query_part, go, handlers,
-        inject_key, job, navigate, on, on_cleanup, on_emit, prefetch, prepend_list_inline,
-        protected, push, remove_list_at_inline, replace, rw_signal, signal, spawn, spawn_for_scope,
-        spawn_latest, spawn_latest_for_scope, spawn_scoped, store, this, watch, App,
-        AppBootCompleted, AppBootFailed, AppBootStarted, AppPlugin, AuthUser, Component,
+        App, AppBootCompleted, AppBootFailed, AppBootStarted, AppPlugin, AuthUser, Component,
         ComponentEvent, ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup,
         ComponentState, ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, FieldHandle,
         ForComponent, Handle, Hook, Inject, IntoRouteTarget, JobError, JobResult, Loader,
@@ -113,7 +106,14 @@ pub mod prelude {
         RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
         RouteTargetBuilder, RouteTargetError, RouteUrl, RwSignal, Scope, ScopeId, ServerError,
         ServerFunctionClientCompleted, ServerFunctionClientFailed, ServerFunctionClientStarted,
-        ServerResult, Setter, Signal, StorageError, Store,
+        ServerResult, Setter, Signal, StorageError, Store, batch, client_module, component,
+        computed, create_context, cx, dispatch, effect, emit, emit_cancelable,
+        emit_cancelable_from, emit_event, emit_event_from, emit_from, emit_from_host, emit_model,
+        emit_model_field, emit_raw, emit_raw_from, encode_route_fragment,
+        encode_route_path_segment, encode_route_query_part, go, handlers, inject_key, job,
+        navigate, on, on_cleanup, on_emit, prefetch, prepend_list_inline, protected, push,
+        remove_list_at_inline, replace, rw_signal, signal, spawn, spawn_for_scope, spawn_latest,
+        spawn_latest_for_scope, spawn_scoped, store, this, watch,
     };
     pub use wasm_bindgen::prelude::*;
 }
@@ -130,17 +130,17 @@ pub mod __private {
     };
     pub use pocopine_core::server::server_function_default_path;
     pub use pocopine_core::{
-        compile_template, component_computed, computed as runtime_computed, inject_pp_data,
-        inject_style, mark_registered, register_component_with_mount, register_row_plans,
-        register_store_scope, register_template, spawn as runtime_spawn,
-        spawn_for_scope as runtime_spawn_for_scope, spawn_latest as runtime_spawn_latest,
+        BindingKind, ClientModule, ClientModuleError, Component, ComponentMountFn, ComponentState,
+        ComponentVTable, FieldHandle, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext,
+        PropValue, Props, Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener,
+        StaticLiteral, StaticPropKind, StaticRowPlan, Store, WriteOrigin, compile_template,
+        component_computed, computed as runtime_computed, inject_pp_data, inject_style,
+        mark_registered, register_component_with_mount, register_row_plans, register_store_scope,
+        register_template, spawn as runtime_spawn, spawn_for_scope as runtime_spawn_for_scope,
+        spawn_latest as runtime_spawn_latest,
         spawn_latest_for_scope as runtime_spawn_latest_for_scope,
         spawn_scoped as runtime_spawn_scoped, store_scope, task::TaskHandle, track,
-        with_write_origin, BindingKind, ClientModule, ClientModuleError, Component,
-        ComponentMountFn, ComponentState, ComponentVTable, FieldHandle, FromHandlerArg, Handle,
-        HandlerDispatch, LifecycleContext, PropValue, Props, Scope, StaticBinOp, StaticBinding,
-        StaticExpr, StaticListener, StaticLiteral, StaticPropKind, StaticRowPlan, Store,
-        WriteOrigin,
+        with_write_origin,
     };
     // RFC 084 — const-eval helpers the `#[slot(props = T)]`
     // validation tokens call to compare publication keys against
@@ -175,13 +175,14 @@ pub mod __private {
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
     pub use pocopine_core::templates_plan::{
-        apply_static_pp_as_plan, capture_static_interp_target, capture_static_slot_outlet,
-        install_static_binding, install_static_child_mount, install_static_for_plan,
-        install_static_if_plan, install_static_interp_target, install_static_listener,
-        install_static_match_plan, install_static_native_model, install_static_opaque_directive,
-        install_static_ref, install_static_teleport_plan, materialize_static_slot_outlet,
-        plan_failure_count, record_plan_failure, register_template_plan, reset_plan_failure_count,
-        stamp_if_body_with, template_plan_for, StaticInterpTarget, StaticTemplatePlan,
+        StaticInterpTarget, StaticTemplatePlan, apply_static_pp_as_plan,
+        capture_static_interp_target, capture_static_slot_outlet, install_static_binding,
+        install_static_child_mount, install_static_for_plan, install_static_if_plan,
+        install_static_interp_target, install_static_listener, install_static_match_plan,
+        install_static_native_model, install_static_opaque_directive, install_static_ref,
+        install_static_teleport_plan, materialize_static_slot_outlet, plan_failure_count,
+        record_plan_failure, register_template_plan, reset_plan_failure_count, stamp_if_body_with,
+        template_plan_for,
     };
     // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
@@ -195,8 +196,8 @@ pub mod __private {
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.
     pub use pocopine_core::slot_fragment::{
-        stamp_dynamic_slot_with, stamp_static_html, SlotFragment, SlotMountCtx, SlotSet,
-        DEFAULT_SLOT_NAME,
+        DEFAULT_SLOT_NAME, SlotFragment, SlotMountCtx, SlotSet, stamp_dynamic_slot_with,
+        stamp_static_html,
     };
     // RFC-058 Phase 1.1 / 1.7 — cleanup-safe directive install
     // helpers. Generated mount code (Phase 2+) calls these

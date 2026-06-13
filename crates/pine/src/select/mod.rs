@@ -314,9 +314,10 @@ impl PineSelectContent {
             if let Ok(list) = menu.query_selector_all("[role=\"option\"]") {
                 for i in 0..list.length() {
                     if let Some(node) = list.item(i)
-                        && let Ok(el) = node.dyn_into::<web_sys::Element>() {
-                            let _ = el.set_attribute("tabindex", "-1");
-                        }
+                        && let Ok(el) = node.dyn_into::<web_sys::Element>()
+                    {
+                        let _ = el.set_attribute("tabindex", "-1");
+                    }
                 }
             }
             let _ = item.set_attribute("tabindex", "0");
@@ -337,17 +338,18 @@ impl PineSelectContent {
         // + DropdownMenu so author-authored placement / offset
         // flow through.
         if let Ok(floater) = menu.dyn_into::<HtmlElement>()
-            && let Some(root) = ROOT.inject() {
-                compound::install_anchor_to_trigger(
-                    &floater,
-                    root.scope_id(),
-                    SLUG,
-                    &self.side,
-                    &self.align,
-                    self.side_offset,
-                    true,
-                );
-            }
+            && let Some(root) = ROOT.inject()
+        {
+            compound::install_anchor_to_trigger(
+                &floater,
+                root.scope_id(),
+                SLUG,
+                &self.side,
+                &self.align,
+                self.side_offset,
+                true,
+            );
+        }
     }
 
     pub fn close(&mut self) {
@@ -371,12 +373,13 @@ fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
         // stamp instead.
         let _ = trigger;
         if let Some(el) = compound::resolve_trigger(root_scope, SLUG)
-            && let Ok(html) = el.dyn_into::<HtmlElement>() {
-                // No-scroll focus — after closing the dropdown
-                // we don't want the page to snap to wherever the
-                // trigger happens to sit.
-                focus::focus_no_scroll(&html);
-            }
+            && let Ok(html) = el.dyn_into::<HtmlElement>()
+        {
+            // No-scroll focus — after closing the dropdown
+            // we don't want the page to snap to wherever the
+            // trigger happens to sit.
+            focus::focus_no_scroll(&html);
+        }
     });
 }
 
@@ -468,10 +471,11 @@ pub struct PineSelectItemIndicator {
 impl PineSelectItemIndicator {
     fn on_setup(&mut self) {
         if let Some(owner) = SELECTED_OWNER.inject()
-            && let Some(scope) = pocopine::Scope::find(owner) {
-                let v = scope.state.borrow().get("selected");
-                self.selected = v.as_bool().unwrap_or(false);
-            }
+            && let Some(scope) = pocopine::Scope::find(owner)
+        {
+            let v = scope.state.borrow().get("selected");
+            self.selected = v.as_bool().unwrap_or(false);
+        }
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {

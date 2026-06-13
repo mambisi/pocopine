@@ -25,14 +25,14 @@ use std::rc::Rc;
 
 use js_sys::{Array, Object, Reflect};
 use smallvec::SmallVec;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
+use wasm_bindgen::prelude::*;
+use web_sys::{DocumentFragment, Element, HtmlTemplateElement, Node, console};
 
 use crate::loop_scope::LoopScope;
 use crate::mount::{self, bind_scope_to, track_effect_on};
 use crate::path::resolve_path;
-use crate::reactive::{effect, trigger_scope, ScopeId};
+use crate::reactive::{ScopeId, effect, trigger_scope};
 use crate::scope::Scope;
 
 /// Controller source for `pp-for`.
@@ -851,45 +851,47 @@ fn try_append_fast_path(
     // RFC-095 W4 — append the new suffix through the mutation
     // channel when eligible: same key dedup, one crossing for the
     // whole batch instead of per-row clone + mount.
-    if elide_proxy && crate::mutation_channel::enabled()
+    if elide_proxy
+        && crate::mutation_channel::enabled()
         && let (Some(plan), Some(proto)) = (row_plan, template.prototype())
-            && let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
-                let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total - old_len);
-                for i in old_len..total {
-                    let item = arr.get(i as u32);
-                    let key_val = key_resolver.resolve(&item, i, parent_proxy);
-                    let key = dedup_row_key(&key_val, &mut seen, i);
-                    pairs.push((key, item));
-                }
-                crate::profiler::reconcile::record_row_iter(row_iter_start);
-                let reorder_start = crate::profiler::reconcile::start();
-                let appended = channel_mount_range(
-                    plan,
-                    slot,
-                    &proto,
-                    anchor,
-                    arr,
-                    old_len,
-                    total,
-                    pairs,
-                    item_name,
-                    parent_scope_id,
-                    inject_parent_id,
-                    stagger_ms,
-                );
-                crate::profiler::reconcile::record_reorder(reorder_start);
-                if let Some(appended) = appended {
-                    drop(seen);
-                    old_prior.extend(appended);
-                    return Ok(old_prior);
-                }
-                // Interpreter refused — reset dedup to the prior
-                // keys and fall through to the direct append loop.
-                seen.clear();
-                for entry in &old_prior {
-                    seen.insert(entry.key.clone());
-                }
-            }
+        && let Some(slot) = crate::directives::for_plan::channel_slot(plan)
+    {
+        let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total - old_len);
+        for i in old_len..total {
+            let item = arr.get(i as u32);
+            let key_val = key_resolver.resolve(&item, i, parent_proxy);
+            let key = dedup_row_key(&key_val, &mut seen, i);
+            pairs.push((key, item));
+        }
+        crate::profiler::reconcile::record_row_iter(row_iter_start);
+        let reorder_start = crate::profiler::reconcile::start();
+        let appended = channel_mount_range(
+            plan,
+            slot,
+            &proto,
+            anchor,
+            arr,
+            old_len,
+            total,
+            pairs,
+            item_name,
+            parent_scope_id,
+            inject_parent_id,
+            stagger_ms,
+        );
+        crate::profiler::reconcile::record_reorder(reorder_start);
+        if let Some(appended) = appended {
+            drop(seen);
+            old_prior.extend(appended);
+            return Ok(old_prior);
+        }
+        // Interpreter refused — reset dedup to the prior
+        // keys and fall through to the direct append loop.
+        seen.clear();
+        for entry in &old_prior {
+            seen.insert(entry.key.clone());
+        }
+    }
 
     let mut appended: Vec<PrevItem> = Vec::with_capacity(total - old_len);
     let create_body = if row_plan.is_none() { body } else { None };
@@ -931,20 +933,21 @@ fn try_append_fast_path(
 
     for entry in &appended {
         if let Some(plan) = row_plan
-            && let Some(sid) = mount::scope_id_of_element(&entry.element) {
-                let proxy_for_mount = if elide_proxy {
-                    None
-                } else {
-                    crate::mount::scope_of_element(&entry.element).map(|(_, p)| p)
-                };
-                crate::directives::for_plan::mount_row_compiled(
-                    plan,
-                    &entry.element,
-                    sid,
-                    proxy_for_mount.as_ref(),
-                );
-                continue;
-            }
+            && let Some(sid) = mount::scope_id_of_element(&entry.element)
+        {
+            let proxy_for_mount = if elide_proxy {
+                None
+            } else {
+                crate::mount::scope_of_element(&entry.element).map(|(_, p)| p)
+            };
+            crate::directives::for_plan::mount_row_compiled(
+                plan,
+                &entry.element,
+                sid,
+                proxy_for_mount.as_ref(),
+            );
+            continue;
+        }
         crate::profiler::mount::record_generic_row_mounted();
         mount::finalize_compiled_subtree(&entry.element);
     }
@@ -1065,20 +1068,21 @@ fn try_prepend_fast_path(
 
     for entry in &prepended {
         if let Some(plan) = row_plan
-            && let Some(sid) = mount::scope_id_of_element(&entry.element) {
-                let proxy_for_mount = if elide_proxy {
-                    None
-                } else {
-                    crate::mount::scope_of_element(&entry.element).map(|(_, p)| p)
-                };
-                crate::directives::for_plan::mount_row_compiled(
-                    plan,
-                    &entry.element,
-                    sid,
-                    proxy_for_mount.as_ref(),
-                );
-                continue;
-            }
+            && let Some(sid) = mount::scope_id_of_element(&entry.element)
+        {
+            let proxy_for_mount = if elide_proxy {
+                None
+            } else {
+                crate::mount::scope_of_element(&entry.element).map(|(_, p)| p)
+            };
+            crate::directives::for_plan::mount_row_compiled(
+                plan,
+                &entry.element,
+                sid,
+                proxy_for_mount.as_ref(),
+            );
+            continue;
+        }
         crate::profiler::mount::record_generic_row_mounted();
         mount::finalize_compiled_subtree(&entry.element);
     }
@@ -1181,12 +1185,13 @@ fn try_single_remove_fast_path(
 
     let leaver_drain_start = crate::profiler::reconcile::start();
     if let Some(entry) = removed
-        && !entry.leaving {
-            if let Some(parent) = entry.element.parent_node() {
-                let _ = parent.remove_child(&entry.element);
-            }
-            crate::directives::for_plan::unmount_row_compiled(entry.scope_id);
+        && !entry.leaving
+    {
+        if let Some(parent) = entry.element.parent_node() {
+            let _ = parent.remove_child(&entry.element);
         }
+        crate::directives::for_plan::unmount_row_compiled(entry.scope_id);
+    }
     crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
 
     Ok(fresh)
@@ -1438,17 +1443,19 @@ fn run_keyed(
         // every prior row is leaving. Try the same safe bulk teardown
         // before hashing 10K keys into `pool`; fall back to the normal
         // reconcile path if transitions or sibling structure require it.
-        if total == 0 && row_plan.is_some()
-            && let Some(parent_el) = parent_node.dyn_ref::<Element>() {
-                crate::profiler::reconcile::record_pool_build(pool_build_start);
-                let leaver_drain_start = crate::profiler::reconcile::start();
-                if bulk_clear_compiled(parent_el, &old_prior, &anchor) {
-                    prior.borrow_mut().clear();
-                    crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
-                    crate::profiler::reconcile::record_total(reconcile_total_start);
-                    return;
-                }
+        if total == 0
+            && row_plan.is_some()
+            && let Some(parent_el) = parent_node.dyn_ref::<Element>()
+        {
+            crate::profiler::reconcile::record_pool_build(pool_build_start);
+            let leaver_drain_start = crate::profiler::reconcile::start();
+            if bulk_clear_compiled(parent_el, &old_prior, &anchor) {
+                prior.borrow_mut().clear();
+                crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
             }
+        }
         for entry in old_prior {
             pool.insert(entry.key.clone(), entry);
         }
@@ -1490,43 +1497,47 @@ fn run_keyed(
         // scope stamp, binding writes, fragment append, insert)
         // collapses into one interpreter crossing. Key resolution
         // and dedup stay Rust-side, identical to the loop below.
-        if pool_initially_empty && total > 0 && elide_proxy && crate::mutation_channel::enabled()
+        if pool_initially_empty
+            && total > 0
+            && elide_proxy
+            && crate::mutation_channel::enabled()
             && let (Some(plan), Some(proto)) = (row_plan.as_ref(), template.prototype())
-                && let Some(slot) = crate::directives::for_plan::channel_slot(plan) {
-                    let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total);
-                    for i in 0..total {
-                        let item = arr.get(i as u32);
-                        let key_val = key_resolver.resolve(&item, i, &parent_proxy);
-                        let key = dedup_row_key(&key_val, &mut seen, i);
-                        pairs.push((key, item));
-                    }
-                    crate::profiler::reconcile::record_row_iter(row_iter_start);
-                    let reorder_start = crate::profiler::reconcile::start();
-                    let fresh = channel_mount_range(
-                        plan,
-                        slot,
-                        &proto,
-                        &anchor,
-                        &arr,
-                        0,
-                        total,
-                        pairs,
-                        &item_name,
-                        parent_scope_id,
-                        inject_parent_id,
-                        stagger_ms,
-                    );
-                    crate::profiler::reconcile::record_reorder(reorder_start);
-                    if let Some(fresh) = fresh {
-                        drop(seen);
-                        *prior.borrow_mut() = fresh;
-                        crate::profiler::reconcile::record_total(reconcile_total_start);
-                        return;
-                    }
-                    // Interpreter refused — clear dedup state and
-                    // fall through to the direct mount loop below.
-                    seen.clear();
-                }
+            && let Some(slot) = crate::directives::for_plan::channel_slot(plan)
+        {
+            let mut pairs: Vec<(RowKey, JsValue)> = Vec::with_capacity(total);
+            for i in 0..total {
+                let item = arr.get(i as u32);
+                let key_val = key_resolver.resolve(&item, i, &parent_proxy);
+                let key = dedup_row_key(&key_val, &mut seen, i);
+                pairs.push((key, item));
+            }
+            crate::profiler::reconcile::record_row_iter(row_iter_start);
+            let reorder_start = crate::profiler::reconcile::start();
+            let fresh = channel_mount_range(
+                plan,
+                slot,
+                &proto,
+                &anchor,
+                &arr,
+                0,
+                total,
+                pairs,
+                &item_name,
+                parent_scope_id,
+                inject_parent_id,
+                stagger_ms,
+            );
+            crate::profiler::reconcile::record_reorder(reorder_start);
+            if let Some(fresh) = fresh {
+                drop(seen);
+                *prior.borrow_mut() = fresh;
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
+            }
+            // Interpreter refused — clear dedup state and
+            // fall through to the direct mount loop below.
+            seen.clear();
+        }
         for i in 0..total {
             let item = arr.get(i as u32);
             let key_val = key_resolver.resolve(&item, i, &parent_proxy);
@@ -1750,63 +1761,65 @@ fn run_keyed(
         // not to register any of those side-tables; generic rows
         // can. Routing generic rows here would leak every one of
         // those tables for the entire torn-down list.
-        if total == 0 && !pool.is_empty() && row_plan.is_some()
-            && let Some(parent_el) = parent_node.dyn_ref::<Element>() {
-                let pool_count = pool.len();
-                // Strict guard: `parent_node` owns *exactly* the
-                // pool's clones plus the anchor, and any other
-                // non-element children are whitespace-only
-                // (typical template indentation). Foreign
-                // comments, user text, or unexpected element siblings
-                // (e.g. a `<tr class="header">` next to a
-                // `<template pp-for>` inside the same `<tbody>`)
-                // bail out — `replace_children_with_node_1`
-                // below would otherwise nuke them.
-                if bulk_clear_safe(parent_el, pool.values(), &anchor, pool_count) {
-                    let scope_ids: Vec<ScopeId> =
-                        pool.values().map(|entry| entry.scope_id).collect();
-                    // Cleanup BEFORE the DOM mutation:
-                    //  1. Stamp every clone with the
-                    //     `release_skip` marker — when the
-                    //     `MutationObserver`-driven
-                    //     `release_subtree` fires async on each
-                    //     removed row, the marker short-circuits
-                    //     the per-element side-table sweep.
-                    //     11K rows × ~5 sub-elements × ~10
-                    //     `Reflect::get` calls otherwise dominate
-                    //     `clear`'s tail.
-                    //  2. Remove each scope from the registry +
-                    //     drop its `RowInstance`. Idempotent if
-                    //     `release_subtree` ever did fire its
-                    //     normal path (it won't, given (1)).
-                    // RFC 054 Lever 5b — single parent-level
-                    // marker instead of N per-row stamps. The
-                    // `MutationObserver` callback honors
-                    // `BULK_RELEASE_KEY` on `rec.target()` and
-                    // skips the entire batch's `release_subtree`
-                    // sweep, then clears the marker. One
-                    // `Reflect::set` per clear instead of 10K.
-                    // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
-                    // marker is gone with the mount. Synchronous bulk teardown
-                    // does the work directly below.
-                    // RFC 054 Lever 5 — bulk teardown. The per-row
-                    // unmount path was O(N²) due to
-                    // `LIST_WATCHERS.members.retain(|id| id != sid)`
-                    // running once per row over an N-element Vec
-                    // (~358ms slowest run for 10K rows). The bulk
-                    // variant drops the entire watcher in one
-                    // borrow and drains side-tables in one
-                    // `thread_local::with` per table.
-                    crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
-                    Scope::remove_compiled_rows(&scope_ids);
-                    pool.clear();
-                    parent_el.replace_children_with_node_1(&anchor);
-                    prior.borrow_mut().clear();
-                    crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
-                    crate::profiler::reconcile::record_total(reconcile_total_start);
-                    return;
-                }
+        if total == 0
+            && !pool.is_empty()
+            && row_plan.is_some()
+            && let Some(parent_el) = parent_node.dyn_ref::<Element>()
+        {
+            let pool_count = pool.len();
+            // Strict guard: `parent_node` owns *exactly* the
+            // pool's clones plus the anchor, and any other
+            // non-element children are whitespace-only
+            // (typical template indentation). Foreign
+            // comments, user text, or unexpected element siblings
+            // (e.g. a `<tr class="header">` next to a
+            // `<template pp-for>` inside the same `<tbody>`)
+            // bail out — `replace_children_with_node_1`
+            // below would otherwise nuke them.
+            if bulk_clear_safe(parent_el, pool.values(), &anchor, pool_count) {
+                let scope_ids: Vec<ScopeId> = pool.values().map(|entry| entry.scope_id).collect();
+                // Cleanup BEFORE the DOM mutation:
+                //  1. Stamp every clone with the
+                //     `release_skip` marker — when the
+                //     `MutationObserver`-driven
+                //     `release_subtree` fires async on each
+                //     removed row, the marker short-circuits
+                //     the per-element side-table sweep.
+                //     11K rows × ~5 sub-elements × ~10
+                //     `Reflect::get` calls otherwise dominate
+                //     `clear`'s tail.
+                //  2. Remove each scope from the registry +
+                //     drop its `RowInstance`. Idempotent if
+                //     `release_subtree` ever did fire its
+                //     normal path (it won't, given (1)).
+                // RFC 054 Lever 5b — single parent-level
+                // marker instead of N per-row stamps. The
+                // `MutationObserver` callback honors
+                // `BULK_RELEASE_KEY` on `rec.target()` and
+                // skips the entire batch's `release_subtree`
+                // sweep, then clears the marker. One
+                // `Reflect::set` per clear instead of 10K.
+                // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
+                // marker is gone with the mount. Synchronous bulk teardown
+                // does the work directly below.
+                // RFC 054 Lever 5 — bulk teardown. The per-row
+                // unmount path was O(N²) due to
+                // `LIST_WATCHERS.members.retain(|id| id != sid)`
+                // running once per row over an N-element Vec
+                // (~358ms slowest run for 10K rows). The bulk
+                // variant drops the entire watcher in one
+                // borrow and drains side-tables in one
+                // `thread_local::with` per table.
+                crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
+                Scope::remove_compiled_rows(&scope_ids);
+                pool.clear();
+                parent_el.replace_children_with_node_1(&anchor);
+                prior.borrow_mut().clear();
+                crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
             }
+        }
 
         for (_, mut entry) in pool.drain() {
             if !entry.leaving {
@@ -1868,10 +1881,11 @@ fn run_keyed(
             let mut cursor = node;
             while let Some(n) = cursor.clone() {
                 if let Ok(el) = n.dyn_into::<Element>()
-                    && crate::directives::transition::is_leaving(&el) {
-                        cursor = el.next_sibling();
-                        continue;
-                    }
+                    && crate::directives::transition::is_leaving(&el)
+                {
+                    cursor = el.next_sibling();
+                    continue;
+                }
                 return cursor;
             }
             None
@@ -2227,9 +2241,12 @@ const MAX_EXACT_INT_F64: f64 = 9_007_199_254_740_992.0;
 /// [`stringify_key`] verbatim for a byte-identical `Str` key.
 fn row_key(v: &JsValue) -> RowKey {
     if let Some(n) = v.as_f64()
-        && n.is_finite() && n.fract() == 0.0 && n.abs() < MAX_EXACT_INT_F64 {
-            return RowKey::Int(n as i64);
-        }
+        && n.is_finite()
+        && n.fract() == 0.0
+        && n.abs() < MAX_EXACT_INT_F64
+    {
+        return RowKey::Int(n as i64);
+    }
     RowKey::Str(stringify_key(v).into())
 }
 

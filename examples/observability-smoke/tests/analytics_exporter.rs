@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
 use pocopine::analytics::{
-    event, AnalyticsClient, BoundedAnalyticsSink, ExporterMetrics, JsonLinesAnalyticsSink,
+    AnalyticsClient, BoundedAnalyticsSink, ExporterMetrics, JsonLinesAnalyticsSink, event,
 };
 use pocopine::observe::{FieldPrivacy, RedactionPolicy};
 

@@ -8,7 +8,7 @@
 mod support;
 
 use pine_richtext::history::{
-    history_plugin, redo, redo_depth, undo, undo_depth, HISTORY_COMMIT_MS_META,
+    HISTORY_COMMIT_MS_META, history_plugin, redo, redo_depth, undo, undo_depth,
 };
 use pine_richtext::state::{EditorState, EditorStateConfig, Selection};
 use serde_json::json;

@@ -19,7 +19,7 @@ use regex::Regex;
 use serde_json::json;
 
 use crate::extension::RichTextExtension;
-use crate::inputrules::{textblock_type_input_rule, wrapping_input_rule, InputRule};
+use crate::inputrules::{InputRule, textblock_type_input_rule, wrapping_input_rule};
 use crate::model::Attrs;
 
 /// Markdown-style block-shortcut input rules.

@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::extension::{registry, RichTextExtension};
+use crate::RichTextResult;
+use crate::extension::{RichTextExtension, registry};
 use crate::extensions::default_extensions;
 use crate::model::{Attrs, Fragment, Mark, Node, Schema};
-use crate::RichTextResult;
 
 /// Return the basic rich text schema, composed by folding the canonical
 /// set of base extensions (see [`crate::extensions::default_extensions`])

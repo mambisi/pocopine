@@ -9,7 +9,7 @@
 //! days-in-month) delegates straight through.
 
 use crate::calendar::state::CalendarState;
-use crate::datetime::{is_before, is_between, is_same_day, DateValue, WeekStartsOn};
+use crate::datetime::{DateValue, WeekStartsOn, is_before, is_between, is_same_day};
 
 #[derive(Debug, Clone)]
 pub struct RangeCalendarState {

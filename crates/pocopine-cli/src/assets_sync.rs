@@ -26,8 +26,8 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use pocopine_assets::{AssetStore, AssetStoreConfig, ASSET_CACHE_CONTROL};
+use anyhow::{Context, Result, bail};
+use pocopine_assets::{ASSET_CACHE_CONTROL, AssetStore, AssetStoreConfig};
 use pocopine_deploy::credentials;
 
 use crate::config::AssetsConfig;

@@ -30,6 +30,6 @@ pub use route_sync::FileBrowserRoute;
 pub use sidebar::FileBrowserSidebar;
 pub use size_control::FileBrowserSizeControl;
 pub use storage_command::FileBrowserStorageCommand;
-pub use top_bar::{apply_saved_theme, FileBrowserTopBar};
+pub use top_bar::{FileBrowserTopBar, apply_saved_theme};
 pub use upload_dock::FileBrowserUploadDock;
 pub use upload_panel::FileBrowserUploadPanel;

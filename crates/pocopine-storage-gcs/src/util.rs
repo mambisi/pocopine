@@ -11,11 +11,7 @@ pub(crate) fn ensure_completable(session: &UploadSession) -> StorageResult<()> {
 }
 
 pub(crate) fn non_empty(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 pub(crate) fn positive_generation(generation: i64) -> Option<i64> {

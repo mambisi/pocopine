@@ -6,7 +6,7 @@
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use observability_smoke::router;
-    use pocopine::logging::{init_server_logging, OtlpConfig, ServerLoggingConfig};
+    use pocopine::logging::{OtlpConfig, ServerLoggingConfig, init_server_logging};
     use pocopine_server::serve;
 
     let service_name = std::env::var("POCOPINE_SERVICE_NAME")

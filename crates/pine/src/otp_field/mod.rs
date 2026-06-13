@@ -230,9 +230,10 @@ impl PineOtpField {
             };
             let _ = el.set_attribute("data-filled", if filled { "true" } else { "false" });
             if let Ok(input) = el.dyn_into::<HtmlInputElement>()
-                && input.value() != display {
-                    input.set_value(&display);
-                }
+                && input.value() != display
+            {
+                input.set_value(&display);
+            }
         }
     }
 
@@ -259,9 +260,10 @@ impl PineOtpField {
             .and_then(|w| w.document())
             .and_then(|d| d.active_element());
         if let Some(active) = active
-            && active.is_same_node(Some(el.as_ref())) {
-                return;
-            }
+            && active.is_same_node(Some(el.as_ref()))
+        {
+            return;
+        }
         if let Ok(html) = el.dyn_into::<HtmlElement>() {
             let _ = html.focus();
         }

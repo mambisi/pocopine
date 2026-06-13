@@ -94,36 +94,35 @@ pub fn write_path_with(
     // scope's writer (e.g. `pp-model="$store.user.name"`).
     if let Some(first) = segments.first()
         && first.starts_with('$')
-            && let Some((macc, consumed)) =
-                crate::scope::magic_scope_access(first, segments.get(1).copied())
-            {
-                match &segments[consumed..] {
-                    [] => return false,
-                    [field] => return macc.write(field, value),
-                    [field, middle @ .., last] => {
-                        let mut cur = macc.read(field).unwrap_or(JsValue::UNDEFINED);
-                        for seg in middle {
-                            cur = Reflect::get(&cur, &JsValue::from_str(seg))
-                                .unwrap_or(JsValue::UNDEFINED);
-                            if !cur.is_object() {
-                                return false;
-                            }
-                        }
-                        if !cur.is_object() {
-                            return false;
-                        }
-                        return Reflect::set(&cur, &JsValue::from_str(last), value)
-                            .unwrap_or(false);
+        && let Some((macc, consumed)) =
+            crate::scope::magic_scope_access(first, segments.get(1).copied())
+    {
+        match &segments[consumed..] {
+            [] => return false,
+            [field] => return macc.write(field, value),
+            [field, middle @ .., last] => {
+                let mut cur = macc.read(field).unwrap_or(JsValue::UNDEFINED);
+                for seg in middle {
+                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+                    if !cur.is_object() {
+                        return false;
                     }
                 }
+                if !cur.is_object() {
+                    return false;
+                }
+                return Reflect::set(&cur, &JsValue::from_str(last), value).unwrap_or(false);
             }
+        }
+    }
     match segments.as_slice() {
         [] => false,
         [single] => {
             if let Some(a) = access
-                && a.write(single, value) {
-                    return true;
-                }
+                && a.write(single, value)
+            {
+                return true;
+            }
             Reflect::set(root, &JsValue::from_str(single), value).unwrap_or(false)
         }
         [first, middle @ .., last] => {

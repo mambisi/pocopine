@@ -26,55 +26,56 @@ pub mod svg;
 mod visibility;
 
 pub use area::{
-    area_legend_items, AreaChartGeometry, AreaChartSeriesRender, ChartAreaSeries, PineAreaChart,
+    AreaChartGeometry, AreaChartSeriesRender, ChartAreaSeries, PineAreaChart, area_legend_items,
 };
 pub use bar::{
-    bar_legend_items, BarChartGeometry, BarChartMode, BarChartOptions, ChartBar, ChartBarSeries,
-    PineBarChart, SvgBar,
+    BarChartGeometry, BarChartMode, BarChartOptions, ChartBar, ChartBarSeries, PineBarChart,
+    SvgBar, bar_legend_items,
 };
 pub use cartesian_chart::{
-    render_cartesian_chart, CartesianAreaSeriesConfig, CartesianAreaSeriesRender,
-    CartesianAxisConfig, CartesianBarRender, CartesianBarSeriesConfig, CartesianChartInputs,
-    CartesianChartOptions, CartesianChartRender, CartesianGridConfig, CartesianLineSeriesConfig,
-    CartesianLineSeriesRender, CartesianMarkerRender, CartesianReferenceDotConfig,
-    CartesianReferenceDotRender, CartesianReferenceLabelConfig, CartesianReferenceLabelRender,
-    CartesianReferenceLineConfig, CartesianReferenceLineRender, CartesianScatterPointRender,
-    CartesianScatterSeriesConfig, PineAreaSeries, PineBarSeries, PineCartesianChart,
-    PineCartesianReferenceDot, PineCartesianReferenceLabel, PineCartesianReferenceLine,
-    PineChartGrid, PineLineSeries, PineScatterSeries, PineXAxis, PineYAxis,
+    CartesianAreaSeriesConfig, CartesianAreaSeriesRender, CartesianAxisConfig, CartesianBarRender,
+    CartesianBarSeriesConfig, CartesianChartInputs, CartesianChartOptions, CartesianChartRender,
+    CartesianGridConfig, CartesianLineSeriesConfig, CartesianLineSeriesRender,
+    CartesianMarkerRender, CartesianReferenceDotConfig, CartesianReferenceDotRender,
+    CartesianReferenceLabelConfig, CartesianReferenceLabelRender, CartesianReferenceLineConfig,
+    CartesianReferenceLineRender, CartesianScatterPointRender, CartesianScatterSeriesConfig,
+    PineAreaSeries, PineBarSeries, PineCartesianChart, PineCartesianReferenceDot,
+    PineCartesianReferenceLabel, PineCartesianReferenceLine, PineChartGrid, PineLineSeries,
+    PineScatterSeries, PineXAxis, PineYAxis, render_cartesian_chart,
 };
 pub use error::{ChartError, ChartResult};
 pub use events::{
-    ChartHover, ChartHoverEnd, ChartSelection, ChartSelectionEnd, LegendToggle,
     CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
-    LEGEND_TOGGLE_EVENT,
+    ChartHover, ChartHoverEnd, ChartSelection, ChartSelectionEnd, LEGEND_TOGGLE_EVENT,
+    LegendToggle,
 };
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use layered::{
-    render_layer_chart, ChartLayerGuide, ChartLayerIcon, ChartLayerLabel, ChartLayerLine,
-    ChartLayerMarker, ChartLayerPoint, ChartLayerReferenceDot, LayerChartInputs, LayerChartRender,
-    PineChartGuide, PineChartIcon, PineChartLabel, PineChartLayer, PineChartLine, PineChartMarker,
+    ChartLayerGuide, ChartLayerIcon, ChartLayerLabel, ChartLayerLine, ChartLayerMarker,
+    ChartLayerPoint, ChartLayerReferenceDot, LayerChartInputs, LayerChartRender, PineChartGuide,
+    PineChartIcon, PineChartLabel, PineChartLayer, PineChartLine, PineChartMarker,
     PineChartReferenceDot, PineLayerChart, SvgLayerGuide, SvgLayerIcon, SvgLayerLabel,
-    SvgLayerLine, SvgLayerMarker, SvgLayerReferenceDot,
+    SvgLayerLine, SvgLayerMarker, SvgLayerReferenceDot, render_layer_chart,
 };
 pub use legend::{LegendItem, PineChartLegend};
 pub use line::{
-    line_legend_items, nearest_line_sample, nearest_line_sample_at, ChartLineSeries, ChartPoint,
-    LineChartGeometry, LineChartOptions, LineChartSample, LineChartSeriesRender, PineLineChart,
+    ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions, LineChartSample,
+    LineChartSeriesRender, PineLineChart, line_legend_items, nearest_line_sample,
+    nearest_line_sample_at,
 };
 pub use path::{area_path, line_path};
 pub use pie::{
-    pie_legend_items, ChartPieSlice, PieChartGeometry, PieChartOptions, PinePieChart, SvgPieSlice,
+    ChartPieSlice, PieChartGeometry, PieChartOptions, PinePieChart, SvgPieSlice, pie_legend_items,
 };
 pub use radial::{
-    radial_bar_legend_items, ChartRadialBar, PineRadialBarChart, RadialBarChartGeometry,
-    RadialBarChartOptions, SvgRadialBar,
+    ChartRadialBar, PineRadialBarChart, RadialBarChartGeometry, RadialBarChartOptions,
+    SvgRadialBar, radial_bar_legend_items,
 };
 pub use responsive::{PineChartResponsive, ResponsiveChartSize};
 pub use scale::{BandScale, LinearScale, Tick};
 pub use scatter::{
-    nearest_scatter_sample, scatter_legend_items, ChartScatterSeries, PineScatterChart,
-    ScatterChartGeometry, ScatterChartOptions, ScatterChartSample, ScatterChartSeriesRender,
+    ChartScatterSeries, PineScatterChart, ScatterChartGeometry, ScatterChartOptions,
+    ScatterChartSample, ScatterChartSeriesRender, nearest_scatter_sample, scatter_legend_items,
 };
 pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 pub use visibility::{

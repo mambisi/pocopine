@@ -10,7 +10,7 @@
 //!
 //! The image an adapter pushes is `{namespace}/{app}:{sha}`.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// A recognised git host, parsed from a remote URL.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,9 +1,9 @@
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use notify::{Config, ErrorKind, Event, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::args::ServeArgs;
@@ -300,9 +300,10 @@ fn watcher_callback(
         if let Ok(ev) = res {
             use notify::EventKind::*;
             if matches!(ev.kind, Modify(_) | Create(_) | Remove(_))
-                && let Some(change) = Change::from_event(&project, &ev) {
-                    let _ = tx.send(change);
-                }
+                && let Some(change) = Change::from_event(&project, &ev)
+            {
+                let _ = tx.send(change);
+            }
         }
     }
 }

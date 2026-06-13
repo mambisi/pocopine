@@ -7,8 +7,8 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    store::{can_create_label, label_picker_options_for, KeepLabelOption},
     KeepStore, KeepTodo,
+    store::{KeepLabelOption, can_create_label, label_picker_options_for},
 };
 
 #[derive(Default, Serialize, Deserialize)]

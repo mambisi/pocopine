@@ -280,9 +280,10 @@ impl PineCommandContent {
             .query_selector(".pine-command-input")
             .ok()
             .flatten()
-            && let Ok(html) = input_el.dyn_into::<HtmlElement>() {
-                let _ = html.focus();
-            }
+            && let Ok(html) = input_el.dyn_into::<HtmlElement>()
+        {
+            let _ = html.focus();
+        }
     }
 
     pub fn close(&mut self) {
@@ -427,12 +428,13 @@ fn refresh_match_state(root: &Handle<PineCommandRoot>) {
         }
         if let Ok(html) = el.dyn_into::<HtmlElement>()
             && html.offset_parent().is_none()
-                && let Some(win) = web_sys::window()
-                    && let Ok(Some(style)) = win.get_computed_style(&html)
-                        && let Ok(display) = style.get_property_value("display")
-                            && display == "none" {
-                                continue;
-                            }
+            && let Some(win) = web_sys::window()
+            && let Ok(Some(style)) = win.get_computed_style(&html)
+            && let Ok(display) = style.get_property_value("display")
+            && display == "none"
+        {
+            continue;
+        }
         any = true;
         break;
     }

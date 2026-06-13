@@ -7,7 +7,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use pocopine::analytics::{
-        event, route_view, AnalyticsClient, BoundedAnalyticsSink, JsonLinesAnalyticsSink,
+        AnalyticsClient, BoundedAnalyticsSink, JsonLinesAnalyticsSink, event, route_view,
     };
     use pocopine::observe::FieldPrivacy;
 

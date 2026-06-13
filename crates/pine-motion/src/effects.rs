@@ -12,7 +12,7 @@
 use web_sys::Element;
 
 use crate::animate::animate;
-use crate::gesture::{hover, GestureHandle};
+use crate::gesture::{GestureHandle, hover};
 use crate::spring::Spring;
 
 const REST_TRANSFORM: &str = "translateY(0px) scale(1)";

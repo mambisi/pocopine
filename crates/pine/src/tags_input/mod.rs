@@ -193,14 +193,15 @@ impl PineTagsInputItemText {
         // may still be "" if the reactive `:value` binding
         // hasn't fired yet; the `on_ready` watch covers that.
         if let Some(item_scope) = ITEM.inject()
-            && let Some(scope) = Scope::find(item_scope) {
-                self.text = scope
-                    .state
-                    .borrow()
-                    .get("value")
-                    .as_string()
-                    .unwrap_or_default();
-            }
+            && let Some(scope) = Scope::find(item_scope)
+        {
+            self.text = scope
+                .state
+                .borrow()
+                .get("value")
+                .as_string()
+                .unwrap_or_default();
+        }
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {

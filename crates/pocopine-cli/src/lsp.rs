@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use pocopine_stylekit::{compile_project, CompileOptions, Severity, SourceFile};
+use pocopine_stylekit::{CompileOptions, Severity, SourceFile, compile_project};
 use tokio::sync::Mutex;
 use tower_lsp::lsp_types::Range as LspRange;
 use tower_lsp::lsp_types::*;
@@ -76,9 +76,10 @@ impl Backend {
     async fn component_index(&self, project: &Path) -> Arc<ComponentIndex> {
         let mut cache = self.components.lock().await;
         if let Some((root, index)) = cache.as_ref()
-            && root == project {
-                return Arc::clone(index);
-            }
+            && root == project
+        {
+            return Arc::clone(index);
+        }
         let index = Arc::new(component_index::scan(project));
         *cache = Some((project.to_path_buf(), Arc::clone(&index)));
         index
@@ -630,7 +631,7 @@ fn walk_directives(
     out: &mut Vec<Diagnostic>,
 ) {
     use pocopine_directives::{
-        is_component_host, lookup, parse_directive_attr, removed_message, ArgReq, Host,
+        ArgReq, Host, is_component_host, lookup, parse_directive_attr, removed_message,
     };
     use pocopine_template_parser::Node;
 
@@ -726,10 +727,11 @@ fn attr_name_range(
 ) -> LspRange {
     let open = el.opening_tag_range.clone();
     if let Some(slice) = text.get(open.clone())
-        && let Some(off) = slice.find(attr_name) {
-            let start = open.start + off;
-            return index.range(&(start..start + attr_name.len()));
-        }
+        && let Some(off) = slice.find(attr_name)
+    {
+        let start = open.start + off;
+        return index.range(&(start..start + attr_name.len()));
+    }
     if let Some(start) = text.find(attr_name) {
         return index.range(&(start..start + attr_name.len()));
     }
@@ -751,10 +753,11 @@ fn collect_loop_vars(ast: &pocopine_template_parser::TemplateAst, out: &mut Hash
                 // `item in items` → bind `item`.
                 let mut parts = value.split_whitespace();
                 if let (Some(var), Some("in")) = (parts.next(), parts.next())
-                    && var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !var.is_empty()
-                    {
-                        out.insert(var.to_string());
-                    }
+                    && var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && !var.is_empty()
+                {
+                    out.insert(var.to_string());
+                }
             }
         }
         for child in &el.children {
@@ -801,10 +804,9 @@ fn check_symbols(
             if let Some(comp) = own {
                 check_unknown_ident(el, name, &parsed, value, comp, loop_vars, text, index, out);
             }
-            if is_component_tag
-                && let Some(child) = components.by_tag(&el.tag) {
-                    check_child_binding(el, name, &parsed, child, text, index, out);
-                }
+            if is_component_tag && let Some(child) = components.by_tag(&el.tag) {
+                check_child_binding(el, name, &parsed, child, text, index, out);
+            }
         }
         for child in &el.children {
             if let Node::Element(ce) = child {
@@ -863,9 +865,10 @@ fn check_unknown_ident(
         return; // magic variable (e.g. $event, $index)
     }
     if let Some(stripped) = ident.strip_prefix('$')
-        && MAGIC_VARS.contains(&stripped) {
-            return;
-        }
+        && MAGIC_VARS.contains(&stripped)
+    {
+        return;
+    }
     if loop_vars.contains(ident) {
         return;
     }
@@ -1027,9 +1030,10 @@ enum CompletionCtx {
 fn detect_context(before: &str) -> CompletionCtx {
     // Interpolation: an unclosed `{{` after the last `}}`.
     if let Some(open) = before.rfind("{{")
-        && before.rfind("}}").map(|close| open > close).unwrap_or(true) {
-            return CompletionCtx::Interpolation;
-        }
+        && before.rfind("}}").map(|close| open > close).unwrap_or(true)
+    {
+        return CompletionCtx::Interpolation;
+    }
 
     // Inside a tag? Need a `<` not yet closed by `>`.
     let Some(last_lt) = before.rfind('<') else {
@@ -1072,14 +1076,15 @@ fn detect_context(before: &str) -> CompletionCtx {
     // Typing an attribute name — `:arg` and `.modifier` get enum completion.
     let tail = tag_slice.rsplit(char::is_whitespace).next().unwrap_or("");
     if let Some(parsed) = pocopine_directives::parse_directive_attr(tail)
-        && pocopine_directives::lookup(&parsed.head).is_some() {
-            if tail.contains('.') {
-                return CompletionCtx::DirectiveModifier(parsed.head);
-            }
-            if tail.contains(':') || tail.starts_with('@') {
-                return CompletionCtx::DirectiveArg(parsed.head);
-            }
+        && pocopine_directives::lookup(&parsed.head).is_some()
+    {
+        if tail.contains('.') {
+            return CompletionCtx::DirectiveModifier(parsed.head);
         }
+        if tail.contains(':') || tail.starts_with('@') {
+            return CompletionCtx::DirectiveArg(parsed.head);
+        }
+    }
     CompletionCtx::AttributeName
 }
 
@@ -1343,7 +1348,7 @@ fn magic_completions() -> Vec<CompletionItem> {
 }
 
 fn class_completions() -> Vec<CompletionItem> {
-    use pocopine_stylekit::catalog::{catalog, ValueKind};
+    use pocopine_stylekit::catalog::{ValueKind, catalog};
     let cat = catalog();
     let mut items = Vec::new();
     for group in &cat.groups {
@@ -1439,9 +1444,10 @@ fn collect_expr_regions(
         for (attr_name, _) in &el.attrs {
             if let Some(parsed) = pocopine_directives::parse_directive_attr(attr_name)
                 && is_expr_directive(&parsed.head)
-                    && let Some((s, e)) = attr_value_span(el, attr_name, text) {
-                        out.push((s, text[s..e].to_string()));
-                    }
+                && let Some((s, e)) = attr_value_span(el, attr_name, text)
+            {
+                out.push((s, text[s..e].to_string()));
+            }
         }
         for child in &el.children {
             if let Node::Element(ce) = child {

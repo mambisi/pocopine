@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement};
 
-use super::waapi::{animate, AnimateOptions, Keyframe};
+use super::waapi::{AnimateOptions, Keyframe, animate};
 
 /// Options for a collapse transition.
 #[derive(Clone, Debug)]

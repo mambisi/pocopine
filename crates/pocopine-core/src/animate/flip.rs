@@ -22,7 +22,7 @@ use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Animation, DomRect, Element};
 
-use super::waapi::{animate, AnimateOptions, Keyframe};
+use super::waapi::{AnimateOptions, Keyframe, animate};
 
 /// Private slot for the most recent FLIP `Animation` handle.
 const FLIP_ANIM_KEY: &str = "__pp_flip_anim";

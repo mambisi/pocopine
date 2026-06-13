@@ -1,9 +1,9 @@
 use crate::{KeepNote, KeepTag};
 
 use super::{
+    KeepStore,
     labels::{normalize_label, normalize_labels},
     view::{card_row_for, command_note_for},
-    KeepStore,
 };
 
 impl KeepStore {

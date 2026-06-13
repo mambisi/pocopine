@@ -33,7 +33,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Path of the credentials file relative to `$HOME`.
@@ -201,9 +201,10 @@ where
     F: Fn(&str) -> Option<String>,
 {
     if let Some(t) = env(&env_var_name(host))
-        && !t.is_empty() {
-            return Ok(t);
-        }
+        && !t.is_empty()
+    {
+        return Ok(t);
+    }
 
     let path = home.join(REL_PATH);
     if !path.exists() {

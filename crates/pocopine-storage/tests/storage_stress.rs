@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use pocopine_storage::backend_common::{UploadSessionLockCleanup, UploadSessionLockRegistry};

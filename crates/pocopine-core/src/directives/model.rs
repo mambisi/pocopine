@@ -17,9 +17,9 @@
 //! child's `open` field — Vue-3-style `v-model:prop` shape. Without
 //! the arg, the child field is `model` for backward compatibility.
 
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
 use web_sys::{
     CustomEvent, Element, Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement,
 };
@@ -212,10 +212,9 @@ fn read_from_element(el: &web_sys::Element, number: bool) -> JsValue {
 }
 
 fn coerce(s: String, number: bool) -> JsValue {
-    if number
-        && let Ok(n) = s.parse::<f64>() {
-            return JsValue::from_f64(n);
-        }
+    if number && let Ok(n) = s.parse::<f64>() {
+        return JsValue::from_f64(n);
+    }
     JsValue::from_str(&s)
 }
 

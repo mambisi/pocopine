@@ -1,9 +1,9 @@
 use js_sys::{Array, Reflect};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
 use web_sys::{Element, ResizeObserver, ResizeObserverEntry};
 
 const WIDTH_FIELD: &str = "width";
@@ -368,14 +368,15 @@ fn apply_child_size(root: &Element, size: ResponsiveChartSize) {
     }
 
     if (!wrote_width || !wrote_height)
-        && let Some(svg) = chart_svg(&child) {
-            if !wrote_width {
-                let _ = svg.set_attribute(WIDTH_FIELD, &trim_float(size.width));
-            }
-            if !wrote_height {
-                let _ = svg.set_attribute(HEIGHT_FIELD, &trim_float(size.height));
-            }
+        && let Some(svg) = chart_svg(&child)
+    {
+        if !wrote_width {
+            let _ = svg.set_attribute(WIDTH_FIELD, &trim_float(size.width));
         }
+        if !wrote_height {
+            let _ = svg.set_attribute(HEIGHT_FIELD, &trim_float(size.height));
+        }
+    }
 }
 
 fn write_child_prop(child: &Element, field: &str, value: f64) -> bool {

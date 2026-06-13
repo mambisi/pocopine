@@ -6,7 +6,7 @@ use chrono::{
     TimeZone, Utc, Weekday,
 };
 
-use super::{impl_primitives, Config, TS};
+use super::{Config, TS, impl_primitives};
 
 macro_rules! impl_dummy {
     ($($t:ty),*) => {$(

@@ -30,7 +30,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::text::{layout, prepare, CanvasMeasurer, Font, PrepareOptions};
+use pocopine::text::{CanvasMeasurer, Font, PrepareOptions, layout, prepare};
 use pocopine::{current_scope_id, refs, tick};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;

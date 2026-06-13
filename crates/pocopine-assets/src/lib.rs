@@ -22,9 +22,9 @@
 //! `pocopine-server` in the dependency graph, so the asset client
 //! cannot live in `pocopine-storage-s3` without a cycle.
 
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
-use aws_sdk_s3::Client;
 
 /// Error from an [`AssetStore`] operation: a contextual message
 /// wrapping the underlying SDK failure. Deliberately stringly — the

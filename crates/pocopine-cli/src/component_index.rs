@@ -134,16 +134,17 @@ pub fn scan(root: &Path) -> ComponentIndex {
                     if let Some(target) = impl_self_name(&im.self_ty) {
                         for impl_item in &im.items {
                             if let ImplItem::Fn(f) = impl_item
-                                && matches!(f.vis, Visibility::Public(_)) {
-                                    handlers
-                                        .entry(target.clone())
-                                        .or_default()
-                                        .push(HandlerDecl {
-                                            name: f.sig.ident.to_string(),
-                                            file: path.clone(),
-                                            pos: Pos::from_span(f.sig.ident.span()),
-                                        });
-                                }
+                                && matches!(f.vis, Visibility::Public(_))
+                            {
+                                handlers
+                                    .entry(target.clone())
+                                    .or_default()
+                                    .push(HandlerDecl {
+                                        name: f.sig.ident.to_string(),
+                                        file: path.clone(),
+                                        pos: Pos::from_span(f.sig.ident.span()),
+                                    });
+                            }
                         }
                     }
                 }

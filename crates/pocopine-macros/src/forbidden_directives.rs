@@ -72,10 +72,11 @@ fn walk(el: &Element, out: &mut TokenStream, seen: &mut HashSet<&'static str>) {
         if let Some(&(name, message)) = pocopine_directives::REMOVED
             .iter()
             .find(|(n, _)| *n == head)
-            && seen.insert(name) {
-                let msg = format!("pocopine: {message}");
-                out.extend(quote! { ::core::compile_error!(#msg); });
-            }
+            && seen.insert(name)
+        {
+            let msg = format!("pocopine: {message}");
+            out.extend(quote! { ::core::compile_error!(#msg); });
+        }
     }
     for child in &el.children {
         if let Node::Element(child_el) = child {

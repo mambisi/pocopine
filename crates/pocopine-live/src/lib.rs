@@ -25,7 +25,7 @@ use std::fmt;
 
 use pocopine_events::{EventDraft, EventError, EventKind, EventResult, IntoTopic, Topic};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 mod query;
 
@@ -766,13 +766,14 @@ mod browser {
     use std::rc::Rc;
 
     use pocopine_core::{current_scope_id, on_scope_unmount_for};
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
     use web_sys::{Event, EventSource, EventSourceInit, EventTarget, MessageEvent};
 
     use crate::{
-        build_live_stream_url, parse_live_event, LiveClientError, LiveEvent, LiveRefreshEvent,
-        RefreshRegistration, RefreshRegistry, BUILT_IN_EVENT_KINDS, KIND_ERROR, LIVE_STREAM_PATH,
+        BUILT_IN_EVENT_KINDS, KIND_ERROR, LIVE_STREAM_PATH, LiveClientError, LiveEvent,
+        LiveRefreshEvent, RefreshRegistration, RefreshRegistry, build_live_stream_url,
+        parse_live_event,
     };
 
     type Handler = Rc<RefCell<Box<dyn FnMut(LiveEvent)>>>;
@@ -1611,19 +1612,19 @@ mod host {
     use std::convert::Infallible;
     use std::sync::Arc;
 
+    use axum::Router;
     use axum::body::Body;
     use axum::extract::State;
     use axum::http::{HeaderMap, Request, StatusCode, Uri};
     use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
     use axum::response::{IntoResponse, Response};
     use axum::routing::get;
-    use axum::Router;
     use futures_util::stream::{self, StreamExt};
     use pocopine_auth::RequestContext;
     use pocopine_events::{
-        build_event_backend, EventBackendConfig, EventCursor, EventEnvelope, EventError,
-        EventResult, LiveEventBackend, LiveEventSubscription, MemoryEventBackend,
-        MemoryEventConfig, SharedEventBackend, SubscribeRequest, Topic,
+        EventBackendConfig, EventCursor, EventEnvelope, EventError, EventResult, LiveEventBackend,
+        LiveEventSubscription, MemoryEventBackend, MemoryEventConfig, SharedEventBackend,
+        SubscribeRequest, Topic, build_event_backend,
     };
     #[cfg(feature = "redis")]
     use pocopine_events::{RedisEventBackend, RedisEventConfig};
@@ -1632,8 +1633,8 @@ mod host {
     use serde_json::json;
 
     use crate::{
-        collection_topic, with_stream_metadata, LiveError, KIND_ERROR, KIND_GAP, KIND_READY,
-        LIVE_PROTOCOL_V1, LIVE_STREAM_PATH,
+        KIND_ERROR, KIND_GAP, KIND_READY, LIVE_PROTOCOL_V1, LIVE_STREAM_PATH, LiveError,
+        collection_topic, with_stream_metadata,
     };
 
     type TopicPolicy = Arc<dyn Fn(&RequestContext, &Topic) -> bool + Send + Sync>;
@@ -2020,7 +2021,7 @@ mod host {
         use serde_json::json;
 
         use super::*;
-        use crate::{LiveInvalidation, KIND_COLLECTION_CHANGED};
+        use crate::{KIND_COLLECTION_CHANGED, LiveInvalidation};
 
         #[test]
         fn requested_collections_map_to_collection_topics() {
@@ -2203,7 +2204,7 @@ mod host {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use host::{routes, LiveHub};
+pub use host::{LiveHub, routes};
 
 #[cfg(target_arch = "wasm32")]
 pub use browser::{

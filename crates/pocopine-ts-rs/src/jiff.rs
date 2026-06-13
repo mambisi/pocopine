@@ -1,8 +1,8 @@
 use jiff::{
-    civil::{Date, DateTime, Time},
     Span, Timestamp, Zoned,
+    civil::{Date, DateTime, Time},
 };
 
-use super::{impl_primitives, TS};
+use super::{TS, impl_primitives};
 
 impl_primitives!(Date, DateTime, Span, Time, Timestamp, Zoned => "string");

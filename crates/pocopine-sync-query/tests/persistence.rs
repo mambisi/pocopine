@@ -18,17 +18,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use pocopine_core::fetch::{
-    install_middleware, FetchNext, FetchRequest, FetchResponse, __reset_middleware_chain_for_test,
+    __reset_middleware_chain_for_test, FetchNext, FetchRequest, FetchResponse, install_middleware,
 };
 use pocopine_core::server::ServerError;
 use pocopine_sync::{
-    local_stream_key, MemoryLocalStore, MutationId, StreamParams, SyncCollectionName, SyncCursor,
-    SyncLocalStore, SyncOpenResponse, SyncOpenStream, SyncPullResponse, SyncResult, SyncRow,
-    SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
+    MemoryLocalStore, MutationId, SYNC_OPEN_PATH, SYNC_PULL_PATH, StreamParams, SyncCollectionName,
+    SyncCursor, SyncLocalStore, SyncOpenResponse, SyncOpenStream, SyncPullResponse, SyncResult,
+    SyncRow, SyncStreamName, local_stream_key,
 };
 use pocopine_sync_query::{
-    query_client_plugin, Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClientConfig,
-    RowChange,
+    Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClientConfig, RowChange,
+    query_client_plugin,
 };
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};

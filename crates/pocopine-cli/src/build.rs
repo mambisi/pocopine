@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Output;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::config::PocopineConfig;
 use crate::tools;
@@ -208,14 +208,17 @@ fn bundle_js_ref_len(tail: &str) -> Option<usize> {
             .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '.')
     }
     if let Some(rest) = tail.strip_prefix("js")
-        && boundary(rest) {
-            return Some(2);
-        }
-    if tail.is_char_boundary(8) && crate::server::is_asset_hash(&tail[..8])
+        && boundary(rest)
+    {
+        return Some(2);
+    }
+    if tail.is_char_boundary(8)
+        && crate::server::is_asset_hash(&tail[..8])
         && let Some(rest) = tail[8..].strip_prefix(".js")
-            && boundary(rest) {
-                return Some(11);
-            }
+        && boundary(rest)
+    {
+        return Some(11);
+    }
     None
 }
 
@@ -232,9 +235,10 @@ fn configured_bin_names(cfg: &PocopineConfig) -> Vec<&str> {
         bins.push(bin);
     }
     if let Some(worker) = cfg.worker_bin.as_deref()
-        && !bins.contains(&worker) {
-            bins.push(worker);
-        }
+        && !bins.contains(&worker)
+    {
+        bins.push(worker);
+    }
     bins
 }
 

@@ -23,7 +23,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use pocopine::{emit_cancelable, focus, scroll_lock, ScopeId};
+use pocopine::{ScopeId, emit_cancelable, focus, scroll_lock};
 use web_sys::Element;
 
 /// Fired before an outside pointerdown dismisses an overlay.

@@ -36,12 +36,12 @@ use pocopine::create_context;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::KeepTodo;
 use crate::components::note_body::KeepNoteBody;
 use crate::store::{
-    can_create_label, format_todo_line, label_picker_options_for, parse_todo_line, KeepEditorData,
-    KeepFormNote, KeepLabelOption, KeepStore, KeepViewMode,
+    KeepEditorData, KeepFormNote, KeepLabelOption, KeepStore, KeepViewMode, can_create_label,
+    format_todo_line, label_picker_options_for, parse_todo_line,
 };
-use crate::KeepTodo;
 use pine_richtext::model::Node as RichTextNode;
 use pine_richtext::view::{DocNode, Markdown};
 
@@ -459,14 +459,15 @@ fn schedule_save_then_load(
             // `title` / `body` from it; markdown stays an
             // export-only format.
             if form.kind == "text"
-                && let Some(state) = body.clone().and_then(read_surface_doc_state) {
-                    form.title = crate::components::note_body::doc_to_title(&state)
-                        .unwrap_or_else(|| form.title.clone());
-                    form.body = crate::components::note_body::doc_to_preview_text(&state)
-                        .map(|combined| strip_leading_title(&combined, &form.title))
-                        .unwrap_or_default();
-                    form.body_state = Some(state);
-                }
+                && let Some(state) = body.clone().and_then(read_surface_doc_state)
+            {
+                form.title = crate::components::note_body::doc_to_title(&state)
+                    .unwrap_or_else(|| form.title.clone());
+                form.body = crate::components::note_body::doc_to_preview_text(&state)
+                    .map(|combined| strip_leading_title(&combined, &form.title))
+                    .unwrap_or_default();
+                form.body_state = Some(state);
+            }
             let snapshot = form.collect_fields();
             if !snapshot.note_id.is_empty() {
                 pocopine::store::<KeepStore>().update(move |s| s.save_form_note(snapshot));

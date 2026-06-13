@@ -33,11 +33,11 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
+    Data, DeriveInput, Expr, ExprClosure, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl,
+    ItemMod, ItemStruct, Lit, LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
-    Data, DeriveInput, Expr, ExprClosure, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl,
-    ItemMod, ItemStruct, Lit, LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
 };
 
 // RFC 050 — compile-time `.poco` template parser + diagnostic
@@ -369,9 +369,10 @@ fn is_lenient_mode() -> bool {
 /// when we can; fall back to the raw absolute path otherwise.
 fn manifest_relative(path: &std::path::Path) -> String {
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
-        && let Ok(rel) = path.strip_prefix(&manifest_dir) {
-            return rel.to_string_lossy().to_string();
-        }
+        && let Ok(rel) = path.strip_prefix(&manifest_dir)
+    {
+        return rel.to_string_lossy().to_string();
+    }
     path.to_string_lossy().to_string()
 }
 
@@ -1390,9 +1391,10 @@ fn classify_static_prop_type(ty: &Type) -> StaticPropKindCode {
             && let Some(inner) = args.args.iter().find_map(|arg| match arg {
                 syn::GenericArgument::Type(inner) => Some(inner),
                 _ => None,
-            }) {
-                return classify_static_prop_type(inner);
-            }
+            })
+        {
+            return classify_static_prop_type(inner);
+        }
         return StaticPropKindCode::Auto;
     }
 
@@ -1437,9 +1439,10 @@ fn find_interior_mut(ty: &Type) -> Option<String> {
             if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
                 for arg in &args.args {
                     if let syn::GenericArgument::Type(inner) = arg
-                        && let Some(found) = find_interior_mut(inner) {
-                            return Some(found);
-                        }
+                        && let Some(found) = find_interior_mut(inner)
+                    {
+                        return Some(found);
+                    }
                 }
             }
             None
@@ -1612,15 +1615,16 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // author isn't routed into the non-bundle path with a
     // missing-template diagnostic.
     if let Some(paths) = args.extends.as_ref()
-        && paths.is_empty() {
-            return syn::Error::new_spanned(
-                &struct_ident,
-                "`extends = []` is empty — bundle markers must list at least one member, \
+        && paths.is_empty()
+    {
+        return syn::Error::new_spanned(
+            &struct_ident,
+            "`extends = []` is empty — bundle markers must list at least one member, \
                  otherwise the type is a no-op. Drop the attribute or list the components.",
-            )
-            .to_compile_error()
-            .into();
-        }
+        )
+        .to_compile_error()
+        .into();
+    }
     let is_bundle = args.extends.is_some();
     if is_bundle {
         // Reject every component-body-only option in bundle
@@ -6022,7 +6026,9 @@ impl Parse for AppMacroInput {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown `app!{{}}` section `{other}` — expected `plugins:`, `components:`, or `routes:`"),
+                        format!(
+                            "unknown `app!{{}}` section `{other}` — expected `plugins:`, `components:`, or `routes:`"
+                        ),
                     ));
                 }
             }

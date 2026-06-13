@@ -14,8 +14,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::reactive::{
-    effect_with, next_signal_id, release, run_now, track_signal, trigger_signal, EffectId,
-    EffectOptions, SignalId,
+    EffectId, EffectOptions, SignalId, effect_with, next_signal_id, release, run_now, track_signal,
+    trigger_signal,
 };
 
 struct State<T> {

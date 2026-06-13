@@ -9,7 +9,7 @@ use pine_richtext::extension::RichTextExtension;
 use pine_richtext::model::{Attrs, Fragment, MarkPolicy, Node, NodeSpec, Schema, Whitespace};
 use pine_richtext::runtime::RuntimeBuilder;
 use pine_richtext::state::{EditorState, EditorStateConfig, Selection, Transaction};
-use pine_richtext::transform::{can_split_into, Transform, TypeAfter};
+use pine_richtext::transform::{Transform, TypeAfter, can_split_into};
 use serde_json::json;
 
 struct KeepNoteSchemaExtension;

@@ -25,15 +25,15 @@ fn registry_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
-use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine_server::axum::Router;
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::http::{Request, StatusCode};
 use pocopine_server::axum::response::Response;
 use pocopine_server::axum::routing::get;
-use pocopine_server::axum::Router;
 use pocopine_server::tower::ServiceExt;
 use pocopine_server::{
-    request_event_layer, HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, Server,
-    ServerHook, ServerPlugin,
+    HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, Server, ServerHook, ServerPlugin,
+    request_event_layer,
 };
 
 #[derive(Clone, Debug)]

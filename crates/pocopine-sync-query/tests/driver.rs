@@ -22,16 +22,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use pocopine_core::fetch::{
-    install_middleware, FetchNext, FetchRequest, FetchResponse, __reset_middleware_chain_for_test,
+    __reset_middleware_chain_for_test, FetchNext, FetchRequest, FetchResponse, install_middleware,
 };
 use pocopine_core::server::ServerError;
 use pocopine_sync::{
-    MutationId, SyncCollectionName, SyncCursor, SyncOpenResponse, SyncOpenStream, SyncPullResponse,
-    SyncResult, SyncRow, SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
+    MutationId, SYNC_OPEN_PATH, SYNC_PULL_PATH, SyncCollectionName, SyncCursor, SyncOpenResponse,
+    SyncOpenStream, SyncPullResponse, SyncResult, SyncRow, SyncStreamName,
 };
 use pocopine_sync_query::{
-    query_client_plugin, Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient,
-    QueryClientConfig, RowChange,
+    Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient, QueryClientConfig, RowChange,
+    query_client_plugin,
 };
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};

@@ -10,8 +10,8 @@
 //! no locale plumbing, and the explicit int is what the rest of
 //! Pine actually passes in today.
 
-use crate::datetime::types::{Matcher, WeekStartsOn};
 use crate::datetime::DateValue;
+use crate::datetime::types::{Matcher, WeekStartsOn};
 use time::Month;
 
 // ── single comparisons ─────────────────────────────────────────

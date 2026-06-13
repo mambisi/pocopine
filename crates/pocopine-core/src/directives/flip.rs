@@ -37,9 +37,9 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
 use web_sys::{Element, MutationObserver, MutationObserverInit};
 
 use crate::mount::track_effect_on;

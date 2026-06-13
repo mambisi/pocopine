@@ -16,7 +16,7 @@ use std::cell::{Cell, RefCell};
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{window, Element, Event, Node};
+use web_sys::{Element, Event, Node, window};
 
 use super::{event as dev_event, highlight, panel, shell};
 use crate::mount;

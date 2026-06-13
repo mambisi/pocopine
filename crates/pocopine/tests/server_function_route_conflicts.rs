@@ -1,8 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use pocopine::ServerResult;
-use pocopine_server::axum::Router;
 use pocopine_server::Server;
+use pocopine_server::axum::Router;
 
 #[pocopine::server(public, path = "/api/conflicting-server-function")]
 async fn first_conflicting_route() -> ServerResult<()> {

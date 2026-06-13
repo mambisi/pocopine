@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use syn::parse::{Parse, ParseStream, Parser};
-use syn::{parse_macro_input, Ident, LitStr, Token};
+use syn::{Ident, LitStr, Token, parse_macro_input};
 
 /// Absolute path to the vendored Tabler asset tree.
 fn icons_root() -> &'static Path {

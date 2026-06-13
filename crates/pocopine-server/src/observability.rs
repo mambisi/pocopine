@@ -55,13 +55,13 @@ pub fn request_event_layer() -> impl Layer<
         Error = std::convert::Infallible,
         Future = impl Send,
     > + Clone
-                  + Send
-                  + Sync
-                  + 'static,
+              + Send
+              + Sync
+              + 'static,
 > + Clone
-       + Send
-       + Sync
-       + 'static {
++ Send
++ Sync
++ 'static {
     middleware::from_fn(request_event_middleware)
 }
 

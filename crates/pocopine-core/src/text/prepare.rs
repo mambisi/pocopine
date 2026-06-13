@@ -1,7 +1,7 @@
 //! `prepare()` — runs analysis + measurement once so [`crate::text::layout`]
 //! can stay pure arithmetic.
 
-use crate::text::analysis::{normalize_whitespace, segment, SegmentKind};
+use crate::text::analysis::{SegmentKind, normalize_whitespace, segment};
 use crate::text::measure::Measurer;
 use unicode_segmentation::UnicodeSegmentation;
 

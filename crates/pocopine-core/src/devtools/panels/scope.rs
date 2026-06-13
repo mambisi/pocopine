@@ -18,9 +18,9 @@
 use std::cell::Cell;
 
 use js_sys::Object;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{window, Element};
+use wasm_bindgen::prelude::*;
+use web_sys::{Element, window};
 
 use crate::reactive::ScopeId;
 use crate::refs;
@@ -132,10 +132,11 @@ impl Panel for ScopeInspector {
             }
             "select-scope" => {
                 if let Some(id_str) = el.get_attribute("data-scope-id")
-                    && let Ok(n) = id_str.parse::<u64>() {
-                        SELECTED.with(|c| c.set(Some(ScopeId(n))));
-                        super::super::panel::invalidate_active();
-                    }
+                    && let Ok(n) = id_str.parse::<u64>()
+                {
+                    SELECTED.with(|c| c.set(Some(ScopeId(n))));
+                    super::super::panel::invalidate_active();
+                }
                 true
             }
             _ => false,

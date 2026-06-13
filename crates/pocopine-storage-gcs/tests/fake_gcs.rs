@@ -20,7 +20,7 @@ use pocopine_storage::{
     UploadStrategy,
 };
 use pocopine_storage_gcs::GcsStorageBackend;
-use testcontainers::core::{wait::HttpWaitStrategy, ContainerPort, WaitFor};
+use testcontainers::core::{ContainerPort, WaitFor, wait::HttpWaitStrategy};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::sync::OnceCell;
@@ -569,8 +569,8 @@ async fn set_upload_length_does_not_promote_staged_bytes() -> StorageResult<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_system_actor_cannot_abort_corrupt_upload_metadata_against_fake_gcs(
-) -> StorageResult<()> {
+async fn non_system_actor_cannot_abort_corrupt_upload_metadata_against_fake_gcs()
+-> StorageResult<()> {
     let clients = gcs_clients().await;
     let bucket = create_bucket(&clients, "corrupt-owner").await;
     let backend =

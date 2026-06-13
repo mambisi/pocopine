@@ -6,10 +6,10 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use pocopine_assets::{is_hashed_bundle_name, ASSET_CACHE_CONTROL};
+use pocopine_assets::{ASSET_CACHE_CONTROL, is_hashed_bundle_name};
 // Re-export so `crate::server::is_asset_hash` keeps resolving for
 // `build.rs`; the shared predicate lives in `pocopine-assets`.
 pub(crate) use pocopine_assets::is_asset_hash;
@@ -159,18 +159,15 @@ fn bin_executable_path(target_dir: &Path, bin: &str, release: bool) -> PathBuf {
 }
 
 fn profile_name(release: bool) -> &'static str {
-    if release {
-        "release"
-    } else {
-        "debug"
-    }
+    if release { "release" } else { "debug" }
 }
 
 pub fn check_configured_port_available(cfg: &PocopineConfig) -> Result<()> {
     if cfg.bin.is_some()
-        && let Some(port) = cfg.port {
-            ensure_port_available(port)?;
-        }
+        && let Some(port) = cfg.port
+    {
+        ensure_port_available(port)?;
+    }
     Ok(())
 }
 
@@ -392,7 +389,9 @@ pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> 
         ),
         Some("redis") if has_redis_url => Ok(()),
         Some("redis") if default_redis_url => Ok(()),
-        Some("redis") => bail!("`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis"),
+        Some("redis") => {
+            bail!("`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis")
+        }
         Some("") => bail!("POCOPINE_JOB_BACKEND was set but empty; use `memory` or `redis`"),
         Some(other) => bail!("unsupported POCOPINE_JOB_BACKEND `{other}`; use `memory` or `redis`"),
         None if has_redis_url => Ok(()),

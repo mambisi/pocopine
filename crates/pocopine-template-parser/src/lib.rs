@@ -98,7 +98,7 @@ use std::ops::Range;
 use html5ever::driver::ParseOpts;
 use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
-use html5ever::{local_name, namespace_url, ns, parse_fragment, QualName};
+use html5ever::{QualName, local_name, namespace_url, ns, parse_fragment};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
 /// Parsed `.poco` template AST.
@@ -548,9 +548,10 @@ fn find_close_tag(bytes: &[u8], start: usize, tag: &str) -> Option<Range<usize>>
                     // Next byte should be whitespace or `>`.
                     let next = bytes.get(name_start + tag_bytes.len()).copied();
                     if matches!(next, Some(c) if c == b'>' || c.is_ascii_whitespace())
-                        && let Some(gt) = find_byte(bytes, name_start, b'>') {
-                            return Some(i..gt + 1);
-                        }
+                        && let Some(gt) = find_byte(bytes, name_start, b'>')
+                    {
+                        return Some(i..gt + 1);
+                    }
                 }
             }
         }
@@ -641,9 +642,11 @@ fn detect_forbidden_self_close(source: &str, errors: &mut Vec<ParseError>) {
             let name_start = i + 2;
             let name_end = read_tag_name_end(bytes, name_start);
             if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end])
-                && is_foreign_content_root(name) && foreign_depth > 0 {
-                    foreign_depth -= 1;
-                }
+                && is_foreign_content_root(name)
+                && foreign_depth > 0
+            {
+                foreign_depth -= 1;
+            }
             i = find_byte(bytes, i, b'>').map(|e| e + 1).unwrap_or(i + 1);
             continue;
         }
@@ -785,16 +788,17 @@ fn collect_fragment_roots(
     let doc = document.children.borrow();
     for doc_child in doc.iter() {
         if let NodeData::Element { ref name, .. } = doc_child.data
-            && name.local == local_name!("html") {
-                let html_children = doc_child.children.borrow();
-                let mut out = Vec::with_capacity(html_children.len());
-                for child in html_children.iter() {
-                    if let Some(node) = convert_node(child, source, errors) {
-                        out.push(node);
-                    }
+            && name.local == local_name!("html")
+        {
+            let html_children = doc_child.children.borrow();
+            let mut out = Vec::with_capacity(html_children.len());
+            for child in html_children.iter() {
+                if let Some(node) = convert_node(child, source, errors) {
+                    out.push(node);
                 }
-                return out;
             }
+            return out;
+        }
     }
     // Defensive fallback — document contained no `<html>` wrapper.
     let mut out = Vec::new();

@@ -323,9 +323,10 @@ pub fn parse(
     };
 
     if let Some(env) = environment.as_deref()
-        && let Some(env_block) = spec.host_overrides.remove(env) {
-            apply_env_overrides(&mut spec, env_block)?;
-        }
+        && let Some(env_block) = spec.host_overrides.remove(env)
+    {
+        apply_env_overrides(&mut spec, env_block)?;
+    }
 
     Ok(spec)
 }

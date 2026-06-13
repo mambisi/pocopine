@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use pocopine_auth::{
     AuthError, AuthFuture, AuthProvider, AuthUser, Permission, RequestContext, Role,
 };
@@ -205,9 +205,10 @@ impl JwtVerifier {
 
         // Revocation check.
         if let Some(check) = &self.inner.config.revocation
-            && check.is_revoked(&claims) {
-                return Err(JwtAuthError::Revoked);
-            }
+            && check.is_revoked(&claims)
+        {
+            return Err(JwtAuthError::Revoked);
+        }
 
         // Project to AuthUser via ClaimMap. Consume by value so the
         // claim map is moved into AuthUser.claims rather than
@@ -354,25 +355,29 @@ fn project_claims(claims: Value, map: &ClaimMap) -> Result<AuthUser, JwtAuthErro
     let mut user = AuthUser::new(id);
 
     if let Some(p) = &map.email
-        && let Some(s) = walk_path(&claims, p).and_then(Value::as_str) {
-            user.email = Some(s.to_string());
-        }
+        && let Some(s) = walk_path(&claims, p).and_then(Value::as_str)
+    {
+        user.email = Some(s.to_string());
+    }
     if let Some(p) = &map.name
-        && let Some(s) = walk_path(&claims, p).and_then(Value::as_str) {
-            user.name = Some(s.to_string());
-        }
+        && let Some(s) = walk_path(&claims, p).and_then(Value::as_str)
+    {
+        user.name = Some(s.to_string());
+    }
     if let Some(p) = &map.roles
-        && let Some(roles) = walk_path(&claims, p) {
-            for s in extract_string_or_array(roles) {
-                user.roles.push(Role::named(s));
-            }
+        && let Some(roles) = walk_path(&claims, p)
+    {
+        for s in extract_string_or_array(roles) {
+            user.roles.push(Role::named(s));
         }
+    }
     if let Some(p) = &map.permissions
-        && let Some(perms) = walk_path(&claims, p) {
-            for s in extract_string_or_array(perms) {
-                user.permissions.push(Permission::new(s));
-            }
+        && let Some(perms) = walk_path(&claims, p)
+    {
+        for s in extract_string_or_array(perms) {
+            user.permissions.push(Permission::new(s));
         }
+    }
 
     // Stash the entire raw claims object so app code can reach
     // provider-specific fields (Firebase identities, Clerk org_id,

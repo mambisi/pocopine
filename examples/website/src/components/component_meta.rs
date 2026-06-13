@@ -46,8 +46,18 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         blurb: "A clickable action with variants and disabled state.",
         anatomy: "",
         props: &[
-            PropRow { name: "variant", ty: "\"primary\" | \"destructive\" | \"ghost\"", default: "—", desc: "Visual style (omit for the default outline)." },
-            PropRow { name: "disabled", ty: "bool", default: "false", desc: "Disables interaction; exposes data-disabled." },
+            PropRow {
+                name: "variant",
+                ty: "\"primary\" | \"destructive\" | \"ghost\"",
+                default: "—",
+                desc: "Visual style (omit for the default outline).",
+            },
+            PropRow {
+                name: "disabled",
+                ty: "bool",
+                default: "false",
+                desc: "Disables interaction; exposes data-disabled.",
+            },
         ],
     },
     ComponentMeta {
@@ -65,8 +75,18 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         blurb: "Boolean toggles — a switch and a checkbox, both pp-model bound.",
         anatomy: "",
         props: &[
-            PropRow { name: "checked", ty: "bool (pp-model)", default: "false", desc: "Two-way bound on/off state." },
-            PropRow { name: "disabled", ty: "bool", default: "false", desc: "Disables interaction." },
+            PropRow {
+                name: "checked",
+                ty: "bool (pp-model)",
+                default: "false",
+                desc: "Two-way bound on/off state.",
+            },
+            PropRow {
+                name: "disabled",
+                ty: "bool",
+                default: "false",
+                desc: "Disables interaction.",
+            },
         ],
     },
     ComponentMeta {
@@ -75,9 +95,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_FORMS,
         blurb: "A single-select set of radio options with roving focus.",
         anatomy: "<pine-radio-group-root pp-model:value>\n  <pine-radio-group-item value=\"…\" />\n</pine-radio-group-root>",
-        props: &[
-            PropRow { name: "value", ty: "String (pp-model)", default: "—", desc: "Selected option value." },
-        ],
+        props: &[PropRow {
+            name: "value",
+            ty: "String (pp-model)",
+            default: "—",
+            desc: "Selected option value.",
+        }],
     },
     ComponentMeta {
         slug: "select",
@@ -85,9 +108,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_FORMS,
         blurb: "A listbox-style dropdown for choosing one option.",
         anatomy: "<pine-select-root pp-model:value>\n  <pine-select-trigger />\n  <pine-select-content>\n    <pine-select-item value=\"…\" />\n  </pine-select-content>\n</pine-select-root>",
-        props: &[
-            PropRow { name: "value", ty: "String (pp-model)", default: "—", desc: "Selected option value." },
-        ],
+        props: &[PropRow {
+            name: "value",
+            ty: "String (pp-model)",
+            default: "—",
+            desc: "Selected option value.",
+        }],
     },
     ComponentMeta {
         slug: "combobox",
@@ -104,8 +130,18 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         blurb: "A draggable range input with keyboard support.",
         anatomy: "",
         props: &[
-            PropRow { name: "value", ty: "f64 (pp-model)", default: "0", desc: "Current value." },
-            PropRow { name: "min / max / step", ty: "f64", default: "0 / 100 / 1", desc: "Range bounds and increment." },
+            PropRow {
+                name: "value",
+                ty: "f64 (pp-model)",
+                default: "0",
+                desc: "Current value.",
+            },
+            PropRow {
+                name: "min / max / step",
+                ty: "f64",
+                default: "0 / 100 / 1",
+                desc: "Range bounds and increment.",
+            },
         ],
     },
     ComponentMeta {
@@ -114,9 +150,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_FORMS,
         blurb: "A two-state pressed/unpressed button.",
         anatomy: "",
-        props: &[
-            PropRow { name: "pressed", ty: "bool (pp-model)", default: "false", desc: "Pressed state; exposes data-state." },
-        ],
+        props: &[PropRow {
+            name: "pressed",
+            ty: "bool (pp-model)",
+            default: "false",
+            desc: "Pressed state; exposes data-state.",
+        }],
     },
     ComponentMeta {
         slug: "field",
@@ -148,9 +187,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_FORMS,
         blurb: "A segmented one-time-passcode input.",
         anatomy: "",
-        props: &[
-            PropRow { name: "length", ty: "usize", default: "6", desc: "Number of code segments." },
-        ],
+        props: &[PropRow {
+            name: "length",
+            ty: "usize",
+            default: "6",
+            desc: "Number of code segments.",
+        }],
     },
     ComponentMeta {
         slug: "tags-input",
@@ -167,9 +209,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_OVERLAYS,
         blurb: "A modal dialog with focus trap and overlay.",
         anatomy: "<pine-dialog-root pp-model:open>\n  <pine-dialog-trigger />\n  <pine-dialog-portal>\n    <pine-dialog-overlay />\n    <pine-dialog-content>\n      <pine-dialog-title />\n      <pine-dialog-description />\n      <pine-dialog-close />\n    </pine-dialog-content>\n  </pine-dialog-portal>\n</pine-dialog-root>",
-        props: &[
-            PropRow { name: "open", ty: "bool (pp-model)", default: "false", desc: "Open state on the root." },
-        ],
+        props: &[PropRow {
+            name: "open",
+            ty: "bool (pp-model)",
+            default: "false",
+            desc: "Open state on the root.",
+        }],
     },
     ComponentMeta {
         slug: "alert-dialog",
@@ -185,9 +230,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_OVERLAYS,
         blurb: "Floating content anchored to a trigger.",
         anatomy: "<pine-popover-root pp-model:open>\n  <pine-popover-trigger />\n  <pine-popover-content />\n</pine-popover-root>",
-        props: &[
-            PropRow { name: "open", ty: "bool (pp-model)", default: "false", desc: "Open state on the root." },
-        ],
+        props: &[PropRow {
+            name: "open",
+            ty: "bool (pp-model)",
+            default: "false",
+            desc: "Open state on the root.",
+        }],
     },
     ComponentMeta {
         slug: "dropdown-menu",
@@ -236,9 +284,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_NAV,
         blurb: "A tabbed panel switcher with roving focus.",
         anatomy: "<pine-tabs-root pp-model:value>\n  <pine-tabs-list>\n    <pine-tabs-trigger value=\"…\" />\n  </pine-tabs-list>\n  <pine-tabs-content value=\"…\" />\n</pine-tabs-root>",
-        props: &[
-            PropRow { name: "value", ty: "String (pp-model)", default: "—", desc: "Active tab value." },
-        ],
+        props: &[PropRow {
+            name: "value",
+            ty: "String (pp-model)",
+            default: "—",
+            desc: "Active tab value.",
+        }],
     },
     ComponentMeta {
         slug: "accordion",
@@ -270,9 +321,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_NAV,
         blurb: "A styled, cross-browser custom scroll container.",
         anatomy: "<pine-scroll-area-root type=\"hover\">\n  <pine-scroll-area-viewport />\n  <pine-scroll-area-scrollbar>\n    <pine-scroll-area-thumb />\n  </pine-scroll-area-scrollbar>\n</pine-scroll-area-root>",
-        props: &[
-            PropRow { name: "type", ty: "\"auto\" | \"always\" | \"scroll\" | \"hover\"", default: "\"hover\"", desc: "When scrollbars are shown." },
-        ],
+        props: &[PropRow {
+            name: "type",
+            ty: "\"auto\" | \"always\" | \"scroll\" | \"hover\"",
+            default: "\"hover\"",
+            desc: "When scrollbars are shown.",
+        }],
     },
     ComponentMeta {
         slug: "splitter",
@@ -296,9 +350,12 @@ pub const COMPONENTS: &[ComponentMeta] = &[
         category: CAT_NAV,
         blurb: "Constrains content to a fixed width/height ratio.",
         anatomy: "",
-        props: &[
-            PropRow { name: "ratio", ty: "f64", default: "1.0", desc: "Width-to-height ratio, e.g. 16/9." },
-        ],
+        props: &[PropRow {
+            name: "ratio",
+            ty: "f64",
+            default: "1.0",
+            desc: "Width-to-height ratio, e.g. 16/9.",
+        }],
     },
     // ── Display ──────────────────────────────────────────────────
     ComponentMeta {

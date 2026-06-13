@@ -16,7 +16,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod bench {
     use bytes::Bytes;
-    use criterion::{criterion_group, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, criterion_group};
     use pocopine_storage::{
         CompleteUpload, InitiateUpload, MemoryStorageBackend, SafeObjectKey, StorageBackend,
         StorageContext, StorageKey, UploadPolicy, UploadStrategy,

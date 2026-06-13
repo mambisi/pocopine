@@ -11,9 +11,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use js_sys::{Function, Reflect};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::{AddEventListenerOptions, Element, Event, EventTarget, HtmlElement, ResizeObserver};
 
 use crate::reactive::ScopeId;
@@ -437,9 +437,9 @@ fn parse_offset(modifiers: &[impl AsRef<str>]) -> f64 {
             && let Some(n) = modifiers
                 .get(i + 1)
                 .and_then(|s| s.as_ref().parse::<f64>().ok())
-            {
-                return n;
-            }
+        {
+            return n;
+        }
     }
     0.0
 }
@@ -465,9 +465,10 @@ fn resolve_anchor(
         return None;
     }
     if is_identifier(raw)
-        && let Some(el) = refs::get_on(scope_id, raw) {
-            return Some(el);
-        }
+        && let Some(el) = refs::get_on(scope_id, raw)
+    {
+        return Some(el);
+    }
     let doc = web_sys::window()?.document()?;
     if let Some(el) = doc.query_selector(raw).ok().flatten() {
         return Some(el);
@@ -481,9 +482,10 @@ fn resolve_anchor(
             let s = s.trim();
             if !s.is_empty() {
                 if is_identifier(s)
-                    && let Some(el) = refs::get_on(scope_id, s) {
-                        return Some(el);
-                    }
+                    && let Some(el) = refs::get_on(scope_id, s)
+                {
+                    return Some(el);
+                }
                 return doc.query_selector(s).ok().flatten();
             }
         }

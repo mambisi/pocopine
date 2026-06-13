@@ -1,8 +1,8 @@
 use pocopine_core::{App, AppPlugin};
 
 use crate::{
-    StorageError, StorageResult, UploadPolicyDescriptor, UploadSession, UploadSessionId,
-    STORAGE_ENDPOINT_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX,
+    STORAGE_ENDPOINT_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX, StorageError, StorageResult,
+    UploadPolicyDescriptor, UploadSession, UploadSessionId,
 };
 
 /// App plugin that provides [`StorageClient`] to components.
@@ -257,8 +257,8 @@ mod wasm {
     use futures_util::stream::{FuturesUnordered, StreamExt as _};
     use js_sys::Promise;
     use serde::de::DeserializeOwned;
-    use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
         AbortSignal, Blob, File, Headers, Request, RequestCredentials, RequestInit, Response,
@@ -266,8 +266,8 @@ mod wasm {
 
     use super::*;
     use crate::{
-        plan_parts, CompleteUploadRequest, InitiateUploadRequest, ObjectRef, PartSpec,
-        StorageResponse, UploadPhase, UploadProgress, UploadStrategy, STORAGE_PROTOCOL_V1,
+        CompleteUploadRequest, InitiateUploadRequest, ObjectRef, PartSpec, STORAGE_PROTOCOL_V1,
+        StorageResponse, UploadPhase, UploadProgress, UploadStrategy, plan_parts,
     };
 
     const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
@@ -1209,12 +1209,13 @@ mod wasm {
 
         fn validate_head_length(&self, head: &UploadHead) -> StorageResult<()> {
             if let Some(length) = head.length
-                && length != self.source.size {
-                    return Err(StorageError::client(format!(
-                        "upload length mismatch: remote {length}, local {}",
-                        self.source.size
-                    )));
-                }
+                && length != self.source.size
+            {
+                return Err(StorageError::client(format!(
+                    "upload length mismatch: remote {length}, local {}",
+                    self.source.size
+                )));
+            }
             Ok(())
         }
 

@@ -240,9 +240,10 @@ fn for_each_direct_child_with_attr(
     let children = parent.children();
     for i in 0..children.length() {
         if let Some(child) = children.item(i)
-            && child.has_attribute(attr) {
-                on_match(&child);
-            }
+            && child.has_attribute(attr)
+        {
+            on_match(&child);
+        }
     }
 }
 

@@ -19,7 +19,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use js_sys::Array;
-use pocopine_core::{refs, ComponentState, Scope};
+use pocopine_core::{ComponentState, Scope, refs};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 

@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use web_sys::{Element, PointerEvent};
 
-use super::{is_primary_pointer, GestureHandle};
+use super::{GestureHandle, is_primary_pointer};
 
 /// One event in a pan session.
 #[derive(Clone, Copy, Debug)]
@@ -151,9 +151,10 @@ where
                 return;
             };
             if st.started
-                && let Ok(mut f) = cb.try_borrow_mut() {
-                    f(PanEvent::Cancel);
-                }
+                && let Ok(mut f) = cb.try_borrow_mut()
+            {
+                f(PanEvent::Cancel);
+            }
         });
     }
 

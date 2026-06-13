@@ -16,7 +16,7 @@
 //! the element's `opening_tag_range`; the parser does not yet track
 //! per-attribute spans (a follow-up that this crate's needs motivate).
 
-use pocopine_template_parser::{parse, Element, Node};
+use pocopine_template_parser::{Element, Node, parse};
 
 use crate::diagnostics::{Diagnostic, Span};
 
@@ -238,9 +238,11 @@ mod tests {
         let ex = extract_poco(0, r#"<div :class="dynamic_classes(state)"></div>"#);
         assert!(ex.classes.is_empty());
         assert_eq!(ex.diagnostics.len(), 1);
-        assert!(ex.diagnostics[0]
-            .message
-            .contains("statically discoverable"));
+        assert!(
+            ex.diagnostics[0]
+                .message
+                .contains("statically discoverable")
+        );
     }
 
     #[test]

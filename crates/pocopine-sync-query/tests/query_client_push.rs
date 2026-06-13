@@ -21,15 +21,15 @@ use std::sync::{Arc, Mutex};
 
 use http_body_util::BodyExt;
 use pocopine_auth::RequestContext;
+use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
-use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, MutationId, RowVersion, SyncPushResponse, SyncResult, SyncServer,
-    SyncStreamName, SYNC_PUSH_PATH,
+    MutationId, RowVersion, SYNC_PUSH_PATH, SyncPushResponse, SyncResult, SyncServer,
+    SyncStreamName, sync_server_plugin,
 };
 use pocopine_sync_query::source::{
-    source as build_source, DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
+    DeleteResult, Source, SourceFuture, SourceStream, WriteResult, source as build_source,
 };
 use pocopine_sync_query::write::{MemoryMutationLog, MutationPayload};
 use pocopine_sync_query::{Query, QueryClient, RowChange};

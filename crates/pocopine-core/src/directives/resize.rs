@@ -7,9 +7,9 @@
 //! border-box via `element.getBoundingClientRect()`.
 
 use js_sys::{Array, Reflect};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::{Element, ResizeObserver, ResizeObserverEntry};
 
 use crate::reactive::ScopeId;

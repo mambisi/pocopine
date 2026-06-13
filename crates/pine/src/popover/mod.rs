@@ -203,17 +203,18 @@ impl PinePopoverContent {
         // props flow through (pp-anchor's modifier syntax is
         // parsed statically at bind time).
         if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>()
-            && let Some(root) = ROOT.inject() {
-                compound::install_anchor_to_trigger(
-                    &floater,
-                    root.scope_id(),
-                    SLUG,
-                    &self.side,
-                    &self.align,
-                    self.side_offset,
-                    true,
-                );
-            }
+            && let Some(root) = ROOT.inject()
+        {
+            compound::install_anchor_to_trigger(
+                &floater,
+                root.scope_id(),
+                SLUG,
+                &self.side,
+                &self.align,
+                self.side_offset,
+                true,
+            );
+        }
 
         // Content is inside a teleported subtree; see the dialog
         // equivalent. Watch root.open and deactivate when it

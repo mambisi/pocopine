@@ -557,11 +557,10 @@ mod tests {
 
     #[test]
     fn mutation_id_generator_rejects_zero_next_counter() {
-        assert!(MutationIdGenerator::with_next_counter(
-            SyncDeviceId::new("device_abc").unwrap(),
-            0
-        )
-        .is_err());
+        assert!(
+            MutationIdGenerator::with_next_counter(SyncDeviceId::new("device_abc").unwrap(), 0)
+                .is_err()
+        );
     }
 
     #[test]

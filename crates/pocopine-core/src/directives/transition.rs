@@ -22,10 +22,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use js_sys::Reflect;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
-use web_sys::{window, Element};
+use web_sys::{Element, window};
 
 const TX_ID_KEY: &str = "__pp_tx_id";
 
@@ -186,9 +186,10 @@ fn cancel(state: &mut State, el: &Element) {
         let _ = cl.remove_1(c);
     }
     if let Some(h) = state.pending_timer.take()
-        && let Some(w) = window() {
-            w.clear_timeout_with_handle(h);
-        }
+        && let Some(w) = window()
+    {
+        w.clear_timeout_with_handle(h);
+    }
     state.epoch = state.epoch.wrapping_add(1);
     state.phase = Phase::Idle;
 }
@@ -428,9 +429,10 @@ fn schedule_end<F: FnOnce() + 'static>(
         && let Ok(handle) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
             closure.as_ref().unchecked_ref(),
             (duration + 20.0) as i32,
-        ) {
-            rc.borrow_mut().pending_timer = Some(handle);
-        }
+        )
+    {
+        rc.borrow_mut().pending_timer = Some(handle);
+    }
     closure.forget();
 }
 
@@ -504,9 +506,10 @@ fn collect_animated(root: &Element) -> Vec<Element> {
     if let Ok(list) = root.query_selector_all(ATTR_SELECTOR) {
         for i in 0..list.length() {
             if let Some(node) = list.item(i)
-                && let Ok(el) = node.dyn_into::<Element>() {
-                    out.push(el);
-                }
+                && let Ok(el) = node.dyn_into::<Element>()
+            {
+                out.push(el);
+            }
         }
     }
     out
@@ -545,9 +548,10 @@ fn enter_subtree_dyn(root: &Element, on_done: Box<dyn FnOnce() + 'static>) {
             let n = remaining.get().saturating_sub(1);
             remaining.set(n);
             if n == 0
-                && let Some(cb) = on_done_cell.borrow_mut().take() {
-                    cb();
-                }
+                && let Some(cb) = on_done_cell.borrow_mut().take()
+            {
+                cb();
+            }
         });
     }
 }
@@ -702,9 +706,10 @@ pub fn enter_subtree_staggered<F: FnOnce() + 'static>(root: &Element, stagger_ms
                 let n = remaining.get().saturating_sub(1);
                 remaining.set(n);
                 if n == 0
-                    && let Some(cb) = on_done_cell.borrow_mut().take() {
-                        cb();
-                    }
+                    && let Some(cb) = on_done_cell.borrow_mut().take()
+                {
+                    cb();
+                }
             });
         };
         if delay == 0 {
@@ -761,9 +766,10 @@ fn leave_subtree_dyn(root: &Element, on_done: Box<dyn FnOnce() + 'static>) {
     let on_done_for_safety = on_done_cell.clone();
     let safety = Closure::once_into_js(move || {
         if remaining_for_safety.get() > 0
-            && let Some(cb) = on_done_for_safety.borrow_mut().take() {
-                cb();
-            }
+            && let Some(cb) = on_done_for_safety.borrow_mut().take()
+        {
+            cb();
+        }
     });
     if let Some(w) = window() {
         let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -779,9 +785,10 @@ fn leave_subtree_dyn(root: &Element, on_done: Box<dyn FnOnce() + 'static>) {
             let n = remaining.get().saturating_sub(1);
             remaining.set(n);
             if n == 0
-                && let Some(cb) = on_done_cell.borrow_mut().take() {
-                    cb();
-                }
+                && let Some(cb) = on_done_cell.borrow_mut().take()
+            {
+                cb();
+            }
         });
     }
 }
@@ -805,9 +812,10 @@ pub fn release(el: &Element) {
     TX.with(|m| {
         if let Some(rc) = m.borrow_mut().remove(&id)
             && let Some(h) = rc.borrow_mut().pending_timer.take()
-                && let Some(w) = window() {
-                    w.clear_timeout_with_handle(h);
-                }
+            && let Some(w) = window()
+        {
+            w.clear_timeout_with_handle(h);
+        }
     });
 }
 

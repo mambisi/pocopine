@@ -3,7 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::model::{Attrs, Fragment, Mark, Node, Schema, Slice};
 use crate::transform::{Mapping, StepMap, Transform};
@@ -349,11 +349,7 @@ fn node_after(doc: &Node, pos: usize) -> Option<Node> {
 }
 
 fn normalize_dir(dir: i8) -> i8 {
-    if dir < 0 {
-        -1
-    } else {
-        1
-    }
+    if dir < 0 { -1 } else { 1 }
 }
 
 fn is_text_position(doc: &Node, schema: &Schema, pos: usize) -> RichTextResult<bool> {
@@ -498,17 +494,17 @@ impl Transaction {
         selection.validate(self.doc())?;
         if let Selection::Node { anchor } = &selection
             && let Some(node) = node_after(self.doc(), *anchor)
-                && !self
-                    .transform
-                    .schema()
-                    .node_type(node.type_name())?
-                    .is_selectable()
-                {
-                    return Err(RichTextError::Selection(format!(
-                        "node type {} is not selectable",
-                        node.type_name()
-                    )));
-                }
+            && !self
+                .transform
+                .schema()
+                .node_type(node.type_name())?
+                .is_selectable()
+        {
+            return Err(RichTextError::Selection(format!(
+                "node type {} is not selectable",
+                node.type_name()
+            )));
+        }
         self.selection = Some(selection);
         self.stored_marks = None;
         Ok(self)
@@ -800,11 +796,7 @@ fn slice_insertion_bias(slice: &Slice, schema: &Schema) -> i8 {
             .node_type(node.type_name())
             .is_ok_and(|node_type| node_type.inline_content(schema))
     });
-    if inline_tail {
-        -1
-    } else {
-        1
-    }
+    if inline_tail { -1 } else { 1 }
 }
 
 /// Configuration for [`EditorState::create`].
@@ -1041,9 +1033,10 @@ impl EditorState {
     ) -> RichTextResult<(Self, Vec<Transaction>)> {
         for plugin in &self.plugins {
             if let Some(filter) = &plugin.filter_transaction
-                && !(filter)(&transaction, self)? {
-                    return Ok((self.clone(), Vec::new()));
-                }
+                && !(filter)(&transaction, self)?
+            {
+                return Ok((self.clone(), Vec::new()));
+            }
         }
 
         let mut next = self.apply_without_append(&transaction)?;
@@ -1054,10 +1047,11 @@ impl EditorState {
                 let mut appended = None;
                 for plugin in &next.plugins {
                     if let Some(append) = &plugin.append_transaction
-                        && let Some(transaction) = (append)(&transactions, self, &next)? {
-                            appended = Some(transaction);
-                            break;
-                        }
+                        && let Some(transaction) = (append)(&transactions, self, &next)?
+                    {
+                        appended = Some(transaction);
+                        break;
+                    }
                 }
 
                 let Some(mut transaction) = appended else {
@@ -1387,12 +1381,10 @@ mod tests {
 
     fn state() -> EditorState {
         let schema = schema_basic::schema();
-        let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
-            "hello",
-            Vec::new(),
-        )
-        .unwrap()])
-        .unwrap()])
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text("hello", Vec::new()).unwrap()])
+                .unwrap(),
+        ])
         .unwrap();
         EditorState::create(EditorStateConfig::new(schema, doc)).unwrap()
     }
@@ -1522,9 +1514,10 @@ mod tests {
         let next = state.apply(first_transaction).unwrap();
 
         let err = next.apply(stale_transaction).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("transaction was created from a different document"));
+        assert!(
+            err.to_string()
+                .contains("transaction was created from a different document")
+        );
     }
 
     #[test]

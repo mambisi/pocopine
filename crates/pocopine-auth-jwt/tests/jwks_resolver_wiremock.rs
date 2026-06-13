@@ -22,16 +22,16 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use jsonwebtoken::{encode, Algorithm as JwtAlg, EncodingKey, Header};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use jsonwebtoken::{Algorithm as JwtAlg, EncodingKey, Header, encode};
 use pocopine_auth_jwt::{
     Algorithm, ClaimMap, JwtAuthError, JwtConfig, JwtVerifier, KeySource, TokenSource,
 };
 use rsa::pkcs1::EncodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

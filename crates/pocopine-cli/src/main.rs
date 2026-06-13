@@ -45,7 +45,7 @@ use args::{AssetsCmd, Cli, Cmd, EnvArgs, EnvCmd, JsCmd};
 /// to the user. Defaults to `info` for first-party crates and `warn`
 /// for everything else; `RUST_LOG` overrides verbatim.
 fn install_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
     let default = "warn,pocopine=info,pocopine_cli=info,pocopine_deploy=info,\
                    pocopine_deploy_railway=info,pocopine_deploy_render=info";

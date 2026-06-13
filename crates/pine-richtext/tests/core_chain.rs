@@ -6,12 +6,9 @@ use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection};
 
 fn starter_state() -> EditorState {
     let schema = schema_basic::schema();
-    let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
-        "hello",
-        Vec::new(),
-    )
-    .unwrap()])
-    .unwrap()])
+    let doc = schema_basic::doc(vec![
+        schema_basic::paragraph(vec![schema_basic::text("hello", Vec::new()).unwrap()]).unwrap(),
+    ])
     .unwrap();
 
     EditorState::create(EditorStateConfig::new(schema, doc)).unwrap()

@@ -21,14 +21,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use serde_json::Value;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use web_sys::{CustomEvent, CustomEventInit, Element, Event};
 
 use super::content::{ContentError, ContentFormat, Markdown};
 use super::root::{
-    runtime_plugins_view, state_json_from_doc, CommandRequest, COMMAND_EVENT, DOC_CHANGED_EVENT,
-    EXPORT_STATE_REQUEST_EVENT, EXPORT_STATE_RESULT_EVENT,
+    COMMAND_EVENT, CommandRequest, DOC_CHANGED_EVENT, EXPORT_STATE_REQUEST_EVENT,
+    EXPORT_STATE_RESULT_EVENT, runtime_plugins_view, state_json_from_doc,
 };
 use crate::runtime::{self, EditorRuntime};
 use crate::state::EditorState;

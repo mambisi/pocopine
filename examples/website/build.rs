@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use pulldown_cmark::{
-    html, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html,
 };
 use quote::ToTokens;
 use serde::Deserialize;
@@ -285,9 +285,10 @@ fn stage_dir(src: &Path, dst: &Path) {
     for e in entries.flatten() {
         let p = e.path();
         if p.is_file()
-            && let Some(name) = p.file_name() {
-                let _ = fs::copy(&p, dst.join(name));
-            }
+            && let Some(name) = p.file_name()
+        {
+            let _ = fs::copy(&p, dst.join(name));
+        }
     }
 }
 
@@ -540,12 +541,13 @@ fn emit_snippets(hl: &Hl, manifest: &str, out_dir: &str) {
             install_arms.push_str(&format!("            {slug:?} => {html:?},\n"));
         }
         if let Some(anatomy) = meta_anatomy.get(slug)
-            && !anatomy.is_empty() {
-                anatomy_arms.push_str(&format!(
-                    "            {slug:?} => {:?},\n",
-                    hl.code(anatomy, "poco")
-                ));
-            }
+            && !anatomy.is_empty()
+        {
+            anatomy_arms.push_str(&format!(
+                "            {slug:?} => {:?},\n",
+                hl.code(anatomy, "poco")
+            ));
+        }
     }
     s.push_str("pub mod api {\n");
     s.push_str(
@@ -640,9 +642,10 @@ fn stage_icons(src: &Path, dst: &Path, expected: usize) {
         for e in entries.flatten() {
             let p = e.path();
             if p.extension().and_then(|x| x.to_str()) == Some("svg")
-                && let Some(name) = p.file_name() {
-                    let _ = fs::copy(&p, dst.join(name));
-                }
+                && let Some(name) = p.file_name()
+            {
+                let _ = fs::copy(&p, dst.join(name));
+            }
         }
     }
 }
@@ -731,9 +734,9 @@ fn doc_of(attrs: &[syn::Attribute]) -> String {
                 lit: syn::Lit::Str(s),
                 ..
             }) = &nv.value
-            {
-                lines.push(s.value().trim().to_string());
-            }
+        {
+            lines.push(s.value().trim().to_string());
+        }
     }
     lines
         .join(" ")
@@ -1528,17 +1531,18 @@ fn emit_type(
 ) {
     out.push_str(&format!("#### `{name}` ({kind})\n\n{doc}\n\n"));
     if let Some(ms) = methods.get(name)
-        && !ms.is_empty() {
-            out.push_str("Methods:\n\n");
-            for (sig, mdoc) in ms {
-                if mdoc.is_empty() {
-                    out.push_str(&format!("- `{sig}`\n"));
-                } else {
-                    out.push_str(&format!("- `{sig}` — {mdoc}\n"));
-                }
+        && !ms.is_empty()
+    {
+        out.push_str("Methods:\n\n");
+        for (sig, mdoc) in ms {
+            if mdoc.is_empty() {
+                out.push_str(&format!("- `{sig}`\n"));
+            } else {
+                out.push_str(&format!("- `{sig}` — {mdoc}\n"));
             }
-            out.push('\n');
         }
+        out.push('\n');
+    }
 }
 
 fn doc_or(attrs: &[syn::Attribute]) -> String {

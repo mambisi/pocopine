@@ -45,21 +45,21 @@ pub use assets::{
 };
 pub use observability::request_event_layer;
 pub use plugin::{
+    HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, PluginValidationError, RequestId,
+    ServerBootFailed, ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed,
+    ServerFunctionRejected, ServerFunctionStarted, ServerHook, ServerListening, ServerPluginHandle,
     active_plugin, emit, has_http_request_completed_hooks, has_http_request_failed_hooks,
     has_http_request_hooks, has_http_request_started_hooks, has_server_boot_failed_hooks,
     has_server_boot_started_hooks, has_server_function_completed_hooks,
     has_server_function_failed_hooks, has_server_function_hooks,
     has_server_function_rejected_hooks, has_server_function_started_hooks,
-    has_server_listening_hooks, next_request_id, HttpRequestCompleted, HttpRequestFailed,
-    HttpRequestStarted, PluginValidationError, RequestId, ServerBootFailed, ServerBootStarted,
-    ServerFunctionCompleted, ServerFunctionFailed, ServerFunctionRejected, ServerFunctionStarted,
-    ServerHook, ServerListening, ServerPluginHandle,
+    has_server_listening_hooks, next_request_id,
 };
 pub use server::{Server, ServerPlugin};
 pub use server_functions::{
-    install_server_functions, ServerFunctionRoute, ServerFunctionRouteConflict,
+    ServerFunctionRoute, ServerFunctionRouteConflict, install_server_functions,
 };
-pub use static_files::{index_file, StaticFiles};
+pub use static_files::{StaticFiles, index_file};
 
 #[doc(hidden)]
 pub use plugin::__reset_for_test;
@@ -67,10 +67,10 @@ pub use plugin::__reset_for_test;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use axum::Router;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::Router;
 use pocopine_auth::{AuthProvider, Principal, RequestContext};
 
 /// Default maximum JSON request body accepted by generated

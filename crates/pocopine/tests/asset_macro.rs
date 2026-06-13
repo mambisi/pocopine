@@ -40,9 +40,11 @@ fn asset_macro_emits_content_addressed_url() {
         .and_then(|rest| rest.split('/').next())
         .expect("URL has the /assets/<hash>/<path> shape");
     assert_eq!(hash_segment.len(), 8);
-    assert!(hash_segment
-        .bytes()
-        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    assert!(
+        hash_segment
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
 }
 
 #[test]
