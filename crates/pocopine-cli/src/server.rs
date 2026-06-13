@@ -537,7 +537,11 @@ fn handle(root: &Path, request: tiny_http::Request) {
         return;
     }
 
-    let candidate = root.join(rel);
+    let candidate = if rel == "index.html" {
+        index_html(root)
+    } else {
+        root.join(rel)
+    };
     let looks_like_asset = looks_like_asset_path(rel);
 
     let canonical = candidate
@@ -567,10 +571,10 @@ fn handle(root: &Path, request: tiny_http::Request) {
         }
     }
 
-    // Fall back to root index.html for non-asset paths (SPA history fallback).
-    // Asset-looking paths 404 so bad imports are not masked.
+    // Fall back to the root index for non-asset paths (SPA history
+    // fallback). Asset-looking paths 404 so bad imports are not masked.
     if !looks_like_asset {
-        let fallback = root.join("index.html");
+        let fallback = index_html(root);
         if let Ok(body) = std::fs::read(&fallback) {
             let body = client_modules::inject_html_if_needed(root, &fallback, body);
             let header = tiny_http::Header::from_bytes(
@@ -588,6 +592,22 @@ fn handle(root: &Path, request: tiny_http::Request) {
     }
 
     let _ = request.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+}
+
+/// The index.html the server hands out for entry-point requests
+/// (`/`, `/index.html`) and the SPA history fallback: the GENERATED
+/// `pkg/index.html` (the copy `build::hash_pkg_bundle` writes with
+/// the hashed bundle reference) when a build has produced one, else
+/// the source `index.html` — it keeps the stable unhashed
+/// `pkg/<name>.js` reference and serves as-is when no build ran.
+/// Mirrors `pocopine_server::index_file` in production.
+fn index_html(root: &Path) -> std::path::PathBuf {
+    let generated = root.join("pkg/index.html");
+    if generated.is_file() {
+        generated
+    } else {
+        root.join("index.html")
+    }
 }
 
 /// RFC-100 — match `assets/<hash>/<path...>` and serve
@@ -734,6 +754,20 @@ mod tests {
 
         let path = bin_executable_path(Path::new("/tmp/pocopine-target"), "server", true);
         assert!(path.ends_with(Path::new("release").join(executable)));
+    }
+
+    #[test]
+    fn index_html_prefers_the_generated_pkg_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // No build output — the source index serves.
+        std::fs::write(root.join("index.html"), "source").unwrap();
+        assert_eq!(index_html(root), root.join("index.html"));
+
+        // `pocopine build` wrote the hash-rewritten copy — prefer it.
+        std::fs::create_dir(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/index.html"), "generated").unwrap();
+        assert_eq!(index_html(root), root.join("pkg/index.html"));
     }
 
     // RFC-100 — content-addressed asset route.

@@ -7,14 +7,19 @@
 async fn main() -> std::io::Result<()> {
     use hn as _;
     use pocopine_logging::init_default;
-    use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
+    use pocopine_server::{
+        axum::Router, index_file, serve, static_files, tower_http::services::ServeFile,
+    };
 
     init_default().map_err(std::io::Error::other)?;
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let index_path = format!("{manifest_dir}/index.html");
 
-    let static_service = static_files(manifest_dir).fallback(ServeFile::new(index_path));
+    // SPA history fallback — `index_file` prefers the generated
+    // `pkg/index.html` (hashed bundle reference, written by
+    // `pocopine build`) over the source index.html.
+    let static_service =
+        static_files(manifest_dir).fallback(ServeFile::new(index_file(manifest_dir)));
     let router = Router::new().fallback_service(static_service);
 
     let addr = "127.0.0.1:3001";

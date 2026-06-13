@@ -59,7 +59,7 @@ pub use server::{Server, ServerPlugin};
 pub use server_functions::{
     install_server_functions, ServerFunctionRoute, ServerFunctionRouteConflict,
 };
-pub use static_files::StaticFiles;
+pub use static_files::{index_file, StaticFiles};
 
 #[doc(hidden)]
 pub use plugin::__reset_for_test;
@@ -149,6 +149,11 @@ fn parse_body_limit(raw: &str) -> Option<usize> {
 /// heuristics cache `.js` but not `.wasm`, which after a deploy can
 /// pair a stale cached glue with a fresh wasm and fail
 /// `WebAssembly.instantiate` with a `LinkError`. See [`StaticFiles`].
+///
+/// `/` and `/index.html` serve the GENERATED `pkg/index.html` (the
+/// copy `pocopine build` writes with the hashed bundle reference)
+/// when it exists, falling back to the source `index.html` — the
+/// source keeps the stable unhashed `pkg/<name>.js` reference.
 pub fn static_files(dir: impl AsRef<std::path::Path>) -> StaticFiles {
     StaticFiles::new(dir)
 }

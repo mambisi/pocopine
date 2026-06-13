@@ -29,6 +29,15 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_args, **_kwargs):
         pass
 
+    def send_head(self):
+        # `pocopine build` writes the hash-rewritten entry point to
+        # pkg/index.html (the source index.html keeps the stable
+        # unhashed bundle reference); prefer the generated copy like
+        # pocopine's real servers do.
+        if self.path in ("/", "/index.html") and (DEMO_ROOT / "pkg" / "index.html").is_file():
+            self.path = "/pkg/index.html"
+        return super().send_head()
+
 
 class _ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True

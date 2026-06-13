@@ -86,11 +86,13 @@ in:
 </html>
 ```
 
-After a build the script reference reads `/pkg/hello_pine.<hash>.js` —
 `pocopine build` content-hashes the JS + wasm pair (one hash, the
-wasm's) and rewrites this line, so browsers and CDNs can cache the
-bundle forever (`immutable`) while `index.html` itself always
-revalidates. Leave the hashed name alone; every build keeps it current.
+wasm's) and writes a generated copy of this file to `pkg/index.html`
+with the reference re-pointed at `/pkg/hello_pine.<hash>.js`. Servers
+prefer that generated copy when it exists, so browsers and CDNs can
+cache the bundle forever (`immutable`) while the HTML entry point
+always revalidates. Your source `index.html` keeps the stable
+unhashed reference — never write a hash into it by hand.
 
 ## 3. Run it
 
