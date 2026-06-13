@@ -30,6 +30,8 @@ members = [
     "crates/pocopine-live",
     "crates/pocopine-logging",
     "crates/pocopine-macros",
+    "crates/pocopine-native",
+    "crates/pocopine-native-tauri",
     "crates/pocopine-observe",
     "crates/pocopine-server",
     "crates/pocopine-storage",
@@ -71,6 +73,14 @@ members = [
     "examples/sync",
     "examples/tailwind",
     "examples/todo",
+]
+
+# RFC-104 native host crate (Tauri shell for the file-browser example).
+# Excluded so a stock `cargo build`/CI never links the Tauri webview
+# backend; build it with `pocopine native dev --path examples/file-browser`
+# on a webview-capable host.
+exclude = [
+    "examples/file-browser/src-tauri",
 ]
 
 # The CLI builds for the host; everything else builds for wasm32. Exclude the
