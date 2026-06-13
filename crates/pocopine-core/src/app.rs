@@ -2510,15 +2510,33 @@ fn hydrate_pp_app_subtree(host: &Element) {
         }
         child = next;
     }
-    // Register any <pp-outlet> so post-hydration navigation re-renders.
+    // Register each <pp-outlet> and CLAIM the route component the server
+    // rendered into it (`render_app_to_string` placed it as the outlet's
+    // `<route-tag>` child). Claiming it means the router must NOT repaint
+    // on init — it only seeds `$route` + the popstate listener.
+    let mut claimed_route = false;
     if let Ok(outlets) = host.query_selector_all("pp-outlet") {
         for i in 0..outlets.length() {
             if let Some(node) = outlets.item(i) {
-                if let Ok(el) = node.dyn_into::<Element>() {
-                    router::set_outlet(el);
+                if let Ok(outlet) = node.dyn_into::<Element>() {
+                    if let Some(route_root) = outlet
+                        .first_element_child()
+                        .and_then(|route_tag| route_tag.first_element_child())
+                    {
+                        if crate::hydrate::hydrate_root(&route_root).is_some() {
+                            claimed_route = true;
+                        }
+                    }
+                    router::set_outlet(outlet);
                 }
             }
         }
+    }
+    if claimed_route {
+        router::init_hydrated();
+    } else {
+        // No server-rendered route — mount the current URL's route fresh.
+        router::init();
     }
 }
 

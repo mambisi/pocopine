@@ -60,6 +60,7 @@ use pocopine_core::directives::for_plan::{
     StaticMatchPlan,
 };
 use pocopine_core::directives::interp::PlannedSegment;
+use pocopine_core::router;
 use pocopine_core::templates::template_for;
 use pocopine_core::templates_plan::{template_plan_for, StaticTemplatePlan};
 use pocopine_core::{expr, host_eval, js_number, Component};
@@ -211,6 +212,82 @@ where
         body: stamp_with_plan(&html, plan, &state),
         state: script_safe_json(&state),
     })
+}
+
+/// RFC-099 Phase 4 — render a **routed app document**: stamp the root
+/// component, resolve `url` to a route via [`router::resolve_route`], and
+/// render that route component into the root's `<pp-outlet>` (with the
+/// captured params as both attributes and prop state). `App::hydrate`
+/// then claims the whole tree. Routes must be registered host-side (the
+/// same `App::route::<C>(…)` builder the client uses). The returned
+/// `state` is the ROOT's island; child + route islands are embedded
+/// inline by the recursive render.
+pub fn render_app_to_string<C>(root: &C, url: &str) -> Option<RenderedPage>
+where
+    C: Component + serde::Serialize,
+{
+    let html = template_for(C::NAME)?;
+    let plan = template_plan_for(C::NAME)?;
+    let state = serde_json::to_value(root).ok()?;
+    let mut keep: Vec<RcDom> = Vec::new();
+    let body = match stamp_fragment(&html, plan, &state, &mut keep) {
+        Some(root_node) => {
+            if let (Some(outlet), Some((route_tag, params))) =
+                (find_outlet(&root_node), router::resolve_route(url))
+            {
+                render_route_into_outlet(&outlet, route_tag, &params, &mut keep);
+            }
+            serialize_node(&root_node)
+        }
+        None => html.into_owned(),
+    };
+    drop(keep);
+    Some(RenderedPage {
+        body,
+        state: script_safe_json(&state),
+    })
+}
+
+/// Find the first `<pp-outlet>` element anywhere under `node`.
+fn find_outlet(node: &Handle) -> Option<Handle> {
+    if let NodeData::Element { name, .. } = &node.data {
+        if name.local.as_ref() == "pp-outlet" {
+            return Some(node.clone());
+        }
+    }
+    for child in node.children.borrow().iter() {
+        if let Some(found) = find_outlet(child) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Render the matched route component into `<pp-outlet>` as a
+/// `<route-tag param="value">` host (mirroring the router's
+/// `finish_route_mount`), with the captured params as both host
+/// attributes (for the client re-mount path) and prop state (for the
+/// SSR render of the route's template).
+fn render_route_into_outlet(
+    outlet: &Handle,
+    route_tag: &str,
+    params: &std::collections::HashMap<String, String>,
+    keep: &mut Vec<RcDom>,
+) {
+    let attrs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let route_el = element_node(route_tag, &attrs);
+    let mut props = serde_json::Map::new();
+    for (k, v) in params {
+        props.insert(prop_field(k), coerce_attr(v));
+    }
+    let route_state = Value::Object(props);
+    if render_component_into_host(&route_el, route_tag, &route_state, keep) {
+        route_el.parent.set(Some(Rc::downgrade(outlet)));
+        *outlet.children.borrow_mut() = vec![route_el];
+    }
 }
 
 /// Serialize `state` to JSON and neutralise `<` (→ `<`) so it is
@@ -731,20 +808,33 @@ fn expand_child_mounts(
         let Some(host) = walk_element_path(root, cm.node_path) else {
             continue;
         };
-        let (Some(child_html), Some(child_plan)) =
-            (template_for(cm.tag), template_plan_for(cm.tag))
-        else {
-            continue;
-        };
         let child_state = child_state_value(&host, cm, parent_state);
-        let Some(child_root) = stamp_fragment(&child_html, child_plan, &child_state, keep) else {
-            continue;
-        };
-        let island = state_island_node(&child_state);
-        child_root.parent.set(Some(Rc::downgrade(&host)));
-        island.parent.set(Some(Rc::downgrade(&host)));
-        *host.children.borrow_mut() = vec![child_root, island];
+        render_component_into_host(&host, cm.tag, &child_state, keep);
     }
+}
+
+/// Render component `tag` with `state` recursively, then place its root
+/// element and its `data-pp-state` island as the children of `host`
+/// (mirroring mount's `host.innerHTML = template`). Shared by child-mount
+/// expansion and route SSR. Returns `false` if `tag` isn't a
+/// registered/plannable component (host left untouched → client mounts).
+fn render_component_into_host(
+    host: &Handle,
+    tag: &str,
+    state: &Value,
+    keep: &mut Vec<RcDom>,
+) -> bool {
+    let (Some(html), Some(plan)) = (template_for(tag), template_plan_for(tag)) else {
+        return false;
+    };
+    let Some(root) = stamp_fragment(&html, plan, state, keep) else {
+        return false;
+    };
+    let island = state_island_node(state);
+    root.parent.set(Some(Rc::downgrade(host)));
+    island.parent.set(Some(Rc::downgrade(host)));
+    *host.children.borrow_mut() = vec![root, island];
+    true
 }
 
 /// Build a child component's render state: static props from the host

@@ -731,3 +731,73 @@ fn server_render_hydrates_child_component_byte_equal() {
         root.outer_html()
     );
 }
+
+// ─── RFC-099 Phase 4 — App::hydrate end-to-end (shell + route) ──────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ah-route",
+    template_inline = r#"<section class="ahp" pp-text="name"></section>"#
+)]
+struct AhRoute {
+    #[prop]
+    name: String,
+}
+#[handlers]
+impl AhRoute {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ah-shell",
+    template_inline = r#"<div class="ahshell"><header class="ahh">H</header><pp-outlet></pp-outlet></div>"#
+)]
+struct AhShell {}
+#[handlers]
+impl AhShell {}
+
+#[wasm_bindgen_test]
+fn app_hydrate_claims_shell_and_route() {
+    AhRoute::register();
+    AhShell::register();
+    pocopine_core::router::register_route("/ph/:name", "ah-route");
+
+    // Server: render the shell + the matched route into <pp-outlet>,
+    // then wrap in the [pp-app] custom-element-host document shape.
+    let page = pocopine_ssr::render_app_to_string(&AhShell::default(), "/ph/widgets")
+        .expect("app rendered");
+    assert!(
+        page.body.contains(">widgets</section>"),
+        "route SSR'd: {}",
+        page.body
+    );
+    let doc_html = format!(
+        r#"<div pp-app><ah-shell>{}{}</ah-shell></div>"#,
+        page.body,
+        page.state_island()
+    );
+
+    // Append (do NOT replace document.body — that holds the wasm-test
+    // harness UI; wiping it makes the runner think the test never ran).
+    // App::hydrate finds the [pp-app] anywhere in the document.
+    let doc = window().unwrap().document().unwrap();
+    let mount = doc.create_element("div").unwrap();
+    mount.set_inner_html(&doc_html);
+    doc.body().unwrap().append_child(&mount).unwrap();
+
+    // Client: the app-level hydrate entry claims the whole [pp-app] tree
+    // (shell + the route in the outlet) instead of mounting fresh.
+    App::new()
+        .register::<AhShell>()
+        .register::<AhRoute>()
+        .hydrate();
+    flush_sync();
+
+    // The server-rendered route survived the claim (still in the outlet,
+    // param intact) — App::hydrate did not blow it away by re-mounting.
+    let html = mount.inner_html();
+    assert!(
+        html.contains(">widgets</section>"),
+        "App::hydrate claimed the route in the outlet (not re-mounted blank): {html}"
+    );
+    assert!(html.contains("ahshell"), "shell present: {html}");
+}

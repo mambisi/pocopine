@@ -265,3 +265,56 @@ fn recursive_child_ssr_renders_child_into_host_with_island() {
         "child state island present: {body}"
     );
 }
+
+// ─── RFC-099 Phase 4 — route SSR (render route into <pp-outlet>) ────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-route-page",
+    template_inline = r#"<section class="page" pp-text="name"></section>"#
+)]
+struct SsrRoutePage {
+    #[prop]
+    name: String,
+}
+#[handlers]
+impl SsrRoutePage {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-shell",
+    template_inline = r#"<div class="shell"><header>H</header><pp-outlet></pp-outlet></div>"#
+)]
+struct SsrShell {}
+#[handlers]
+impl SsrShell {}
+
+#[test]
+fn route_ssr_renders_matched_route_into_outlet() {
+    SsrRoutePage::register();
+    SsrShell::register();
+    pocopine_core::router::register_route("/p/:name", "ssr-route-page");
+
+    let page = pocopine_ssr::render_app_to_string(&SsrShell::default(), "/p/widgets").unwrap();
+
+    assert!(
+        page.body.contains("<pp-outlet>"),
+        "outlet present: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("<ssr-route-page name=\"widgets\">"),
+        "route host with param attr in outlet: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains(">widgets</section>"),
+        "route template rendered with the :name param: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("data-pp-state") && page.body.contains(r#""name":"widgets""#),
+        "route state island present: {}",
+        page.body
+    );
+}

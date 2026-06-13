@@ -576,6 +576,16 @@ pub fn register_route(pattern: &'static str, component_name: &'static str) {
     register_route_with_config(pattern, component_name, RouteRuntimeConfig::default());
 }
 
+/// RFC-099 Phase 4 — host-callable route resolution for SSR. Returns the
+/// matched route's component tag + captured `:param` / `*rest` values
+/// for `path`, without touching the DOM, guards, or loaders. `None` when
+/// no registered route matches. The SSR renderer uses this to stamp the
+/// route component into the `<pp-outlet>`; guards/loaders run only on the
+/// client (see the divergence policy).
+pub fn resolve_route(path: &str) -> Option<(&'static str, HashMap<String, String>)> {
+    match_route(path, false).map(|m| (m.component_name, m.params))
+}
+
 pub(crate) fn register_route_with_config(
     pattern: &'static str,
     component_name: &'static str,
@@ -899,6 +909,39 @@ pub fn init() {
     cb.forget();
 
     let _ = mount_current();
+}
+
+/// RFC-099 Phase 4 — initialise the router for a HYDRATED app: seed the
+/// `$route` scope from the current URL and attach the `popstate`
+/// listener, but DO NOT paint the route — the server already rendered it
+/// into the `<pp-outlet>` and `App::hydrate` claimed it. The first
+/// client navigation (or popstate) re-mounts normally via
+/// [`mount_current`].
+pub fn init_hydrated() {
+    if INITIALISED.with(|b| b.replace(true)) {
+        return; // idempotent
+    }
+    ensure_route_scope();
+
+    // Seed `$route` from the current URL so bindings on the claimed
+    // route see the right path/params/query — without mounting.
+    if let Some(win) = web_sys::window() {
+        let loc = win.location();
+        let path = loc.pathname().unwrap_or_else(|_| "/".into());
+        let search = loc.search().unwrap_or_default();
+        let params = match_route(&path, false)
+            .map(|m| m.params)
+            .unwrap_or_default();
+        update_route_state(&path, &params, parse_query(&search));
+    }
+
+    let cb = Closure::wrap(Box::new(move |_: Event| {
+        let _ = mount_current();
+    }) as Box<dyn FnMut(Event)>);
+    if let Some(win) = web_sys::window() {
+        let _ = win.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
+    }
+    cb.forget();
 }
 
 fn ensure_route_scope() {
