@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use js_sys::Reflect;
 use pocopine_core::{
-    batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, run_now,
-    rw_signal, set_auto_flush, signal, spawn_for_scope, spawn_latest, spawn_latest_for_scope,
-    spawn_scoped, watch, watch_scope_field_now, FieldHandle, Handle, Scope,
+    batch, computed, effect, effect_hydrating, flush_sync, on_cleanup, on_scope_unmount_for,
+    release, run_now, rw_signal, set_auto_flush, signal, spawn_for_scope, spawn_latest,
+    spawn_latest_for_scope, spawn_scoped, watch, watch_scope_field_now, FieldHandle, Handle, Scope,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -251,6 +251,39 @@ fn watch_fires_on_distinct_values_only() {
     assert_eq!(hits.get(), 2);
     assert_eq!(last_old.get(), Some(5));
     assert_eq!(last_new.get(), 7);
+}
+
+// RFC-099 Phase 2c — `effect_hydrating` subscribes on its first run but
+// suppresses the side-effect (so hydration attaches without re-writing
+// the server's DOM); later changes apply.
+#[wasm_bindgen_test]
+fn effect_hydrating_suppresses_first_run_but_subscribes() {
+    setup();
+    let (s, setter) = signal(0_i32);
+    let reads = Rc::new(Cell::new(0)); // body invocations (= subscription proof)
+    let applies = Rc::new(Cell::new(0)); // un-suppressed side-effects
+    {
+        let reads = reads.clone();
+        let applies = applies.clone();
+        let s = s.clone();
+        effect_hydrating(move |suppressed| {
+            let _ = s.get(); // always — establishes the dependency
+            reads.set(reads.get() + 1);
+            if !suppressed {
+                applies.set(applies.get() + 1);
+            }
+        });
+    }
+    // First run executed (so it subscribed) but the apply was suppressed.
+    assert_eq!(reads.get(), 1, "first run executes (subscribes)");
+    assert_eq!(applies.get(), 0, "first-run side-effect suppressed");
+
+    // A change re-runs WITH the side-effect — proving the subscription
+    // from the suppressed first run is live.
+    setter.set(1);
+    flush_sync();
+    assert_eq!(reads.get(), 2);
+    assert_eq!(applies.get(), 1, "post-hydration change applies");
 }
 
 #[derive(Default, Serialize, Deserialize)]

@@ -267,6 +267,30 @@ pub fn effect_with(f: impl Fn() + 'static, opts: EffectOptions) -> EffectId {
     effect_with_dyn(Rc::new(f), opts)
 }
 
+/// RFC-099 Phase 2c — an effect whose **first run is suppressed**.
+///
+/// The body still runs immediately (so its dependency reads `track` and
+/// the effect subscribes), but it receives `suppressed = true` on that
+/// first invocation and `false` on every subsequent re-run. Hydration
+/// uses this to attach a binding to server-rendered DOM: the first run
+/// establishes the subscription without re-writing the node the server
+/// already filled (zero DOM writes during hydrate); later changes apply
+/// normally.
+///
+/// ```ignore
+/// effect_hydrating(move |suppressed| {
+///     let v = read_field();           // always — establishes the dep
+///     if !suppressed { write_dom(v); } // skip on the hydration pass
+/// });
+/// ```
+pub fn effect_hydrating(f: impl Fn(bool) + 'static) -> EffectId {
+    let first = std::cell::Cell::new(true);
+    effect(move || {
+        let suppressed = first.replace(false);
+        f(suppressed);
+    })
+}
+
 // RFC-058 Phase 6.5 — type-erased body. The generic shim above
 // performs the `Rc::new(f)` coercion to `EffectFn` (one
 // monomorphization per call site, but each is just the

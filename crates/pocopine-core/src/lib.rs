@@ -115,8 +115,9 @@ pub use profiler::mount::{
 };
 pub use props::{PropValue, Props};
 pub use reactive::{
-    batch, current_effect, effect, effect_scoped, effect_with, flush_sync, on_cleanup, release,
-    run_now, set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,
+    batch, current_effect, effect, effect_hydrating, effect_scoped, effect_with, flush_sync,
+    on_cleanup, release, run_now, set_auto_flush, track, trigger_scope, EffectId, EffectOptions,
+    ScopeId, SignalId,
 };
 pub use registry::{
     assert_registry_clean, canonical_component_name, mark_registered, register_component,
