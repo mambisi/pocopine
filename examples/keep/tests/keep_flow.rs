@@ -24,8 +24,10 @@ async fn keep_push_and_live_wakeup_share_the_stream_topic() {
     ));
     let _ = std::fs::remove_file(&test_path);
     let _ = std::fs::remove_file(&test_tags_path);
-    std::env::set_var("POCOPINE_KEEP_NOTES_DB_PATH", &test_path);
-    std::env::set_var("POCOPINE_KEEP_TAGS_DB_PATH", &test_tags_path);
+    // SAFETY: test-only; set before the server reads it.
+    unsafe { std::env::set_var("POCOPINE_KEEP_NOTES_DB_PATH", &test_path) };
+    // SAFETY: test-only; set before the server reads it.
+    unsafe { std::env::set_var("POCOPINE_KEEP_TAGS_DB_PATH", &test_tags_path) };
 
     let sync = sync_server();
     let sync_topic_prefixes = sync.live_topic_prefixes();

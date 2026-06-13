@@ -28,7 +28,8 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn asset_macro_emits_content_addressed_url() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::remove_var("POCOPINE_ASSET_BASE");
+    // SAFETY: env access is serialized by ENV_LOCK.
+    unsafe { std::env::remove_var("POCOPINE_ASSET_BASE") };
     let url = asset!("test.txt");
 
     let expected_hash = asset_hash(FIXTURE);
@@ -47,9 +48,11 @@ fn asset_macro_emits_content_addressed_url() {
 #[test]
 fn asset_macro_url_respects_runtime_base() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("POCOPINE_ASSET_BASE", "https://cdn.example.com/");
+    // SAFETY: env access is serialized by ENV_LOCK.
+    unsafe { std::env::set_var("POCOPINE_ASSET_BASE", "https://cdn.example.com/") };
     let url = asset!("test.txt");
-    std::env::remove_var("POCOPINE_ASSET_BASE");
+    // SAFETY: env access is serialized by ENV_LOCK.
+    unsafe { std::env::remove_var("POCOPINE_ASSET_BASE") };
 
     let expected_hash = asset_hash(FIXTURE);
     assert_eq!(
