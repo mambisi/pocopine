@@ -22,6 +22,10 @@ pub enum Cmd {
     /// Same as `run`, with src/ watched for changes that retrigger the
     /// wasm build.
     Dev(ServeArgs),
+    /// Native desktop target (RFC-104): run/build the app inside a Tauri
+    /// webview with `#[server]` functions served in-process. Needs the
+    /// platform webview libraries (`webkit2gtk-4.1` + friends on Linux).
+    Native(NativeArgs),
     /// Check local tools and project configuration used by Pocopine.
     Doctor(DoctorArgs),
     /// Fetch + refresh the pocopine-skills agent guides in `.claude/skills/`.
@@ -137,6 +141,61 @@ pub struct ServeArgs {
     /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
     #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
     pub no_stylekit: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NativeArgs {
+    /// Path to the project crate (defaults to current dir).
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+    #[command(subcommand)]
+    pub cmd: NativeCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum NativeCmd {
+    /// Scaffold the `src-tauri` host crate for this project (idempotent;
+    /// never overwrites existing files).
+    Init,
+    /// Build the wasm bundle + CSS, then run the native window with the
+    /// live project directory as the asset root — a rebuild is picked up
+    /// on reload. Scaffolds `src-tauri/` first if it is missing.
+    Dev(NativeDevArgs),
+    /// Build the wasm bundle (release) + CSS, then build the native
+    /// binary (and the installer bundle via `cargo tauri build` when the
+    /// Tauri CLI is available).
+    Build(NativeBuildArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NativeDevArgs {
+    /// Build the wasm bundle in release mode (default: debug, for a fast
+    /// edit loop).
+    #[arg(long)]
+    pub release: bool,
+    /// Force the Pine Stylekit CSS stage on. On by default.
+    #[arg(long)]
+    pub stylekit: bool,
+    /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
+    #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
+    pub no_stylekit: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NativeBuildArgs {
+    /// Build the wasm bundle in debug mode (default: release).
+    #[arg(long)]
+    pub debug: bool,
+    /// Force the Pine Stylekit CSS stage on. On by default.
+    #[arg(long)]
+    pub stylekit: bool,
+    /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
+    #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
+    pub no_stylekit: bool,
+    /// Skip the installer/bundle step (`cargo tauri build`) even when the
+    /// Tauri CLI is present; build only the host binary with `cargo`.
+    #[arg(long)]
+    pub no_bundle: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
