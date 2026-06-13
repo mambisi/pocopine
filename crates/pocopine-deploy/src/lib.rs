@@ -13,7 +13,8 @@
 //! §2.3, §11 q7). Only `docker` is an acceptable external binary in
 //! the deploy path.
 
-#![forbid(unsafe_code)]
+// Forbid unsafe in production; tests need `unsafe { std::env::set_var }` (Rust 2024).
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 pub mod adapter;
 pub mod artefact;

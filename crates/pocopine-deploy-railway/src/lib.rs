@@ -29,7 +29,8 @@
 //! point the service at. Make sure Railway has pull credentials for a
 //! private registry before the first deploy.
 
-#![forbid(unsafe_code)]
+// Forbid unsafe in production; tests need `unsafe { std::env::remove_var }` (Rust 2024).
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod client;
@@ -1054,7 +1055,8 @@ mod tests {
                 from: EnvSource::Secret,
             },
         );
-        std::env::remove_var(key);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var(key) };
         let cs = RailwayAdapter.detect_constraints(&spec);
         assert!(cs.iter().any(
             |c| matches!(c, Constraint::Refuse(s) if s.contains(key) && s.contains("secret values")),

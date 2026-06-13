@@ -49,8 +49,10 @@ impl TraceService for CaptureTraceService {
 async fn otlp_smoke_exports_expected_spans_without_payload_leak() {
     let collector = start_collector().await;
 
-    std::env::set_var("OTEL_BSP_SCHEDULE_DELAY", "100");
-    std::env::set_var("OTEL_BSP_EXPORT_TIMEOUT", "2000");
+    // SAFETY: test-only; set before logging init.
+    unsafe { std::env::set_var("OTEL_BSP_SCHEDULE_DELAY", "100") };
+    // SAFETY: test-only; set before logging init.
+    unsafe { std::env::set_var("OTEL_BSP_EXPORT_TIMEOUT", "2000") };
 
     init_server_logging(
         ServerLoggingConfig::json()

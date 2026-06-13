@@ -317,7 +317,8 @@ mod tests {
             namespace: "ghcr.io/acme".into(),
             host: "ghcr.io".into(),
         };
-        std::env::set_var("POCOPINE_GHCR_IO_TOKEN", "tok-123");
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("POCOPINE_GHCR_IO_TOKEN", "tok-123") };
 
         // Explicit username wins.
         let c = resolve_registry_credentials(&reg, Some("ci-bot"), None).expect("resolved");
@@ -329,7 +330,8 @@ mod tests {
             .expect("resolved");
         assert_eq!(c.username, "acme");
 
-        std::env::remove_var("POCOPINE_GHCR_IO_TOKEN");
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("POCOPINE_GHCR_IO_TOKEN") };
     }
 
     #[test]
