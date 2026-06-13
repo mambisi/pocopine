@@ -9,7 +9,7 @@ use pocopine_auth_jwt::{
 use pocopine_server::{Server, ServerPlugin};
 
 use crate::error::CredentialsError;
-use crate::password::{hash_password_sync, Argon2Params};
+use crate::password::{Argon2Params, hash_password_sync};
 use crate::routes;
 use crate::store::{TokenStore, UserStore};
 

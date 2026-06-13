@@ -43,7 +43,7 @@ use std::sync::Arc;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, LinkType, Tag, TagEnd};
 use pulldown_cmark_to_cmark::{
-    calculate_code_block_token_count, cmark_with_options, Options as RenderOptions,
+    Options as RenderOptions, calculate_code_block_token_count, cmark_with_options,
 };
 
 /// Re-export `pulldown_cmark` so extension authors can build
@@ -1022,10 +1022,11 @@ impl<'a> ParseWalker<'a> {
         // precedence. Tag-level rules are handled inside
         // open_tag / close_tag.
         if let Some(kind) = atomic_event_kind(&event)
-            && let Some(rule) = self.rules.get(&ParseMatch::Event(kind)).cloned() {
-                let owned = event.clone().into_static();
-                return self.apply_rule_open(&rule, &owned);
-            }
+            && let Some(rule) = self.rules.get(&ParseMatch::Event(kind)).cloned()
+        {
+            let owned = event.clone().into_static();
+            return self.apply_rule_open(&rule, &owned);
+        }
         match event {
             Event::Start(tag) => self.open_tag(tag)?,
             Event::End(end) => self.close_tag(end)?,
@@ -2358,14 +2359,15 @@ mod tests {
         let doc = parse("", &s).unwrap();
         assert_eq!(doc.type_name(), "doc");
         assert_eq!(top_block_types(&doc), vec!["paragraph".to_string()]);
-        assert!(doc
-            .content()
-            .child(0)
-            .unwrap()
-            .content()
-            .iter()
-            .next()
-            .is_none());
+        assert!(
+            doc.content()
+                .child(0)
+                .unwrap()
+                .content()
+                .iter()
+                .next()
+                .is_none()
+        );
     }
 
     #[test]

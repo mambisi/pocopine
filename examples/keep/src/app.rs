@@ -2,9 +2,10 @@ use pocopine::prelude::*;
 use wasm_bindgen::JsValue;
 
 use crate::{
+    KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepLogin,
+    KeepNoteBody, KeepNoteCard, KeepNoteForm, KeepStore,
     firebase::{KEEP_AUTH_SNAPSHOT_KEY, KEEP_FIREBASE_TOKEN_KEY},
-    keep_firebase_auth_plugin, KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout,
-    KeepListDetail, KeepLogin, KeepNoteBody, KeepNoteCard, KeepNoteForm, KeepStore,
+    keep_firebase_auth_plugin,
 };
 
 fn sync_client_plugin() -> pocopine_sync::SyncClientPlugin {

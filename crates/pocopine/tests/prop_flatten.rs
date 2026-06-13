@@ -15,7 +15,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element, HtmlElement};
+use web_sys::{Element, HtmlElement, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 

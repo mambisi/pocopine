@@ -1,13 +1,13 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{ext::IdentExt, Expr, Fields, ItemEnum, Variant};
+use syn::{Expr, Fields, ItemEnum, Variant, ext::IdentExt};
 
 use crate::{
+    DerivedTS,
     attr::{Attr, EnumAttr, FieldAttr, Repr, StructAttr, Tagged, VariantAttr},
     deps::Dependencies,
     types::{self, type_as, type_override},
     utils::make_string_literal,
-    DerivedTS,
 };
 
 pub(crate) fn r#enum_def(s: &ItemEnum) -> syn::Result<DerivedTS> {

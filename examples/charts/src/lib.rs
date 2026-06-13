@@ -1,9 +1,9 @@
 use pine_charts::{
-    area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items,
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartHover, ChartLayerPoint, ChartLineSeries,
+    ChartPieSlice, ChartPoint, ChartRadialBar, ChartScatterSeries, ChartSelection, LegendItem,
+    LegendToggle, area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items,
     set_area_series_visible, set_bar_series_visible, set_pie_slice_visible, set_radial_bar_visible,
-    set_scatter_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries, ChartHover,
-    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartRadialBar,
-    ChartScatterSeries, ChartSelection, LegendItem, LegendToggle,
+    set_scatter_series_visible,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};

@@ -7,9 +7,9 @@
 //! container.
 
 use js_sys::{Function, Object, Reflect};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::{Element, FocusEvent, HtmlElement, KeyboardEvent, Node};
 
 /// CSS selector matching everything the trap / auto-focus treat as

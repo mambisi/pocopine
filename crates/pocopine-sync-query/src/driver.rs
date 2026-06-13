@@ -45,13 +45,13 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use pocopine_sync::{
-    local_stream_key, LocalPendingMutation, LocalSnapshotBatch, LocalStreamSnapshot,
+    LocalPendingMutation, LocalSnapshotBatch, LocalStreamSnapshot, SYNC_OPEN_PATH, SYNC_PULL_PATH,
     SyncCollectionName, SyncCursor, SyncLocalStore, SyncOpenRequest, SyncOpenResponse,
     SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncReason, SyncRow,
-    SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH,
+    SyncStreamName, local_stream_key,
 };
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::client::{QueryClient, QueryClientInner, QuerySubscription};
@@ -712,11 +712,7 @@ where
         state.last_reason = SyncReason::Initial;
         drop(state);
         sub.notify_listeners_external();
-        if drift {
-            Err(())
-        } else {
-            Ok(())
-        }
+        if drift { Err(()) } else { Ok(()) }
     }
 
     /// Apply a `/pull` response.
@@ -1629,8 +1625,8 @@ where
 /// on native we use `tokio::time::sleep` directly.
 #[cfg(target_arch = "wasm32")]
 async fn sleep(duration: Duration) {
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
     let ms = duration.as_millis() as i32;
     let promise = js_sys::Promise::new(&mut |resolve, _reject| {
         if let Some(win) = web_sys::window() {

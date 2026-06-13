@@ -14,9 +14,9 @@
 //! `pp-if`) means "always mount here."
 
 use js_sys::Reflect;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{console, Element, HtmlTemplateElement, Node};
+use wasm_bindgen::prelude::*;
+use web_sys::{Element, HtmlTemplateElement, Node, console};
 
 use crate::mount::{self, bind_borrowed_scope_to};
 
@@ -42,10 +42,12 @@ pub fn host_of(el: &Element) -> Option<Element> {
     let mut cur: Option<Element> = Some(el.clone());
     while let Some(node) = cur {
         if let Ok(v) = Reflect::get(node.as_ref(), &origin_key)
-            && !v.is_undefined() && !v.is_null()
-                && let Ok(template) = v.dyn_into::<Element>() {
-                    return template.parent_element();
-                }
+            && !v.is_undefined()
+            && !v.is_null()
+            && let Ok(template) = v.dyn_into::<Element>()
+        {
+            return template.parent_element();
+        }
         cur = node.parent_element();
     }
     None
@@ -253,9 +255,10 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
     let children = fragment.child_nodes();
     for i in 0..children.length() {
         if let Some(n) = children.item(i)
-            && let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
+        }
     }
     None
 }

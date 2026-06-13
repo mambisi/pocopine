@@ -31,7 +31,7 @@
 
 use std::collections::BTreeSet;
 
-use pocopine_stylekit::{compile_project, CompileOptions, Severity, SourceFile};
+use pocopine_stylekit::{CompileOptions, Severity, SourceFile, compile_project};
 
 const BAKED_CORPUS: &str = include_str!("fixtures/tailwind-positive.txt");
 

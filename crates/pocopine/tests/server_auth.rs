@@ -9,7 +9,7 @@ mod support;
 
 use pocopine::{AuthUser, Role, ServerError, ServerResult};
 use pocopine_server::axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Extensions, HeaderMap, Method, Request, Uri},
 };
 use pocopine_server::tower::ServiceExt;

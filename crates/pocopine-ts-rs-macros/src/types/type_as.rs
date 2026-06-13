@@ -2,9 +2,9 @@ use quote::quote;
 use syn::{Expr, Result, Type};
 
 use crate::{
+    DerivedTS,
     attr::{ContainerAttr, EnumAttr, StructAttr},
     deps::Dependencies,
-    DerivedTS,
 };
 
 pub(crate) fn type_as_struct(

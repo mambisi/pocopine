@@ -20,7 +20,7 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, Node, PointerEvent};
 
-use super::{is_primary_pointer, GestureHandle};
+use super::{GestureHandle, is_primary_pointer};
 
 /// Callback fired on the matching pointerup / pointercancel. `success`
 /// is `true` when the release lands on the original press target or

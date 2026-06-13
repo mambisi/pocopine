@@ -33,13 +33,13 @@ use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-use crate::reactive::{trigger_scope, ScopeId};
+use crate::reactive::{ScopeId, trigger_scope};
 use crate::scope::{
-    current_scope_id, invalidate_field_cache, read_scope_key, with_current_scope_id, write_field,
-    Scope,
+    Scope, current_scope_id, invalidate_field_cache, read_scope_key, with_current_scope_id,
+    write_field,
 };
 
 /// Typed handle onto a component or store scope.

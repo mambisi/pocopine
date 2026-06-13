@@ -35,8 +35,8 @@ use pocopine_sync::{
     RowVersion, StreamParams, SyncCollectionName, SyncError, SyncOp, SyncRejectedMutation,
     SyncResult, SyncRow, SyncStreamName,
 };
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::query::Query;

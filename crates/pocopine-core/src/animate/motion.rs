@@ -19,8 +19,8 @@
 //! `#[component(motion = "always")]` macro arg adds this stamp.
 
 use std::cell::Cell;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 
 /// User motion preference snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

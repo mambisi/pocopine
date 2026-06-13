@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::error::Error;
 
 #[allow(unused_imports)]
-pub use token::{token_hash, TokenKind, TokenRecord};
+pub use token::{TokenKind, TokenRecord, token_hash};
 
 use pocopine_auth::AuthUser;
 

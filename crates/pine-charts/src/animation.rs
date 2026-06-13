@@ -23,7 +23,9 @@ pub(crate) fn animation_style(duration_ms: f64, easing: &str) -> String {
         easing
     };
 
-    format!("--pine-chart-animation-duration: {duration_ms}ms; --pine-chart-animation-easing: {easing};")
+    format!(
+        "--pine-chart-animation-duration: {duration_ms}ms; --pine-chart-animation-easing: {easing};"
+    )
 }
 
 #[cfg(test)]

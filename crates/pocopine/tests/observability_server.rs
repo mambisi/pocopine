@@ -8,12 +8,12 @@ mod support;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use pocopine::{ServerError, ServerResult};
-use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine_server::Server;
+use pocopine_server::axum::Router;
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::http::{Method, Request};
 use pocopine_server::axum::routing::get;
-use pocopine_server::axum::Router;
 use pocopine_server::tower::ServiceExt;
-use pocopine_server::Server;
 use support::{CapturedEvent, TraceCapture};
 
 fn registry_lock() -> MutexGuard<'static, ()> {

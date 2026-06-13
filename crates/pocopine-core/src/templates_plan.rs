@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{console, Element, Node};
+use web_sys::{Element, Node, console};
 
 use crate::directives::for_plan::{
     BindingKind, MatchCase, StaticBinding, StaticChildMount, StaticCondPlan, StaticForPlan,
@@ -845,9 +845,10 @@ pub fn stamp_if_body_with(
     let kids = content_parent.child_nodes();
     for i in 0..kids.length() {
         if let Some(n) = kids.item(i)
-            && let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
+        }
     }
     None
 }
@@ -876,9 +877,10 @@ fn first_element_child(parent: &Node) -> Option<Element> {
     let kids = parent.child_nodes();
     for i in 0..kids.length() {
         if let Some(n) = kids.item(i)
-            && let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
+        }
     }
     None
 }

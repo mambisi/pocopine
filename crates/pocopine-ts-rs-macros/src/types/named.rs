@@ -1,13 +1,13 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{spanned::Spanned, Expr, Field, FieldsNamed, Path, Result};
+use syn::{Expr, Field, FieldsNamed, Path, Result, spanned::Spanned};
 
 use crate::{
+    DerivedTS,
     attr::{Attr, ContainerAttr, FieldAttr, Inflection, StructAttr},
     deps::Dependencies,
     optional::Optional,
     utils::{raw_name_to_ts_field, to_ts_ident},
-    DerivedTS,
 };
 
 pub(crate) fn named(attr: &StructAttr, ts_name: Expr, fields: &FieldsNamed) -> Result<DerivedTS> {

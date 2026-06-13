@@ -1,5 +1,5 @@
 use pine_richtext::model::Node as RichTextNode;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 
 pub const KEEP_STREAM: &str = "keep_notes_for_user";

@@ -50,7 +50,7 @@
 #[cfg(target_arch = "wasm32")]
 use std::cell::{Cell, RefCell};
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{BroadcastChannel, MessageEvent};
 

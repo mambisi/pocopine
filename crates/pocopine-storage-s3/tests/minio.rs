@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
 use bytes::Bytes;
 use pocopine_storage::{
     ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectChecksum,
@@ -20,8 +20,8 @@ use pocopine_storage::{
     UploadBody, UploadPolicy, UploadSession, UploadStrategy, UploadedPartStatus,
 };
 use pocopine_storage_s3::S3StorageBackend;
-use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::minio::MinIO;
 use tokio::sync::OnceCell;
 
@@ -863,9 +863,11 @@ async fn multipart_by_number_resumes_from_listed_parts_against_minio() -> Storag
     let mut numbers: Vec<u32> = committed.iter().map(|part| part.number).collect();
     numbers.sort_unstable();
     assert_eq!(numbers, vec![1, 3], "re-PUT of part 1 left no duplicate");
-    assert!(committed
-        .iter()
-        .all(|part| part.status == UploadedPartStatus::Uploaded));
+    assert!(
+        committed
+            .iter()
+            .all(|part| part.status == UploadedPartStatus::Uploaded)
+    );
 
     // Fill the gap and complete.
     reloaded
@@ -946,9 +948,9 @@ async fn multipart_by_number_rejects_undersized_nonfinal_part_then_resumes() -> 
 
     let part = 5 * 1024 * 1024usize;
     let small = 1024 * 1024usize; // 1 MiB, below the 5 MiB non-final floor
-                                  // Declared length matches the eventual valid upload (part 1 = 5 MiB, part 2 =
-                                  // 1 MiB). The undersized-part check runs before the byte-sum check, so the
-                                  // first (undersized) attempt is rejected for the right reason.
+    // Declared length matches the eventual valid upload (part 1 = 5 MiB, part 2 =
+    // 1 MiB). The undersized-part check runs before the byte-sum check, so the
+    // first (undersized) attempt is rejected for the right reason.
     let session =
         initiate_multipart(&backend, "files/small.bin", Some((part + small) as u64)).await?;
     // Part 1 (non-final) is undersized; part 2 is the last part (exempt).

@@ -68,16 +68,16 @@ pub mod write;
 // Re-exports of the curated public API.
 pub use client::{QueryClient, QueryHandle, QuerySubscription, QueryView, UpdateToken};
 pub use driver::{
-    live_event_matches_params, DriverEpoch, QueryClientConfig, DEFAULT_POLL_INTERVAL,
-    DEFAULT_SYNC_ENDPOINT,
+    DEFAULT_POLL_INTERVAL, DEFAULT_SYNC_ENDPOINT, DriverEpoch, QueryClientConfig,
+    live_event_matches_params,
 };
 pub use mutator::{
     AnyMutator, HydrateReplayOutcome, MutationOutcome, Mutator, MutatorEntry, MutatorRemoteContext,
     MutatorRemoteFuture, RowChange,
 };
-pub use plugin::{query_client_plugin, QueryClientPlugin};
+pub use plugin::{QueryClientPlugin, query_client_plugin};
 pub use predicate::{
-    contains_matches, range_contains, FieldContains, FieldEq, FieldInSet, FieldOrder, FieldRange,
+    FieldContains, FieldEq, FieldInSet, FieldOrder, FieldRange, contains_matches, range_contains,
 };
 pub use query::{MatchFn, Order, OrderBy, PartitionHashFn, Query, QueryBuilder, QueryKey};
 pub use selector::{AnyArgs, AnyTrackable, SelectorId, SelectorView, TrackToken};
@@ -89,8 +89,8 @@ pub use state::QueryState;
 // new direction. See `rfcs/rfc-090-merge-crud-into-query.md`.
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{
-    query_from_pull_request, source, Source, SourceFuture, SourceId, SourceParamsFn,
-    SourceResource, SourceResourceBuilder, SourceVersionFn, DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT,
+    DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT, Source, SourceFuture, SourceId, SourceParamsFn,
+    SourceResource, SourceResourceBuilder, SourceVersionFn, query_from_pull_request, source,
 };
 
 // RFC 090 Phase 2a — mutation lifecycle types at the crate root so
@@ -118,8 +118,8 @@ pub use pocopine_sync_query_macros::{query, query_resource};
 // Re-export wire-level types from pocopine-sync that the macro emissions
 // and runtime touch directly. Users mostly don't see these.
 pub use pocopine_sync::{
-    local_stream_key, MemoryLocalStore, SyncCursor, SyncLocalStore, SyncStreamName,
-    SyncStreamSubscription,
+    MemoryLocalStore, SyncCursor, SyncLocalStore, SyncStreamName, SyncStreamSubscription,
+    local_stream_key,
 };
 
 /// Macro-implementation surface. **Not** part of the public API — every

@@ -4,7 +4,7 @@
 //! has no behavioural drift before we flip the switch.
 
 use crate::extension::{ExtensionNodeView, RichTextExtension};
-use crate::extensions::{default_extensions, TaskListExtension};
+use crate::extensions::{TaskListExtension, default_extensions};
 use crate::model::Schema;
 use crate::schema_basic;
 

@@ -88,9 +88,10 @@ impl WebsiteApp {
         // inline script in index.html already applied it before paint;
         // this syncs our own state (and re-applies on a remount).
         if let Ok(Some(saved)) = LocalStorage::<String>::new(THEME_KEY).get()
-            && (saved == "dark" || saved == "light") {
-                self.theme = saved;
-            }
+            && (saved == "dark" || saved == "light")
+        {
+            self.theme = saved;
+        }
         self.apply_theme();
         self.search = build_search_index();
     }
@@ -121,9 +122,10 @@ impl WebsiteApp {
     pub fn on_command(&mut self, ev: web_sys::CustomEvent) {
         self.open = false;
         if let Some(target) = ev.detail().as_string()
-            && !target.is_empty() {
-                navigate(&target);
-            }
+            && !target.is_empty()
+        {
+            navigate(&target);
+        }
     }
     pub fn cmd_toggle_theme(&mut self) {
         self.open = false;
@@ -139,9 +141,10 @@ impl WebsiteApp {
     /// Mirror `self.theme` onto `<html data-theme>` (not a handler).
     fn apply_theme(&self) {
         if let Some(doc) = web_sys::window().and_then(|w| w.document())
-            && let Some(root) = doc.document_element() {
-                let _ = root.set_attribute("data-theme", &self.theme);
-            }
+            && let Some(root) = doc.document_element()
+        {
+            let _ = root.set_attribute("data-theme", &self.theme);
+        }
     }
 }
 

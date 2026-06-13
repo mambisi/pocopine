@@ -85,6 +85,6 @@ pub use builder::Credentials;
 pub use error::CredentialsError;
 pub use password::{Argon2Params, Argon2ParamsError};
 pub use store::{
-    token::{token_hash, TokenKind, TokenRecord},
     PasswordCredentials, StoreError, TokenStore, UserStore,
+    token::{TokenKind, TokenRecord, token_hash},
 };

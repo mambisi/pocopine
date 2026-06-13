@@ -3,10 +3,10 @@ use pocopine::prelude::*;
 #[cfg(pocopine_host)]
 use {
     crate::{
-        sqlite_stream::{
-            default_keep_notes_path, default_keep_tags_path, SqliteKeepStream, SqliteKeepTagStream,
-        },
         KEEP_COLLECTION, KEEP_STREAM, KEEP_TAGS_COLLECTION, KEEP_TAGS_STREAM,
+        sqlite_stream::{
+            SqliteKeepStream, SqliteKeepTagStream, default_keep_notes_path, default_keep_tags_path,
+        },
     },
     pocopine_events::MemoryEventBackend,
     pocopine_sync::SyncServer,

@@ -10,10 +10,10 @@
 async fn main() -> std::io::Result<()> {
     use pocopine_logging::init_default;
     use pocopine_server::axum::{
-        handler::HandlerWithoutStateExt,
-        http::{header, StatusCode, Uri},
-        response::IntoResponse,
         Router,
+        handler::HandlerWithoutStateExt,
+        http::{StatusCode, Uri, header},
+        response::IntoResponse,
     };
     use pocopine_server::{serve, static_files};
     use website as _;

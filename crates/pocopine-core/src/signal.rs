@@ -13,7 +13,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::reactive::{next_signal_id, track_signal, trigger_signal, SignalId};
+use crate::reactive::{SignalId, next_signal_id, track_signal, trigger_signal};
 
 /// Read handle for a reactive cell. Clone freely; all clones see the same
 /// value and share the same id.

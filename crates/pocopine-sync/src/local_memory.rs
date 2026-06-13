@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
-    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey,
-    SyncCollectionName, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
-    SyncResult, SyncRow, SyncStreamName,
+    ClientMutation, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationId, RowKey, SyncCollectionName, SyncError, SyncLocalFuture,
+    SyncLocalIdentity, SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    generate_sync_device_id,
 };
 
 /// In-memory [`SyncLocalStore`] implementation for tests and demos.
@@ -210,10 +210,11 @@ impl SyncLocalStore for MemoryLocalStore {
                     row.conflict = true;
                     state.rows.insert(row.key.clone(), row);
                 } else if let Some(key) = conflict.key
-                    && let Some(row) = state.rows.get_mut(&key) {
-                        row.pending = false;
-                        row.conflict = true;
-                    }
+                    && let Some(row) = state.rows.get_mut(&key)
+                {
+                    row.pending = false;
+                    row.conflict = true;
+                }
             }
 
             for mut row in result.rows {
@@ -231,9 +232,10 @@ impl SyncLocalStore for MemoryLocalStore {
         let key = key.clone();
         Self::ready(self.with_inner(|inner| {
             if let Some(state) = inner.streams.get_mut(&stream)
-                && let Some(row) = state.rows.get_mut(&key) {
-                    row.conflict = false;
-                }
+                && let Some(row) = state.rows.get_mut(&key)
+            {
+                row.conflict = false;
+            }
             Ok(())
         }))
     }

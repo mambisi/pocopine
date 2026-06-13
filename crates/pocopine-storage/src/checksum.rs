@@ -1,4 +1,4 @@
-use pocopine_crypto::{digest_hex, Algorithm, Hasher};
+use pocopine_crypto::{Algorithm, Hasher, digest_hex};
 
 use crate::{ChecksumAlgorithm, ChecksumPolicy, ObjectChecksum, StorageError, StorageResult};
 

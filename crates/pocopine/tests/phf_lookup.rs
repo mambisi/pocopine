@@ -4,8 +4,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use pocopine::prelude::*;
 use pocopine::ComponentVTable;
+use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 

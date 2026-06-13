@@ -18,12 +18,12 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{console, Element, HtmlTemplateElement};
+use web_sys::{Element, HtmlTemplateElement, console};
 
 use super::{teleport, transition};
 use crate::directives::for_plan::IfBodyFn;
 use crate::mount::{self, bind_borrowed_scope_to, track_effect_on};
-use crate::reactive::{effect, ScopeId};
+use crate::reactive::{ScopeId, effect};
 
 /// A branch's pre-built evaluator (scoped access inside).
 pub type BranchEval = Rc<dyn Fn(&JsValue) -> JsValue>;
@@ -138,9 +138,10 @@ pub fn install_cond(
             // mount). Mid-leave on the same branch: cancel and
             // re-enter in lock-step.
             if let Some(clone) = current.borrow().as_ref()
-                && transition::is_subtree_leaving(clone) {
-                    transition::enter_subtree(clone, || {});
-                }
+                && transition::is_subtree_leaving(clone)
+            {
+                transition::enter_subtree(clone, || {});
+            }
             return;
         }
 
@@ -196,9 +197,10 @@ pub fn install_cond(
                     // replaced it already.
                     let mut slot = slot_cap.borrow_mut();
                     if let Some(cur) = slot.as_ref()
-                        && cur.is_same_node(Some(clone_cap.as_ref())) {
-                            *slot = None;
-                        }
+                        && cur.is_same_node(Some(clone_cap.as_ref()))
+                    {
+                        *slot = None;
+                    }
                 });
             }
             *current.borrow_mut() = None;
@@ -291,9 +293,10 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
     let children = fragment.child_nodes();
     for i in 0..children.length() {
         if let Some(n) = children.item(i)
-            && let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
+        }
     }
     None
 }
@@ -403,26 +406,28 @@ pub fn install_match(
             // ident — the body's own bindings re-render without
             // a remount (Solid's non-keyed Match semantics).
             if let Some(scope) = payload_scope.borrow().as_ref()
-                && let Some(state) = scope.typed::<crate::payload_scope::PayloadScope>() {
-                    let ident = {
-                        let mut st = state.borrow_mut();
-                        st.value = if arms
-                            .get(active.unwrap_or_default())
-                            .map(|a| a.tags.is_empty())
-                            .unwrap_or(false)
-                        {
-                            value.clone()
-                        } else {
-                            payload.clone()
-                        };
-                        st.ident.clone()
+                && let Some(state) = scope.typed::<crate::payload_scope::PayloadScope>()
+            {
+                let ident = {
+                    let mut st = state.borrow_mut();
+                    st.value = if arms
+                        .get(active.unwrap_or_default())
+                        .map(|a| a.tags.is_empty())
+                        .unwrap_or(false)
+                    {
+                        value.clone()
+                    } else {
+                        payload.clone()
                     };
-                    crate::reactive::trigger(scope.id, &ident);
-                }
+                    st.ident.clone()
+                };
+                crate::reactive::trigger(scope.id, &ident);
+            }
             if let Some(clone) = current.borrow().as_ref()
-                && transition::is_subtree_leaving(clone) {
-                    transition::enter_subtree(clone, || {});
-                }
+                && transition::is_subtree_leaving(clone)
+            {
+                transition::enter_subtree(clone, || {});
+            }
             return;
         }
 
@@ -481,9 +486,10 @@ pub fn install_match(
                     }
                     let mut slot = slot_cap.borrow_mut();
                     if let Some(cur) = slot.as_ref()
-                        && cur.is_same_node(Some(clone_cap.as_ref())) {
-                            *slot = None;
-                        }
+                        && cur.is_same_node(Some(clone_cap.as_ref()))
+                    {
+                        *slot = None;
+                    }
                 });
             }
             *current.borrow_mut() = None;

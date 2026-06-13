@@ -88,7 +88,7 @@ pub fn install_outside_dismiss(
     inside_els: Vec<Element>,
     on_dismiss: impl Fn() + 'static,
 ) {
-    use pocopine::events::{self, ev, ListenerHandle};
+    use pocopine::events::{self, ListenerHandle, ev};
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::JsCast;

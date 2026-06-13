@@ -11,9 +11,9 @@
 //! resolved (e.g. `getBoundingClientRect` against freshly applied
 //! transition classes).
 
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 
 /// Schedule `f` on the next microtask.
 pub fn next<F: FnOnce() + 'static>(f: F) {

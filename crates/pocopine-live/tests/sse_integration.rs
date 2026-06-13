@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pocopine_events::{EventDraft, MemoryEventBackend};
-use pocopine_live::{collection_topic, routes, LiveHub, KIND_COLLECTION_CHANGED, LIVE_STREAM_PATH};
+use pocopine_live::{KIND_COLLECTION_CHANGED, LIVE_STREAM_PATH, LiveHub, collection_topic, routes};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -58,11 +58,13 @@ async fn allowed_topic_opens_sse_stream() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("text/event-stream")));
+    assert!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"))
+    );
 }
 
 #[tokio::test]

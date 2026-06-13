@@ -35,10 +35,10 @@ pub mod measure;
 pub mod measure_js;
 pub mod prepare;
 
-pub use layout::{layout, layout_with_lines, LayoutLine, LayoutResult};
+pub use layout::{LayoutLine, LayoutResult, layout, layout_with_lines};
 pub use line_break::LayoutCursor;
 pub use measure::{CanvasMeasurer, Measurer};
-pub use prepare::{prepare, Font, PrepareOptions, PreparedText, WhiteSpace};
+pub use prepare::{Font, PrepareOptions, PreparedText, WhiteSpace, prepare};
 
 /// Canonical number→text used by every text-rendering path
 /// (pp-text, interpolation, row plans, the typed text lane, and

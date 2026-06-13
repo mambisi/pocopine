@@ -20,7 +20,7 @@ use pocopine_storage::{
     UploadStrategy,
 };
 use pocopine_storage_azure::AzureBlobStorageBackend;
-use testcontainers::core::{wait::HttpWaitStrategy, ContainerPort, WaitFor};
+use testcontainers::core::{ContainerPort, WaitFor, wait::HttpWaitStrategy};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::sync::OnceCell;

@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 
+pub use r#enum::*;
 pub use field::*;
 use proc_macro2::TokenTree;
 use quote::quote;
-pub use r#enum::*;
 pub use r#struct::*;
 use syn::{
-    parenthesized,
+    Error, Expr, Ident, Lit, Path, Result, Token, WherePredicate, parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
-    Error, Expr, Ident, Lit, Path, Result, Token, WherePredicate,
 };
 pub use variant::*;
 mod r#enum;
@@ -107,15 +106,17 @@ fn skip_until_next_comma(input: ParseStream) -> proc_macro2::TokenStream {
             let mut rest = *cursor;
 
             if let Some((TokenTree::Punct(ref punct), _)) = cursor.token_tree()
-                && punct.as_char() == ',' {
-                    return Ok((stuff, rest));
-                }
+                && punct.as_char() == ','
+            {
+                return Ok((stuff, rest));
+            }
 
             while let Some((tt, next)) = rest.token_tree() {
                 if let Some((TokenTree::Punct(punct), _)) = next.token_tree()
-                    && punct.as_char() == ',' {
-                        return Ok((stuff, next));
-                    }
+                    && punct.as_char() == ','
+                {
+                    return Ok((stuff, next));
+                }
 
                 rest = next;
                 stuff = quote!(#stuff #tt)

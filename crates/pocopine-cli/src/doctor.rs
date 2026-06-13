@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::args::DoctorArgs;
@@ -501,10 +501,9 @@ fn cargo_metadata_bins(project: &Path, project_tools: &tools::ProjectTools) -> R
                 .get("kind")
                 .and_then(Value::as_array)
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")));
-            if is_bin
-                && let Some(name) = target.get("name").and_then(Value::as_str) {
-                    bins.push(name.to_string());
-                }
+            if is_bin && let Some(name) = target.get("name").and_then(Value::as_str) {
+                bins.push(name.to_string());
+            }
         }
     }
     bins.sort();

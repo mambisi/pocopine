@@ -21,7 +21,7 @@
 //! When no rule has fired (or the user has typed since the last
 //! rule), the state is `null`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::commands::BoxedCommand;
 use crate::model::Fragment;

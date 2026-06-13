@@ -1,9 +1,9 @@
 #[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use pocopine_live::{routes, LiveHub};
+    use pocopine_live::{LiveHub, routes};
     use pocopine_logging::init_default;
-    use pocopine_server::{axum::Router, static_files, Server};
+    use pocopine_server::{Server, axum::Router, static_files};
     use pocopine_sync::sync_server_plugin;
     use sync_example::{live_backend, sync_server};
 

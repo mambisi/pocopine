@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use pine_richtext::model::{Attrs, Fragment, Node, Schema, Slice};
 use pine_richtext::schema_basic;
@@ -164,11 +164,9 @@ fn bench_replace_empty_paragraph_with_heading(c: &mut Criterion) {
     // doc with one empty paragraph; insert a heading-wrapped slice via
     // include_parents=true. Exercises fit_empty_parent_with_wrapped_slice.
     let doc = schema_basic::doc(vec![schema_basic::paragraph(Vec::new()).unwrap()]).unwrap();
-    let source = schema_basic::doc(vec![schema_basic::heading(
-        1,
-        vec![text("heading text content")],
-    )
-    .unwrap()])
+    let source = schema_basic::doc(vec![
+        schema_basic::heading(1, vec![text("heading text content")]).unwrap(),
+    ])
     .unwrap();
     // Slice content of the heading with open ends so the slice carries its
     // heading wrapper.

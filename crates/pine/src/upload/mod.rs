@@ -376,9 +376,10 @@ impl PineUploadRoot {
             #[cfg(target_arch = "wasm32")]
             if let Some(scope_id) = current_scope_id()
                 && let Some(el) = refs::get_on(scope_id, "input")
-                    && let Ok(input) = el.dyn_into::<HtmlInputElement>() {
-                        input.click();
-                    }
+                && let Ok(input) = el.dyn_into::<HtmlInputElement>()
+            {
+                input.click();
+            }
         }
     }
 
@@ -410,10 +411,11 @@ impl PineUploadRoot {
             return;
         }
         if let Some(file) = self.files.iter().find(|f| f.id == id)
-            && file.status == "uploading" {
-                #[cfg(target_arch = "wasm32")]
-                abort_one(current_scope_id(), &id);
-            }
+            && file.status == "uploading"
+        {
+            #[cfg(target_arch = "wasm32")]
+            abort_one(current_scope_id(), &id);
+        }
     }
 
     /// Reset an errored or canceled item to `queued` and kick the
@@ -826,10 +828,14 @@ impl PineUploadRoot {
         self.status_label = compose_status(count, done, error, uploading, queued);
 
         #[cfg(target_arch = "wasm32")]
-        if !self.busy && error == 0 && count > 0 && done == count
-            && let Some(scope_id) = current_scope_id() {
-                emit_root_event(scope_id, "pp:upload:all-complete", done);
-            }
+        if !self.busy
+            && error == 0
+            && count > 0
+            && done == count
+            && let Some(scope_id) = current_scope_id()
+        {
+            emit_root_event(scope_id, "pp:upload:all-complete", done);
+        }
     }
 }
 
@@ -972,9 +978,10 @@ fn abort_one(scope_id: Option<ScopeId>, file_id: &str) {
     let Some(scope_id) = scope_id else { return };
     ABORT_CONTROLLERS.with(|controllers| {
         if let Some(map) = controllers.borrow().get(&scope_id)
-            && let Some(controller) = map.get(file_id) {
-                controller.abort();
-            }
+            && let Some(controller) = map.get(file_id)
+        {
+            controller.abort();
+        }
     });
 }
 
@@ -1095,9 +1102,9 @@ impl PineUploadDropzone {
                 .ok()
                 .flatten()
                 .is_some()
-            {
-                return;
-            }
+        {
+            return;
+        }
         if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineUploadRoot| r.open_picker());
         }
@@ -1125,11 +1132,12 @@ impl PineUploadDropzone {
         #[cfg(target_arch = "wasm32")]
         if let Ok(drag) = _ev.dyn_into::<DragEvent>()
             && let Some(transfer) = drag.data_transfer()
-                && let Some(list) = transfer.files()
-                    && let Some(root) = ROOT.inject() {
-                        root.update(|r: &mut PineUploadRoot| r.add_files(list));
-                        return;
-                    }
+            && let Some(list) = transfer.files()
+            && let Some(root) = ROOT.inject()
+        {
+            root.update(|r: &mut PineUploadRoot| r.add_files(list));
+            return;
+        }
         // Even when the drop carried no files, clear the dragover
         // flag so the surface doesn't get stuck looking active.
         if let Some(root) = ROOT.inject() {
@@ -1263,11 +1271,7 @@ fn resolve_item_id() -> Option<String> {
             .get("id")
             .as_string()
             .unwrap_or_default();
-        if id.is_empty() {
-            None
-        } else {
-            Some(id)
-        }
+        if id.is_empty() { None } else { Some(id) }
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1305,7 +1309,7 @@ impl PineUploadClear {
 
 #[cfg(test)]
 mod tests {
-    use super::{user_upload_error_message, GENERIC_UPLOAD_ERROR, UPLOAD_UNAVAILABLE_ERROR};
+    use super::{GENERIC_UPLOAD_ERROR, UPLOAD_UNAVAILABLE_ERROR, user_upload_error_message};
 
     #[test]
     fn storage_errors_are_hidden_from_user_message() {

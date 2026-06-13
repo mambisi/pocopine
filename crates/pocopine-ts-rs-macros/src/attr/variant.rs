@@ -1,12 +1,12 @@
 use syn::{Attribute, Expr, Fields, Ident, Result, Type, Variant};
 
-use super::{parse_assign_expr, Attr, Serde};
+use super::{Attr, Serde, parse_assign_expr};
 use crate::{
     attr::{
-        parse_assign_from_str, parse_assign_inflection, parse_assign_str,
-        parse_optional_assign_str, Inflection,
+        Inflection, parse_assign_from_str, parse_assign_inflection, parse_assign_str,
+        parse_optional_assign_str,
     },
-    optional::{parse_optional, Optional},
+    optional::{Optional, parse_optional},
     utils::parse_attrs,
 };
 

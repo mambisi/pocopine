@@ -42,8 +42,8 @@ fn extensions() -> &'static RwLock<Vec<Arc<dyn RichTextExtension>>> {
 /// [`crate::runtime::registry::default`] during its lazy fold — that's
 /// the one consumer that can't go through the runtime adapter
 /// (circular).
-pub(crate) fn read_extensions(
-) -> std::sync::RwLockReadGuard<'static, Vec<Arc<dyn RichTextExtension>>> {
+pub(crate) fn read_extensions()
+-> std::sync::RwLockReadGuard<'static, Vec<Arc<dyn RichTextExtension>>> {
     extensions().read().expect("extension registry poisoned")
 }
 

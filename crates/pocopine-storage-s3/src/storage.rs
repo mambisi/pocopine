@@ -1,19 +1,19 @@
+use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client;
 use aws_smithy_types::body::SdkBody;
 use bytes::Bytes;
 use futures_util::TryStreamExt as _;
 use http_body::Frame;
 use http_body_util::StreamBody;
 use pocopine_storage::backend_common::{
+    UploadConcurrencyRegistry, UploadSessionLockCleanup, UploadSessionLockRegistry,
     checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
     ensure_upload_length_can_be_set, expires_at, refresh_expired, select_upload_mode,
-    UploadConcurrencyRegistry, UploadSessionLockCleanup, UploadSessionLockRegistry,
 };
 use pocopine_storage::checksum::{
-    checksum_algorithm_to_compute, ensure_supported_checksum_policy, precheck_checksum,
-    validate_complete_checksum, validate_complete_checksum_precomputed, StreamingChecksum,
+    StreamingChecksum, checksum_algorithm_to_compute, ensure_supported_checksum_policy,
+    precheck_checksum, validate_complete_checksum, validate_complete_checksum_precomputed,
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
@@ -25,7 +25,7 @@ use time::OffsetDateTime;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
-use crate::layout::{S3KeyLayout, DEFAULT_INTERNAL_PREFIX};
+use crate::layout::{DEFAULT_INTERNAL_PREFIX, S3KeyLayout};
 use crate::state::{NativeUploadState, S3CompletedPart, S3MultipartState, StoredUploadSession};
 use crate::util::{
     ensure_completable, is_get_object_not_found, is_head_object_not_found, is_no_such_upload,
@@ -800,9 +800,10 @@ impl S3StorageBackend {
         object_key: &str,
     ) -> StorageResult<String> {
         if let Some(state) = stored.native.multipart()
-            && let Some(upload_id) = &state.upload_id {
-                return Ok(upload_id.clone());
-            }
+            && let Some(upload_id) = &state.upload_id
+        {
+            return Ok(upload_id.clone());
+        }
         let upload_id = self
             .create_multipart(object_key, stored.public.content_type.as_deref(), session)
             .await?;
@@ -815,9 +816,10 @@ impl S3StorageBackend {
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
         if let Some(size) = size
-            && size > self.max_proxy_upload_bytes {
-                return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
-            }
+            && size > self.max_proxy_upload_bytes
+        {
+            return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
+        }
         Ok(())
     }
 
@@ -956,11 +958,12 @@ impl S3StorageBackend {
     ) -> StorageResult<ObjectRef> {
         let total = stored.public.next_offset.unwrap_or(0);
         if let Some(expected) = stored.public.size
-            && total != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {total}"
-                )));
-            }
+            && total != expected
+        {
+            return Err(StorageError::policy_rejected(format!(
+                "upload is incomplete: expected {expected} bytes, got {total}"
+            )));
+        }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         // Reject a missing-required or disallowed-algorithm checksum up front, so
         // a config error never assembles (and then deletes) the object.
@@ -1271,10 +1274,11 @@ impl S3StorageBackend {
 
     async fn abort_multipart_session(&self, stored: &StoredUploadSession) -> StorageResult<()> {
         if let Some(state) = stored.native.multipart()
-            && let Some(upload_id) = &state.upload_id {
-                let object_key = self.layout.object_key(stored.storage_key.key.as_str());
-                self.abort_multipart(&object_key, upload_id).await?;
-            }
+            && let Some(upload_id) = &state.upload_id
+        {
+            let object_key = self.layout.object_key(stored.storage_key.key.as_str());
+            self.abort_multipart(&object_key, upload_id).await?;
+        }
         Ok(())
     }
 }
@@ -1653,7 +1657,7 @@ impl StorageBackend for S3StorageBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{part_size_for, S3_MAX_PARTS, S3_MAX_PART_SIZE, S3_MIN_PART_SIZE};
+    use super::{S3_MAX_PART_SIZE, S3_MAX_PARTS, S3_MIN_PART_SIZE, part_size_for};
 
     #[test]
     fn part_size_stays_at_floor_for_small_caps() {

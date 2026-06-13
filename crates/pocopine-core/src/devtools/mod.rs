@@ -21,7 +21,7 @@ use std::cell::{Cell, RefCell};
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{window, HtmlElement, KeyboardEvent};
+use web_sys::{HtmlElement, KeyboardEvent, window};
 
 use crate::scope::Scope;
 
@@ -172,10 +172,11 @@ pub fn toggle() {
     let next = !shell::is_visible();
     shell::set_visible(next);
     if let Some(root) = shell::panel_root()
-        && let Ok(html_el) = root.clone().dyn_into::<HtmlElement>() {
-            let style = html_el.style();
-            let _ = style.set_property("display", if next { "block" } else { "none" });
-        }
+        && let Ok(html_el) = root.clone().dyn_into::<HtmlElement>()
+    {
+        let style = html_el.style();
+        let _ = style.set_property("display", if next { "block" } else { "none" });
+    }
 }
 
 /// Render pass — called by the 200ms interval and by interactive

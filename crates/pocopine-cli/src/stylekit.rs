@@ -10,8 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use pocopine_stylekit::{compile_project, render, CompileOptions, ProjectCss, SourceFile};
+use anyhow::{Context, Result, bail};
+use pocopine_stylekit::{CompileOptions, ProjectCss, SourceFile, compile_project, render};
 
 use crate::config::{PocopineConfig, StylekitConfig};
 

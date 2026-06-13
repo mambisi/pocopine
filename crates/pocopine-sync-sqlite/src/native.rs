@@ -6,12 +6,12 @@ use std::{
 };
 
 use pocopine_sync::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
-    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey, RowVersion,
-    SyncCollectionName, SyncCursor, SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity,
-    SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    ClientMutation, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor,
+    SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
+    SyncResult, SyncRow, SyncStreamName, generate_sync_device_id,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::schema::{
     BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, CLEAR_STREAM_SQL,
@@ -1135,9 +1135,10 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err
-            .to_string()
-            .contains("incompatible sync sqlite schema version"));
+        assert!(
+            err.to_string()
+                .contains("incompatible sync sqlite schema version")
+        );
     }
 
     #[test]

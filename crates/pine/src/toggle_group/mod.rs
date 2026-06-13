@@ -139,9 +139,10 @@ impl PineToggleGroupItem {
     fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject()
             && let Some(scope) = Scope::find(root)
-                && let Some(rc) = scope.typed::<PineToggleGroupRoot>() {
-                    self.pressed = rc.borrow().item_pressed(&self.value);
-                }
+            && let Some(rc) = scope.typed::<PineToggleGroupRoot>()
+        {
+            self.pressed = rc.borrow().item_pressed(&self.value);
+        }
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {

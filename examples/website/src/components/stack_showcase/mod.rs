@@ -51,10 +51,11 @@ impl StackShowcase {
         };
         if let Ok(Some(btn)) = el.closest("[data-feat]")
             && let Some(v) = btn.get_attribute("data-feat")
-                && let Ok(n) = v.parse::<u32>()
-                    && (n as usize) < FEATS.len() {
-                        self.active = n;
-                        self.apply();
-                    }
+            && let Ok(n) = v.parse::<u32>()
+            && (n as usize) < FEATS.len()
+        {
+            self.active = n;
+            self.apply();
+        }
     }
 }

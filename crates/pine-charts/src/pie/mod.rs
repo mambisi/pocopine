@@ -5,16 +5,16 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::animation::{
-    animation_duration_ms, animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING,
+    DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_duration_ms, animation_style,
 };
 use crate::cartesian::{
-    pointer_event_svg_point, step_key, sync_tooltip_fields, CartesianHoverPlacement,
-    ChartStateFields, DEFAULT_EMPTY_MESSAGE,
+    CartesianHoverPlacement, ChartStateFields, DEFAULT_EMPTY_MESSAGE, pointer_event_svg_point,
+    step_key, sync_tooltip_fields,
 };
-use crate::error::{finite, ChartError, ChartResult};
+use crate::error::{ChartError, ChartResult, finite};
 use crate::events::{
-    ChartHover, ChartHoverEnd, ChartSelection, ChartSelectionKeys, CHART_HOVER_END_EVENT,
-    CHART_HOVER_EVENT,
+    CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, ChartHover, ChartHoverEnd, ChartSelection,
+    ChartSelectionKeys,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::LegendItem;

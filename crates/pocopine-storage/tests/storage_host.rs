@@ -1,28 +1,27 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use pocopine_core::ServerError;
 use pocopine_server::auth::{AuthUser, RequestContext};
+use pocopine_server::axum::Router;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
-use pocopine_server::axum::Router;
 use pocopine_storage::{
-    storage_server_plugin, storage_tus_server_plugin, ChecksumAlgorithm, ChecksumPolicy,
-    CompleteUpload, InitiateUpload, InitiateUploadRequest, LocalFsStorageBackend,
-    MemoryStorageBackend, ObjectChecksum, ObjectMetadata, ObjectOwnerRef, SafeObjectKey,
-    StorageBackend, StorageContext, StorageError, StorageKey, StorageKeyFuture, StorageKeyResolver,
-    StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent, UploadPolicy,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, STORAGE_ANON_COOKIE,
-    STORAGE_UPLOADS_PATH,
+    ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, InitiateUploadRequest,
+    LocalFsStorageBackend, MemoryStorageBackend, ObjectChecksum, ObjectMetadata, ObjectOwnerRef,
+    STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH, SafeObjectKey, StorageBackend, StorageContext,
+    StorageError, StorageKey, StorageKeyFuture, StorageKeyResolver, StorageResponse, StorageResult,
+    StorageScope, StorageServer, UploadIntent, UploadPolicy, UploadSession, UploadSessionId,
+    UploadSessionStatus, UploadStrategy, storage_server_plugin, storage_tus_server_plugin,
 };
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -280,12 +279,14 @@ async fn tus_options_advertises_creation_resume_and_termination() -> StorageResu
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(response.headers().get("tus-resumable").unwrap(), "1.0.0");
     assert_eq!(response.headers().get("tus-version").unwrap(), "1.0.0");
-    assert!(response
-        .headers()
-        .get("tus-extension")
-        .and_then(|value| value.to_str().ok())
-        .unwrap()
-        .contains("creation-defer-length"));
+    assert!(
+        response
+            .headers()
+            .get("tus-extension")
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
+            .contains("creation-defer-length")
+    );
     assert_eq!(response.headers().get("tus-max-size").unwrap(), "1024");
     Ok(())
 }
@@ -1299,8 +1300,8 @@ async fn local_fs_complete_is_stable_and_moves_temp_file_to_final_key() -> Stora
 }
 
 #[tokio::test]
-async fn local_fs_complete_does_not_adopt_pre_existing_object_for_unfinalized_session(
-) -> StorageResult<()> {
+async fn local_fs_complete_does_not_adopt_pre_existing_object_for_unfinalized_session()
+-> StorageResult<()> {
     // The "tmp is missing, final_path exists" recovery branch used to claim
     // the on-disk object as this session's result. That let a fresh session
     // whose key happened to resolve to an already-occupied object path adopt

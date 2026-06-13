@@ -10,7 +10,7 @@ use crate::model::{Attrs, Fragment};
 use crate::schema_basic;
 use crate::state::{EditorState, EditorStateConfig};
 
-use super::plugin::{input_rules, rule_fire_meta, undo_input_rule, INPUT_RULES_PLUGIN_KEY};
+use super::plugin::{INPUT_RULES_PLUGIN_KEY, input_rules, rule_fire_meta, undo_input_rule};
 use super::rule::{InCodePolicy, InputRule};
 use super::run::run_rules;
 
@@ -484,9 +484,11 @@ fn replacement_inherits_marks_at_mark_boundary() {
     for i in 0..para.child_count() {
         let child = para.child(i).unwrap();
         if let Some(text) = child.text()
-            && text.contains('—') && child.marks().iter().any(|m| m.type_name() == "strong") {
-                found_strong_em_dash = true;
-            }
+            && text.contains('—')
+            && child.marks().iter().any(|m| m.type_name() == "strong")
+        {
+            found_strong_em_dash = true;
+        }
     }
     assert!(
         found_strong_em_dash,
@@ -578,9 +580,11 @@ fn replacement_inherits_marks_from_cursor_position() {
     for i in 0..para.child_count() {
         let child = para.child(i).unwrap();
         if let Some(text) = child.text()
-            && text.contains('—') && child.marks().iter().any(|m| m.type_name() == "strong") {
-                found_em_dash_with_strong = true;
-            }
+            && text.contains('—')
+            && child.marks().iter().any(|m| m.type_name() == "strong")
+        {
+            found_em_dash_with_strong = true;
+        }
     }
     assert!(
         found_em_dash_with_strong,
@@ -992,10 +996,11 @@ fn markdown_bullet_shortcut_places_cursor_inside_joined_list_item() {
     let mut found_list_item = false;
     for depth in 0..=resolved.depth() {
         if let Some(node) = resolved.node(depth)
-            && node.type_name() == "list_item" {
-                found_list_item = true;
-                break;
-            }
+            && node.type_name() == "list_item"
+        {
+            found_list_item = true;
+            break;
+        }
     }
     assert!(
         found_list_item,

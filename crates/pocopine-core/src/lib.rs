@@ -66,36 +66,36 @@ pub mod watch;
 pub mod web;
 
 pub use app::{
-    encode_route_fragment, encode_route_path_segment, encode_route_query_part, App, AppPlugin,
-    Component, IntoRouteTarget, Loader, LoaderContext, LoaderError, PageLink, PageMeta,
-    PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent, RouteConfig,
+    App, AppPlugin, Component, IntoRouteTarget, Loader, LoaderContext, LoaderError, PageLink,
+    PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent, RouteConfig,
     RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
     RouteLoaderFuture, RouteMeta, RouteMetaKey, RouteName, RouteQuery, RouteRejection,
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle,
+    RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle, encode_route_fragment,
+    encode_route_path_segment, encode_route_query_part,
 };
 pub use client_module::{ClientModule, ClientModuleError};
-pub use computed::{computed, Computed};
+pub use computed::{Computed, computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
-pub use context::{inject, provide, ContextKey, ContextMarker};
+pub use context::{ContextKey, ContextMarker, inject, provide};
 pub use directives::for_plan::{
-    register_row_plans, BindingKind, StaticBinding, StaticListener, StaticRowPlan,
+    BindingKind, StaticBinding, StaticListener, StaticRowPlan, register_row_plans,
 };
 pub use emit::{
-    emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
-    emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, Emit,
+    Emit, emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
+    emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from,
 };
-pub use events::{on_scope_unmount, on_scope_unmount_for, DomEventName, ListenerHandle};
+pub use events::{DomEventName, ListenerHandle, on_scope_unmount, on_scope_unmount_for};
 pub use expr::{StaticBinOp, StaticExpr, StaticLiteral};
 pub use extractors::{Inject, NearestParent, Parent};
-pub use handle::{this, FieldHandle, Handle};
+pub use handle::{FieldHandle, Handle, this};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use lifecycle::{
     Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, LifecyclePhase, MountEpoch,
     ParentId, Refs, ScopePath, TagName, TeleportHost, TypedEl, Win,
 };
-pub use model_runtime::{with_write_origin, WriteOrigin};
+pub use model_runtime::{WriteOrigin, with_write_origin};
 pub use plugin::{
     AppBootCompleted, AppBootFailed, AppBootStarted, ComponentEvent, ComponentMounted,
     ComponentPluginExt, ComponentReady, ComponentSetup, ComponentUnmounted, ForComponent, Hook,
@@ -108,32 +108,32 @@ pub use profiler::mount::{
 };
 pub use props::{PropValue, Props};
 pub use reactive::{
-    batch, current_effect, effect, effect_scoped, effect_with, flush_sync, on_cleanup, release,
-    run_now, set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,
+    EffectId, EffectOptions, ScopeId, SignalId, batch, current_effect, effect, effect_scoped,
+    effect_with, flush_sync, on_cleanup, release, run_now, set_auto_flush, track, trigger_scope,
 };
 pub use registry::{
-    assert_registry_clean, canonical_component_name, mark_registered, register_component,
-    register_component_as, register_component_prefixed, register_component_with_mount,
-    registered_component_names, registry_errors, render_boot_error, verify_registry, ComponentCtor,
-    ComponentEntry, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
-    RegistryErrorKind, COMPONENT_ENTRIES,
+    COMPONENT_ENTRIES, ComponentCtor, ComponentEntry, ComponentMountFn, ComponentVTable,
+    RegisteredComponent, RegistryError, RegistryErrorKind, assert_registry_clean,
+    canonical_component_name, mark_registered, register_component, register_component_as,
+    register_component_prefixed, register_component_with_mount, registered_component_names,
+    registry_errors, render_boot_error, verify_registry,
 };
 pub use router::{
-    go, navigate, prefetch, push, reevaluate_current, register_route, replace, NavigationFailure,
-    NavigationResult, PrefetchResult, PrefetchSkip, ReturnTo, RouteLocation, RouteToken,
+    NavigationFailure, NavigationResult, PrefetchResult, PrefetchSkip, ReturnTo, RouteLocation,
+    RouteToken, go, navigate, prefetch, push, reevaluate_current, register_route, replace,
 };
 pub use scope::{
-    append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache, js_bridge,
-    patch_list_at_inline, patch_list_indices_inline, prepend_list_inline, remove_list_at_inline,
-    replace_field_inline, swap_list_indices_inline, ComponentState, Scope, StaticPropKind,
+    ComponentState, Scope, StaticPropKind, append_list_inline, current_scope_id, invalidate_field,
+    invalidate_field_cache, js_bridge, patch_list_at_inline, patch_list_indices_inline,
+    prepend_list_inline, remove_list_at_inline, replace_field_inline, swap_list_indices_inline,
 };
 pub use server::{Result as ServerResult, ServerError};
-pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
+pub use signal::{RwSignal, Setter, Signal, rw_signal, signal};
 pub use storage::{LocalStorage, StorageError};
-pub use store::{register_store_scope, store, store_scope, stores_object, Store, StoreHandle};
+pub use store::{Store, StoreHandle, register_store_scope, store, store_scope, stores_object};
 pub use styles::inject_style;
 pub use task::{
-    spawn, spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped, TaskHandle,
+    TaskHandle, spawn, spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped,
 };
 pub use templates::{
     compile_template, inject_pp_data, is_registered, register_template, template_for,

@@ -1,10 +1,10 @@
 use wasm_bindgen::JsCast;
 
-use crate::error::{finite, ChartError, ChartResult};
+use crate::error::{ChartError, ChartResult, finite};
 use crate::events::ChartHover;
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::scale::LinearScale;
-use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
+use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel, format_tick};
 
 pub(crate) const DEFAULT_EMPTY_MESSAGE: &str = "No visible data";
 

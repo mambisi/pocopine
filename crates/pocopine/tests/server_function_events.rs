@@ -14,14 +14,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use pocopine::ServerResult;
 use pocopine_auth::{AuthFuture, AuthProvider, AuthUser, RequestContext};
-use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine_server::axum::Router;
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::http::{Method, Request};
 use pocopine_server::axum::response::Response;
-use pocopine_server::axum::Router;
 use pocopine_server::tower::ServiceExt;
 use pocopine_server::{
-    request_event_layer, RouterAuthExt, Server, ServerFunctionCompleted, ServerFunctionFailed,
-    ServerFunctionRejected, ServerFunctionStarted, ServerHook, ServerPlugin,
+    RouterAuthExt, Server, ServerFunctionCompleted, ServerFunctionFailed, ServerFunctionRejected,
+    ServerFunctionStarted, ServerHook, ServerPlugin, request_event_layer,
 };
 
 /// Tests share the process-global plugin registry, so they must

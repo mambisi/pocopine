@@ -605,13 +605,13 @@ async fn source_provided_mutation_log_skips_auto_default() {
     // not a fresh `MemoryMutationLog`.
     use pocopine_auth::RequestContext;
     use pocopine_sync::{MutationId, SyncOp};
+    use pocopine_sync_query::Query;
     use pocopine_sync_query::source::{
         DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
     };
     use pocopine_sync_query::write::{
         AcceptedMutation, MemoryMutationLog, MutationLog, MutationReservation,
     };
-    use pocopine_sync_query::Query;
     use std::sync::Arc;
 
     #[derive(Clone)]
@@ -752,10 +752,10 @@ fn tasks_resource_convenience_compiles_with_stub_source() {
     // `row_to_params_typed`). This stub Source carries no `version`
     // field on the row, so `version_field` is not pre-wired.
     use pocopine_auth::RequestContext;
+    use pocopine_sync_query::Query;
     use pocopine_sync_query::source::{
         DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
     };
-    use pocopine_sync_query::Query;
 
     pub struct TaskStore;
 

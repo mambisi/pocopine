@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use pocopine_stylekit::{compile_project, CompileOptions, SourceFile};
+use pocopine_stylekit::{CompileOptions, SourceFile, compile_project};
 
 fn example_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/tailwind")

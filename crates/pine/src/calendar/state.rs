@@ -18,8 +18,8 @@
 //!   to the component layer where `js-sys::Intl` can be reached.
 
 use crate::datetime::{
-    compare_year_month, create_months, get_days_in_month, is_after, is_before, is_same_day,
-    is_same_month, start_of_month, CreateMonthsProps, DateValue, Grid, WeekStartsOn,
+    CreateMonthsProps, DateValue, Grid, WeekStartsOn, compare_year_month, create_months,
+    get_days_in_month, is_after, is_before, is_same_day, is_same_month, start_of_month,
 };
 
 /// Configuration plus resolved state of a calendar at a point in
@@ -335,10 +335,11 @@ mod tests {
     fn select_outside_view_moves_placeholder() {
         let mut s = CalendarState::new(d(2024, 6, 1));
         s.select_date(d(2024, 9, 10));
-        assert!(s
-            .grid
-            .iter()
-            .any(|g| g.value.month() == 9 && g.value.year() == 2024));
+        assert!(
+            s.grid
+                .iter()
+                .any(|g| g.value.month() == 9 && g.value.year() == 2024)
+        );
         assert_eq!(s.placeholder, d(2024, 9, 10));
     }
 

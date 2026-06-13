@@ -3,12 +3,11 @@ use std::{collections::BTreeMap, fmt, rc::Rc};
 use futures::lock::Mutex as AsyncMutex;
 use js_sys::{Function, Promise, Reflect};
 use pocopine_sync::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
-    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey, SyncError,
-    SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp, SyncResult, SyncRow,
-    SyncStreamName,
+    ClientMutation, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationId, RowKey, SyncError, SyncLocalFuture, SyncLocalIdentity,
+    SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName, generate_sync_device_id,
 };
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     Event, IdbDatabase, IdbObjectStore, IdbOpenDbRequest, IdbRequest, IdbTransaction,
@@ -360,10 +359,11 @@ async fn mark_push_result(database_name: String, result: LocalPushResult) -> Syn
             row.conflict = true;
             rows.insert(row.key.clone(), row);
         } else if let Some(key) = conflict.key
-            && let Some(row) = rows.get_mut(&key) {
-                row.pending = false;
-                row.conflict = true;
-            }
+            && let Some(row) = rows.get_mut(&key)
+        {
+            row.pending = false;
+            row.conflict = true;
+        }
     }
 
     for mut row in result.rows {
@@ -678,9 +678,10 @@ fn js_value_to_string(value: &JsValue) -> String {
     }
 
     if let Ok(message) = Reflect::get(value, &JsValue::from_str("message"))
-        && let Some(message) = message.as_string() {
-            return message;
-        }
+        && let Some(message) = message.as_string()
+    {
+        return message;
+    }
 
     js_sys::JSON::stringify(value)
         .ok()

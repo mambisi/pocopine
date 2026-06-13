@@ -207,11 +207,10 @@ impl PineTimeField {
                 let advanced = segs.type_digit(part, digit as u8);
                 self.part_selected = false;
                 self.commit_segments(&segs);
-                if advanced
-                    && let Some(next) = part.next(self.has_seconds) {
-                        self.set_active_part(Some(next), true);
-                        self.focus_segment_in_dom(next);
-                    }
+                if advanced && let Some(next) = part.next(self.has_seconds) {
+                    self.set_active_part(Some(next), true);
+                    self.focus_segment_in_dom(next);
+                }
                 return;
             }
             _ => return,
@@ -272,19 +271,23 @@ impl PineTimeField {
     fn refill_from_display(&self, s: &mut TimeSegments) {
         if s.hour.is_none()
             && let Ok(h) = self.hour_display.trim().parse::<u8>()
-                && h <= 23 {
-                    s.hour = Some(h);
-                }
+            && h <= 23
+        {
+            s.hour = Some(h);
+        }
         if s.minute.is_none()
             && let Ok(m) = self.minute_display.trim().parse::<u8>()
-                && m <= 59 {
-                    s.minute = Some(m);
-                }
-        if self.has_seconds && s.second.is_none()
+            && m <= 59
+        {
+            s.minute = Some(m);
+        }
+        if self.has_seconds
+            && s.second.is_none()
             && let Ok(sec) = self.second_display.trim().parse::<u8>()
-                && sec <= 59 {
-                    s.second = Some(sec);
-                }
+            && sec <= 59
+        {
+            s.second = Some(sec);
+        }
     }
 
     fn commit_segments(&mut self, s: &TimeSegments) {

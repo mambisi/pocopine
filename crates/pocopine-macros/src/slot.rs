@@ -28,9 +28,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
+    Attribute, Ident, LitStr, Path, Token,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
-    Attribute, Ident, LitStr, Path, Token,
 };
 
 /// One `#[slot(...)]` declaration on the parent struct.

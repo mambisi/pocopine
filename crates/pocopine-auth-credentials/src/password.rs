@@ -177,12 +177,16 @@ mod tests {
         let hash = hash_password("hunter2hunter2".to_string(), params.clone())
             .await
             .unwrap();
-        assert!(verify_password("hunter2hunter2".to_string(), hash.clone())
-            .await
-            .unwrap());
-        assert!(!verify_password("wrong-password".to_string(), hash)
-            .await
-            .unwrap());
+        assert!(
+            verify_password("hunter2hunter2".to_string(), hash.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !verify_password("wrong-password".to_string(), hash)
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

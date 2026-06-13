@@ -6,7 +6,7 @@ use pocopine_sync::{
     SyncLocalIdentity, SyncLocalStore, SyncOp, SyncPushResponse, SyncRow, SyncStreamName,
 };
 use pocopine_sync_indexdb::IndexedDbLocalStore;
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
 use web_sys::{Event, IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};

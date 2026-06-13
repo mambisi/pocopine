@@ -147,11 +147,7 @@ impl FileBrowserSizeControl {
 }
 
 fn unit_factor(unit: &str) -> f64 {
-    if unit == "GB" {
-        1024.0
-    } else {
-        1.0
-    }
+    if unit == "GB" { 1024.0 } else { 1.0 }
 }
 
 fn mib_value(value: f64) -> f64 {

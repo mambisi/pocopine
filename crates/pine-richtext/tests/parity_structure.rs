@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 
 use pine_richtext::model::{Attrs, Fragment, MarkPolicy, MarkSpec, Node, NodeSpec, Schema, Slice};
 use pine_richtext::transform::{
-    can_split, can_split_into, find_wrapping, lift_target, Transform, TypeAfter,
+    Transform, TypeAfter, can_split, can_split_into, find_wrapping, lift_target,
 };
 
 // ---------- Schema + test doc ----------

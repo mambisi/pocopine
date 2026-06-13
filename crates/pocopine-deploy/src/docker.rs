@@ -21,7 +21,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 /// Thin wrapper around the `docker` CLI. `new()` resolves the binary
@@ -175,9 +175,10 @@ pub fn docker_config_has_auth(config_json: &str, registry_host: &str) -> bool {
     }
     for field in ["credHelpers", "auths"] {
         if let Some(map) = cfg.get(field).and_then(|m| m.as_object())
-            && map.keys().any(|k| registry_key_matches(k, registry_host)) {
-                return true;
-            }
+            && map.keys().any(|k| registry_key_matches(k, registry_host))
+        {
+            return true;
+        }
     }
     false
 }

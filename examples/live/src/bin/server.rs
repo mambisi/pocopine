@@ -1,8 +1,8 @@
 #[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use live_example::{live_backend, POSTS_COLLECTION, POSTS_LIST_QUERY_TAG};
-    use pocopine::live::{collection_topic, query_tag_topic, routes, LiveHub};
+    use live_example::{POSTS_COLLECTION, POSTS_LIST_QUERY_TAG, live_backend};
+    use pocopine::live::{LiveHub, collection_topic, query_tag_topic, routes};
     use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files};
 

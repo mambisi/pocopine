@@ -89,15 +89,16 @@ pub(crate) fn broadcast_sign_out() {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn subscribe_sign_out(handler: Rc<dyn Fn()>) -> Option<WasmSubscriptionInner> {
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
     let channel = web_sys::BroadcastChannel::new(SIGN_OUT_CHANNEL).ok()?;
     let closure: Closure<dyn FnMut(web_sys::MessageEvent)> =
         Closure::new(move |event: web_sys::MessageEvent| {
             if let Some(value) = event.data().as_string()
-                && value == SIGN_OUT_MESSAGE {
-                    handler();
-                }
+                && value == SIGN_OUT_MESSAGE
+            {
+                handler();
+            }
         });
     channel.set_onmessage(Some(closure.as_ref().unchecked_ref()));
     Some(WasmSubscriptionInner {

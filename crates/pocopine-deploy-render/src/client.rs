@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::info;
 
 /// Read the response body as text and parse it as `T`, including the
@@ -530,7 +530,9 @@ fn print_render_logs(service_id: &str, deploy_id: &str, logs: &[RenderLog]) {
     eprintln!();
     eprintln!("── render logs · service {service_id} · deploy {deploy_id} ──────────");
     if logs.is_empty() {
-        eprintln!("(no logs returned — Render may not have captured any yet, or the credential lacks the `logs` scope)");
+        eprintln!(
+            "(no logs returned — Render may not have captured any yet, or the credential lacks the `logs` scope)"
+        );
         return;
     }
     for entry in logs {

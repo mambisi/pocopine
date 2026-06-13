@@ -80,10 +80,11 @@ pub fn delegate_nav(ev: &web_sys::MouseEvent) {
         return;
     };
     if let Some(href) = anchor.get_attribute("href")
-        && href.starts_with('/') {
-            ev.prevent_default();
-            pocopine::navigate(&href);
-        }
+        && href.starts_with('/')
+    {
+        ev.prevent_default();
+        pocopine::navigate(&href);
+    }
 }
 
 /// Generic 4-column row for the hand-authored API tables on the section

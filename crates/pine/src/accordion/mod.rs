@@ -203,11 +203,12 @@ pub struct PineAccordionTrigger {
 impl PineAccordionTrigger {
     fn on_setup(&mut self) {
         if let Some(item) = ITEM.inject()
-            && let Some(scope) = Scope::find(item) {
-                let s = scope.state.borrow();
-                self.open = s.get("open").as_bool().unwrap_or(false);
-                self.disabled = s.get("disabled").as_bool().unwrap_or(false);
-            }
+            && let Some(scope) = Scope::find(item)
+        {
+            let s = scope.state.borrow();
+            self.open = s.get("open").as_bool().unwrap_or(false);
+            self.disabled = s.get("disabled").as_bool().unwrap_or(false);
+        }
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {
@@ -220,9 +221,10 @@ impl PineAccordionTrigger {
     pub fn click(&mut self) {
         let Some(item) = ITEM.inject() else { return };
         if let Some(scope) = Scope::find(item)
-            && let Some(inner) = scope.typed::<PineAccordionItem>() {
-                Handle::new(inner, item).update(|s: &mut PineAccordionItem| s.click_trigger());
-            }
+            && let Some(inner) = scope.typed::<PineAccordionItem>()
+        {
+            Handle::new(inner, item).update(|s: &mut PineAccordionItem| s.click_trigger());
+        }
     }
 }
 
@@ -241,9 +243,10 @@ pub struct PineAccordionContent {
 impl PineAccordionContent {
     fn on_setup(&mut self) {
         if let Some(item) = ITEM.inject()
-            && let Some(scope) = Scope::find(item) {
-                self.open = scope.state.borrow().get("open").as_bool().unwrap_or(false);
-            }
+            && let Some(scope) = Scope::find(item)
+        {
+            self.open = scope.state.borrow().get("open").as_bool().unwrap_or(false);
+        }
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {

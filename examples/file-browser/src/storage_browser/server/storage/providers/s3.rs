@@ -1,6 +1,6 @@
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
 use pocopine::{ServerError, ServerResult};
 use pocopine_storage::StorageResult;
 use pocopine_storage_s3::S3StorageBackend;

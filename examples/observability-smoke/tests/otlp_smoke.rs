@@ -12,13 +12,13 @@ use opentelemetry_proto::tonic::collector::trace::v1::trace_service_server::{
 use opentelemetry_proto::tonic::collector::trace::v1::{
     ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
-use opentelemetry_proto::tonic::common::v1::{any_value, AnyValue, KeyValue};
+use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::trace::v1::Span;
-use pocopine::logging::{init_server_logging, OtlpConfig, ServerLoggingConfig};
-use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine::logging::{OtlpConfig, ServerLoggingConfig, init_server_logging};
+use pocopine_server::Server;
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::http::{Method, Request};
 use pocopine_server::tower::ServiceExt;
-use pocopine_server::Server;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{Response, Status};

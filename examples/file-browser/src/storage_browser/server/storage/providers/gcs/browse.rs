@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use google_cloud_auth::credentials::{
-    service_account::Builder as ServiceAccountCredentials, Builder as GoogleCredentialsBuilder,
+    Builder as GoogleCredentialsBuilder, service_account::Builder as ServiceAccountCredentials,
 };
 use google_cloud_storage::builder::storage::SignedUrlBuilder;
 use google_cloud_storage::http::Method;

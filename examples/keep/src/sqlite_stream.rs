@@ -18,8 +18,8 @@ use pocopine_sync::{
     SyncPushRequest, SyncPushResponse, SyncRejectedMutation, SyncResult, SyncRow, SyncStreamName,
     SyncStreamSource,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
-use serde::{de::DeserializeOwned, Serialize};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{KeepNote, KeepTag};

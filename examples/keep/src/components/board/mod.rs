@@ -15,7 +15,7 @@ use crate::components::{
     auth_gate::KeepAuthGate, grid_layout::KeepGridLayout, list_detail::KeepListDetail,
     login::KeepLogin,
 };
-use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
+use crate::{KEEP_STREAM, KEEP_TAGS_STREAM, KeepStore, focus_after_flush};
 
 /// Top-level component. Owns nothing except the sync wiring; every
 /// piece of durable UI state lives in [`KeepStore`].

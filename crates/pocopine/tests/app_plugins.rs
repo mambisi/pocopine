@@ -10,13 +10,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use js_sys::{Promise, Reflect};
-use pocopine::prelude::*;
 use pocopine::App;
+use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, HtmlElement};
+use web_sys::{HtmlElement, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -343,9 +343,10 @@ fn remove_pp_app_roots() {
     let roots = doc().query_selector_all("[pp-app]").unwrap();
     for i in 0..roots.length() {
         if let Some(root) = roots.item(i)
-            && let Ok(el) = root.dyn_into::<web_sys::Element>() {
-                el.remove();
-            }
+            && let Ok(el) = root.dyn_into::<web_sys::Element>()
+        {
+            el.remove();
+        }
     }
 }
 

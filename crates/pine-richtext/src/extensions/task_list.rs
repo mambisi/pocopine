@@ -9,9 +9,9 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::commands::{wrap_in_list, BoxedCommand};
+use crate::commands::{BoxedCommand, wrap_in_list};
 use crate::extension::{ExtensionNodeView, NamedCommand, RichTextExtension};
 use crate::markdown::{EventSink, NodeEmitter};
 use crate::model::{Attrs, NodeSpec};

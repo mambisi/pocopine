@@ -1,29 +1,28 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::LegendItem;
 use crate::animation::{
-    animation_style, exit_animation_delay_ms, DEFAULT_ANIMATION_DURATION_MS,
-    DEFAULT_ANIMATION_EASING,
+    DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_style,
+    exit_animation_delay_ms,
 };
 use crate::cartesian::{
-    centered_plot_y, chart_hover_payload, optional_domain, plot_rect_from_edges,
-    pointer_event_svg_point, step_key, sync_tooltip_fields, CartesianChartState,
-    CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields, ChartStateFields,
-    PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
+    CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
+    ChartStateFields, DEFAULT_EMPTY_MESSAGE, PlotEdgeFields, centered_plot_y, chart_hover_payload,
+    optional_domain, plot_rect_from_edges, pointer_event_svg_point, step_key, sync_tooltip_fields,
 };
 use crate::error::{ChartError, ChartResult};
 use crate::events::{
-    ChartHoverEnd, ChartSelection, ChartSelectionKeys, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
+    CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, ChartHoverEnd, ChartSelection, ChartSelectionKeys,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
 use crate::line::{
-    nearest_line_sample_at, ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions,
-    LineChartSample,
+    ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions, LineChartSample,
+    nearest_line_sample_at,
 };
 use crate::path::area_path;
 use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
-use crate::LegendItem;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartAreaSeries {

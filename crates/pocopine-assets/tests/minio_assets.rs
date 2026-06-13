@@ -9,9 +9,9 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use pocopine_assets::{AssetStore, AssetStoreConfig, ASSET_CACHE_CONTROL};
-use testcontainers::runners::AsyncRunner;
+use pocopine_assets::{ASSET_CACHE_CONTROL, AssetStore, AssetStoreConfig};
 use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::minio::MinIO;
 use tokio::sync::OnceCell;
 

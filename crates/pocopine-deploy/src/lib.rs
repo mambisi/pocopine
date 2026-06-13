@@ -31,7 +31,7 @@ pub use adapter::{
 };
 pub use artefact::{Artefact, StagedFiles};
 pub use registry::{
-    resolve_registry, resolve_registry_credentials, GitProvider, RegistryCredentials,
-    ResolvedRegistry,
+    GitProvider, RegistryCredentials, ResolvedRegistry, resolve_registry,
+    resolve_registry_credentials,
 };
 pub use spec::{DeploySpec, EnvSource, EnvValue, Mode, ProcessSpec, Scale, ServiceSpec};

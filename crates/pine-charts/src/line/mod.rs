@@ -1,23 +1,23 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
+use crate::animation::{DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_style};
 use crate::cartesian::{
-    centered_plot_y, chart_hover_payload, nearest_sample_by_point, nearest_sample_by_x,
-    optional_domain, plot_rect_from_edges, pointer_event_svg_point, step_key, sync_tooltip_fields,
     CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
-    CartesianHoverSample, CartesianHoverUpdate, CartesianLayout, ChartStateFields, PlotEdgeFields,
-    DEFAULT_EMPTY_MESSAGE,
+    CartesianHoverSample, CartesianHoverUpdate, CartesianLayout, ChartStateFields,
+    DEFAULT_EMPTY_MESSAGE, PlotEdgeFields, centered_plot_y, chart_hover_payload,
+    nearest_sample_by_point, nearest_sample_by_x, optional_domain, plot_rect_from_edges,
+    pointer_event_svg_point, step_key, sync_tooltip_fields,
 };
-use crate::error::{finite, ChartError, ChartResult};
+use crate::error::{ChartError, ChartResult, finite};
 use crate::events::{
-    ChartHoverEnd, ChartSelection, ChartSelectionKeys, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
+    CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, ChartHoverEnd, ChartSelection, ChartSelectionKeys,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
 use crate::path::line_path;
 use crate::scale::LinearScale;
-use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
+use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel, format_tick};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartPoint {

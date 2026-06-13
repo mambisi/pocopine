@@ -12,8 +12,8 @@ mod support;
 use pine_richtext::model::{Attrs, Fragment, MarkPolicy, MarkSpec, Node, NodeSpec, Schema, Slice};
 use pine_richtext::schema_basic;
 use pine_richtext::transform::{
-    can_join, join_point, AttrStep, DocAttrStep, MapRange, Mapping, MarkStep, NodeMarkStep,
-    ReplaceAroundStep, ReplaceStep, Step, StepMap,
+    AttrStep, DocAttrStep, MapRange, Mapping, MarkStep, NodeMarkStep, ReplaceAroundStep,
+    ReplaceStep, Step, StepMap, can_join, join_point,
 };
 
 use support::*;
@@ -156,26 +156,22 @@ fn transform_keeps_defining_context_at_textblock_start() {
     // schema_basic, so the wrapper structure must survive the replace and
     // the cursor parent's "foo" content gets merged into the slice's last
     // textblock.
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("foo").into(),
-    ])
-    .into()]);
-    let source = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tag("a"),
-            tagged_text("one").into(),
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tag("a"), tagged_text("foo").into()]).into(),
+    ]);
+    let source = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("one").into()]).into(),
+            ])
+            .into(),
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tagged_text("two").into(), tag("b")]).into(),
+            ])
+            .into(),
         ])
-        .into()])
         .into(),
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tagged_text("two").into(),
-            tag("b"),
-        ])
-        .into()])
-        .into(),
-    ])
-    .into()]);
+    ]);
     let slice = source
         .node
         .slice_with_parents(source.tag("a"), source.tag("b"), true)
@@ -199,26 +195,22 @@ fn transform_keeps_defining_context_at_textblock_end() {
     //   doc(p("foo<a>"))
     //   slice: ul(li(p("one")), li(p("two")))  with openStart=3, openEnd=3
     //   expected: doc(ul(li(p("fooone")), li(p("two"))))
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo").into(),
-        tag("a"),
-    ])
-    .into()]);
-    let source = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tag("a"),
-            tagged_text("one").into(),
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tagged_text("foo").into(), tag("a")]).into(),
+    ]);
+    let source = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("one").into()]).into(),
+            ])
+            .into(),
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tagged_text("two").into(), tag("b")]).into(),
+            ])
+            .into(),
         ])
-        .into()])
         .into(),
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tagged_text("two").into(),
-            tag("b"),
-        ])
-        .into()])
-        .into(),
-    ])
-    .into()]);
+    ]);
     let slice = source
         .node
         .slice_with_parents(source.tag("a"), source.tag("b"), true)
@@ -243,29 +235,29 @@ fn transform_keeps_defining_context_over_a_range_in_one_textblock() {
     //   doc(p("foo<a>middle<b>bar"))
     //   slice: ul(li(p("one")), li(p("two")))  with openStart=3, openEnd=3
     //   expected: doc(ul(li(p("fooone")), li(p("twobar"))))
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo").into(),
-        tag("a"),
-        tagged_text("middle").into(),
-        tag("b"),
-        tagged_text("bar").into(),
-    ])
-    .into()]);
-    let source = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item(vec![tagged_paragraph(vec![
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo").into(),
             tag("a"),
-            tagged_text("one").into(),
-        ])
-        .into()])
-        .into(),
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tagged_text("two").into(),
+            tagged_text("middle").into(),
             tag("b"),
+            tagged_text("bar").into(),
         ])
-        .into()])
         .into(),
-    ])
-    .into()]);
+    ]);
+    let source = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("one").into()]).into(),
+            ])
+            .into(),
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tagged_text("two").into(), tag("b")]).into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
     let slice = source
         .node
         .slice_with_parents(source.tag("a"), source.tag("b"), true)
@@ -305,21 +297,19 @@ fn transform_keeps_defining_context_across_two_textblocks() {
         ])
         .into(),
     ]);
-    let source = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tag("a"),
-            tagged_text("one").into(),
+    let source = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("one").into()]).into(),
+            ])
+            .into(),
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tagged_text("two").into(), tag("b")]).into(),
+            ])
+            .into(),
         ])
-        .into()])
         .into(),
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tagged_text("two").into(),
-            tag("b"),
-        ])
-        .into()])
-        .into(),
-    ])
-    .into()]);
+    ]);
     let slice = source
         .node
         .slice_with_parents(source.tag("a"), source.tag("b"), true)
@@ -393,14 +383,16 @@ fn transform_partial_lift_emits_replace_around_step() {
     // build_lift_around_step's open-slice approach produces the correct
     // doc for boundary positions too — so the step type should now be
     // ReplaceAround across the board, not Replace.
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("one").into(),
-        tag("a"),
-        tagged_paragraph_text("two").into(),
-        tag("b"),
-        tagged_paragraph_text("three").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph_text("one").into(),
+            tag("a"),
+            tagged_paragraph_text("two").into(),
+            tag("b"),
+            tagged_paragraph_text("three").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
 
@@ -593,16 +585,17 @@ fn transform_node_mark_methods_match_upstream_cases() {
     );
 
     tr.remove_node_mark(1, em.clone()).unwrap();
-    assert!(tr
-        .doc()
-        .content()
-        .child(0)
-        .unwrap()
-        .content()
-        .child(0)
-        .unwrap()
-        .marks()
-        .is_empty());
+    assert!(
+        tr.doc()
+            .content()
+            .child(0)
+            .unwrap()
+            .content()
+            .child(0)
+            .unwrap()
+            .marks()
+            .is_empty()
+    );
     tr.remove_node_mark(1, em).unwrap();
 
     let schema = Schema::builder()
@@ -704,16 +697,18 @@ fn transform_set_block_type_matches_core_upstream_cases() {
     );
 
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("hello ").into(),
-        tagged_marked_text("wor<a>ld", vec![em]).into(),
-        TaggedNode {
-            node: image("x.png"),
-            tags: Default::default(),
-        }
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("hello ").into(),
+            tagged_marked_text("wor<a>ld", vec![em]).into(),
+            TaggedNode {
+                node: image("x.png"),
+                tags: Default::default(),
+            }
+            .into(),
+        ])
         .into(),
-    ])
-    .into()]);
+    ]);
     let from = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
 
@@ -971,12 +966,16 @@ fn transform_replace_joins_matching_top_level_textblocks() {
 
 #[test]
 fn transform_replace_handles_open_and_nested_slices() {
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("on<a>e").into(),
-        tagged_paragraph_text("t<b>wo").into(),
-    ])
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_blockquote(vec![
+                tagged_paragraph_text("on<a>e").into(),
+                tagged_paragraph_text("t<b>wo").into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
     let insert = tagged_doc(vec![tagged_paragraph_text("<a>H<b>").into()]);
     let slice = insert.node.slice(insert.tag("a"), insert.tag("b")).unwrap();
     let from = tagged.tag("a");
@@ -985,17 +984,17 @@ fn transform_replace_handles_open_and_nested_slices() {
 
     tr.replace(from, to, slice).unwrap();
 
-    let expected = doc(vec![schema_basic::blockquote(vec![
-        schema_basic::blockquote(vec![paragraph_text("onHwo")]).unwrap(),
-    ])
-    .unwrap()]);
+    let expected = doc(vec![
+        schema_basic::blockquote(vec![
+            schema_basic::blockquote(vec![paragraph_text("onHwo")]).unwrap(),
+        ])
+        .unwrap(),
+    ]);
     assert_eq!(tr.doc(), &expected);
 
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "a<a>bc<b>d",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("a<a>bc<b>d").into()]).into(),
+    ]);
     let insert = tagged_doc(vec![tagged_paragraph_text("x<a>y<b>z").into()]);
     let slice = insert.node.slice(insert.tag("a"), insert.tag("b")).unwrap();
     let from = tagged.tag("a");
@@ -1005,7 +1004,7 @@ fn transform_replace_handles_open_and_nested_slices() {
     tr.replace(from, to, slice).unwrap();
 
     let expected = doc(vec![
-        schema_basic::blockquote(vec![paragraph_text("ayd")]).unwrap()
+        schema_basic::blockquote(vec![paragraph_text("ayd")]).unwrap(),
     ]);
     assert_eq!(tr.doc(), &expected);
 }
@@ -1094,16 +1093,13 @@ fn transform_replace_matches_more_upstream_open_slice_cases() {
 #[test]
 fn transform_replace_merges_multiple_open_levels() {
     let tagged = tagged_doc(vec![
-        tagged_blockquote(vec![tagged_blockquote(vec![tagged_paragraph_text(
-            "hell<a>o",
-        )
-        .into()])
-        .into()])
-        .into(),
-        tagged_blockquote(vec![tagged_blockquote(vec![
-            tagged_paragraph_text("<b>a").into()
+        tagged_blockquote(vec![
+            tagged_blockquote(vec![tagged_paragraph_text("hell<a>o").into()]).into(),
         ])
-        .into()])
+        .into(),
+        tagged_blockquote(vec![
+            tagged_blockquote(vec![tagged_paragraph_text("<b>a").into()]).into(),
+        ])
         .into(),
     ]);
     let insert = tagged_doc(vec![tagged_paragraph_text("<a>i<b>").into()]);
@@ -1114,31 +1110,39 @@ fn transform_replace_merges_multiple_open_levels() {
 
     tr.replace(from, to, slice).unwrap();
 
-    let expected = doc(vec![schema_basic::blockquote(vec![
-        schema_basic::blockquote(vec![paragraph_text("hellia")]).unwrap(),
-    ])
-    .unwrap()]);
+    let expected = doc(vec![
+        schema_basic::blockquote(vec![
+            schema_basic::blockquote(vec![paragraph_text("hellia")]).unwrap(),
+        ])
+        .unwrap(),
+    ]);
     assert_eq!(tr.doc(), &expected);
 }
 
 #[test]
 fn transform_replace_handles_lopsided_open_slices() {
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("on<a>e").into(),
-        tagged_paragraph_text("two").into(),
-        tag("b"),
-        tagged_paragraph_text("three").into(),
-    ])
-    .into()])
-    .into()]);
-    let insert = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("aa<a>aa").into(),
-        tagged_paragraph_text("bb").into(),
-        tagged_paragraph_text("cc").into(),
-        tag("b"),
-        tagged_paragraph_text("dd").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_blockquote(vec![
+                tagged_paragraph_text("on<a>e").into(),
+                tagged_paragraph_text("two").into(),
+                tag("b"),
+                tagged_paragraph_text("three").into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
+    let insert = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph_text("aa<a>aa").into(),
+            tagged_paragraph_text("bb").into(),
+            tagged_paragraph_text("cc").into(),
+            tag("b"),
+            tagged_paragraph_text("dd").into(),
+        ])
+        .into(),
+    ]);
     let slice = insert.node.slice(insert.tag("a"), insert.tag("b")).unwrap();
     let from = tagged.tag("a");
     let to = tagged.tag("b");
@@ -1146,29 +1150,33 @@ fn transform_replace_handles_lopsided_open_slices() {
 
     tr.replace(from, to, slice).unwrap();
 
-    let expected = doc(vec![schema_basic::blockquote(vec![
+    let expected = doc(vec![
         schema_basic::blockquote(vec![
-            paragraph_text("onaa"),
-            paragraph_text("bb"),
-            paragraph_text("cc"),
-            paragraph_text("three"),
+            schema_basic::blockquote(vec![
+                paragraph_text("onaa"),
+                paragraph_text("bb"),
+                paragraph_text("cc"),
+                paragraph_text("three"),
+            ])
+            .unwrap(),
         ])
         .unwrap(),
-    ])
-    .unwrap()]);
+    ]);
     assert_eq!(tr.doc(), &expected);
 
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
+    let tagged = tagged_doc(vec![
         tagged_blockquote(vec![
-            tagged_paragraph_text("on<a>e").into(),
-            tagged_paragraph_text("two").into(),
-            tagged_paragraph_text("three").into(),
+            tagged_blockquote(vec![
+                tagged_paragraph_text("on<a>e").into(),
+                tagged_paragraph_text("two").into(),
+                tagged_paragraph_text("three").into(),
+            ])
+            .into(),
+            tag("b"),
+            tagged_paragraph_text("x").into(),
         ])
         .into(),
-        tag("b"),
-        tagged_paragraph_text("x").into(),
-    ])
-    .into()]);
+    ]);
     let insert = tagged_doc(vec![
         tagged_blockquote(vec![
             tagged_paragraph_text("aa<a>aa").into(),
@@ -1186,16 +1194,18 @@ fn transform_replace_handles_lopsided_open_slices() {
 
     tr.replace(from, to, slice).unwrap();
 
-    let expected = doc(vec![schema_basic::blockquote(vec![
+    let expected = doc(vec![
         schema_basic::blockquote(vec![
-            paragraph_text("onaa"),
-            paragraph_text("bb"),
-            paragraph_text("cc"),
+            schema_basic::blockquote(vec![
+                paragraph_text("onaa"),
+                paragraph_text("bb"),
+                paragraph_text("cc"),
+            ])
+            .unwrap(),
+            paragraph_text("x"),
         ])
         .unwrap(),
-        paragraph_text("x"),
-    ])
-    .unwrap()]);
+    ]);
     assert_eq!(tr.doc(), &expected);
 }
 
@@ -1283,10 +1293,9 @@ fn transform_replace_range_with_fits_block_and_inline_nodes() {
 
     assert_eq!(tr.doc(), &doc(vec![heading(1, "foo"), horizontal_rule()]));
 
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("<a>").into()
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("<a>").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
 
@@ -1405,14 +1414,16 @@ fn transform_add_mark_matches_upstream_cases() {
     let link_bar = schema_basic::link("bar", Option::<String>::None).unwrap();
 
     // should add a mark
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("hello ").into(),
-        tag("a"),
-        tagged_text("there").into(),
-        tag("b"),
-        tagged_text("!").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("hello ").into(),
+            tag("a"),
+            tagged_text("there").into(),
+            tag("b"),
+            tagged_text("!").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1427,14 +1438,16 @@ fn transform_add_mark_matches_upstream_cases() {
     );
 
     // should only add a mark once (idempotent over the same span)
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("hello ").into(),
-        tag("a"),
-        tagged_marked_text("there", vec![strong.clone()]).into(),
-        tagged_text("!").into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("hello ").into(),
+            tag("a"),
+            tagged_marked_text("there", vec![strong.clone()]).into(),
+            tagged_text("!").into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1448,15 +1461,17 @@ fn transform_add_mark_matches_upstream_cases() {
     );
 
     // joins overlapping marks
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("one ").into(),
-        tag("a"),
-        tagged_text("two ").into(),
-        tagged_marked_text("three", vec![em.clone()]).into(),
-        tag("b"),
-        tagged_marked_text(" four", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("one ").into(),
+            tag("a"),
+            tagged_text("two ").into(),
+            tagged_marked_text("three", vec![em.clone()]).into(),
+            tag("b"),
+            tagged_marked_text(" four", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1472,13 +1487,15 @@ fn transform_add_mark_matches_upstream_cases() {
     );
 
     // overwrites marks with different attributes (link href)
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("this is a ").into(),
-        tag("a"),
-        tagged_marked_text("link", vec![link_foo]).into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("this is a ").into(),
+            tag("a"),
+            tagged_marked_text("link", vec![link_foo]).into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1494,13 +1511,15 @@ fn transform_add_mark_matches_upstream_cases() {
     // can add a mark in a nested node
     let tagged = tagged_doc(vec![
         tagged_paragraph_text("before").into(),
-        tagged_blockquote(vec![tagged_paragraph(vec![
-            tagged_text("the variable is called ").into(),
-            tag("a"),
-            tagged_text("i").into(),
-            tag("b"),
+        tagged_blockquote(vec![
+            tagged_paragraph(vec![
+                tagged_text("the variable is called ").into(),
+                tag("a"),
+                tagged_text("i").into(),
+                tag("b"),
+            ])
+            .into(),
         ])
-        .into()])
         .into(),
         tagged_paragraph_text("after").into(),
     ]);
@@ -1562,12 +1581,12 @@ fn transform_remove_mark_matches_upstream_cases() {
     let link_bar = schema_basic::link("bar", Option::<String>::None).unwrap();
 
     // can cut a gap
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![tagged_marked_text(
-        "hello <a>world<b>!",
-        vec![em.clone()],
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_marked_text("hello <a>world<b>!", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1582,15 +1601,17 @@ fn transform_remove_mark_matches_upstream_cases() {
     );
 
     // does nothing when there's no mark in range
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_marked_text("hello", vec![em.clone()]).into(),
-        tagged_text(" ").into(),
-        tag("a"),
-        tagged_text("world").into(),
-        tag("b"),
-        tagged_text("!").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_marked_text("hello", vec![em.clone()]).into(),
+            tagged_text(" ").into(),
+            tag("a"),
+            tagged_text("world").into(),
+            tag("b"),
+            tagged_text("!").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1604,14 +1625,16 @@ fn transform_remove_mark_matches_upstream_cases() {
     );
 
     // can remove marks from nested nodes
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_marked_text("one ", vec![em.clone()]).into(),
-        tag("a"),
-        tagged_marked_text("two", vec![em.clone(), strong.clone()]).into(),
-        tag("b"),
-        tagged_marked_text(" three", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_marked_text("one ", vec![em.clone()]).into(),
+            tag("a"),
+            tagged_marked_text("two", vec![em.clone(), strong.clone()]).into(),
+            tag("b"),
+            tagged_marked_text(" three", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1625,13 +1648,15 @@ fn transform_remove_mark_matches_upstream_cases() {
     );
 
     // can remove a link
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("hello ").into(),
-        tagged_marked_text("link", vec![link_foo.clone()]).into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tag("a"),
+            tagged_text("hello ").into(),
+            tagged_marked_text("link", vec![link_foo.clone()]).into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1639,13 +1664,15 @@ fn transform_remove_mark_matches_upstream_cases() {
     assert_eq!(tr.doc(), &doc(vec![paragraph_text("hello link")]));
 
     // doesn't remove a non-matching link (different href)
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("hello ").into(),
-        tagged_marked_text("link", vec![link_foo.clone()]).into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tag("a"),
+            tagged_text("hello ").into(),
+            tagged_marked_text("link", vec![link_foo.clone()]).into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -1662,12 +1689,14 @@ fn transform_remove_mark_matches_upstream_cases() {
 #[test]
 fn transform_insert_matches_upstream_cases() {
     // can insert a break
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("hello").into(),
-        tag("a"),
-        tagged_text("there").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("hello").into(),
+            tag("a"),
+            tagged_text("there").into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     tr.insert(pos, Fragment::from(hard_break())).unwrap();
@@ -1821,7 +1850,7 @@ fn transform_add_remove_node_mark_on_inline_leaves() {
 
     // doesn't duplicate an existing mark
     let document = doc(vec![paragraph(vec![
-        image("a.png").with_marks(vec![em.clone()])
+        image("a.png").with_marks(vec![em.clone()]),
     ])]);
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), document);
     tr.add_node_mark(1, em.clone()).unwrap();
@@ -1840,7 +1869,7 @@ fn transform_add_remove_node_mark_on_inline_leaves() {
     // replaces a mark with the same name but different attrs (link href)
     let link_y = schema_basic::link("y", Option::<String>::None).unwrap();
     let document = doc(vec![paragraph(vec![
-        image("a.png").with_marks(vec![link_x])
+        image("a.png").with_marks(vec![link_x]),
     ])]);
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), document);
     tr.add_node_mark(1, link_y.clone()).unwrap();
@@ -1858,35 +1887,37 @@ fn transform_add_remove_node_mark_on_inline_leaves() {
 
     // removes a mark
     let document = doc(vec![paragraph(vec![
-        image("a.png").with_marks(vec![em.clone()])
+        image("a.png").with_marks(vec![em.clone()]),
     ])]);
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), document);
     tr.remove_node_mark(1, em.clone()).unwrap();
-    assert!(tr
-        .doc()
-        .content()
-        .child(0)
-        .unwrap()
-        .content()
-        .child(0)
-        .unwrap()
-        .marks()
-        .is_empty());
+    assert!(
+        tr.doc()
+            .content()
+            .child(0)
+            .unwrap()
+            .content()
+            .child(0)
+            .unwrap()
+            .marks()
+            .is_empty()
+    );
 
     // removing a missing mark is a no-op
     let document = doc(vec![paragraph(vec![image("a.png")])]);
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), document);
     tr.remove_node_mark(1, em).unwrap();
-    assert!(tr
-        .doc()
-        .content()
-        .child(0)
-        .unwrap()
-        .content()
-        .child(0)
-        .unwrap()
-        .marks()
-        .is_empty());
+    assert!(
+        tr.doc()
+            .content()
+            .child(0)
+            .unwrap()
+            .content()
+            .child(0)
+            .unwrap()
+            .marks()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1976,10 +2007,9 @@ fn transform_replace_more_upstream_cases() {
     tr.replace(from, to, Slice::empty()).unwrap();
     assert_eq!(
         tr.doc(),
-        &doc(vec![schema_basic::blockquote(vec![paragraph_text(
-            "foobaz"
-        )])
-        .unwrap()])
+        &doc(vec![
+            schema_basic::blockquote(vec![paragraph_text("foobaz")]).unwrap()
+        ])
     );
 
     // crossing a deeper to depth with intervening siblings drops the
@@ -2060,11 +2090,15 @@ fn transform_replace_range_matches_more_upstream_cases() {
     // recreates a list when overwriting an empty paragraph with a deeply
     // wrapped slice (ul > li > p).
     let tagged = tagged_doc(vec![tagged_paragraph(vec![tag("a")]).into()]);
-    let insert = tagged_doc(vec![tagged_bullet_list(vec![tagged_list_item(vec![
-        tagged_paragraph(vec![tag("a"), tagged_text("foobar").into(), tag("b")]).into(),
-    ])
-    .into()])
-    .into()]);
+    let insert = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("foobar").into(), tag("b")]).into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
     let slice = insert
         .node
         .slice_with_parents(insert.tag("a"), insert.tag("b"), true)
@@ -2142,11 +2176,13 @@ fn transform_set_block_type_more_upstream_cases() {
     let em = schema_basic::em().unwrap();
 
     // can change a wrapped block (inside a blockquote)
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph(vec![tag("a"), tagged_text("one").into()]).into(),
-        tagged_paragraph(vec![tagged_text("two").into(), tag("b")]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph(vec![tag("a"), tagged_text("one").into()]).into(),
+            tagged_paragraph(vec![tagged_text("two").into(), tag("b")]).into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -2155,20 +2191,20 @@ fn transform_set_block_type_more_upstream_cases() {
     tr.set_block_type(from, to, "heading", attrs).unwrap();
     assert_eq!(
         tr.doc(),
-        &doc(vec![schema_basic::blockquote(vec![
-            heading(1, "one"),
-            heading(1, "two"),
+        &doc(vec![
+            schema_basic::blockquote(vec![heading(1, "one"), heading(1, "two"),]).unwrap()
         ])
-        .unwrap()])
     );
 
     // clears markup when changing a textblock to code_block
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("hello").into(),
-        tag("a"),
-        tagged_marked_text("world", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("hello").into(),
+            tag("a"),
+            tagged_marked_text("world", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     tr.set_block_type(pos, pos, "code_block", Attrs::new())
@@ -2176,15 +2212,17 @@ fn transform_set_block_type_more_upstream_cases() {
     assert_eq!(tr.doc(), &doc(vec![code_block("helloworld")]));
 
     // removes non-text inline nodes when converting to code_block
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("one").into(),
-        tagged_image("x.png").into(),
-        tagged_text("two").into(),
-        tagged_image("y.png").into(),
-        tagged_text("three").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tag("a"),
+            tagged_text("one").into(),
+            tagged_image("x.png").into(),
+            tagged_text("two").into(),
+            tagged_image("y.png").into(),
+            tagged_text("three").into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     tr.set_block_type(pos, pos, "code_block", Attrs::new())
@@ -2192,12 +2230,14 @@ fn transform_set_block_type_more_upstream_cases() {
     assert_eq!(tr.doc(), &doc(vec![code_block("onetwothree")]));
 
     // keeps marks when converting to a heading (paragraph -> heading allows marks)
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("hello ").into(),
-        tagged_marked_text("world", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tag("a"),
+            tagged_text("hello ").into(),
+            tagged_marked_text("world", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     let mut attrs = Attrs::new();
@@ -2205,11 +2245,9 @@ fn transform_set_block_type_more_upstream_cases() {
     tr.set_block_type(pos, pos, "heading", attrs).unwrap();
     assert_eq!(
         tr.doc(),
-        &doc(vec![schema_basic::heading(
-            1,
-            vec![text("hello "), marked_text("world", vec![em])]
-        )
-        .unwrap()])
+        &doc(vec![
+            schema_basic::heading(1, vec![text("hello "), marked_text("world", vec![em])]).unwrap()
+        ])
     );
 }
 
@@ -2419,13 +2457,15 @@ fn transform_list_operations_parity() {
     );
 
     // join two adjacent list items inside the same list
-    let tagged = tagged_doc(vec![tagged_ordered_list(vec![
-        tagged_list_item_text("one").into(),
-        tagged_list_item_text("two").into(),
-        tag("a"),
-        tagged_list_item_text("three").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_ordered_list(vec![
+            tagged_list_item_text("one").into(),
+            tagged_list_item_text("two").into(),
+            tag("a"),
+            tagged_list_item_text("three").into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema.clone(), tagged.node);
     tr.join(pos).unwrap();
@@ -2438,14 +2478,16 @@ fn transform_list_operations_parity() {
     );
 
     // delete a list_item entirely — bullet_list keeps its remaining items
-    let tagged = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item_text("one").into(),
-        tag("a"),
-        tagged_list_item_text("two").into(),
-        tag("b"),
-        tagged_list_item_text("three").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item_text("one").into(),
+            tag("a"),
+            tagged_list_item_text("two").into(),
+            tag("b"),
+            tagged_list_item_text("three").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema.clone(), tagged.node);
@@ -2459,13 +2501,17 @@ fn transform_list_operations_parity() {
     );
 
     // join two adjacent textblocks across list items
-    let tagged = tagged_doc(vec![tagged_bullet_list(vec![tagged_list_item(vec![
-        tagged_paragraph_text("a").into(),
-        tag("a"),
-        tagged_paragraph_text("b").into(),
-    ])
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph_text("a").into(),
+                tag("a"),
+                tagged_paragraph_text("b").into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema.clone(), tagged.node);
     tr.join(pos).unwrap();
@@ -2477,11 +2523,15 @@ fn transform_list_operations_parity() {
     // lift a paragraph out of a single-item list — the lifted content has to
     // walk past both the list_item and the surrounding list to reach a valid
     // target (the doc).
-    let tagged = tagged_doc(vec![tagged_bullet_list(vec![tagged_list_item(vec![
-        tagged_paragraph(vec![tag("a"), tagged_text("foo").into(), tag("b")]).into(),
-    ])
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("foo").into(), tag("b")]).into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema.clone(), tagged.node);
@@ -2490,18 +2540,17 @@ fn transform_list_operations_parity() {
 
     // lift the middle item of a list — the surrounding list splits and the
     // lifted paragraph appears between two single-item lists.
-    let tagged = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item_text("one").into(),
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tag("a"),
-            tagged_text("two").into(),
-            tag("b"),
+    let tagged = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item_text("one").into(),
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("two").into(), tag("b")]).into(),
+            ])
+            .into(),
+            tagged_list_item_text("three").into(),
         ])
-        .into()])
         .into(),
-        tagged_list_item_text("three").into(),
-    ])
-    .into()]);
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema.clone(), tagged.node);
@@ -2516,17 +2565,16 @@ fn transform_list_operations_parity() {
     );
 
     // lift from the end of a list — the trailing list disappears entirely.
-    let tagged = tagged_doc(vec![tagged_bullet_list(vec![
-        tagged_list_item_text("one").into(),
-        tagged_list_item(vec![tagged_paragraph(vec![
-            tag("a"),
-            tagged_text("two").into(),
-            tag("b"),
+    let tagged = tagged_doc(vec![
+        tagged_bullet_list(vec![
+            tagged_list_item_text("one").into(),
+            tagged_list_item(vec![
+                tagged_paragraph(vec![tag("a"), tagged_text("two").into(), tag("b")]).into(),
+            ])
+            .into(),
         ])
-        .into()])
         .into(),
-    ])
-    .into()]);
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema.clone(), tagged.node);
@@ -2595,35 +2643,39 @@ fn transform_join_split_matches_upstream_cases() {
     );
 
     // join nested blocks — two inner blockquotes share an outer blockquote
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
+    let tagged = tagged_doc(vec![
         tagged_blockquote(vec![
-            tagged_paragraph_text("a").into(),
-            tagged_paragraph_text("b").into(),
+            tagged_blockquote(vec![
+                tagged_paragraph_text("a").into(),
+                tagged_paragraph_text("b").into(),
+            ])
+            .into(),
+            tag("a"),
+            tagged_blockquote(vec![
+                tagged_paragraph_text("c").into(),
+                tagged_paragraph_text("d").into(),
+            ])
+            .into(),
         ])
         .into(),
-        tag("a"),
-        tagged_blockquote(vec![
-            tagged_paragraph_text("c").into(),
-            tagged_paragraph_text("d").into(),
-        ])
-        .into(),
-    ])
-    .into()]);
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     tr.join(pos).unwrap();
     assert_eq!(
         tr.doc(),
-        &doc(vec![schema_basic::blockquote(vec![
+        &doc(vec![
             schema_basic::blockquote(vec![
-                paragraph_text("a"),
-                paragraph_text("b"),
-                paragraph_text("c"),
-                paragraph_text("d"),
+                schema_basic::blockquote(vec![
+                    paragraph_text("a"),
+                    paragraph_text("b"),
+                    paragraph_text("c"),
+                    paragraph_text("d"),
+                ])
+                .unwrap()
             ])
             .unwrap()
         ])
-        .unwrap()])
     );
 
     // split a textblock
@@ -2638,11 +2690,9 @@ fn transform_join_split_matches_upstream_cases() {
 
     // split two deep — split textblock and its blockquote parent
     let tagged = tagged_doc(vec![
-        tagged_blockquote(vec![tagged_blockquote(vec![tagged_paragraph_text(
-            "foo<a>bar",
-        )
-        .into()])
-        .into()])
+        tagged_blockquote(vec![
+            tagged_blockquote(vec![tagged_paragraph_text("foo<a>bar").into()]).into(),
+        ])
         .into(),
         tagged_paragraph_text("after").into(),
     ]);
@@ -2663,11 +2713,9 @@ fn transform_join_split_matches_upstream_cases() {
 
     // split three deep — split textblock and both blockquote ancestors
     let tagged = tagged_doc(vec![
-        tagged_blockquote(vec![tagged_blockquote(vec![tagged_paragraph_text(
-            "foo<a>bar",
-        )
-        .into()])
-        .into()])
+        tagged_blockquote(vec![
+            tagged_blockquote(vec![tagged_paragraph_text("foo<a>bar").into()]).into(),
+        ])
         .into(),
         tagged_paragraph_text("after").into(),
     ]);
@@ -2690,29 +2738,23 @@ fn transform_join_split_matches_upstream_cases() {
     );
 
     // split at end produces empty trailing block
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "hi<a>",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("hi<a>").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     tr.split(pos, 1).unwrap();
     assert_eq!(
         tr.doc(),
-        &doc(vec![schema_basic::blockquote(vec![
-            paragraph_text("hi"),
-            empty_paragraph(),
+        &doc(vec![
+            schema_basic::blockquote(vec![paragraph_text("hi"), empty_paragraph(),]).unwrap()
         ])
-        .unwrap()])
     );
 
     // split rejects break of content constraints (blockquote with first-paragraph cursor not allowed)
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tag("a"),
-        tagged_paragraph_text("x").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tag("a"), tagged_paragraph_text("x").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     assert!(tr.split(pos, 1).is_err());
@@ -2726,7 +2768,7 @@ fn transform_lift_step_maps_through_a_concurrent_insertion() {
     // Mapping the lift step through the insert's mapping and applying both
     // should land both edits on the resulting document.
     let starting = doc(vec![
-        schema_basic::blockquote(vec![paragraph_text("a")]).unwrap()
+        schema_basic::blockquote(vec![paragraph_text("a")]).unwrap(),
     ]);
     let mut lift_tr =
         pine_richtext::transform::Transform::new(schema_basic::schema(), starting.clone());
@@ -2792,12 +2834,14 @@ fn transform_wrap_step_maps_through_a_concurrent_insertion() {
 #[test]
 fn transform_lift_wrap_matches_upstream_cases() {
     // lift the only child out of a blockquote (whole-wrapper lift)
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tag("a"),
-        tagged_paragraph_text("two").into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tag("a"),
+            tagged_paragraph_text("two").into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -2805,14 +2849,16 @@ fn transform_lift_wrap_matches_upstream_cases() {
     assert_eq!(tr.doc(), &doc(vec![paragraph_text("two")]));
 
     // lift a block out of the middle of its parent (partial-wrapper lift)
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("one").into(),
-        tag("a"),
-        tagged_paragraph_text("two").into(),
-        tag("b"),
-        tagged_paragraph_text("three").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph_text("one").into(),
+            tag("a"),
+            tagged_paragraph_text("two").into(),
+            tag("b"),
+            tagged_paragraph_text("three").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -2827,13 +2873,15 @@ fn transform_lift_wrap_matches_upstream_cases() {
     );
 
     // lift a block from the start of its parent
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tag("a"),
-        tagged_paragraph_text("two").into(),
-        tag("b"),
-        tagged_paragraph_text("three").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tag("a"),
+            tagged_paragraph_text("two").into(),
+            tag("b"),
+            tagged_paragraph_text("three").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -2847,13 +2895,15 @@ fn transform_lift_wrap_matches_upstream_cases() {
     );
 
     // lift a block from the end of its parent
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("one").into(),
-        tag("a"),
-        tagged_paragraph_text("two").into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph_text("one").into(),
+            tag("a"),
+            tagged_paragraph_text("two").into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
@@ -2867,29 +2917,33 @@ fn transform_lift_wrap_matches_upstream_cases() {
     );
 
     // lift multiple sibling blocks at once
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![
+    let tagged = tagged_doc(vec![
         tagged_blockquote(vec![
-            tagged_paragraph_text("one").into(),
-            tag("a"),
-            tagged_paragraph_text("two").into(),
-            tag("b"),
+            tagged_blockquote(vec![
+                tagged_paragraph_text("one").into(),
+                tag("a"),
+                tagged_paragraph_text("two").into(),
+                tag("b"),
+            ])
+            .into(),
+            tagged_paragraph_text("three").into(),
         ])
         .into(),
-        tagged_paragraph_text("three").into(),
-    ])
-    .into()]);
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let mut tr = pine_richtext::transform::Transform::new(schema_basic::schema(), tagged.node);
     tr.lift(from, to).unwrap();
     assert_eq!(
         tr.doc(),
-        &doc(vec![schema_basic::blockquote(vec![
-            schema_basic::blockquote(vec![paragraph_text("one")]).unwrap(),
-            paragraph_text("two"),
-            paragraph_text("three"),
+        &doc(vec![
+            schema_basic::blockquote(vec![
+                schema_basic::blockquote(vec![paragraph_text("one")]).unwrap(),
+                paragraph_text("two"),
+                paragraph_text("three"),
+            ])
+            .unwrap()
         ])
-        .unwrap()])
     );
 
     // wrap a paragraph in a blockquote (range spans the whole paragraph)
@@ -3048,20 +3102,24 @@ fn transform_replace_joins_marks_across_inserted_slice() {
     // continuing across the boundary, and the surrounding marked text fuses
     // into a single em run rather than splitting.
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo ").into(),
-        tagged_marked_text("bar<a>baz", vec![em.clone()]).into(),
-        tag("b"),
-        tagged_text(" quux").into(),
-    ])
-    .into()]);
-    let insert = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo ").into(),
-        tagged_marked_text("xy<a>zzy", vec![em.clone()]).into(),
-        tagged_text(" foo").into(),
-        tag("b"),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo ").into(),
+            tagged_marked_text("bar<a>baz", vec![em.clone()]).into(),
+            tag("b"),
+            tagged_text(" quux").into(),
+        ])
+        .into(),
+    ]);
+    let insert = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo ").into(),
+            tagged_marked_text("xy<a>zzy", vec![em.clone()]).into(),
+            tagged_text(" foo").into(),
+            tag("b"),
+        ])
+        .into(),
+    ]);
     let slice = insert.node.slice(insert.tag("a"), insert.tag("b")).unwrap();
     let from = tagged.tag("a");
     let to = tagged.tag("b");
@@ -3079,12 +3137,9 @@ fn transform_replace_joins_marks_across_inserted_slice() {
     // "can replace text with a break" — replacement adds a hard_break inside a
     // paragraph and the surrounding text stays.
     let tagged = tagged_doc(vec![tagged_paragraph_text("foo<a>bb<b>bar").into()]);
-    let insert = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_hard_break().into(),
-        tag("b"),
-    ])
-    .into()]);
+    let insert = tagged_doc(vec![
+        tagged_paragraph(vec![tag("a"), tagged_hard_break().into(), tag("b")]).into(),
+    ]);
     let slice = insert.node.slice(insert.tag("a"), insert.tag("b")).unwrap();
     let from = tagged.tag("a");
     let to = tagged.tag("b");

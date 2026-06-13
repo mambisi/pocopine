@@ -1,8 +1,8 @@
 use percent_encoding::utf8_percent_encode;
 use pocopine::{ServerError, ServerResult};
 
-use crate::storage_browser::server::storage::*;
 use crate::storage_browser::StorageBreadcrumb;
+use crate::storage_browser::server::storage::*;
 
 /// Classify how an object can be previewed in the browser. Prefers the
 /// MIME type, falling back to the file extension when it's absent.

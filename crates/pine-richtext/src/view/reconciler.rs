@@ -404,9 +404,10 @@ impl<'a> Reconciler<'a> {
 
     fn content_root_for_node(&self, dom: &Element, node: &RichNode) -> Result<Element, ()> {
         if let Some(spec) = self.runtime.lookup_node_view(node.type_name())
-            && let Some(selector) = &spec.content_selector {
-                return dom.query_selector(selector).map_err(|_| ())?.ok_or(());
-            }
+            && let Some(selector) = &spec.content_selector
+        {
+            return dom.query_selector(selector).map_err(|_| ())?.ok_or(());
+        }
         Ok(dom.clone())
     }
 
@@ -625,7 +626,7 @@ fn patch_reflected_attrs(dom: &Element, old_attrs: &Attrs, new_attrs: &Attrs) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{split_block, toggle_mark, Command};
+    use crate::commands::{Command, split_block, toggle_mark};
     use crate::extension::RichTextExtension;
     use crate::model::{Fragment, MarkPolicy, NodeSpec};
     use crate::runtime::RuntimeBuilder;
@@ -762,11 +763,10 @@ mod tests {
 
     #[test]
     fn heading_level_change_replaces_node_not_surface() {
-        let state = state_with_doc(doc(vec![schema_basic::heading(
-            1,
-            vec![schema_basic::text("Title", Vec::new()).unwrap()],
-        )
-        .unwrap()]));
+        let state = state_with_doc(doc(vec![
+            schema_basic::heading(1, vec![schema_basic::text("Title", Vec::new()).unwrap()])
+                .unwrap(),
+        ]));
         let mut tr = state.tr();
         tr.step(Step::Attr(AttrStep {
             pos: 0,

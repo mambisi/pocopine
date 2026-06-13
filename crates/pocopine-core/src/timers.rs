@@ -60,9 +60,10 @@ impl TimeoutHandle {
     /// previously cancelled.
     pub fn cancel(&self) {
         if let Some(id) = self.id.take()
-            && let Some(w) = web_sys::window() {
-                w.clear_timeout_with_handle(id);
-            }
+            && let Some(w) = web_sys::window()
+        {
+            w.clear_timeout_with_handle(id);
+        }
     }
 
     /// `true` while the timer is still scheduled to fire.
@@ -100,9 +101,10 @@ where
         && let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
             closure.as_ref().unchecked_ref(),
             delay_ms as i32,
-        ) {
-            id_cell.set(Some(id));
-        }
+        )
+    {
+        id_cell.set(Some(id));
+    }
     TimeoutHandle {
         id: id_cell,
         _closure: closure,
@@ -133,9 +135,10 @@ pub struct IntervalHandle {
 impl IntervalHandle {
     pub fn cancel(&self) {
         if let Some(id) = self.id.take()
-            && let Some(w) = web_sys::window() {
-                w.clear_interval_with_handle(id);
-            }
+            && let Some(w) = web_sys::window()
+        {
+            w.clear_interval_with_handle(id);
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -257,9 +260,10 @@ impl Debounced {
     /// Cancel any pending fire. No-op if nothing is scheduled.
     pub fn cancel(&self) {
         if let Some(id) = self.id.take()
-            && let Some(w) = web_sys::window() {
-                w.clear_timeout_with_handle(id);
-            }
+            && let Some(w) = web_sys::window()
+        {
+            w.clear_timeout_with_handle(id);
+        }
         self.closure.take();
     }
 

@@ -29,7 +29,7 @@ pub use components::{
     KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepLogin,
     KeepNoteBody, KeepNoteCard, KeepNoteForm,
 };
-pub use firebase::{keep_firebase_auth_plugin, FirebaseAuthUser, KeepFirebaseAuth};
+pub use firebase::{FirebaseAuthUser, KeepFirebaseAuth, keep_firebase_auth_plugin};
 pub use model::*;
 pub use store::KeepStore;
 pub use sync::reset_keep_notes;

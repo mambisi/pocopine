@@ -1,13 +1,13 @@
 use bytes::Bytes;
 use google_cloud_storage::client::{Storage, StorageControl};
 use pocopine_storage::backend_common::{
+    UploadConcurrencyRegistry, UploadSessionLockCleanup, UploadSessionLockRegistry,
     checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
-    ensure_upload_length_can_be_set, expires_at, select_upload_mode, UploadConcurrencyRegistry,
-    UploadSessionLockCleanup, UploadSessionLockRegistry,
+    ensure_upload_length_can_be_set, expires_at, select_upload_mode,
 };
 use pocopine_storage::checksum::{
-    checksum_algorithm_to_compute, ensure_supported_checksum_policy, precheck_checksum,
-    validate_complete_checksum, validate_complete_checksum_precomputed, StreamingChecksum,
+    StreamingChecksum, checksum_algorithm_to_compute, ensure_supported_checksum_policy,
+    precheck_checksum, validate_complete_checksum, validate_complete_checksum_precomputed,
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
@@ -19,10 +19,10 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::control::{ComposeRequest, ComposeSource, GcsControl, GcsJsonControl};
-use crate::layout::{GcsKeyLayout, DEFAULT_INTERNAL_PREFIX};
+use crate::layout::{DEFAULT_INTERNAL_PREFIX, GcsKeyLayout};
 use crate::state::{
-    decode_session_object, AbortSessionRead, GcsComponent, GcsObjectAttrs, GcsObjectBytes,
-    GcsObjectMetadata, GcsObjectWrite, NativeUploadState, StoredUploadSession,
+    AbortSessionRead, GcsComponent, GcsObjectAttrs, GcsObjectBytes, GcsObjectMetadata,
+    GcsObjectWrite, NativeUploadState, StoredUploadSession, decode_session_object,
 };
 use crate::util::{
     ensure_completable, gcs_error, is_gcs_not_found, is_gcs_precondition_failed,
@@ -469,9 +469,11 @@ impl GcsStorageBackend {
     ) -> StorageResult<Option<GcsObjectWrite>> {
         let metadata = self.get_object_metadata(key).await?;
         if let Some(size) = metadata.size
-            && size != bytes.len() as u64 && (size != 0 || bytes.is_empty()) {
-                return Ok(None);
-            }
+            && size != bytes.len() as u64
+            && (size != 0 || bytes.is_empty())
+        {
+            return Ok(None);
+        }
         let existing = self
             .get_object_bytes_with_limit(key, bytes.len() as u64)
             .await?;
@@ -526,7 +528,7 @@ impl GcsStorageBackend {
                     Err(StorageError::UnknownUploadSession { .. }) => {
                         return Err(StorageError::conflict(
                             "GCS upload component changed during a concurrent write",
-                        ))
+                        ));
                     }
                     Err(err) => return Err(err),
                 };
@@ -699,9 +701,10 @@ impl GcsStorageBackend {
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
         if let Some(size) = size
-            && size > self.max_proxy_upload_bytes {
-                return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
-            }
+            && size > self.max_proxy_upload_bytes
+        {
+            return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
+        }
         Ok(())
     }
 
@@ -806,11 +809,12 @@ impl GcsStorageBackend {
     ) -> StorageResult<ObjectRef> {
         let total = stored.public.next_offset.unwrap_or(0);
         if let Some(expected) = stored.public.size
-            && total != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {total}"
-                )));
-            }
+            && total != expected
+        {
+            return Err(StorageError::policy_rejected(format!(
+                "upload is incomplete: expected {expected} bytes, got {total}"
+            )));
+        }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         // Reject a missing-required / disallowed-algorithm checksum before any
         // finalize work, while the session is still resumable.
@@ -1257,7 +1261,7 @@ impl GcsStorageBackend {
                         _ => {
                             return Err(StorageError::policy_rejected(format!(
                                 "GCS object key already exists: {object_key}"
-                            )))
+                            )));
                         }
                     }
                 }

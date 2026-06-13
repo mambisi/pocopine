@@ -191,10 +191,10 @@ pub fn report(action: &str) {
 
 #[cfg(feature = "mount-profiler")]
 pub mod mount {
-    use super::{enabled_inner, now_ms, METRICS};
+    use super::{METRICS, enabled_inner, now_ms};
 
-    pub use super::{report as super_report, reset as super_reset};
     pub use super::{ENABLE_FLAG, LOG_PREFIX};
+    pub use super::{report as super_report, reset as super_reset};
 
     pub fn enabled() -> bool {
         enabled_inner()
@@ -249,7 +249,7 @@ pub mod mount {
 
 #[cfg(feature = "mount-profiler")]
 pub mod reconcile {
-    use super::{enabled_inner, now_ms, METRICS};
+    use super::{METRICS, enabled_inner, now_ms};
 
     pub fn start() -> Option<f64> {
         enabled_inner().then(now_ms)
@@ -289,7 +289,7 @@ pub mod reconcile {
 
 #[cfg(feature = "mount-profiler")]
 pub mod state_sync {
-    use super::{enabled_inner, now_ms, METRICS};
+    use super::{METRICS, enabled_inner, now_ms};
 
     pub fn start() -> Option<f64> {
         enabled_inner().then(now_ms)
@@ -324,7 +324,7 @@ pub mod state_sync {
 
 #[cfg(feature = "mount-profiler")]
 pub mod unmount {
-    use super::{enabled_inner, now_ms, METRICS};
+    use super::{METRICS, enabled_inner, now_ms};
 
     pub fn start() -> Option<f64> {
         enabled_inner().then(now_ms)

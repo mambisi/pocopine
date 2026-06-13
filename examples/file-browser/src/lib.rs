@@ -17,13 +17,13 @@ pub use components::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use storage_browser::storage_server;
 pub use storage_browser::{
-    browse_storage_connection, create_storage_folder, delete_storage_connection,
-    get_storage_browser_config, get_storage_connection, get_storage_object_detail,
-    list_storage_connections, list_storage_object_commands, save_gcs_storage_connection,
-    save_s3_storage_connection, save_storage_browser_config, GcsConnectionInput, S3ConnectionInput,
-    StorageBreadcrumb, StorageBrowserConfigEdit, StorageBrowserConfigInput, StorageCommandEntry,
-    StorageConnectionEdit, StorageConnectionSummary, StorageEntry, StorageListing,
-    StorageMetadataEntry, StorageObjectDetail,
+    GcsConnectionInput, S3ConnectionInput, StorageBreadcrumb, StorageBrowserConfigEdit,
+    StorageBrowserConfigInput, StorageCommandEntry, StorageConnectionEdit,
+    StorageConnectionSummary, StorageEntry, StorageListing, StorageMetadataEntry,
+    StorageObjectDetail, browse_storage_connection, create_storage_folder,
+    delete_storage_connection, get_storage_browser_config, get_storage_connection,
+    get_storage_object_detail, list_storage_connections, list_storage_object_commands,
+    save_gcs_storage_connection, save_s3_storage_connection, save_storage_browser_config,
 };
 pub use store::StorageBrowserStore;
 

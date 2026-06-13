@@ -17,13 +17,13 @@ mod theme;
 mod view;
 mod view_mode;
 
-pub use labels::{can_create_label, label_options_for, label_picker_options_for, KeepLabelOption};
-use theme::load_theme_preference;
+pub use labels::{KeepLabelOption, can_create_label, label_options_for, label_picker_options_for};
 pub use theme::KeepTheme;
-pub(crate) use view::{format_todo_line, parse_todo_line, KeepFormNote};
+use theme::load_theme_preference;
 pub use view::{KeepCommandNote, KeepEditorData, KeepNoteCardRow};
-use view_mode::load_view_mode_preference;
+pub(crate) use view::{KeepFormNote, format_todo_line, parse_todo_line};
 pub use view_mode::KeepViewMode;
+use view_mode::load_view_mode_preference;
 
 struct CachedAuth {
     display_name: String,
@@ -401,11 +401,13 @@ mod tests {
         store.toggle_note_selection("one".to_string());
         assert_eq!(store.selected_note_ids, vec!["one"]);
         assert_eq!(store.selection_label, "1 selected");
-        assert!(store
-            .other_notes
-            .iter()
-            .find(|row| row.value.id == "one")
-            .is_some_and(|row| row.selected && row.selection_active));
+        assert!(
+            store
+                .other_notes
+                .iter()
+                .find(|row| row.value.id == "one")
+                .is_some_and(|row| row.selected && row.selection_active)
+        );
 
         store.toggle_note_selection("two".to_string());
         assert_eq!(store.selected_note_ids, vec!["one", "two"]);

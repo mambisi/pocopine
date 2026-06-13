@@ -12,7 +12,7 @@
 //! `AtomicU16` hook bitmask gates per-request emit sites so plugin-
 //! free servers stay on the same fast path as before.
 
-use std::any::{type_name, Any, TypeId};
+use std::any::{Any, TypeId, type_name};
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;

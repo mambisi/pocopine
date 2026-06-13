@@ -88,10 +88,12 @@ fn registry_lookup_returns_registered_icons() {
     assert!(pine_icons::lookup("filled", "star").is_some());
     assert!(pine_icons::lookup("outline", "not-registered").is_none());
     // Sanity — the SVG string should actually start with `<svg`.
-    assert!(pine_icons::lookup("outline", "user")
-        .unwrap()
-        .trim_start()
-        .starts_with("<svg"));
+    assert!(
+        pine_icons::lookup("outline", "user")
+            .unwrap()
+            .trim_start()
+            .starts_with("<svg")
+    );
 }
 
 #[test]

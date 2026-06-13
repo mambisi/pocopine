@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use pulldown_cmark::{Event as MdEvent, LinkType, Tag as MdTag};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::extension::RichTextExtension;
 use crate::markdown::{

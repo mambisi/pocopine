@@ -4,7 +4,7 @@ use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{components::upload_dock::request_upload_picker, StorageBrowserStore};
+use crate::{StorageBrowserStore, components::upload_dock::request_upload_picker};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(

@@ -10,13 +10,13 @@ use std::sync::Arc;
 
 use pocopine::{AuthUser, ServerResult};
 use pocopine_auth::{AuthFuture, AuthProvider, RequestContext};
+use pocopine_server::RouterAuthExt;
 use pocopine_server::axum::{
-    body::{to_bytes, Body},
-    http::{Method, Request},
     Router,
+    body::{Body, to_bytes},
+    http::{Method, Request},
 };
 use pocopine_server::tower::ServiceExt;
-use pocopine_server::RouterAuthExt;
 
 /// Stub provider:
 /// * `Authorization: Bearer good-token` → `Ok(Some(user))`

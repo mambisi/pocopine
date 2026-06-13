@@ -23,8 +23,8 @@ use std::rc::Rc;
 
 use pocopine_sync::{MutationId, SyncResult};
 use pocopine_sync_query::{
-    selector::SelectorId, Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient,
-    RowChange,
+    Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClient, RowChange,
+    selector::SelectorId,
 };
 use pocopine_sync_query_macros::query_resource;
 use serde::{Deserialize, Serialize};

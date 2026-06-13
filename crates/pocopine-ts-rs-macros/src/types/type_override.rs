@@ -2,9 +2,9 @@ use quote::quote;
 use syn::{Expr, Result};
 
 use crate::{
+    DerivedTS,
     attr::{ContainerAttr, EnumAttr, StructAttr},
     deps::Dependencies,
-    DerivedTS,
 };
 
 pub(crate) fn type_override_struct(

@@ -211,10 +211,11 @@ fn sibling_size_before(parent: &Element, k: usize) -> usize {
             continue;
         };
         if let Some(next_pos) = next_sibling_data_pos(child_el)
-            && let Some(our_pos) = data_pos_of(child_el) {
-                acc += next_pos.saturating_sub(our_pos);
-                continue;
-            }
+            && let Some(our_pos) = data_pos_of(child_el)
+        {
+            acc += next_pos.saturating_sub(our_pos);
+            continue;
+        }
         if child_el.has_attribute("data-pos") {
             acc += rendered_model_node_size(child_el);
         } else {

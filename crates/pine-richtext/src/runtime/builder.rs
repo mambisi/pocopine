@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::extension::{KeyBindings, NamedCommand, RichTextExtension};
 use crate::extensions::default_extensions;
-use crate::inputrules::{input_rules as input_rules_plugin, InputRule};
+use crate::inputrules::{InputRule, input_rules as input_rules_plugin};
 use crate::markdown::{
     MarkEmitter as MarkdownMarkEmitter, MarkdownParseRule, NodeEmitter as MarkdownNodeEmitter,
     ParseMatch as MarkdownParseMatch,
@@ -22,8 +22,8 @@ use crate::markdown::{
 use crate::model::Schema;
 use crate::state::Plugin;
 
-use super::node_views::{NodeViewRegistry, NodeViewSpec};
 use super::EditorRuntime;
+use super::node_views::{NodeViewRegistry, NodeViewSpec};
 
 type ExtChain = Vec<Arc<dyn RichTextExtension>>;
 

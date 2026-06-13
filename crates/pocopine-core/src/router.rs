@@ -24,20 +24,20 @@ use std::rc::Rc;
 
 use js_sys::{Array, Object, Reflect};
 use once_cell::unsync::OnceCell;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
 use crate::app::{
-    push_encoded_route_path_segment, IntoRouteTarget, Loader, LoaderContext, PageMeta,
-    PageMetaContext, PageMetaFactory, PageMetaTag, Prefetch, RejectionSource, RouteContext,
-    RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader, RouteMeta, RouteName,
-    RouteQuery, RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
-    RouteTarget, RouteTargetError,
+    IntoRouteTarget, Loader, LoaderContext, PageMeta, PageMetaContext, PageMetaFactory,
+    PageMetaTag, Prefetch, RejectionSource, RouteContext, RouteErrorSurface, RouteGuard,
+    RouteGuardDecision, RouteLoader, RouteMeta, RouteName, RouteQuery, RouteRejection,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
+    RouteTargetError, push_encoded_route_path_segment,
 };
 use crate::mount;
-use crate::reactive::{trigger_scope, ScopeId};
+use crate::reactive::{ScopeId, trigger_scope};
 use crate::scope::{ComponentState, Scope};
 
 mod return_to;
@@ -1270,16 +1270,18 @@ fn finish_route_mount(
         // outlet is left in its prior state — guards / loader
         // never ran because the route doesn't exist.
         if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get())
-            && mount_component_into_outlet(fallback) && has_route_hooks {
-                apply_page_meta(None);
-                crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
-                    path: path.to_string(),
-                    route_pattern: None,
-                    component: Some(fallback),
-                    duration_ms: elapsed_since(start_ms),
-                });
-                return None;
-            }
+            && mount_component_into_outlet(fallback)
+            && has_route_hooks
+        {
+            apply_page_meta(None);
+            crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+                path: path.to_string(),
+                route_pattern: None,
+                component: Some(fallback),
+                duration_ms: elapsed_since(start_ms),
+            });
+            return None;
+        }
         apply_page_meta(None);
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
@@ -1662,9 +1664,10 @@ fn paint_route_error_surface(surface: &RouteErrorSurface) {
     // through the normal route-mount path so it has a full
     // `#[component]` surface (template, handlers, lifecycle).
     if let Some(name) = ROUTE_ERROR_COMPONENT.with(|cell| cell.get())
-        && mount_component_into_outlet(name) {
-            return;
-        }
+        && mount_component_into_outlet(name)
+    {
+        return;
+    }
     paint_default_route_error_surface(surface);
 }
 

@@ -6,7 +6,7 @@
 //! and dispatches framework lifecycle events to services that implement
 //! [`Hook<E>`].
 
-use std::any::{type_name, Any, TypeId};
+use std::any::{Any, TypeId, type_name};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;

@@ -20,5 +20,5 @@ pub use grid::{PineRangeCalendarGrid, PineRangeCalendarGridBody, PineRangeCalend
 pub use header::{
     PineRangeCalendarHeader, PineRangeCalendarHeading, PineRangeCalendarNext, PineRangeCalendarPrev,
 };
-pub use root::{PineRangeCalendarRoot, RangeCellView, RANGE_ROOT};
+pub use root::{PineRangeCalendarRoot, RANGE_ROOT, RangeCellView};
 pub use state::RangeCalendarState;

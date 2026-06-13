@@ -18,7 +18,7 @@ use std::{cell::RefCell, collections::HashMap};
 use js_sys::Reflect;
 use wasm_bindgen::JsValue;
 
-pub use pocopine_expr::{parse, BinOp, Expr, Literal, ParseError, Span, Spanned};
+pub use pocopine_expr::{BinOp, Expr, Literal, ParseError, Span, Spanned, parse};
 
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
@@ -309,9 +309,10 @@ fn write_assign_path_with(
         // Single-segment: full reactivity. Scoped writer first;
         // proxy set trap as the `$`-name / no-access fallback.
         if let Some(a) = root
-            && a.write(&segments[0], value) {
-                return;
-            }
+            && a.write(&segments[0], value)
+        {
+            return;
+        }
         let _ = Reflect::set(proxy, &JsValue::from_str(&segments[0]), value);
         return;
     }
@@ -322,30 +323,29 @@ fn write_assign_path_with(
     if segments[0].starts_with('$')
         && let Some((access, consumed)) =
             crate::scope::magic_scope_access(&segments[0], segments.get(1).map(|s| s.as_str()))
-        {
-            match &segments[consumed..] {
-                [] => {}
-                [field] => {
-                    if access.write(field, value) {
-                        return;
-                    }
-                }
-                [field, middle @ .., last] => {
-                    let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
-                    for seg in middle {
-                        cur = Reflect::get(&cur, &JsValue::from_str(seg))
-                            .unwrap_or(JsValue::UNDEFINED);
-                        if !cur.is_object() {
-                            return;
-                        }
-                    }
-                    if cur.is_object() {
-                        let _ = Reflect::set(&cur, &JsValue::from_str(last), value);
-                    }
+    {
+        match &segments[consumed..] {
+            [] => {}
+            [field] => {
+                if access.write(field, value) {
                     return;
                 }
             }
+            [field, middle @ .., last] => {
+                let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
+                for seg in middle {
+                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+                    if !cur.is_object() {
+                        return;
+                    }
+                }
+                if cur.is_object() {
+                    let _ = Reflect::set(&cur, &JsValue::from_str(last), value);
+                }
+                return;
+            }
         }
+    }
     // Multi-segment (RFC-024 §7): read the penultimate object
     // (the root via the access — the same cached projection the
     // proxy would return — subscribing along the way) and set the
@@ -401,13 +401,14 @@ fn resolve_segments_with(
     if first.starts_with('$')
         && let Some((access, consumed)) =
             crate::scope::magic_scope_access(first, segments.get(1).map(|s| s.as_str()))
-            && let Some(field) = segments.get(consumed) {
-                let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
-                for seg in &segments[consumed + 1..] {
-                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
-                }
-                return cur;
-            }
+        && let Some(field) = segments.get(consumed)
+    {
+        let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
+        for seg in &segments[consumed + 1..] {
+            cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+        }
+        return cur;
+    }
     // RFC-095 W1 — the root segment is the only one that touches
     // scope state; resolve it Rust-side when a reader owns it.
     // The resolved value is a plain JsValue (cached serde output),
@@ -433,13 +434,14 @@ fn resolve_static_segments_with(
     if first.starts_with('$')
         && let Some((access, consumed)) =
             crate::scope::magic_scope_access(first, segments.get(1).copied())
-            && let Some(field) = segments.get(consumed) {
-                let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
-                for seg in &segments[consumed + 1..] {
-                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
-                }
-                return cur;
-            }
+        && let Some(field) = segments.get(consumed)
+    {
+        let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
+        for seg in &segments[consumed + 1..] {
+            cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+        }
+        return cur;
+    }
     let mut cur = match root.and_then(|a| a.read(first)) {
         Some(v) => v,
         None => Reflect::get(scope, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),

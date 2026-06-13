@@ -7,16 +7,16 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use pine_charts::{
-    line_legend_items, set_line_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries,
-    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartRadialBar,
-    ChartScatterSeries, LegendItem, LegendToggle, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
-    CHART_SELECT_END_EVENT, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLayerPoint, ChartLineSeries, ChartPieSlice,
+    ChartPoint, ChartRadialBar, ChartScatterSeries, LEGEND_TOGGLE_EVENT, LegendItem, LegendToggle,
+    line_legend_items, set_line_series_visible,
 };
 use pocopine::prelude::*;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element, HtmlElement};
+use web_sys::{Element, HtmlElement, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -871,10 +871,11 @@ async fn pie_chart_morphs_shape_without_svg_animate_nodes() {
         Some(donut_path.as_str())
     );
     assert!(morphing_slice.query_selector("animate").unwrap().is_none());
-    assert!(host
-        .query_selector(".pine-chart-pie-slice-reveal")
-        .unwrap()
-        .is_none());
+    assert!(
+        host.query_selector(".pine-chart-pie-slice-reveal")
+            .unwrap()
+            .is_none()
+    );
 
     sleep_ms(80).await;
     settle().await;
@@ -909,14 +910,16 @@ async fn pie_chart_prunes_finished_leaving_slices_before_delayed_entries_finish(
     sleep_ms(70).await;
     settle().await;
 
-    assert!(host
-        .query_selector(".pine-chart-pie-slice[data-label='Organic']")
-        .unwrap()
-        .is_none());
-    assert!(host
-        .query_selector(".pine-chart-pie-slice[data-label='Referral']")
-        .unwrap()
-        .is_none());
+    assert!(
+        host.query_selector(".pine-chart-pie-slice[data-label='Organic']")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        host.query_selector(".pine-chart-pie-slice[data-label='Referral']")
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         host.query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
             .unwrap()
@@ -1006,10 +1009,11 @@ async fn pie_chart_animates_survivor_renormalization_when_middle_slice_is_remove
     sleep_ms(120).await;
     settle().await;
 
-    assert!(host
-        .query_selector(".pine-chart-pie-slice[data-label='Two']")
-        .unwrap()
-        .is_none());
+    assert!(
+        host.query_selector(".pine-chart-pie-slice[data-label='Two']")
+            .unwrap()
+            .is_none()
+    );
     let one_done = host
         .query_selector(".pine-chart-pie-slice[data-label='One']")
         .unwrap()
@@ -1470,10 +1474,12 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
         tooltip.get_attribute("data-tooltip-y").as_deref(),
         Some("below")
     );
-    assert!(tooltip
-        .get_attribute("style")
-        .unwrap_or_default()
-        .contains("--pine-chart-tooltip-x: 50%"));
+    assert!(
+        tooltip
+            .get_attribute("style")
+            .unwrap_or_default()
+            .contains("--pine-chart-tooltip-x: 50%")
+    );
 
     let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
     svg.dispatch_event(&leave).unwrap();
@@ -1518,10 +1524,12 @@ async fn line_chart_emits_hover_events_and_allows_custom_tooltips() {
         tooltip.get_attribute("aria-hidden").as_deref(),
         Some("true")
     );
-    assert!(tooltip
-        .get_attribute("style")
-        .unwrap_or_default()
-        .contains("--pine-chart-tooltip-x: 50%"));
+    assert!(
+        tooltip
+            .get_attribute("style")
+            .unwrap_or_default()
+            .contains("--pine-chart-tooltip-x: 50%")
+    );
     assert_eq!(hover_chart.borrow().as_deref(), Some("line"));
     assert_eq!(hover_kind.borrow().as_deref(), Some("xy"));
     assert_eq!(hover_label.borrow().as_deref(), Some("x 5, y 10"));
@@ -2638,10 +2646,11 @@ async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updat
     let paid_style = paid.get_attribute("style").unwrap();
     assert!(paid_style.contains("--pine-chart-slice-delay: 56ms;"));
     assert!(paid.query_selector("animate").unwrap().is_none());
-    assert!(host
-        .query_selector(".pine-chart-pie-slice-reveal")
-        .unwrap()
-        .is_none());
+    assert!(
+        host.query_selector(".pine-chart-pie-slice-reveal")
+            .unwrap()
+            .is_none()
+    );
     let paid_animating_path = paid.get_attribute("d").unwrap();
     assert!(
         first_arc_radius(&paid_animating_path) > 1.0,
@@ -2653,10 +2662,11 @@ async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updat
     settle().await;
     assert!(chart.has_attribute("data-hover"));
     assert!(chart.has_attribute("data-slice-animating"));
-    assert!(host
-        .query_selector(".pine-chart-pie-slices .pine-chart-pie-slice[data-hovered]")
-        .unwrap()
-        .is_some());
+    assert!(
+        host.query_selector(".pine-chart-pie-slices .pine-chart-pie-slice[data-hovered]")
+            .unwrap()
+            .is_some()
+    );
     let hover_layer = host
         .query_selector(".pine-chart-pie-hover")
         .unwrap()
@@ -2751,10 +2761,11 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
     assert!(referral.query_selector("animate").unwrap().is_none());
     let referral_start_path = referral.get_attribute("d").unwrap();
     let referral_start_radius = first_arc_radius(&referral_start_path);
-    assert!(host
-        .query_selector(".pine-chart-pie-slice-reveal")
-        .unwrap()
-        .is_none());
+    assert!(
+        host.query_selector(".pine-chart-pie-slice-reveal")
+            .unwrap()
+            .is_none()
+    );
 
     sleep_ms(34).await;
     settle().await;
