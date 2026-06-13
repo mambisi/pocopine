@@ -133,7 +133,7 @@ fn run_with_registry_walks_vtables_and_transitive_uses() {
 /// The test asserts this component is NOT in the runtime registry
 /// after `route_static`, so it must never be registered anywhere
 /// else in the test suite.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "phf-unregistered-by-route-static",
     template_inline = r#"<div class="phf-unregistered-by-route-static"></div>"#
@@ -142,8 +142,6 @@ struct PhfUnregisteredByRouteStatic {}
 
 #[handlers]
 impl PhfUnregisteredByRouteStatic {}
-
-impl pocopine::RouteComponent for PhfUnregisteredByRouteStatic {}
 
 /// **High-priority Codex fix.** `App::route_static::<C>` must
 /// record the route without eagerly calling `C::register()`. If

@@ -8,7 +8,7 @@ use crate::components::Comment;
 use crate::shared::ItemNode;
 use crate::{extract_domain, get_item_tree, humanize_age, performance_now};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(style = "story_detail.css")]
 pub struct StoryDetail {
     #[prop]
@@ -55,8 +55,6 @@ impl StoryDetail {
         },);
     }
 }
-
-impl RouteComponent for StoryDetail {}
 
 /// Convert wire-shape `ItemNode` (HN Algolia) to the client-side
 /// `Comment` display shape. Filters out dead / deleted nodes and

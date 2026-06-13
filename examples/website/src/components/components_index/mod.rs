@@ -7,7 +7,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(template = "ComponentsIndex.poco", style = "components_index.css")]
 pub struct ComponentsIndex {}
 
@@ -20,5 +20,3 @@ impl ComponentsIndex {
         crate::components::delegate_nav(&ev);
     }
 }
-
-impl RouteComponent for ComponentsIndex {}

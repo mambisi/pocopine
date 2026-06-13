@@ -17,7 +17,7 @@ pub struct PostRow {
     pub href: String,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     template = "BlogsIndex.poco",
     style = "blogs_index.css",
@@ -49,5 +49,3 @@ impl BlogsIndex {
         crate::components::delegate_nav(&ev);
     }
 }
-
-impl RouteComponent for BlogsIndex {}

@@ -111,7 +111,7 @@ pub struct NavRow {
     pub active: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, RouteComponent)]
 #[component(
     template = "MotionPage.poco",
     style = "motion_page.css",
@@ -179,8 +179,6 @@ impl MotionPage {
         delegate_nav(&ev);
     }
 }
-
-impl RouteComponent for MotionPage {}
 
 fn build_nav(active: &str) -> Vec<NavRow> {
     TECHS

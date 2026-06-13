@@ -16,7 +16,7 @@ use crate::gen_code::icons;
 /// but only the first N matches are painted.
 const PAGE: usize = 120;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, RouteComponent)]
 #[component(template = "IconsPage.poco", style = "icons_page.css", role = "panel")]
 pub struct IconsPage {
     pub query: String,
@@ -185,5 +185,3 @@ impl IconsPage {
         self.copied = format!("Copied {label} to clipboard.");
     }
 }
-
-impl RouteComponent for IconsPage {}

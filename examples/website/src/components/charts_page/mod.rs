@@ -118,7 +118,7 @@ impl PropRow {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, RouteComponent)]
 #[component(
     template = "ChartsPage.poco",
     style = "charts_page.css",
@@ -312,8 +312,6 @@ impl ChartsPage {
         delegate_nav(&ev);
     }
 }
-
-impl RouteComponent for ChartsPage {}
 
 fn build_nav(active: &str) -> Vec<NavRow> {
     CHARTS

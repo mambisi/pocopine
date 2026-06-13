@@ -56,6 +56,7 @@ pub use pocopine_jobs::{JobError, JobResult};
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{
     app, asset, client_module, component, handlers, job, protected, server, store, Emit, Props,
+    RouteComponent,
 };
 
 pub mod auth {

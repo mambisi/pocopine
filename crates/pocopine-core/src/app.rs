@@ -73,6 +73,11 @@ pub trait Component {
 /// Route-local configuration lives here so guards/loaders stay next
 /// to the component that consumes them. RFC 078 lands this trait
 /// before the guard/loader fields are populated.
+///
+/// Components without route-local config use
+/// `#[derive(RouteComponent)]` (from `pocopine-macros`) instead of
+/// writing the empty impl by hand; components overriding `config()`
+/// keep the manual impl.
 pub trait RouteComponent: Component {
     fn config() -> RouteConfig<Self>
     where
@@ -1227,6 +1232,8 @@ mod route_config_tests {
         fn register() {}
     }
 
+    // Hand-written: `#[derive(RouteComponent)]` expands to
+    // `::pocopine::RouteComponent`, which core can't depend on.
     impl RouteComponent for TestRoute {}
 
     #[test]
@@ -1832,10 +1839,11 @@ impl App {
     /// `<pp-outlet>` with captured params passed through as
     /// attributes.
     ///
-    /// Components that don't need guards or loaders impl
-    /// `RouteComponent` with a one-line empty body —
-    /// `impl RouteComponent for MyComponent {}` — and inherit the
-    /// default empty `RouteConfig`. The bound exists specifically to
+    /// Components that don't need guards or loaders add
+    /// `#[derive(RouteComponent)]` on the struct — the derive emits
+    /// the empty `impl RouteComponent for MyComponent {}` — and
+    /// inherit the default empty `RouteConfig`. The bound exists
+    /// specifically to
     /// guarantee that a component declaring guards
     /// (e.g. `require_auth`) cannot silently be mounted unguarded
     /// by the wrong builder method.

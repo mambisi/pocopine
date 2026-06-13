@@ -69,16 +69,14 @@ impl Counter {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct Home {}
 
 #[handlers]
 impl Home {}
 
-impl RouteComponent for Home {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct Contact {
     pub name: String,
@@ -125,16 +123,12 @@ impl Contact {
     }
 }
 
-impl RouteComponent for Contact {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct NotFound {}
 
 #[handlers]
 impl NotFound {}
-
-impl RouteComponent for NotFound {}
 
 #[wasm_bindgen(start)]
 pub fn main() {

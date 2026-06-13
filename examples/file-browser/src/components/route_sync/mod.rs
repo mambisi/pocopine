@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::StorageBrowserStore;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     template = "FileBrowserRoute.poco",
     role = "panel",
@@ -17,8 +17,6 @@ pub struct FileBrowserRoute {
     #[prop]
     pub prefix: String,
 }
-
-impl RouteComponent for FileBrowserRoute {}
 
 #[handlers]
 impl FileBrowserRoute {

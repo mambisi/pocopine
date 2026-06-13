@@ -14,25 +14,21 @@ pub struct AppShell {}
 #[handlers]
 impl AppShell {}
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct Home {}
 
 #[handlers]
 impl Home {}
 
-impl RouteComponent for Home {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct About {}
 
 #[handlers]
 impl About {}
 
-impl RouteComponent for About {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct BlogPost {
     #[prop]
@@ -50,16 +46,12 @@ impl BlogPost {
     }
 }
 
-impl RouteComponent for BlogPost {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component]
 pub struct NotFound {}
 
 #[handlers]
 impl NotFound {}
-
-impl RouteComponent for NotFound {}
 
 #[wasm_bindgen(start)]
 pub fn main() {

@@ -30,7 +30,7 @@ pub struct NavRow {
     pub active: bool,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     template = "ComponentPage.poco",
     style = "component_page.css",
@@ -162,5 +162,3 @@ impl ComponentPage {
             .collect()
     }
 }
-
-impl RouteComponent for ComponentPage {}
