@@ -784,14 +784,22 @@ fn compile_fast_path(item_name: &str, segments: &[String]) -> Option<FastPath> {
         "$last" => (FastPathRoot::LoopLast, &segments[1..]),
         _ => (FastPathRoot::Parent, segments),
     };
-    Some(FastPath {
-        root,
-        keys: rest
-            .iter()
-            .map(|segment| JsValue::from_str(segment))
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    })
+    // RFC-099 — `JsValue::from_str` is a wasm-bindgen extern that panics
+    // off-wasm. The compiled row plan is a CLIENT-only reconciliation
+    // optimization; the host (SSR) registers it harmlessly but never
+    // consults the keys, so build them empty there.
+    #[cfg(target_arch = "wasm32")]
+    let keys = rest
+        .iter()
+        .map(|segment| JsValue::from_str(segment))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    #[cfg(not(target_arch = "wasm32"))]
+    let keys = {
+        let _ = rest;
+        Vec::new().into_boxed_slice()
+    };
+    Some(FastPath { root, keys })
 }
 
 fn literal_fast_value(expr: &Spanned<Expr>) -> Option<JsValue> {

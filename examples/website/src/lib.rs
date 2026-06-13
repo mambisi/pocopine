@@ -207,8 +207,13 @@ fn build_search_index() -> Vec<SearchEntry> {
     out
 }
 
-#[wasm_bindgen(start)]
-pub fn main() {
+/// Register + configure the app: pine primitives, every website
+/// component, and the route table. Side-effecting (registration happens
+/// as the builder is assembled), so the returned [`App`] can be either
+/// `.run()` (wasm client) or used purely for its registration side
+/// effects by the host SSR binary before
+/// `pocopine_ssr::render_app_to_string`.
+pub fn boot_app() -> App {
     pine::register_all();
     pine_charts::register_all();
     pine_icons::register_icons![
@@ -293,5 +298,26 @@ pub fn main() {
         .route::<DocPage>("/docs/*slug")
         .route::<BlogsIndex>("/blogs")
         .route::<BlogPage>("/blogs/*slug")
-        .run();
+}
+
+#[wasm_bindgen(start)]
+pub fn main() {
+    let app = boot_app();
+    // RFC-099 — if the document was server-rendered (a component root
+    // with `data-pp-scope-id` already lives under `[pp-app]`), CLAIM it;
+    // otherwise mount fresh. Lets the same bundle drive both the static
+    // SPA index and the SSR'd one (`website-ssr` binary).
+    let server_rendered = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| {
+            d.query_selector("[pp-app] [data-pp-scope-id]")
+                .ok()
+                .flatten()
+        })
+        .is_some();
+    if server_rendered {
+        app.hydrate();
+    } else {
+        app.run();
+    }
 }

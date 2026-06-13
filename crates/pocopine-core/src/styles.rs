@@ -41,5 +41,16 @@ pub fn inject_style(component: &'static str, css: &str) {
 }
 
 fn window_document() -> Option<Document> {
-    web_sys::window().and_then(|w| w.document())
+    // RFC-099 — on the host (SSR), there is no document: `web_sys::window`
+    // touches a wasm-imported global and panics off-wasm. Return `None`
+    // so `inject_style` (called from every `register()`) is a no-op —
+    // server-rendered CSS ships as a `<link>` stylesheet, not injected.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window().and_then(|w| w.document())
+    }
 }
