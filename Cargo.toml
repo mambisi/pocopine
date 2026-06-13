@@ -69,6 +69,7 @@ members = [
     "examples/richtext",
     "examples/site",
     "examples/spa",
+    "examples/ssr-demo",
     "examples/sync",
     "examples/tailwind",
     "examples/todo",

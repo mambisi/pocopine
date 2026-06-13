@@ -1,0 +1,19 @@
+[package]
+name = "ssr-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# RFC-099 — a host binary that server-renders a real `#[component]` to
+# HTML via `pocopine_ssr::render_to_string`. Run: `cargo run -p ssr-demo`.
+
+[[bin]]
+name = "ssr-demo"
+path = "src/main.rs"
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine" }
+pocopine-ssr = { path = "../../crates/pocopine-ssr" }
+serde = { workspace = true }
+serde_json = "1"
