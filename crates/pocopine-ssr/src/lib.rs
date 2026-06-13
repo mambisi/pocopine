@@ -23,11 +23,26 @@
 //! JS display formatter ([`pocopine_core::js_number`]); a plain `pp-bind`
 //! attribute uses Rust `f64::to_string` (exactly what `bind.rs` does).
 //!
-//! **Phase-2 scope.** Structural controllers (`pp-if` / `pp-for` /
-//! `pp-match`) resolve client-side and are left untouched here. Real-
-//! component server↔client byte-equality is gated by the Phase-2c
-//! differential render harness; this crate's unit test pins the stamp
-//! semantics against hand-built fixtures.
+//! **Structural directives (RFC-099 Phase 3).** `pp-if` / `pp-match` /
+//! `pp-for` are expanded here too, recursively, using the body data the
+//! macro now exposes (`StaticCondPlan::body_plan` / `body_html` & co):
+//!
+//! * `pp-if` chain → evaluate the head + `pp-else-if` exprs, render the
+//!   first truthy branch's body (or the `pp-else`), drop the member
+//!   `<template>`s, and emit a `<!--pp:cond-->` anchor after the clone,
+//! * `pp-match` → tag-extract the matched value (serde external tagging),
+//!   render the first matching case's body (augmenting state with the
+//!   `pp-let` payload), emit `<!--pp:match-->`,
+//! * `pp-for` → evaluate the items, render one body clone per item
+//!   against state augmented with `{ item, $index, $first, $last }`,
+//!   emit `<!--pp:for-->` after the rows.
+//!
+//! Sites expand in **reverse document order** so an earlier expansion
+//! never shifts the element-child indices a later site resolves against
+//! (mirrors the client's specialized install pass). A body that fell
+//! outside the macro's lift envelope (`body_html`/`body_plan` = `None`)
+//! is left as the authored `<template>` for the client to mount — never
+//! mis-rendered. Client-side claiming of these anchors is Phase 3 Unit D.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,10 +55,12 @@ use html5ever::{
     QualName,
 };
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
-use pocopine_core::directives::for_plan::{BindingKind, StaticBinding, StaticInterp};
+use pocopine_core::directives::for_plan::{
+    BindingKind, StaticBinding, StaticCondPlan, StaticForPlan, StaticInterp, StaticMatchPlan,
+};
 use pocopine_core::directives::interp::PlannedSegment;
 use pocopine_core::templates::template_for;
-use pocopine_core::templates_plan::template_plan_for;
+use pocopine_core::templates_plan::{template_plan_for, StaticTemplatePlan};
 use pocopine_core::{expr, host_eval, js_number, Component};
 use serde_json::Value;
 
@@ -60,27 +77,71 @@ pub fn stamp(
     // detaches children iteratively to avoid deep-recursion stack
     // overflow), so a parsed node is only valid while its `RcDom` is
     // alive. Keep every dom we parse (the template + any `pp-html`
-    // re-parses) alive until after serialization.
+    // re-parses, body fragments) alive until after serialization.
     let mut keep: Vec<RcDom> = Vec::new();
-    let roots = parse_fragment_into(cleaned_html, local_name!("body"), &mut keep);
-    let Some(root) = roots
-        .into_iter()
-        .find(|n| matches!(n.data, NodeData::Element { .. }))
-    else {
+    let Some(root) = parse_root(cleaned_html, &mut keep) else {
         return cleaned_html.to_string();
     };
+    apply_flat(&root, bindings, interps, state, &mut keep);
+    let out = serialize_node(&root);
+    drop(keep); // tree must outlive the serialize above
+    out
+}
+
+/// Parse `html` and return its first element root (unwrapping the
+/// html5ever fragment wrapper). `None` when the fragment has no element.
+fn parse_root(html: &str, keep: &mut Vec<RcDom>) -> Option<Handle> {
+    parse_fragment_into(html, local_name!("body"), keep)
+        .into_iter()
+        .find(|n| matches!(n.data, NodeData::Element { .. }))
+}
+
+/// Apply the flat (path-resolved) bindings + interps of a plan to an
+/// already-parsed `root`. Shared by [`stamp`] and the recursive
+/// fragment stamper.
+fn apply_flat(
+    root: &Handle,
+    bindings: &[StaticBinding],
+    interps: &[StaticInterp],
+    state: &Value,
+    keep: &mut Vec<RcDom>,
+) {
     for b in bindings {
-        if let Some(node) = walk_element_path(&root, b.node_path) {
-            apply_binding(&node, b, state, &mut keep);
+        if let Some(node) = walk_element_path(root, b.node_path) {
+            apply_binding(&node, b, state, keep);
         }
     }
     for it in interps {
-        if let Some(parent) = walk_element_path(&root, it.node_path) {
+        if let Some(parent) = walk_element_path(root, it.node_path) {
             apply_interp(&parent, it, state);
         }
     }
-    let out = serialize_node(&root);
-    drop(keep); // tree must outlive the serialize above
+}
+
+/// Stamp a body fragment's cleaned HTML through its sub-plan (flat
+/// entries + nested structural), returning the rendered root element.
+/// `None` when `html` has no element root. Recursion point for nested
+/// controllers inside a `pp-if` / `pp-match` / `pp-for` body.
+fn stamp_fragment(
+    html: &str,
+    plan: &StaticTemplatePlan,
+    state: &Value,
+    keep: &mut Vec<RcDom>,
+) -> Option<Handle> {
+    let root = parse_root(html, keep)?;
+    apply_flat(&root, plan.bindings, plan.interps, state, keep);
+    expand_structural(&root, plan, state, keep);
+    Some(root)
+}
+
+/// Whole-template stamp: flat entries + structural expansion.
+fn stamp_with_plan(cleaned_html: &str, plan: &StaticTemplatePlan, state: &Value) -> String {
+    let mut keep: Vec<RcDom> = Vec::new();
+    let out = match stamp_fragment(cleaned_html, plan, state, &mut keep) {
+        Some(root) => serialize_node(&root),
+        None => cleaned_html.to_string(),
+    };
+    drop(keep);
     out
 }
 
@@ -144,7 +205,10 @@ where
     let html = template_for(C::NAME)?;
     let plan = template_plan_for(C::NAME)?;
     let state = serde_json::to_value(component).ok()?;
-    Some(render(&html, plan.bindings, plan.interps, &state))
+    Some(RenderedPage {
+        body: stamp_with_plan(&html, plan, &state),
+        state: script_safe_json(&state),
+    })
 }
 
 /// Serialize `state` to JSON and neutralise `<` (→ `<`) so it is
@@ -375,6 +439,243 @@ fn render_segments(segments: &[PlannedSegment], state: &Value) -> String {
         }
     }
     out
+}
+
+// ─── structural directives (pp-if / pp-match / pp-for) ─────────────
+
+/// Expand every `pp-if` / `pp-match` / `pp-for` site in `plan` against
+/// `state`, in **reverse document order** (by template node path) so an
+/// earlier expansion never invalidates a later site's path resolution.
+fn expand_structural(
+    root: &Handle,
+    plan: &StaticTemplatePlan,
+    state: &Value,
+    keep: &mut Vec<RcDom>,
+) {
+    enum Site<'a> {
+        Cond(&'a StaticCondPlan),
+        Match(&'a StaticMatchPlan),
+        For(&'a StaticForPlan),
+    }
+    let mut sites: Vec<(&[u16], Site)> = Vec::new();
+    for cp in plan.if_plans {
+        sites.push((cp.template_node_path, Site::Cond(cp)));
+    }
+    for mp in plan.match_plans {
+        sites.push((mp.template_node_path, Site::Match(mp)));
+    }
+    for fp in plan.for_plans {
+        sites.push((fp.template_node_path, Site::For(fp)));
+    }
+    sites.sort_by(|a, b| b.0.cmp(a.0));
+    for (path, site) in sites {
+        // Scope-root templates (empty path) stay put — the client's
+        // scope-root exception keeps the `<template>`; SSR leaves it.
+        if path.is_empty() {
+            continue;
+        }
+        let Some(tpl) = walk_element_path(root, path) else {
+            continue;
+        };
+        if !is_template(&tpl) {
+            continue;
+        }
+        match site {
+            Site::Cond(cp) => expand_cond(&tpl, cp, state, keep),
+            Site::Match(mp) => expand_match(&tpl, mp, state, keep),
+            Site::For(fp) => expand_for(&tpl, fp, state, keep),
+        }
+    }
+}
+
+/// `pp-if` chain: render the first truthy branch (or `pp-else`), drop
+/// the member `<template>`s, and place a `<!--pp:cond-->` anchor after
+/// the clone (matching the client's clone-before-anchor layout).
+fn expand_cond(tpl: &Handle, cp: &StaticCondPlan, state: &Value, keep: &mut Vec<RcDom>) {
+    // First truthy branch among [head, else-if…], else the `pp-else`.
+    let active: Option<(Option<&str>, Option<&StaticTemplatePlan>)> =
+        if !is_falsy(&eval_src(cp.expr_src, state)) {
+            Some((cp.body_html, cp.body_plan))
+        } else {
+            cp.else_if
+                .iter()
+                .find(|br| !is_falsy(&eval_src(br.expr_src, state)))
+                .map(|br| (br.body_html, br.body_plan))
+                .or(if cp.has_else {
+                    Some((cp.else_body_html, cp.else_body_plan))
+                } else {
+                    None
+                })
+        };
+
+    let body_node = match active {
+        Some((Some(html), Some(plan))) => match stamp_fragment(html, plan, state, keep) {
+            Some(n) => Some(n),
+            None => return,
+        },
+        // Active branch fell outside the lift envelope — leave the
+        // authored chain for the client to mount (never mis-render).
+        Some(_) => return,
+        // No branch is active: just the anchor, no clone.
+        None => None,
+    };
+
+    let mut new_nodes: Vec<Handle> = Vec::new();
+    new_nodes.extend(body_node);
+    new_nodes.push(comment_node("pp:cond"));
+    replace_template_chain(tpl, cp.consumed_count, new_nodes);
+}
+
+/// `pp-match`: tag-extract the value, render the first matching case
+/// (augmenting state with the `pp-let` payload), `<!--pp:match-->`.
+fn expand_match(tpl: &Handle, mp: &StaticMatchPlan, state: &Value, keep: &mut Vec<RcDom>) {
+    let value = eval_src(mp.expr_src, state);
+    let (tag, payload) = extract_tag(&value);
+    let active = mp.cases.iter().find(|c| {
+        c.tags.is_empty() || tag.as_deref().map(|t| c.tags.contains(&t)).unwrap_or(false)
+    });
+
+    let body_node = match active {
+        Some(case) => match (case.body_html, case.body_plan) {
+            (Some(html), Some(plan)) => {
+                // `pp-let`: bind the payload (whole value for the `_`
+                // wildcard arm, the inner payload otherwise — mirrors
+                // `install_match`'s same-tag update).
+                let scoped;
+                let st = match case.bind_name {
+                    Some(name) => {
+                        let bound = if case.tags.is_empty() {
+                            value.clone()
+                        } else {
+                            payload.clone()
+                        };
+                        scoped = augment(state, vec![(name, bound)]);
+                        &scoped
+                    }
+                    None => state,
+                };
+                match stamp_fragment(html, plan, st, keep) {
+                    Some(n) => Some(n),
+                    None => return,
+                }
+            }
+            // Matched case unliftable — leave for client mount.
+            _ => return,
+        },
+        // No case matched — nothing renders, just the anchor.
+        None => None,
+    };
+
+    let mut new_nodes: Vec<Handle> = Vec::new();
+    new_nodes.extend(body_node);
+    new_nodes.push(comment_node("pp:match"));
+    replace_template_chain(tpl, 0, new_nodes);
+}
+
+/// `pp-for`: render one body clone per item against state augmented
+/// with `{ item_name, $index, $first, $last }`, then `<!--pp:for-->`.
+fn expand_for(tpl: &Handle, fp: &StaticForPlan, state: &Value, keep: &mut Vec<RcDom>) {
+    let (html, plan) = match (fp.body_html, fp.body_plan) {
+        (Some(h), Some(p)) => (h, p),
+        // Row body outside the lift envelope — leave for client mount.
+        _ => return,
+    };
+    let items = match eval_src(fp.items_expr, state) {
+        Value::Array(a) => a,
+        _ => Vec::new(),
+    };
+    let len = items.len();
+    let mut new_nodes: Vec<Handle> = Vec::new();
+    for (i, item) in items.into_iter().enumerate() {
+        let row_state = augment(
+            state,
+            vec![
+                (fp.item_name, item),
+                ("$index", Value::from(i)),
+                ("$first", Value::Bool(i == 0)),
+                ("$last", Value::Bool(i + 1 == len)),
+            ],
+        );
+        if let Some(n) = stamp_fragment(html, plan, &row_state, keep) {
+            new_nodes.push(n);
+        }
+    }
+    new_nodes.push(comment_node("pp:for"));
+    replace_template_chain(tpl, 0, new_nodes);
+}
+
+/// Extract `(tag, payload)` from a matched value, mirroring the
+/// client's `extract_tag` over serde external tagging: a string IS its
+/// tag (payload absent ⇒ `Null`); a one-key object is `(key, value)`;
+/// anything else has no tag (only the `_` wildcard arm matches).
+fn extract_tag(v: &Value) -> (Option<String>, Value) {
+    match v {
+        Value::String(s) => (Some(s.clone()), Value::Null),
+        Value::Object(map) if map.len() == 1 => {
+            let (k, val) = map.iter().next().expect("len == 1");
+            (Some(k.clone()), val.clone())
+        }
+        _ => (None, Value::Null),
+    }
+}
+
+/// `base` (a JSON object) with `extra` keys inserted/overwritten — used
+/// to thread `pp-for` loop-locals and the `pp-match` `pp-let` payload
+/// into a body fragment's render state.
+fn augment(base: &Value, extra: Vec<(&str, Value)>) -> Value {
+    let mut map = base.as_object().cloned().unwrap_or_default();
+    for (k, v) in extra {
+        map.insert(k.to_string(), v);
+    }
+    Value::Object(map)
+}
+
+fn is_template(node: &Handle) -> bool {
+    matches!(&node.data, NodeData::Element { name, .. } if name.local == local_name!("template"))
+}
+
+fn comment_node(text: &str) -> Handle {
+    Node::new(NodeData::Comment {
+        contents: StrTendril::from(text),
+    })
+}
+
+/// The (live) parent of `node`, via its weak back-pointer.
+fn parent_of(node: &Handle) -> Option<Handle> {
+    let weak = node.parent.take();
+    let parent = weak.as_ref().and_then(|w| w.upgrade());
+    node.parent.set(weak);
+    parent
+}
+
+/// Replace `tpl` (a structural `<template>`) plus the next
+/// `consumed_count` element siblings (the `pp-else-if` / `pp-else`
+/// chain members) with `new_nodes`, in place. Nodes interleaved within
+/// the consumed range (whitespace text) are removed with them.
+fn replace_template_chain(tpl: &Handle, consumed_count: u16, new_nodes: Vec<Handle>) {
+    let Some(parent) = parent_of(tpl) else {
+        return;
+    };
+    let mut children = parent.children.borrow_mut();
+    let Some(start) = children.iter().position(|c| Rc::ptr_eq(c, tpl)) else {
+        return;
+    };
+    // Extend the removed range over `consumed_count` following element
+    // siblings (and anything between them).
+    let mut end = start;
+    let mut consumed = 0u16;
+    let mut i = start + 1;
+    while consumed < consumed_count && i < children.len() {
+        if matches!(children[i].data, NodeData::Element { .. }) {
+            consumed += 1;
+            end = i;
+        }
+        i += 1;
+    }
+    for n in &new_nodes {
+        n.parent.set(Some(Rc::downgrade(&parent)));
+    }
+    children.splice(start..=end, new_nodes);
 }
 
 // ─── attribute helpers ─────────────────────────────────────────────

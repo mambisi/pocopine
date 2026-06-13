@@ -129,9 +129,12 @@ fn resolve_path(state: &Value, segments: &[String]) -> Value {
     let Some((first, rest)) = segments.split_first() else {
         return Value::Null;
     };
-    if first.starts_with('$') {
-        return Value::Null; // magic roots resolved in Phase 2
-    }
+    // No special-case for `$`-rooted paths: the SSR for-row stamper
+    // (RFC-099 Phase 3) injects loop-locals (`$index` / `$first` /
+    // `$last`) into the row state, so they resolve here like any other
+    // key. True magic roots (`$store` / `$route`) are absent from state
+    // and fall through to `Null` — the same result the old explicit
+    // guard produced, so cross-engine parity is unaffected.
     let mut cur = state.get(first).cloned().unwrap_or(Value::Null);
     for seg in rest {
         cur = cur

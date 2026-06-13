@@ -18,3 +18,10 @@ serde_json = "1"
 # pocopine-template-parser so the workspace resolves one copy.
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
+
+[dev-dependencies]
+# Real `#[component]` macro expansion for the structural-stamp tests —
+# defines components with pp-if/pp-match/pp-for, registers them, and
+# renders host-side via `render_to_string`. `pocopine` builds for the
+# host here (same as the ssr-demo example).
+pocopine = { path = "../pocopine" }

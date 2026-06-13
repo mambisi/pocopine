@@ -6064,6 +6064,7 @@ version = "0.1.0"
 dependencies = [
  "html5ever",
  "markup5ever_rcdom",
+ "pocopine",
  "pocopine-core",
  "pocopine-expr",
  "serde",
