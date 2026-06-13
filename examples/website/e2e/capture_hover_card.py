@@ -15,7 +15,7 @@ Usage:
     python3 -m pip install --user --break-system-packages playwright
     python3 -m playwright install firefox
     # rebuild wasm
-    wasm-pack build --target web --out-dir pkg --dev examples/website
+    cargo run -p pocopine-cli -- build --path examples/website
     # run
     python3 examples/website/e2e/capture_hover_card.py
 """

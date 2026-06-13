@@ -6,7 +6,7 @@ Boots the demo, verifies:
   - <pine-icon :name="…">       reacts to theme toggle (swaps moon↔sun SVG).
 
 Usage:
-    wasm-pack build --target web --out-dir pkg --dev examples/website
+    cargo run -p pocopine-cli -- build --path examples/website
     python3 examples/website/e2e/capture_header_icons.py
 """
 

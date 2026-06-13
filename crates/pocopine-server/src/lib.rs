@@ -37,6 +37,7 @@ mod observability;
 pub mod plugin;
 mod server;
 mod server_functions;
+mod static_files;
 
 pub use assets::{
     ASSETS_ACCESS_KEY_ID_ENV, ASSETS_BUCKET_ENV, ASSETS_ENDPOINT_ENV, ASSETS_REGION_ENV,
@@ -58,6 +59,7 @@ pub use server::{Server, ServerPlugin};
 pub use server_functions::{
     install_server_functions, ServerFunctionRoute, ServerFunctionRouteConflict,
 };
+pub use static_files::StaticFiles;
 
 #[doc(hidden)]
 pub use plugin::__reset_for_test;
@@ -70,7 +72,6 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum::Router;
 use pocopine_auth::{AuthProvider, Principal, RequestContext};
-use tower_http::services::ServeDir;
 
 /// Default maximum JSON request body accepted by generated
 /// server-function routes.
@@ -130,10 +131,26 @@ fn parse_body_limit(raw: &str) -> Option<usize> {
     (limit > 0).then_some(limit)
 }
 
-/// Serve a directory of static files (typically the `pkg/` directory
-/// that `wasm-pack build --target web` produces, plus `index.html`).
-pub fn static_files(dir: impl AsRef<std::path::Path>) -> ServeDir {
-    ServeDir::new(dir)
+/// Serve a directory of static files (typically `index.html` plus the
+/// `pkg/` directory that `pocopine build` produces).
+///
+/// This is a [`tower_http::services::ServeDir`] with pocopine's cache
+/// policy applied to every response (fallbacks included):
+///
+/// * content-hashed bundle files (`<name>.<hash8>.js` /
+///   `<name>_bg.<hash8>.wasm`, the pair `pocopine build` writes) →
+///   `Cache-Control: public,max-age=31536000,immutable`
+/// * HTML responses (index.html, SPA fallbacks) →
+///   `Cache-Control: no-cache` (always revalidate, so a fresh deploy's
+///   index.html immediately points clients at the new bundle pair)
+/// * everything else → no explicit header
+///
+/// The two together close the wasm/JS cache-skew window: CDN default
+/// heuristics cache `.js` but not `.wasm`, which after a deploy can
+/// pair a stale cached glue with a fresh wasm and fail
+/// `WebAssembly.instantiate` with a `LinkError`. See [`StaticFiles`].
+pub fn static_files(dir: impl AsRef<std::path::Path>) -> StaticFiles {
+    StaticFiles::new(dir)
 }
 
 /// Type-erased handle to an [`AuthProvider`] suitable for use as

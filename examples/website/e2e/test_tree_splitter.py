@@ -234,11 +234,13 @@ def run_splitter_checks(page) -> None:
 
 
 def main() -> int:
-    pkg = DEMO_ROOT / "pkg" / "website_bg.wasm"
-    if not pkg.exists():
-        print(f"error: {pkg} missing — run:", file=sys.stderr)
+    # `pocopine build` content-hashes the pair to website_bg.<hash8>.wasm;
+    # accept the raw wasm-pack name too for older checkouts.
+    pkg_dir = DEMO_ROOT / "pkg"
+    if not list(pkg_dir.glob("website_bg*.wasm")):
+        print(f"error: {pkg_dir}/website_bg*.wasm missing — run:", file=sys.stderr)
         print(
-            "  (cd examples/website && wasm-pack build --target web --out-dir pkg --dev)",
+            "  pocopine build --path examples/website",
             file=sys.stderr,
         )
         return 2

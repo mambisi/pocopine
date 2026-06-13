@@ -27,3 +27,7 @@ pocopine-assets = { workspace = true }
 [dependencies]
 pocopine-auth = { workspace = true }
 serde = { workspace = true }
+
+# Host-only tests (the crate is empty on wasm32, see lib.rs cfg).
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "3"
