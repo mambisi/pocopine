@@ -30,10 +30,17 @@
 //! invocation.
 
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
+use std::marker::PhantomData;
 use std::rc::Rc;
 
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
 use crate::reactive::{trigger_scope, ScopeId};
-use crate::scope::{current_scope_id, invalidate_field_cache, with_current_scope_id, Scope};
+use crate::scope::{
+    current_scope_id, invalidate_field_cache, read_scope_key, with_current_scope_id, write_field,
+    Scope,
+};
 
 /// Typed handle onto a component or store scope.
 ///
@@ -193,4 +200,96 @@ pub fn this<T: 'static>() -> Handle<T> {
         )
     });
     Handle::new(inner, id)
+}
+
+/// RFC-097 — a typed projection of **one** component/store field,
+/// obtained from a [`Handle<T>`] via the macro-generated `…Fields`
+/// accessors (`this::<Uploader>().progress()` → `FieldHandle<f64>`),
+/// never from `self`.
+///
+/// `set`/`update` write exactly that one field through the reactive
+/// write mirror — one version bump, one [`trigger`](crate::reactive),
+/// **no [`DirtySweep`](crate::scope)**. Where [`Handle::update`] hashes
+/// every observed field to discover what moved (correct for atomic
+/// multi-field edits, wasteful for a stream), a `FieldHandle` names the
+/// field at the API seam, so a 60 Hz progress write costs only what it
+/// touches. It exists solely for contexts `&mut self` cannot reach
+/// (async tasks, websocket callbacks); inside a handler, `self.x = v`
+/// remains the only authoring surface.
+///
+/// `Copy` (just a `ScopeId` + a `&'static str`). Not `Send`/`Sync`
+/// (wasm, single-threaded).
+pub struct FieldHandle<T> {
+    scope_id: ScopeId,
+    key: &'static str,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for FieldHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for FieldHandle<T> {}
+
+impl<T> FieldHandle<T> {
+    /// Construct a field handle. Called by the macro-generated field
+    /// accessors; not part of the authoring surface.
+    #[doc(hidden)]
+    pub fn __new(scope_id: ScopeId, key: &'static str) -> Self {
+        FieldHandle {
+            scope_id,
+            key,
+            _marker: PhantomData,
+        }
+    }
+
+    /// The scope this field belongs to.
+    pub fn scope_id(&self) -> ScopeId {
+        self.scope_id
+    }
+}
+
+impl<T: Serialize + DeserializeOwned> FieldHandle<T> {
+    /// Tracked read of the field. Inside an effect, subscribes that
+    /// effect to *this one* field; outside an effect it is a no-op
+    /// track (a plain read). A dead scope reads as `T::default()` —
+    /// the tracked read mirror returns `undefined` for a missing
+    /// scope, which deserializes to the default (mirrors
+    /// [`crate::watch`]'s dead-scope read).
+    pub fn get(&self) -> T
+    where
+        T: Default,
+    {
+        let value = read_scope_key(self.scope_id, self.key);
+        serde_wasm_bindgen::from_value(value).unwrap_or_default()
+    }
+
+    /// Write exactly this field through the write mirror: one version
+    /// bump, one trigger, **no dirty sweep**. A write on a dead scope
+    /// is a silent no-op (mirrors [`Handle`] write semantics). Flatten
+    /// containers, the typed-text lane, and projection versioning all
+    /// apply unchanged — `set` is indistinguishable from a swept
+    /// handler that changed only this field.
+    pub fn set(&self, value: T) {
+        // serde_wasm_bindgen::to_value is the same serializer the proxy
+        // SET trap and `ComponentState::set` round-trip through, so the
+        // value lands in the field exactly as `self.x = value` would.
+        if let Ok(js) = serde_wasm_bindgen::to_value(&value) {
+            write_field(self.scope_id, self.key, &js);
+        }
+    }
+
+    /// Read-modify-write of this **one** field (`get` → mutate →
+    /// `set`): still one trigger, no sweep. Contrast
+    /// [`Handle::update`], which mutates the whole struct under a
+    /// single sweep.
+    pub fn update(&self, f: impl FnOnce(&mut T))
+    where
+        T: Default,
+    {
+        let mut value = self.get();
+        f(&mut value);
+        self.set(value);
+    }
 }
