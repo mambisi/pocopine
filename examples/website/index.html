@@ -23,15 +23,156 @@
       } catch (e) {}
     })();
   </script>
+  <!-- Boot-loader styles. A thin top progress bar (YouTube / nprogress
+       style) that fills as the wasm bundle downloads. Inlined so it
+       paints before the bundle arrives; colours reuse the styles.css
+       theme tokens (already applied above) with light-theme fallbacks.
+       The html fallback bg avoids a white flash if styles.css is slow. -->
+  <style>
+    html { background: var(--bg, #fffaf2); }
+    #pp-loader {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      z-index: 9999;
+      overflow: hidden;
+      pointer-events: none;
+      transition: opacity 0.3s ease 0.15s;
+    }
+    #pp-loader.pp-loader--done { opacity: 0; }
+    .pp-loader__bar {
+      height: 100%;
+      width: 100%;
+      background: var(--brand, #f8ae45);
+      box-shadow: 0 0 8px var(--brand, #f8ae45);
+      /* translateX(-100%) = empty, translateX(0) = full. Driven by JS. */
+      transform: translateX(-100%);
+      transition: transform 0.2s ease;
+      will-change: transform;
+    }
+    #pp-loader.pp-loader--error .pp-loader__bar {
+      background: var(--destructive, #c04a2b);
+      box-shadow: 0 0 8px var(--destructive, #c04a2b);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #pp-loader { transition: opacity 0.3s ease; }
+      .pp-loader__bar { transition: none; }
+    }
+  </style>
 </head>
 <body>
+  <!-- Boot loader: a top progress bar shown while the wasm bundle
+       downloads, compiles, and mounts the app. Lives OUTSIDE `pp-app`
+       (the framework owns that subtree) and is removed by the script
+       below once the app has mounted. -->
+  <div id="pp-loader" role="progressbar" aria-label="Loading pocopine"
+       aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div class="pp-loader__bar"></div>
+  </div>
+
   <div pp-app>
     <website-app></website-app>
   </div>
 
   <script type="module">
     import init from "/pkg/website.js";
-    init();
+
+    const loader = document.getElementById("pp-loader");
+    const bar = loader && loader.querySelector(".pp-loader__bar");
+    let value = 0; // 0..1, the displayed bar fraction
+    let trickle = 0;
+
+    const setBar = (v) => {
+      value = Math.max(0, Math.min(v, 1));
+      if (bar) bar.style.transform = "translateX(" + (value - 1) * 100 + "%)";
+      if (loader) loader.setAttribute("aria-valuenow", String(Math.round(value * 100)));
+    };
+
+    const removeLoader = () => {
+      if (!loader) return;
+      clearInterval(trickle);
+      loader.classList.add("pp-loader--done");
+      const done = () => loader.remove();
+      loader.addEventListener("transitionend", done, { once: true });
+      setTimeout(done, 700);
+    };
+
+    // After the bytes are in, the bar can't measure the (brief)
+    // compile + mount phase, so ease it toward 98% — like YouTube's
+    // bar — so it keeps moving instead of looking stuck. init() snaps
+    // it to 100%.
+    const startTrickle = () => {
+      clearInterval(trickle);
+      trickle = setInterval(() => {
+        if (value >= 0.98) { clearInterval(trickle); return; }
+        setBar(value + (0.98 - value) * 0.1);
+      }, 200);
+    };
+
+    // Real download progress: wasm-bindgen's init() fetches the (hashed)
+    // `*_bg.wasm` via the global `fetch`, so we wrap that one response's
+    // body in a byte-counting stream and map bytes/Content-Length onto
+    // the first 90% of the bar (the last 10% is the compile/mount tail).
+    // The re-wrapped Response keeps its headers so wasm-bindgen still
+    // stream-compiles it (with the arrayBuffer fallback). fetch is
+    // restored after init.
+    const realFetch = window.fetch.bind(window);
+    window.fetch = (input, opts) => {
+      const url =
+        typeof input === "string" ? input : (input && input.url) || String(input);
+      const res = realFetch(input, opts);
+      if (!/\.wasm(\?|$)/.test(url)) return res;
+      return res.then((resp) => {
+        if (!resp.body || !resp.ok) return resp;
+        const total = Number(resp.headers.get("content-length")) || 0;
+        if (!total) startTrickle(); // no total → just keep it moving
+        let loaded = 0;
+        const reader = resp.body.getReader();
+        const tracked = new ReadableStream({
+          async pull(controller) {
+            const { done, value: chunk } = await reader.read();
+            if (done) {
+              startTrickle(); // bytes in; compile + mount next
+              controller.close();
+              return;
+            }
+            loaded += chunk.byteLength;
+            if (total) setBar((loaded / total) * 0.9);
+            controller.enqueue(chunk);
+          },
+          cancel(reason) {
+            reader.cancel(reason);
+          },
+        });
+        return new Response(tracked, {
+          headers: resp.headers,
+          status: resp.status,
+          statusText: resp.statusText,
+        });
+      });
+    };
+
+    try {
+      await init();
+      // init() resolved → App::run() booted synchronously and mounted.
+      clearInterval(trickle);
+      setBar(1);
+      requestAnimationFrame(() => requestAnimationFrame(removeLoader));
+    } catch (err) {
+      // Leave a red bar at the top so a failed load is visible (instead
+      // of a bar stuck mid-way) — the user knows to reload.
+      clearInterval(trickle);
+      if (loader) {
+        loader.classList.add("pp-loader--error");
+        loader.setAttribute("aria-label", "Failed to load — reload the page");
+        setBar(1);
+      }
+      throw err;
+    } finally {
+      window.fetch = realFetch;
+    }
   </script>
 </body>
 </html>
