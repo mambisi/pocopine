@@ -331,12 +331,20 @@ app, templates, or HTML rewrites.
    files; how they get into the tree is out of scope.
 4. **`.poco` `$asset()` syntax is phase 2** — v1 is Rust-side only
    (`asset!` into a field/prop, bound in the template). Decided
-   syntax: **`$asset("path")`** — it wears the `$` framework
-   namespace (`$store`/`$route`/`$index`) but, unlike those runtime
-   magics, is resolved at template compile time by `#[component]`
-   (hash baked in; missing file = compile error) — a build-time
-   intrinsic in magic syntax. The hook rides a later RFC once SSR
-   (RFC-099) settles expression evaluation on both sides.
+   syntax: **`$asset('path')`** — a pine-expr intrinsic that
+   constant-folds to a string literal at template-compile time
+   (hash baked, missing file = compile error). Valid wherever
+   pine-expr evaluates: bound attributes
+   (`:src="dark ? $asset('a.svg') : $asset('b.svg')"`), plain
+   quoted attributes (build-time substitution,
+   `src="$asset('blog/intro.webm')"`), and `{{ }}` text
+   interpolation (`<p>{{ $asset('report.pdf') }}</p>`, with
+   interpolation's existing direct-text-children limits). Both
+   quote styles accepted, single preferred inside double-quoted
+   attributes. Binding grammar rule, which killed the unquoted
+   variant: **`.poco` must always parse as valid HTML** — syntax
+   extensions live only inside attribute values and `{{ }}` text
+   nodes, never in markup structure.
 5. **No bucket GC** — unreferenced old hashes are kept (see §5.3).
 6. **Streaming/Range in the Mode B proxy** — v1 buffers full bodies
    and answers `Range` requests with a `200` full body (HTTP
