@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Implemented — the `post_mount` hook shipped but was renamed `on_ready` by RFC-029; `#[watch(field)]` shipped as specified. |
 | **Author** | pocopine team |
 | **Created** | 2026-04-19 |
 | **Supersedes** | — |

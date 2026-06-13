@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented (H1–H4 landed on main, PR #202) |
 | **Author** | pocopine team |
 | **Created** | 2026-06-12 |
 | **Related** | [`rfc-095-reactive-core-de-alpine.md`](./rfc-095-reactive-core-de-alpine.md) (W0 harness, W5 revert), [`rfc-096-signals-first-reactive-core.md`](./rfc-096-signals-first-reactive-core.md) (the engine being hardened) |

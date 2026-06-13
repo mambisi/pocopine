@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | In progress on `perf-reactive-dirty-tracking`: W2 landed (−7.1% geomean), W1 landed (proxy-free root reads), W3a landed (one dependency graph — fields interned as signals; DEPS/REVERSE deleted), dead Alpine magics removed (\$el/\$refs/\$dispatch/\$id); W5 tried and reverted with measurements; W0 COMPLETE (semantics tests + 1000-op differential fuzz vs oracle + keyed fast-path symmetry gates); W3b landed (plan-gated lazy proxy minting); W3c expanded into [`rfc-096-signals-first-reactive-core.md`](./rfc-096-signals-first-reactive-core.md) (the full signals switch); W4 LANDED (descriptor variant — runLots −8.7%, gap to vanilla 1.41×→1.29×; see §7) |
+| **Status** | Implemented (landed in 0.2.0 via `perf-reactive-dirty-tracking`; W3c expanded into RFC-096). W2 landed (−7.1% geomean), W1 landed (proxy-free root reads), W3a landed (one dependency graph — fields interned as signals; DEPS/REVERSE deleted), dead Alpine magics removed (\$el/\$refs/\$dispatch/\$id); W5 tried and reverted with measurements; W0 COMPLETE (semantics tests + 1000-op differential fuzz vs oracle + keyed fast-path symmetry gates); W3b landed (plan-gated lazy proxy minting); W3c expanded into [`rfc-096-signals-first-reactive-core.md`](./rfc-096-signals-first-reactive-core.md) (the full signals switch); W4 LANDED (descriptor variant — runLots −8.7%, gap to vanilla 1.41×→1.29×; see §7) |
 | **Author** | pocopine team |
 | **Created** | 2026-06-10 |
 | **Related** | [`rfc-054`](./rfc-054-compiled-row-plans.md), [`rfc-058-compiled-views-walker-removal.md`](./rfc-058-compiled-views-walker-removal.md), [`rfc-094-conditional-chains-and-enum-matching.md`](./rfc-094-conditional-chains-and-enum-matching.md) |
