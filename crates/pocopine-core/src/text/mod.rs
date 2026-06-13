@@ -45,23 +45,9 @@ pub use prepare::{prepare, Font, PrepareOptions, PreparedText, WhiteSpace};
 /// the mutation-channel interpreter's `String(v)`): JS `String()`
 /// semantics, so 1e21 → "1e+21", Infinity → "Infinity", and the
 /// channel/direct paths can never disagree on a number's text.
-/// Host (non-wasm) builds approximate with Rust Display plus the
-/// integral `.0`-strip — identical for every value the host test
-/// suite exercises.
+/// RFC-099 Phase 1 — one pure-Rust implementation
+/// ([`crate::js_number::to_js_string`]) on both targets, so the wasm
+/// client and the SSR host renderer produce byte-identical text.
 pub(crate) fn js_number_string(n: f64) -> String {
-    #[cfg(target_arch = "wasm32")]
-    {
-        js_sys::Number::from(n)
-            .to_string_with_radix(10)
-            .map(String::from)
-            .unwrap_or_else(|_| n.to_string())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if n.fract() == 0.0 && n.is_finite() && n.abs() < 9.0e15 {
-            format!("{}", n as i64)
-        } else {
-            n.to_string()
-        }
-    }
+    crate::js_number::to_js_string(n)
 }

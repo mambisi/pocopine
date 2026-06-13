@@ -32,6 +32,9 @@ pub mod fingerprint;
 pub mod focus;
 pub mod handle;
 pub mod handler;
+/// RFC-099 Phase 1 — JS-identical number formatting, shared by the
+/// wasm client and the SSR host renderer.
+pub mod js_number;
 pub mod lifecycle;
 pub mod loop_scope;
 pub mod magics;
