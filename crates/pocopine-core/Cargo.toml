@@ -60,6 +60,10 @@ phf = { version = "0.13", features = ["macros"] }
 # differential-fuzz failure replays from its seed alone (HashSet
 # iteration order varied per run). Same asymptotics as HashSet.
 indexmap = { workspace = true }
+# RFC-098 H2 — one generational slab for the effect lifecycle
+# (body + scheduler + cleanups + signal deps), replacing four parallel
+# tables. EffectId = generation<<32 | slot; stale ids resolve to None.
+slab = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3"

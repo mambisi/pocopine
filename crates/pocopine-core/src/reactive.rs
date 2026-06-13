@@ -3,11 +3,17 @@
 //! RFC-095 W3a — **one dependency graph.** Component fields are
 //! interned as signals: the first time an effect tracks
 //! `(ScopeId, key)`, the pair mints a `SignalId` (see
-//! `FIELD_SIGNALS`), and from then on the field subscribes,
-//! triggers, and tears down through the same `SIGNAL_DEPS` /
-//! `SIGNAL_REVERSE` tables `Signal<T>` and `Computed<T>` use.
-//! The string key is hashed once per track/trigger to find the
-//! id; subscriber-list operations are `u64`-keyed.
+//! `FIELD_SIGNALS`), and from then on the field subscribes through
+//! the same `SIGNAL_DEPS` forward table `Signal<T>` and
+//! `Computed<T>` use. The string key is hashed once per
+//! track/trigger to find the id; subscriber-list operations are
+//! `u64`-keyed.
+//!
+//! RFC-098 — effect lifecycle state (body, scheduler, cleanups, and
+//! the inverse dep set) lives in one generational `EFFECT_SLAB`
+//! entry; `EffectId` packs `generation << 32 | slot`. Subscriber
+//! sets and the flush `QUEUE` are insertion-ordered (`IndexSet`),
+//! and dispatch is a non-reentrant trampoline.
 //!
 //! Effects subscribe when a tracked read fires inside one (proxy
 //! `get` trap or the RFC-095 W1 scoped root reader). A write
@@ -22,9 +28,11 @@ use std::rc::Rc;
 
 // RFC-098 H4 — `IndexSet` gives HashSet's API with deterministic
 // (insertion-ordered) iteration, so dispatch + flush order is
-// replayable from a fuzz seed. `SIGNAL_REVERSE` stays a `HashSet`:
-// its iteration is never observable (it only drives removals).
+// replayable from a fuzz seed.
 use indexmap::IndexSet;
+// RFC-098 H2 — one generational slab holds every effect's lifecycle
+// state (body, scheduler, cleanups, signal deps) in a single entry.
+use slab::Slab;
 
 use js_sys::Promise;
 use wasm_bindgen::closure::Closure;
@@ -51,6 +59,25 @@ type EffectFn = Rc<dyn Fn()>;
 type SchedulerFn = Rc<dyn Fn(EffectId)>;
 type CleanupFn = Box<dyn FnOnce()>;
 
+/// RFC-098 H2 — all of one effect's lifecycle state in a single slab
+/// entry, replacing the four parallel `EFFECTS` / `SCHEDULERS` /
+/// `CLEANUPS` / `SIGNAL_REVERSE` tables that were permitted to
+/// disagree. `release` now removes exactly one entry, so a
+/// half-released effect is unrepresentable.
+struct EffectEntry {
+    /// Slot generation. The packed `EffectId` carries the generation
+    /// it was minted at; a stale id (held past `release`, whose slot
+    /// has been reused) mismatches and resolves to `None`.
+    generation: u32,
+    body: EffectFn,
+    scheduler: Option<SchedulerFn>,
+    cleanups: Vec<CleanupFn>,
+    /// Inverse dependency set (was `SIGNAL_REVERSE[id]`): the signals
+    /// this effect subscribes to, so `clear_deps_for` is O(deps).
+    /// Order is never observed, so a plain `HashSet` is right.
+    deps: HashSet<SignalId>,
+}
+
 /// Runtime configuration for an effect. See [`effect_with`].
 #[derive(Default, Clone)]
 pub struct EffectOptions {
@@ -68,8 +95,15 @@ thread_local! {
     // "never minted" value in debugger output.
     static NEXT_ID: Cell<u64> = const { Cell::new(1) };
     static CURRENT_EFFECT: Cell<Option<EffectId>> = const { Cell::new(None) };
-    static EFFECTS: RefCell<HashMap<EffectId, EffectFn>> = RefCell::new(HashMap::new());
-    static SCHEDULERS: RefCell<HashMap<EffectId, SchedulerFn>> = RefCell::new(HashMap::new());
+    /// RFC-098 H2 — the one effect table. `EffectId = generation<<32 |
+    /// slot`; the slab reuses freed slots, `EFFECT_GENERATIONS` bumps
+    /// the per-slot generation on release so a reused slot mints a
+    /// fresh id and any stale id resolves to `None`. ScopeId/SignalId
+    /// keep the `NEXT_ID` counter; only effects use slot addressing.
+    static EFFECT_SLAB: RefCell<Slab<EffectEntry>> = const { RefCell::new(Slab::new()) };
+    /// Per-slot generation, bumped each time a slot is released so the
+    /// next occupant of that slot is distinguishable from the last.
+    static EFFECT_GENERATIONS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     /// RFC-095 W3a — field-signal interning. Each `(scope, field
     /// key)` pair lazily mints a `SignalId` the first time an
     /// effect tracks it; from then on the field IS that signal in
@@ -89,14 +123,12 @@ thread_local! {
     // use `shift_remove` (not the default swap-remove) to keep the
     // surviving order stable.
     static SIGNAL_DEPS: RefCell<HashMap<SignalId, IndexSet<EffectId>>> = RefCell::new(HashMap::new());
-    static SIGNAL_REVERSE: RefCell<HashMap<EffectId, HashSet<SignalId>>> = RefCell::new(HashMap::new());
 
     // RFC-098 H4 — `IndexSet` so `flush` drains in the order effects
     // were queued; set semantics still dedupe an effect a single
     // dispatch queues twice.
     static QUEUE: RefCell<IndexSet<EffectId>> = RefCell::new(IndexSet::new());
     static FLUSH_SCHEDULED: Cell<bool> = const { Cell::new(false) };
-    static CLEANUPS: RefCell<HashMap<EffectId, Vec<CleanupFn>>> = RefCell::new(HashMap::new());
     static BATCHING: Cell<u32> = const { Cell::new(0) };
     static AUTO_FLUSH: Cell<bool> = const { Cell::new(true) };
 
@@ -128,16 +160,61 @@ pub fn next_scope_id() -> ScopeId {
     })
 }
 
-fn next_effect_id() -> EffectId {
-    NEXT_ID.with(|c| {
-        let id = c.get();
-        c.set(id + 1);
-        EffectId(id)
+// ── RFC-098 H2 — generational effect-id encoding ─────────────────
+//
+// `EffectId.0 = (generation as u64) << 32 | (slot as u64)`. The slot
+// is the slab key (dense from 0); the generation distinguishes
+// successive occupants of a reused slot. `EffectId` stays a `Copy u64`
+// so the DOM-expando teardown lists and devtools are untouched.
+
+#[inline]
+fn pack_effect_id(slot: usize, generation: u32) -> EffectId {
+    debug_assert!(slot <= u32::MAX as usize, "effect slot exceeds u32");
+    let packed = ((generation as u64) << 32) | (slot as u64 & 0xFFFF_FFFF);
+    // The teardown lists round-trip an EffectId through `f64`
+    // (`mount.rs` stores `id.0 as f64`), exact only below 2^53 —
+    // which holds while generation < 2^21 (~2M reuses of one slot).
+    debug_assert!(
+        packed < (1u64 << 53),
+        "EffectId {packed:#x} exceeds f64-exact range — slot reused >2^21 times (generation overflow)"
+    );
+    EffectId(packed)
+}
+
+#[inline]
+fn unpack_effect_id(id: EffectId) -> (usize, u32) {
+    ((id.0 & 0xFFFF_FFFF) as usize, (id.0 >> 32) as u32)
+}
+
+/// Run `f` against `id`'s live slab entry, or return `None` if the id
+/// is stale — its slot is empty or has been reused under a newer
+/// generation. `f` runs while the slab is borrowed, so it must NOT run
+/// user code (body / scheduler / cleanups): clone or take what's
+/// needed out and drop the borrow first.
+fn with_effect<R>(id: EffectId, f: impl FnOnce(&EffectEntry) -> R) -> Option<R> {
+    let (slot, generation) = unpack_effect_id(id);
+    EFFECT_SLAB.with(|s| {
+        s.borrow()
+            .get(slot)
+            .filter(|e| e.generation == generation)
+            .map(f)
     })
 }
 
-/// Allocate a fresh `SignalId`. Signals share the id pool with effects and
-/// scopes so numeric ids are globally unique across the runtime.
+/// Mutable counterpart to [`with_effect`]. Same borrow caveat: `f`
+/// must not run user code.
+fn with_effect_mut<R>(id: EffectId, f: impl FnOnce(&mut EffectEntry) -> R) -> Option<R> {
+    let (slot, generation) = unpack_effect_id(id);
+    EFFECT_SLAB.with(|s| {
+        s.borrow_mut()
+            .get_mut(slot)
+            .filter(|e| e.generation == generation)
+            .map(f)
+    })
+}
+
+/// Allocate a fresh `SignalId`. Signals share the id pool with scopes
+/// so numeric ids are globally unique across the runtime.
 pub fn next_signal_id() -> SignalId {
     NEXT_ID.with(|c| {
         let id = c.get();
@@ -188,12 +265,32 @@ pub fn effect_with(f: impl Fn() + 'static, opts: EffectOptions) -> EffectId {
 // / pp-if / pp-text / pp-bind closure types before this
 // consolidation.
 fn effect_with_dyn(f: EffectFn, opts: EffectOptions) -> EffectId {
-    let id = next_effect_id();
-    EFFECTS.with(|e| e.borrow_mut().insert(id, f.clone()));
-    if let Some(sched) = opts.scheduler {
-        SCHEDULERS.with(|s| s.borrow_mut().insert(id, sched));
-    }
-    if !opts.lazy {
+    let EffectOptions { lazy, scheduler } = opts;
+    let id = EFFECT_SLAB.with(|slab| {
+        let mut slab = slab.borrow_mut();
+        let entry = slab.vacant_entry();
+        let slot = entry.key();
+        // Generation for this slot: 0 the first time, else one past the
+        // last occupant (`EFFECT_GENERATIONS[slot]` was bumped on its
+        // release). The freshly-inserted entry uses the SAME slot the
+        // VacantEntry reported.
+        let generation = EFFECT_GENERATIONS.with(|g| {
+            let mut g = g.borrow_mut();
+            if slot >= g.len() {
+                g.resize(slot + 1, 0);
+            }
+            g[slot]
+        });
+        entry.insert(EffectEntry {
+            generation,
+            body: f.clone(),
+            scheduler,
+            cleanups: Vec::new(),
+            deps: HashSet::new(),
+        });
+        pack_effect_id(slot, generation)
+    });
+    if !lazy {
         run_effect(id, &f);
     }
     id
@@ -234,9 +331,12 @@ fn now_ms() -> f64 {
 }
 
 fn clear_deps_for(id: EffectId) {
-    // RFC-095 W3a — one graph: component fields are interned
-    // signals, so this single sweep covers both.
-    let sig_keys: Option<HashSet<SignalId>> = SIGNAL_REVERSE.with(|r| r.borrow_mut().remove(&id));
+    // RFC-095 W3a — one graph: component fields are interned signals,
+    // so this single sweep covers both. Take the effect's dep set out
+    // of its slab entry (short borrow, no user code), then unsubscribe
+    // it from each signal. A stale/released id yields `None` — nothing
+    // to clear.
+    let sig_keys: Option<HashSet<SignalId>> = with_effect_mut(id, |e| std::mem::take(&mut e.deps));
     if let Some(sig_keys) = sig_keys {
         SIGNAL_DEPS.with(|d| {
             let mut d = d.borrow_mut();
@@ -256,7 +356,10 @@ fn clear_deps_for(id: EffectId) {
 }
 
 fn run_cleanups(id: EffectId) {
-    let pending: Option<Vec<CleanupFn>> = CLEANUPS.with(|c| c.borrow_mut().remove(&id));
+    // Take the cleanups out under a short borrow, then run them with no
+    // slab borrow held — a cleanup may re-enter (e.g. release another
+    // effect, mutating the slab).
+    let pending: Option<Vec<CleanupFn>> = with_effect_mut(id, |e| std::mem::take(&mut e.cleanups));
     if let Some(pending) = pending {
         for f in pending {
             f();
@@ -265,24 +368,46 @@ fn run_cleanups(id: EffectId) {
 }
 
 /// Remove an effect entirely; all its dependency edges go with it.
+/// RFC-098 H2 — one slab `remove`, so the lifecycle is atomic; a
+/// double-release or a stale id is a no-op (generation mismatch).
 pub fn release(id: EffectId) {
     // Final cleanups run first: an effect that opens a resource should
-    // close it before it ceases to exist.
+    // close it before it ceases to exist. (These take from the entry,
+    // so they must precede the removal below.)
     run_cleanups(id);
     clear_deps_for(id);
-    EFFECTS.with(|e| e.borrow_mut().remove(&id));
-    SCHEDULERS.with(|s| s.borrow_mut().remove(&id));
-    QUEUE.with(|q| {
-        // shift_remove keeps any concurrently-queued effects in order.
-        q.borrow_mut().shift_remove(&id);
+    let (slot, generation) = unpack_effect_id(id);
+    let removed = EFFECT_SLAB.with(|s| {
+        let mut s = s.borrow_mut();
+        // Only remove when the id is live — guards double-release and
+        // stale ids from evicting a slot's newer occupant.
+        if s.get(slot).is_some_and(|e| e.generation == generation) {
+            s.remove(slot);
+            true
+        } else {
+            false
+        }
     });
+    if removed {
+        // Bump the slot's generation so its next occupant gets a fresh
+        // id and this id (now stale) resolves to None forever.
+        EFFECT_GENERATIONS.with(|g| {
+            if let Some(slot_gen) = g.borrow_mut().get_mut(slot) {
+                *slot_gen = slot_gen.wrapping_add(1);
+            }
+        });
+        QUEUE.with(|q| {
+            // shift_remove keeps any concurrently-queued effects in order.
+            q.borrow_mut().shift_remove(&id);
+        });
+    }
 }
 
 /// Register a function to run when the enclosing effect reruns or is
 /// released. No-op when called outside an effect.
 pub fn on_cleanup(f: impl FnOnce() + 'static) {
     let Some(id) = current_effect() else { return };
-    CLEANUPS.with(|c| c.borrow_mut().entry(id).or_default().push(Box::new(f)));
+    with_effect_mut(id, |e| e.cleanups.push(Box::new(f)));
 }
 
 /// RFC-095 W3a — resolve (or lazily mint) the `SignalId` interned
@@ -355,9 +480,12 @@ pub fn track_signal(signal_id: SignalId) {
     SIGNAL_DEPS.with(|d| {
         d.borrow_mut().entry(signal_id).or_default().insert(id);
     });
-    SIGNAL_REVERSE.with(|r| {
-        r.borrow_mut().entry(id).or_default().insert(signal_id);
-    });
+    // Record the inverse edge in the effect's own entry (was
+    // SIGNAL_REVERSE). `current_effect()` is set only while a live
+    // effect runs, so the entry exists; if it somehow doesn't (stale),
+    // this no-ops — the forward edge above is harmless on its own (it
+    // just dispatches to an id that resolves to None).
+    with_effect_mut(id, |e| e.deps.insert(signal_id));
 }
 
 /// Dispatch signal `sid`: snapshot its subscribers under a short
@@ -411,11 +539,17 @@ fn dispatch_signal(sid: SignalId) {
                 .unwrap_or_default()
         });
         for eid in local {
-            let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
+            // Resolve the subscriber's scheduler, cloned out so the slab
+            // borrow drops before it runs. Three outcomes:
+            //   None         — stale id (released mid-dispatch): skip.
+            //   Some(None)    — live, no scheduler: queue for flush.
+            //   Some(Some(s)) — live computed/custom: run inline.
+            let sched = with_effect(eid, |e| e.scheduler.clone());
             match sched {
+                None => continue,
                 // Inline; any trigger it fires lands in WORKLIST above.
-                Some(s) => s(eid),
-                None => {
+                Some(Some(s)) => s(eid),
+                Some(None) => {
                     QUEUE.with(|q| {
                         q.borrow_mut().insert(eid);
                     });
@@ -486,8 +620,9 @@ pub fn trigger_signal(signal_id: SignalId) {
 /// cleanups. Effects associated with the scope are independently
 /// released via `mount::release_subtree` → `release(EffectId)`;
 /// this evicts the scope's interned field signals and their
-/// subscriber lists. Stale `SIGNAL_REVERSE` entries on
-/// still-living effects degrade to no-ops at their release.
+/// subscriber lists. A still-living effect's inverse dep set (in its
+/// slab entry) may briefly name an evicted signal; that entry just
+/// won't be found at the effect's next teardown — a harmless no-op.
 pub fn clear_scope(scope_id: ScopeId) {
     let sids: Vec<SignalId> = FIELD_SIGNALS.with(|f| {
         f.borrow_mut()
@@ -607,9 +742,12 @@ fn flush() {
     // in the next batch, not the current one.
     let ids: Vec<EffectId> = QUEUE.with(|q| q.borrow_mut().drain(..).collect());
     for id in ids {
-        let f = EFFECTS.with(|e| e.borrow().get(&id).cloned());
-        if let Some(f) = f {
-            run_effect(id, &f);
+        // Clone the body out (Rc bump) and drop the slab borrow before
+        // running it. A `None` means the effect was released after it
+        // was queued — skip it.
+        let body = with_effect(id, |e| e.body.clone());
+        if let Some(body) = body {
+            run_effect(id, &body);
         }
     }
 }
@@ -617,9 +755,9 @@ fn flush() {
 /// Force-rerun a specific effect right now. Used by primitives like
 /// `computed` that drive their own scheduling via [`EffectOptions`].
 pub fn run_now(id: EffectId) {
-    let f = EFFECTS.with(|e| e.borrow().get(&id).cloned());
-    if let Some(f) = f {
-        run_effect(id, &f);
+    let body = with_effect(id, |e| e.body.clone());
+    if let Some(body) = body {
+        run_effect(id, &body);
     }
 }
 
@@ -640,7 +778,7 @@ pub fn stats() -> (usize, usize) {
     // surface) — same growth signal the health panel watched.
     let dep_count =
         FIELD_SIGNALS.with(|f| f.borrow().values().map(|inner| inner.len()).sum::<usize>());
-    (EFFECTS.with(|e| e.borrow().len()), dep_count)
+    (EFFECT_SLAB.with(|s| s.borrow().len()), dep_count)
 }
 
 // ── devtools read-only snapshots ─────────────────────────────────
@@ -689,7 +827,7 @@ pub fn signal_graph_snapshot() -> Vec<SignalSnapshot> {
 /// microtask queue.
 #[cfg(feature = "devtools")]
 pub fn is_scheduler_routed(id: EffectId) -> bool {
-    SCHEDULERS.with(|s| s.borrow().contains_key(&id))
+    with_effect(id, |e| e.scheduler.is_some()).unwrap_or(false)
 }
 
 // Keep unused-import noise away when `wasm-bindgen-futures` features drift.
