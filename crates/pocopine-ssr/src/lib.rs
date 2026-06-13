@@ -452,20 +452,24 @@ fn expand_structural(
     state: &Value,
     keep: &mut Vec<RcDom>,
 ) {
+    // The kind-local index travels with each site so the anchor can be
+    // labelled `pp:<kind>:<index>` — the client claimer (Unit D) finds
+    // its anchor by that label (scanning the parent's child comments),
+    // which is robust even when no clone precedes the anchor.
     enum Site<'a> {
-        Cond(&'a StaticCondPlan),
-        Match(&'a StaticMatchPlan),
-        For(&'a StaticForPlan),
+        Cond(usize, &'a StaticCondPlan),
+        Match(usize, &'a StaticMatchPlan),
+        For(usize, &'a StaticForPlan),
     }
     let mut sites: Vec<(&[u16], Site)> = Vec::new();
-    for cp in plan.if_plans {
-        sites.push((cp.template_node_path, Site::Cond(cp)));
+    for (i, cp) in plan.if_plans.iter().enumerate() {
+        sites.push((cp.template_node_path, Site::Cond(i, cp)));
     }
-    for mp in plan.match_plans {
-        sites.push((mp.template_node_path, Site::Match(mp)));
+    for (i, mp) in plan.match_plans.iter().enumerate() {
+        sites.push((mp.template_node_path, Site::Match(i, mp)));
     }
-    for fp in plan.for_plans {
-        sites.push((fp.template_node_path, Site::For(fp)));
+    for (i, fp) in plan.for_plans.iter().enumerate() {
+        sites.push((fp.template_node_path, Site::For(i, fp)));
     }
     sites.sort_by(|a, b| b.0.cmp(a.0));
     for (path, site) in sites {
@@ -481,54 +485,78 @@ fn expand_structural(
             continue;
         }
         match site {
-            Site::Cond(cp) => expand_cond(&tpl, cp, state, keep),
-            Site::Match(mp) => expand_match(&tpl, mp, state, keep),
-            Site::For(fp) => expand_for(&tpl, fp, state, keep),
+            Site::Cond(i, cp) => expand_cond(&tpl, i, cp, state, keep),
+            Site::Match(i, mp) => expand_match(&tpl, i, mp, state, keep),
+            Site::For(i, fp) => expand_for(&tpl, i, fp, state, keep),
         }
     }
 }
 
 /// `pp-if` chain: render the first truthy branch (or `pp-else`), drop
-/// the member `<template>`s, and place a `<!--pp:cond-->` anchor after
-/// the clone (matching the client's clone-before-anchor layout).
-fn expand_cond(tpl: &Handle, cp: &StaticCondPlan, state: &Value, keep: &mut Vec<RcDom>) {
+/// the member `<template>`s, and place a `<!--pp:cond:idx-->` anchor
+/// after the clone (matching the client's clone-before-anchor layout).
+fn expand_cond(
+    tpl: &Handle,
+    idx: usize,
+    cp: &StaticCondPlan,
+    state: &Value,
+    keep: &mut Vec<RcDom>,
+) {
+    // Expand only when EVERY branch is liftable as data: post-hydration
+    // the client controller may flip to any branch, and the member
+    // `<template>`s the legacy clone-fallback needs are gone from the
+    // SSR output. If any branch fell outside the lift envelope, leave
+    // the authored chain for the client to mount (never mis-render).
+    let head_liftable = cp.body_html.is_some() && cp.body_plan.is_some();
+    let elifs_liftable = cp
+        .else_if
+        .iter()
+        .all(|br| br.body_html.is_some() && br.body_plan.is_some());
+    let else_liftable =
+        !cp.has_else || (cp.else_body_html.is_some() && cp.else_body_plan.is_some());
+    if !(head_liftable && elifs_liftable && else_liftable) {
+        return;
+    }
+
     // First truthy branch among [head, else-if…], else the `pp-else`.
-    let active: Option<(Option<&str>, Option<&StaticTemplatePlan>)> =
-        if !is_falsy(&eval_src(cp.expr_src, state)) {
-            Some((cp.body_html, cp.body_plan))
-        } else {
-            cp.else_if
-                .iter()
-                .find(|br| !is_falsy(&eval_src(br.expr_src, state)))
-                .map(|br| (br.body_html, br.body_plan))
-                .or(if cp.has_else {
-                    Some((cp.else_body_html, cp.else_body_plan))
-                } else {
-                    None
-                })
-        };
+    let active: Option<(&str, &StaticTemplatePlan)> = if !is_falsy(&eval_src(cp.expr_src, state)) {
+        Some((cp.body_html.unwrap(), cp.body_plan.unwrap()))
+    } else {
+        cp.else_if
+            .iter()
+            .find(|br| !is_falsy(&eval_src(br.expr_src, state)))
+            .map(|br| (br.body_html.unwrap(), br.body_plan.unwrap()))
+            .or(if cp.has_else {
+                Some((cp.else_body_html.unwrap(), cp.else_body_plan.unwrap()))
+            } else {
+                None
+            })
+    };
 
     let body_node = match active {
-        Some((Some(html), Some(plan))) => match stamp_fragment(html, plan, state, keep) {
+        Some((html, plan)) => match stamp_fragment(html, plan, state, keep) {
             Some(n) => Some(n),
             None => return,
         },
-        // Active branch fell outside the lift envelope — leave the
-        // authored chain for the client to mount (never mis-render).
-        Some(_) => return,
         // No branch is active: just the anchor, no clone.
         None => None,
     };
 
     let mut new_nodes: Vec<Handle> = Vec::new();
     new_nodes.extend(body_node);
-    new_nodes.push(comment_node("pp:cond"));
+    new_nodes.push(comment_node(&format!("pp:cond:{idx}")));
     replace_template_chain(tpl, cp.consumed_count, new_nodes);
 }
 
 /// `pp-match`: tag-extract the value, render the first matching case
 /// (augmenting state with the `pp-let` payload), `<!--pp:match-->`.
-fn expand_match(tpl: &Handle, mp: &StaticMatchPlan, state: &Value, keep: &mut Vec<RcDom>) {
+fn expand_match(
+    tpl: &Handle,
+    idx: usize,
+    mp: &StaticMatchPlan,
+    state: &Value,
+    keep: &mut Vec<RcDom>,
+) {
     let value = eval_src(mp.expr_src, state);
     let (tag, payload) = extract_tag(&value);
     let active = mp.cases.iter().find(|c| {
@@ -568,13 +596,13 @@ fn expand_match(tpl: &Handle, mp: &StaticMatchPlan, state: &Value, keep: &mut Ve
 
     let mut new_nodes: Vec<Handle> = Vec::new();
     new_nodes.extend(body_node);
-    new_nodes.push(comment_node("pp:match"));
+    new_nodes.push(comment_node(&format!("pp:match:{idx}")));
     replace_template_chain(tpl, 0, new_nodes);
 }
 
 /// `pp-for`: render one body clone per item against state augmented
 /// with `{ item_name, $index, $first, $last }`, then `<!--pp:for-->`.
-fn expand_for(tpl: &Handle, fp: &StaticForPlan, state: &Value, keep: &mut Vec<RcDom>) {
+fn expand_for(tpl: &Handle, idx: usize, fp: &StaticForPlan, state: &Value, keep: &mut Vec<RcDom>) {
     let (html, plan) = match (fp.body_html, fp.body_plan) {
         (Some(h), Some(p)) => (h, p),
         // Row body outside the lift envelope — leave for client mount.
@@ -600,7 +628,7 @@ fn expand_for(tpl: &Handle, fp: &StaticForPlan, state: &Value, keep: &mut Vec<Rc
             new_nodes.push(n);
         }
     }
-    new_nodes.push(comment_node("pp:for"));
+    new_nodes.push(comment_node(&format!("pp:for:{idx}")));
     replace_template_chain(tpl, 0, new_nodes);
 }
 

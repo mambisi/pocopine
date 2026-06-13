@@ -348,6 +348,121 @@ pub fn hydrate_plan(
             install_static_listener(&el, scope_id, proxy, l, template_name);
         }
     }
+    // RFC-099 Phase 3 — claim the structural controllers the server
+    // stamped (pp-if chains so far). Each finds its decision anchor by
+    // label, adopts the server-rendered clone, installs its body
+    // effects, and seeds the controller so its first run is a no-op.
+    for (idx, cp) in plan.if_plans.iter().enumerate() {
+        hydrate_static_if_plan(root, scope_id, proxy, idx, cp, template_name);
+    }
+}
+
+/// Find the `<!--label-->` comment among `parent`'s child nodes (the
+/// decision anchor the SSR stamper emitted, e.g. `pp:cond:0`).
+fn find_comment_anchor(parent: &Element, label: &str) -> Option<web_sys::Node> {
+    let kids = parent.child_nodes();
+    for i in 0..kids.length() {
+        let node = kids.item(i)?;
+        if node.node_type() == web_sys::Node::COMMENT_NODE
+            && node.node_value().as_deref() == Some(label)
+        {
+            return Some(node);
+        }
+    }
+    None
+}
+
+/// RFC-099 Phase 3 — claim a server-stamped `pp-if` chain. The server
+/// rendered `[active-branch-clone]<!--pp:cond:idx-->` (member
+/// `<template>`s dropped). Find the anchor, adopt the clone, install
+/// the active branch body's effects on it, and hand the seeded chain
+/// to [`directives::if_::hydrate_cond`]. If the anchor is absent the
+/// server left the chain unexpanded (an unliftable branch) — fall back
+/// to a normal client mount on the surviving `<template>`.
+fn hydrate_static_if_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    idx: usize,
+    entry: &'static StaticCondPlan,
+    template_name: &str,
+) {
+    let path = entry.template_node_path;
+    if path.is_empty() {
+        return; // scope-root template: SSR left it bare for client mount
+    }
+    let Some(parent) = resolve_node_path(root, &path[..path.len() - 1]) else {
+        return;
+    };
+    let label = format!("pp:cond:{idx}");
+    let Some(anchor) = find_comment_anchor(&parent, &label) else {
+        // Unexpanded chain — the surviving <template> is at `path`.
+        if let Some(tpl_el) = resolve_node_path(root, path) {
+            install_static_if_plan(&tpl_el, scope_id, proxy, entry, template_name);
+        }
+        return;
+    };
+
+    // Branch evaluators (mirrors install_static_if_plan).
+    let Some(head) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
+        fail(
+            "hydrate-if-parse",
+            template_name,
+            path,
+            Some(entry.expr_src),
+        );
+        return;
+    };
+    let mut branches: Vec<(
+        directives::if_::BranchEval,
+        Option<crate::directives::for_plan::IfBodyFn>,
+    )> = Vec::with_capacity(1 + entry.else_if.len());
+    branches.push((head, entry.body));
+    for b in entry.else_if {
+        let Some(eval) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
+            fail(
+                "hydrate-else-if-parse",
+                template_name,
+                path,
+                Some(b.expr_src),
+            );
+            return;
+        };
+        branches.push((eval, b.body));
+    }
+
+    // Active branch — client eval against the same state the server
+    // rendered from, so it matches the adopted clone.
+    let active = branches
+        .iter()
+        .position(|(e, _)| !e(proxy).is_falsy())
+        .or_else(|| entry.has_else.then_some(branches.len()));
+    let adopted = anchor
+        .previous_sibling()
+        .and_then(|n| n.dyn_into::<Element>().ok());
+    let active_body_plan = match active {
+        Some(0) => entry.body_plan,
+        Some(i) if i <= entry.else_if.len() => entry.else_if[i - 1].body_plan,
+        Some(_) => entry.else_body_plan,
+        None => None,
+    };
+    if let (Some(el), Some(bp)) = (adopted.as_ref(), active_body_plan) {
+        // The adopted clone IS the body root; install its bindings /
+        // interps / nested controllers (recursive claim).
+        hydrate_plan(el, scope_id, proxy, bp, template_name);
+    }
+
+    directives::if_::hydrate_cond(
+        anchor,
+        active,
+        adopted,
+        scope_id,
+        proxy.clone(),
+        branches,
+        entry.has_else,
+        entry.else_body,
+        entry.teleport_selector,
+    );
 }
 
 pub fn install_static_binding(

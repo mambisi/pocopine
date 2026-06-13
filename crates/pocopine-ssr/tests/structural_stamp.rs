@@ -32,7 +32,7 @@ fn cond_chain_renders_the_active_branch_with_anchor() {
 
     let big = render_to_string(&SsrCond { count: 10 }).unwrap().body;
     assert!(big.contains(r#"<p class="big">big</p>"#), "head: {big}");
-    assert!(big.contains("<!--pp:cond-->"), "anchor: {big}");
+    assert!(big.contains("<!--pp:cond:0-->"), "anchor: {big}");
     assert!(
         !big.contains("small") && !big.contains("zero"),
         "only one branch: {big}"
@@ -99,7 +99,7 @@ fn match_renders_the_selected_case_with_anchor() {
         pending.contains(r#"<p class="pending">pending</p>"#),
         "tag-list arm: {pending}"
     );
-    assert!(pending.contains("<!--pp:match-->"), "anchor: {pending}");
+    assert!(pending.contains("<!--pp:match:0-->"), "anchor: {pending}");
 
     // pp-let payload bound into the case body's `{{msg}}`.
     let ready = render_to_string(&SsrMatch {
@@ -172,7 +172,7 @@ fn for_renders_one_clone_per_item_with_anchor() {
         body.contains(r#"<li class="row">beta</li>"#),
         "row 1: {body}"
     );
-    assert!(body.contains("<!--pp:for-->"), "anchor: {body}");
+    assert!(body.contains("<!--pp:for:0-->"), "anchor: {body}");
     assert_eq!(
         body.matches(r#"class="row""#).count(),
         2,
@@ -182,7 +182,7 @@ fn for_renders_one_clone_per_item_with_anchor() {
     // Empty list → no rows, just the anchor.
     let empty = render_to_string(&SsrFor { rows: vec![] }).unwrap().body;
     assert!(
-        empty.contains("<!--pp:for-->"),
+        empty.contains("<!--pp:for:0-->"),
         "anchor present when empty: {empty}"
     );
     assert!(
