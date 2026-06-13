@@ -140,6 +140,23 @@ The document itself is served the same way: the window points at
 `pkg/*.wasm`, and CSS from the same router's `static_files` fallback. One
 handler, one router, every request.
 
+### 4.1 Same-origin by construction
+
+Every native request originates from the app's own webview hitting the
+in-process router; there is no network listener and no cross-origin or
+CSRF surface. The bridge makes that explicit by stamping
+`Sec-Fetch-Site: same-origin` on each dispatched request before it reaches
+the router. This is factually accurate for native, and it lets
+server-side origin/CSRF guards written for the web accept native calls
+unchanged — e.g. `pocopine-storage`'s mutation-origin check, which
+otherwise rejects WebKitGTK custom-scheme `fetch`es because they carry
+neither `Origin` nor `Sec-Fetch-Site` ("storage mutation origin could not
+be validated"). Guards that inspect `Origin`/`Referer` specifically may
+need the same treatment extended (synthesizing a matching `Origin`); the
+`Sec-Fetch-Site` stamp covers the common pattern. This is the one place
+the native transport rewrites a request — everything else is passed
+through verbatim.
+
 ## 5. The crates: `pocopine-native` + `pocopine-native-tauri`
 
 The native target is split into a backend-neutral core and a Tauri
