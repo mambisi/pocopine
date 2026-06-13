@@ -30,7 +30,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 // ─── fixtures ───────────────────────────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "pap-home",
     template_inline = r#"<div class="pap-home" data-mounted="yes">home mounted</div>"#
@@ -39,8 +39,6 @@ struct PapHome {}
 
 #[handlers]
 impl PapHome {}
-
-impl pocopine::RouteComponent for PapHome {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(

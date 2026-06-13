@@ -12,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::docs_data;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(template = "BlogPage.poco", style = "blog_page.css", role = "panel")]
 pub struct BlogPage {
     /// Rest param `*slug`, e.g. `pocopine-0-2-0`.
@@ -115,5 +115,3 @@ fn hydrate_videos() {
         }
     }
 }
-
-impl RouteComponent for BlogPage {}

@@ -5490,6 +5490,48 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
     out.into()
 }
 
+/// `#[derive(RouteComponent)]` — opt a component into client routing.
+///
+/// Expands to the empty impl —
+/// `impl ::pocopine::RouteComponent for MyComponent {}` — so the
+/// component satisfies the `App::route::<C>()` bound and inherits the
+/// default (guard-free, loader-free) `RouteConfig`.
+///
+/// Derive when the route needs no route-local configuration. Hand-impl
+/// `RouteComponent` instead when the component overrides `config()` —
+/// guards, loaders, page metadata, prefetch policy:
+///
+/// ```ignore
+/// // No guards/loaders — derive.
+/// #[derive(Default, Serialize, Deserialize, RouteComponent)]
+/// #[component]
+/// pub struct About {}
+///
+/// // Route-local config — hand-impl.
+/// impl RouteComponent for Dashboard {
+///     fn config() -> RouteConfig<Self> {
+///         RouteConfig::new().guard(predicate_guard(members_only))
+///     }
+/// }
+/// ```
+///
+/// A blanket `impl<T: Component> RouteComponent for T` was considered
+/// and rejected: it would conflict with every hand-written `config()`
+/// override and erase the opt-in bound that keeps guarded components
+/// from being mounted unguarded.
+#[proc_macro_derive(RouteComponent)]
+pub fn derive_route_component(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let out = quote! {
+        impl #impl_generics ::pocopine::RouteComponent
+            for #ident #ty_generics #where_clause {}
+    };
+    out.into()
+}
+
 // ── RFC-044 §5.10 — `#[derive(Props)]` ────────────────────────────
 
 /// Generates a `Props` impl for a flatten-container struct.

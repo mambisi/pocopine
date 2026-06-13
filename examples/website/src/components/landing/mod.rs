@@ -6,11 +6,9 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(template = "Landing.poco", style = "landing.css", role = "panel")]
 pub struct Landing {}
 
 #[handlers]
 impl Landing {}
-
-impl RouteComponent for Landing {}

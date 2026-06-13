@@ -28,7 +28,7 @@ struct ObsPluginShell {}
 #[handlers]
 impl ObsPluginShell {}
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "obs-plugin-secret-page",
     template_inline = r#"<section><p pp-text="id"></p></section>"#
@@ -40,8 +40,6 @@ struct ObsPluginSecretPage {
 
 #[handlers]
 impl ObsPluginSecretPage {}
-
-impl RouteComponent for ObsPluginSecretPage {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(

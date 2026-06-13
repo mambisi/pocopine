@@ -25,7 +25,7 @@ pub struct StoryView {
     pub comments_label: String,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(style = "story_list.css")]
 pub struct StoryList {
     pub query: String,
@@ -92,8 +92,6 @@ impl StoryList {
         },);
     }
 }
-
-impl RouteComponent for StoryList {}
 
 fn story_to_view(s: Story) -> StoryView {
     let url = s.url.clone().unwrap_or_default();

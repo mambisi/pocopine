@@ -191,7 +191,7 @@ impl RouteComponent for GuardRedirectSource {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-redirect-target",
     template_inline = r#"<div class="rgl-redirect-target">at target</div>"#
@@ -200,8 +200,6 @@ struct GuardRedirectTarget {}
 
 #[handlers]
 impl GuardRedirectTarget {}
-
-impl RouteComponent for GuardRedirectTarget {}
 
 #[wasm_bindgen_test(async)]
 async fn guard_redirect_navigates_to_target() {
@@ -306,7 +304,7 @@ impl RouteComponent for LoaderUnauthorized {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-loader-login",
     template_inline = r#"<div class="rgl-loader-login">login</div>"#
@@ -315,8 +313,6 @@ struct LoaderLogin {}
 
 #[handlers]
 impl LoaderLogin {}
-
-impl RouteComponent for LoaderLogin {}
 
 #[wasm_bindgen_test(async)]
 async fn loader_unauthorized_dispatches_through_rejection_handler() {
@@ -351,7 +347,7 @@ async fn loader_unauthorized_dispatches_through_rejection_handler() {
 
 // ─── Configurable not-found component ───────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-not-found",
     template_inline = r#"<div class="rgl-not-found">404 surface</div>"#
@@ -361,16 +357,12 @@ struct NotFoundSurface {}
 #[handlers]
 impl NotFoundSurface {}
 
-impl RouteComponent for NotFoundSurface {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(name = "rgl-known-route", template_inline = r#"<div>known</div>"#)]
 struct KnownRoute {}
 
 #[handlers]
 impl KnownRoute {}
-
-impl RouteComponent for KnownRoute {}
 
 #[wasm_bindgen_test(async)]
 async fn not_found_component_mounts_for_unmatched_url() {
@@ -397,7 +389,7 @@ async fn not_found_component_mounts_for_unmatched_url() {
 
 // ─── Configurable route_error_component ─────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-error-surface",
     template_inline = r#"<div class="rgl-error-surface">app error UI</div>"#
@@ -406,8 +398,6 @@ struct CustomErrorSurface {}
 
 #[handlers]
 impl CustomErrorSurface {}
-
-impl RouteComponent for CustomErrorSurface {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(name = "rgl-error-rejected", template_inline = r#"<div>never</div>"#)]
@@ -575,7 +565,7 @@ impl RouteComponent for AbortSlowRoute {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-abort-target",
     template_inline = r#"<div class="rgl-abort-target">target</div>"#
@@ -584,8 +574,6 @@ struct AbortTargetRoute {}
 
 #[handlers]
 impl AbortTargetRoute {}
-
-impl RouteComponent for AbortTargetRoute {}
 
 #[wasm_bindgen_test(async)]
 async fn loader_fetch_signal_aborts_on_navigation_supersession() {

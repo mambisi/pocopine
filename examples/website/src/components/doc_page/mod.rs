@@ -32,7 +32,7 @@ pub struct TocView {
     pub sub: bool,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(template = "DocPage.poco", style = "doc_page.css", role = "panel")]
 pub struct DocPage {
     /// Rest param `*slug`, e.g. `guides/auth/credentials`.
@@ -124,5 +124,3 @@ impl DocPage {
         crate::components::delegate_nav(&ev);
     }
 }
-
-impl RouteComponent for DocPage {}

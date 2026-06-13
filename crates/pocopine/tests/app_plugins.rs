@@ -24,7 +24,7 @@ thread_local! {
     static EVENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "app-plugin-direct-home",
     template_inline = r#"<div class="app-plugin-direct-home">direct</div>"#
@@ -34,9 +34,7 @@ struct AppPluginDirectHome {}
 #[handlers]
 impl AppPluginDirectHome {}
 
-impl RouteComponent for AppPluginDirectHome {}
-
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "app-plugin-macro-home",
     template_inline = r#"<div class="app-plugin-macro-home">macro</div>"#
@@ -45,8 +43,6 @@ struct AppPluginMacroHome {}
 
 #[handlers]
 impl AppPluginMacroHome {}
-
-impl RouteComponent for AppPluginMacroHome {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(
