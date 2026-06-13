@@ -1,0 +1,28 @@
+[package]
+name = "pocopine-native-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Tauri backend for the pocopine native target: webview window + custom-protocol server-function transport (RFC-104)."
+
+[lib]
+# The `tauri` webview backend for `pocopine-native`. `tauri` is an
+# OPTIONAL dependency behind the (default-off) `tauri` feature so a
+# stock `cargo build`/CI of the workspace never links webkit2gtk /
+# libsoup. App `src-tauri` crates enable `features = ["tauri"]`. See
+# RFC-104 §5.1.
+
+[features]
+default = []
+# Pull in the real Tauri webview runtime. Links system webview
+# libraries (webkit2gtk-4.1 on Linux); enable on a desktop host.
+tauri = ["dep:tauri"]
+
+[dependencies]
+pocopine-native = { path = "../pocopine-native" }
+pocopine-server = { workspace = true }
+http = { workspace = true }
+tracing = { workspace = true }
+tauri = { version = "2", optional = true }
