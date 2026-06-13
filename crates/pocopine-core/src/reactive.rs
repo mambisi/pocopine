@@ -291,6 +291,42 @@ pub fn effect_hydrating(f: impl Fn(bool) + 'static) -> EffectId {
     })
 }
 
+thread_local! {
+    /// RFC-099 Phase 2 — set while a hydration claim walk installs
+    /// effects (see [`set_hydrating`]). Read by [`effect_install`] so a
+    /// binding installed during the claim suppresses its FIRST DOM
+    /// write: the server already rendered that value, so the write is
+    /// redundant (the zero-initial-write invariant). Cleared outside
+    /// the claim, so mount installs — and every effect re-run after
+    /// hydration — behave normally.
+    static HYDRATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// True while a hydration claim is installing effects.
+pub fn is_hydrating() -> bool {
+    HYDRATING.with(|h| h.get())
+}
+
+/// Set the hydrating flag, returning the previous value (restore it
+/// when the claim finishes). Internal to the hydrate path.
+pub(crate) fn set_hydrating(v: bool) -> bool {
+    HYDRATING.with(|h| h.replace(v))
+}
+
+/// Install a binding effect that honours the hydration claim: when
+/// installed during a claim ([`is_hydrating`]), the effect's FIRST run
+/// receives `suppressed = true` so the directive reads (to subscribe)
+/// but skips the redundant DOM write — the server already rendered it.
+/// Outside a claim it is a plain [`effect`] with `suppressed = false`,
+/// so the mount path is byte-for-byte unchanged.
+pub fn effect_install(f: impl Fn(bool) + 'static) -> EffectId {
+    if is_hydrating() {
+        effect_hydrating(f)
+    } else {
+        effect(move || f(false))
+    }
+}
+
 // RFC-058 Phase 6.5 — type-erased body. The generic shim above
 // performs the `Rc::new(f)` coercion to `EffectFn` (one
 // monomorphization per call site, but each is just the

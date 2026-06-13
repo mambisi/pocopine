@@ -20,9 +20,10 @@
 use pocopine::flush_sync;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element};
+use web_sys::{window, Element, MutationObserver, MutationObserverInit};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -108,6 +109,80 @@ fn server_render_hydrates_byte_equal_and_stays_reactive() {
         "binding not live after hydrate: {}",
         root.outer_html()
     );
+}
+
+// ─── RFC-099 — zero-initial-write (counter-pinned via MutationObserver)
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-zerowrite",
+    template_inline = r#"<div class="zw"><span class="t" pp-text="title"></span><b :data-n="count"></b><em pp-show="vis">x</em></div>"#
+)]
+struct SsrZeroWrite {
+    title: String,
+    count: f64,
+    vis: bool,
+}
+
+#[handlers]
+impl SsrZeroWrite {}
+
+#[wasm_bindgen_test]
+fn binding_hydration_writes_zero_dom_mutations() {
+    SsrZeroWrite::register();
+    let demo = SsrZeroWrite {
+        title: "Z".into(),
+        count: 5.0,
+        vis: true,
+    };
+    let page = pocopine_ssr::render_to_string(&demo).expect("registered");
+
+    let doc = window().unwrap().document().unwrap();
+    let container = doc.create_element("div").unwrap();
+    container.set_inner_html(&page.body);
+    let root: Element = container.first_element_child().expect("root");
+
+    // Observe every kind of DOM change on the server-rendered subtree.
+    let cb = Closure::<dyn FnMut(js_sys::Array, MutationObserver)>::new(|_, _| {});
+    let obs = MutationObserver::new(cb.as_ref().unchecked_ref()).unwrap();
+    let opts = MutationObserverInit::new();
+    opts.set_child_list(true);
+    opts.set_subtree(true);
+    opts.set_attributes(true);
+    opts.set_character_data(true);
+    obs.observe_with_options(&root, &opts).unwrap();
+
+    // Hydrate (bindings only: pp-text, :bind, pp-show — no interp).
+    let state = serde_json::to_value(&demo).unwrap();
+    let scope_id =
+        pocopine_core::hydrate::hydrate_subtree(&root, SsrZeroWrite::NAME, &state).expect("scope");
+    flush_sync();
+
+    // THE gate: hydration installed every binding without touching the
+    // DOM — `takeRecords()` returns the queued mutations synchronously.
+    let records = obs.take_records();
+    assert_eq!(
+        records.length(),
+        0,
+        "hydration wrote {} DOM mutation(s) (expected zero): {}",
+        records.length(),
+        root.outer_html()
+    );
+
+    // Still reactive: a real change DOES mutate, and shows the new value.
+    pocopine_core::scope::write_field(scope_id, "count", &JsValue::from_f64(6.0));
+    flush_sync();
+    assert!(
+        obs.take_records().length() > 0,
+        "a real post-hydrate change must mutate the DOM"
+    );
+    assert!(
+        root.outer_html().contains("data-n=\"6\""),
+        "binding not live after zero-write hydrate: {}",
+        root.outer_html()
+    );
+    obs.disconnect();
+    drop(cb);
 }
 
 #[wasm_bindgen_test]

@@ -26,7 +26,6 @@ use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::mount::track_effect_on;
-use crate::reactive::effect;
 
 fn normalize_prop_name(name: &str) -> String {
     name.replace('-', "_")
@@ -72,8 +71,14 @@ pub fn install_eval(
     // for plain attrs we serialise to the value we'd write).
     let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-    let id = effect(move || {
+    let id = crate::reactive::effect_install(move |suppressed| {
         let v = evaluator(&parent_proxy_owned);
+        // RFC-099 — hydration claim: subscribed above, the server
+        // already rendered this attribute (and a child host's props are
+        // claimed with the child, not here); skip the write.
+        if suppressed {
+            return;
+        }
         match &child_target {
             Some(child_scope_id) => {
                 let target_field =

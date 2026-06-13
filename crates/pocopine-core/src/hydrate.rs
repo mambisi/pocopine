@@ -75,6 +75,12 @@ pub fn hydrate_subtree(host: &web_sys::Element, tag: &str, state: &Value) -> Opt
         JsValue::UNDEFINED
     };
     crate::mount::bind_scope_to(host, scope.id, &proxy);
+    // RFC-099 — mark the claim so binding installs suppress their first
+    // (redundant) DOM write: the server already rendered every value, so
+    // hydration is O(bindings) with zero initial DOM mutations. Restored
+    // after the walk so post-hydration effect re-runs write normally.
+    let prev_hydrating = crate::reactive::set_hydrating(true);
     crate::templates_plan::hydrate_plan(host, scope.id, &proxy, plan, tag);
+    crate::reactive::set_hydrating(prev_hydrating);
     Some(scope.id)
 }

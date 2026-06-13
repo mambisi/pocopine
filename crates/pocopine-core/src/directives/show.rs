@@ -12,7 +12,6 @@ use web_sys::{Element, HtmlElement};
 
 use super::transition;
 use crate::mount::track_effect_on;
-use crate::reactive::effect;
 
 /// Install a `pp-show` effect on `el` that toggles its `display`
 /// style by the truthiness of `expr`. If the element carries any
@@ -37,8 +36,15 @@ pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue
     // "flash on refresh". Mirrors Alpine's `x-show` + `x-transition`,
     // which never animates the initial render (no implicit `appear`).
     let initial = Cell::new(true);
-    let id = effect(move || {
+    let id = crate::reactive::effect_install(move |suppressed| {
         let truthy = !evaluator(&proxy_owned).is_falsy();
+        // RFC-099 — hydration claim: subscribed above, the server
+        // already rendered the correct display state; skip the write
+        // (leaving `initial` set so the first post-hydrate change
+        // applies display directly, with no enter/leave flash).
+        if suppressed {
+            return;
+        }
         let style = html_el.style();
         let first_run = initial.replace(false);
         if truthy {

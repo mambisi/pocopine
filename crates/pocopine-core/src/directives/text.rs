@@ -8,7 +8,6 @@ use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::mount::track_effect_on;
-use crate::reactive::effect;
 
 /// Install a `pp-text` effect on `el` that writes `expr`'s
 /// stringified value into the element's `textContent` and
@@ -37,12 +36,17 @@ pub fn install_fast(
     let el_owned = el.clone();
     let proxy_owned = proxy.clone();
     let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let id = effect(move || {
+    let id = crate::reactive::effect_install(move |suppressed| {
         let next = match crate::scope::read_field_text(scope_id, key) {
             Some(Some(s)) => s,
             Some(None) => js_to_string(&evaluator(&proxy_owned)),
             None => return,
         };
+        // RFC-099 — hydration claim: the read above subscribed; the
+        // server already rendered this text, so skip the write.
+        if suppressed {
+            return;
+        }
         {
             let p = prev.borrow();
             if p.as_deref() == Some(next.as_str()) {
@@ -60,12 +64,17 @@ pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue
     let el_owned = el.clone();
     let proxy_owned = proxy.clone();
     let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let id = effect(move || {
+    let id = crate::reactive::effect_install(move |suppressed| {
         // RFC-095 — no ambient-element wrap: binding expressions
         // are pure reads (`$el` is gone; calls only resolve in
         // pp-on, which binds its own ambient context).
         let v = evaluator(&proxy_owned);
         let next = js_to_string(&v);
+        // RFC-099 — hydration claim: subscribed above, server already
+        // rendered this text; skip the redundant write.
+        if suppressed {
+            return;
+        }
         {
             let p = prev.borrow();
             if p.as_deref() == Some(next.as_str()) {
