@@ -604,16 +604,39 @@ fn hydrate_static_for_plan(
         }
         return;
     };
-    directives::for_::hydrate_naive(
-        anchor,
-        entry.item_name,
-        entry.items_expr,
-        proxy.clone(),
-        scope_id,
-        entry.stagger_ms,
-        entry.body,
-        entry.body_plan,
-    );
+    match entry.key_expr {
+        // Keyed: claim into run_keyed's pool so reconciliation preserves
+        // row identity. Resolve the RFC-054 row plan by id (the
+        // <template> that carried data-pp-row-plan is gone).
+        Some(key) if !key.trim().is_empty() => {
+            let row_plan = entry
+                .row_plan_id
+                .and_then(|id| directives::for_plan::lookup_row_plan_by_id(template_name, id));
+            directives::for_::hydrate_keyed(
+                anchor,
+                entry.item_name,
+                entry.items_expr,
+                key,
+                proxy.clone(),
+                scope_id,
+                entry.stagger_ms,
+                entry.body,
+                entry.body_plan,
+                entry.body_html.unwrap_or(""),
+                row_plan,
+            );
+        }
+        _ => directives::for_::hydrate_naive(
+            anchor,
+            entry.item_name,
+            entry.items_expr,
+            proxy.clone(),
+            scope_id,
+            entry.stagger_ms,
+            entry.body,
+            entry.body_plan,
+        ),
+    }
 }
 
 pub fn install_static_binding(

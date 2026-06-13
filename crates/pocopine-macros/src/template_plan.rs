@@ -392,6 +392,12 @@ struct IfBodyEmission {
     ident: syn::Ident,
     html: String,
     plan: AnalysisCtx,
+    /// RFC-099 Phase 3 — emit the create-path body `fn`? `false` for a
+    /// KEYED `pp-for` row whose RFC-054 row-plan owns the client create
+    /// path: we still emit the `_HTML` / `_PLAN` consts (so the SSR
+    /// stamper + claim can read the row as data) but skip the unused
+    /// create closure to keep it out of the wasm bundle.
+    emit_fn: bool,
 }
 
 /// RFC-094 Phase 3 — one `pp-match` site.
@@ -443,6 +449,16 @@ struct ForPlanLite {
     /// same site. The macro emits a body fragment fn the
     /// `StaticForPlan.body` literal references.
     body_fn_ident: Option<syn::Ident>,
+    /// RFC-099 Phase 3 — `Some` when the row body lifted (whether or
+    /// not a row-plan claimed the create path); supplies the
+    /// `StaticForPlan.body_plan` / `body_html` data the SSR stamper +
+    /// claim read. Equals `body_fn_ident` for unkeyed rows; for keyed
+    /// rows `body_fn_ident` is `None` but this is `Some`.
+    body_data_ident: Option<syn::Ident>,
+    /// RFC-099 Phase 3 — the assigned RFC-054 row-plan id, so the
+    /// claim path can resolve the `CompiledRowPlan` without the
+    /// (now-gone) `<template>`'s `data-pp-row-plan` attribute.
+    row_plan_id: Option<u32>,
 }
 
 struct TeleportPlanLite {
@@ -912,27 +928,38 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
                 // empty-plan case in RFC 062.
                 quote! {}
             });
+        // The create-path body fn — skipped for a keyed `pp-for` row
+        // whose RFC-054 row-plan owns the create path (the consts still
+        // ship as the SSR/claim data source). `emit_fn = false` keeps
+        // this unused closure out of the wasm bundle.
+        let body_fn = if emission.emit_fn {
+            quote! {
+                fn #ident(
+                    scope_id: ::pocopine::ScopeId,
+                    proxy: &::pocopine::__private::JsValue,
+                    ctx_parent_id: ::pocopine::ScopeId,
+                ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
+                    ::pocopine::__private::stamp_if_body_with(
+                        #html_const,
+                        scope_id,
+                        proxy,
+                        ctx_parent_id,
+                        |root, scope_id, proxy| {
+                            let _ = root;
+                            let _ = scope_id;
+                            let _ = proxy;
+                            #install_pass
+                        },
+                    )
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             const #html_const: &'static str = #html_lit;
             const #plan_const: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
-            fn #ident(
-                scope_id: ::pocopine::ScopeId,
-                proxy: &::pocopine::__private::JsValue,
-                ctx_parent_id: ::pocopine::ScopeId,
-            ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
-                ::pocopine::__private::stamp_if_body_with(
-                    #html_const,
-                    scope_id,
-                    proxy,
-                    ctx_parent_id,
-                    |root, scope_id, proxy| {
-                        let _ = root;
-                        let _ = scope_id;
-                        let _ = proxy;
-                        #install_pass
-                    },
-                )
-            }
+            #body_fn
         }
     });
     quote! { #(#items)* }
@@ -1521,7 +1548,17 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
         Some(ident) => quote! { ::core::option::Option::Some(#ident) },
         None => quote! { ::core::option::Option::None },
     };
-    let (body_plan_tokens, body_html_tokens) = body_data_tokens(&fp.body_fn_ident);
+    // RFC-099 Phase 3 — body_plan/body_html come from body_data_ident
+    // (Some for keyed rows even though body_fn_ident is None), so keyed
+    // lists server-render and the claim can read the row body.
+    let (body_plan_tokens, body_html_tokens) = body_data_tokens(&fp.body_data_ident);
+    let row_plan_id_tokens = match fp.row_plan_id {
+        Some(id) => {
+            let id = proc_macro2::Literal::u32_unsuffixed(id);
+            quote! { ::core::option::Option::Some(#id) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
     quote! {
         ::pocopine::__private::StaticForPlan {
             template_node_path: #path,
@@ -1532,6 +1569,7 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
             body: #body_tokens,
             body_plan: #body_plan_tokens,
             body_html: #body_html_tokens,
+            row_plan_id: #row_plan_id_tokens,
         }
     }
 }
@@ -1748,21 +1786,36 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 // `record_plan_failure` at install time and
                 // renders the subtree empty.
                 let mut bodies_need_proxy = false;
+                // RFC-099 Phase 3 — lift the row body to DATA whether or
+                // not a row-plan claims the site, so KEYED lists still
+                // server-render (their `body_fn` stays `None`, but the
+                // SSR stamper + claim read `body_plan` / `body_html`).
+                // `emit_fn` is false for the row-plan case so the unused
+                // create closure stays out of the wasm bundle; the
+                // create path there is the RFC-054 row-plan fast path.
+                // Only NON-row-plan bodies feed `bodies_need_proxy` /
+                // ref-forwarding, preserving the row-plan proxy-elision
+                // contract.
+                let body_data_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                    if !row_plan_claims_site {
+                        ctx.absorb_lifted_refs(&body_ctx);
+                        bodies_need_proxy |= plan_needs_proxy(&body_ctx);
+                    }
+                    let ident = emissions.alloc_if_body_ident("for_body");
+                    emissions.if_bodies.push(IfBodyEmission {
+                        ident: ident.clone(),
+                        html,
+                        plan: body_ctx,
+                        emit_fn: !row_plan_claims_site,
+                    });
+                    ident
+                });
                 let body_fn_ident = if row_plan_claims_site {
                     None
                 } else {
-                    analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
-                        ctx.absorb_lifted_refs(&body_ctx);
-                        bodies_need_proxy |= plan_needs_proxy(&body_ctx);
-                        let ident = emissions.alloc_if_body_ident("for_body");
-                        emissions.if_bodies.push(IfBodyEmission {
-                            ident: ident.clone(),
-                            html,
-                            plan: body_ctx,
-                        });
-                        ident
-                    })
+                    body_data_ident.clone()
                 };
+                let row_plan_id = ctx.row_plan_id(path);
                 ctx.for_plans.push(ForPlanLite {
                     template_node_path: path.clone(),
                     item_name,
@@ -1771,6 +1824,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     stagger_ms,
                     bodies_need_proxy,
                     body_fn_ident,
+                    body_data_ident,
+                    row_plan_id,
                 });
                 ctx.stripped.push(StrippedAttr {
                     node_path: path.clone(),
@@ -1824,6 +1879,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     ident: ident.clone(),
                     html,
                     plan: body_ctx,
+                    emit_fn: true,
                 });
                 ident
             });
@@ -1978,6 +2034,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                                 ident: ident.clone(),
                                 html,
                                 plan: body_ctx,
+                                emit_fn: true,
                             });
                             ident
                         });
@@ -2057,6 +2114,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     ident: ident.clone(),
                     html,
                     plan: body_ctx,
+                    emit_fn: true,
                 });
                 ident
             });
@@ -2443,6 +2501,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                                         ident: ident.clone(),
                                         html,
                                         plan: body_ctx,
+                                        emit_fn: true,
                                     });
                                     ident
                                 });

@@ -403,3 +403,105 @@ fn server_render_hydrates_pp_for_byte_equal_and_stays_reactive() {
         "old rows remain: {html}"
     );
 }
+
+// ─── RFC-099 Phase 3 — structural claim (KEYED pp-for) ──────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "ssr-for-keyed-demo",
+    template_inline = r#"<ul class="root">
+        <template pp-for="item in items" pp-key="item.id"><li class="krow" pp-text="item.label"></li></template>
+    </ul>"#
+)]
+struct SsrForKeyedDemo {
+    items: Vec<ForItem>,
+}
+
+#[handlers]
+impl SsrForKeyedDemo {}
+
+#[wasm_bindgen_test]
+fn server_render_hydrates_keyed_pp_for_byte_equal_and_preserves_identity() {
+    SsrForKeyedDemo::register();
+    let demo = SsrForKeyedDemo {
+        items: vec![
+            ForItem {
+                id: 1,
+                label: "alpha".into(),
+            },
+            ForItem {
+                id: 2,
+                label: "beta".into(),
+            },
+        ],
+    };
+
+    // 1. Server render — keyed rows DO server-render now (the macro
+    //    emits the row body as data even though the RFC-054 row-plan
+    //    owns the client create path).
+    let page = pocopine_ssr::render_to_string(&demo).expect("registered");
+    assert!(
+        page.body.contains(r#"<li class="krow">alpha</li>"#)
+            && page.body.contains(r#"<li class="krow">beta</li>"#),
+        "server stamped keyed rows: {}",
+        page.body
+    );
+    assert!(
+        page.body.contains("<!--pp:for:0-->"),
+        "anchor: {}",
+        page.body
+    );
+
+    // 2. Into the DOM + hydrate (claim into run_keyed's pool).
+    let doc = window().unwrap().document().unwrap();
+    let container = doc.create_element("div").unwrap();
+    container.set_inner_html(&page.body);
+    let root: Element = container.first_element_child().expect("root");
+    let before = root.outer_html();
+    let state = serde_json::to_value(&demo).unwrap();
+    let scope_id = pocopine_core::hydrate::hydrate_subtree(&root, SsrForKeyedDemo::NAME, &state)
+        .expect("scope");
+    flush_sync();
+    assert_eq!(
+        before,
+        root.outer_html(),
+        "keyed pp-for hydration mutated the DOM (claim not byte-equal)"
+    );
+
+    // 3. KEYED IDENTITY: mark the adopted "alpha" row (key 1), then
+    //    reorder. Keyed reconciliation must REUSE that exact DOM node
+    //    (move it), not rebuild — the whole point of pp-key.
+    let alpha = root.query_selector(".krow").unwrap().unwrap();
+    assert_eq!(alpha.text_content().unwrap(), "alpha");
+    alpha.set_attribute("data-mark", "x").unwrap();
+
+    let reordered = js_sys::Array::new();
+    for_item(&reordered, 2, "beta");
+    for_item(&reordered, 1, "alpha");
+    pocopine_core::scope::write_field(scope_id, "items", &reordered);
+    flush_sync();
+
+    // The marked node survived the reorder (same element, reused by key)
+    // and is now the SECOND row.
+    let marked = root
+        .query_selector("[data-mark]")
+        .unwrap()
+        .expect("keyed row reused across reorder (identity preserved)");
+    assert_eq!(
+        marked.text_content().unwrap(),
+        "alpha",
+        "marked row is still alpha"
+    );
+    let rows = root.query_selector_all(".krow").unwrap();
+    assert_eq!(rows.length(), 2, "two rows after reorder");
+    let first: Element = rows.item(0).unwrap().dyn_into().unwrap();
+    assert_eq!(
+        first.text_content().unwrap(),
+        "beta",
+        "first row is beta after reorder"
+    );
+    assert!(
+        marked.is_same_node(Some(&rows.item(1).unwrap())),
+        "marked alpha row moved to second position (not rebuilt)"
+    );
+}

@@ -459,9 +459,19 @@ pub struct StaticForPlan {
     /// RFC-099 Phase 3 — row body as DATA (see
     /// [`StaticCondPlan::body_plan`]). The SSR stamper renders one
     /// clone of `body_plan` per item, against the state augmented
-    /// with `{ item_name: item, $index, $first, $last }`.
+    /// with `{ item_name: item, $index, $first, $last }`. Emitted for
+    /// KEYED rows too (where `body` is `None` because the RFC-054
+    /// row-plan owns the client create path) so keyed lists still
+    /// server-render.
     pub body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
     pub body_html: Option<&'static str>,
+    /// RFC-099 Phase 3 — the RFC-054 row-plan id for this `pp-for`
+    /// site (the `data-pp-row-plan="<id>"` the macro stamped on the
+    /// `<template>`), when one was assigned. The hydrate (claim) path
+    /// needs it to resolve the `CompiledRowPlan` from the registry by
+    /// `(component, id)` — the `<template>` it would otherwise read
+    /// the attribute from is gone from the server output.
+    pub row_plan_id: Option<u32>,
 }
 
 /// Macro-emitted constructor for a `pp-for` row body. Called
@@ -996,6 +1006,18 @@ pub fn lookup_for_template(template_el: &Element) -> Option<Rc<CompiledRowPlan>>
         .and_then(|s| s.parse::<u32>().ok())?;
     let component_name = nearest_component_name(template_el)?;
     ROW_PLANS.with(|r| r.borrow().get(&(component_name, plan_id)).cloned())
+}
+
+/// RFC-099 Phase 3 — resolve a row plan by `(component, plan_id)`
+/// directly, without a `<template>` to read `data-pp-row-plan` from.
+/// The hydrate (claim) path uses this because the server replaced the
+/// `<template>` with the rendered rows + a comment anchor.
+pub fn lookup_row_plan_by_id(component_name: &str, plan_id: u32) -> Option<Rc<CompiledRowPlan>> {
+    ROW_PLANS.with(|r| {
+        r.borrow()
+            .get(&(component_name.to_string(), plan_id))
+            .cloned()
+    })
 }
 
 /// Fetch (or lazy-mint) the row's `js_sys::Proxy`. Compiled-row
