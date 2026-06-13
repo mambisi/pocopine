@@ -1,0 +1,7 @@
+<root class="pine-app-shell"
+      pp-ref="shell"
+      :data-breakpoint="breakpoint"
+      :data-nav-mode="nav_mode"
+      :data-nav-open="nav_open">
+  <slot></slot>
+</root>

@@ -1,0 +1,10 @@
+<root class="pine-app-shell-sidebar"
+      pp-ref="sidebar"
+      role="navigation"
+      :id="nav_id"
+      :aria-label="label"
+      :data-nav-mode="nav_mode"
+      :data-state="nav_open ? 'open' : 'closed'"
+      @keydown.escape="close_nav">
+  <slot></slot>
+</root>

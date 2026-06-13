@@ -1,0 +1,8 @@
+<root class="pine-app-shell-trigger"
+      type="button"
+      :data-nav-mode="nav_mode"
+      :aria-expanded="nav_open ? 'true' : 'false'"
+      :aria-controls="nav_id"
+      @click="toggle">
+  <slot></slot>
+</root>

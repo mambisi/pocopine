@@ -1,0 +1,3 @@
+<root class="pine-app-shell-content" role="main">
+  <slot></slot>
+</root>

@@ -1,0 +1,5 @@
+<root class="pine-container"
+      :data-size="size"
+      :data-safe-area="safe_area">
+  <slot></slot>
+</root>
