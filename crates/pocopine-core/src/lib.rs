@@ -32,6 +32,10 @@ pub mod fingerprint;
 pub mod focus;
 pub mod handle;
 pub mod handler;
+/// RFC-099 Phase 1b — host-side expression evaluator over
+/// `serde_json::Value` (the SSR render backend), parity-gated against
+/// the wasm `JsValue` evaluator.
+pub mod host_eval;
 /// RFC-099 Phase 1 — JS-identical number formatting, shared by the
 /// wasm client and the SSR host renderer.
 pub mod js_number;
