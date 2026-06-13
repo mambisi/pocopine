@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use js_sys::{Object, Reflect};
+use smallvec::SmallVec;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -1011,6 +1012,14 @@ fn nearest_component_name(el: &Element) -> Option<String> {
 /// `trigger_scope`, so update cycles skip the entire reactive
 /// dispatch + Reflect::get tracking machinery and just walk a
 /// flat array of cached values.
+/// RFC-101 P1 — the per-row binding cache, inline for the common small
+/// row (≤4 bindings) so it costs zero heap blocks; spills to the heap
+/// only for wide rows. jsbench rows have 3 bindings.
+type BindingCache = SmallVec<[Option<Rc<str>>; 4]>;
+/// RFC-101 P1 — per-row delegated listener routes, inline for ≤2
+/// listeners (jsbench rows have 2: select + remove).
+type ListenerRoutes = SmallVec<[RowListenerRoute; 2]>;
+
 struct RowInstance {
     plan: Rc<CompiledRowPlan>,
     /// Element handles resolved from `plan.bindings[i].node_path`
@@ -1020,7 +1029,7 @@ struct RowInstance {
     /// the slot is currently absent / not-yet-written. Compared
     /// against the new evaluation each tick to skip DOM writes
     /// when nothing changed.
-    binding_cache: Vec<Option<Rc<str>>>,
+    binding_cache: BindingCache,
     /// `js_sys::Proxy` for the row scope. Lazy-minted: when the
     /// plan is FastExpr-only (see [`is_proxy_elision_eligible`]),
     /// this stays `None` through mount and is built on first
@@ -1034,7 +1043,7 @@ struct RowInstance {
     loop_state: Option<Rc<RefCell<LoopScope>>>,
     /// Per-row listener routes used by the list-level delegated
     /// listener installed for compiled row plans.
-    listener_routes: Box<[RowListenerRoute]>,
+    listener_routes: ListenerRoutes,
     /// `(parent_scope_id, plan_ptr)` membership key for the
     /// list-level parent-state watcher (see [`ListWatcherKey`]).
     /// Lets the watcher iterate exactly its rows on re-fire and
@@ -1181,7 +1190,7 @@ pub(crate) fn mount_rows_compiled(
     crate::profiler::mount::record_node_path_resolution(node_path_start);
 
     let binding_start = crate::profiler::mount::start();
-    let mut binding_caches: Vec<Vec<Option<Rc<str>>>> = Vec::with_capacity(rows.len());
+    let mut binding_caches: Vec<BindingCache> = Vec::with_capacity(rows.len());
     let mut loop_states: Vec<Option<Rc<RefCell<LoopScope>>>> = Vec::with_capacity(rows.len());
     let mut parent_links: Vec<Option<ScopeId>> = Vec::with_capacity(rows.len());
     for ((_, scope_id, proxy), binding_nodes) in rows.iter().zip(resolved_binding_nodes.iter()) {
@@ -1189,7 +1198,7 @@ pub(crate) fn mount_rows_compiled(
         let parent_link = loop_state
             .as_ref()
             .map(|state| state.borrow().parent_scope_id);
-        let mut binding_cache: Vec<Option<Rc<str>>> = vec![None; plan.bindings.len()];
+        let mut binding_cache: BindingCache = SmallVec::from_elem(None, plan.bindings.len());
         {
             let loop_borrow = loop_state.as_ref().map(|state| state.borrow());
             let loop_ref = loop_borrow.as_deref();
@@ -1210,7 +1219,7 @@ pub(crate) fn mount_rows_compiled(
     crate::profiler::mount::record_initial_binding_apply(binding_start);
 
     let listener_start = crate::profiler::mount::start();
-    let mut listener_routes: Vec<Box<[RowListenerRoute]>> = Vec::with_capacity(rows.len());
+    let mut listener_routes: Vec<ListenerRoutes> = Vec::with_capacity(rows.len());
     for (row_root, _, _) in rows {
         listener_routes.push(resolve_listener_routes(plan, row_root));
         crate::profiler::mount::record_compiled_row_mounted();
@@ -1561,8 +1570,8 @@ fn apply_binding(
     }
 }
 
-fn resolve_listener_routes(plan: &CompiledRowPlan, row_root: &Element) -> Box<[RowListenerRoute]> {
-    let mut routes: Vec<RowListenerRoute> = Vec::with_capacity(plan.listeners.len());
+fn resolve_listener_routes(plan: &CompiledRowPlan, row_root: &Element) -> ListenerRoutes {
+    let mut routes: ListenerRoutes = SmallVec::with_capacity(plan.listeners.len());
     for listener in &plan.listeners {
         let Some(node) = resolve_node_path(row_root, listener.node_path) else {
             console::warn_1(&JsValue::from_str(&format!(
@@ -1577,7 +1586,7 @@ fn resolve_listener_routes(plan: &CompiledRowPlan, row_root: &Element) -> Box<[R
             ast: listener.ast.clone(),
         });
     }
-    routes.into_boxed_slice()
+    routes
 }
 
 // ─── RFC-095 W4 — mutation-channel bridge ───────────────────────
@@ -1759,7 +1768,7 @@ pub(crate) fn register_channel_rows(
     ROW_INSTANCES.with(|m| {
         let mut map = m.borrow_mut();
         for row in rows {
-            let listener_routes: Box<[RowListenerRoute]> = plan
+            let listener_routes: ListenerRoutes = plan
                 .listeners
                 .iter()
                 .zip(row.listener_nodes)
@@ -1776,7 +1785,7 @@ pub(crate) fn register_channel_rows(
                 RowInstance {
                     plan: plan.clone(),
                     binding_nodes: row.binding_nodes,
-                    binding_cache: vec![None; plan.bindings.len()],
+                    binding_cache: SmallVec::from_elem(None, plan.bindings.len()),
                     proxy: RefCell::new(None),
                     loop_state: Some(row.loop_state),
                     listener_routes,
