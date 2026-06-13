@@ -9445,6 +9445,7 @@ dependencies = [
  "pocopine-crypto",
  "pocopine-logging",
  "pocopine-server",
+ "pocopine-ssr",
  "pulldown-cmark",
  "quote",
  "serde",

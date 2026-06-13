@@ -55,6 +55,16 @@ pub fn hydrate_subtree(host: &web_sys::Element, tag: &str, state: &Value) -> Opt
     let scope = crate::registry::instantiate(tag)?;
     let plan = crate::templates_plan::template_plan_for(tag)?;
 
+    // Record the inject-chain parent (RFC-027) before setup runs, so
+    // `inject` inside `on_setup` resolves — mirrors `mount_component`.
+    // Uses the SAME resolver as mount: an explicit `CTX_PARENT_KEY` stamp
+    // else the nearest enclosing scope's `SCOPE_ID_KEY` via DOM ancestry
+    // (`inherited_ctx_parent_of` only sees `CTX_PARENT_KEY`, so it missed
+    // a plain `bind_scope_to`'d parent like the app shell).
+    if let Some(parent_id) = crate::mount::resolve_ctx_parent(host) {
+        crate::context::set_parent(scope.id, parent_id);
+    }
+
     // Load the server state into the fresh scope so every binding
     // re-evaluates to the value the server already rendered. A
     // JSON-compatible serializer keeps object fields as JS objects (not
@@ -67,6 +77,27 @@ pub fn hydrate_subtree(host: &web_sys::Element, tag: &str, state: &Value) -> Opt
                 st.set(k, js);
             }
         }
+    }
+
+    // RFC-099 — fire `on_setup` on the client during hydration. Its
+    // STATE mutations re-derive what the server rendered (idempotent),
+    // but crucially its client-runtime effects — `provide()` of injected
+    // context, effect setup — MUST run for the claimed tree to be live
+    // (descendants `inject()` it). Runs with the scope bound as current
+    // so `inject`/`this`/`provide` resolve.
+    if scope.state.borrow().has_setup() {
+        let setup_ctx = crate::lifecycle::LifecycleContext::__new(
+            host,
+            scope.id,
+            crate::lifecycle::LifecyclePhase::Setup,
+        );
+        crate::scope::with_current_scope_id(scope.id, || {
+            crate::model_runtime::with_scope_write(
+                scope.id,
+                crate::model_runtime::WriteOrigin::SetupSeed,
+                || scope.state.borrow_mut().setup(setup_ctx),
+            );
+        });
     }
 
     let proxy = if plan.needs_proxy {
@@ -82,5 +113,11 @@ pub fn hydrate_subtree(host: &web_sys::Element, tag: &str, state: &Value) -> Opt
     let prev_hydrating = crate::reactive::set_hydrating(true);
     crate::templates_plan::hydrate_plan(host, scope.id, &proxy, plan, tag);
     crate::reactive::set_hydrating(prev_hydrating);
+
+    // RFC-099 — fire `on_mount` / `on_ready` (client-only lifecycle) over
+    // the claimed subtree, same as a fresh mount's post-order finalize.
+    // Children claimed recursively already finalized themselves; the
+    // walked-marker keeps this from double-firing them.
+    crate::mount::finalize_compiled_subtree(host);
     Some(scope.id)
 }
