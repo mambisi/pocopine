@@ -4294,6 +4294,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "layout-demo"
+version = "0.1.1"
+dependencies = [
+ "pine-layout",
+ "pine-motion",
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
