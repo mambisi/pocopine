@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use http::{Request, Response};
+use http::{HeaderName, HeaderValue, Request, Response};
 use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::Router;
 use pocopine_server::tower::ServiceExt;
@@ -63,8 +63,21 @@ pub fn build_router(
 /// [`std::convert::Infallible`], so this never fails at the routing
 /// layer; transport-level failures surface as HTTP status codes from
 /// the handlers themselves.
+///
+/// Before dispatching, the request is stamped `Sec-Fetch-Site:
+/// same-origin`. A native request always originates from the app's own
+/// webview hitting the in-process router — there is no network or
+/// cross-origin surface — so this is factually accurate, and it lets
+/// server-side CSRF/origin guards written for the web (e.g.
+/// `pocopine-storage`'s mutation-origin check) accept native calls.
+/// WebKitGTK custom-scheme requests carry neither `Origin` nor
+/// `Sec-Fetch-Site`, which those guards otherwise reject.
 pub async fn dispatch(router: Router, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
+    parts.headers.insert(
+        HeaderName::from_static("sec-fetch-site"),
+        HeaderValue::from_static("same-origin"),
+    );
     let req = Request::from_parts(parts, Body::from(body));
 
     // `Router<()>: Service<Request<Body>, Error = Infallible>`.
@@ -125,6 +138,31 @@ mod tests {
         let res = dispatch(router, req).await;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.body().as_slice(), br#"[1,2,3]"#);
+    }
+
+    #[tokio::test]
+    async fn dispatch_stamps_same_origin_for_csrf_guards() {
+        // Mirrors pocopine-storage's mutation guard: a request is rejected
+        // unless it looks same-origin. WebKitGTK custom-scheme fetches send
+        // no Sec-Fetch-Site/Origin, so the bridge must stamp same-origin.
+        let router = Router::new().route(
+            "/_pocopine/mutate",
+            pocopine_server::axum::routing::post(|headers: http::HeaderMap| async move {
+                match headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+                    Some("same-origin") => (StatusCode::OK, "ok"),
+                    _ => (StatusCode::FORBIDDEN, "origin could not be validated"),
+                }
+            }),
+        );
+        // Built without any Sec-Fetch-Site header, like the webview sends.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/_pocopine/mutate")
+            .body(Vec::new())
+            .unwrap();
+        let res = dispatch(router, req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.body().as_slice(), b"ok");
     }
 
     #[tokio::test]
