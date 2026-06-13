@@ -275,6 +275,18 @@ pub struct Scope {
 /// this table (old code called `.forget()` and leaked forever).
 type AnyClosures = Vec<Box<dyn Any>>;
 
+/// One projection slot per field signal — the RFC-096 S3 versioned
+/// projection store, co-located so a read/store/invalidate touches one
+/// map instead of two parallel ones keyed on the same `SignalId`.
+/// `version` bumps on invalidate/confirm; `cached` holds the marshalled
+/// value with the stamp it was stored at, and is live for a read iff
+/// `stamp == version`.
+#[derive(Default)]
+struct ProjectionSlot {
+    version: u32,
+    cached: Option<(u32, JsValue)>,
+}
+
 thread_local! {
     /// Registry of live scopes keyed by id. Directives look up the scope
     /// here to invoke handlers when an event fires.
@@ -307,16 +319,17 @@ thread_local! {
     /// which fields it touched). Fields the handler explicitly
     /// kept fresh via `patch_list_at_inline` are recorded in
     /// the PATCHED set and survive invalidation by version re-stamp.
-    /// RFC-096 S3 — versioned projections ON the field signal:
-    /// `PROJECTIONS[sid] = (version, JsValue)` is valid iff its
-    /// version equals `VERSIONS[sid]` (default 0). Invalidation
-    /// is a version bump; the old FIELD_CACHE map-removal dance
-    /// and the FRESH_FIELDS survive-the-blanket set are both
-    /// subsumed (PATCHED marks a projection the `patch_*` APIs
-    /// kept correct through a mutation — the sweep re-stamps it
-    /// to the new version instead of dropping it).
-    static VERSIONS: RefCell<HashMap<SignalId, u32>> = RefCell::new(HashMap::new());
-    static PROJECTIONS: RefCell<HashMap<SignalId, (u32, JsValue)>> =
+    /// RFC-096 S3 — versioned projections ON the field signal, now
+    /// in one [`ProjectionSlot`] per signal (was two parallel maps,
+    /// `VERSIONS` + `PROJECTIONS`, keyed on the same `SignalId`). A
+    /// slot's `cached` value is valid iff its stamp equals the slot's
+    /// current `version` (default 0). Invalidation is a version bump
+    /// that clears `cached`; the old FIELD_CACHE map-removal dance and
+    /// the FRESH_FIELDS survive-the-blanket set are both subsumed
+    /// (PATCHED marks a projection the `patch_*` APIs kept correct
+    /// through a mutation — the sweep re-stamps it to the new version
+    /// instead of dropping it).
+    static PROJECTIONS: RefCell<HashMap<SignalId, ProjectionSlot>> =
         RefCell::new(HashMap::new());
     static PATCHED: RefCell<HashMap<ScopeId, std::collections::HashSet<SignalId>>> =
         RefCell::new(HashMap::new());
@@ -568,30 +581,34 @@ pub(crate) fn read_field_text(scope_id: ScopeId, key: &str) -> Option<Option<Str
 /// at build time; a version bump is the invalidation.
 fn projection_read(scope_id: ScopeId, field: &str) -> Option<JsValue> {
     let sid = crate::reactive::ensure_field_signal(scope_id, field);
-    let ver = VERSIONS.with(|v| v.borrow().get(&sid).copied().unwrap_or(0));
+    // One map lookup (was two): the cached value is live iff its stamp
+    // still equals the slot's current version.
     PROJECTIONS.with(|p| {
-        p.borrow()
-            .get(&sid)
-            .filter(|(stamp, _)| *stamp == ver)
-            .map(|(_, js)| js.clone())
+        p.borrow().get(&sid).and_then(|slot| {
+            slot.cached
+                .as_ref()
+                .filter(|(stamp, _)| *stamp == slot.version)
+                .map(|(_, js)| js.clone())
+        })
     })
 }
 
 fn projection_store(scope_id: ScopeId, field: &str, js: JsValue) {
     let sid = crate::reactive::ensure_field_signal(scope_id, field);
-    let ver = VERSIONS.with(|v| v.borrow().get(&sid).copied().unwrap_or(0));
     PROJECTIONS.with(|p| {
-        p.borrow_mut().insert(sid, (ver, js));
+        let mut p = p.borrow_mut();
+        let slot = p.entry(sid).or_default();
+        let ver = slot.version;
+        slot.cached = Some((ver, js));
     });
 }
 
 fn projection_invalidate(sid: SignalId) {
-    VERSIONS.with(|v| {
-        let mut v = v.borrow_mut();
-        *v.entry(sid).or_insert(0) += 1;
-    });
     PROJECTIONS.with(|p| {
-        p.borrow_mut().remove(&sid);
+        let mut p = p.borrow_mut();
+        let slot = p.entry(sid).or_default();
+        slot.version += 1;
+        slot.cached = None;
     });
 }
 
@@ -599,15 +616,13 @@ fn projection_invalidate(sid: SignalId) {
 /// mutation: bump the version AND re-stamp the (already correct)
 /// projection so it survives, instead of dropping it.
 fn projection_confirm_patched(sid: SignalId) {
-    let ver = VERSIONS.with(|v| {
-        let mut v = v.borrow_mut();
-        let e = v.entry(sid).or_insert(0);
-        *e += 1;
-        *e
-    });
     PROJECTIONS.with(|p| {
-        if let Some(entry) = p.borrow_mut().get_mut(&sid) {
-            entry.0 = ver;
+        let mut p = p.borrow_mut();
+        let slot = p.entry(sid).or_default();
+        slot.version += 1;
+        let ver = slot.version;
+        if let Some((stamp, _)) = slot.cached.as_mut() {
+            *stamp = ver;
         }
     });
 }
@@ -628,12 +643,7 @@ pub fn serde_projection_count() -> u64 {
 /// ids. Called from `reactive::clear_scope(s)` alongside the
 /// dependency teardown.
 pub(crate) fn purge_field_storage(sids: &[SignalId]) {
-    VERSIONS.with(|v| {
-        let mut v = v.borrow_mut();
-        for sid in sids {
-            v.remove(sid);
-        }
-    });
+    // One map to purge (was VERSIONS + PROJECTIONS).
     PROJECTIONS.with(|p| {
         let mut p = p.borrow_mut();
         for sid in sids {
