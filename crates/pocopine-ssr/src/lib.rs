@@ -42,7 +42,9 @@ use html5ever::{
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use pocopine_core::directives::for_plan::{BindingKind, StaticBinding, StaticInterp};
 use pocopine_core::directives::interp::PlannedSegment;
-use pocopine_core::{expr, host_eval, js_number};
+use pocopine_core::templates::template_for;
+use pocopine_core::templates_plan::template_plan_for;
+use pocopine_core::{expr, host_eval, js_number, Component};
 use serde_json::Value;
 
 /// Stamp one component's `bindings` + `interps` into its `cleaned_html`,
@@ -80,6 +82,77 @@ pub fn stamp(
     let out = serialize_node(&root);
     drop(keep); // tree must outlive the serialize above
     out
+}
+
+/// A server-rendered component: the stamped HTML plus the serialized
+/// state the client deserializes during hydration (Phase 2c).
+pub struct RenderedPage {
+    /// Rendered HTML for the component subtree.
+    pub body: String,
+    /// Component state as JSON, already **script-safe**: every `<` is
+    /// escaped to the JSON unicode escape `<` so the payload
+    /// cannot break out of the `<script>` tag or open an HTML comment
+    /// (still valid JSON — `<` parses back to `<`).
+    pub state: String,
+}
+
+impl RenderedPage {
+    /// The `<script type="application/json" data-pp-state>` island the
+    /// client reads to rehydrate this component's state.
+    pub fn state_island(&self) -> String {
+        format!(
+            "<script type=\"application/json\" data-pp-state>{}</script>",
+            self.state
+        )
+    }
+
+    /// `body` followed by the state island — the unit the client
+    /// hydrates (mounts the body, reads the adjacent state).
+    pub fn into_fragment(self) -> String {
+        let island = self.state_island();
+        let mut out = self.body;
+        out.push_str(&island);
+        out
+    }
+}
+
+/// Render bindings + interps into `cleaned_html` AND capture `state` as
+/// a script-safe JSON island — the decoupled core (no registry). See
+/// [`render_to_string`] for the component-level entry.
+pub fn render(
+    cleaned_html: &str,
+    bindings: &[StaticBinding],
+    interps: &[StaticInterp],
+    state: &Value,
+) -> RenderedPage {
+    RenderedPage {
+        body: stamp(cleaned_html, bindings, interps, state),
+        state: script_safe_json(state),
+    }
+}
+
+/// Render a **registered** component instance to a [`RenderedPage`].
+/// Looks its template + plan up by [`Component::NAME`]; returns `None`
+/// if the component isn't registered (the caller registers components
+/// on the server, the same way the client app does). State is the
+/// component serialized via serde — so loader/`on_setup` results that
+/// are already in the instance flow into the island.
+pub fn render_to_string<C>(component: &C) -> Option<RenderedPage>
+where
+    C: Component + serde::Serialize,
+{
+    let html = template_for(C::NAME)?;
+    let plan = template_plan_for(C::NAME)?;
+    let state = serde_json::to_value(component).ok()?;
+    Some(render(&html, plan.bindings, plan.interps, &state))
+}
+
+/// Serialize `state` to JSON and neutralise `<` (→ `<`) so it is
+/// safe to embed verbatim inside a `<script>` element.
+fn script_safe_json(state: &Value) -> String {
+    serde_json::to_string(state)
+        .unwrap_or_else(|_| "null".to_string())
+        .replace('<', "\\u003c")
 }
 
 // ─── HTML parse / walk / serialize (html5ever RcDom) ───────────────
@@ -457,5 +530,38 @@ mod tests {
         assert!(!out.contains("href"), "href should be removed: {out}");
         // BTreeMap key order (active, lg) — both truthy, `muted` dropped.
         assert!(out.contains("class=\"active lg\""), "class object: {out}");
+    }
+
+    #[test]
+    fn render_produces_body_and_script_safe_state_island() {
+        let html = r#"<div><span></span></div>"#;
+        let bindings: &[StaticBinding] = &[StaticBinding {
+            node_path: &[0],
+            kind: BindingKind::Text,
+            expr_src: "msg",
+            compiled: None,
+        }];
+        let state = json!({ "msg": "hi", "evil": "</script><script>alert(1)" });
+        let page = super::render(html, bindings, &[], &state);
+
+        assert!(page.body.contains("<span>hi</span>"), "body: {}", page.body);
+        // The breakout attempt is neutralised: no literal `</script>` and
+        // every `<` is the JSON unicode escape.
+        assert!(
+            !page.state.contains("</script>"),
+            "state must be script-safe: {}",
+            page.state
+        );
+        assert!(
+            page.state.contains("\\u003c"),
+            "`<` escaped: {}",
+            page.state
+        );
+
+        let island = page.state_island();
+        assert!(island.starts_with("<script type=\"application/json\" data-pp-state>"));
+        assert!(island.ends_with("</script>"));
+        // The only `</script>` is the legitimate closing tag.
+        assert_eq!(island.matches("</script>").count(), 1, "breakout: {island}");
     }
 }

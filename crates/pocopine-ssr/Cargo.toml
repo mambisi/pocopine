@@ -12,6 +12,7 @@ description = "Server-side rendering (RFC-099) for pocopine — stamps compiled 
 # false` (set at the workspace level) keeps devtools/wasm bits out.
 pocopine-core = { workspace = true }
 pocopine-expr = { workspace = true }
+serde = "1"
 serde_json = "1"
 # Host HTML parse → mutate → serialize. Same versions as
 # pocopine-template-parser so the workspace resolves one copy.

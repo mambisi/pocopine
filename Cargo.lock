@@ -6065,6 +6065,7 @@ dependencies = [
  "markup5ever_rcdom",
  "pocopine-core",
  "pocopine-expr",
+ "serde",
  "serde_json",
 ]
 
