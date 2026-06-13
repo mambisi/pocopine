@@ -217,8 +217,11 @@ pub fn this<T: 'static>() -> Handle<T> {
 /// (async tasks, websocket callbacks); inside a handler, `self.x = v`
 /// remains the only authoring surface.
 ///
-/// `Copy` (just a `ScopeId` + a `&'static str`). Not `Send`/`Sync`
-/// (wasm, single-threaded).
+/// `Copy` (just a `ScopeId` + a `&'static str` + a zero-size marker).
+/// It is `Send`/`Sync` (the fields are), but that is moot — the scope
+/// registry it resolves against is thread-local, and the runtime is
+/// single-threaded wasm; a handle used off-thread would simply find no
+/// scope (no UB).
 pub struct FieldHandle<T> {
     scope_id: ScopeId,
     key: &'static str,
@@ -257,6 +260,12 @@ impl<T: Serialize + DeserializeOwned> FieldHandle<T> {
     /// the tracked read mirror returns `undefined` for a missing
     /// scope, which deserializes to the default (mirrors
     /// [`crate::watch`]'s dead-scope read).
+    ///
+    /// `unwrap_or_default()` also covers a deserialize *mismatch* (a
+    /// stored value that isn't a `T`) by returning the default — but
+    /// that is unreachable through the macro-generated accessors, where
+    /// `T` is exactly the field's declared type; only a hand-built
+    /// [`FieldHandle::__new`] with the wrong `T` could trip it.
     pub fn get(&self) -> T
     where
         T: Default,
@@ -275,6 +284,10 @@ impl<T: Serialize + DeserializeOwned> FieldHandle<T> {
         // serde_wasm_bindgen::to_value is the same serializer the proxy
         // SET trap and `ComponentState::set` round-trip through, so the
         // value lands in the field exactly as `self.x = value` would.
+        // Two no-op paths, both deliberate: a serialize `Err` drops the
+        // write (unreachable for a `derive`d `Serialize`, which never
+        // errors), and `write_field` returns `false` (ignored) on a dead
+        // scope — the documented dead-scope no-op.
         if let Ok(js) = serde_wasm_bindgen::to_value(&value) {
             write_field(self.scope_id, self.key, &js);
         }
