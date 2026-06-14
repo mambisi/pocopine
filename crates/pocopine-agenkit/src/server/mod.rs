@@ -41,5 +41,7 @@ pub use provider::{
 pub use reduce::ReduceBuilder;
 pub use retrieval::{AiRetriever, DynRetriever, RetrieverRegistry, retriever_as_tool};
 pub use stream_route::{AI_FLOW_STREAM_PATH, ai_flow_stream_router, stream_filter};
-pub use thread::{AgentThreadHandle, AgentThreadStore, InMemoryThreadStore, ThreadBuilder};
+pub use thread::{
+    AgentThreadHandle, AgentThreadStore, InMemoryThreadStore, ThreadBuilder, ThreadOwner,
+};
 pub use tool::{AiTool, DynTool, ToolRegistry};
