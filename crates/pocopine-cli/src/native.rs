@@ -1,29 +1,30 @@
 //! `pocopine native` — the RFC-104 desktop target.
 //!
-//! `dev` / `build` reuse the existing wasm + CSS pipeline (the same
-//! `build::wasm` + Stylekit/Tailwind stages `pocopine build` runs), then
-//! drive the app's `src-tauri` host crate:
+//! Convention over config: the Tauri host crate always lives in
+//! `src-tauri/` next to the app, with a single binary that already
+//! enables the `tauri` feature. There is no `[package.metadata.pocopine
+//! .native]` block — everything is driven by flags.
 //!
-//! * `dev` exports [`DEV_DIR_ENV`] pointing at the live project
-//!   directory and `cargo run`s the host crate, so the native window
-//!   serves the on-disk `pkg/` + `index.html` and a rebuild is picked up
-//!   on reload.
+//! * `dev` exports [`DEV_DIR_ENV`] pointing at the live project directory
+//!   and `cargo run`s the host crate, so the window serves the on-disk
+//!   `pkg/` + `index.html` and a rebuild is picked up on reload.
 //! * `build` builds the wasm in release, then bundles with `cargo tauri
-//!   build` when the Tauri CLI is available, falling back to a plain
-//!   `cargo build` of the host binary.
+//!   build` when the Tauri CLI is available, else a plain `cargo build`.
+//! * `init` (and `dev`/`build` when `src-tauri/` is missing) scaffolds
+//!   the host crate.
 //!
-//! `init` (and `dev`/`build` when `src-tauri/` is missing) scaffolds the
-//! host crate. The scaffold targets an external project consuming
-//! published crates; in-repo, see `examples/file-browser/src-tauri`.
+//! Backend selection is a single flag: `--backend <url>` forwards the
+//! app's `#[server]` calls to a deployed server ("server"); omitting it
+//! runs them in-process ("standalone").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::args::{NativeArgs, NativeBuildArgs, NativeCmd, NativeDevArgs};
-use crate::config::{self, NativeConfig, PocopineConfig};
+use crate::config::{self, PocopineConfig};
 use crate::{build, client_modules, stylekit, tailwind};
 
 /// Environment variable the native shell reads for the dev static root.
@@ -32,43 +33,39 @@ use crate::{build, client_modules, stylekit, tailwind};
 /// deliberately.
 const DEV_DIR_ENV: &str = "POCOPINE_NATIVE_DEV_DIR";
 
-/// Environment variable carrying the selected channel's server backend
-/// URL. When set, the native shell forwards `#[server]` calls there
-/// (RFC-104 "server" channel); unset → standalone (in-process).
+/// Environment variable carrying the server backend URL. When set, the
+/// native shell forwards `#[server]` calls there ("server"); unset →
+/// standalone (in-process). Matches the shell's `BACKEND_ENV`.
 const BACKEND_ENV: &str = "POCOPINE_NATIVE_BACKEND";
+
+/// Convention: the Tauri host crate lives here, relative to the project.
+const SRC_TAURI: &str = "src-tauri";
 
 pub fn run(args: NativeArgs) -> Result<()> {
     let project = args
         .path
         .canonicalize()
         .with_context(|| format!("could not resolve project path {}", args.path.display()))?;
+    // Loaded only for the shared wasm + CSS stages (tailwind / stylekit).
     let cfg = config::load(&args.path)?;
-    let native = cfg.native.clone().unwrap_or_default();
 
     match &args.cmd {
         NativeCmd::Init => {
-            let created = scaffold(&project, &native)?;
-            report_scaffold(&native, &created);
+            let created = scaffold(&project)?;
+            report_scaffold(&created);
             Ok(())
         }
-        NativeCmd::Dev(dev_args) => dev(&project, &cfg, &native, dev_args),
-        NativeCmd::Build(build_args) => build_native(&project, &cfg, &native, build_args),
+        NativeCmd::Dev(dev_args) => dev(&project, &cfg, dev_args),
+        NativeCmd::Build(build_args) => build_native(&project, &cfg, build_args),
     }
 }
 
-fn dev(
-    project: &Path,
-    cfg: &PocopineConfig,
-    native: &NativeConfig,
-    args: &NativeDevArgs,
-) -> Result<()> {
-    ensure_src_tauri(project, native)?;
-    let backend = resolve_backend(native, args.channel.as_deref(), args.backend.as_deref())?;
+fn dev(project: &Path, cfg: &PocopineConfig, args: &NativeDevArgs) -> Result<()> {
+    ensure_src_tauri(project)?;
+    let backend = args.backend.as_deref().map(normalize_backend);
     wasm_and_css(project, cfg, args.release, args.stylekit, args.no_stylekit)?;
-    let src_tauri = project.join(&native.src_tauri);
     cargo_drive(
-        &src_tauri,
-        native,
+        &project.join(SRC_TAURI),
         "run",
         args.release,
         Some(project),
@@ -76,20 +73,15 @@ fn dev(
     )
 }
 
-fn build_native(
-    project: &Path,
-    cfg: &PocopineConfig,
-    native: &NativeConfig,
-    args: &NativeBuildArgs,
-) -> Result<()> {
-    ensure_src_tauri(project, native)?;
-    let backend = resolve_backend(native, args.channel.as_deref(), args.backend.as_deref())?;
+fn build_native(project: &Path, cfg: &PocopineConfig, args: &NativeBuildArgs) -> Result<()> {
+    ensure_src_tauri(project)?;
+    let backend = args.backend.as_deref().map(normalize_backend);
     let release = !args.debug;
     wasm_and_css(project, cfg, release, args.stylekit, args.no_stylekit)?;
-    let src_tauri = project.join(&native.src_tauri);
+    let src_tauri = project.join(SRC_TAURI);
 
     if !args.no_bundle && tauri_cli_available() {
-        tauri_cli_build(&src_tauri, native, release, backend.as_deref())
+        tauri_cli_build(&src_tauri, release, backend.as_deref())
     } else {
         if !args.no_bundle {
             println!(
@@ -97,44 +89,11 @@ fn build_native(
                  Install it with `cargo install tauri-cli` to produce installers."
             );
         }
-        cargo_drive(
-            &src_tauri,
-            native,
-            "build",
-            release,
-            None,
-            backend.as_deref(),
-        )
+        cargo_drive(&src_tauri, "build", release, None, backend.as_deref())
     }
 }
 
-/// Resolve the server backend URL for this run: the `--backend` override
-/// wins; otherwise the selected (or `default-channel`) channel's
-/// `backend`; otherwise `None` (standalone, in-process). Errors if a
-/// named channel doesn't exist.
-fn resolve_backend(
-    native: &NativeConfig,
-    channel: Option<&str>,
-    backend_override: Option<&str>,
-) -> Result<Option<String>> {
-    if let Some(url) = backend_override {
-        return Ok(Some(normalize_backend(url)));
-    }
-    let Some(name) = channel.or(native.default_channel.as_deref()) else {
-        return Ok(None);
-    };
-    let channel = native.channels.get(name).ok_or_else(|| {
-        let known: Vec<&str> = native.channels.keys().map(String::as_str).collect();
-        let known = if known.is_empty() {
-            "(none defined)".to_string()
-        } else {
-            known.join(", ")
-        };
-        anyhow!("unknown native channel `{name}`. Defined channels: {known}")
-    })?;
-    Ok(channel.backend.as_deref().map(normalize_backend))
-}
-
+/// Strip a trailing slash so `{base}{path}` joins cleanly in the shell.
 fn normalize_backend(url: &str) -> String {
     url.trim_end_matches('/').to_string()
 }
@@ -158,12 +117,11 @@ fn wasm_and_css(
     Ok(())
 }
 
-/// `cargo run`/`cargo build` the host crate in `src_tauri`. `dev_dir`,
-/// when set, is exported as [`DEV_DIR_ENV`] so the shell serves the live
-/// project directory.
+/// `cargo run`/`cargo build` the host crate (its single default bin).
+/// `dev_dir`, when set, is exported as [`DEV_DIR_ENV`]; `backend`, when
+/// set, as [`BACKEND_ENV`].
 fn cargo_drive(
     src_tauri: &Path,
-    native: &NativeConfig,
     subcommand: &str,
     release: bool,
     dev_dir: Option<&Path>,
@@ -173,12 +131,6 @@ fn cargo_drive(
     cmd.arg(subcommand);
     if release {
         cmd.arg("--release");
-    }
-    if let Some(bin) = native.bin.as_deref() {
-        cmd.arg("--bin").arg(bin);
-    }
-    if !native.features.is_empty() {
-        cmd.arg("--features").arg(native.features.join(","));
     }
     cmd.current_dir(src_tauri);
     if let Some(dir) = dev_dir {
@@ -207,19 +159,11 @@ fn cargo_drive(
     Ok(())
 }
 
-fn tauri_cli_build(
-    src_tauri: &Path,
-    native: &NativeConfig,
-    release: bool,
-    backend: Option<&str>,
-) -> Result<()> {
+fn tauri_cli_build(src_tauri: &Path, release: bool, backend: Option<&str>) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("tauri").arg("build");
     if !release {
         cmd.arg("--debug");
-    }
-    if !native.features.is_empty() {
-        cmd.arg("--features").arg(native.features.join(","));
     }
     cmd.current_dir(src_tauri);
     if let Some(url) = backend {
@@ -240,7 +184,7 @@ fn tauri_cli_build(
     Ok(())
 }
 
-/// Human-readable channel mode for build logs.
+/// Human-readable backend mode for build logs.
 fn backend_label(backend: Option<&str>) -> String {
     match backend {
         Some(url) => format!("server → {url}"),
@@ -259,27 +203,26 @@ fn tauri_cli_available() -> bool {
 // ─── scaffolding ────────────────────────────────────────────────────
 
 /// Scaffold `src-tauri/` if it does not already exist.
-fn ensure_src_tauri(project: &Path, native: &NativeConfig) -> Result<()> {
-    if project.join(&native.src_tauri).join("Cargo.toml").exists() {
+fn ensure_src_tauri(project: &Path) -> Result<()> {
+    if project.join(SRC_TAURI).join("Cargo.toml").exists() {
         return Ok(());
     }
-    println!(
-        "ℹ no `{}` found — scaffolding the Tauri host crate",
-        native.src_tauri
-    );
-    let created = scaffold(project, native)?;
-    report_scaffold(native, &created);
+    println!("ℹ no `{SRC_TAURI}/` found — scaffolding the Tauri host crate");
+    let created = scaffold(project)?;
+    report_scaffold(&created);
     Ok(())
 }
 
 /// Write the host-crate files that don't already exist, returning the
 /// paths created. Never overwrites — re-running is safe.
-fn scaffold(project: &Path, native: &NativeConfig) -> Result<Vec<PathBuf>> {
+fn scaffold(project: &Path) -> Result<Vec<PathBuf>> {
     let app = crate_name(project)?;
     let app_ident = app.replace('-', "_");
-    let title = native.title.clone().unwrap_or_else(|| app.clone());
+    // Convention: window title defaults to the crate name; edit the
+    // generated `main.rs` / `tauri.conf.json` to change it.
+    let title = app.clone();
 
-    let dir = project.join(&native.src_tauri);
+    let dir = project.join(SRC_TAURI);
     std::fs::create_dir_all(dir.join("src"))
         .with_context(|| format!("create {}", dir.join("src").display()))?;
 
@@ -317,23 +260,19 @@ fn scaffold(project: &Path, native: &NativeConfig) -> Result<Vec<PathBuf>> {
     Ok(created)
 }
 
-fn report_scaffold(native: &NativeConfig, created: &[PathBuf]) {
+fn report_scaffold(created: &[PathBuf]) {
     if created.is_empty() {
-        println!(
-            "✓ `{}` already scaffolded; nothing to write",
-            native.src_tauri
-        );
+        println!("✓ `{SRC_TAURI}/` already scaffolded; nothing to write");
         return;
     }
-    println!("✓ scaffolded native host crate at `{}`:", native.src_tauri);
+    println!("✓ scaffolded native host crate at `{SRC_TAURI}/`:");
     for path in created {
         println!("   + {}", path.display());
     }
     println!(
         "Next:\n  \
-         • add an app icon and list it under `bundle.icon` in {}/tauri.conf.json\n  \
-         • run `pocopine native dev` to launch the window",
-        native.src_tauri
+         • add an app icon and list it under `bundle.icon` in {SRC_TAURI}/tauri.conf.json\n  \
+         • run `pocopine native dev` to launch the window"
     );
 }
 
@@ -455,6 +394,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_backend_trims_trailing_slash() {
+        assert_eq!(
+            normalize_backend("https://api.example.com/"),
+            "https://api.example.com"
+        );
+        assert_eq!(
+            normalize_backend("https://api.example.com"),
+            "https://api.example.com"
+        );
+    }
+
+    #[test]
+    fn backend_label_distinguishes_modes() {
+        assert_eq!(backend_label(None), "standalone");
+        assert_eq!(
+            backend_label(Some("https://api.example.com")),
+            "server → https://api.example.com"
+        );
+    }
+
+    #[test]
     fn scaffold_writes_host_crate_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
@@ -463,9 +423,8 @@ mod tests {
             "[package]\nname = \"my-app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
-        let native = NativeConfig::default();
 
-        let created = scaffold(project, &native).unwrap();
+        let created = scaffold(project).unwrap();
         assert_eq!(
             created.len(),
             6,
@@ -481,6 +440,8 @@ mod tests {
         // crate name `my-app` → ident `my_app` in the `use … as _;` link.
         assert!(main_rs.contains("use my_app as _;"));
         assert!(main_rs.contains("pocopine_native_tauri::run!"));
+        // Title defaults to the crate name.
+        assert!(main_rs.contains(r#".title("my-app")"#));
 
         let cargo = std::fs::read_to_string(project.join("src-tauri/Cargo.toml")).unwrap();
         assert!(cargo.contains("name = \"my-app-native\""));
@@ -493,105 +454,10 @@ mod tests {
         assert!(conf.contains("\"identifier\": \"com.pocopine.my_app\""));
 
         // Re-running writes nothing new.
-        let again = scaffold(project, &native).unwrap();
+        let again = scaffold(project).unwrap();
         assert!(
             again.is_empty(),
             "scaffold must not overwrite existing files"
         );
-    }
-
-    fn channel(backend: Option<&str>) -> config::NativeChannel {
-        config::NativeChannel {
-            backend: backend.map(str::to_string),
-        }
-    }
-
-    #[test]
-    fn resolve_backend_is_standalone_by_default() {
-        let native = NativeConfig::default();
-        assert_eq!(resolve_backend(&native, None, None).unwrap(), None);
-    }
-
-    #[test]
-    fn resolve_backend_uses_named_channel_and_trims_slash() {
-        let mut native = NativeConfig::default();
-        native
-            .channels
-            .insert("server".into(), channel(Some("https://api.example.com/")));
-        assert_eq!(
-            resolve_backend(&native, Some("server"), None)
-                .unwrap()
-                .as_deref(),
-            Some("https://api.example.com"),
-        );
-    }
-
-    #[test]
-    fn resolve_backend_falls_back_to_default_channel() {
-        let mut channels = std::collections::BTreeMap::new();
-        channels.insert(
-            "server".to_string(),
-            channel(Some("https://api.example.com")),
-        );
-        let native = NativeConfig {
-            channels,
-            default_channel: Some("server".into()),
-            ..NativeConfig::default()
-        };
-        assert_eq!(
-            resolve_backend(&native, None, None).unwrap().as_deref(),
-            Some("https://api.example.com"),
-        );
-    }
-
-    #[test]
-    fn resolve_backend_override_beats_channel() {
-        let mut native = NativeConfig::default();
-        native
-            .channels
-            .insert("server".into(), channel(Some("https://api.example.com")));
-        assert_eq!(
-            resolve_backend(&native, Some("server"), Some("http://localhost:3024/"))
-                .unwrap()
-                .as_deref(),
-            Some("http://localhost:3024"),
-        );
-    }
-
-    #[test]
-    fn resolve_backend_channel_without_url_is_standalone() {
-        let mut native = NativeConfig::default();
-        native.channels.insert("offline".into(), channel(None));
-        assert_eq!(
-            resolve_backend(&native, Some("offline"), None).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn resolve_backend_unknown_channel_errors() {
-        let native = NativeConfig::default();
-        let err = resolve_backend(&native, Some("nope"), None).unwrap_err();
-        assert!(err.to_string().contains("unknown native channel `nope`"));
-    }
-
-    #[test]
-    fn scaffold_honours_configured_title_and_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path();
-        std::fs::write(
-            project.join("Cargo.toml"),
-            "[package]\nname = \"keep\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
-        let native = NativeConfig {
-            src_tauri: "desktop".into(),
-            title: Some("Keep Notes".into()),
-            ..NativeConfig::default()
-        };
-
-        scaffold(project, &native).unwrap();
-        let main_rs = std::fs::read_to_string(project.join("desktop/src/main.rs")).unwrap();
-        assert!(main_rs.contains(r#".title("Keep Notes")"#));
     }
 }

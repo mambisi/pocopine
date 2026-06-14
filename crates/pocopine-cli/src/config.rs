@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -38,79 +37,8 @@ pub struct PocopineConfig {
     /// default; customize the logo / splash, or opt out via
     /// `enabled = false`.
     pub loader: Option<LoaderConfig>,
-    /// RFC-104 native desktop target. Customizes where the Tauri host
-    /// crate lives and how `pocopine native dev`/`build` invoke it.
-    /// Absent = defaults (`src-tauri/`, no extra cargo features).
-    pub native: Option<NativeConfig>,
-}
-
-/// `[package.metadata.pocopine.native]` — the RFC-104 Tauri target.
-///
-/// ```toml
-/// [package.metadata.pocopine.native]
-/// src-tauri = "src-tauri"   # host crate directory (default)
-/// bin = "app-native"        # host bin to run/build (default: the crate's only bin)
-/// features = ["tauri"]      # cargo features to enable (default: none)
-/// title = "My App"          # scaffolded window title (default: crate name)
-/// ```
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct NativeConfig {
-    /// Directory holding the Tauri host crate, relative to the project
-    /// root. Defaults to `src-tauri`.
-    #[serde(default = "default_src_tauri")]
-    pub src_tauri: String,
-    /// Host binary to `cargo run`/`cargo build`. When unset, cargo runs
-    /// the host crate's single default bin.
-    pub bin: Option<String>,
-    /// Cargo features to enable on the host crate. Empty by default —
-    /// the scaffolded `src-tauri` crate enables `pocopine-tauri/tauri`
-    /// unconditionally, so no feature flag is needed.
-    #[serde(default)]
-    pub features: Vec<String>,
-    /// Window title used when scaffolding. Defaults to the crate name.
-    pub title: Option<String>,
-    /// Named build channels (RFC-104). A channel selects where the app's
-    /// `#[server]` calls go:
-    ///
-    /// * a channel with **no `backend`** → **standalone**: the functions
-    ///   run in-process (the default when no channel is selected);
-    /// * a channel with **`backend = "<url>"`** → **server**: the native
-    ///   shell forwards `#[server]` calls to that deployed pocopine
-    ///   server.
-    ///
-    /// Selected with `pocopine native dev|build --channel <name>`.
-    #[serde(default)]
-    pub channels: BTreeMap<String, NativeChannel>,
-    /// Channel used when `--channel` is omitted. Unset → standalone.
-    pub default_channel: Option<String>,
-}
-
-/// A `[package.metadata.pocopine.native.channels.<name>]` entry.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct NativeChannel {
-    /// Deployed pocopine server URL this channel targets. Absent → this
-    /// channel is standalone (in-process). Trailing slashes are trimmed
-    /// when the URL is used.
-    pub backend: Option<String>,
-}
-
-impl Default for NativeConfig {
-    fn default() -> Self {
-        Self {
-            src_tauri: default_src_tauri(),
-            bin: None,
-            features: Vec::new(),
-            title: None,
-            channels: BTreeMap::new(),
-            default_channel: None,
-        }
-    }
-}
-
-fn default_src_tauri() -> String {
-    "src-tauri".into()
+    // RFC-104 native target has no config block — it's convention
+    // (`src-tauri/`) + CLI flags (`--backend`, …). See `native.rs`.
 }
 
 /// `[package.metadata.pocopine.assets]` — the RFC-100 asset bucket.
