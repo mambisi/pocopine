@@ -61,6 +61,24 @@ pub async fn fetch_text(url: &str) -> Option<String> {
     text.as_string()
 }
 
+/// RFC-099 — read a pre-rendered static fragment off disk during SSR so
+/// its content lands in the first paint (byte-equal on a route refresh,
+/// no fetch flicker). `rel` is the path under the served static root —
+/// e.g. `static-docs/<slug>.html` — the exact file the client fetches and
+/// the server serves; the root matches the server bin's resolution
+/// (`POCOPINE_DIST`, else the crate dir). Returns `None` on a path-
+/// traversal attempt or a missing/empty file (caller renders not-found).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_static_fragment(rel: &str) -> Option<String> {
+    if rel.contains("..") {
+        return None;
+    }
+    let root =
+        std::env::var("POCOPINE_DIST").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
+    let html = std::fs::read_to_string(std::path::Path::new(&root).join(rel)).ok()?;
+    (!html.trim().is_empty()).then_some(html)
+}
+
 /// Shared SPA-navigation click delegate.
 ///
 /// `pp-route` cannot be used inside a `<template pp-for>` clone — it
