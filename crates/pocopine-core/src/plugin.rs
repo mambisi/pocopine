@@ -635,12 +635,12 @@ pub(crate) fn emit<E>(event: E)
 where
     E: Clone + 'static,
 {
-    // Built-in: drive the top progress bar across route navigations
-    // (RouteNavigationStarted → show, Completed/Failed → finish). A no-op
+    // Built-in: drive the top progress bar + boot splash off the app
+    // lifecycle (AppBootCompleted/Failed) and route navigations. A no-op
     // for every other event type. Kept at this single emit site so it sees
-    // all route events without touching each router emit call.
+    // all of them without touching each emit call.
     #[cfg(target_arch = "wasm32")]
-    crate::progress::observe_route_event(&event as &dyn std::any::Any);
+    crate::progress::observe_event(&event as &dyn std::any::Any);
     ACTIVE_PLUGINS.with(|plugins| {
         plugins.borrow().emit(event);
     });

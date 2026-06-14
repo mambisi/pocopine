@@ -81,9 +81,17 @@ function install() {
       if (value < 0.95) { value += (0.95 - value) * 0.1; render(); }
     }, 200);
   }
+  function hideSplash() {
+    var s = document.getElementById('pp-splash');
+    if (!s) return;
+    s.classList.add('pp-splash--done');
+    s.addEventListener('transitionend', function () { s.remove(); }, { once: true });
+    setTimeout(function () { s.remove(); }, 700);
+  }
   function complete() {
     clearInterval(trickle); clearTimeout(resume);
     value = 1; render(); ensure(); el.classList.add('pp-loader--done');
+    hideSplash();
     setTimeout(function () {
       value = 0; determinate = false; pending = 0;
       if (bar) {
@@ -113,8 +121,10 @@ function install() {
     done: function () { pending = Math.max(0, pending - 1); if (pending === 0) complete(); },
     error: function () {
       clearInterval(trickle); clearTimeout(resume); ensure();
-      el.classList.add('pp-loader--error'); value = 1; render();
+      el.classList.add('pp-loader--error'); value = 1; render(); hideSplash();
     },
+    // App reported ready (AppBootCompleted): drop the splash + finish.
+    ready: function () { complete(); },
   };
   w.__pocopineProgress = api;
   return api;
@@ -124,6 +134,7 @@ export function pp_progress_set(f) { install().set(f); }
 export function pp_progress_inc(d) { install().inc(d); }
 export function pp_progress_done() { install().done(); }
 export function pp_progress_error() { install().error(); }
+export function pp_progress_ready() { install().ready(); }
 // Has a controller been installed (boot loader, or a prior API call)?
 // Used to gate the router auto-hook so apps that never opt into a loader
 // don't get a surprise nav bar — and so route events aren't even built.
@@ -137,6 +148,7 @@ export function pp_progress_installed() {
         pub fn pp_progress_inc(d: f64);
         pub fn pp_progress_done();
         pub fn pp_progress_error();
+        pub fn pp_progress_ready();
         pub fn pp_progress_installed() -> bool;
     }
 }
@@ -227,13 +239,33 @@ pub(crate) fn is_installed() -> bool {
     }
 }
 
-/// Built-in router integration: drive the bar across route navigations.
+/// Built-in integration: drive the bar + splash off the app lifecycle.
 /// Invoked from [`crate::plugin::emit`] for every event; a no-op for
-/// anything that isn't a route-navigation lifecycle event.
+/// anything that isn't an app-boot or route-navigation event.
+///
+/// - `AppBootCompleted` → `ready()` (drop the boot splash, finish the bar)
+/// - `AppBootFailed`    → `error()` (red bar)
+/// - `RouteNavigationStarted` / `Completed` / `Failed` → `start` / `finish`
+///
+/// App-boot events are emitted for every app unconditionally, so they're
+/// gated here on a controller actually being installed (boot loader or a
+/// prior API call) — a no-loader app self-injects nothing on boot. Route
+/// events are already gated upstream by `has_route_navigation_hooks`.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn observe_route_event(ev: &dyn std::any::Any) {
-    use crate::plugin::{RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted};
-    if ev.is::<RouteNavigationStarted>() {
+pub(crate) fn observe_event(ev: &dyn std::any::Any) {
+    use crate::plugin::{
+        AppBootCompleted, AppBootFailed, RouteNavigationCompleted, RouteNavigationFailed,
+        RouteNavigationStarted,
+    };
+    if ev.is::<AppBootCompleted>() {
+        if is_installed() {
+            imp::pp_progress_ready();
+        }
+    } else if ev.is::<AppBootFailed>() {
+        if is_installed() {
+            fail();
+        }
+    } else if ev.is::<RouteNavigationStarted>() {
         start();
     } else if ev.is::<RouteNavigationCompleted>() || ev.is::<RouteNavigationFailed>() {
         finish();
