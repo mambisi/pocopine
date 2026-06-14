@@ -10,76 +10,76 @@
   </header>
 
   <div class="ci-grid">
-    <a class="ci-card" href="/components/button">
+    <div class="ci-card" data-href="/components/button" role="link" tabindex="0">
       <div class="ci-preview"><button-demo></button-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Button</span>
         <span class="ci-card-blurb">A clickable action with variants and disabled state.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/switch-checkbox">
+    <div class="ci-card" data-href="/components/switch-checkbox" role="link" tabindex="0">
       <div class="ci-preview"><switch-checkbox-demo></switch-checkbox-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Switch &amp; Checkbox</span>
         <span class="ci-card-blurb">Boolean toggles, both pp-model bound.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/slider">
+    <div class="ci-card" data-href="/components/slider" role="link" tabindex="0">
       <div class="ci-preview"><slider-demo></slider-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Slider</span>
         <span class="ci-card-blurb">A draggable range input with keyboard support.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/radio-group">
+    <div class="ci-card" data-href="/components/radio-group" role="link" tabindex="0">
       <div class="ci-preview"><radio-group-demo></radio-group-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Radio Group</span>
         <span class="ci-card-blurb">A single-select set with roving focus.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/tabs">
+    <div class="ci-card" data-href="/components/tabs" role="link" tabindex="0">
       <div class="ci-preview"><tabs-demo></tabs-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Tabs</span>
         <span class="ci-card-blurb">A tabbed panel switcher with roving focus.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/toggle">
+    <div class="ci-card" data-href="/components/toggle" role="link" tabindex="0">
       <div class="ci-preview"><toggle-demo></toggle-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Toggle</span>
         <span class="ci-card-blurb">A two-state pressed / unpressed button.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/accordion">
+    <div class="ci-card" data-href="/components/accordion" role="link" tabindex="0">
       <div class="ci-preview"><accordion-demo></accordion-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Accordion</span>
         <span class="ci-card-blurb">Stacked, collapsible sections.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/avatar">
+    <div class="ci-card" data-href="/components/avatar" role="link" tabindex="0">
       <div class="ci-preview"><avatar-demo></avatar-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Avatar</span>
         <span class="ci-card-blurb">A user image with a fallback when it fails to load.</span>
       </div>
-    </a>
+    </div>
 
-    <a class="ci-card" href="/components/input">
+    <div class="ci-card" data-href="/components/input" role="link" tabindex="0">
       <div class="ci-preview"><input-demo></input-demo></div>
       <div class="ci-meta">
         <span class="ci-card-title">Input</span>
         <span class="ci-card-blurb">A single-line text field that binds with pp-model.</span>
       </div>
-    </a>
+    </div>
   </div>
 </root>

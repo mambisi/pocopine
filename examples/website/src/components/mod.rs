@@ -76,10 +76,23 @@ pub fn delegate_nav(ev: &web_sys::MouseEvent) {
     else {
         return;
     };
-    let Ok(Some(anchor)) = el.closest("a[href]") else {
-        return;
-    };
-    if let Some(href) = anchor.get_attribute("href") {
+    // Prefer an enclosing real link's `href`; fall back to a `[data-href]`
+    // card. Cards that wrap a live interactive preview can't be an `<a>`
+    // (a nested `<a>` inside the preview is invalid HTML and the browser
+    // splits it when the SSR'd page is parsed) — they're a `<div
+    // data-href>` instead, navigated by this same delegated click.
+    let href = el
+        .closest("a[href]")
+        .ok()
+        .flatten()
+        .and_then(|a| a.get_attribute("href"))
+        .or_else(|| {
+            el.closest("[data-href]")
+                .ok()
+                .flatten()
+                .and_then(|d| d.get_attribute("data-href"))
+        });
+    if let Some(href) = href {
         if href.starts_with('/') {
             ev.prevent_default();
             pocopine::navigate(&href);
