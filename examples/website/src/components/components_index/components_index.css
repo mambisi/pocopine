@@ -39,6 +39,13 @@
   color: var(--fg);
   box-shadow: var(--shadow);
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  /* RFC-099 / SSR-flicker survey item #4 — each card hosts an expensive
+     LIVE demo component; skip rendering offscreen cards (the browser lays
+     them out only when they near the viewport). `contain-intrinsic-size`
+     reserves their box so this never shifts layout (no CLS). Pure CSS —
+     orthogonal to SSR/hydration, no framework support required. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
 }
 .ci-card:hover {
   transform: translateY(-3px);
