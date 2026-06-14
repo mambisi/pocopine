@@ -16,7 +16,7 @@ const CHANGE_MAX_COALESCE: Duration = Duration::from_secs(4);
 pub fn run(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
-    server::check_configured_port_available(&cfg)?;
+    server::check_configured_port_available(&cfg, args.port)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
@@ -58,13 +58,13 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     // Start the serving side. In bin mode the child owns its ports + routes.
     // In static mode the CLI owns the socket and runs on a background thread.
-    server::check_configured_port_available(&cfg)?;
+    server::check_configured_port_available(&cfg, args.port)?;
     if cfg.bin.is_some() || cfg.worker_bin.is_some() {
-        spawn_configured_bins(&mut children, &project, &cfg, args.release, &dev_env)?;
+        spawn_configured_bins(&mut children, &project, &cfg, args.release, &dev_env, args.port)?;
     } else {
         {
             let serve_path = project.clone();
-            let port = args.port;
+            let port = args.port.unwrap_or(5243);
             thread::spawn(move || {
                 if let Err(e) = server::serve_static(&serve_path, port) {
                     eprintln!("server error: {e}");
@@ -116,6 +116,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                         &cfg,
                         args.release,
                         &dev_env,
+                        args.port,
                     ) {
                         eprintln!("server restart failed: {e:#}");
                         continue;
@@ -149,15 +150,22 @@ fn spawn_configured_bins(
     cfg: &config::PocopineConfig,
     release: bool,
     dev_env: &std::collections::BTreeMap<String, String>,
+    override_port: Option<u16>,
 ) -> Result<()> {
     if let Some(bin) = cfg.bin.as_deref() {
+        // The web bin gets PORT = --port override, else the manifest port,
+        // so its bound addr matches the port the preflight checked.
+        let mut server_env = dev_env.clone();
+        if let Some(p) = override_port.or(cfg.port) {
+            server_env.insert("PORT".to_string(), p.to_string());
+        }
         children.bins.push(server::spawn_bin_with_env(
             project,
             bin,
             release,
             server::BinRole::Server,
             true,
-            dev_env,
+            &server_env,
         )?);
     }
     if let Some(worker) = cfg.worker_bin.as_deref() {
@@ -180,11 +188,12 @@ fn restart_configured_bins(
     cfg: &config::PocopineConfig,
     release: bool,
     dev_env: &std::collections::BTreeMap<String, String>,
+    override_port: Option<u16>,
 ) -> Result<()> {
     for child in children.bins.drain(..) {
         child.kill();
     }
-    spawn_configured_bins(children, project, cfg, release, dev_env)
+    spawn_configured_bins(children, project, cfg, release, dev_env, override_port)
 }
 
 fn coalesce_changes(rx: &Receiver<Change>, first: Change) -> Change {

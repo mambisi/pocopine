@@ -121,11 +121,13 @@ pub struct ServeArgs {
     /// from here.
     #[arg(long, default_value = ".")]
     pub path: PathBuf,
-    /// Port to listen on in static mode. Ignored in server-bin mode -
-    /// the bin controls its own addr. If the port is taken, the next
-    /// available port is tried (up to `port + 20`).
-    #[arg(long, default_value_t = 5243)]
-    pub port: u16,
+    /// Override the listen port (no `Cargo.toml` edit needed). In static
+    /// mode the CLI listens here (default 5243; if taken, the next free
+    /// port up to +20 is used). In server-bin mode the configured bin is
+    /// launched with `PORT=<this>`, overriding
+    /// `[package.metadata.pocopine].port` — pocopine server bins read `PORT`.
+    #[arg(long)]
+    pub port: Option<u16>,
     /// Build in release mode.
     #[arg(long)]
     pub release: bool,
