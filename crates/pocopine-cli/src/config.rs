@@ -130,7 +130,11 @@ pub struct LoaderConfig {
 
 impl Default for LoaderConfig {
     fn default() -> Self {
-        Self { enabled: true, splash: true, logo: None }
+        Self {
+            enabled: true,
+            splash: true,
+            logo: None,
+        }
     }
 }
 
