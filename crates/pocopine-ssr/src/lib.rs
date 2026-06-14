@@ -134,6 +134,10 @@ fn stamp_fragment(
     apply_flat(&root, plan.bindings, plan.interps, state, keep);
     expand_child_mounts(&root, plan, state, keep);
     expand_structural(&root, plan, state, keep);
+    // RFC-099 — drop the inline content of closed overlay portals so it
+    // doesn't paint server-side and flash/collapse on hydrate.
+    #[cfg(not(target_arch = "wasm32"))]
+    gate_overlay_slot_content(&root, keep);
     Some(root)
 }
 
@@ -749,6 +753,78 @@ fn augment(base: &Value, extra: Vec<(&str, Value)>) -> Value {
 
 fn is_template(node: &Handle) -> bool {
     matches!(&node.data, NodeData::Element { name, .. } if name.local == local_name!("template"))
+}
+
+/// RFC-099 — recursively drop the inline content of unrendered overlay
+/// portals. A teleport portal (`<template pp-if="open" pp-teleport>`)
+/// is closed by default and relocates its content when opened, but the
+/// parent-authored content is sitting inline in the cleaned HTML — so it
+/// paints server-side and then flashes/collapses when the client mounts
+/// the portal. For each registered custom-element that wasn't rendered as
+/// a child mount (no scope-id), render its template with default state:
+/// if that produces no element content (the slot is structurally gated
+/// off), clear the authored content so it doesn't paint. Host-only.
+#[cfg(not(target_arch = "wasm32"))]
+fn gate_overlay_slot_content(node: &Handle, keep: &mut Vec<RcDom>) {
+    let children: Vec<Handle> = node.children.borrow().iter().cloned().collect();
+    for child in &children {
+        let NodeData::Element { name, attrs, .. } = &child.data else {
+            continue;
+        };
+        let tag = name.local.as_ref().to_string();
+        let has_scope = attrs
+            .borrow()
+            .iter()
+            .any(|a| a.name.local.as_ref() == "data-pp-scope-id");
+        let has_authored_el = child
+            .children
+            .borrow()
+            .iter()
+            .any(|c| matches!(c.data, NodeData::Element { .. }));
+        if !has_scope && has_authored_el {
+            if let (Some(html), Some(plan)) = (template_for(&tag), template_plan_for(&tag)) {
+                let props = element_attr_props(child);
+                let state = pocopine_core::registry::ssr_derive_state(&tag, &props);
+                let empty = match stamp_fragment(&html, plan, &state, keep) {
+                    Some(r) => !has_visible_element(&r),
+                    None => true,
+                };
+                if empty {
+                    child.children.borrow_mut().clear();
+                    continue;
+                }
+            }
+        }
+        gate_overlay_slot_content(child, keep);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn element_attr_props(el: &Handle) -> Value {
+    let mut props = serde_json::Map::new();
+    if let NodeData::Element { attrs, .. } = &el.data {
+        for a in attrs.borrow().iter() {
+            let name = a.name.local.as_ref();
+            if name.starts_with("pp-") || name.starts_with("data-pp-") || name.starts_with("__pp") {
+                continue;
+            }
+            props.insert(prop_field(name), coerce_attr(&a.value));
+        }
+    }
+    Value::Object(props)
+}
+
+/// Does `node`'s subtree contain a non-`<template>` element (real
+/// rendered content, as opposed to just a structural anchor / inert
+/// `<template>` body)?
+#[cfg(not(target_arch = "wasm32"))]
+fn has_visible_element(node: &Handle) -> bool {
+    if let NodeData::Element { name, .. } = &node.data {
+        if name.local != local_name!("template") {
+            return true;
+        }
+    }
+    node.children.borrow().iter().any(has_visible_element)
 }
 
 fn comment_node(text: &str) -> Handle {
