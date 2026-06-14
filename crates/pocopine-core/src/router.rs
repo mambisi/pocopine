@@ -27,7 +27,7 @@ use once_cell::unsync::OnceCell;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{Element, Event};
+use web_sys::{Element, Event, MouseEvent};
 
 use crate::app::{
     IntoRouteTarget, Loader, LoaderContext, PageMeta, PageMetaContext, PageMetaFactory,
@@ -897,6 +897,55 @@ pub fn init() {
         let _ = win.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
     }
     cb.forget();
+
+    // Delegated client-side navigation: intercept plain left-clicks on
+    // same-origin `<a pp-route>` links so internal navigation never triggers
+    // a full page reload (which would re-download + recompile the wasm).
+    // Attribute-based, so it also covers links inside `pp-for` clones. Modified
+    // clicks, `target`, `download`, external/scheme hrefs, and unmarked links
+    // fall through to the browser.
+    let on_click = Closure::wrap(Box::new(move |ev: Event| {
+        let Some(me) = ev.dyn_ref::<MouseEvent>() else {
+            return;
+        };
+        if me.default_prevented()
+            || me.button() != 0
+            || me.meta_key()
+            || me.ctrl_key()
+            || me.shift_key()
+            || me.alt_key()
+        {
+            return;
+        }
+        let Some(target) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        let Some(anchor) = target.closest("a[pp-route]").ok().flatten() else {
+            return;
+        };
+        if anchor
+            .get_attribute("target")
+            .is_some_and(|t| !t.is_empty() && t != "_self")
+            || anchor.has_attribute("download")
+        {
+            return;
+        }
+        let Some(href) = anchor.get_attribute("href") else {
+            return;
+        };
+        // Only intercept absolute internal paths; leave external URLs,
+        // schemes (`mailto:`, `http:`), and protocol-relative `//` to the
+        // browser.
+        if !href.starts_with('/') || href.starts_with("//") {
+            return;
+        }
+        ev.prevent_default();
+        navigate(&href);
+    }) as Box<dyn FnMut(Event)>);
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        let _ = doc.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref());
+    }
+    on_click.forget();
 
     let _ = mount_current();
 }
