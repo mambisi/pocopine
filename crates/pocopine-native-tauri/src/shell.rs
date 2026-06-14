@@ -63,12 +63,21 @@ pub fn run(app: NativeApp, context: tauri::Context<tauri::Wry>) -> tauri::Result
             };
 
             // Bind an ephemeral loopback port synchronously so the window
-            // URL is known, then hand the socket to the async server.
+            // URL is known, then hand the raw socket to the async server.
+            // `TcpListener::from_std` registers the fd with the Tokio
+            // reactor, so it must run *inside* the runtime — `setup` is
+            // outside it, so defer it into the spawned task.
             let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
             std_listener.set_nonblocking(true)?;
             let addr = std_listener.local_addr()?;
-            let listener = TcpListener::from_std(std_listener)?;
             tauri::async_runtime::spawn(async move {
+                let listener = match TcpListener::from_std(std_listener) {
+                    Ok(listener) => listener,
+                    Err(err) => {
+                        tracing::error!(target: "pocopine.log", %err, "native loopback bind failed");
+                        return;
+                    }
+                };
                 if let Err(err) = pocopine_server::axum::serve(listener, router).await {
                     tracing::error!(
                         target: "pocopine.log",
