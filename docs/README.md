@@ -24,6 +24,7 @@ New here? Start with **[Getting Started](./getting-started/introduction.md)**.
 **Styling & UI**
 
 - [Pine Stylekit](./guides/styling/stylekit.md) — the utility-CSS compiler and `@theme` tokens.
+- [Layout (`pine-layout`)](./guides/layout/README.md) — headless responsive layout: the breakpoint engine, structural primitives, the adaptive [AppShell](./guides/layout/app-shell.md), and the [Workspace](./guides/layout/workspace.md) shell.
 - [Animation](./guides/styling/animation.md) — presets, FLIP, and the WAAPI escape hatch.
 - [Icons](./guides/styling/icons.md) — tree-shaken Tabler icons.
 - [Charts](./guides/styling/charts/README.md) — SVG-first chart primitives.
