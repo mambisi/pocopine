@@ -84,13 +84,17 @@ const THEME_KEY: &str = "pocopine-theme";
 impl WebsiteApp {
     pub fn on_setup(&mut self) {
         provide(&WEBSITE_APP, this::<Self>());
-        // Restore the saved theme across reloads / deep-links. The
-        // inline script in index.html already applied it before paint;
-        // this syncs our own state (and re-applies on a remount).
-        if let Ok(Some(saved)) = LocalStorage::<String>::new(THEME_KEY).get() {
-            if saved == "dark" || saved == "light" {
+        // Restore the theme: a saved choice wins, else the OS preference.
+        // This MUST match the no-flash <script> in index.html exactly —
+        // the script set `<html data-theme>` before first paint, and
+        // apply_theme below re-affirms the same value on hydrate instead
+        // of changing it (a disagreement would flash on hydrate).
+        match LocalStorage::<String>::new(THEME_KEY).get() {
+            Ok(Some(saved)) if saved == "dark" || saved == "light" => {
                 self.theme = saved;
             }
+            _ if prefers_dark() => self.theme = "dark".into(),
+            _ => {}
         }
         self.apply_theme();
         self.search = build_search_index();
@@ -135,6 +139,16 @@ impl WebsiteApp {
         self.open = false;
         self.open_github();
     }
+}
+
+/// The OS `prefers-color-scheme: dark` signal — the default theme when
+/// the visitor hasn't picked one. Mirrors the no-flash script's fallback
+/// in index.html so the first paint and `on_setup` agree.
+fn prefers_dark() -> bool {
+    web_sys::window()
+        .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
+        .map(|m| m.matches())
+        .unwrap_or(false)
 }
 
 impl WebsiteApp {
