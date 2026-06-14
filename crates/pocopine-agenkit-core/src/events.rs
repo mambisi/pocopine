@@ -25,6 +25,10 @@ pub const AI_STEP_STARTED: &str = "ai_step_started";
 pub const AI_STEP_COMPLETED: &str = "ai_step_completed";
 /// A flow step failed.
 pub const AI_STEP_FAILED: &str = "ai_step_failed";
+/// A flow step was cancelled before finishing (e.g. a losing parallel branch
+/// aborted in flight). A terminal event, so a client reconstructing the trace
+/// tree can close a branch that started but neither completed nor failed.
+pub const AI_STEP_CANCELLED: &str = "ai_step_cancelled";
 
 // Parallel and reducer steps.
 /// A parallel fan-out group began.

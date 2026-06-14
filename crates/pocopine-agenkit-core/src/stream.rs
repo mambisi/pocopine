@@ -136,6 +136,15 @@ pub enum FlowStreamEvent {
         /// The public error kind.
         error_kind: String,
     },
+    /// A branch was cancelled in flight (a losing branch aborted by an
+    /// early-exit join). Terminal, so a client can close a branch that started
+    /// but never completed or failed.
+    BranchCancelled {
+        /// The parallel group id.
+        group_id: ParallelGroupId,
+        /// The branch's step id.
+        step_id: StepId,
+    },
     /// A parallel group finished.
     ParallelCompleted {
         /// The parallel group id.

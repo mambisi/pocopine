@@ -62,6 +62,7 @@ pub fn stream_filter(event: &FlowStreamEvent, mode: StreamMode) -> bool {
         | BranchStarted { .. }
         | BranchCompleted { .. }
         | BranchFailed { .. }
+        | BranchCancelled { .. }
         | ParallelCompleted { .. }
         | ReducerStarted { .. }
         | ReducerDecision { .. }
