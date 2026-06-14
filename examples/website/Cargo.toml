@@ -77,7 +77,7 @@ web-sys = { version = "0.3", features = [
 pocopine-logging = { workspace = true }
 pocopine-server = { path = "../../crates/pocopine-server" }
 pocopine-ssr = { path = "../../crates/pocopine-ssr" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
 
 # Host-only: render docs/ markdown to static HTML at build time.
 # pulldown-cmark does not target wasm, so this runs on the build host
