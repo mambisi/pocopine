@@ -635,6 +635,12 @@ pub(crate) fn emit<E>(event: E)
 where
     E: Clone + 'static,
 {
+    // Built-in: drive the top progress bar across route navigations
+    // (RouteNavigationStarted → show, Completed/Failed → finish). A no-op
+    // for every other event type. Kept at this single emit site so it sees
+    // all route events without touching each router emit call.
+    #[cfg(target_arch = "wasm32")]
+    crate::progress::observe_route_event(&event as &dyn std::any::Any);
     ACTIVE_PLUGINS.with(|plugins| {
         plugins.borrow().emit(event);
     });
@@ -673,7 +679,10 @@ pub(crate) fn has_component_unmounted_hooks() -> bool {
 
 #[inline]
 pub(crate) fn has_route_navigation_hooks() -> bool {
-    active_hook_mask_contains(HOOK_ROUTE_NAVIGATION_EVENTS)
+    // The built-in progress bar consumes route events to auto-drive the top
+    // loader, but only once a controller is installed (boot loader or a
+    // prior `progress` API call) — so opted-out apps still pay nothing.
+    active_hook_mask_contains(HOOK_ROUTE_NAVIGATION_EVENTS) || crate::progress::is_installed()
 }
 
 #[inline]

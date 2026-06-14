@@ -42,6 +42,7 @@ pub mod path;
 pub mod payload_scope;
 pub mod plugin;
 pub mod profiler;
+pub mod progress;
 pub mod props;
 pub mod reactive;
 pub mod refs;

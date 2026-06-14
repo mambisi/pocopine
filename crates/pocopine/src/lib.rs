@@ -42,7 +42,8 @@ pub use pocopine_core::{
     watch_scope_field_now, watch_scope_field_scoped, watch_scoped,
 };
 pub use pocopine_core::{
-    animate, dom, events, focus, profiler, refs, router, scroll_lock, storage, text, tick, timers,
+    animate, dom, events, focus, profiler, progress, refs, router, scroll_lock, storage, text,
+    tick, timers,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
