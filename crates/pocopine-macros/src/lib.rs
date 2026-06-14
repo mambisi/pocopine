@@ -3492,6 +3492,30 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn has_setup(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_setup(self)
             }
+            // RFC-099 — host (SSR) serde bridge. Merge JSON props over the
+            // current (Default) state, and serialize the post-`on_setup`
+            // state for the island. `#[component]` structs are serde
+            // (the get/set proxy already requires it), so this is sound.
+            #[cfg(not(target_arch = "wasm32"))]
+            fn host_apply_props(&mut self, props: &::pocopine::__private::serde_json::Value) {
+                if let Ok(mut __cur) = ::pocopine::__private::serde_json::to_value(&*self) {
+                    if let (Some(__obj), Some(__p)) = (__cur.as_object_mut(), props.as_object()) {
+                        for (__k, __v) in __p {
+                            __obj.insert(__k.clone(), __v.clone());
+                        }
+                        if let Ok(__next) =
+                            ::pocopine::__private::serde_json::from_value::<Self>(__cur)
+                        {
+                            *self = __next;
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            fn host_serialize(&self) -> ::pocopine::__private::serde_json::Value {
+                ::pocopine::__private::serde_json::to_value(self)
+                    .unwrap_or(::pocopine::__private::serde_json::Value::Null)
+            }
             fn has_on_mount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_mount(self)
             }

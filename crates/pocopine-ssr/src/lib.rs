@@ -818,7 +818,17 @@ fn expand_child_mounts(
         let Some(host) = walk_element_path(root, cm.node_path) else {
             continue;
         };
-        let child_state = child_state_value(&host, cm, parent_state);
+        let child_props = child_state_value(&host, cm, parent_state);
+        // RFC-099 — run the child's `on_setup` host-side so values it
+        // derives (e.g. pine-icon's looked-up SVG + pixel size) are baked
+        // into the SSR'd HTML; without this they'd be empty server-side
+        // and pop in on hydrate, tearing the layout. Host-only — the
+        // wasm-built stamper (the differential test harness) uses props
+        // directly, since `on_setup` runs there as part of hydration.
+        #[cfg(not(target_arch = "wasm32"))]
+        let child_state = pocopine_core::registry::ssr_derive_state(cm.tag, &child_props);
+        #[cfg(target_arch = "wasm32")]
+        let child_state = child_props;
         render_component_into_host(&host, cm.tag, &child_state, keep);
     }
 }
@@ -884,12 +894,23 @@ fn coerce_attr(raw: &str) -> Value {
     match raw {
         "true" => Value::Bool(true),
         "false" => Value::Bool(false),
-        _ => raw
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(Value::Number)
-            .unwrap_or_else(|| Value::String(raw.to_string())),
+        // Prefer an INTEGER number so integer-typed props (`size: u32`)
+        // deserialize cleanly in `host_apply_props` — a float `Number`
+        // (`from_f64`) won't deserialize into `u32`/`i32` via serde_json,
+        // and would silently drop the whole prop merge (RFC-099).
+        _ => {
+            if let Ok(i) = raw.parse::<i64>() {
+                return Value::Number(i.into());
+            }
+            if let Ok(u) = raw.parse::<u64>() {
+                return Value::Number(u.into());
+            }
+            raw.parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+                .unwrap_or_else(|| Value::String(raw.to_string()))
+        }
     }
 }
 

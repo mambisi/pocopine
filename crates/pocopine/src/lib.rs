@@ -206,6 +206,11 @@ pub mod __private {
     pub use pocopine_core::directives;
     pub use serde;
     pub use serde_wasm_bindgen;
+    // RFC-099 — the macro's host (SSR) serde bridge (`host_apply_props` /
+    // `host_serialize`) round-trips component state through `serde_json`.
+    // Host-only: the methods that use it are `#[cfg(not(wasm32))]`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use serde_json;
     pub use wasm_bindgen;
     pub use wasm_bindgen::JsValue;
     pub use wasm_bindgen_futures;
