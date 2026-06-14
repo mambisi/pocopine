@@ -24,7 +24,7 @@
 mod assets;
 pub mod bridge;
 
-pub use assets::{dev_dir, DEV_DIR_ENV};
+pub use assets::{DEV_DIR_ENV, dev_dir};
 
 use pocopine_server::Server;
 

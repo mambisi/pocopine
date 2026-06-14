@@ -35,23 +35,26 @@ mod tests {
 
     #[test]
     fn dev_dir_is_none_when_unset_or_empty() {
-        // SAFETY: single-threaded unit test; no other thread reads the
-        // env concurrently. We restore the prior value before exit.
         let key = DEV_DIR_ENV;
         let previous = std::env::var_os(key);
 
-        std::env::remove_var(key);
-        assert_eq!(dev_dir(), None);
+        // SAFETY (edition 2024 makes env mutation `unsafe`): single-threaded
+        // unit test; no other thread reads the env concurrently, and the
+        // prior value is restored before exit.
+        unsafe {
+            std::env::remove_var(key);
+            assert_eq!(dev_dir(), None);
 
-        std::env::set_var(key, "");
-        assert_eq!(dev_dir(), None, "empty value is treated as unset");
+            std::env::set_var(key, "");
+            assert_eq!(dev_dir(), None, "empty value is treated as unset");
 
-        std::env::set_var(key, "/tmp/project");
-        assert_eq!(dev_dir(), Some(PathBuf::from("/tmp/project")));
+            std::env::set_var(key, "/tmp/project");
+            assert_eq!(dev_dir(), Some(PathBuf::from("/tmp/project")));
 
-        match previous {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
+            match previous {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
         }
     }
 }
