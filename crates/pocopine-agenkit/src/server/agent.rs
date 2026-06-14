@@ -208,6 +208,7 @@ impl<A: AiAgent> AgentRun<A> {
                 .store
                 .append(
                     &thread.id,
+                    thread.owner(),
                     vec![
                         ThreadMessage::new(Role::User, input_text),
                         ThreadMessage::new(Role::Assistant, output_text),
