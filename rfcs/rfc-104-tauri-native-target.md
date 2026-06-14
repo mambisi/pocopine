@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Implemented — the file-browser example runs natively end-to-end (browse + upload). See §11 for as-shipped notes. |
 | **Author** | pocopine team |
 | **Created** | 2026-06-13 |
 | **Related** | [`rfc-077-server-plugin-lifecycle.md`](./rfc-077-server-plugin-lifecycle.md) (the `Server` builder this reuses), [`rfc-078-client-route-guards-and-loaders.md`](./rfc-078-client-route-guards-and-loaders.md) (`fetch::call` middleware chain), [`rfc-099-ssr-hydration.md`](./rfc-099-ssr-hydration.md) (host-side render — future native first-paint), [`rfc-080-deploy-contract.md`](./rfc-080-deploy-contract.md) (web deploy is orthogonal; native is a *distribution* target), [`rfc-100-asset-pipeline.md`](./rfc-100-asset-pipeline.md) (`POCOPINE_ASSET_BASE` for native), `docs/internal/roadmap-0.2.x.md` |
@@ -360,8 +360,8 @@ re-enables it.
    backend-neutral bridge/builder (with the unit tests) and the
    feature-gated Tauri shell. Both are workspace members (safe: neither
    default build links `tauri`).
-2. **CLI** — `native` subcommands, `[package.metadata.pocopine.native]`
-   config, `src-tauri` scaffolder.
+2. **CLI** — `native` subcommands (`init`/`dev`/`build`), the `--backend`
+   flag, and the `src-tauri` scaffolder (no config block — §6.1).
 3. **Example** — add `examples/file-browser/src-tauri` (excluded from
    the workspace): the existing Cloud File Explorer app, packaged as a
    desktop binary. The native `main` mirrors the example's server bin —
@@ -385,3 +385,42 @@ re-enables it.
   a follow-up; v1 produces unsigned local bundles.
 - **Mobile:** Tauri v2 mobile reuses the same crate; revisit after
   desktop is stable.
+
+## 11. As-shipped notes
+
+Validated by running `examples/file-browser` natively on Linux (Wayland +
+NVIDIA, WebKitGTK 2.52): the window loads from the loopback URL, browsing
+and storage `#[server]` calls work, and **file uploads succeed** — the
+case that drove the transport away from a custom scheme.
+
+What shipped, and the bring-up issues resolved along the way (each a real
+crash/error hit during first run, recorded so the next port is smoother):
+
+- **Transport is a loopback listener, not a custom scheme (§4).** The
+  custom URI scheme worked for everything *except* binary upload bodies,
+  which SIGSEGV WebKitGTK. The shell `axum::serve`s the router on an
+  ephemeral `127.0.0.1` port; the window loads `http://127.0.0.1:<port>/`.
+- **No config block (§6.1).** Convention (`src-tauri/`, single bin,
+  `tauri` feature on) + the `--backend` flag. Standalone (in-process) vs
+  server (forward to a deployed URL) is the one knob.
+- **Nested `src-tauri` needs its own `[workspace]`** — otherwise Cargo
+  errors "believes it's in a workspace when it's not" when building from
+  inside it. Both the example and the scaffolder emit it.
+- **A window icon is required at compile time.** `generate_context!`
+  fails without `icons/icon.png`; the scaffolder ships a placeholder.
+- **`WEBKIT_DISABLE_DMABUF_RENDERER=1`** is defaulted on Linux (WebKitGTK
+  DMABUF renderer SIGSEGVs on NVIDIA/hybrid under Wayland).
+- **A rustls `CryptoProvider` is installed at startup.** The process
+  pulls in both `aws-lc-rs` and `ring`, so rustls 0.23 won't auto-pick
+  one; `install_default()` runs before any TLS (the server-mode proxy
+  *and* the app's own S3/GCS storage clients in standalone).
+- **The Tokio listener is built inside the runtime.** `TcpListener::
+  from_std` registers with the reactor, so it runs in the spawned task,
+  not Tauri's (non-async) `setup` hook.
+- **`pocopine doctor`** checks the native prerequisites per-OS (GTK/
+  WebKitGTK dev libs on Linux, with the distro install command; Xcode CLT
+  on macOS; WebView2 note on Windows) plus the window icon.
+
+Deferred (unchanged from §10): loopback hardening (Host allowlist /
+per-launch token, §4.2), `Server::finalize()` promotion, auto-update/
+signing, and mobile.
