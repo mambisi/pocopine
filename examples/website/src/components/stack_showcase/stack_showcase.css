@@ -20,8 +20,11 @@
   height: 7px;
   background: var(--brand);
 }
-.sfw-corner-l { left: -4px; }
-.sfw-corner-r { right: -4px; }
+/* Flush to the section edge, not -4px past it: on mobile the section is
+   full-bleed, so a negative offset pushed these accents past the viewport
+   and forced horizontal page scroll. */
+.sfw-corner-l { left: 0; }
+.sfw-corner-r { right: 0; }
 
 .sfw-head { max-width: 48rem; margin-bottom: 1.5rem; }
 .sfw-head h2 {
