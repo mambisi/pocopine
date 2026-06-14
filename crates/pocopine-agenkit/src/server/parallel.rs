@@ -178,6 +178,11 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
         let mut successes: Vec<T> = Vec::new();
         let mut success_count: u32 = 0;
         let mut first_error: Option<AgenkitError> = None;
+        // Track which branches reached a terminal (completed/failed) event so
+        // any started-but-undrained branch left behind by `abort_all` can be
+        // closed with a cancelled event — otherwise a client reconstructing the
+        // tree sees forever-open branches under a completed group (§D7/§D8).
+        let mut settled = vec![false; branch_steps.len()];
 
         while let Some(joined) = set.join_next().await {
             let (index, result) = match joined {
@@ -219,6 +224,7 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                         group_id: group_id.clone(),
                         step_id,
                     });
+                    settled[index] = true;
                     successes.push(value);
                     success_count += 1;
                     if success_count >= target
@@ -245,6 +251,7 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                         step_id,
                         error_kind: error.kind().to_string(),
                     });
+                    settled[index] = true;
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
@@ -254,6 +261,31 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                     }
                 }
             }
+        }
+
+        // Close any branch that started but was aborted in flight (an
+        // early-exit join broke out of the drain loop with losers still
+        // running). Each gets a terminal cancelled event so the trace tree has
+        // no dangling open branches under the completed group.
+        for (index, done) in settled.iter().enumerate() {
+            if *done {
+                continue;
+            }
+            let step_id = branch_steps[index].clone();
+            run.emit(
+                run.event(
+                    events::AI_STEP_CANCELLED,
+                    StepKind::Agent,
+                    StepStatus::Cancelled,
+                )
+                .with_step(step_id.clone())
+                .with_parallel_group(group_id.clone())
+                .with_field("branch", branch_names[index].clone()),
+            );
+            run.stream(FlowStreamEvent::BranchCancelled {
+                group_id: group_id.clone(),
+                step_id,
+            });
         }
 
         run.emit(

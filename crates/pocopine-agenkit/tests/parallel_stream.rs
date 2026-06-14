@@ -190,6 +190,59 @@ fn all_settled_join_records_a_panicked_branch_but_keeps_survivors() {
 }
 
 #[test]
+fn first_success_emits_cancelled_terminal_for_aborted_loser() {
+    // The losing branch is aborted in flight by `FirstSuccess`. It emitted a
+    // `BranchStarted`, so the stream must close it with a terminal
+    // `BranchCancelled` — never leave it forever-open under the completed group.
+    let (agenkit, _) = runtime();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let winner: i32 = block_on(async {
+        let value = agenkit
+            .run_flow_streaming("race", serde_json::json!(null), tx)
+            .await
+            .unwrap();
+        serde_json::from_value(value).unwrap()
+    });
+    assert_eq!(winner, 1);
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    let count = |pred: fn(&FlowStreamEvent) -> bool| events.iter().filter(|e| pred(e)).count();
+
+    assert_eq!(
+        count(|e| matches!(e, FlowStreamEvent::BranchStarted { .. })),
+        2,
+        "both branches started"
+    );
+    assert_eq!(
+        count(|e| matches!(e, FlowStreamEvent::BranchCompleted { .. })),
+        1,
+        "the winner completed"
+    );
+    assert_eq!(
+        count(|e| matches!(e, FlowStreamEvent::BranchCancelled { .. })),
+        1,
+        "the aborted loser must be closed with a cancelled terminal"
+    );
+    // Every started branch reached exactly one terminal: no dangling open branch.
+    let started = count(|e| matches!(e, FlowStreamEvent::BranchStarted { .. }));
+    let terminal = count(|e| {
+        matches!(
+            e,
+            FlowStreamEvent::BranchCompleted { .. }
+                | FlowStreamEvent::BranchFailed { .. }
+                | FlowStreamEvent::BranchCancelled { .. }
+        )
+    });
+    assert_eq!(
+        started, terminal,
+        "every branch must reach a terminal event"
+    );
+}
+
+#[test]
 fn streaming_emits_public_flow_events() {
     let (agenkit, _) = runtime();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
