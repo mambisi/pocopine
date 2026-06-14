@@ -412,14 +412,85 @@ fn hydrate_static_child_mount(
         install_static_child_mount(&host, scope_id, proxy, entry, template_name);
         return;
     }
-    match host.first_element_child() {
-        Some(inner) => {
-            crate::hydrate::hydrate_root(&inner);
-        }
-        // No server content (child wasn't server-rendered) — mount fresh.
-        None => crate::mount::mount_child_component(&host, entry.tag),
+    // The claim: adopt the server-rendered subtree (or mount fresh if the
+    // child wasn't server-rendered) and wire the parent's host directives.
+    let claim: Box<dyn FnOnce()> = {
+        let host = host.clone();
+        let proxy = proxy.clone();
+        let template_name = template_name.to_string();
+        Box::new(move || {
+            match host.first_element_child() {
+                Some(inner) => {
+                    crate::hydrate::hydrate_root(&inner);
+                }
+                None => crate::mount::mount_child_component(&host, entry.tag),
+            }
+            install_child_host_directives(&host, scope_id, &proxy, entry, &template_name);
+        })
+    };
+
+    // RFC-099 — lazy hydration. A host marked `pp-hydrate="visible"` keeps
+    // its already-painted SSR markup but DEFERS the claim (bindings /
+    // listeners / effects / on_mount) until it scrolls into view, so
+    // below-the-fold content stops competing for the main thread at load.
+    // No flicker — the markup never changes, only behaviour arrives later.
+    // Degrades to an immediate claim if the attribute was stripped or
+    // IntersectionObserver is unavailable.
+    if host.get_attribute("pp-hydrate").as_deref() == Some("visible") {
+        defer_hydration_until_visible(&host, claim);
+    } else {
+        claim();
     }
-    install_child_host_directives(&host, scope_id, proxy, entry, template_name);
+}
+
+/// RFC-099 — run `claim` once when `host` first intersects the viewport,
+/// then disconnect. Claims immediately if `IntersectionObserver` can't be
+/// constructed. The one-shot callback is intentionally leaked (`forget`):
+/// it fires at most once per lazily-hydrated host and the observer is
+/// disconnected right after, so there's no ongoing cost.
+fn defer_hydration_until_visible(host: &Element, claim: Box<dyn FnOnce()>) {
+    use std::cell::Cell;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    // Shared single-shot slots, swapped out when the host first intersects.
+    type ClaimSlot = Rc<Cell<Option<Box<dyn FnOnce()>>>>;
+    type ObserverSlot = Rc<Cell<Option<web_sys::IntersectionObserver>>>;
+
+    let observer: ObserverSlot = Rc::new(Cell::new(None));
+    let pending: ClaimSlot = Rc::new(Cell::new(Some(claim)));
+
+    let observer_cb = observer.clone();
+    let pending_cb = pending.clone();
+    let cb = Closure::<dyn FnMut(js_sys::Array)>::new(move |entries: js_sys::Array| {
+        let visible = entries.iter().any(|e| {
+            e.dyn_into::<web_sys::IntersectionObserverEntry>()
+                .map(|entry| entry.is_intersecting())
+                .unwrap_or(false)
+        });
+        if visible {
+            if let Some(claim) = pending_cb.take() {
+                claim();
+            }
+            if let Some(obs) = observer_cb.take() {
+                obs.disconnect();
+            }
+        }
+    });
+
+    match web_sys::IntersectionObserver::new(cb.as_ref().unchecked_ref()) {
+        Ok(obs) => {
+            obs.observe(host);
+            observer.set(Some(obs));
+            cb.forget();
+        }
+        // No observer support — claim now rather than never.
+        Err(_) => {
+            if let Some(claim) = pending.take() {
+                claim();
+            }
+        }
+    }
 }
 
 /// Find the `<!--label-->` comment among `parent`'s child nodes (the

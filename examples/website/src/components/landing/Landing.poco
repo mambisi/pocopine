@@ -13,5 +13,7 @@
 
   <stack-showcase></stack-showcase>
   <stack-flow></stack-flow>
-  <secure-section></secure-section>
+  <!-- RFC-099 — below the fold: keep the SSR markup, defer hydration
+       (claim/effects) until it scrolls into view (pp-hydrate="visible"). -->
+  <secure-section pp-hydrate="visible"></secure-section>
 </root>
