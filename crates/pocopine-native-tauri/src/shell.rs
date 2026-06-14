@@ -34,6 +34,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// loop until the last window closes. Called via the [`crate::run!`] macro.
 pub fn run(app: NativeApp, context: tauri::Context<tauri::Wry>) -> tauri::Result<()> {
     apply_linux_webview_workarounds();
+    install_crypto_provider();
 
     let NativeAppParts {
         title,
@@ -194,15 +195,21 @@ fn backend_target() -> Option<(String, reqwest::Client)> {
         .ok()
         .map(|value| value.trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())?;
-
-    // rustls 0.23 refuses to auto-pick a CryptoProvider when the build
-    // graph enables more than one (this workspace pulls in both aws-lc-rs
-    // and ring transitively), panicking at first TLS use. Install ring's
-    // provider explicitly before reqwest builds its TLS config. Idempotent
-    // — a second call (or one from elsewhere) returns Err, which we ignore.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     Some((base, reqwest::Client::new()))
+}
+
+/// Install a process-default rustls `CryptoProvider`.
+///
+/// rustls 0.23 refuses to auto-pick a provider when the build graph
+/// enables more than one — and this process pulls in both `aws-lc-rs` and
+/// `ring` transitively (the server-mode proxy via `reqwest`, *and* the
+/// app's own in-process storage clients hitting S3/GCS). Either would
+/// panic at first TLS use ("Could not automatically determine the
+/// process-level CryptoProvider"). Install `ring` once at startup, before
+/// any rustls config is built. Idempotent — a second call (or one from
+/// elsewhere) returns `Err`, which we ignore.
+fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 /// Environment variable carrying the server backend URL, set by `pocopine
