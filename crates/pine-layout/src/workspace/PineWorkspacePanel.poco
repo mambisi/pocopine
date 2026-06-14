@@ -1,0 +1,8 @@
+<root class="pine-workspace-panel"
+      role="navigation"
+      :id="id"
+      :aria-label="label"
+      :data-side="side"
+      :data-state="open ? 'open' : 'closed'">
+  <slot></slot>
+</root>

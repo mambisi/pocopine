@@ -1,0 +1,70 @@
+<pine-workspace class="ws" pp-model:breakpoint="bp">
+
+  <pine-workspace-header class="ws-header">
+    <button class="ws-icon-btn" pp-on:click="toggle_sidebar" aria-label="Toggle sidebar">
+      <span class="ws-burger"></span>
+    </button>
+    <span class="ws-brand"><span class="ws-logo">◆</span>&nbsp;Pine&nbsp;Workspace</span>
+    <span class="ws-grow"></span>
+    <button class="ws-btn" pp-on:click="toggle_bottom">Console</button>
+    <button class="ws-btn ws-btn-accent" pp-on:click="toggle_aside">Detail</button>
+  </pine-workspace-header>
+
+  <pine-workspace-sidebar class="ws-sidebar" label="Primary navigation" pp-model:collapsed="sidebar_collapsed">
+    <nav class="ws-nav">
+      <a class="ws-nav-item is-active" href="#"><span class="ws-ico">▦</span><span class="nav-label">Dashboard</span></a>
+      <a class="ws-nav-item" href="#"><span class="ws-ico">◷</span><span class="nav-label">Activity</span></a>
+      <a class="ws-nav-item" href="#"><span class="ws-ico">⬡</span><span class="nav-label">Projects</span></a>
+      <a class="ws-nav-item" href="#"><span class="ws-ico">◐</span><span class="nav-label">Reports</span></a>
+      <a class="ws-nav-item" href="#"><span class="ws-ico">⚙</span><span class="nav-label">Settings</span></a>
+    </nav>
+  </pine-workspace-sidebar>
+
+  <pine-workspace-main class="ws-main">
+    <div class="ws-main-inner">
+      <h1>Workspace shell</h1>
+      <p>
+        A content-heavy frame: a resizable rail/sidebar, the main region, and a trailing
+        <strong>Aside</strong> — a resizable docked column you can open and close.
+        <code>pine-layout</code> ships no CSS — this entire layout is author CSS reacting
+        to <code>data-*</code> + <code>--pine-*-size</code>.
+      </p>
+      <ul class="ws-tips">
+        <li>Drag the splitters between regions to resize (double-click to reset).</li>
+        <li>Toggle the trailing <strong>Detail</strong> panel and the <strong>Console</strong>.</li>
+        <li>Narrow the window: the sidebar auto-collapses to a rail (hover it for the flyout).</li>
+      </ul>
+      <div class="ws-cards">
+        <div class="ws-card"><span>Sidebar</span><strong>resize · rail · flyout</strong></div>
+        <div class="ws-card"><span>Aside</span><strong>resize · open / close</strong></div>
+        <div class="ws-card"><span>Bottom</span><strong>resize · collapse</strong></div>
+      </div>
+    </div>
+  </pine-workspace-main>
+
+  <pine-workspace-aside class="ws-aside" label="Detail panel" pp-model:open="aside_open">
+    <div class="ws-aside-inner">
+      <header class="ws-aside-head">
+        <strong>Detail</strong>
+        <button class="ws-icon-btn" pp-on:click="toggle_aside" aria-label="Close detail">✕</button>
+      </header>
+      <p>A task detail / AI / comments panel — a resizable column you can open and close.</p>
+      <p class="ws-muted">Drag the left edge to resize (double-click to reset).</p>
+    </div>
+  </pine-workspace-aside>
+
+  <pine-workspace-bottom class="ws-bottom" label="Console" pp-model:open="bottom_open">
+    <header class="ws-bottom-head">
+      <strong>Console</strong>
+      <button class="ws-icon-btn" pp-on:click="toggle_bottom" aria-label="Close console">✕</button>
+    </header>
+    <pre class="ws-console">pine-workspace ready · drag the top edge to resize this panel</pre>
+  </pine-workspace-bottom>
+
+  <pine-workspace-footer class="ws-footer">
+    <span>pine-workspace — RFC-105</span>
+    <span class="ws-grow"></span>
+    <span class="ws-bp" aria-hidden="true" pp-text="bp"></span>
+  </pine-workspace-footer>
+
+</pine-workspace>

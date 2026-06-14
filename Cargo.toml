@@ -73,6 +73,7 @@ members = [
     "examples/sync",
     "examples/tailwind",
     "examples/todo",
+    "examples/workspace",
 ]
 
 # The CLI builds for the host; everything else builds for wasm32. Exclude the

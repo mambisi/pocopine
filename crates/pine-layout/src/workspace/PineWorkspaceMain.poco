@@ -1,0 +1,3 @@
+<root class="pine-workspace-main" role="main">
+  <slot></slot>
+</root>

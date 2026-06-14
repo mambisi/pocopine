@@ -34,6 +34,7 @@
 //! ```
 
 use crate::breakpoint::{install, Breakpoint};
+use crate::floating as drawer;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -92,16 +93,9 @@ impl PineAppShell {
     /// `rail_at` / `sidebar_at` thresholds. Closes the drawer when the
     /// viewport grows out of drawer mode so focus/scroll are released.
     fn recompute_nav_mode(&mut self) {
-        let bp = Breakpoint::from_token(&self.breakpoint).unwrap_or(Breakpoint::Base);
-        let rail = Breakpoint::from_token(&self.rail_at).unwrap_or(Breakpoint::Md);
-        let sidebar = Breakpoint::from_token(&self.sidebar_at).unwrap_or(Breakpoint::Xl);
-        self.nav_mode = if bp.rank() >= sidebar.rank() {
-            "sidebar".into()
-        } else if bp.rank() >= rail.rank() {
-            "rail".into()
-        } else {
-            "drawer".into()
-        };
+        self.nav_mode =
+            crate::breakpoint::nav_mode(&self.breakpoint, &self.rail_at, &self.sidebar_at)
+                .to_string();
         if self.nav_mode != "drawer" && self.nav_open {
             // Leaving drawer mode — the Sidebar's watcher releases the
             // focus trap + scroll lock when it sees this flip to false.
@@ -281,64 +275,6 @@ impl PineAppShellTrigger {
             shell.update(|s| s.toggle_nav());
         }
     }
-}
-
-// ── Drawer runtime — modal focus trap + scroll lock ───────────────
-//
-// Focus traps / saved-focus handles aren't serde-friendly, so they
-// live in a per-scope side-table keyed by the Sidebar's scope id —
-// the same shape `pine::overlay` uses for Dialog/Popover.
-
-#[cfg(target_arch = "wasm32")]
-mod drawer {
-    use pocopine::{focus, scroll_lock};
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use web_sys::Element;
-
-    struct Runtime {
-        saved: focus::Saved,
-        // Held purely for its `Drop` — dropping detaches the trap.
-        _trap: focus::TrapHandle,
-    }
-
-    thread_local! {
-        static DRAWERS: RefCell<HashMap<u64, Runtime>> = RefCell::new(HashMap::new());
-    }
-
-    /// Activate the modal drawer: lock scroll, save focus, trap focus
-    /// inside `el`, and move focus to its first focusable. Idempotent.
-    pub(super) fn open(scope: u64, el: &Element) {
-        let already = DRAWERS.with(|d| d.borrow().contains_key(&scope));
-        if already {
-            return;
-        }
-        scroll_lock::lock();
-        let saved = focus::save();
-        let trap = focus::trap(el);
-        let _ = focus::auto_focus_first(el);
-        DRAWERS.with(|d| {
-            d.borrow_mut().insert(scope, Runtime { saved, _trap: trap });
-        });
-    }
-
-    /// Deactivate the drawer: untrap, unlock scroll, restore focus.
-    /// Idempotent.
-    pub(super) fn close(scope: u64) {
-        let rt = DRAWERS.with(|d| d.borrow_mut().remove(&scope));
-        if let Some(rt) = rt {
-            // `_trap` drops here, detaching the focus trap.
-            scroll_lock::unlock();
-            focus::restore(rt.saved);
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod drawer {
-    use web_sys::Element;
-    pub(super) fn open(_scope: u64, _el: &Element) {}
-    pub(super) fn close(_scope: u64) {}
 }
 
 #[cfg(test)]

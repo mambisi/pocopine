@@ -1,0 +1,24 @@
+<root class="pine-workspace-aside"
+      pp-ref="aside"
+      role="complementary"
+      :id="id"
+      :aria-label="label"
+      :data-side="side"
+      :data-aside-state="open ? 'open' : 'closed'"
+      :data-dragging="dragging"
+      :style="'--pine-aside-size:' + display_size + 'px'">
+  <slot></slot>
+  <div class="pine-workspace-aside-resize"
+       role="separator"
+       aria-orientation="vertical"
+       :aria-valuenow="size"
+       :aria-valuemin="min"
+       :aria-valuemax="max"
+       tabindex="0"
+       @pointerdown="on_resize_start"
+       @keydown.arrow-right.prevent="nudge_grow"
+       @keydown.arrow-left.prevent="nudge_shrink"
+       @keydown.home.prevent="to_min"
+       @keydown.end.prevent="to_max"
+       @dblclick="reset_size"></div>
+</root>

@@ -1,0 +1,3 @@
+<root class="pine-workspace" :data-breakpoint="breakpoint">
+  <slot></slot>
+</root>

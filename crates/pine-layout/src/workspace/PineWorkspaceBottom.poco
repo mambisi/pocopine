@@ -1,0 +1,23 @@
+<root class="pine-workspace-bottom"
+      role="complementary"
+      :id="id"
+      :aria-label="label"
+      :data-edge="edge"
+      :data-state="open ? 'open' : 'closed'"
+      :data-dragging="dragging"
+      :style="'--pine-bottom-size:' + display_size + 'px'">
+  <slot></slot>
+  <div class="pine-workspace-bottom-resize"
+       role="separator"
+       aria-orientation="horizontal"
+       :aria-valuenow="size"
+       :aria-valuemin="min"
+       :aria-valuemax="max"
+       tabindex="0"
+       @pointerdown="on_resize_start"
+       @keydown.arrow-up.prevent="nudge_grow"
+       @keydown.arrow-down.prevent="nudge_shrink"
+       @keydown.home.prevent="to_min"
+       @keydown.end.prevent="to_max"
+       @dblclick="reset_size"></div>
+</root>

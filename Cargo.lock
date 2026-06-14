@@ -9943,6 +9943,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "workspace-demo"
+version = "0.1.1"
+dependencies = [
+ "pine-layout",
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
