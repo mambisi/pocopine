@@ -19,12 +19,12 @@
 
 use std::sync::Arc;
 
-use pocopine_native::{bridge, dev_dir, NativeApp, NativeAppParts};
-use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine_native::{NativeApp, NativeAppParts, bridge, dev_dir};
+use pocopine_server::axum::Router;
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::extract::{Request as AxumRequest, State};
 use pocopine_server::axum::response::Response as AxumResponse;
 use pocopine_server::axum::routing::any;
-use pocopine_server::axum::Router;
 use pocopine_server::tokio::net::TcpListener;
 use pocopine_server::tower_http::services::ServeFile;
 use pocopine_server::{index_file, static_files};
@@ -225,7 +225,12 @@ const BACKEND_ENV: &str = "POCOPINE_NATIVE_BACKEND";
 #[cfg(target_os = "linux")]
 fn apply_linux_webview_workarounds() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        // SAFETY (edition 2024 makes env mutation `unsafe`): runs before any
+        // GTK/WebKit/Tokio thread starts, so no other thread is touching the
+        // environment.
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
     }
 }
 

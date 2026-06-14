@@ -17,11 +17,11 @@
 use std::path::Path;
 
 use http::{HeaderName, HeaderValue, Request, Response};
-use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::Router;
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::tower::ServiceExt;
 use pocopine_server::tower_http::services::ServeFile;
-use pocopine_server::{index_file, static_files, Server};
+use pocopine_server::{Server, index_file, static_files};
 
 /// Assemble the app router that backs the native window.
 ///

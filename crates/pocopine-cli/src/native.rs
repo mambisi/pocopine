@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::args::{NativeArgs, NativeBuildArgs, NativeCmd, NativeDevArgs};
@@ -150,9 +150,9 @@ fn cargo_drive(
         src_tauri.display(),
         backend_label(backend),
     );
-    let status = cmd.status().with_context(|| {
-        "failed to invoke cargo for the native host crate (is the Rust toolchain installed?)"
-    })?;
+    let status = cmd.status().with_context(
+        || "failed to invoke cargo for the native host crate (is the Rust toolchain installed?)",
+    )?;
     if !status.success() {
         bail!("native host crate `cargo {subcommand}` failed with {status}");
     }

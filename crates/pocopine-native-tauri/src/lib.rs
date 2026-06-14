@@ -26,7 +26,7 @@
 //! }
 //! ```
 
-pub use pocopine_native::{dev_dir, NativeApp, DEV_DIR_ENV};
+pub use pocopine_native::{DEV_DIR_ENV, NativeApp, dev_dir};
 
 #[cfg(feature = "tauri")]
 mod shell;
