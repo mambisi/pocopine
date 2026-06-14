@@ -14,9 +14,9 @@ functions run host-side behind an axum HTTP server. This RFC adds a
 **native desktop target** without forking the runtime: the *exact same
 wasm bundle* runs inside a [Tauri](https://tauri.app) webview, and the
 app's `#[server]` functions run **in the same native process** as the
-window — reached over a custom URI scheme that drives the existing
-axum `Router` in-process. No open TCP port, no IPC layer, and **zero
-changes to `pocopine-core`**.
+window — served over an ephemeral `127.0.0.1` loopback listener that
+drives the existing axum `Router`. No remote backend, no IPC layer, and
+**zero changes to `pocopine-core`**.
 
 The whole feature is two new host crates — `pocopine-native` (the
 backend-neutral transport core) and `pocopine-native-tauri` (the Tauri
@@ -28,15 +28,14 @@ target is untouched.
  ┌──────────────────────── Tauri process (native, one Tokio runtime) ───────────────────────┐
  │                                                                                            │
  │   ┌─ WebView (WKWebView / WebView2 / WebKitGTK) ─┐      ┌─ Rust backend ─────────────────┐ │
- │   │  document  pocopine://localhost/             │      │                                │ │
- │   │  pkg/<app>_bg.<hash>.wasm  (UNCHANGED)       │      │  axum Router                   │ │
- │   │  pocopine-core reactive runtime              │      │   = Server::new(Router::new()) │ │
- │   │                                              │      │     · inventory!(#[server])    │ │
- │   │  window.fetch("/_pocopine/save_a1b2")        │      │     · static_files(pkg)        │ │
+ │   │  document  http://127.0.0.1:<ephemeral>/     │      │  axum Router                   │ │
+ │   │  pkg/<app>_bg.<hash>.wasm  (UNCHANGED)       │      │   = Server::new(Router::new()) │ │
+ │   │  pocopine-core reactive runtime              │      │     · inventory!(#[server])    │ │
+ │   │                                              │      │     · static_files(pkg)        │ │
+ │   │  fetch("/_pocopine/save_a1b2")  +  uploads   │      │                                │ │
  │   └───────────────────────┬──────────────────────┘      └───────────────▲────────────────┘ │
- │                           │  scheme handler: http::Request                │                  │
- │                           └────────────►  bridge::dispatch ──────────────┘                  │
- │                                          Router::oneshot(req).await                          │
+ │                           │  real HTTP over loopback (127.0.0.1)          │                  │
+ │                           └────────────►  axum::serve(listener, router) ──┘                  │
  └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,73 +88,81 @@ Three consequences:
    between web and native.** The native target is purely additive: a
    window + an in-process backend.
 
-## 4. Transport: custom URI scheme → `Router::oneshot`
+## 4. Transport: an ephemeral `127.0.0.1` loopback listener
 
-The single interesting design decision is how `window.fetch("/_pocopine/…")`
-inside the webview reaches the app's `#[server]` handlers.
+The one interesting design decision is how the webview reaches the app's
+`#[server]` handlers. Three options were considered:
 
-| Option | Open port? | wasm-side change | Reuses `#[server]` router |
-|---|---|---|---|
-| **A. Custom URI scheme → `oneshot`** ✅ | No | **none** | yes, verbatim |
-| B. Tauri IPC (`invoke`) + fetch middleware | No | new client crate + dispatch shim | needs adapter |
-| C. Embed axum on `127.0.0.1:<rand>` | **yes** | none | yes, verbatim |
+| Option | Open port? | wasm-side change | Reuses `#[server]` router | Binary uploads |
+|---|---|---|---|---|
+| A. Custom URI scheme → `oneshot` | No | none | yes | **broken (WebKitGTK)** |
+| B. Tauri IPC (`invoke`) + fetch middleware | No | new client crate + shim | needs adapter | awkward |
+| **C. Loopback `127.0.0.1:<ephemeral>`** ✅ | yes (loopback) | none | yes, verbatim | works |
 
-This RFC adopts **Option A**. Tauri v2's
-`register_asynchronous_uri_scheme_protocol` hands the Rust side an
-`http::Request<Vec<u8>>` for every request the webview makes under a
-registered scheme and lets it answer with an `http::Response`. axum's
-`Router` *is* a `tower::Service<http::Request<Body>>`, so the request is
-fed straight into the same router the web server would `serve()`:
+This RFC ships **Option C**, after starting on A. The history matters:
+
+**A was the original design** — `register_asynchronous_uri_scheme_protocol`
+serves the app from a `pocopine://localhost` custom scheme with no open
+port, feeding each request into the router via `Router::oneshot`. It
+works for the document, wasm, CSS, and JSON `#[server]` calls. But
+**WebKitGTK SIGSEGVs reading a binary `Blob` request body over a custom
+scheme** (file uploads — `pocopine-storage`'s resumable `PATCH` chunks).
+That is a hard platform bug, not something the framework can work around
+on the custom-scheme path; small JSON string bodies survive, binary
+bodies crash the webview process.
+
+**C avoids it by being real HTTP.** The shell binds an ephemeral
+`127.0.0.1:0` listener and `axum::serve`s the same router the web server
+would; the window loads `http://127.0.0.1:<port>/`. Every request — the
+document, wasm, CSS, `#[server]` calls, and uploads — is an ordinary HTTP
+request the OS webview handles natively. No custom scheme, no
+per-request adapter; `axum::serve(listener, router)` is the entire
+transport, identical to production serving.
 
 ```text
- window.fetch("/_pocopine/save_a1b2", {POST, body})
-        │  scheme = pocopine  (document origin)
+ fetch("/_pocopine/save_a1b2")  +  binary uploads
+        │  origin = http://127.0.0.1:<port>  (real HTTP)
         ▼
- register_asynchronous_uri_scheme_protocol("pocopine", handler)
-        │  http::Request<Vec<u8>>
-        ▼
- bridge::dispatch(router.clone(), req):
-        ├─ Request<Vec<u8>>  → Request<axum::body::Body>
-        ├─ router.oneshot(req).await        (Error = Infallible)
-        └─ Response<Body>    → Response<Vec<u8>>   (collect bytes)
-        ▼
- responder.respond(http::Response<Cow<[u8]>>)
+ ephemeral 127.0.0.1:0 listener  ──►  axum::serve(listener, router)
+        │
+        └─ standalone: in-process #[server] router  |  server: forward to backend (§6.2)
 ```
 
-**Why A over B/C.**
+- **vs A (custom scheme):** A's "no open port" is nicer, but it cannot
+  carry binary upload bodies on WebKitGTK. C trades the port for working
+  uploads. The port is **loopback only** (`127.0.0.1`, never `0.0.0.0`)
+  and **ephemeral** (`:0`, a fresh random port per launch). This is the
+  same model Tauri's own `tauri-plugin-localhost` uses. (`bridge::dispatch`
+  — the custom-scheme `http::Request → oneshot` adapter — remains in
+  `pocopine-native` as a tested utility for backends that can use it.)
+- **vs B (IPC):** would require a *new wasm-side crate* (a
+  `FetchMiddleware` over the JS IPC bridge) plus a host shim re-deriving
+  routing from the `#[server]` inventory, and still wouldn't cleanly
+  carry the storage client's uploads (it bypasses the fetch middleware).
+  C reuses the HTTP semantics the whole stack already speaks (status
+  codes, headers, auth middleware, the `pocopine-server` plugin chain)
+  with **no** wasm-side code.
 
-- **vs C (localhost):** an open `127.0.0.1` port is reachable by any
-  other process on the machine (and any web page via DNS-rebinding to
-  localhost). The custom scheme is in-process only — there is no socket.
-  C is fine as a throwaway spike; it is not the shipping design.
-- **vs B (IPC):** Tauri's `invoke()` would require a *new wasm-side
-  crate* (a `FetchMiddleware` that serialises calls over the JS IPC
-  bridge) plus a host dispatch shim that re-derives routing from the
-  `#[server]` inventory. Option A reuses the HTTP semantics the whole
-  stack already speaks (status codes, headers, the auth middleware, the
-  `pocopine-server` plugin chain) and needs **no** wasm-side code.
+### 4.1 Origin/CSRF — natural, not stamped
 
-The document itself is served the same way: the window points at
-`pocopine://localhost/`, and the scheme handler answers `/`, `/index.html`,
-`pkg/*.wasm`, and CSS from the same router's `static_files` fallback. One
-handler, one router, every request.
+Because the page now has a real `http://127.0.0.1:<port>` origin, the
+webview sends proper `Origin` / `Sec-Fetch-Site` headers on every
+request, so server-side origin/CSRF guards written for the web accept
+native calls **as designed** — e.g. `pocopine-storage`'s mutation-origin
+check sees `Origin` matching the (localhost) `Host` and passes. The
+loopback transport needs no header rewriting; it serves the router
+verbatim. (Only the "server"-mode proxy in §6.2 stamps
+`Sec-Fetch-Site: same-origin`, because it forwards to a *different*
+origin on the app's behalf.)
 
-### 4.1 Same-origin by construction
+### 4.2 Loopback hardening
 
-Every native request originates from the app's own webview hitting the
-in-process router; there is no network listener and no cross-origin or
-CSRF surface. The bridge makes that explicit by stamping
-`Sec-Fetch-Site: same-origin` on each dispatched request before it reaches
-the router. This is factually accurate for native, and it lets
-server-side origin/CSRF guards written for the web accept native calls
-unchanged — e.g. `pocopine-storage`'s mutation-origin check, which
-otherwise rejects WebKitGTK custom-scheme `fetch`es because they carry
-neither `Origin` nor `Sec-Fetch-Site` ("storage mutation origin could not
-be validated"). Guards that inspect `Origin`/`Referer` specifically may
-need the same treatment extended (synthesizing a matching `Origin`); the
-`Sec-Fetch-Site` stamp covers the common pattern. This is the one place
-the native transport rewrites a request — everything else is passed
-through verbatim.
+The listener binds `127.0.0.1` (loopback only — unreachable off-box) on
+an ephemeral port. The residual risks are other local processes and
+DNS-rebinding from a browser tab; a follow-up can add a `Host`-header
+allowlist (reject requests whose `Host` isn't the bound `127.0.0.1:port`)
+and/or a per-launch bearer token to close those. v1 ships the loopback +
+ephemeral-port baseline.
 
 ## 5. The crates: `pocopine-native` + `pocopine-native-tauri`
 
@@ -185,11 +192,13 @@ crates/pocopine-native-tauri/           (tauri OPTIONAL, behind feature "tauri",
   `.with_auth` / `.plugin`), and calls `Server::try_finalize()` to
   install `#[server]` routes and activate the plugin registry. **This
   crate compiles and is unit-tested on any host** (no webview libraries).
-- **`pocopine-native-tauri::shell`** is the thin Tauri wiring: register
-  the scheme, spawn the dispatch future on `tauri::async_runtime`, build
-  the `WebviewWindow` pointed at `pocopine://localhost/`. It consumes
-  the core via `pocopine_native::{bridge, NativeApp, dev_dir}` and is
-  gated behind `feature = "tauri"`.
+- **`pocopine-native-tauri::shell`** is the thin Tauri wiring: build the
+  router (`bridge::build_router` for standalone, or a forwarding router
+  for server mode), `axum::serve` it on an ephemeral `127.0.0.1` listener
+  via `tauri::async_runtime`, and open the `WebviewWindow` at
+  `http://127.0.0.1:<port>/`. It consumes the core via
+  `pocopine_native::{bridge, NativeApp, dev_dir}` and is gated behind
+  `feature = "tauri"`.
 
 ### 5.1 Why the `tauri` dep is optional and off by default
 
@@ -287,22 +296,26 @@ pocopine deploy status                           # read the URL
 pocopine native build --backend "<that url>"     # desktop client points at it
 ```
 
-**How "server" works (host-side forward).** The shell keeps serving the
-document + wasm + CSS locally over the custom scheme, but forwards the
-server/storage routes to the backend with an HTTP client (`reqwest`).
-Because the forward is **host-to-host**, not a browser request:
+**How "server" works (host-side forward).** The loopback listener serves
+the document + wasm + CSS locally, but its `/_pocopine/*` and
+`/__pocopine/*` routes forward to the backend with an HTTP client
+(`reqwest`). Because the forward is **host-to-host**, not a browser
+request:
 
 - there is **no browser CORS** to configure on the server;
-- the webview stays same-origin (it only ever talks to the custom scheme);
-- auth headers the app already sets flow through unchanged.
+- the webview only ever talks to `http://127.0.0.1:<port>` (same-origin);
+- auth headers the app already sets flow through unchanged;
+- the proxy stamps `Sec-Fetch-Site: same-origin` (it forwards to a
+  different origin on the app's behalf) and drops the loopback
+  `Host`/`Origin`.
 
 ## 7. Interaction with RFC-099 (SSR) — future, not a dependency
 
 In a Tauri app the "server" and the webview host are the **same native
 process**. Once RFC-099 phases 3–4 land host-side plan-stamping and
-two-tier templates, the scheme handler for `/` can render the first
-paint **in-process** (no network, no spinner) and hand fully-formed HTML
-to the webview, which then hydrates the wasm — native SSR with zero
+two-tier templates, the loopback `/` route can render the first paint
+**in-process** (no network, no spinner) and hand fully-formed HTML to the
+webview, which then hydrates the wasm — native SSR with zero
 round-trips. This is a strong future payoff but **not** a dependency:
 RFC-099 phase 1 is only the number formatter + expr host backend, so the
 native target ships **client-rendered (identical to the browser)** today
