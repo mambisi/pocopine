@@ -46,6 +46,30 @@ pub use pocopine_core::{
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
+
+/// Spawn a `'static` future on the microtask queue (wraps
+/// `wasm_bindgen_futures::spawn_local`). On the host (SSR) it's a no-op —
+/// client-only async work (fetching a content fragment, polling, etc.)
+/// runs on the client after hydration, never during the server render, so
+/// running a component's `on_setup` host-side to bake derived state stays
+/// host-safe. Prefer this over importing `wasm_bindgen_futures` directly
+/// in component code. RFC-099.
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_local<F>(future: F)
+where
+    F: core::future::Future<Output = ()> + 'static,
+{
+    __private::wasm_bindgen_futures::spawn_local(future);
+}
+
+/// Host stub for [`spawn_local`] — drops the future unpolled (no async
+/// runtime / DOM on the server). See the wasm variant for details.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn_local<F>(_future: F)
+where
+    F: core::future::Future<Output = ()> + 'static,
+{
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub use pocopine_jobs::{
     DeadLetter, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler, JobId,

@@ -16,8 +16,10 @@
 //! derived in `on_setup` (the host doesn't run setup) — those hydrate /
 //! fill in on the client.
 
+#[cfg(not(target_arch = "wasm32"))]
 use website::{boot_app, WebsiteApp};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     // URL to render (default "/").
     let url = std::env::args().nth(1).unwrap_or_else(|| "/".to_string());
@@ -43,3 +45,8 @@ fn main() {
     );
     println!("{doc}");
 }
+
+// Host-only binary (pocopine-ssr is never linked into wasm); a stub keeps
+// `--target wasm32` builds of the website crate's bins compiling.
+#[cfg(target_arch = "wasm32")]
+fn main() {}

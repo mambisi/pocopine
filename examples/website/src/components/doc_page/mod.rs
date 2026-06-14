@@ -8,8 +8,8 @@
 //! everything from the `slug` and kicks off the fetch.
 
 use pocopine::prelude::*;
+use pocopine::spawn_local;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen_futures::spawn_local;
 
 use crate::docs_data;
 

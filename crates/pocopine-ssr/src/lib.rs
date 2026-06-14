@@ -298,6 +298,12 @@ fn render_route_into_outlet(
         props.insert(prop_field(k), coerce_attr(v));
     }
     let route_state = Value::Object(props);
+    // RFC-099 — run the route component's `on_setup` host-side too (like
+    // child mounts), so state it derives from its route params — a doc
+    // page's sidebar/TOC/title from its `slug` — is baked into the SSR'd
+    // page rather than popping in on hydrate when you refresh on a route.
+    #[cfg(not(target_arch = "wasm32"))]
+    let route_state = pocopine_core::registry::ssr_derive_state(route_tag, &route_state);
     if render_component_into_host(&route_el, route_tag, &route_state, keep) {
         route_el.parent.set(Some(Rc::downgrade(outlet)));
         *outlet.children.borrow_mut() = vec![route_el];
