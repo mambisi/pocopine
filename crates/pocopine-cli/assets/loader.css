@@ -1,0 +1,68 @@
+/* pocopine boot loader — injected into pkg/index.html by `pocopine build`
+ * when `[package.metadata.pocopine.loader] enabled` (the default).
+ * Colours reuse the app's theme tokens (--brand/--bg/--destructive) with
+ * light-theme fallbacks. Keep the controller contract in sync with
+ * crates/pocopine-core/src/progress.rs (window.__pocopineProgress). */
+
+/* Full-screen logo splash — first/cold load only (it lives in the initial
+ * HTML so it paints on frame 1; removed once the app reports ready). */
+#pp-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg, #fffaf2);
+  transition: opacity 0.4s ease;
+}
+#pp-splash.pp-splash--done {
+  opacity: 0;
+  pointer-events: none;
+}
+/* Cold-start only: the injected <head> gate sets data-pp-no-splash once the
+ * splash has shown this tab session (survives reloads / full-page
+ * navigations), so it doesn't reappear on every navigation. The top bar
+ * still shows. */
+html[data-pp-no-splash] #pp-splash { display: none !important; }
+.pp-splash__logo {
+  width: 96px;
+  height: 96px;
+  animation: pp-splash-pulse 1.4s ease-in-out infinite;
+}
+@keyframes pp-splash-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.97); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* Thin top progress bar — boot download + in-app/route activity. */
+#pp-loader {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 9999;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity 0.3s ease 0.15s;
+}
+#pp-loader.pp-loader--done { opacity: 0; }
+.pp-loader__bar {
+  height: 100%;
+  width: 100%;
+  background: var(--brand, #f8ae45);
+  box-shadow: 0 0 8px var(--brand, #f8ae45);
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+  will-change: transform;
+}
+#pp-loader.pp-loader--error .pp-loader__bar {
+  background: var(--destructive, #c04a2b);
+  box-shadow: 0 0 8px var(--destructive, #c04a2b);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-splash__logo { animation: none; }
+  .pp-loader__bar { transition: none; }
+}

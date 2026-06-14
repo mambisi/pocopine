@@ -23,9 +23,9 @@
       } catch (e) {}
     })();
   </script>
-  <!-- Flash insurance: styles.css (render-blocking) sets the themed body
-       background, but pin html too in case the stylesheet is slow. -->
-  <style>html { background: var(--bg, #fffaf2); }</style>
+  <!-- The boot loader (splash + top progress bar) is injected into the
+       generated pkg/index.html by `pocopine build`; configure it under
+       [package.metadata.pocopine.loader]. Nothing to hand-write here. -->
 </head>
 <body>
   <div pp-app>
@@ -34,140 +34,7 @@
 
   <script type="module">
     import init from "/pkg/website.js";
-
-    // ── Shared progress controller ──────────────────────────────────────
-    // Installs `window.__pocopineProgress` (idempotent): a thin top
-    // progress bar (YouTube / nprogress style). The boot loader below
-    // drives it with the wasm download; AFTER boot it stays installed so
-    // `pocopine::progress` (and the router's auto-hook) reuse this SAME
-    // bar in-app. Mirrors the controller in
-    // crates/pocopine-core/src/progress.rs — keep the two in sync.
-    (function () {
-      if (window.__pocopineProgress) return;
-      if (!document.getElementById("pp-loader-style")) {
-        var st = document.createElement("style");
-        st.id = "pp-loader-style";
-        st.textContent =
-          "#pp-loader{position:fixed;top:0;left:0;right:0;height:3px;z-index:9999;overflow:hidden;pointer-events:none;transition:opacity .3s ease .15s}"
-          + "#pp-loader.pp-loader--done{opacity:0}"
-          + ".pp-loader__bar{height:100%;width:100%;background:var(--brand,#f8ae45);box-shadow:0 0 8px var(--brand,#f8ae45);transform:translateX(-100%);transition:transform .2s ease;will-change:transform}"
-          + "#pp-loader.pp-loader--error .pp-loader__bar{background:var(--destructive,#c04a2b);box-shadow:0 0 8px var(--destructive,#c04a2b)}"
-          + "@media (prefers-reduced-motion:reduce){#pp-loader{transition:opacity .3s ease}.pp-loader__bar{transition:none}}";
-        (document.head || document.documentElement).appendChild(st);
-      }
-      var el = null, bar = null, pending = 0, value = 0, determinate = false, trickle = 0, resume = 0;
-      function ensure() {
-        el = document.getElementById("pp-loader");
-        if (!el) {
-          el = document.createElement("div");
-          el.id = "pp-loader";
-          el.setAttribute("role", "progressbar");
-          el.setAttribute("aria-label", "Loading");
-          el.setAttribute("aria-valuemin", "0");
-          el.setAttribute("aria-valuemax", "100");
-          bar = document.createElement("div");
-          bar.className = "pp-loader__bar";
-          el.appendChild(bar);
-          (document.body || document.documentElement).appendChild(el);
-        }
-        if (!bar) bar = el.querySelector(".pp-loader__bar");
-      }
-      function render() {
-        ensure();
-        var v = Math.max(0, Math.min(value, 1));
-        if (bar) bar.style.transform = "translateX(" + (v - 1) * 100 + "%)";
-        el.setAttribute("aria-valuenow", String(Math.round(v * 100)));
-      }
-      function show() { ensure(); el.classList.remove("pp-loader--done", "pp-loader--error"); }
-      function startTrickle() {
-        clearInterval(trickle);
-        trickle = setInterval(function () {
-          if (value < 0.95) { value += (0.95 - value) * 0.1; render(); }
-        }, 200);
-      }
-      function complete() {
-        clearInterval(trickle); clearTimeout(resume);
-        value = 1; render(); ensure(); el.classList.add("pp-loader--done");
-        setTimeout(function () {
-          value = 0; determinate = false; pending = 0;
-          if (bar) {
-            bar.style.transition = "none"; render();
-            requestAnimationFrame(function () { if (bar) bar.style.transition = ""; });
-          }
-          if (el) el.classList.remove("pp-loader--done");
-        }, 450);
-      }
-      var api = {
-        start: function () {
-          pending++; show();
-          if (pending === 1 && !determinate) {
-            if (value < 0.08) value = 0.08;
-            render(); startTrickle();
-          }
-        },
-        set: function (f) {
-          determinate = true; clearInterval(trickle); clearTimeout(resume);
-          value = Math.max(0, Math.min(f, 1)); show(); render();
-          if (value >= 1) { complete(); return; }
-          resume = setTimeout(function () { determinate = false; startTrickle(); }, 400);
-        },
-        inc: function (d) { api.set(value + d); },
-        done: function () { pending = Math.max(0, pending - 1); if (pending === 0) complete(); },
-        error: function () {
-          clearInterval(trickle); clearTimeout(resume); ensure();
-          el.classList.add("pp-loader--error"); value = 1; render();
-        },
-      };
-      window.__pocopineProgress = api;
-    })();
-
-    const progress = window.__pocopineProgress;
-
-    // ── Boot: real wasm download progress ───────────────────────────────
-    // wasm-bindgen's init() fetches the (hashed) `*_bg.wasm` via the global
-    // `fetch`, so wrap that one response body in a byte-counting stream and
-    // map bytes/Content-Length onto the first 90% of the bar (the controller
-    // trickles the compile/mount tail). The re-wrapped Response keeps its
-    // headers so streaming compilation still works (arrayBuffer fallback).
-    const realFetch = window.fetch.bind(window);
-    window.fetch = (input, opts) => {
-      const url =
-        typeof input === "string" ? input : (input && input.url) || String(input);
-      const res = realFetch(input, opts);
-      if (!/\.wasm(\?|$)/.test(url)) return res;
-      return res.then((resp) => {
-        if (!resp.body || !resp.ok) return resp;
-        const total = Number(resp.headers.get("content-length")) || 0;
-        let loaded = 0;
-        const reader = resp.body.getReader();
-        const tracked = new ReadableStream({
-          async pull(controller) {
-            const { done, value: chunk } = await reader.read();
-            if (done) { controller.close(); return; }
-            loaded += chunk.byteLength;
-            if (total) progress.set((loaded / total) * 0.9);
-            controller.enqueue(chunk);
-          },
-          cancel(reason) { reader.cancel(reason); },
-        });
-        return new Response(tracked, {
-          headers: resp.headers,
-          status: resp.status,
-          statusText: resp.statusText,
-        });
-      });
-    };
-
-    progress.start();
-    try {
-      await init();
-      progress.done(); // mounted → bar completes and fades out (kept in DOM for reuse)
-    } catch (err) {
-      progress.error(); // red bar — load failed, reload
-      throw err;
-    } finally {
-      window.fetch = realFetch;
-    }
+    init();
   </script>
 </body>
 </html>

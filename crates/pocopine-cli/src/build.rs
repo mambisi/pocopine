@@ -166,10 +166,82 @@ fn write_pkg_index_html(project: &Path, hashed: &[(String, String)]) -> Result<(
     for (name, hash) in hashed {
         html = rewrite_bundle_refs(&html, name, hash);
     }
+    let loader = crate::config::load(project)
+        .ok()
+        .and_then(|c| c.loader)
+        .unwrap_or_default();
+    let suffix = if loader.enabled {
+        html = inject_loader(&html, &loader);
+        " + boot loader"
+    } else {
+        ""
+    };
     std::fs::write(project.join("pkg/index.html"), html)
         .context("write generated pkg/index.html")?;
-    println!("✓ pkg/index.html → hashed bundle reference(s)");
+    println!("✓ pkg/index.html → hashed bundle reference(s){suffix}");
     Ok(())
+}
+
+/// Inject the boot loader: the splash + top-bar styles into `<head>`, the
+/// full-screen logo splash into `<body>` (so it paints on the first frame),
+/// and the controller script. The script is classic (not a module) so it
+/// runs before the app's deferred module boot and can wrap `fetch` to
+/// report the wasm download as progress. No-op if already injected.
+fn inject_loader(html: &str, loader: &crate::config::LoaderConfig) -> String {
+    if html.contains("id=\"pp-loader-style\"") {
+        return html.to_string();
+    }
+    const CSS: &str = include_str!("../assets/loader.css");
+    const JS: &str = include_str!("../assets/loader.js");
+    let mut out = html.to_string();
+
+    if let Some(at) = out.find("</head>") {
+        let mut head = format!("  <style id=\"pp-loader-style\">\n{CSS}  </style>\n");
+        if loader.splash {
+            // Show the splash once per tab session. This runs before <body>
+            // is parsed, so on a reload / full-page navigation within the
+            // session it hides the splash with no flash (the bar still shows).
+            head.push_str("  <script>(function(){try{var k=\"pp-splash-shown\";if(sessionStorage.getItem(k)){document.documentElement.setAttribute(\"data-pp-no-splash\",\"\");}else{sessionStorage.setItem(k,\"1\");}}catch(e){}})();</script>\n");
+        }
+        out.insert_str(at, &head);
+    }
+    if loader.splash
+        && let Some(logo) = loader.logo.clone().or_else(|| icon_href(html))
+    {
+        let splash = format!(
+            "\n  <div id=\"pp-splash\"><img class=\"pp-splash__logo\" src=\"{logo}\" alt=\"\" /></div>\n"
+        );
+        if let Some(start) = out.find("<body")
+            && let Some(gt) = out[start..].find('>')
+        {
+            out.insert_str(start + gt + 1, &splash);
+        }
+    }
+    if let Some(at) = out.find("</body>") {
+        out.insert_str(at, &format!("  <script>\n{JS}  </script>\n"));
+    }
+    out
+}
+
+/// Best-effort `<link rel="icon" … href="X">` href — the splash logo when
+/// none is configured explicitly.
+fn icon_href(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("rel=\"icon\"") {
+        let abs = from + rel;
+        let tag_start = lower[..abs].rfind('<').unwrap_or(abs);
+        let tag_end = lower[abs..].find('>').map_or(html.len(), |e| abs + e);
+        let tag = &html[tag_start..tag_end];
+        if let Some(h) = tag.find("href=\"") {
+            let rest = &tag[h + 6..];
+            if let Some(end) = rest.find('"') {
+                return Some(rest[..end].to_string());
+            }
+        }
+        from = tag_end;
+    }
+    None
 }
 
 /// Replace every `pkg/<name>.js` / `pkg/<name>.<hash8>.js` occurrence
