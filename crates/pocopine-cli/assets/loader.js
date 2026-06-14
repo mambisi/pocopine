@@ -13,7 +13,10 @@
 (function () {
   if (window.__pocopineProgress) return;
 
-  var el = null, bar = null, pending = 0, value = 0, determinate = false, trickle = 0, resume = 0;
+  var el = null, bar = null, pending = 0, value = 0, determinate = false, trickle = 0, resume = 0, showTimer = 0, shown = false;
+  // A navigation may run this long before the bar reveals (deferred
+  // indicator): fast routes never flash a bar; only genuinely slow work does.
+  var SHOW_DELAY = 150;
 
   function ensure() {
     el = document.getElementById("pp-loader");
@@ -38,6 +41,13 @@
     el.setAttribute("aria-valuenow", String(Math.round(v * 100)));
   }
   function show() { ensure(); el.classList.remove("pp-loader--done", "pp-loader--error"); }
+  // Reveal the bar (the deferred timer fired, or an explicit show): start the
+  // indeterminate trickle from a small head start.
+  function reveal() {
+    showTimer = 0; shown = true; show();
+    if (value < 0.08) value = 0.08;
+    render(); startTrickle();
+  }
   function startTrickle() {
     clearInterval(trickle);
     trickle = setInterval(function () {
@@ -52,12 +62,13 @@
     setTimeout(function () { s.remove(); }, 700);
   }
   function complete() {
+    clearTimeout(showTimer); showTimer = 0;
     clearInterval(trickle); clearTimeout(resume);
     pending = 0; value = 1; render();
     ensure(); el.classList.add("pp-loader--done");
     hideSplash();
     setTimeout(function () {
-      value = 0; determinate = false;
+      value = 0; determinate = false; shown = false;
       if (bar) {
         bar.style.transition = "none"; render();
         requestAnimationFrame(function () { if (bar) bar.style.transition = ""; });
@@ -67,22 +78,32 @@
   }
 
   var api = {
+    // Begin a task. Don't show yet — arm a timer so a navigation that finishes
+    // within SHOW_DELAY never flashes the bar. Slow work reveals it on fire.
     start: function () {
-      pending++; show();
-      if (pending === 1 && !determinate) {
-        if (value < 0.08) value = 0.08;
-        render(); startTrickle();
+      pending++;
+      if (pending === 1 && !determinate && !shown && !showTimer) {
+        showTimer = setTimeout(reveal, SHOW_DELAY);
       }
     },
     set: function (f) {
+      // A concrete fraction is an explicit "show progress" — reveal at once.
+      clearTimeout(showTimer); showTimer = 0; shown = true;
       determinate = true; clearInterval(trickle); clearTimeout(resume);
       value = Math.max(0, Math.min(f, 1)); show(); render();
       if (value >= 1) { complete(); return; }
       resume = setTimeout(function () { determinate = false; startTrickle(); }, 400);
     },
     inc: function (d) { api.set(value + d); },
-    done: function () { pending = Math.max(0, pending - 1); if (pending === 0) complete(); },
+    done: function () {
+      pending = Math.max(0, pending - 1);
+      if (pending > 0) return;
+      // Finished before the reveal timer fired → cancel it; never flash.
+      if (showTimer) { clearTimeout(showTimer); showTimer = 0; return; }
+      if (shown) complete();
+    },
     error: function () {
+      clearTimeout(showTimer); showTimer = 0; shown = true;
       clearInterval(trickle); clearTimeout(resume); ensure();
       el.classList.add("pp-loader--error"); value = 1; render(); hideSplash();
     },

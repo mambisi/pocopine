@@ -23,9 +23,10 @@
 //! pocopine::progress::set(bytes_sent as f32 / total as f32);
 //! ```
 //!
-//! NOTE: the controller JS + CSS below mirror the copy in
-//! `examples/website/index.html` (and the starter template). They implement
-//! the same `window.__pocopineProgress` contract — keep them in sync.
+//! NOTE: the controller JS + CSS below mirror the canonical boot loader in
+//! `crates/pocopine-cli/assets/loader.js` (injected into `pkg/index.html` by
+//! `pocopine build`). They implement the same `window.__pocopineProgress`
+//! contract — keep the two in sync.
 
 #[cfg(target_arch = "wasm32")]
 mod imp {
@@ -35,7 +36,7 @@ mod imp {
 function install() {
   // No-op outside a DOM (e.g. the node-based wasm test battery).
   if (typeof window === 'undefined' || typeof document === 'undefined') {
-    return { start: function(){}, set: function(){}, inc: function(){}, done: function(){}, error: function(){} };
+    return { start: function(){}, set: function(){}, inc: function(){}, done: function(){}, error: function(){}, ready: function(){} };
   }
   var w = window;
   if (w.__pocopineProgress) return w.__pocopineProgress;
@@ -51,7 +52,10 @@ function install() {
       + '@media (prefers-reduced-motion:reduce){#pp-loader{transition:opacity .3s ease}.pp-loader__bar{transition:none}}';
     (document.head || document.documentElement).appendChild(st);
   }
-  var el = null, bar = null, pending = 0, value = 0, determinate = false, trickle = 0, resume = 0;
+  var el = null, bar = null, pending = 0, value = 0, determinate = false, trickle = 0, resume = 0, showTimer = 0, shown = false;
+  // Deferred-reveal window: a navigation that finishes within SHOW_DELAY ms
+  // never flashes the bar; only genuinely slow work reveals it.
+  var SHOW_DELAY = 150;
   function ensure() {
     el = document.getElementById('pp-loader');
     if (!el) {
@@ -75,6 +79,11 @@ function install() {
     el.setAttribute('aria-valuenow', String(Math.round(v * 100)));
   }
   function show() { ensure(); el.classList.remove('pp-loader--done', 'pp-loader--error'); }
+  function reveal() {
+    showTimer = 0; shown = true; show();
+    if (value < 0.08) value = 0.08;
+    render(); startTrickle();
+  }
   function startTrickle() {
     clearInterval(trickle);
     trickle = setInterval(function () {
@@ -89,11 +98,12 @@ function install() {
     setTimeout(function () { s.remove(); }, 700);
   }
   function complete() {
+    clearTimeout(showTimer); showTimer = 0;
     clearInterval(trickle); clearTimeout(resume);
-    value = 1; render(); ensure(); el.classList.add('pp-loader--done');
+    pending = 0; value = 1; render(); ensure(); el.classList.add('pp-loader--done');
     hideSplash();
     setTimeout(function () {
-      value = 0; determinate = false; pending = 0;
+      value = 0; determinate = false; shown = false;
       if (bar) {
         bar.style.transition = 'none'; render();
         requestAnimationFrame(function () { if (bar) bar.style.transition = ''; });
@@ -102,14 +112,16 @@ function install() {
     }, 450);
   }
   var api = {
+    // Deferred reveal — fast navigations never flash the bar; slow work does.
     start: function () {
-      pending++; show();
-      if (pending === 1 && !determinate) {
-        if (value < 0.08) value = 0.08;
-        render(); startTrickle();
+      pending++;
+      if (pending === 1 && !determinate && !shown && !showTimer) {
+        showTimer = setTimeout(reveal, SHOW_DELAY);
       }
     },
     set: function (f) {
+      // A concrete fraction is an explicit "show progress" — reveal at once.
+      clearTimeout(showTimer); showTimer = 0; shown = true;
       determinate = true; clearInterval(trickle); clearTimeout(resume);
       value = Math.max(0, Math.min(f, 1)); show(); render();
       if (value >= 1) { complete(); return; }
@@ -118,8 +130,15 @@ function install() {
       resume = setTimeout(function () { determinate = false; startTrickle(); }, 400);
     },
     inc: function (d) { api.set(value + d); },
-    done: function () { pending = Math.max(0, pending - 1); if (pending === 0) complete(); },
+    done: function () {
+      pending = Math.max(0, pending - 1);
+      if (pending > 0) return;
+      // Finished before the reveal timer fired → cancel it; never flash.
+      if (showTimer) { clearTimeout(showTimer); showTimer = 0; return; }
+      if (shown) complete();
+    },
     error: function () {
+      clearTimeout(showTimer); showTimer = 0; shown = true;
       clearInterval(trickle); clearTimeout(resume); ensure();
       el.classList.add('pp-loader--error'); value = 1; render(); hideSplash();
     },
@@ -153,9 +172,15 @@ export function pp_progress_installed() {
     }
 }
 
-/// Show the bar and begin one loading task. Ref-counted: the bar stays up
-/// until a matching [`finish`] for every [`start`], so concurrent tasks
-/// (and the automatic route hook) coexist.
+/// Begin one loading task. Ref-counted: the bar stays up until a matching
+/// [`finish`] for every [`start`], so concurrent tasks (and the automatic
+/// route hook) coexist.
+///
+/// The reveal is *deferred* ~150 ms: a task that finishes within that window
+/// never flashes the bar, so quick work (e.g. an already-loaded route) feels
+/// instant. Slower work reveals the bar and — once shown — always plays its
+/// finish animation to completion. Call [`set`] instead to show a
+/// determinate fraction immediately.
 pub fn start() {
     #[cfg(target_arch = "wasm32")]
     imp::pp_progress_start();
