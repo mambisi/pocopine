@@ -1407,6 +1407,29 @@ fn finish_route_mount(
     // the macro-emitted entries.
     mount::mount_child_component(&el, name);
     mount::finalize_compiled_subtree(&el);
+    // Route enter transition (RFC-005): copy the outlet's `pp-transition*`
+    // config onto the freshly-mounted page root and play the enter sequence,
+    // so the incoming page animates in. Applied to `el` (fresh each nav) and
+    // copied after mount so the walker doesn't consume the attrs. A no-op
+    // when the outlet declares no transition — apps swap instantly as before.
+    for attr in [
+        // RFC-038 preset shorthand (`pp-transition="fade"` / `:in` / `:out`)…
+        "pp-transition",
+        "pp-transition:in",
+        "pp-transition:out",
+        // …or the explicit six-class form.
+        "pp-transition:enter",
+        "pp-transition:enter-start",
+        "pp-transition:enter-end",
+        "pp-transition:leave",
+        "pp-transition:leave-start",
+        "pp-transition:leave-end",
+    ] {
+        if let Some(v) = outlet.get_attribute(attr) {
+            let _ = el.set_attribute(attr, &v);
+        }
+    }
+    crate::directives::transition::enter(&el, || {});
     apply_page_meta(page_meta);
 
     // The component's `Loader<T>` extractor (if any) consumed the
