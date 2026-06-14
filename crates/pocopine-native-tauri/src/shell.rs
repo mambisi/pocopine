@@ -1,35 +1,37 @@
-//! Tauri webview wiring (RFC-104 §5) — the **only** module that imports
+//! Tauri webview wiring (RFC-104 §4) — the **only** module that imports
 //! `tauri`, gated behind the `tauri` feature.
 //!
-//! It registers a custom URI scheme whose handler drives the app's axum
-//! router via [`pocopine_native::bridge::dispatch`], then opens a window
-//! pointed at that scheme. Everything the webview requests — the
-//! document, the wasm `pkg/` bundle, CSS, and every
-//! `window.fetch("/_pocopine/…")` server call — flows through the same
-//! in-process router.
+//! The app is served over an ephemeral `127.0.0.1` loopback HTTP
+//! listener: the window loads `http://127.0.0.1:<port>/`, and the same
+//! axum router that the web server would use answers the document, the
+//! wasm `pkg/` bundle, CSS, and every `#[server]` / storage call. Real
+//! HTTP (rather than a custom URI scheme) is what makes binary uploads
+//! work — WebKitGTK crashes reading a `Blob` request body over a custom
+//! scheme — and it gives the page a real origin, so server-side
+//! origin/CSRF guards see proper `Origin`/`Sec-Fetch-Site` headers.
+//!
+//! In "server" mode the listener serves the document + wasm + CSS locally
+//! and forwards `#[server]`/storage routes to a deployed backend.
 //!
 //! This module links the platform webview backend (`wry`/`tao`, which
 //! need `webkit2gtk-4.1` + `libsoup` on Linux), so it only builds with
-//! the `tauri` feature on a desktop host. The transport logic it calls
-//! ([`pocopine_native::bridge`]) is webview-free and unit-tested in
-//! `pocopine-native`.
+//! the `tauri` feature on a desktop host.
 
-use std::borrow::Cow;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use pocopine_native::{bridge, dev_dir, NativeApp, NativeAppParts};
+use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine_server::axum::extract::{Request as AxumRequest, State};
+use pocopine_server::axum::response::Response as AxumResponse;
+use pocopine_server::axum::routing::any;
 use pocopine_server::axum::Router;
+use pocopine_server::tokio::net::TcpListener;
+use pocopine_server::tower_http::services::ServeFile;
+use pocopine_server::{index_file, static_files};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-/// Custom URI scheme the window's document and all its sub-requests are
-/// served under. The browser engine treats it as the document origin,
-/// so relative `fetch("/_pocopine/…")` calls stay same-origin and reach
-/// the handler below.
-const SCHEME: &str = "pocopine";
-
-/// Build the window, register the in-process router, and run the Tauri
-/// event loop until the last window closes. Called via the
-/// [`crate::run!`] macro.
+/// Build the window, bind the loopback server, and run the Tauri event
+/// loop until the last window closes. Called via the [`crate::run!`] macro.
 pub fn run(app: NativeApp, context: tauri::Context<tauri::Wry>) -> tauri::Result<()> {
     apply_linux_webview_workarounds();
 
@@ -39,57 +41,14 @@ pub fn run(app: NativeApp, context: tauri::Context<tauri::Wry>) -> tauri::Result
         configure,
     } = app.into_parts();
 
-    // The router is built in `setup` (it needs the resolved static root,
-    // and `configure` is `FnOnce`), but the scheme handler is registered
-    // before `setup` runs. Share it through a cell the handler reads on
-    // each request; `setup` populates it before the window — and thus
-    // any request — exists.
-    let router_cell: Arc<OnceLock<Router>> = Arc::new(OnceLock::new());
-    let handler_cell = Arc::clone(&router_cell);
-
-    // RFC-104 "server" channel: when the CLI passes a backend URL, the
-    // app's `#[server]` calls are forwarded to that deployed server
-    // (host-side — no browser CORS). Static assets always serve locally.
-    // Absent → "standalone": everything runs through the in-process router.
-    let proxy = backend_target();
-    if let Some((base, _)) = proxy.as_ref() {
-        tracing::info!(target: "pocopine.log", backend = %base, "native server channel");
+    // "server" mode when the CLI passed a backend URL; otherwise the
+    // router runs the app's `#[server]` functions in-process.
+    let backend = backend_target();
+    if let Some((base, _)) = backend.as_ref() {
+        tracing::info!(target: "pocopine.log", backend = %base, "native server mode");
     }
 
     tauri::Builder::default()
-        .register_asynchronous_uri_scheme_protocol(SCHEME, move |_app, request, responder| {
-            // Server channel: forward server-function / storage routes to
-            // the remote backend; everything else (the document, wasm,
-            // CSS) still serves from the in-process router.
-            if let Some((base, client)) = proxy.as_ref() {
-                if is_server_route(request.uri().path()) {
-                    let base = base.clone();
-                    let client = client.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let response = proxy_to_backend(&client, &base, request).await;
-                        let (parts, body) = response.into_parts();
-                        responder.respond(http::Response::from_parts(parts, Cow::Owned(body)));
-                    });
-                    return;
-                }
-            }
-
-            let Some(router) = handler_cell.get().cloned() else {
-                // Should not happen: the window is created after the cell
-                // is set. Fail loud rather than hang the webview.
-                tracing::error!(
-                    target: "pocopine.log",
-                    "native router requested before it was ready"
-                );
-                responder.respond(service_unavailable());
-                return;
-            };
-            tauri::async_runtime::spawn(async move {
-                let response = bridge::dispatch(router, request).await;
-                let (parts, body) = response.into_parts();
-                responder.respond(http::Response::from_parts(parts, Cow::Owned(body)));
-            });
-        })
         .setup(move |app| {
             let static_root = match dev_dir() {
                 // `pocopine native dev` — serve the live project dir.
@@ -98,76 +57,83 @@ pub fn run(app: NativeApp, context: tauri::Context<tauri::Wry>) -> tauri::Result
                 None => app.path().resource_dir()?,
             };
 
-            let router = bridge::build_router(static_root, configure)
-                .map_err(|err| tauri::Error::Anyhow(err.into()))?;
-            // `set` only fails if already set; the cell is private to
-            // this run, so first-write always wins.
-            let _ = router_cell.set(router);
+            let router = match backend {
+                Some((base, client)) => proxy_router(&static_root, base, client),
+                None => bridge::build_router(static_root, configure)?,
+            };
 
-            let url: WebviewUrl = format!("{SCHEME}://localhost/")
-                .parse::<tauri::Url>()
-                .map(WebviewUrl::CustomProtocol)
-                .map_err(|err| tauri::Error::Anyhow(err.into()))?;
+            // Bind an ephemeral loopback port synchronously so the window
+            // URL is known, then hand the socket to the async server.
+            let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+            std_listener.set_nonblocking(true)?;
+            let addr = std_listener.local_addr()?;
+            let listener = TcpListener::from_std(std_listener)?;
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = pocopine_server::axum::serve(listener, router).await {
+                    tracing::error!(
+                        target: "pocopine.log",
+                        %err,
+                        "native loopback server stopped"
+                    );
+                }
+            });
+            tracing::info!(target: "pocopine.log", %addr, "native loopback server ready");
 
-            WebviewWindowBuilder::new(app, "main", url)
+            let url = format!("http://{addr}/").parse::<tauri::Url>()?;
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title(title)
                 .inner_size(inner_size.0, inner_size.1)
                 .build()?;
-
-            tracing::info!(
-                target: "pocopine.log",
-                scheme = SCHEME,
-                "native window ready"
-            );
             Ok(())
         })
         .run(context)
 }
 
-/// 503 body returned if a request somehow arrives before the router is
-/// installed.
-fn service_unavailable() -> http::Response<Cow<'static, [u8]>> {
-    http::Response::builder()
-        .status(http::StatusCode::SERVICE_UNAVAILABLE)
-        .body(Cow::Owned(b"native router not ready".to_vec()))
-        .expect("static 503 response is well-formed")
+// ─── server mode: reverse proxy to the deployed backend ─────────────
+
+#[derive(Clone)]
+struct ProxyState {
+    base: Arc<String>,
+    client: reqwest::Client,
 }
 
-/// Environment variable carrying the server-channel backend URL, set by
-/// `pocopine native dev|build --channel <name>` / `--backend`. Matches
-/// the CLI's `BACKEND_ENV` (RFC-104 contract).
-const BACKEND_ENV: &str = "POCOPINE_NATIVE_BACKEND";
-
-/// Server-mode proxy target from the environment: the backend base URL
-/// (trailing slash trimmed) plus a reusable HTTP client. `None` →
-/// standalone (in-process).
-fn backend_target() -> Option<(String, reqwest::Client)> {
-    let base = std::env::var(BACKEND_ENV)
-        .ok()
-        .map(|value| value.trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())?;
-
-    // rustls 0.23 refuses to auto-pick a CryptoProvider when the build
-    // graph enables more than one (this workspace pulls in both aws-lc-rs
-    // and ring transitively), panicking at first TLS use. Install ring's
-    // provider explicitly before reqwest builds its TLS config. Idempotent
-    // — a second call (or one from elsewhere) returns Err, which we ignore.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    Some((base, reqwest::Client::new()))
+/// Router for "server" mode: the `#[server]` / storage routes forward to
+/// the backend; everything else (document, wasm, CSS) serves locally with
+/// an `index.html` SPA fallback.
+fn proxy_router(static_root: &std::path::Path, base: String, client: reqwest::Client) -> Router {
+    let static_service =
+        static_files(static_root).fallback(ServeFile::new(index_file(static_root)));
+    let state = ProxyState {
+        base: Arc::new(base),
+        client,
+    };
+    Router::new()
+        .route("/_pocopine/*path", any(proxy_handler))
+        .route("/__pocopine/*path", any(proxy_handler))
+        .fallback_service(static_service)
+        .with_state(state)
 }
 
-/// Routes carrying app data to the backend: generated `#[server]`
-/// functions (`/_pocopine/…`) and the storage/upload protocol
-/// (`/__pocopine/…`). Everything else is a static asset served locally.
-fn is_server_route(path: &str) -> bool {
-    path.starts_with("/_pocopine") || path.starts_with("/__pocopine")
+async fn proxy_handler(State(state): State<ProxyState>, req: AxumRequest) -> AxumResponse {
+    let (parts, body) = req.into_parts();
+    let bytes = to_bytes(body, usize::MAX)
+        .await
+        .unwrap_or_default()
+        .to_vec();
+    let response = proxy_to_backend(
+        &state.client,
+        &state.base,
+        http::Request::from_parts(parts, bytes),
+    )
+    .await;
+    let (parts, body) = response.into_parts();
+    AxumResponse::from_parts(parts, Body::from(body))
 }
 
 /// Forward one request to the remote backend and buffer the full
 /// response. Host-to-host (not a browser request) so there is no CORS;
-/// the desktop app is a first-party client, so we assert same-origin like
-/// the in-process bridge does.
+/// the desktop app is a first-party client, so we assert same-origin
+/// (the remote's origin guards otherwise reject the loopback `Origin`).
 async fn proxy_to_backend(
     client: &reqwest::Client,
     base: &str,
@@ -183,7 +149,8 @@ async fn proxy_to_backend(
 
     let mut builder = client.request(parts.method, url).body(body);
     for (name, value) in parts.headers.iter() {
-        if name == http::header::HOST {
+        // Drop the loopback host/origin; the backend is a different one.
+        if name == http::header::HOST || name == http::header::ORIGIN {
             continue;
         }
         builder = builder.header(name.clone(), value.clone());
@@ -209,6 +176,29 @@ async fn proxy_to_backend(
         }
     }
 }
+
+/// Server-mode proxy target from the environment: the backend base URL
+/// (trailing slash trimmed) plus a reusable HTTP client. `None` →
+/// standalone (in-process).
+fn backend_target() -> Option<(String, reqwest::Client)> {
+    let base = std::env::var(BACKEND_ENV)
+        .ok()
+        .map(|value| value.trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())?;
+
+    // rustls 0.23 refuses to auto-pick a CryptoProvider when the build
+    // graph enables more than one (this workspace pulls in both aws-lc-rs
+    // and ring transitively), panicking at first TLS use. Install ring's
+    // provider explicitly before reqwest builds its TLS config. Idempotent
+    // — a second call (or one from elsewhere) returns Err, which we ignore.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    Some((base, reqwest::Client::new()))
+}
+
+/// Environment variable carrying the server backend URL, set by `pocopine
+/// native dev|build --backend`. Matches the CLI's `BACKEND_ENV`.
+const BACKEND_ENV: &str = "POCOPINE_NATIVE_BACKEND";
 
 /// Disable WebKitGTK's DMABUF renderer, which SIGSEGVs on many Linux
 /// setups with NVIDIA / hybrid GPUs under Wayland (WebKitGTK 2.4x+). The
