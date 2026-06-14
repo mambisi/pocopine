@@ -20,18 +20,18 @@ use std::sync::{Arc, Mutex};
 
 use http_body_util::BodyExt;
 use pocopine_auth::RequestContext;
+use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
-use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, ClientMutation, ClientMutationDraft, MutationId, RowVersion, SyncOp,
-    SyncPushRequest, SyncPushResponse, SyncResult, SyncServer, SyncStreamName, SYNC_PUSH_PATH,
+    ClientMutation, ClientMutationDraft, MutationId, RowVersion, SYNC_PUSH_PATH, SyncOp,
+    SyncPushRequest, SyncPushResponse, SyncResult, SyncServer, SyncStreamName, sync_server_plugin,
 };
+use pocopine_sync_query::Query;
 use pocopine_sync_query::source::{
-    source as build_source, DeleteResult, Source, SourceFuture, SourceStream, WriteResult,
+    DeleteResult, Source, SourceFuture, SourceStream, WriteResult, source as build_source,
 };
 use pocopine_sync_query::write::{MemoryMutationLog, MutationPayload};
-use pocopine_sync_query::Query;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -330,9 +330,11 @@ async fn mismatched_replay_is_rejected() {
     let result = push(&app, "m_mismatch", mutated).await.unwrap();
     assert!(result.accepted.is_empty());
     assert_eq!(result.rejected.len(), 1);
-    assert!(result.rejected[0]
-        .reason
-        .contains("already accepted with different contents"));
+    assert!(
+        result.rejected[0]
+            .reason
+            .contains("already accepted with different contents")
+    );
 }
 
 #[tokio::test]
@@ -381,7 +383,9 @@ async fn create_with_base_version_is_rejected() {
         serde_json::from_slice(&bytes).unwrap();
     let response = outer.unwrap();
     assert_eq!(response.rejected.len(), 1);
-    assert!(response.rejected[0]
-        .reason
-        .contains("create does not accept a base row version"));
+    assert!(
+        response.rejected[0]
+            .reason
+            .contains("create does not accept a base row version")
+    );
 }

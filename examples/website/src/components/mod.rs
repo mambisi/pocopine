@@ -110,11 +110,11 @@ pub fn delegate_nav(ev: &web_sys::MouseEvent) {
                 .flatten()
                 .and_then(|d| d.get_attribute("data-href"))
         });
-    if let Some(href) = href {
-        if href.starts_with('/') {
-            ev.prevent_default();
-            pocopine::navigate(&href);
-        }
+    if let Some(href) = href
+        && href.starts_with('/')
+    {
+        ev.prevent_default();
+        pocopine::navigate(&href);
     }
 }
 

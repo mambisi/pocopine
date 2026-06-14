@@ -34,11 +34,11 @@ pub mod press;
 
 pub use focus::focus;
 pub use hover::hover;
-pub use pan::{pan, PanConfig, PanEvent};
-pub use press::{press, PressEndHandler};
+pub use pan::{PanConfig, PanEvent, pan};
+pub use press::{PressEndHandler, press};
 
 use wasm_bindgen::JsCast;
-use wasm_bindgen::{closure::Closure, JsValue};
+use wasm_bindgen::{JsValue, closure::Closure};
 use web_sys::EventTarget;
 
 /// Holds a set of event-listener closures alive and removes them on

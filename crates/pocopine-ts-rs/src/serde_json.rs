@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::{impl_primitives, impl_shadow, TS};
+use super::{TS, impl_primitives, impl_shadow};
 
 #[derive(TS)]
 #[ts(

@@ -6,10 +6,10 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use pocopine_assets::{is_hashed_bundle_name, ASSET_CACHE_CONTROL};
+use pocopine_assets::{ASSET_CACHE_CONTROL, is_hashed_bundle_name};
 // Re-export so `crate::server::is_asset_hash` keeps resolving for
 // `build.rs`; the shared predicate lives in `pocopine-assets`.
 pub(crate) use pocopine_assets::is_asset_hash;
@@ -159,18 +159,17 @@ fn bin_executable_path(target_dir: &Path, bin: &str, release: bool) -> PathBuf {
 }
 
 fn profile_name(release: bool) -> &'static str {
-    if release {
-        "release"
-    } else {
-        "debug"
-    }
+    if release { "release" } else { "debug" }
 }
 
-pub fn check_configured_port_available(cfg: &PocopineConfig) -> Result<()> {
-    if cfg.bin.is_some() {
-        if let Some(port) = cfg.port {
-            ensure_port_available(port)?;
-        }
+pub fn check_configured_port_available(
+    cfg: &PocopineConfig,
+    override_port: Option<u16>,
+) -> Result<()> {
+    if cfg.bin.is_some()
+        && let Some(port) = override_port.or(cfg.port)
+    {
+        ensure_port_available(port)?;
     }
     Ok(())
 }
@@ -189,7 +188,7 @@ fn ensure_port_available(port: u16) -> Result<()> {
                 .map(|owner| format!(" by `{}` (pid {})", owner.command, owner.pid))
                 .unwrap_or_default();
             bail!(
-                "port {port} is already in use{owner}; stop the existing server or change `[package.metadata.pocopine].port`"
+                "port {port} is already in use{owner}; stop the existing server, pass `--port <PORT>`, or change `[package.metadata.pocopine].port`"
             );
         }
         Err(err) => Err(err).with_context(|| format!("check configured port {port}")),
@@ -393,7 +392,9 @@ pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> 
         ),
         Some("redis") if has_redis_url => Ok(()),
         Some("redis") if default_redis_url => Ok(()),
-        Some("redis") => bail!("`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis"),
+        Some("redis") => {
+            bail!("`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis")
+        }
         Some("") => bail!("POCOPINE_JOB_BACKEND was set but empty; use `memory` or `redis`"),
         Some(other) => bail!("unsupported POCOPINE_JOB_BACKEND `{other}`; use `memory` or `redis`"),
         None if has_redis_url => Ok(()),
@@ -404,8 +405,13 @@ pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> 
     }
 }
 
-pub fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) -> Result<()> {
-    check_configured_port_available(cfg)?;
+pub fn run_project(
+    path: &Path,
+    cfg: &PocopineConfig,
+    release: bool,
+    port: Option<u16>,
+) -> Result<()> {
+    check_configured_port_available(cfg, port)?;
     if cfg.worker_bin.is_some() {
         validate_worker_backend_for_separate_process(false)?;
     }
@@ -418,7 +424,15 @@ pub fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) 
 
     match cfg.bin.as_deref() {
         Some(bin) => {
-            let server = spawn_bin(path, bin, release, BinRole::Server, false)?;
+            // Hand the effective port (--port override, else the manifest
+            // port) to the bin via PORT, so the addr it binds matches the
+            // port we just checked. pocopine server bins read PORT.
+            let mut server_env = BTreeMap::new();
+            if let Some(p) = port.or(cfg.port) {
+                server_env.insert("PORT".to_string(), p.to_string());
+            }
+            let server =
+                spawn_bin_with_env(path, bin, release, BinRole::Server, false, &server_env)?;
             let mut children = Vec::new();
             children.push(server);
             if let Some(worker) = worker {
@@ -427,18 +441,19 @@ pub fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) 
             wait_for_children(children)
         }
         None => {
+            let static_port = port.unwrap_or(5243);
             if let Some(worker) = worker {
                 let serve_path = path
                     .canonicalize()
                     .with_context(|| format!("bad serve dir: {}", path.display()))?;
                 thread::spawn(move || {
-                    if let Err(e) = serve_static(&serve_path, port) {
+                    if let Err(e) = serve_static(&serve_path, static_port) {
                         eprintln!("server error: {e}");
                     }
                 });
                 wait_for_children(vec![worker])
             } else {
-                serve_static(path, port)
+                serve_static(path, static_port)
             }
         }
     }
@@ -832,7 +847,7 @@ mod tests {
             ..PocopineConfig::default()
         };
 
-        let err = check_configured_port_available(&cfg).unwrap_err();
+        let err = check_configured_port_available(&cfg, None).unwrap_err();
         assert!(err.to_string().contains("already in use"));
     }
 
@@ -845,7 +860,7 @@ mod tests {
             ..PocopineConfig::default()
         };
 
-        check_configured_port_available(&cfg).unwrap();
+        check_configured_port_available(&cfg, None).unwrap();
     }
 
     #[test]

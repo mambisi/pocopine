@@ -1,0 +1,24 @@
+[package]
+name = "pocopine-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Backend-neutral core of the pocopine native target: the axum-router ⇄ in-process transport bridge (RFC-104)."
+
+[lib]
+# Host-only crate with NO webview dependency. It holds the transport
+# bridge (axum `Router` ⇄ `http` oneshot), the `NativeApp` builder, and
+# dev-dir resolution — everything a native backend needs that is not
+# tied to a specific windowing toolkit. The Tauri backend lives in the
+# separate `pocopine-native-tauri` crate. See RFC-104 §5.
+
+[dependencies]
+pocopine-server = { workspace = true }
+http = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+tempfile = "3"

@@ -10,8 +10,8 @@
 //! without duplicating the edge cases.
 
 use js_sys::{Array, Object};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::prelude::*;
 
 /// Max characters a value cell shows before the middle is replaced
 /// with `…`. Chosen to roughly fit the 540px panel at the monospace

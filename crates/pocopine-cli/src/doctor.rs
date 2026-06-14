@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::args::DoctorArgs;
@@ -84,6 +84,7 @@ pub fn run(args: &DoctorArgs) -> Result<()> {
             check_tailwind(&mut report, project, cfg, &project_tools);
             check_configured_bins(&mut report, project, cfg, &project_tools);
         }
+        check_native(&mut report, project);
     }
 
     report.print();
@@ -432,6 +433,190 @@ fn check_editor_extension(report: &mut Report) {
     }
 }
 
+/// RFC-104 native (Tauri) target. The target is convention-based: it's
+/// enabled when a `src-tauri/` host crate is present, so web-only
+/// projects stay quiet.
+fn check_native(report: &mut Report, project: &Path) {
+    let src_tauri_dir = project.join("src-tauri");
+    if !src_tauri_dir.join("Cargo.toml").is_file() {
+        report.ok("native target", "not enabled (no src-tauri/)");
+        return;
+    }
+
+    report.ok("native target", "Tauri host crate at src-tauri/");
+    check_native_icon(report, &src_tauri_dir, "src-tauri");
+    check_native_webview(report);
+    check_tauri_cli(report);
+}
+
+/// Tauri's `generate_context!` embeds a window icon at compile time and
+/// fails the build if one is missing — catch it here with a clear hint.
+fn check_native_icon(report: &mut Report, src_tauri_dir: &Path, src_tauri: &str) {
+    if src_tauri_dir.join("icons/icon.png").is_file() {
+        report.ok("native icon", "icons/icon.png present");
+    } else {
+        report.warn(
+            "native icon",
+            format!("missing {src_tauri}/icons/icon.png"),
+            "`generate_context!` needs a window icon — run `pocopine native init` for a \
+             placeholder, or `cargo tauri icon <your-icon.png>` for the full set",
+        );
+    }
+}
+
+/// The Tauri CLI is optional (only `pocopine native build` installers need
+/// it), so this is always informational — never trips `--strict`.
+fn check_tauri_cli(report: &mut Report) {
+    let version = std::process::Command::new("cargo")
+        .args(["tauri", "--version"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| first_line(&out.stdout));
+    match version {
+        Some(version) => report.ok("tauri cli", format!("{version} (installer bundling)")),
+        None => report.ok(
+            "tauri cli",
+            "optional — for `pocopine native build` installers: \
+             `cargo install tauri-cli --version '^2'`",
+        ),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn check_native_webview(report: &mut Report) {
+    if tools::which("pkg-config").is_none() {
+        report.fail(
+            "native webview",
+            "pkg-config not found",
+            linux_webview_install_hint(),
+        );
+        return;
+    }
+    // The GTK/WebKitGTK dev packages `wry`/`tao` link against (RFC-104 §8).
+    const REQUIRED: &[&str] = &["glib-2.0", "gtk+-3.0", "webkit2gtk-4.1", "libsoup-3.0"];
+    let missing: Vec<&str> = REQUIRED
+        .iter()
+        .copied()
+        .filter(|pc| !pkg_config_has(pc))
+        .collect();
+    if missing.is_empty() {
+        report.ok(
+            "native webview",
+            "GTK 3 + WebKitGTK 4.1 development libraries present",
+        );
+    } else {
+        report.fail(
+            "native webview",
+            format!("missing dev libraries: {}", missing.join(", ")),
+            linux_webview_install_hint(),
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pkg_config_has(pc: &str) -> bool {
+    std::process::Command::new("pkg-config")
+        .arg("--exists")
+        .arg(pc)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_webview_install_hint() -> String {
+    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let id = format!(
+        "{} {}",
+        os_release_field(&os_release, "ID").unwrap_or_default(),
+        os_release_field(&os_release, "ID_LIKE").unwrap_or_default(),
+    )
+    .to_lowercase();
+    let matches = |needles: &[&str]| needles.iter().any(|needle| id.contains(needle));
+
+    if matches(&["debian", "ubuntu"]) {
+        "install: sudo apt update && sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+         libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev \
+         build-essential pkg-config"
+            .to_string()
+    } else if matches(&["fedora", "rhel", "centos"]) {
+        "install: sudo dnf install -y webkit2gtk4.1-devel gtk3-devel libsoup3-devel \
+         librsvg2-devel libxdo-devel openssl-devel && \
+         sudo dnf group install -y \"C Development Tools and Libraries\""
+            .to_string()
+    } else if matches(&["arch", "manjaro"]) {
+        "install: sudo pacman -S --needed webkit2gtk-4.1 gtk3 libsoup3 librsvg libxdo openssl \
+         base-devel"
+            .to_string()
+    } else if matches(&["suse", "opensuse"]) {
+        "install: sudo zypper install -t pattern devel_basis && sudo zypper install \
+         webkit2gtk3-soup2-devel libgtk-3-devel libsoup-devel librsvg-devel libxdo-devel \
+         libopenssl-devel"
+            .to_string()
+    } else {
+        "install GTK 3 + WebKitGTK 4.1 development packages for your distro — \
+         see https://tauri.app/start/prerequisites/"
+            .to_string()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn os_release_field(contents: &str, key: &str) -> Option<String> {
+    for line in contents.lines() {
+        if let Some(value) = line
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
+            return Some(value.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn check_native_webview(report: &mut Report) {
+    // WKWebView is part of the OS; only the Xcode Command Line Tools are
+    // needed to link.
+    let clt = std::process::Command::new("xcode-select")
+        .arg("-p")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if clt {
+        report.ok(
+            "native webview",
+            "macOS system WebView (WKWebView); Xcode Command Line Tools present",
+        );
+    } else {
+        report.warn(
+            "native webview",
+            "Xcode Command Line Tools not detected",
+            "install with: xcode-select --install",
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn check_native_webview(report: &mut Report) {
+    // WebView2 ships with Edge / Windows 10+; it can't be probed cheaply,
+    // so this is informational.
+    report.ok(
+        "native webview",
+        "Windows WebView2 (bundled with Edge / Windows 10+); if a window fails to open, \
+         install the Evergreen WebView2 Runtime from Microsoft",
+    );
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn check_native_webview(report: &mut Report) {
+    report.warn(
+        "native webview",
+        "unrecognized platform",
+        "see https://tauri.app/start/prerequisites/ for the webview prerequisites",
+    );
+}
+
 fn check_command(
     report: &mut Report,
     label: &'static str,
@@ -501,10 +686,8 @@ fn cargo_metadata_bins(project: &Path, project_tools: &tools::ProjectTools) -> R
                 .get("kind")
                 .and_then(Value::as_array)
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")));
-            if is_bin {
-                if let Some(name) = target.get("name").and_then(Value::as_str) {
-                    bins.push(name.to_string());
-                }
+            if is_bin && let Some(name) = target.get("name").and_then(Value::as_str) {
+                bins.push(name.to_string());
             }
         }
     }
@@ -536,21 +719,21 @@ impl Report {
         });
     }
 
-    fn warn(&mut self, name: &'static str, detail: impl Into<String>, hint: &'static str) {
+    fn warn(&mut self, name: &'static str, detail: impl Into<String>, hint: impl Into<String>) {
         self.checks.push(Check {
             level: Level::Warn,
             name,
             detail: detail.into(),
-            hint: Some(hint),
+            hint: Some(hint.into()),
         });
     }
 
-    fn fail(&mut self, name: &'static str, detail: impl Into<String>, hint: &'static str) {
+    fn fail(&mut self, name: &'static str, detail: impl Into<String>, hint: impl Into<String>) {
         self.checks.push(Check {
             level: Level::Fail,
             name,
             detail: detail.into(),
-            hint: Some(hint),
+            hint: Some(hint.into()),
         });
     }
 
@@ -579,7 +762,7 @@ impl Report {
                 check.name,
                 check.detail
             );
-            if let Some(hint) = check.hint {
+            if let Some(hint) = &check.hint {
                 println!("        {} {hint}", color.dim("hint:"));
             }
         }
@@ -601,7 +784,7 @@ struct Check {
     level: Level,
     name: &'static str,
     detail: String,
-    hint: Option<&'static str>,
+    hint: Option<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

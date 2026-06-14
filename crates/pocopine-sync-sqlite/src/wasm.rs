@@ -3,10 +3,10 @@ use std::{cell::RefCell, collections::BTreeSet, fmt, rc::Rc};
 use futures::lock::Mutex as AsyncMutex;
 use js_sys::{Array, Reflect};
 use pocopine_sync::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
-    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey, RowVersion,
-    SyncCollectionName, SyncCursor, SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity,
-    SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    ClientMutation, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor,
+    SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
+    SyncResult, SyncRow, SyncStreamName, generate_sync_device_id,
 };
 use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};

@@ -27,7 +27,7 @@
 // `clippy --all-targets --target wasm32-unknown-unknown` green.
 #[cfg(not(target_arch = "wasm32"))]
 mod bench {
-    use criterion::{black_box, criterion_group, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group};
 
     const CHUNK: usize = 1024 * 1024; // 1 MiB PATCH chunks
     const S3_PART: usize = 5 * 1024 * 1024; // S3 minimum part size

@@ -16,9 +16,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    sync_stream_tag, MigrationOutcome, SyncError, SyncOpenRequest, SyncOpenResponse,
-    SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse,
-    SyncResult, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    MigrationOutcome, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH, SyncError, SyncOpenRequest,
+    SyncOpenResponse, SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, SyncResult, sync_stream_tag,
 };
 
 /// Future returned by a stream source.
@@ -849,20 +849,20 @@ mod tests {
     use http_body_util::BodyExt;
     use pocopine_core::ServerError;
     use pocopine_server::auth::{
-        require_auth, require_role, AuthUser, Predicate, Principal, RequestContext, Role,
+        AuthUser, Predicate, Principal, RequestContext, Role, require_auth, require_role,
     };
+    use pocopine_server::axum::Router;
     use pocopine_server::axum::body::Body;
     use pocopine_server::axum::http::{Request, StatusCode};
-    use pocopine_server::axum::Router;
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
-    use serde_json::{json, Value};
+    use serde::de::DeserializeOwned;
+    use serde_json::{Value, json};
     use tower::ServiceExt;
 
     use super::*;
     use crate::{
-        ClientMutation, MemorySyncStream, MutationId, RowKey, SyncCollectionName, SyncOp,
-        SyncOpenRequest, SyncPullMode, SyncPushRequest, SyncRow, SyncStreamName, SYNC_PROTOCOL_V1,
+        ClientMutation, MemorySyncStream, MutationId, RowKey, SYNC_PROTOCOL_V1, SyncCollectionName,
+        SyncOp, SyncOpenRequest, SyncPullMode, SyncPushRequest, SyncRow, SyncStreamName,
     };
 
     #[tokio::test]

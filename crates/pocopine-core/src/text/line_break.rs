@@ -102,51 +102,52 @@ pub(crate) fn walk<F: FnMut(InternalLine)>(
         let w = seg.width;
 
         if !has_content {
-            if matches!(seg.kind, SegmentKind::Text) && w > fit_limit {
-                if let Some(gw) = &seg.grapheme_widths {
-                    // Per-grapheme fallback for an oversize word.
-                    let seg_idx = i as u32;
-                    let mut acc = 0.0_f64;
-                    let mut g_start: u32 = 0;
-                    let mut g: u32 = 0;
-                    while (g as usize) < gw.len() {
-                        let step = gw[g as usize];
-                        if acc + step > fit_limit && g > g_start {
-                            line_count += 1;
-                            visit(InternalLine {
-                                start: LayoutCursor {
-                                    segment_index: seg_idx,
-                                    grapheme_index: g_start,
-                                },
-                                end: LayoutCursor {
-                                    segment_index: seg_idx,
-                                    grapheme_index: g,
-                                },
-                                width: acc,
-                                soft_hyphen_break: false,
-                            });
-                            g_start = g;
-                            acc = 0.0;
-                        }
-                        acc += step;
-                        g += 1;
+            if matches!(seg.kind, SegmentKind::Text)
+                && w > fit_limit
+                && let Some(gw) = &seg.grapheme_widths
+            {
+                // Per-grapheme fallback for an oversize word.
+                let seg_idx = i as u32;
+                let mut acc = 0.0_f64;
+                let mut g_start: u32 = 0;
+                let mut g: u32 = 0;
+                while (g as usize) < gw.len() {
+                    let step = gw[g as usize];
+                    if acc + step > fit_limit && g > g_start {
+                        line_count += 1;
+                        visit(InternalLine {
+                            start: LayoutCursor {
+                                segment_index: seg_idx,
+                                grapheme_index: g_start,
+                            },
+                            end: LayoutCursor {
+                                segment_index: seg_idx,
+                                grapheme_index: g,
+                            },
+                            width: acc,
+                            soft_hyphen_break: false,
+                        });
+                        g_start = g;
+                        acc = 0.0;
                     }
-                    // Remainder continues as current-line content.
-                    line_start = LayoutCursor {
-                        segment_index: seg_idx,
-                        grapheme_index: g_start,
-                    };
-                    line_end = LayoutCursor {
-                        segment_index: seg_idx + 1,
-                        grapheme_index: 0,
-                    };
-                    line_w = acc;
-                    has_content = acc > 0.0;
-                    pending_seg = -1;
-                    pending_soft_hyphen = false;
-                    i += 1;
-                    continue;
+                    acc += step;
+                    g += 1;
                 }
+                // Remainder continues as current-line content.
+                line_start = LayoutCursor {
+                    segment_index: seg_idx,
+                    grapheme_index: g_start,
+                };
+                line_end = LayoutCursor {
+                    segment_index: seg_idx + 1,
+                    grapheme_index: 0,
+                };
+                line_w = acc;
+                has_content = acc > 0.0;
+                pending_seg = -1;
+                pending_soft_hyphen = false;
+                i += 1;
+                continue;
             }
             line_w = w;
             line_end = LayoutCursor {

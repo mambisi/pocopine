@@ -6,9 +6,9 @@ use std::process::Command;
 use pocopine_server::axum::{self, Router};
 use pocopine_server::tokio;
 use pocopine_storage::{
-    storage_tus_server_plugin, MemoryStorageBackend, SafeObjectKey, StorageContext, StorageKey,
-    StorageKeyFuture, StorageKeyResolver, StorageResult, StorageScope, StorageServer, UploadIntent,
-    UploadPolicy,
+    MemoryStorageBackend, SafeObjectKey, StorageContext, StorageKey, StorageKeyFuture,
+    StorageKeyResolver, StorageResult, StorageScope, StorageServer, UploadIntent, UploadPolicy,
+    storage_tus_server_plugin,
 };
 
 const EXPECTED_OBJECT_KEY: &str = "avatars/tus-js/photo.txt";

@@ -1,7 +1,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::events::{LegendToggle, LEGEND_TOGGLE_EVENT};
+use crate::events::{LEGEND_TOGGLE_EVENT, LegendToggle};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LegendItem {

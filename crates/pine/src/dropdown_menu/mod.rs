@@ -27,7 +27,7 @@
 
 use crate::{compound, overlay};
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field_scoped, ScopeId};
+use pocopine::{ScopeId, create_context, current_scope_id, focus, refs, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::Element;
@@ -283,18 +283,18 @@ impl PineDropdownMenuContent {
         // can honour the author's side/align/side_offset props
         // (the pp-anchor directive form parses modifiers
         // statically at bind time).
-        if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
-            if let Some(root) = ROOT.inject() {
-                compound::install_anchor_to_trigger(
-                    &floater,
-                    root.scope_id(),
-                    SLUG,
-                    &self.side,
-                    &self.align,
-                    self.side_offset,
-                    true,
-                );
-            }
+        if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>()
+            && let Some(root) = ROOT.inject()
+        {
+            compound::install_anchor_to_trigger(
+                &floater,
+                root.scope_id(),
+                SLUG,
+                &self.side,
+                &self.align,
+                self.side_offset,
+                true,
+            );
         }
     }
 
@@ -901,11 +901,11 @@ impl PineDropdownMenuItemIndicator {
     fn on_setup(&mut self) {
         // Read the parent item's initial `checked` synchronously
         // so the first pp-show evaluation sees the right value.
-        if let Some(owner) = CHECKED_OWNER.inject() {
-            if let Some(scope) = Scope::find(owner) {
-                let v = scope.state.borrow().get("checked");
-                self.checked = v.as_bool().unwrap_or(false);
-            }
+        if let Some(owner) = CHECKED_OWNER.inject()
+            && let Some(scope) = Scope::find(owner)
+        {
+            let v = scope.state.borrow().get("checked");
+            self.checked = v.as_bool().unwrap_or(false);
         }
     }
 
@@ -990,12 +990,12 @@ impl PineDropdownMenuRadioItem {
     fn on_setup(&mut self) {
         // Seed initial group_value + checked from the group,
         // and provide to ItemIndicator.
-        if let Some(group) = RADIO_GROUP.inject() {
-            if let Some(scope) = Scope::find(group) {
-                let v = scope.state.borrow().get("value");
-                self.group_value = v.as_string().unwrap_or_default();
-                self.checked = self.group_value == self.value;
-            }
+        if let Some(group) = RADIO_GROUP.inject()
+            && let Some(scope) = Scope::find(group)
+        {
+            let v = scope.state.borrow().get("value");
+            self.group_value = v.as_string().unwrap_or_default();
+            self.checked = self.group_value == self.value;
         }
         if let Some(scope) = current_scope_id() {
             CHECKED_OWNER.provide(scope);
@@ -1020,17 +1020,17 @@ impl PineDropdownMenuRadioItem {
             return;
         }
         // Write the new value into the group.
-        if let Some(group) = RADIO_GROUP.inject() {
-            if let Some(scope) = Scope::find(group) {
-                let new_value = self.value.clone();
-                let handle = scope
-                    .typed::<PineDropdownMenuRadioGroup>()
-                    .map(|rc| Handle::new(rc, group));
-                if let Some(h) = handle {
-                    h.update(|g: &mut PineDropdownMenuRadioGroup| {
-                        g.value = new_value;
-                    });
-                }
+        if let Some(group) = RADIO_GROUP.inject()
+            && let Some(scope) = Scope::find(group)
+        {
+            let new_value = self.value.clone();
+            let handle = scope
+                .typed::<PineDropdownMenuRadioGroup>()
+                .map(|rc| Handle::new(rc, group));
+            if let Some(h) = handle {
+                h.update(|g: &mut PineDropdownMenuRadioGroup| {
+                    g.value = new_value;
+                });
             }
         }
 

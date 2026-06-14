@@ -1,6 +1,6 @@
 use core::fmt::Write;
 
-use crate::error::{finite, ChartError, ChartResult};
+use crate::error::{ChartError, ChartResult, finite};
 use crate::geometry::Point;
 
 pub fn line_path(points: impl IntoIterator<Item = Point>) -> ChartResult<String> {

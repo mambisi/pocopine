@@ -6,10 +6,10 @@
 use pocopine::prelude::*;
 use std::cell::Cell;
 use std::rc::Rc;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element, HtmlElement, HtmlInputElement};
+use web_sys::{Element, HtmlElement, HtmlInputElement, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -6604,7 +6604,7 @@ async fn motion_element_override_always_beats_reduce_ancestor() {
 // instantaneously. `respect_motion_preference: false` opts out.
 #[wasm_bindgen_test]
 async fn motion_reduced_clamps_waapi_duration_to_one_ms() {
-    use pocopine_core::animate::{animate, AnimateOptions, Keyframe};
+    use pocopine_core::animate::{AnimateOptions, Keyframe, animate};
     let host = mount("<div class=\"animate-target\" data-pp-motion=\"reduce\">x</div>");
     tick().await;
     let target = host.query_selector(".animate-target").unwrap().unwrap();
@@ -6630,7 +6630,7 @@ async fn motion_reduced_clamps_waapi_duration_to_one_ms() {
 // finishes promptly.
 #[wasm_bindgen_test]
 async fn animation_handle_finished_future_resolves() {
-    use pocopine_core::animate::{animate, AnimateOptions, Keyframe};
+    use pocopine_core::animate::{AnimateOptions, Keyframe, animate};
     let host = mount("<div class=\"finish-target\">x</div>");
     tick().await;
     let target = host.query_selector(".finish-target").unwrap().unwrap();
@@ -7372,10 +7372,12 @@ async fn date_range_field_tab_bridges_start_end_edges() {
 
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("month"));
-    assert!(active
-        .closest(".pine-date-range-field-end")
-        .unwrap()
-        .is_some());
+    assert!(
+        active
+            .closest(".pine-date-range-field-end")
+            .unwrap()
+            .is_some()
+    );
 
     let end_month: HtmlElement = active.dyn_into().unwrap();
     let shift_init = web_sys::KeyboardEventInit::new();
@@ -7390,10 +7392,12 @@ async fn date_range_field_tab_bridges_start_end_edges() {
 
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("year"));
-    assert!(active
-        .closest(".pine-date-range-field-start")
-        .unwrap()
-        .is_some());
+    assert!(
+        active
+            .closest(".pine-date-range-field-start")
+            .unwrap()
+            .is_some()
+    );
 
     host.remove();
 }
@@ -7425,10 +7429,12 @@ async fn time_range_field_tab_bridges_start_end_edges() {
 
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("hour"));
-    assert!(active
-        .closest(".pine-time-range-field-end")
-        .unwrap()
-        .is_some());
+    assert!(
+        active
+            .closest(".pine-time-range-field-end")
+            .unwrap()
+            .is_some()
+    );
 
     let end_hour: HtmlElement = active.dyn_into().unwrap();
     let shift_init = web_sys::KeyboardEventInit::new();
@@ -7443,10 +7449,12 @@ async fn time_range_field_tab_bridges_start_end_edges() {
 
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("minute"));
-    assert!(active
-        .closest(".pine-time-range-field-start")
-        .unwrap()
-        .is_some());
+    assert!(
+        active
+            .closest(".pine-time-range-field-start")
+            .unwrap()
+            .is_some()
+    );
 
     host.remove();
 }

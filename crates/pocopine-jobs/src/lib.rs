@@ -71,7 +71,7 @@ impl From<serde_json::Error> for JobError {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
-    use std::collections::{hash_map::DefaultHasher, BTreeSet, HashMap, VecDeque};
+    use std::collections::{BTreeSet, HashMap, VecDeque, hash_map::DefaultHasher};
     use std::fs;
     use std::future::Future;
     use std::hash::{Hash, Hasher};
@@ -854,10 +854,10 @@ return redis.call(
                     .arg("MKSTREAM")
                     .query_async(conn)
                     .await;
-                if let Err(err) = result {
-                    if !err.to_string().contains("BUSYGROUP") {
-                        return Err(err.into());
-                    }
+                if let Err(err) = result
+                    && !err.to_string().contains("BUSYGROUP")
+                {
+                    return Err(err.into());
                 }
             }
             Ok(())
@@ -2104,8 +2104,8 @@ return redis.call(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{
-    registered_jobs, DeadLetter, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler,
-    JobId, PeriodicSchedule, RetryPolicy, Worker, WorkerConfig,
+    DeadLetter, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler, JobId,
+    PeriodicSchedule, RetryPolicy, Worker, WorkerConfig, registered_jobs,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

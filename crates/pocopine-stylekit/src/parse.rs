@@ -98,10 +98,10 @@ pub fn parse_class(input: &str) -> Result<ParsedClass, Diagnostic> {
     // `color/[alpha]` / `color/(--a)` — the bracket is the *opacity
     // modifier's* value, not a base arbitrary, so the peel above left a
     // trailing `/`. Fold it back to `color/alpha` for the colour resolver.
-    if base.ends_with('/') {
-        if let Some(a) = arbitrary.take() {
-            base.push_str(&a);
-        }
+    if base.ends_with('/')
+        && let Some(a) = arbitrary.take()
+    {
+        base.push_str(&a);
     }
 
     Ok(ParsedClass {

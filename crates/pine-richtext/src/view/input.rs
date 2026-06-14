@@ -27,9 +27,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
-use wasm_bindgen::closure::Closure;
+use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use web_sys::{ClipboardEvent, Element, Event, InputEvent, KeyboardEvent, StaticRange};
 
 use crate::commands::{self, Command};
@@ -428,60 +428,57 @@ where
                     let cursor_from = state.selection().from(state.doc());
                     let cursor_to = state.selection().to(state.doc());
                     let rules = runtime_for_input.input_rules();
-                    if !rules.is_empty() {
-                        if let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
-                        {
-                            let mut tr = fire.transaction;
-                            if fire.undoable {
-                                tr.set_meta(
-                                    inputrules_plugin::INPUT_RULES_PLUGIN_KEY,
-                                    inputrules_plugin::rule_fire_meta(
-                                        fire.from, fire.to, &fire.text,
-                                    ),
-                                );
-                            }
-                            ev.prevent_default();
-                            log_input_perf(
-                                debug_perf,
-                                "input.beforeinput",
-                                json!({
-                                    "runtime": runtime_for_log,
-                                    "input_type": input_type,
-                                    "handled": true,
-                                    "rule": true,
-                                    "data_chars": data_chars,
-                                    "target_range": target_range_found,
-                                    "target_range_applied": target_range_applied,
-                                    "range_ms": round_ms(range_ms),
-                                    "state_ms": round_ms(perf_now_ms() - state_started_at),
-                                    "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                                }),
+                    if !rules.is_empty()
+                        && let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
+                    {
+                        let mut tr = fire.transaction;
+                        if fire.undoable {
+                            tr.set_meta(
+                                inputrules_plugin::INPUT_RULES_PLUGIN_KEY,
+                                inputrules_plugin::rule_fire_meta(fire.from, fire.to, &fire.text),
                             );
-                            let input_type_for_log = input_type.clone();
-                            dispatch(state, tr, false);
-                            log_input_perf(
-                                debug_perf,
-                                "input.beforeinput.complete",
-                                json!({
-                                    "runtime": runtime_for_log.clone(),
-                                    "input_type": input_type_for_log.clone(),
-                                    "rule": true,
-                                    "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                                }),
-                            );
-                            schedule_next_frame_perf(
-                                debug_perf,
-                                "input.next_frame",
-                                json!({
-                                    "runtime": runtime_for_log.clone(),
-                                    "source": "beforeinput",
-                                    "input_type": input_type_for_log,
-                                    "rule": true,
-                                }),
-                                started_at,
-                            );
-                            return;
                         }
+                        ev.prevent_default();
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log,
+                                "input_type": input_type,
+                                "handled": true,
+                                "rule": true,
+                                "data_chars": data_chars,
+                                "target_range": target_range_found,
+                                "target_range_applied": target_range_applied,
+                                "range_ms": round_ms(range_ms),
+                                "state_ms": round_ms(perf_now_ms() - state_started_at),
+                                "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
+                        let input_type_for_log = input_type.clone();
+                        dispatch(state, tr, false);
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput.complete",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type_for_log.clone(),
+                                "rule": true,
+                                "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
+                        schedule_next_frame_perf(
+                            debug_perf,
+                            "input.next_frame",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "source": "beforeinput",
+                                "input_type": input_type_for_log,
+                                "rule": true,
+                            }),
+                            started_at,
+                        );
+                        return;
                     }
 
                     ev.prevent_default();
@@ -784,7 +781,7 @@ where
     // be broken if we tried to round-trip every move through the model.
 
     let _ = surface; // keep `surface` named even after we drop the
-                     // selectionchange listener that used it.
+    // selectionchange listener that used it.
     closures
 }
 
@@ -873,14 +870,14 @@ fn state_with_text_selection(state: EditorState, from: usize, to: usize) -> Opti
 /// `window.getSelection()` scan on the hot typing/deletion path.
 fn target_range_only_to_model(surface: &Element, event: &InputEvent) -> Option<(usize, usize)> {
     let ranges = event.get_target_ranges();
-    if ranges.length() > 0 {
-        if let Ok(range) = ranges.get(0).dyn_into::<StaticRange>() {
-            let start = dom_pos_to_model(surface, &range.start_container(), range.start_offset());
-            let end = dom_pos_to_model(surface, &range.end_container(), range.end_offset());
-            if let (Some(a), Some(b)) = (start, end) {
-                let (from, to) = if a <= b { (a, b) } else { (b, a) };
-                return Some((from, to));
-            }
+    if ranges.length() > 0
+        && let Ok(range) = ranges.get(0).dyn_into::<StaticRange>()
+    {
+        let start = dom_pos_to_model(surface, &range.start_container(), range.start_offset());
+        let end = dom_pos_to_model(surface, &range.end_container(), range.end_offset());
+        if let (Some(a), Some(b)) = (start, end) {
+            let (from, to) = if a <= b { (a, b) } else { (b, a) };
+            return Some((from, to));
         }
     }
     None
@@ -1048,12 +1045,9 @@ mod tests {
 
     fn state_with_paragraph(text: &str, cursor: usize) -> EditorState {
         let schema = schema_basic::schema();
-        let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
-            text,
-            Vec::new(),
-        )
-        .unwrap()])
-        .unwrap()])
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()]).unwrap(),
+        ])
         .unwrap();
         EditorState::create(EditorStateConfig::new(schema, doc).selection(Selection::text(cursor)))
             .unwrap()

@@ -4,7 +4,7 @@ async fn main() -> std::io::Result<()> {
     use file_browser_example as _;
     use pocopine_logging::init_default;
     use pocopine_server::{
-        axum::Router, index_file, static_files, tower_http::services::ServeFile, Server,
+        Server, axum::Router, index_file, static_files, tower_http::services::ServeFile,
     };
     use pocopine_storage::storage_server_plugin;
 

@@ -29,7 +29,8 @@
 //! point the service at. Make sure Railway has pull credentials for a
 //! private registry before the first deploy.
 
-#![forbid(unsafe_code)]
+// Forbid unsafe in production; tests need `unsafe { std::env::remove_var }` (Rust 2024).
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod client;
@@ -38,8 +39,8 @@ pub mod client;
 use anyhow::Context;
 use anyhow::Result;
 use pocopine_deploy::{
-    common, AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint,
-    Mode, ProcessStatus, StagedFiles,
+    AdapterMode, Artefact, Constraint, DeployAdapter, DeployOutcome, DeploySpec, Hint, Mode,
+    ProcessStatus, StagedFiles, common,
 };
 use serde::Deserialize;
 
@@ -626,10 +627,11 @@ impl DeployAdapter for RailwayAdapter {
 
             // Generate a public domain for the web-facing service —
             // only after we've confirmed a real, non-failed deployment.
-            if proc.is_public() && !matches!(outcome, client::DeploymentOutcome::Failed(_)) {
-                if let Some(domain) = client.create_service_domain(&service.id, &environment.id) {
-                    public_url = Some(domain);
-                }
+            if proc.is_public()
+                && !matches!(outcome, client::DeploymentOutcome::Failed(_))
+                && let Some(domain) = client.create_service_domain(&service.id, &environment.id)
+            {
+                public_url = Some(domain);
             }
         }
 
@@ -786,10 +788,10 @@ fn load_railway_token() -> Result<String> {
     if let Ok(t) = credentials::load("railway") {
         return Ok(t);
     }
-    if let Ok(t) = std::env::var("RAILWAY_API_TOKEN") {
-        if !t.is_empty() {
-            return Ok(t);
-        }
+    if let Ok(t) = std::env::var("RAILWAY_API_TOKEN")
+        && !t.is_empty()
+    {
+        return Ok(t);
     }
     anyhow::bail!(
         "railway: no API token. Run `pocopine deploy auth railway`, or export $POCOPINE_RAILWAY_TOKEN or $RAILWAY_API_TOKEN (an account or team token — project-scoped tokens are not supported).",
@@ -982,9 +984,10 @@ mod tests {
         spec.git_remote = Some("git@github.com:acme/myapp.git".into());
 
         let cs = RailwayAdapter.detect_constraints(&spec);
-        assert!(!cs
-            .iter()
-            .any(|c| matches!(c, Constraint::Refuse(s) if s.contains("image_registry"))));
+        assert!(
+            !cs.iter()
+                .any(|c| matches!(c, Constraint::Refuse(s) if s.contains("image_registry")))
+        );
         assert_eq!(image_tag(&spec), "ghcr.io/acme/test-app:abc1234");
     }
 
@@ -1001,9 +1004,10 @@ mod tests {
         let mut spec = fullstack_spec_with_railway_config();
         spec.processes.get_mut("worker").unwrap().scale.min = 0;
         let cs = RailwayAdapter.detect_constraints(&spec);
-        assert!(cs
-            .iter()
-            .any(|c| matches!(c, Constraint::Warn(s) if s.contains("`worker` scale.min = 0"))));
+        assert!(
+            cs.iter()
+                .any(|c| matches!(c, Constraint::Warn(s) if s.contains("`worker` scale.min = 0")))
+        );
     }
 
     #[test]
@@ -1021,9 +1025,10 @@ mod tests {
         let mut spec = fullstack_spec_with_railway_config();
         spec.processes.get_mut("web").unwrap().bin = String::new();
         let cs = RailwayAdapter.detect_constraints(&spec);
-        assert!(cs
-            .iter()
-            .any(|c| matches!(c, Constraint::Refuse(s) if s.contains("empty `bin`"))));
+        assert!(
+            cs.iter()
+                .any(|c| matches!(c, Constraint::Refuse(s) if s.contains("empty `bin`")))
+        );
     }
 
     #[test]
@@ -1054,7 +1059,8 @@ mod tests {
                 from: EnvSource::Secret,
             },
         );
-        std::env::remove_var(key);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var(key) };
         let cs = RailwayAdapter.detect_constraints(&spec);
         assert!(cs.iter().any(
             |c| matches!(c, Constraint::Refuse(s) if s.contains(key) && s.contains("secret values")),

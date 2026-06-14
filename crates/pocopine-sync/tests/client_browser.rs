@@ -11,11 +11,11 @@ use std::rc::Rc;
 use js_sys::Promise;
 use pocopine::prelude::*;
 use pocopine_sync::{
-    sync_plugin, ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation,
-    LocalSnapshotBatch, MemoryLocalStore, MutationId, RowKey, SyncChange, SyncCollectionName,
-    SyncCursor, SyncDeviceId, SyncLocalIdentity, SyncLocalStore, SyncOp, SyncOpenRequest,
-    SyncOpenResponse, SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncPushRequest,
-    SyncPushResponse, SyncRow, SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation, LocalSnapshotBatch,
+    MemoryLocalStore, MutationId, RowKey, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    SyncChange, SyncCollectionName, SyncCursor, SyncDeviceId, SyncLocalIdentity, SyncLocalStore,
+    SyncOp, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullRequest, SyncPullResponse,
+    SyncPushRequest, SyncPushResponse, SyncRow, SyncStreamName, sync_plugin,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -208,14 +208,16 @@ async fn open_validates_stream_then_pull_renders_snapshot() {
                         let response = SyncPullResponse::snapshot(
                             SyncStreamName::new(STREAM).unwrap(),
                             SyncCollectionName::new(COLLECTION).unwrap(),
-                            vec![SyncRow::new(
-                                "post_1",
-                                BrowserPost {
-                                    id: "post_1".to_string(),
-                                    title: "Loaded through sync".to_string(),
-                                },
-                            )
-                            .unwrap()],
+                            vec![
+                                SyncRow::new(
+                                    "post_1",
+                                    BrowserPost {
+                                        id: "post_1".to_string(),
+                                        title: "Loaded through sync".to_string(),
+                                    },
+                                )
+                                .unwrap(),
+                            ],
                             Some(pocopine_sync::SyncCursor::new("1").unwrap()),
                         );
                         Ok(json_response(response))
@@ -276,14 +278,16 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
         .save_snapshot(LocalSnapshotBatch::new(
             SyncStreamName::new(STREAM).unwrap(),
             SyncCollectionName::new(COLLECTION).unwrap(),
-            vec![SyncRow::new(
-                "post_1",
-                serde_json::json!({
-                    "id": "post_1",
-                    "title": "Cached locally"
-                }),
-            )
-            .unwrap()],
+            vec![
+                SyncRow::new(
+                    "post_1",
+                    serde_json::json!({
+                        "id": "post_1",
+                        "title": "Cached locally"
+                    }),
+                )
+                .unwrap(),
+            ],
             Some(SyncCursor::new("cached_cursor").unwrap()),
         ))
         .await
@@ -398,11 +402,13 @@ async fn open_replays_pending_mutations_before_pull() {
         .save_snapshot(LocalSnapshotBatch::new(
             stream.clone(),
             collection.clone(),
-            vec![SyncRow::new(
-                "post_1",
-                serde_json::json!({"id": "post_1", "title": "Cached"}),
-            )
-            .unwrap()],
+            vec![
+                SyncRow::new(
+                    "post_1",
+                    serde_json::json!({"id": "post_1", "title": "Cached"}),
+                )
+                .unwrap(),
+            ],
             Some(SyncCursor::new("cached_cursor").unwrap()),
         ))
         .await
@@ -550,11 +556,13 @@ async fn open_keeps_hydrated_pending_overlay_when_replay_fails() {
         .save_snapshot(LocalSnapshotBatch::new(
             stream.clone(),
             collection,
-            vec![SyncRow::new(
-                "post_1",
-                serde_json::json!({"id": "post_1", "title": "Cached"}),
-            )
-            .unwrap()],
+            vec![
+                SyncRow::new(
+                    "post_1",
+                    serde_json::json!({"id": "post_1", "title": "Cached"}),
+                )
+                .unwrap(),
+            ],
             Some(SyncCursor::new("cached_cursor").unwrap()),
         ))
         .await

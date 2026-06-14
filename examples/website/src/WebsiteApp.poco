@@ -4,7 +4,7 @@
   <site-header></site-header>
 
   <main class="app-main">
-    <pp-outlet></pp-outlet>
+    <pp-outlet pp-transition="fade-scale"></pp-outlet>
   </main>
 
   <footer class="app-footer">

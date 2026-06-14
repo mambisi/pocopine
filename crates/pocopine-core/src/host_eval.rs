@@ -67,19 +67,11 @@ fn eval_binop(op: BinOp, lhs: &Spanned<Expr>, rhs: &Spanned<Expr>, state: &Value
     match op {
         BinOp::And => {
             let l = eval(lhs, state);
-            if is_falsy(&l) {
-                l
-            } else {
-                eval(rhs, state)
-            }
+            if is_falsy(&l) { l } else { eval(rhs, state) }
         }
         BinOp::Or => {
             let l = eval(lhs, state);
-            if is_falsy(&l) {
-                eval(rhs, state)
-            } else {
-                l
-            }
+            if is_falsy(&l) { eval(rhs, state) } else { l }
         }
         BinOp::Eq | BinOp::Ne => {
             let eq = strict_eq(&eval(lhs, state), &eval(rhs, state));
@@ -213,7 +205,7 @@ fn number(f: f64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::eval;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn run(src: &str, state: &Value) -> Value {
         let ast = crate::expr::parse(src).expect("parse");

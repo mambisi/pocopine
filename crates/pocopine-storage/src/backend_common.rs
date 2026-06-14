@@ -46,10 +46,10 @@ impl UploadSessionLockRegistry {
             .locks
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(existing) = locks.get(session.as_str()) {
-            if Arc::strong_count(existing) <= 2 {
-                locks.remove(session.as_str());
-            }
+        if let Some(existing) = locks.get(session.as_str())
+            && Arc::strong_count(existing) <= 2
+        {
+            locks.remove(session.as_str());
         }
     }
 }
@@ -238,12 +238,12 @@ pub fn ensure_size_limit(
             "upload exceeds scope max of {max_bytes} bytes"
         )));
     }
-    if let Some(size) = declared_size {
-        if new_offset > size {
-            return Err(StorageError::policy_rejected(format!(
-                "upload exceeds declared size of {size} bytes"
-            )));
-        }
+    if let Some(size) = declared_size
+        && new_offset > size
+    {
+        return Err(StorageError::policy_rejected(format!(
+            "upload exceeds declared size of {size} bytes"
+        )));
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 /// `[package.metadata.pocopine]` section parsed from a project's
@@ -32,6 +32,13 @@ pub struct PocopineConfig {
     /// project's `assets/` tree to the configured S3-compatible
     /// bucket under content-addressed keys.
     pub assets: Option<AssetsConfig>,
+    /// Boot loader: the full-screen logo splash (cold load) + thin top
+    /// progress bar injected into the generated `pkg/index.html`. On by
+    /// default; customize the logo / splash, or opt out via
+    /// `enabled = false`.
+    pub loader: Option<LoaderConfig>,
+    // RFC-104 native target has no config block — it's convention
+    // (`src-tauri/`) + CLI flags (`--backend`, …). See `native.rs`.
 }
 
 /// `[package.metadata.pocopine.assets]` — the RFC-100 asset bucket.
@@ -104,6 +111,37 @@ impl Default for StylekitConfig {
             enabled: default_sk_enabled(),
         }
     }
+}
+
+/// `[package.metadata.pocopine.loader]` — the injected boot loader: a
+/// full-screen logo splash on cold load plus a thin top progress bar that
+/// tracks the wasm download and (via `pocopine::progress`) in-app activity.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LoaderConfig {
+    /// Inject the loader into the generated `pkg/index.html` (default true).
+    #[serde(default = "default_loader_bool")]
+    pub enabled: bool,
+    /// Show the full-screen logo splash on cold load (default true). When
+    /// false, only the top progress bar is injected.
+    #[serde(default = "default_loader_bool")]
+    pub splash: bool,
+    /// Splash logo URL. Defaults to the page's `<link rel="icon">` href.
+    pub logo: Option<String>,
+}
+
+impl Default for LoaderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            splash: true,
+            logo: None,
+        }
+    }
+}
+
+fn default_loader_bool() -> bool {
+    true
 }
 
 fn default_sk_input() -> String {

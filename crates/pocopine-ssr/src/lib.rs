@@ -51,8 +51,8 @@ use html5ever::serialize::{SerializeOpts, TraversalScope};
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{
-    local_name, namespace_url, ns, parse_fragment, serialize, Attribute, LocalName, ParseOpts,
-    QualName,
+    Attribute, LocalName, ParseOpts, QualName, local_name, namespace_url, ns, parse_fragment,
+    serialize,
 };
 use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use pocopine_core::directives::for_plan::{
@@ -62,8 +62,8 @@ use pocopine_core::directives::for_plan::{
 use pocopine_core::directives::interp::PlannedSegment;
 use pocopine_core::router;
 use pocopine_core::templates::template_for;
-use pocopine_core::templates_plan::{template_plan_for, StaticTemplatePlan};
-use pocopine_core::{expr, host_eval, js_number, Component};
+use pocopine_core::templates_plan::{StaticTemplatePlan, template_plan_for};
+use pocopine_core::{Component, expr, host_eval, js_number};
 use serde_json::Value;
 
 /// Stamp one component's `bindings` + `interps` into its `cleaned_html`,
@@ -264,10 +264,10 @@ where
 
 /// Find the first `<pp-outlet>` element anywhere under `node`.
 fn find_outlet(node: &Handle) -> Option<Handle> {
-    if let NodeData::Element { name, .. } = &node.data {
-        if name.local.as_ref() == "pp-outlet" {
-            return Some(node.clone());
-        }
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local.as_ref() == "pp-outlet"
+    {
+        return Some(node.clone());
     }
     for child in node.children.borrow().iter() {
         if let Some(found) = find_outlet(child) {
@@ -787,18 +787,19 @@ fn gate_overlay_slot_content(node: &Handle, keep: &mut Vec<RcDom>) {
             .borrow()
             .iter()
             .any(|c| matches!(c.data, NodeData::Element { .. }));
-        if !has_scope && has_authored_el {
-            if let (Some(html), Some(plan)) = (template_for(&tag), template_plan_for(&tag)) {
-                let props = element_attr_props(child);
-                let state = pocopine_core::registry::ssr_derive_state(&tag, &props);
-                let empty = match stamp_fragment(&html, plan, &state, keep) {
-                    Some(r) => !has_visible_element(&r),
-                    None => true,
-                };
-                if empty {
-                    child.children.borrow_mut().clear();
-                    continue;
-                }
+        if !has_scope
+            && has_authored_el
+            && let (Some(html), Some(plan)) = (template_for(&tag), template_plan_for(&tag))
+        {
+            let props = element_attr_props(child);
+            let state = pocopine_core::registry::ssr_derive_state(&tag, &props);
+            let empty = match stamp_fragment(&html, plan, &state, keep) {
+                Some(r) => !has_visible_element(&r),
+                None => true,
+            };
+            if empty {
+                child.children.borrow_mut().clear();
+                continue;
             }
         }
         gate_overlay_slot_content(child, keep);
@@ -825,10 +826,10 @@ fn element_attr_props(el: &Handle) -> Value {
 /// `<template>` body)?
 #[cfg(not(target_arch = "wasm32"))]
 fn has_visible_element(node: &Handle) -> bool {
-    if let NodeData::Element { name, .. } = &node.data {
-        if name.local != local_name!("template") {
-            return true;
-        }
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local != local_name!("template")
+    {
+        return true;
     }
     node.children.borrow().iter().any(has_visible_element)
 }

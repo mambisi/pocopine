@@ -97,12 +97,14 @@ mod tests {
 
     fn with_asset_base<R>(base: Option<&str>, f: impl FnOnce() -> R) -> R {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: env access is serialized by ENV_LOCK, held for this fn.
         match base {
-            Some(base) => std::env::set_var("POCOPINE_ASSET_BASE", base),
-            None => std::env::remove_var("POCOPINE_ASSET_BASE"),
+            Some(base) => unsafe { std::env::set_var("POCOPINE_ASSET_BASE", base) },
+            None => unsafe { std::env::remove_var("POCOPINE_ASSET_BASE") },
         }
         let result = f();
-        std::env::remove_var("POCOPINE_ASSET_BASE");
+        // SAFETY: serialized by ENV_LOCK (see above).
+        unsafe { std::env::remove_var("POCOPINE_ASSET_BASE") };
         result
     }
 

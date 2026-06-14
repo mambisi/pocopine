@@ -3016,17 +3016,15 @@ impl Fragment {
         let children = Arc::make_mut(&mut self.children);
         let mut merged: Vec<Node> = Vec::with_capacity(children.len());
         for child in children.drain(..) {
-            if let Some(last) = merged.last_mut() {
-                if last.is_text()
-                    && child.is_text()
-                    && last.marks == child.marks
-                    && last.attrs == child.attrs
-                {
-                    if let (Some(left), Some(right)) = (&mut last.text, &child.text) {
-                        left.push_str(right);
-                        continue;
-                    }
-                }
+            if let Some(last) = merged.last_mut()
+                && last.is_text()
+                && child.is_text()
+                && last.marks == child.marks
+                && last.attrs == child.attrs
+                && let (Some(left), Some(right)) = (&mut last.text, &child.text)
+            {
+                left.push_str(right);
+                continue;
             }
             merged.push(child);
         }
@@ -3727,9 +3725,11 @@ mod tests {
             .unwrap();
 
         let content_match = doc.content_match_at(1, &schema).unwrap();
-        assert!(content_match
-            .match_type(schema.node_type("title").unwrap())
-            .is_none());
+        assert!(
+            content_match
+                .match_type(schema.node_type("title").unwrap())
+                .is_none()
+        );
         assert_eq!(
             content_match.default_textblock_type().map(NodeType::name),
             Some("paragraph")

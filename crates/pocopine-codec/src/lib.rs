@@ -52,8 +52,8 @@ pub use percent_encoding;
 // `percent-encoding` directly. Pair with [`percent_encode_set`].
 pub use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 
 /// Encode bytes as a standard (padded) base64 string.

@@ -28,11 +28,11 @@ type SsrRequest = (String, tokio::sync::oneshot::Sender<Option<String>>);
 async fn main() -> std::io::Result<()> {
     use pocopine_logging::init_default;
     use pocopine_server::axum::{
+        Router,
         handler::HandlerWithoutStateExt,
         http::{StatusCode, Uri},
         response::IntoResponse,
         routing::get,
-        Router,
     };
     use pocopine_server::{serve, static_files};
     use website as _;
@@ -119,7 +119,7 @@ async fn serve_html_route(
     path: &str,
 ) -> pocopine_server::axum::response::Response {
     use pocopine_server::axum::{
-        http::{header, StatusCode},
+        http::{StatusCode, header},
         response::IntoResponse,
     };
 

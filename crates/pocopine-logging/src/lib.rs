@@ -3,7 +3,7 @@
 //! Runtime crates should emit `tracing` events. Application entrypoints
 //! install one logging subscriber appropriate for their environment.
 
-use pocopine_observe::{emit_tracing, ObservedEvent};
+use pocopine_observe::{ObservedEvent, emit_tracing};
 
 pub fn log_event(event: &ObservedEvent) {
     emit_tracing(event);
@@ -16,17 +16,17 @@ mod server {
     use std::time::Duration;
 
     use pocopine_observe::{
-        emit_tracing, EventClass, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent,
+        EventClass, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, emit_tracing,
     };
     use pocopine_server::{
-        request_event_layer, HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, Server,
-        ServerBootFailed, ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed,
-        ServerFunctionRejected, ServerFunctionStarted, ServerHook, ServerListening, ServerPlugin,
+        HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, Server, ServerBootFailed,
+        ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed, ServerFunctionRejected,
+        ServerFunctionStarted, ServerHook, ServerListening, ServerPlugin, request_event_layer,
     };
     use tracing_subscriber::fmt as tracing_fmt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::{filter, EnvFilter};
+    use tracing_subscriber::{EnvFilter, filter};
 
     #[cfg(feature = "otlp")]
     const DEFAULT_OTLP_ENDPOINT: &str = "http://localhost:4317";
@@ -728,9 +728,9 @@ mod server {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    init_default, init_server_logging, server_observability, server_observability_with_config,
     InitLoggingError, LogFormat, ServerLoggingConfig, ServerObservability,
-    ServerObservabilityConfig, ServerObservabilityPlugin,
+    ServerObservabilityConfig, ServerObservabilityPlugin, init_default, init_server_logging,
+    server_observability, server_observability_with_config,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "otlp"))]
@@ -748,7 +748,7 @@ mod web {
         ServerFunctionClientFailed, ServerFunctionClientStarted,
     };
     use pocopine_observe::{
-        emit_tracing, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent,
+        EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, emit_tracing,
     };
     use tracing::field::{Field, Visit};
     use tracing::{Event, Level, Metadata, Subscriber};
@@ -1093,12 +1093,12 @@ mod web {
                 component_ready,
             } = self.config;
 
-            if let Some(console_config) = console_logging {
-                if let Err(err) = init_console_logging(console_config) {
-                    web_sys::console::warn_1(&JsValue::from_str(&format!(
-                        "pocopine: frontend observability could not initialize console logging: {err}"
-                    )));
-                }
+            if let Some(console_config) = console_logging
+                && let Err(err) = init_console_logging(console_config)
+            {
+                web_sys::console::warn_1(&JsValue::from_str(&format!(
+                    "pocopine: frontend observability could not initialize console logging: {err}"
+                )));
             }
 
             let mut app = app
@@ -1403,7 +1403,7 @@ mod web {
 
 #[cfg(target_arch = "wasm32")]
 pub use web::{
-    frontend_observability, frontend_observability_with_config, init_console_logging,
     ConsoleLogFormat, ConsoleLoggingConfig, FrontendObservability, FrontendObservabilityConfig,
-    FrontendObservabilityPlugin, InitLoggingError,
+    FrontendObservabilityPlugin, InitLoggingError, frontend_observability,
+    frontend_observability_with_config, init_console_logging,
 };

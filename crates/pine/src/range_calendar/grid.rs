@@ -3,7 +3,7 @@
 //! body observes `RANGE_ROOT.cells` (which carry the range-specific
 //! flags) rather than the plain Calendar's cells.
 
-use crate::range_calendar::root::{RangeCellView, RANGE_ROOT};
+use crate::range_calendar::root::{RANGE_ROOT, RangeCellView};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 

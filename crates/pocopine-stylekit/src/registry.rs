@@ -8,8 +8,8 @@
 //! ([`crate::palette`], M2) when no `@theme` token matches; an unknown
 //! class is still a *diagnostic*, not a silent miss.
 
-use crate::diagnostics::{suggest, Diagnostic, Span};
-use crate::emit::{escape_selector, Rule};
+use crate::diagnostics::{Diagnostic, Span, suggest};
+use crate::emit::{Rule, escape_selector};
 use crate::parse::ParsedClass;
 use crate::tokens::ThemeTokens;
 use crate::{Compilation, CompileOptions};
@@ -256,11 +256,11 @@ fn negate_decls(pos: &str, decls: Decls) -> Result<Decls, Diagnostic> {
     let out: Decls = decls
         .into_iter()
         .map(|(p, v)| {
-            if negatable_prop(&p) {
-                if let Some(nv) = negate_value(&v) {
-                    negated = true;
-                    return (p, nv);
-                }
+            if negatable_prop(&p)
+                && let Some(nv) = negate_value(&v)
+            {
+                negated = true;
+                return (p, nv);
             }
             (p, v)
         })
@@ -1458,10 +1458,18 @@ fn shadow_scale(name: &str) -> Option<&'static str> {
     Some(match name {
         "2xs" => "0 1px var(--pp-shadow-color, rgb(0 0 0 / 0.05))",
         "xs" => "0 1px 2px 0 var(--pp-shadow-color, rgb(0 0 0 / 0.05))",
-        "sm" => "0 1px 3px 0 var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--pp-shadow-color, rgb(0 0 0 / 0.1))",
-        "md" => "0 4px 6px -1px var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 2px 4px -2px var(--pp-shadow-color, rgb(0 0 0 / 0.1))",
-        "lg" => "0 10px 15px -3px var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 4px 6px -4px var(--pp-shadow-color, rgb(0 0 0 / 0.1))",
-        "xl" => "0 20px 25px -5px var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 8px 10px -6px var(--pp-shadow-color, rgb(0 0 0 / 0.1))",
+        "sm" => {
+            "0 1px 3px 0 var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--pp-shadow-color, rgb(0 0 0 / 0.1))"
+        }
+        "md" => {
+            "0 4px 6px -1px var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 2px 4px -2px var(--pp-shadow-color, rgb(0 0 0 / 0.1))"
+        }
+        "lg" => {
+            "0 10px 15px -3px var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 4px 6px -4px var(--pp-shadow-color, rgb(0 0 0 / 0.1))"
+        }
+        "xl" => {
+            "0 20px 25px -5px var(--pp-shadow-color, rgb(0 0 0 / 0.1)), 0 8px 10px -6px var(--pp-shadow-color, rgb(0 0 0 / 0.1))"
+        }
         "2xl" => "0 25px 50px -12px var(--pp-shadow-color, rgb(0 0 0 / 0.25))",
         "inner" => "inset 0 2px 4px 0 var(--pp-shadow-color, rgb(0 0 0 / 0.05))",
         _ => return None,
@@ -1489,7 +1497,7 @@ fn try_shadow(base: &str, tokens: &ThemeTokens) -> Resolved {
                 _ => {
                     return Some(Err(Diagnostic::error(format!(
                         "`--inset-shadow-{name}` is not a defined token"
-                    ))))
+                    ))));
                 }
             }
         };
@@ -1634,7 +1642,7 @@ fn try_font(base: &str, _t: &ThemeTokens) -> Resolved {
             _ => {
                 return Some(Err(Diagnostic::error(format!(
                     "`font-stretch` expects a keyword or percentage, got `{s}`"
-                ))))
+                ))));
             }
         };
         return Some(Ok(decl("font-stretch", &v)));
@@ -1678,7 +1686,7 @@ fn try_leading(base: &str, _t: &ThemeTokens) -> Resolved {
         _ => {
             return Some(Err(Diagnostic::error(format!(
                 "unknown line-height `{name}`"
-            ))))
+            ))));
         }
     };
     Some(Ok(decl(
@@ -1701,7 +1709,7 @@ fn try_tracking(base: &str, _t: &ThemeTokens) -> Resolved {
         _ => {
             return Some(Err(Diagnostic::error(format!(
                 "unknown letter-spacing `{name}`"
-            ))))
+            ))));
         }
     };
     Some(Ok(decl(
@@ -1729,7 +1737,7 @@ fn try_decoration(base: &str, tokens: &ThemeTokens) -> Resolved {
     }
     match name {
         "solid" | "double" | "dotted" | "dashed" | "wavy" => {
-            return Some(Ok(decl("text-decoration-style", name)))
+            return Some(Ok(decl("text-decoration-style", name)));
         }
         "auto" | "from-font" => return Some(Ok(decl("text-decoration-thickness", name))),
         _ => {}
@@ -2161,7 +2169,7 @@ fn try_misc(base: &str, tokens: &ThemeTokens) -> Resolved {
                 ("-webkit-line-clamp".into(), "unset".into()),
                 ("display".into(), "block".into()),
                 ("overflow".into(), "visible".into()),
-            ]))
+            ]));
         }
         _ => {}
     }
@@ -2185,10 +2193,10 @@ fn try_misc(base: &str, tokens: &ThemeTokens) -> Resolved {
             if name == "none" {
                 return Some(Ok(decl(prop, "none")));
             }
-            if prop == "stroke" {
-                if let Ok(n) = name.parse::<u32>() {
-                    return Some(Ok(decl("stroke-width", &n.to_string())));
-                }
+            if prop == "stroke"
+                && let Ok(n) = name.parse::<u32>()
+            {
+                return Some(Ok(decl("stroke-width", &n.to_string())));
             }
             if prop == "accent-color" && name == "auto" {
                 return Some(Ok(decl(prop, "auto")));
@@ -2309,13 +2317,13 @@ fn try_mask(base: &str, tokens: &ThemeTokens) -> Resolved {
             return Some(Ok(mask_layer_decls(
                 "radial",
                 ("--pp-mask-radial-shape".into(), "circle".into()),
-            )))
+            )));
         }
         "ellipse" => {
             return Some(Ok(mask_layer_decls(
                 "radial",
                 ("--pp-mask-radial-shape".into(), "ellipse".into()),
-            )))
+            )));
         }
         "radial-closest-side"
         | "radial-farthest-side"
@@ -2332,28 +2340,28 @@ fn try_mask(base: &str, tokens: &ThemeTokens) -> Resolved {
 
     // Linear edges: mask-{t,b,l,r,x,y}-{from,to}-<value>.
     for key in ["t", "b", "l", "r", "x", "y"] {
-        if let Some(tail) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-')) {
-            if let Some((kind, raw)) = split_from_to(tail) {
-                let edges = mask_edges(key).unwrap();
-                return Some(match mask_value(raw, tokens) {
-                    Some((slot, val)) => Ok(mask_edge_decls(edges, kind, slot, &val)),
-                    None => Err(mask_err(base, raw)),
-                });
-            }
+        if let Some(tail) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-'))
+            && let Some((kind, raw)) = split_from_to(tail)
+        {
+            let edges = mask_edges(key).unwrap();
+            return Some(match mask_value(raw, tokens) {
+                Some((slot, val)) => Ok(mask_edge_decls(edges, kind, slot, &val)),
+                None => Err(mask_err(base, raw)),
+            });
         }
     }
 
     // Linear-angle / radial / conic layers.
     for layer in ["linear", "radial", "conic"] {
         if let Some(tail) = rest.strip_prefix(layer).and_then(|r| r.strip_prefix('-')) {
-            if layer == "radial" {
-                if let Some(pos) = tail.strip_prefix("at-") {
-                    let set = (
-                        "--pp-mask-radial-position".to_string(),
-                        pos.replace('-', " "),
-                    );
-                    return Some(Ok(mask_layer_decls("radial", set)));
-                }
+            if layer == "radial"
+                && let Some(pos) = tail.strip_prefix("at-")
+            {
+                let set = (
+                    "--pp-mask-radial-position".to_string(),
+                    pos.replace('-', " "),
+                );
+                return Some(Ok(mask_layer_decls("radial", set)));
             }
             return Some(match mask_gradient_var(layer, tail, tokens) {
                 Some(Ok(set)) => Ok(mask_layer_decls(layer, set)),
@@ -2381,15 +2389,15 @@ fn mask_arbitrary(base: &str, value: &str) -> Option<Decls> {
         ));
     }
     for key in ["t", "b", "l", "r", "x", "y"] {
-        if let Some(kind) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-')) {
-            if kind == "from" || kind == "to" {
-                return Some(mask_edge_decls(
-                    mask_edges(key).unwrap(),
-                    kind,
-                    "position",
-                    value,
-                ));
-            }
+        if let Some(kind) = rest.strip_prefix(key).and_then(|r| r.strip_prefix('-'))
+            && (kind == "from" || kind == "to")
+        {
+            return Some(mask_edge_decls(
+                mask_edges(key).unwrap(),
+                kind,
+                "position",
+                value,
+            ));
         }
     }
     for layer in ["linear", "radial", "conic"] {
@@ -2436,13 +2444,13 @@ fn mask_gradient_var(
         });
     }
     // Bare angle for linear/conic → the layer position.
-    if layer != "radial" {
-        if let Ok(deg) = tail.parse::<f64>() {
-            return Some(Ok((
-                format!("--pp-mask-{layer}-position"),
-                format!("{}deg", trim_num(deg)),
-            )));
-        }
+    if layer != "radial"
+        && let Ok(deg) = tail.parse::<f64>()
+    {
+        return Some(Ok((
+            format!("--pp-mask-{layer}-position"),
+            format!("{}deg", trim_num(deg)),
+        )));
     }
     None
 }
@@ -2515,24 +2523,24 @@ fn try_scroll(base: &str, _t: &ThemeTokens) -> Resolved {
 /// `--pp-grad-*` vars consumed by `bg-linear-to-*`.
 fn try_gradient(base: &str, tokens: &ThemeTokens) -> Resolved {
     // Angled gradients: `bg-linear-45`, `bg-conic-180`.
-    if let Some(a) = base.strip_prefix("bg-linear-") {
-        if let Ok(n) = a.parse::<f64>() {
-            return Some(Ok(decl(
-                "background-image",
-                &format!("linear-gradient({}deg, var(--pp-grad-stops))", trim_num(n)),
-            )));
-        }
+    if let Some(a) = base.strip_prefix("bg-linear-")
+        && let Ok(n) = a.parse::<f64>()
+    {
+        return Some(Ok(decl(
+            "background-image",
+            &format!("linear-gradient({}deg, var(--pp-grad-stops))", trim_num(n)),
+        )));
     }
-    if let Some(a) = base.strip_prefix("bg-conic-") {
-        if let Ok(n) = a.parse::<f64>() {
-            return Some(Ok(decl(
-                "background-image",
-                &format!(
-                    "conic-gradient(from {}deg, var(--pp-grad-stops))",
-                    trim_num(n)
-                ),
-            )));
-        }
+    if let Some(a) = base.strip_prefix("bg-conic-")
+        && let Ok(n) = a.parse::<f64>()
+    {
+        return Some(Ok(decl(
+            "background-image",
+            &format!(
+                "conic-gradient(from {}deg, var(--pp-grad-stops))",
+                trim_num(n)
+            ),
+        )));
     }
     // `from-50%` / `via-30%` / `to-90%` set a gradient-stop *position*.
     for (pfx, var) in [
@@ -2540,10 +2548,11 @@ fn try_gradient(base: &str, tokens: &ThemeTokens) -> Resolved {
         ("via-", "--pp-grad-via-position"),
         ("to-", "--pp-grad-to-position"),
     ] {
-        if let Some(p) = base.strip_prefix(pfx) {
-            if p.ends_with('%') && p[..p.len() - 1].parse::<f64>().is_ok() {
-                return Some(Ok(decl(var, p)));
-            }
+        if let Some(p) = base.strip_prefix(pfx)
+            && p.ends_with('%')
+            && p[..p.len() - 1].parse::<f64>().is_ok()
+        {
+            return Some(Ok(decl(var, p)));
         }
     }
     if let Some(c) = base.strip_prefix("from-") {
@@ -2594,15 +2603,15 @@ fn try_filter(base: &str, _t: &ThemeTokens) -> Resolved {
 /// `divide-x-N` / `divide-y-N` widths and `divide-{color}` (applied to
 /// children via the `emit_into` child-combinator tail).
 fn try_divide(base: &str, tokens: &ThemeTokens) -> Resolved {
-    if let Some(v) = base.strip_prefix("divide-x-") {
-        if let Ok(n) = v.parse::<u32>() {
-            return Some(Ok(decl("border-left-width", &format!("{n}px"))));
-        }
+    if let Some(v) = base.strip_prefix("divide-x-")
+        && let Ok(n) = v.parse::<u32>()
+    {
+        return Some(Ok(decl("border-left-width", &format!("{n}px"))));
     }
-    if let Some(v) = base.strip_prefix("divide-y-") {
-        if let Ok(n) = v.parse::<u32>() {
-            return Some(Ok(decl("border-top-width", &format!("{n}px"))));
-        }
+    if let Some(v) = base.strip_prefix("divide-y-")
+        && let Ok(n) = v.parse::<u32>()
+    {
+        return Some(Ok(decl("border-top-width", &format!("{n}px"))));
     }
     if let Some(c) = base.strip_prefix("divide-") {
         return Some(resolve_color_value("border-color", c, tokens, base));
@@ -2922,7 +2931,7 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                     ("outline-style".into(), "solid".into()),
                     ("outline-width".into(), vv),
                 ]
-            })
+            });
         }
         "ring" => {
             return Ok(if is_color {
@@ -2932,7 +2941,7 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                     "--pp-ring-shadow",
                     &format!("0 0 0 {vv} var(--pp-ring-color, currentcolor)"),
                 )
-            })
+            });
         }
         "ring-offset" => {
             return Ok(if is_color {
@@ -2942,7 +2951,7 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                     "--pp-ring-offset-shadow",
                     &format!("0 0 0 {vv} var(--pp-ring-offset-color, #fff)"),
                 )
-            })
+            });
         }
         "inset-ring" => {
             return Ok(if is_color {
@@ -2952,7 +2961,7 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                     "--pp-inset-ring-shadow",
                     &format!("inset 0 0 0 {vv} var(--pp-inset-ring-color, currentcolor)"),
                 )
-            })
+            });
         }
         "inset-shadow" => return Ok(shadow_decls("--pp-inset-shadow", &format!("inset {vv}"))),
         "text-shadow" => return Ok(decl("text-shadow", &vv)),
@@ -2965,7 +2974,7 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                     "--pp-grad-stops".into(),
                     "var(--pp-grad-from), var(--pp-grad-to, transparent)".into(),
                 ),
-            ])
+            ]);
         }
         "via" => {
             return Ok(vec![
@@ -2975,7 +2984,7 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                     "var(--pp-grad-from), var(--pp-grad-via), var(--pp-grad-to, transparent)"
                         .into(),
                 ),
-            ])
+            ]);
         }
         "to" => return Ok(decl("--pp-grad-to", &vv)),
         "font" => {
@@ -2983,14 +2992,14 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                 decl("font-weight", &vv)
             } else {
                 decl("font-family", &vv)
-            })
+            });
         }
         "decoration" => {
             return Ok(if is_color {
                 decl("text-decoration-color", &vv)
             } else {
                 decl("text-decoration-thickness", &vv)
-            })
+            });
         }
         "stroke" if !is_color => return Ok(decl("stroke-width", &vv)),
         _ => {}
@@ -3303,10 +3312,9 @@ fn resolve_variant(variant: &str) -> VariantResolution {
     if let Some(s) = variant
         .strip_prefix("aria-")
         .filter(|s| !s.starts_with('['))
+        && let Some(a) = aria_pseudo(s)
     {
-        if let Some(a) = aria_pseudo(s) {
-            return Pseudo(a);
-        }
+        return Pseudo(a);
     }
     // `has-{state}` → `:has(:state)` (bare; `has-[…]` is below).
     if let Some(hs) = variant.strip_prefix("has-").and_then(state_pseudo) {
@@ -3659,11 +3667,15 @@ mod tests {
             assert!(!css(cls).contains(".."), "double dot in {cls}");
         }
         // Stacked conditioners chain (both ancestors kept, in order).
-        assert!(css("group-hover:group-focus:flex")
-            .contains(".group:hover .group:focus .group-hover\\:group-focus\\:flex {"));
+        assert!(
+            css("group-hover:group-focus:flex")
+                .contains(".group:hover .group:focus .group-hover\\:group-focus\\:flex {")
+        );
         // group-has-{state} composes too.
-        assert!(css("group-has-checked:flex")
-            .contains(".group:has(:checked) .group-has-checked\\:flex {"));
+        assert!(
+            css("group-has-checked:flex")
+                .contains(".group:has(:checked) .group-has-checked\\:flex {")
+        );
     }
 
     #[test]
@@ -3724,8 +3736,10 @@ mod tests {
         // edge-fade masks → see the `mask_gradients` test for the
         // composable layer model.
         assert!(css("mask-b-from-20%").contains("--pp-mask-bottom-from-position: 20%;"));
-        assert!(css("mask-t-to-4")
-            .contains("--pp-mask-top-to-position: calc(var(--spacing, 0.25rem) * 4);"));
+        assert!(
+            css("mask-t-to-4")
+                .contains("--pp-mask-top-to-position: calc(var(--spacing, 0.25rem) * 4);")
+        );
 
         // arbitrary mask image / position / size (full-image override)
         assert!(css("mask-[url(/m.png)]").contains("mask-image: url(/m.png);"));
@@ -3879,21 +3893,27 @@ mod tests {
         assert!(t.contains("--pp-mask-top: linear-gradient(to top,"));
         assert!(t.contains("--pp-mask-top-from-position: 50%;"));
         // to-stop + spacing-scale value
-        assert!(css("mask-b-to-2")
-            .contains("--pp-mask-bottom-to-position: calc(var(--spacing, 0.25rem) * 2);"));
+        assert!(
+            css("mask-b-to-2")
+                .contains("--pp-mask-bottom-to-position: calc(var(--spacing, 0.25rem) * 2);")
+        );
         // x spans both left + right
         let x = css("mask-x-from-0");
         assert!(x.contains("--pp-mask-left-from-position: 0px;"));
         assert!(x.contains("--pp-mask-right-from-position: 0px;"));
         // radial / conic / linear layers compose independently
-        assert!(css("mask-radial-from-20%")
-            .contains("--pp-mask-radial: radial-gradient(var(--pp-mask-radial-stops));"));
+        assert!(
+            css("mask-radial-from-20%")
+                .contains("--pp-mask-radial: radial-gradient(var(--pp-mask-radial-stops));")
+        );
         assert!(css("mask-radial-at-center").contains("--pp-mask-radial-position: center;"));
         assert!(css("mask-conic-180").contains("--pp-mask-conic-position: 180deg;"));
         assert!(css("mask-linear-45").contains("--pp-mask-linear-position: 45deg;"));
         // arbitrary + (--var) stops route through the same builders
         assert!(css("mask-t-from-[12px]").contains("--pp-mask-top-from-position: 12px;"));
-        assert!(css("mask-radial-from-(--p)").contains("--pp-mask-radial-from-position: var(--p);"));
+        assert!(
+            css("mask-radial-from-(--p)").contains("--pp-mask-radial-from-position: var(--p);")
+        );
         // -webkit- fallbacks present
         assert!(t.contains("-webkit-mask-image:"));
         assert!(t.contains("-webkit-mask-composite: source-in;"));
@@ -3940,16 +3960,22 @@ mod tests {
         assert!(css("-translate-y-1/2").contains("--pp-ty: -50%;"));
         assert!(css("-top-1/2").contains("top: -50%;"));
         // logical inset + scroll-margin negate too
-        assert!(css("-inset-bs-2")
-            .contains("inset-block-start: calc(calc(var(--spacing, 0.25rem) * 2) * -1);"));
-        assert!(css("-scroll-mt-4")
-            .contains("scroll-margin-top: calc(calc(var(--spacing, 0.25rem) * 4) * -1);"));
+        assert!(
+            css("-inset-bs-2")
+                .contains("inset-block-start: calc(calc(var(--spacing, 0.25rem) * 2) * -1);")
+        );
+        assert!(
+            css("-scroll-mt-4")
+                .contains("scroll-margin-top: calc(calc(var(--spacing, 0.25rem) * 4) * -1);")
+        );
         // rotate/skew degrees
         assert!(css("-rotate-45").contains("--pp-rotate: -45deg;"));
         // negative space keeps the child-combinator selector
         assert!(css("-space-x-2").contains("> :not([hidden]) ~ :not([hidden])"));
-        assert!(css("-space-x-2")
-            .contains("margin-left: calc(calc(var(--spacing, 0.25rem) * 2) * -1);"));
+        assert!(
+            css("-space-x-2")
+                .contains("margin-left: calc(calc(var(--spacing, 0.25rem) * 2) * -1);")
+        );
         // non-negatable utilities are rejected (Tailwind emits nothing)
         assert!(is_err("-flex"));
         assert!(is_err("-bg-surface"));
@@ -3987,10 +4013,14 @@ mod tests {
         ));
         // bracketed / fractional opacity modifiers normalise to a %:
         // `/[0.5]` (fraction) → 50%, `/[50%]` and `/50` → 50%.
-        assert!(css("bg-surface/[0.5]")
-            .contains("color-mix(in oklab, var(--color-surface) 50%, transparent)"));
-        assert!(css("bg-surface/[50%]")
-            .contains("color-mix(in oklab, var(--color-surface) 50%, transparent)"));
+        assert!(
+            css("bg-surface/[0.5]")
+                .contains("color-mix(in oklab, var(--color-surface) 50%, transparent)")
+        );
+        assert!(
+            css("bg-surface/[50%]")
+                .contains("color-mix(in oklab, var(--color-surface) 50%, transparent)")
+        );
         // works on the builtin palette + other colour utilities too
         assert!(css("fill-red-500/[50%]").contains("color-mix(in oklab,"));
         assert!(css("divide-red-500/[50%]").contains("color-mix(in oklab,"));
@@ -4020,9 +4050,11 @@ mod tests {
         // A @theme token of the same name overrides the palette.
         let mut t = palette();
         t.insert("color-red-500", "#ff0000");
-        assert!(run("text-red-500", &t)
-            .css
-            .contains("color: var(--color-red-500);"));
+        assert!(
+            run("text-red-500", &t)
+                .css
+                .contains("color: var(--color-red-500);")
+        );
         // Out-of-range shade is still an error.
         assert!(run("bg-slate-1234", &palette()).has_errors());
     }
@@ -4044,8 +4076,10 @@ mod tests {
         // Token-driven shadow scale, emitted through the composable chain.
         assert!(css("shadow-xl").contains("--pp-shadow: var(--shadow-xl, 0 20px 25px"));
         assert!(css("shadow-card").contains("--pp-shadow: var(--shadow-card);"));
-        assert!(css("ring-2")
-            .contains("--pp-ring-shadow: 0 0 0 2px var(--pp-ring-color, currentcolor);"));
+        assert!(
+            css("ring-2")
+                .contains("--pp-ring-shadow: 0 0 0 2px var(--pp-ring-color, currentcolor);")
+        );
         assert!(css("ring-accent").contains("--pp-ring-color: var(--color-accent);"));
     }
 
@@ -4098,8 +4132,10 @@ mod tests {
         // calc() operators are spaced so the value is valid CSS — an unspaced
         // `-` is rejected by the browser and the whole declaration is dropped.
         assert!(css("h-[calc(100vh-3.5rem)]").contains("height: calc(100vh - 3.5rem);"));
-        assert!(css("grid-cols-[minmax(0,1fr)_80px]")
-            .contains("grid-template-columns: minmax(0,1fr) 80px;"));
+        assert!(
+            css("grid-cols-[minmax(0,1fr)_80px]")
+                .contains("grid-template-columns: minmax(0,1fr) 80px;")
+        );
         assert!(css("tracking-[0.04em]").contains("letter-spacing: 0.04em;"));
     }
 
@@ -4107,8 +4143,10 @@ mod tests {
     fn arbitrary_transition_and_numeric_families() {
         assert!(css("duration-[300ms]").contains("transition-duration: 300ms;"));
         assert!(css("delay-[150ms]").contains("transition-delay: 150ms;"));
-        assert!(css("ease-[cubic-bezier(0.4,0,0.2,1)]")
-            .contains("transition-timing-function: cubic-bezier(0.4,0,0.2,1);"));
+        assert!(
+            css("ease-[cubic-bezier(0.4,0,0.2,1)]")
+                .contains("transition-timing-function: cubic-bezier(0.4,0,0.2,1);")
+        );
         assert!(css("z-[60]").contains("z-index: 60;"));
         assert!(css("order-[2]").contains("order: 2;"));
         assert!(css("opacity-[0.42]").contains("opacity: 0.42;"));

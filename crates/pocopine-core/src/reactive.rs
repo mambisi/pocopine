@@ -35,8 +35,8 @@ use indexmap::IndexSet;
 use slab::Slab;
 
 use js_sys::Promise;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
 
 /// Dependency-map key: the scope-scoped field name. Stored as

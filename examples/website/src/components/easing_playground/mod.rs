@@ -3,7 +3,7 @@
 //! Play to run it with that easing (pine-motion `Easing::CubicBezier`).
 //! Used as the live demo on `/motion/easing`.
 
-use pine_motion::{animate, Easing, Tween};
+use pine_motion::{Easing, Tween, animate};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -157,10 +157,10 @@ impl EasingPlayground {
         if channels.is_empty() {
             return;
         }
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Ok(Some(el)) = doc.query_selector(".ce-preview-box") {
-                animate(&el, &channels, Tween::new().duration(900.0).easing(easing));
-            }
+        if let Some(doc) = web_sys::window().and_then(|w| w.document())
+            && let Ok(Some(el)) = doc.query_selector(".ce-preview-box")
+        {
+            animate(&el, &channels, Tween::new().duration(900.0).easing(easing));
         }
     }
 

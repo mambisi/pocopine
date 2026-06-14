@@ -18,10 +18,10 @@
 use std::sync::Arc;
 
 use pine_richtext::extension::RichTextExtension;
+use pine_richtext::markdown::NodeEmitter;
 use pine_richtext::markdown::pulldown_cmark::{
     Event as MdEvent, HeadingLevel, Tag as MdTag, TagEnd as MdTagEnd,
 };
-use pine_richtext::markdown::NodeEmitter;
 use pine_richtext::model::{MarkPolicy, NodeSpec, Whitespace};
 use serde_json::json;
 

@@ -18,11 +18,11 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use crate::context::{inject, ContextKey, ContextMarker};
+use crate::context::{ContextKey, ContextMarker, inject};
 use crate::handle::Handle;
 use crate::lifecycle::LifecycleContext;
-use crate::reactive::{track, ScopeId};
-use crate::scope::{with_current_scope_id, Scope};
+use crate::reactive::{ScopeId, track};
+use crate::scope::{Scope, with_current_scope_id};
 use crate::watch::watch;
 
 const PARENT_OBSERVE_KEY: &str = "__pp_parent_observe";
@@ -155,10 +155,10 @@ fn resolve_immediate_parent<T: 'static>(child: ScopeId) -> Option<Handle<T>> {
 fn resolve_nearest_ancestor<T: 'static>(child: ScopeId) -> Option<Handle<T>> {
     let mut cur = child;
     while let Some(parent_id) = crate::context::parent_of(cur) {
-        if let Some(scope) = Scope::find(parent_id) {
-            if let Some(rc) = scope.typed::<T>() {
-                return Some(Handle::new(rc, parent_id));
-            }
+        if let Some(scope) = Scope::find(parent_id)
+            && let Some(rc) = scope.typed::<T>()
+        {
+            return Some(Handle::new(rc, parent_id));
         }
         cur = parent_id;
     }

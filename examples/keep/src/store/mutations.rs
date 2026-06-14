@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 
 use crate::{KeepNote, KeepTag};
 
-use super::{labels::normalize_labels, view::KeepFormNote, KeepStore, KeepViewMode};
+use super::{KeepStore, KeepViewMode, labels::normalize_labels, view::KeepFormNote};
 
 impl KeepStore {
     pub(crate) fn save_form_note(&mut self, form: KeepFormNote) {

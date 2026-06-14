@@ -22,9 +22,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pocopine_deploy::{
-    config, credentials, docker::DockerClient, spec, Constraint, DeployAdapter, Hint, StagedFiles,
+    Constraint, DeployAdapter, Hint, StagedFiles, config, credentials, docker::DockerClient, spec,
 };
 
 use crate::args::{AuthArgs, ConfigArgs, ConfigCmd, DeployArgs, DeployCmd, StatusArgs};
@@ -170,9 +170,13 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
             println!("{content}");
         }
         if args.skip_build {
-            eprintln!("--dry-run: --skip-build is set; would reuse the existing pushed image and run the host-API deploy only.");
+            eprintln!(
+                "--dry-run: --skip-build is set; would reuse the existing pushed image and run the host-API deploy only."
+            );
         } else {
-            eprintln!("--dry-run: would then bundle wasm + run `docker build` + `docker push` + host-API deploy.");
+            eprintln!(
+                "--dry-run: would then bundle wasm + run `docker build` + `docker push` + host-API deploy."
+            );
         }
         return Ok(());
     }
@@ -423,15 +427,14 @@ fn read_project_field(project: &Path, host: &str, field: &str, prod: bool) -> Re
     // `[deploy.production.<host>]` overlay on top of the base
     // `[deploy.<host>]`. The `get` command must do the same so its
     // "source" report matches what an actual --prod deploy resolves.
-    if prod {
-        if let Some(v) = deploy
+    if prod
+        && let Some(v) = deploy
             .get("production")
             .and_then(|p| p.get(host))
             .and_then(|h| h.get(field))
             .and_then(|v| v.as_str())
-        {
-            return Ok(v.to_owned());
-        }
+    {
+        return Ok(v.to_owned());
     }
     deploy
         .get(host)
@@ -442,7 +445,7 @@ fn read_project_field(project: &Path, host: &str, field: &str, prod: bool) -> Re
 }
 
 fn run_status(args: &DeployArgs, opts: &StatusArgs) -> Result<()> {
-    use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
+    use comfy_table::{Cell, Color, ContentArrangement, Table, presets::UTF8_FULL};
 
     let entry = args
         .path
@@ -954,11 +957,7 @@ fn discover_git_remote(project: &Path) -> Option<String> {
         return None;
     }
     let url = String::from_utf8(out.stdout).ok()?.trim().to_owned();
-    if url.is_empty() {
-        None
-    } else {
-        Some(url)
-    }
+    if url.is_empty() { None } else { Some(url) }
 }
 
 #[cfg(test)]

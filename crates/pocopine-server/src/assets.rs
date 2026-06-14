@@ -47,13 +47,13 @@
 //!   HTTP permits; proper `206` support rides the same streaming
 //!   follow-up.
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use pocopine_assets::{
-    is_asset_hash, AssetStore, AssetStoreConfig, FetchedAsset, ASSET_CACHE_CONTROL,
+    ASSET_CACHE_CONTROL, AssetStore, AssetStoreConfig, FetchedAsset, is_asset_hash,
 };
 use std::future::Future;
 use std::pin::Pin;

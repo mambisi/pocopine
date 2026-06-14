@@ -6,7 +6,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::note_form::{KeepNoteFormContext, KEEP_NOTE_FORM_CONTEXT};
+use crate::components::note_form::{KEEP_NOTE_FORM_CONTEXT, KeepNoteFormContext};
 use crate::store::KeepStore;
 
 #[derive(Default, Serialize, Deserialize)]

@@ -19,7 +19,7 @@
 //! by interpolated siblings.
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{console, Element, Node, Text};
+use web_sys::{Element, Node, Text, console};
 
 use crate::expr::{self, Spanned};
 use crate::mount::track_effect_on;

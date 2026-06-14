@@ -1757,94 +1757,95 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     }
 
     if let Some(for_attr) = pp_for_value(el) {
-        if el.tag == "template" && !el.attrs.iter().any(|(n, _)| n == "pp-teleport") {
-            if let Some((item_name, items_expr)) = parse_pp_for(&for_attr) {
-                let key_expr = el
-                    .attrs
-                    .iter()
-                    .find(|(n, _)| n == "pp-key")
-                    .map(|(_, v)| v.clone())
-                    .filter(|s| !s.trim().is_empty());
-                let stagger_ms = el
-                    .attrs
-                    .iter()
-                    .find(|(n, _)| n == "pp-stagger")
-                    .and_then(|(_, v)| v.trim().parse::<u32>().ok())
-                    .unwrap_or(0);
-                // RFC-058 Phase 4.2c — try to lift the row body
-                // into a fragment fn. Skip when an RFC-054 row
-                // plan claims this site (the row-plan fast path
-                // is strictly better than per-row body closures:
-                // proxy elision, no
-                // per-row effect creation, etc.).
-                let row_plan_claims_site = ctx
-                    .row_plan_assignments
-                    .iter()
-                    .any(|(p, _)| p.as_slice() == path.as_slice());
-                // A `None` body means it fell outside the
-                // lifting envelope — the applier surfaces it via
-                // `record_plan_failure` at install time and
-                // renders the subtree empty.
-                let mut bodies_need_proxy = false;
-                // RFC-099 Phase 3 — lift the row body to DATA whether or
-                // not a row-plan claims the site, so KEYED lists still
-                // server-render (their `body_fn` stays `None`, but the
-                // SSR stamper + claim read `body_plan` / `body_html`).
-                // `emit_fn` is false for the row-plan case so the unused
-                // create closure stays out of the wasm bundle; the
-                // create path there is the RFC-054 row-plan fast path.
-                // Only NON-row-plan bodies feed `bodies_need_proxy` /
-                // ref-forwarding, preserving the row-plan proxy-elision
-                // contract.
-                let body_data_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
-                    if !row_plan_claims_site {
-                        ctx.absorb_lifted_refs(&body_ctx);
-                        bodies_need_proxy |= plan_needs_proxy(&body_ctx);
-                    }
-                    let ident = emissions.alloc_if_body_ident("for_body");
-                    emissions.if_bodies.push(IfBodyEmission {
-                        ident: ident.clone(),
-                        html,
-                        plan: body_ctx,
-                        emit_fn: !row_plan_claims_site,
-                    });
-                    ident
+        if el.tag == "template"
+            && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
+            && let Some((item_name, items_expr)) = parse_pp_for(&for_attr)
+        {
+            let key_expr = el
+                .attrs
+                .iter()
+                .find(|(n, _)| n == "pp-key")
+                .map(|(_, v)| v.clone())
+                .filter(|s| !s.trim().is_empty());
+            let stagger_ms = el
+                .attrs
+                .iter()
+                .find(|(n, _)| n == "pp-stagger")
+                .and_then(|(_, v)| v.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            // RFC-058 Phase 4.2c — try to lift the row body
+            // into a fragment fn. Skip when an RFC-054 row
+            // plan claims this site (the row-plan fast path
+            // is strictly better than per-row body closures:
+            // proxy elision, no
+            // per-row effect creation, etc.).
+            let row_plan_claims_site = ctx
+                .row_plan_assignments
+                .iter()
+                .any(|(p, _)| p.as_slice() == path.as_slice());
+            // A `None` body means it fell outside the
+            // lifting envelope — the applier surfaces it via
+            // `record_plan_failure` at install time and
+            // renders the subtree empty.
+            let mut bodies_need_proxy = false;
+            // RFC-099 Phase 3 — lift the row body to DATA whether or
+            // not a row-plan claims the site, so KEYED lists still
+            // server-render (their `body_fn` stays `None`, but the
+            // SSR stamper + claim read `body_plan` / `body_html`).
+            // `emit_fn` is false for the row-plan case so the unused
+            // create closure stays out of the wasm bundle; the
+            // create path there is the RFC-054 row-plan fast path.
+            // Only NON-row-plan bodies feed `bodies_need_proxy` /
+            // ref-forwarding, preserving the row-plan proxy-elision
+            // contract.
+            let body_data_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                if !row_plan_claims_site {
+                    ctx.absorb_lifted_refs(&body_ctx);
+                    bodies_need_proxy |= plan_needs_proxy(&body_ctx);
+                }
+                let ident = emissions.alloc_if_body_ident("for_body");
+                emissions.if_bodies.push(IfBodyEmission {
+                    ident: ident.clone(),
+                    html,
+                    plan: body_ctx,
+                    emit_fn: !row_plan_claims_site,
                 });
-                let body_fn_ident = if row_plan_claims_site {
-                    None
-                } else {
-                    body_data_ident.clone()
-                };
-                let row_plan_id = ctx.row_plan_id(path);
-                ctx.for_plans.push(ForPlanLite {
-                    template_node_path: path.clone(),
-                    item_name,
-                    items_expr,
-                    key_expr,
-                    stagger_ms,
-                    bodies_need_proxy,
-                    body_fn_ident,
-                    body_data_ident,
-                    row_plan_id,
-                });
-                ctx.stripped.push(StrippedAttr {
-                    node_path: path.clone(),
-                    name: "pp-for".to_string(),
-                });
-                ctx.stripped.push(StrippedAttr {
-                    node_path: path.clone(),
-                    name: "pp-key".to_string(),
-                });
-                ctx.stripped.push(StrippedAttr {
-                    node_path: path.clone(),
-                    name: "pp-stagger".to_string(),
-                });
-                // Don't recurse — the row body is owned by the
-                // RFC-054 row plan (when present) or the mount
-                // (when absent). Either way the template-plan
-                // classifier doesn't follow `<template>` content.
-                return;
-            }
+                ident
+            });
+            let body_fn_ident = if row_plan_claims_site {
+                None
+            } else {
+                body_data_ident.clone()
+            };
+            let row_plan_id = ctx.row_plan_id(path);
+            ctx.for_plans.push(ForPlanLite {
+                template_node_path: path.clone(),
+                item_name,
+                items_expr,
+                key_expr,
+                stagger_ms,
+                bodies_need_proxy,
+                body_fn_ident,
+                body_data_ident,
+                row_plan_id,
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-for".to_string(),
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-key".to_string(),
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-stagger".to_string(),
+            });
+            // Don't recurse — the row body is owned by the
+            // RFC-054 row plan (when present) or the mount
+            // (when absent). Either way the template-plan
+            // classifier doesn't follow `<template>` content.
+            return;
         }
         // Ineligible (wrong host, has pp-teleport, or expr
         // doesn't parse) — fall through to block-boundary skip
@@ -2805,21 +2806,21 @@ fn classify_attr(
         // allowlist. Anything else (pp-route / pp-cloak
         // / pp-stagger / pp-transition / unknown) stays preserved
         // and forces requires_walker.
-        if let Some((head, arg, modifiers)) = parse_pp_directive_name(rest) {
-            if is_lift_eligible_opaque(&head) {
-                ctx.opaque_directives.push(OpaqueDirectiveLite {
-                    node_path: path.to_vec(),
-                    name: head,
-                    arg,
-                    modifiers,
-                    value: value.to_string(),
-                });
-                ctx.stripped.push(StrippedAttr {
-                    node_path: path.to_vec(),
-                    name: name.to_string(),
-                });
-                return ClassifyOutcome::Stripped;
-            }
+        if let Some((head, arg, modifiers)) = parse_pp_directive_name(rest)
+            && is_lift_eligible_opaque(&head)
+        {
+            ctx.opaque_directives.push(OpaqueDirectiveLite {
+                node_path: path.to_vec(),
+                name: head,
+                arg,
+                modifiers,
+                value: value.to_string(),
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.to_vec(),
+                name: name.to_string(),
+            });
+            return ClassifyOutcome::Stripped;
         }
         // RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
         // native input/textarea/select. Component-target
@@ -3242,10 +3243,10 @@ fn is_debounce_ms(m: &str) -> bool {
 fn if_body_subtree_is_eligible(el: &Element) -> bool {
     if el.synthetic {
         for child in &el.children {
-            if let Node::Element(child_el) = child {
-                if !if_body_subtree_is_eligible(child_el) {
-                    return false;
-                }
+            if let Node::Element(child_el) = child
+                && !if_body_subtree_is_eligible(child_el)
+            {
+                return false;
             }
         }
         return true;
@@ -3266,10 +3267,10 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
         // `ChildHostModelLite`. No need to gate either form.
     }
     for child in &el.children {
-        if let Node::Element(child_el) = child {
-            if !if_body_subtree_is_eligible(child_el) {
-                return false;
-            }
+        if let Node::Element(child_el) = child
+            && !if_body_subtree_is_eligible(child_el)
+        {
+            return false;
         }
     }
     true
@@ -3783,7 +3784,7 @@ mod tests {
     /// cases so the grammar doesn't drift silently.
     #[test]
     fn parse_interp_segments_handles_documented_shapes() {
-        use super::{parse_interp_segments, InterpSegment};
+        use super::{InterpSegment, parse_interp_segments};
 
         fn render(segs: &[InterpSegment]) -> String {
             let mut s = String::new();

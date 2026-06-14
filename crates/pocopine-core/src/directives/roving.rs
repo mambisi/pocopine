@@ -18,10 +18,10 @@
 //!   `data-highlighted` attribute.
 
 use js_sys::Reflect;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
-use web_sys::{console, Element, HtmlElement, KeyboardEvent, NodeList};
+use web_sys::{Element, HtmlElement, KeyboardEvent, NodeList, console};
 
 use crate::reactive::ScopeId;
 
@@ -300,10 +300,10 @@ fn parse_orientation(modifiers: &[impl AsRef<str>]) -> Orientation {
 /// selector. Missing → default.
 fn parse_items_selector(modifiers: &[&str]) -> String {
     for (i, m) in modifiers.iter().enumerate() {
-        if *m == "items" {
-            if let Some(s) = modifiers.get(i + 1) {
-                return (*s).to_string();
-            }
+        if *m == "items"
+            && let Some(s) = modifiers.get(i + 1)
+        {
+            return (*s).to_string();
         }
     }
     default_items_selector()
@@ -322,10 +322,10 @@ fn default_items_selector() -> String {
 /// `items.<selector>` modifier from RFC-022.
 fn parse_items_selector_virtual(modifiers: &[&str]) -> String {
     for (i, m) in modifiers.iter().enumerate() {
-        if *m == "items" {
-            if let Some(s) = modifiers.get(i + 1) {
-                return (*s).to_string();
-            }
+        if *m == "items"
+            && let Some(s) = modifiers.get(i + 1)
+        {
+            return (*s).to_string();
         }
     }
     "[role=\"option\"]".to_string()
@@ -468,19 +468,18 @@ fn is_item_visible(item: &Element) -> bool {
     // `offsetParent === null` catches `display:none` + display:none
     // ancestors (the common `pp-show` case). A follow-up computed-
     // style check covers fixed-position edge cases.
-    if let Ok(html) = item.clone().dyn_into::<HtmlElement>() {
-        if html.offset_parent().is_none() {
-            if let Some(win) = web_sys::window() {
-                if let Ok(Some(style)) = win.get_computed_style(item) {
-                    if let Ok(display) = style.get_property_value("display") {
-                        if display == "none" {
-                            return false;
-                        }
-                    }
-                }
-            } else {
+    if let Ok(html) = item.clone().dyn_into::<HtmlElement>()
+        && html.offset_parent().is_none()
+    {
+        if let Some(win) = web_sys::window() {
+            if let Ok(Some(style)) = win.get_computed_style(item)
+                && let Ok(display) = style.get_property_value("display")
+                && display == "none"
+            {
                 return false;
             }
+        } else {
+            return false;
         }
     }
     true
@@ -501,11 +500,11 @@ fn ensure_id(el: &Element, listbox_id: &str, index: usize) -> String {
 
 fn set_highlighted(items: &[Element], active: Option<&Element>) {
     for item in items {
-        if let Some(a) = active {
-            if item.is_same_node(Some(a.as_ref())) {
-                let _ = item.set_attribute("data-highlighted", "true");
-                continue;
-            }
+        if let Some(a) = active
+            && item.is_same_node(Some(a.as_ref()))
+        {
+            let _ = item.set_attribute("data-highlighted", "true");
+            continue;
         }
         if item.has_attribute("data-highlighted") {
             let _ = item.remove_attribute("data-highlighted");
@@ -524,10 +523,10 @@ fn node_list_to_elements(list: &NodeList) -> Vec<Element> {
     let len = list.length();
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
-        if let Some(node) = list.item(i) {
-            if let Ok(el) = node.dyn_into::<Element>() {
-                out.push(el);
-            }
+        if let Some(node) = list.item(i)
+            && let Ok(el) = node.dyn_into::<Element>()
+        {
+            out.push(el);
         }
     }
     out

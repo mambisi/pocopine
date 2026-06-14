@@ -8,12 +8,12 @@
 //! string, with direct shortcuts [`get_week_number_iso`] /
 //! [`get_week_number_us`].
 
+use crate::datetime::DateValue;
 use crate::datetime::comparators::{
     get_days_in_month, get_last_first_day_of_week, get_next_last_day_of_week,
 };
 use crate::datetime::types::{DateRange, Grid, WeekStartsOn};
 use crate::datetime::utils::chunk;
-use crate::datetime::DateValue;
 
 // ── month / year / decade anchors ──────────────────────────────
 

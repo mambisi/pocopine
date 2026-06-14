@@ -38,7 +38,7 @@ pub mod run;
 #[cfg(test)]
 mod tests;
 
-pub use plugin::{input_rules, INPUT_RULES_PLUGIN_KEY};
+pub use plugin::{INPUT_RULES_PLUGIN_KEY, input_rules};
 pub use rule::{InCodePolicy, InputRule, RuleHandler, RuleOptions};
 pub use rule_builders::{textblock_type_input_rule, wrapping_input_rule};
 pub use rules::{

@@ -2503,10 +2503,10 @@ fn hydrate_pp_app_subtree(host: &Element) {
         let next = el.next_element_sibling();
         // The custom-element host's first element child is the
         // server-rendered component root (carries data-pp-scope-id).
-        if crate::templates::template_for(&el.local_name()).is_some() {
-            if let Some(inner) = el.first_element_child() {
-                let _ = crate::hydrate::hydrate_root(&inner);
-            }
+        if crate::templates::template_for(&el.local_name()).is_some()
+            && let Some(inner) = el.first_element_child()
+        {
+            let _ = crate::hydrate::hydrate_root(&inner);
         }
         child = next;
     }
@@ -2517,18 +2517,17 @@ fn hydrate_pp_app_subtree(host: &Element) {
     let mut claimed_route = false;
     if let Ok(outlets) = host.query_selector_all("pp-outlet") {
         for i in 0..outlets.length() {
-            if let Some(node) = outlets.item(i) {
-                if let Ok(outlet) = node.dyn_into::<Element>() {
-                    if let Some(route_root) = outlet
-                        .first_element_child()
-                        .and_then(|route_tag| route_tag.first_element_child())
-                    {
-                        if crate::hydrate::hydrate_root(&route_root).is_some() {
-                            claimed_route = true;
-                        }
-                    }
-                    router::set_outlet(outlet);
+            if let Some(node) = outlets.item(i)
+                && let Ok(outlet) = node.dyn_into::<Element>()
+            {
+                if let Some(route_root) = outlet
+                    .first_element_child()
+                    .and_then(|route_tag| route_tag.first_element_child())
+                    && crate::hydrate::hydrate_root(&route_root).is_some()
+                {
+                    claimed_route = true;
                 }
+                router::set_outlet(outlet);
             }
         }
     }

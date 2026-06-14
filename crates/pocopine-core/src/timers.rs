@@ -74,10 +74,10 @@ impl TimeoutHandle {
     /// Cancel the pending timer. No-op if it already fired or was
     /// previously cancelled.
     pub fn cancel(&self) {
-        if let Some(id) = self.id.take() {
-            if let Some(w) = host_window() {
-                w.clear_timeout_with_handle(id);
-            }
+        if let Some(id) = self.id.take()
+            && let Some(w) = host_window()
+        {
+            w.clear_timeout_with_handle(id);
         }
     }
 
@@ -122,13 +122,13 @@ where
                 f();
             }
         }) as Box<dyn FnMut()>);
-        if let Some(w) = host_window() {
-            if let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+        if let Some(w) = host_window()
+            && let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
                 closure.as_ref().unchecked_ref(),
                 delay_ms as i32,
-            ) {
-                id_cell.set(Some(id));
-            }
+            )
+        {
+            id_cell.set(Some(id));
         }
         TimeoutHandle {
             id: id_cell,
@@ -163,10 +163,10 @@ pub struct IntervalHandle {
 
 impl IntervalHandle {
     pub fn cancel(&self) {
-        if let Some(id) = self.id.take() {
-            if let Some(w) = host_window() {
-                w.clear_interval_with_handle(id);
-            }
+        if let Some(id) = self.id.take()
+            && let Some(w) = host_window()
+        {
+            w.clear_interval_with_handle(id);
         }
     }
 
@@ -300,10 +300,10 @@ impl Debounced {
 
     /// Cancel any pending fire. No-op if nothing is scheduled.
     pub fn cancel(&self) {
-        if let Some(id) = self.id.take() {
-            if let Some(w) = host_window() {
-                w.clear_timeout_with_handle(id);
-            }
+        if let Some(id) = self.id.take()
+            && let Some(w) = host_window()
+        {
+            w.clear_timeout_with_handle(id);
         }
         self.closure.take();
     }

@@ -16,7 +16,7 @@
 
 use std::panic::catch_unwind;
 
-use pocopine_stylekit::parse::{parse_class, Variant};
+use pocopine_stylekit::parse::{Variant, parse_class};
 
 const CORPUS: &str = include_str!("fixtures/tailwind-candidates.txt");
 

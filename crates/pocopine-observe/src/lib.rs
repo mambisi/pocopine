@@ -706,10 +706,10 @@ mod tests {
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
     use tracing::field::{Field, Visit};
+    use tracing_subscriber::Layer;
     use tracing_subscriber::fmt::MakeWriter;
     use tracing_subscriber::layer::Context;
     use tracing_subscriber::prelude::*;
-    use tracing_subscriber::Layer;
 
     #[derive(Clone)]
     struct SharedWriter(Arc<Mutex<Vec<u8>>>);

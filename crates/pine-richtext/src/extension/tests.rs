@@ -16,7 +16,7 @@
 //! `RuntimeBuilder` and doesn't depend on the shared cache.
 
 #[allow(deprecated)]
-use crate::extension::{registry, ExtensionNodeView, KeyBindings, NamedCommand, RichTextExtension};
+use crate::extension::{ExtensionNodeView, KeyBindings, NamedCommand, RichTextExtension, registry};
 use crate::runtime::registry::lock_tests;
 
 #[derive(Default)]

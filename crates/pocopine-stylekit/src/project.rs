@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::extract::{extract_poco, UsedClass};
+use crate::extract::{UsedClass, extract_poco};
 use crate::{CompileOptions, Compiler, Diagnostic, Severity, ThemeTokens};
 
 /// One `.poco` source file to compile.
@@ -453,20 +453,22 @@ mod tests {
             source: r#"<div class="flex"></div>"#.into(),
         }];
         let out = compile_project(theme, &files, CompileOptions::default());
-        assert!(out
-            .diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Warning && d.message.contains("unterminated")));
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Warning && d.message.contains("unterminated"))
+        );
         // Well-formed @theme produces no such warning.
         let ok = compile_project(
             "@theme { --color-surface: #fff; }",
             &files,
             CompileOptions::default(),
         );
-        assert!(!ok
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("unterminated")));
+        assert!(
+            !ok.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unterminated"))
+        );
     }
 
     #[test]

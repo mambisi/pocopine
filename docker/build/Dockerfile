@@ -3,13 +3,13 @@
 # pocopine canonical build container — RFC 080 §4.4
 #
 # Tag convention: <pocopine-cli-version>-rust-<rust-version>
-#   e.g. ghcr.io/pocopine/build:0.1.0-rust-1.84
+#   e.g. ghcr.io/pocopine/build:0.1.0-rust-1.85
 #
 # Build:
 #   docker buildx build \
-#     --build-arg RUST_VERSION=1.84 \
+#     --build-arg RUST_VERSION=1.85 \
 #     --build-arg POCOPINE_REV=$(git rev-parse HEAD) \
-#     -t ghcr.io/pocopine/build:0.1.0-rust-1.84 \
+#     -t ghcr.io/pocopine/build:0.1.0-rust-1.85 \
 #     -f docker/build/Dockerfile .
 #
 # Use:
@@ -17,7 +17,10 @@
 #     ghcr.io/pocopine/build:<v> pocopine build --in-container
 
 # ─── Stage 1 — build pocopine-cli from this repo's source ────────────────────
-ARG RUST_VERSION=1.84
+# 1.85 is the floor: the workspace is Rust edition 2024 (rustc 1.85+).
+# The pinned nightly in rust-toolchain.toml drives the actual build; this
+# stable base just bootstraps cargo/rustup.
+ARG RUST_VERSION=1.85
 FROM rust:${RUST_VERSION}-slim-bookworm AS cli-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -9,7 +9,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{EncodingKey, Header, encode};
 use serde::Serialize;
 
 use crate::config::{Algorithm, SecretBytes};

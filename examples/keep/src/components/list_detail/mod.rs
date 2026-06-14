@@ -11,7 +11,7 @@ use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::note_form::{KeepNoteForm, KeepNoteFormContext, KEEP_NOTE_FORM_CONTEXT};
+use crate::components::note_form::{KEEP_NOTE_FORM_CONTEXT, KeepNoteForm, KeepNoteFormContext};
 use crate::store::KeepStore;
 
 #[derive(Default, Serialize, Deserialize)]

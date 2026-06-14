@@ -33,7 +33,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Path of the credentials file relative to `$HOME`.
@@ -200,10 +200,10 @@ fn load_inner<F>(home: &Path, host: &str, env: F) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
 {
-    if let Some(t) = env(&env_var_name(host)) {
-        if !t.is_empty() {
-            return Ok(t);
-        }
+    if let Some(t) = env(&env_var_name(host))
+        && !t.is_empty()
+    {
+        return Ok(t);
     }
 
     let path = home.join(REL_PATH);

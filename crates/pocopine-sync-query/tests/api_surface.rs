@@ -7,8 +7,8 @@
 
 use pocopine_sync::{MutationId, RowKey, SyncResult, SyncStreamName};
 use pocopine_sync_query::{
-    params, FieldEq, FieldInSet, MutationOutcome, Mutator, MutatorRemoteContext,
-    MutatorRemoteFuture, Order, OrderBy, Query, RowChange,
+    FieldEq, FieldInSet, MutationOutcome, Mutator, MutatorRemoteContext, MutatorRemoteFuture,
+    Order, OrderBy, Query, RowChange, params,
 };
 
 // ---- Query building ----------------------------------------------------

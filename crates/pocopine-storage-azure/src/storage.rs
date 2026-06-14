@@ -13,13 +13,13 @@ use azure_storage_blob::{BlobContainerClient, BlobServiceClient};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use pocopine_storage::backend_common::{
+    UploadConcurrencyRegistry, UploadSessionLockCleanup, UploadSessionLockRegistry,
     checked_new_offset, ensure_open, ensure_owner, ensure_size_limit,
-    ensure_upload_length_can_be_set, expires_at, select_upload_mode, UploadConcurrencyRegistry,
-    UploadSessionLockCleanup, UploadSessionLockRegistry,
+    ensure_upload_length_can_be_set, expires_at, select_upload_mode,
 };
 use pocopine_storage::checksum::{
-    checksum_algorithm_to_compute, ensure_supported_checksum_policy, precheck_checksum,
-    validate_complete_checksum_precomputed, StreamingChecksum,
+    StreamingChecksum, checksum_algorithm_to_compute, ensure_supported_checksum_policy,
+    precheck_checksum, validate_complete_checksum_precomputed,
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, CompleteUpload, InitiateUpload, ObjectChecksum,
@@ -32,8 +32,8 @@ use uuid::Uuid;
 
 use crate::layout::{AzureKeyLayout, DEFAULT_INTERNAL_PREFIX};
 use crate::state::{
-    decode_session_object, AbortSessionRead, AzureObjectAttrs, AzureObjectBytes,
-    AzureObjectMetadata, AzureObjectWrite, NativeUploadState, StoredUploadSession,
+    AbortSessionRead, AzureObjectAttrs, AzureObjectBytes, AzureObjectMetadata, AzureObjectWrite,
+    NativeUploadState, StoredUploadSession, decode_session_object,
 };
 use crate::util::{
     azure_error, ensure_completable, is_azure_already_exists, is_azure_not_found,
@@ -480,10 +480,10 @@ impl AzureBlobStorageBackend {
     }
 
     fn ensure_requested_size_is_supported(&self, size: Option<u64>) -> StorageResult<()> {
-        if let Some(size) = size {
-            if size > self.max_proxy_upload_bytes {
-                return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
-            }
+        if let Some(size) = size
+            && size > self.max_proxy_upload_bytes
+        {
+            return Err(StorageError::payload_too_large(self.max_proxy_upload_bytes));
         }
         Ok(())
     }
@@ -731,12 +731,12 @@ impl AzureBlobStorageBackend {
         provided_checksum: Option<ObjectChecksum>,
     ) -> StorageResult<ObjectRef> {
         let total = stored.public.next_offset.unwrap_or(0);
-        if let Some(expected) = stored.public.size {
-            if total != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {total}"
-                )));
-            }
+        if let Some(expected) = stored.public.size
+            && total != expected
+        {
+            return Err(StorageError::policy_rejected(format!(
+                "upload is incomplete: expected {expected} bytes, got {total}"
+            )));
         }
         ensure_size_limit(stored.max_bytes, stored.public.size, total)?;
         let object_key = self.layout.object_key(stored.storage_key.key.as_str());
@@ -1060,12 +1060,12 @@ impl AzureBlobStorageBackend {
         // GC'd) — otherwise it would be stuck, rejecting both part uploads and
         // abort. `reopen_if_object_absent` only reopens when the blob is truly
         // absent/foreign, so an already-committed object is never reopened.
-        if count > 0 {
-            if let Err(err) = self.ensure_blocks_staged(&object_key, session, count).await {
-                self.reopen_if_object_absent(session, &mut stored, &object_key)
-                    .await;
-                return Err(err);
-            }
+        if count > 0
+            && let Err(err) = self.ensure_blocks_staged(&object_key, session, count).await
+        {
+            self.reopen_if_object_absent(session, &mut stored, &object_key)
+                .await;
+            return Err(err);
         }
 
         // Fence: persist Completing before the commit so a concurrent abort is

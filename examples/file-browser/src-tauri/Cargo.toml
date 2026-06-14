@@ -1,0 +1,30 @@
+# Own workspace so this nested crate builds standalone. It lives inside
+# the `examples/file-browser` workspace member but is intentionally NOT
+# part of the pocopine workspace (the webview backend must never be built
+# by a stock `cargo build`/CI). Without this, Cargo walks up to the root
+# manifest and errors with "believes it's in a workspace when it's not".
+[workspace]
+
+[package]
+name = "file-browser-tauri"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "file-browser"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The app crate (one directory up), linked for its `#[server]` inventory
+# and the `storage_server()` constructor.
+file-browser-example = { path = ".." }
+# In-repo path deps; an external project would use published versions:
+# pocopine-native-tauri = { version = "0.1", features = ["tauri"] }
+pocopine-native-tauri = { path = "../../../crates/pocopine-native-tauri", features = ["tauri"] }
+pocopine-storage = { path = "../../../crates/pocopine-storage" }
+tauri = { version = "2", features = [] }

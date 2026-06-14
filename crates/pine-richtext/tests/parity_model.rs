@@ -11,8 +11,8 @@ use serde_json::json;
 mod support;
 
 use pine_richtext::model::{
-    find_diff_end, find_diff_start, Attrs, ContentExpr, Fragment, Mark, MarkSpec, Node, NodeSpec,
-    Schema, Slice,
+    Attrs, ContentExpr, Fragment, Mark, MarkSpec, Node, NodeSpec, Schema, Slice, find_diff_end,
+    find_diff_start,
 };
 use pine_richtext::schema_basic;
 
@@ -252,22 +252,26 @@ fn model_content_expression_supports_nested_repeats_and_counts() {
             Fragment::from(vec![hard_break(), hard_break(), hard_break(), hard_break()]),
         )
         .unwrap();
-    assert!(schema
-        .node("doc", Attrs::new(), Fragment::from(hard_break()))
-        .is_err());
-    assert!(schema
-        .node(
-            "doc",
-            Attrs::new(),
-            Fragment::from(vec![
-                hard_break(),
-                hard_break(),
-                hard_break(),
-                hard_break(),
-                hard_break()
-            ]),
-        )
-        .is_err());
+    assert!(
+        schema
+            .node("doc", Attrs::new(), Fragment::from(hard_break()))
+            .is_err()
+    );
+    assert!(
+        schema
+            .node(
+                "doc",
+                Attrs::new(),
+                Fragment::from(vec![
+                    hard_break(),
+                    hard_break(),
+                    hard_break(),
+                    hard_break(),
+                    hard_break()
+                ]),
+            )
+            .is_err()
+    );
 }
 
 #[test]
@@ -349,11 +353,12 @@ fn model_content_match_fills_across_two_bounds() {
         .unwrap()
         .fill_before(&middle, false)
         .unwrap();
-    assert!(expr
-        .match_fragment(&schema, &before.append(left).append(middle))
-        .unwrap()
-        .fill_before(&after, true)
-        .is_none());
+    assert!(
+        expr.match_fragment(&schema, &before.append(left).append(middle))
+            .unwrap()
+            .fill_before(&after, true)
+            .is_none()
+    );
 }
 
 #[test]
@@ -362,11 +367,13 @@ fn model_resolved_positions_reflect_document_structure() {
     let tagged = tagged_doc(vec![
         tagged_paragraph_text("ab").into(),
         tag("between"),
-        tagged_blockquote(vec![tagged_paragraph(vec![
-            tagged_marked_text("cd", vec![em]).into(),
-            tagged_text("ef").into(),
+        tagged_blockquote(vec![
+            tagged_paragraph(vec![
+                tagged_marked_text("cd", vec![em]).into(),
+                tagged_text("ef").into(),
+            ])
+            .into(),
         ])
-        .into()])
         .into(),
     ]);
     assert_eq!(tagged.tag("between"), 4);
@@ -423,45 +430,40 @@ fn model_resolved_positions_report_active_marks() {
     let strong = schema_basic::strong().unwrap();
     let schema = schema_basic::schema();
 
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![tagged_marked_text(
-        "fo<a>o",
-        vec![em.clone()],
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tagged_marked_text("fo<a>o", vec![em.clone()]).into()]).into(),
+    ]);
     assert!(em.is_in_set(&tagged.node.resolve(tagged.tag("a")).unwrap().marks(&schema)));
     assert!(!strong.is_in_set(&tagged.node.resolve(tagged.tag("a")).unwrap().marks(&schema)));
 
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_marked_text("hi", vec![em.clone()]).into(),
-        tagged_text("<a> there").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_marked_text("hi", vec![em.clone()]).into(),
+            tagged_text("<a> there").into(),
+        ])
+        .into(),
+    ]);
     assert!(em.is_in_set(&tagged.node.resolve(tagged.tag("a")).unwrap().marks(&schema)));
 
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("one <a>").into(),
-        tagged_marked_text("two", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("one <a>").into(),
+            tagged_marked_text("two", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     assert!(!em.is_in_set(&tagged.node.resolve(tagged.tag("a")).unwrap().marks(&schema)));
 
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![tagged_marked_text(
-        "<a>one",
-        vec![em.clone()],
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tagged_marked_text("<a>one", vec![em.clone()]).into()]).into(),
+    ]);
     assert!(em.is_in_set(&tagged.node.resolve(tagged.tag("a")).unwrap().marks(&schema)));
 
     let link = schema_basic::link("https://example.test", Option::<String>::None).unwrap();
     let other_link = schema_basic::link("https://other.test", Option::<String>::None).unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![tagged_marked_text(
-        "li<a>nk",
-        vec![link],
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tagged_marked_text("li<a>nk", vec![link]).into()]).into(),
+    ]);
     assert!(!other_link.is_in_set(&tagged.node.resolve(tagged.tag("a")).unwrap().marks(&schema)));
 }
 
@@ -652,11 +654,13 @@ fn model_slice_matches_upstream_slice_matrix() {
     );
 
     let em = schema_basic::em().unwrap();
-    let case = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("here's noth").into(),
-        tagged_marked_text("<a>ing and here's e<b>m", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let case = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("here's noth").into(),
+            tagged_marked_text("<a>ing and here's e<b>m", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     assert_slice(
         &case,
         Some("a"),
@@ -675,32 +679,41 @@ fn model_slice_matches_upstream_list_schema_cases() {
     // "can cut to a deep position":
     //   doc(blockquote(ul(li(p("a")), li(p("b<b>")))))  → cut at <b>
     //   expected: doc(blockquote(ul(li(p("a")), li(p("b"))))), openStart=0, openEnd=4
-    let case = tagged_doc(vec![tagged_blockquote(vec![tagged_bullet_list(vec![
-        tagged_list_item_text("a").into(),
-        tagged_list_item(vec![tagged_paragraph_text("b<b>").into()]).into(),
-    ])
-    .into()])
-    .into()]);
-    let expected = doc(vec![schema_basic::blockquote(vec![bullet_list(vec![
-        list_item_text("a"),
-        list_item_text("b"),
-    ])])
-    .unwrap()]);
+    let case = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_bullet_list(vec![
+                tagged_list_item_text("a").into(),
+                tagged_list_item(vec![tagged_paragraph_text("b<b>").into()]).into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
+    let expected = doc(vec![
+        schema_basic::blockquote(vec![bullet_list(vec![
+            list_item_text("a"),
+            list_item_text("b"),
+        ])])
+        .unwrap(),
+    ]);
     assert_slice(&case, None, Some("b"), &expected, 0, 4);
 
     // "can cut from a deep position":
     //   doc(blockquote(ul(li(p("a")), li(p("<a>b")))))
     //   expected: doc(blockquote(ul(li(p("b"))))), openStart=4, openEnd=0
-    let case = tagged_doc(vec![tagged_blockquote(vec![tagged_bullet_list(vec![
-        tagged_list_item_text("a").into(),
-        tagged_list_item(vec![tagged_paragraph_text("<a>b").into()]).into(),
-    ])
-    .into()])
-    .into()]);
-    let expected = doc(vec![schema_basic::blockquote(vec![bullet_list(vec![
-        list_item_text("b"),
-    ])])
-    .unwrap()]);
+    let case = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_bullet_list(vec![
+                tagged_list_item_text("a").into(),
+                tagged_list_item(vec![tagged_paragraph_text("<a>b").into()]).into(),
+            ])
+            .into(),
+        ])
+        .into(),
+    ]);
+    let expected = doc(vec![
+        schema_basic::blockquote(vec![bullet_list(vec![list_item_text("b")])]).unwrap(),
+    ]);
     assert_slice(&case, Some("a"), None, &expected, 4, 0);
 
     // "can cut across different depths":
@@ -725,21 +738,23 @@ fn model_slice_matches_upstream_list_schema_cases() {
     // "can cut between deeply nested nodes":
     //   doc(blockquote(p("foo<a>bar"), ul(li(p("a")), li(p("b"), "<b>", p("c"))), p("d")))
     //   expected: blockquote(p("bar"), ul(li(p("a")), li(p("b")))), openStart=1, openEnd=2
-    let case = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("foo<a>bar").into(),
-        tagged_bullet_list(vec![
-            tagged_list_item_text("a").into(),
-            tagged_list_item(vec![
-                tagged_paragraph_text("b").into(),
-                tag("b"),
-                tagged_paragraph_text("c").into(),
+    let case = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph_text("foo<a>bar").into(),
+            tagged_bullet_list(vec![
+                tagged_list_item_text("a").into(),
+                tagged_list_item(vec![
+                    tagged_paragraph_text("b").into(),
+                    tag("b"),
+                    tagged_paragraph_text("c").into(),
+                ])
+                .into(),
             ])
             .into(),
+            tagged_paragraph_text("d").into(),
         ])
         .into(),
-        tagged_paragraph_text("d").into(),
-    ])
-    .into()]);
+    ]);
     let expected = schema_basic::blockquote(vec![
         paragraph_text("bar"),
         bullet_list(vec![list_item_text("a"), list_item_text("b")]),
@@ -750,11 +765,13 @@ fn model_slice_matches_upstream_list_schema_cases() {
 
 #[test]
 fn model_slice_can_include_parent_context() {
-    let case = tagged_doc(vec![tagged_blockquote(vec![
-        tagged_paragraph_text("fo<a>o").into(),
-        tagged_paragraph_text("bar<b>").into(),
-    ])
-    .into()]);
+    let case = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph_text("fo<a>o").into(),
+            tagged_paragraph_text("bar<b>").into(),
+        ])
+        .into(),
+    ]);
     let slice = case
         .node
         .slice_with_parents(case.tag("a"), case.tag("b"), true)
@@ -830,12 +847,14 @@ fn model_nodes_between_matches_upstream_traversal_cases() {
 #[test]
 fn model_node_lookup_and_mark_range_helpers_follow_positions() {
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("a").into(),
-        tagged_marked_text("<a>bc<b>", vec![em.clone()]).into(),
-        tagged_text("d").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("a").into(),
+            tagged_marked_text("<a>bc<b>", vec![em.clone()]).into(),
+            tagged_text("d").into(),
+        ])
+        .into(),
+    ]);
     let mark_from = tagged.tag("a");
     let mark_to = tagged.tag("b");
     let doc = tagged.node;
@@ -987,42 +1006,60 @@ fn model_schema_basic_flags_defining_wrappers() {
     // Sanity check: schema_basic now marks the wrappers PM declares as
     // defining_for_content / defining in upstream's basic + list schemas.
     let schema = schema_basic::schema();
-    assert!(schema
-        .node_type("blockquote")
-        .unwrap()
-        .is_defining_for_content());
-    assert!(schema
-        .node_type("blockquote")
-        .unwrap()
-        .is_defining_as_context());
-    assert!(schema
-        .node_type("heading")
-        .unwrap()
-        .is_defining_for_content());
-    assert!(schema
-        .node_type("heading")
-        .unwrap()
-        .is_defining_as_context());
-    assert!(schema
-        .node_type("code_block")
-        .unwrap()
-        .is_defining_for_content());
-    assert!(schema
-        .node_type("code_block")
-        .unwrap()
-        .is_defining_as_context());
-    assert!(schema
-        .node_type("list_item")
-        .unwrap()
-        .is_defining_for_content());
-    assert!(schema
-        .node_type("list_item")
-        .unwrap()
-        .is_defining_as_context());
-    assert!(!schema
-        .node_type("paragraph")
-        .unwrap()
-        .is_defining_for_content());
+    assert!(
+        schema
+            .node_type("blockquote")
+            .unwrap()
+            .is_defining_for_content()
+    );
+    assert!(
+        schema
+            .node_type("blockquote")
+            .unwrap()
+            .is_defining_as_context()
+    );
+    assert!(
+        schema
+            .node_type("heading")
+            .unwrap()
+            .is_defining_for_content()
+    );
+    assert!(
+        schema
+            .node_type("heading")
+            .unwrap()
+            .is_defining_as_context()
+    );
+    assert!(
+        schema
+            .node_type("code_block")
+            .unwrap()
+            .is_defining_for_content()
+    );
+    assert!(
+        schema
+            .node_type("code_block")
+            .unwrap()
+            .is_defining_as_context()
+    );
+    assert!(
+        schema
+            .node_type("list_item")
+            .unwrap()
+            .is_defining_for_content()
+    );
+    assert!(
+        schema
+            .node_type("list_item")
+            .unwrap()
+            .is_defining_as_context()
+    );
+    assert!(
+        !schema
+            .node_type("paragraph")
+            .unwrap()
+            .is_defining_for_content()
+    );
     assert!(!schema.node_type("hard_break").unwrap().is_selectable());
 }
 
@@ -1044,9 +1081,11 @@ fn model_schema_basic_declares_builtin_attrs() {
     let missing_image_src = schema
         .node("image", Attrs::new(), Fragment::empty())
         .unwrap_err();
-    assert!(missing_image_src
-        .to_string()
-        .contains("missing required attribute src"));
+    assert!(
+        missing_image_src
+            .to_string()
+            .contains("missing required attribute src")
+    );
     let image =
         schema_basic::image("image.png", Option::<String>::None, Option::<String>::None).unwrap();
     assert_eq!(image.attrs().get("src"), Some(&json!("image.png")));
@@ -1054,9 +1093,11 @@ fn model_schema_basic_declares_builtin_attrs() {
     assert_eq!(image.attrs().get("title"), Some(&json!(null)));
 
     let missing_link_href = schema.mark("link", Attrs::new()).unwrap_err();
-    assert!(missing_link_href
-        .to_string()
-        .contains("missing required attribute href"));
+    assert!(
+        missing_link_href
+            .to_string()
+            .contains("missing required attribute href")
+    );
     let link = schema_basic::link("https://example.test", Option::<String>::None).unwrap();
     assert_eq!(
         link.attrs().get("href"),
@@ -1121,7 +1162,7 @@ fn model_resolved_block_range_respects_predicate() {
     // blockRange should walk outward past depths whose parent doesn't satisfy
     // the predicate. Matches upstream's `ResolvedPos.blockRange(other, pred)`.
     let document = doc(vec![
-        schema_basic::blockquote(vec![paragraph_text("foo")]).unwrap()
+        schema_basic::blockquote(vec![paragraph_text("foo")]).unwrap(),
     ]);
     // Position 3 sits inside the paragraph's text. Default blockRange returns
     // a range whose parent is the blockquote (depth 1).
@@ -1136,9 +1177,11 @@ fn model_resolved_block_range_respects_predicate() {
     assert_eq!(doc_range.parent().type_name(), "doc");
 
     // A predicate that nothing satisfies returns None.
-    assert!(resolved
-        .block_range_with(None, |node| node.type_name() == "missing")
-        .is_none());
+    assert!(
+        resolved
+            .block_range_with(None, |node| node.type_name() == "missing")
+            .is_none()
+    );
 }
 
 #[test]
@@ -1168,11 +1211,9 @@ fn model_node_cut_matches_upstream_cases() {
     assert_eq!(cut, doc(vec![paragraph_text("bar")]));
 
     // cuts from the left
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "foo<b>bar",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("foo<b>bar").into()]).into(),
+    ]);
     let to = tagged.tag("b");
     let cut = tagged.node.cut(0, to).unwrap();
     assert_eq!(
@@ -1183,11 +1224,9 @@ fn model_node_cut_matches_upstream_cases() {
     );
 
     // cuts to the right
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "foo<a>bar",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("foo<a>bar").into()]).into(),
+    ]);
     let from = tagged.tag("a");
     let cut = tagged.node.cut(from, tagged.node.content_size()).unwrap();
     assert_eq!(
@@ -1355,11 +1394,9 @@ fn model_replace_supports_top_level_join_on_delete() {
     assert_eq!(result, doc(vec![paragraph_text("onwo")]));
 
     // can replace within a block
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "a<a>bc<b>d",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("a<a>bc<b>d").into()]).into(),
+    ]);
     let insert = tagged_doc(vec![tagged_paragraph_text("x<a>y<b>z").into()]);
     let slice = insert.node.slice(insert.tag("a"), insert.tag("b")).unwrap();
     let from = tagged.tag("a");
@@ -1393,13 +1430,15 @@ fn model_slice_can_cut_across_paragraphs_and_marks() {
     );
 
     // can cut part of marked text
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("here's noth").into(),
-        tag("a"),
-        tagged_text("ing and ").into(),
-        tagged_marked_text("here's e<b>m", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("here's noth").into(),
+            tag("a"),
+            tagged_text("ing and ").into(),
+            tagged_marked_text("here's e<b>m", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let slice = tagged.node.slice(from, to).unwrap();

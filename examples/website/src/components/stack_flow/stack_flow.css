@@ -41,6 +41,9 @@
   display: flex;
   flex-direction: column;
   gap: 2.75rem;
+  /* Shrink with its grid track instead of inflating it to the steps'
+     min-content (which overflowed the viewport on mobile). */
+  min-width: 0;
 }
 /* Timeline rail connecting the step nodes (faded at both ends) */
 .flow-steps::before {
@@ -61,9 +64,10 @@
      have time to play out as you scroll (no extra stages). */
   min-height: 46vh;
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 28px minmax(0, 1fr);
   column-gap: 1.1rem;
   align-content: center;
+  min-width: 0;
 }
 .flow-step-num {
   grid-column: 1;
@@ -133,6 +137,9 @@
 .flow-stage {
   position: sticky;
   top: 5rem;
+  /* Shrink with its grid track so the demo (which clips its own overflow)
+     can't inflate the single mobile column past the viewport. */
+  min-width: 0;
 }
 .flow-stage .flow-cta {
   margin-top: 1.25rem;

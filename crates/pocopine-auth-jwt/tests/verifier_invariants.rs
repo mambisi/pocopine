@@ -12,13 +12,13 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use http::{HeaderMap, HeaderValue, Method, Uri};
-use jsonwebtoken::{encode, Algorithm as JwtAlg, EncodingKey, Header};
+use jsonwebtoken::{Algorithm as JwtAlg, EncodingKey, Header, encode};
 use pocopine_auth::{AuthProvider, RequestContext, Role};
 use pocopine_auth_jwt::{
     Algorithm, ClaimMap, ClaimPath, JwtAuthError, JwtConfig, JwtIssuer, JwtVerifier, KeySource,
     RevocationCheck, SecretBytes, TokenSource,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const SECRET: &[u8] = b"this-is-a-32-byte-long-test-secret-please";
 
@@ -111,8 +111,8 @@ async fn alg_none_is_impossible_to_express() {
     // We assert this by hand-crafting a header `{"alg":"none","typ":"JWT"}`
     // and confirming we get a Malformed/AlgorithmRejected, never
     // a successful verification.
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
     let payload_b64 = URL_SAFE_NO_PAD.encode(br#"{"sub":"attacker"}"#);
     let token = format!("{header_b64}.{payload_b64}.");

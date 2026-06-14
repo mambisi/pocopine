@@ -2,13 +2,13 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
-use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
-use crate::bar::{bar_aria_label, baseline_value, category_tick_labels, ChartBar};
+use crate::animation::{DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_style};
+use crate::bar::{ChartBar, bar_aria_label, baseline_value, category_tick_labels};
 use crate::cartesian::{
-    expanded_domain, grid_lines_for_y, optional_domain, tick_labels_for_y, x_axis_label,
-    y_axis_label, DEFAULT_EMPTY_MESSAGE,
+    DEFAULT_EMPTY_MESSAGE, expanded_domain, grid_lines_for_y, optional_domain, tick_labels_for_y,
+    x_axis_label, y_axis_label,
 };
-use crate::error::{finite, ChartError, ChartResult};
+use crate::error::{ChartError, ChartResult, finite};
 use crate::geometry::{ChartMargins, ChartRect};
 use crate::legend::series_label_or_default;
 use crate::line::{
@@ -19,7 +19,7 @@ use crate::marks::{
 };
 use crate::path::{area_path, line_path};
 use crate::scale::{BandScale, LinearScale};
-use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
+use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel, format_tick};
 
 const DEFAULT_WIDTH: f64 = 640.0;
 const DEFAULT_HEIGHT: f64 = 320.0;

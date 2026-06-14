@@ -41,12 +41,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use js_sys::{Array, Reflect};
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
 use web_sys::{DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement, Node};
 
-use crate::reactive::{release, EffectId, ScopeId};
+use crate::reactive::{EffectId, ScopeId, release};
 use crate::registry::instantiate;
 use crate::scope::{Scope, StaticPropKind};
 use crate::slot_scope::SlotScope;
@@ -694,10 +694,10 @@ fn find_single_child_element_skipping_slot_templates(tag: &Element) -> Option<El
         let Ok(el) = node.dyn_into::<Element>() else {
             continue;
         };
-        if let Some(tpl) = el.dyn_ref::<HtmlTemplateElement>() {
-            if tpl.has_attribute("pp-slot") {
-                continue;
-            }
+        if let Some(tpl) = el.dyn_ref::<HtmlTemplateElement>()
+            && tpl.has_attribute("pp-slot")
+        {
+            continue;
         }
         if found.is_some() {
             return None;
@@ -780,10 +780,10 @@ fn has_user_transition_attr(el: &Element) -> bool {
 /// shorthand to `pp-on:event` long form so the call goes through
 /// cleanly. Other names pass through unchanged.
 fn setattr_safe_name(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix('@') {
-        if !rest.is_empty() {
-            return format!("pp-on:{rest}");
-        }
+    if let Some(rest) = name.strip_prefix('@')
+        && !rest.is_empty()
+    {
+        return format!("pp-on:{rest}");
     }
     name.to_string()
 }
@@ -920,10 +920,10 @@ fn coerce_attr_value(raw: &str) -> JsValue {
     }
     let trimmed = raw.trim_start();
     let first = trimmed.as_bytes().first();
-    if matches!(first, Some(b'{') | Some(b'[') | Some(b'"')) {
-        if let Ok(v) = js_sys::JSON::parse(raw) {
-            return v;
-        }
+    if matches!(first, Some(b'{') | Some(b'[') | Some(b'"'))
+        && let Ok(v) = js_sys::JSON::parse(raw)
+    {
+        return v;
     }
     if let Ok(n) = raw.parse::<f64>() {
         return JsValue::from_f64(n);
@@ -1074,19 +1074,19 @@ fn capture_light_dom_slots(
         }
     }
     for n in snapshot {
-        if let Some(tpl) = n.dyn_ref::<HtmlTemplateElement>() {
-            if let Some(name) = tpl.get_attribute("pp-slot") {
-                by_name.insert(
-                    name,
-                    CapturedSlot {
-                        source: tpl.content(),
-                        ident: tpl.get_attribute("pp-let").unwrap_or_default(),
-                        owner_scope_id,
-                        owner_proxy: owner_proxy.clone(),
-                    },
-                );
-                continue;
-            }
+        if let Some(tpl) = n.dyn_ref::<HtmlTemplateElement>()
+            && let Some(name) = tpl.get_attribute("pp-slot")
+        {
+            by_name.insert(
+                name,
+                CapturedSlot {
+                    source: tpl.content(),
+                    ident: tpl.get_attribute("pp-let").unwrap_or_default(),
+                    owner_scope_id,
+                    owner_proxy: owner_proxy.clone(),
+                },
+            );
+            continue;
         }
         let _ = default_fragment.append_child(&n);
     }
@@ -1228,10 +1228,10 @@ fn materialize_slot_default(
     let frag: DocumentFragment = doc.create_document_fragment();
     let kids = slot_el.child_nodes();
     for i in 0..kids.length() {
-        if let Some(n) = kids.item(i) {
-            if let Ok(clone) = n.clone_node_with_deep(true) {
-                let _ = frag.append_child(&clone);
-            }
+        if let Some(n) = kids.item(i)
+            && let Ok(clone) = n.clone_node_with_deep(true)
+        {
+            let _ = frag.append_child(&clone);
         }
     }
     let frag_kids = frag.child_nodes();
@@ -1394,17 +1394,17 @@ pub fn find_element_for_scope(scope_id: ScopeId) -> Option<Element> {
 }
 
 fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
-    if let Some(id_num) = get_private(root, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
-        if id_num as u64 == scope_id.0 {
-            return Some(root.clone());
-        }
+    if let Some(id_num) = get_private(root, SCOPE_ID_KEY).and_then(|v| v.as_f64())
+        && id_num as u64 == scope_id.0
+    {
+        return Some(root.clone());
     }
     let children = root.children();
     for i in 0..children.length() {
-        if let Some(child) = children.item(i) {
-            if let Some(found) = find_in_subtree(&child, scope_id) {
-                return Some(found);
-            }
+        if let Some(child) = children.item(i)
+            && let Some(found) = find_in_subtree(&child, scope_id)
+        {
+            return Some(found);
         }
     }
     None
@@ -1611,12 +1611,12 @@ fn release_subtree_inner(node: &Node) {
                 release_subtree_inner(&c);
             }
         }
-        if let Some(v) = get_private(&el, EFFECTS_KEY) {
-            if let Ok(arr) = v.dyn_into::<Array>() {
-                for i in 0..arr.length() {
-                    if let Some(n) = arr.get(i).as_f64() {
-                        release(EffectId(n as u64));
-                    }
+        if let Some(v) = get_private(&el, EFFECTS_KEY)
+            && let Ok(arr) = v.dyn_into::<Array>()
+        {
+            for i in 0..arr.length() {
+                if let Some(n) = arr.get(i).as_f64() {
+                    release(EffectId(n as u64));
                 }
             }
         }

@@ -32,8 +32,8 @@ use pocopine_core::animate::AnimationHandle;
 
 use crate::animate::animate;
 use crate::easing::Easing;
-use crate::gesture::pan::{pan, PanConfig, PanEvent};
 use crate::gesture::GestureHandle;
+use crate::gesture::pan::{PanConfig, PanEvent, pan};
 use crate::spring::Spring;
 
 const MOMENTUM_POWER_SECONDS: f64 = 0.35;

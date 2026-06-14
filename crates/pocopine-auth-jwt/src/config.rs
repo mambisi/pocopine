@@ -142,7 +142,7 @@ impl SecretBytes {
     /// View of the secret. Limit the call site to the verification
     /// step; never log the result.
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0 .0
+        &self.0.0
     }
 }
 

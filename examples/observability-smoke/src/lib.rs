@@ -6,7 +6,7 @@
 
 use pocopine::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
-use pocopine_server::axum::{response::Html, routing::get, Router};
+use pocopine_server::axum::{Router, response::Html, routing::get};
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::Instrument as _;

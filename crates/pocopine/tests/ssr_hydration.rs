@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element, MutationObserver, MutationObserverInit};
+use web_sys::{Element, MutationObserver, MutationObserverInit, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 

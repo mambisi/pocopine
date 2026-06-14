@@ -1,9 +1,22 @@
 /* ─── Copyable install command ───────────────────────────────── */
 
+/* The component host sits between the page layout and the pill. Bound it to
+   its container and let it shrink (min-width:0), otherwise its min-content
+   width (the no-wrap command) lets the pill stretch past the viewport on
+   mobile — the `max-width:100%` on .install would resolve against the host's
+   overflowing width and do nothing. */
+install-cmd {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .install {
   display: inline-flex;
   align-items: center;
   gap: 0.7rem;
+  max-width: 100%;
   font-family: var(--mono);
   font-size: 0.95rem;
   padding: 0.6rem 0.7rem 0.6rem 1rem;
@@ -12,13 +25,19 @@
   background: var(--bg);
   box-shadow: var(--shadow);
 }
-.install-prompt { color: var(--brand); font-weight: 700; }
+.install-prompt { color: var(--brand); font-weight: 700; flex: none; }
 .install-cmd {
   color: var(--fg);
   background: transparent;
   padding: 0;
   white-space: nowrap;
+  /* On narrow screens the command scrolls inside the pill rather than
+     stretching it past the viewport (which forced page-wide overflow). */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none; /* keep the pill clean (Firefox) */
 }
+.install-cmd::-webkit-scrollbar { display: none; } /* WebKit/Blink */
 .install-copy {
   display: inline-flex;
   align-items: center;
@@ -33,6 +52,7 @@
   padding: 0.35rem 0.8rem;
   cursor: pointer;
   transition: filter 0.12s;
+  flex: none; /* never shrink the Copy button; only the command area scrolls */
 }
 .install-copy:hover { filter: brightness(1.06); }
 .install-copied { color: var(--brand-fg); }

@@ -18,16 +18,16 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
 
 use pocopine_sync::{
-    ClientMutation, MutationId, RowKey, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+    ClientMutation, MutationId, RowKey, SYNC_ENDPOINT_PREFIX, SyncRow, SyncStreamName,
 };
 use serde_json::Value;
 
 use crate::driver::{
-    spawn_driver, DriverEpoch, DriverHandle, QueryClientConfig, ReplayEntry, ReplayOutcome,
-    SubscriptionDriver,
+    DriverEpoch, DriverHandle, QueryClientConfig, ReplayEntry, ReplayOutcome, SubscriptionDriver,
+    spawn_driver,
 };
 use crate::mutator::{
-    wrap_persisted_payload, AnyMutator, HydrateReplayOutcome, MutatorEntry, RowChange,
+    AnyMutator, HydrateReplayOutcome, MutatorEntry, RowChange, wrap_persisted_payload,
 };
 use crate::query::{MatchFn, Order, Query, QueryKey};
 use crate::selector::{AnyArgs, AnySelector, SelectorEntry, SelectorId, SelectorView};
@@ -1187,10 +1187,10 @@ impl QueryClient {
                 // consistency via the next `/pull` handles any
                 // genuine divergence.
                 for overlay in &overlays {
-                    if let Some(restored) = overlay.deleted_row.clone() {
-                        if !state.canonical_contains(&restored.key) {
-                            state.upsert_canonical(restored);
-                        }
+                    if let Some(restored) = overlay.deleted_row.clone()
+                        && !state.canonical_contains(&restored.key)
+                    {
+                        state.upsert_canonical(restored);
                     }
                 }
                 overlays
@@ -1710,10 +1710,10 @@ impl QueryClient {
                 // lets the newer canonical stand; the next /pull
                 // will reconcile.
                 for overlay in &overlays {
-                    if let Some(restored) = overlay.deleted_row.clone() {
-                        if !state.canonical_contains(&restored.key) {
-                            state.upsert_canonical(restored);
-                        }
+                    if let Some(restored) = overlay.deleted_row.clone()
+                        && !state.canonical_contains(&restored.key)
+                    {
+                        state.upsert_canonical(restored);
                     }
                 }
                 overlays

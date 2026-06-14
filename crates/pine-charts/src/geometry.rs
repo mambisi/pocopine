@@ -1,4 +1,4 @@
-use crate::error::{finite, ChartError, ChartResult};
+use crate::error::{ChartError, ChartResult, finite};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {

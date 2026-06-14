@@ -17,7 +17,7 @@
 //! fill in on the client.
 
 #[cfg(not(target_arch = "wasm32"))]
-use website::{boot_app, WebsiteApp};
+use website::{WebsiteApp, boot_app};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {

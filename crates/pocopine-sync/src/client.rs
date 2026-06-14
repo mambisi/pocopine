@@ -4,10 +4,10 @@ use pocopine_core::{App, AppPlugin, Handle};
 use serde_json::Value;
 
 use crate::{
-    sign_out::{broadcast_sign_out, SignOutSubscription},
     ClientMutation, ClientMutationDraft, CollectionState, LocalPendingMutation, MemoryLocalStore,
-    MutationId, RowKey, SyncCursor, SyncError, SyncLocalStore, SyncPushResponse, SyncReason,
-    SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+    MutationId, RowKey, SYNC_ENDPOINT_PREFIX, SyncCursor, SyncError, SyncLocalStore,
+    SyncPushResponse, SyncReason, SyncResult, SyncRow, SyncStreamName,
+    sign_out::{SignOutSubscription, broadcast_sign_out},
 };
 
 /// In-tab sign-out generation counter shared between [`SyncClient`] and every
@@ -63,9 +63,9 @@ impl SyncEpoch {
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    sync_stream_tag, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
-    PendingMutation, SyncChange, SyncConflict, SyncOp, SyncOpenRequest, SyncOpenResponse,
-    SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, PendingMutation,
+    SyncChange, SyncConflict, SyncOp, SyncOpenRequest, SyncOpenResponse, SyncPullMode,
+    SyncPullRequest, SyncPullResponse, SyncPushRequest, sync_stream_tag,
 };
 
 /// Selector from an app-owned component/store into one sync collection field.

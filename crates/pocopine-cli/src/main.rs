@@ -28,6 +28,7 @@ mod dev;
 mod doctor;
 mod env;
 mod lsp;
+mod native;
 mod server;
 mod skills;
 mod stylekit;
@@ -45,7 +46,7 @@ use args::{AssetsCmd, Cli, Cmd, EnvArgs, EnvCmd, JsCmd};
 /// to the user. Defaults to `info` for first-party crates and `warn`
 /// for everything else; `RUST_LOG` overrides verbatim.
 fn install_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
     let default = "warn,pocopine=info,pocopine_cli=info,pocopine_deploy=info,\
                    pocopine_deploy_railway=info,pocopine_deploy_render=info";
@@ -67,6 +68,7 @@ fn main() -> Result<()> {
         Cmd::Build(args) => run_build(args),
         Cmd::Run(args) => run_project(args),
         Cmd::Dev(args) => dev::run(&args),
+        Cmd::Native(args) => native::run(args),
         Cmd::Doctor(args) => doctor::run(&args),
         Cmd::Skills(args) => skills::run(&args),
         Cmd::Deploy(args) => deploy::run(&args),
@@ -187,7 +189,7 @@ fn run_build(args: args::BuildArgs) -> Result<()> {
 fn run_project(args: args::ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
-    server::check_configured_port_available(&cfg)?;
+    server::check_configured_port_available(&cfg, args.port)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;

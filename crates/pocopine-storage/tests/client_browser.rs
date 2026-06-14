@@ -13,17 +13,17 @@ use std::rc::Rc;
 use js_sys::{Array, Promise};
 use pocopine::prelude::*;
 use pocopine_storage::{
-    storage_plugin, upload_plugin, BrowserStorageRequest, BrowserStorageResponse,
-    BrowserStorageTransport, ObjectRef, ObjectVisibility, StorageClient, StorageError,
-    StorageResponse, StorageResult, TransferPlan, UploadClient, UploadPhase, UploadProgress,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, ObjectRef,
+    ObjectVisibility, StorageClient, StorageError, StorageResponse, StorageResult, TransferPlan,
+    UploadClient, UploadPhase, UploadProgress, UploadSession, UploadSessionId, UploadSessionStatus,
+    UploadStrategy, storage_plugin, upload_plugin,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Blob};
+use web_sys::{Blob, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -369,14 +369,16 @@ async fn upload_client_local_storage_resume_is_opt_in() {
         .collect::<Vec<_>>();
     assert_eq!(tus_methods, ["HEAD", "PATCH", "PATCH"]);
     assert_eq!(state.tus_patch_offsets, [2, 4]);
-    assert!(window()
-        .unwrap()
-        .local_storage()
-        .unwrap()
-        .unwrap()
-        .get_item(key)
-        .unwrap()
-        .is_none());
+    assert!(
+        window()
+            .unwrap()
+            .local_storage()
+            .unwrap()
+            .unwrap()
+            .get_item(key)
+            .unwrap()
+            .is_none()
+    );
     pocopine_storage::__reset_browser_transport_for_test();
 }
 
@@ -411,20 +413,24 @@ async fn multipart_upload_sends_parts_with_part_header_and_completes() {
         ["POST", "PUT", "PUT", "PUT", "POST"]
     );
     // every part carried the Upload-Part header (no /parts/ sub-path, no offset).
-    assert!(state
-        .requests
-        .iter()
-        .filter(|request| request.method == "PUT")
-        .all(|request| header(request, "Upload-Part").is_some()));
+    assert!(
+        state
+            .requests
+            .iter()
+            .filter(|request| request.method == "PUT")
+            .all(|request| header(request, "Upload-Part").is_some())
+    );
     // all three 1-based part numbers were uploaded (order-independent).
     let mut numbers = state.part_numbers.clone();
     numbers.sort_unstable();
     assert_eq!(numbers, [1, 2, 3]);
     // multipart progress reports the per-part index, and ends Complete.
-    assert!(progress
-        .borrow()
-        .iter()
-        .any(|event| event.current_part.is_some()));
+    assert!(
+        progress
+            .borrow()
+            .iter()
+            .any(|event| event.current_part.is_some())
+    );
     assert_eq!(
         progress.borrow().last().unwrap().phase,
         UploadPhase::Complete

@@ -76,20 +76,20 @@ pub(crate) fn segment(text: &str) -> Vec<RawSegment> {
         // exactly one of the single-char markers. Combining
         // sequences that happen to start with a space are rare and
         // would break text runs incorrectly if we split eagerly.
-        if g.chars().count() == 1 {
-            if let Some(kind) = special_kind(g.chars().next().unwrap()) {
-                if !buf.is_empty() {
-                    out.push(RawSegment {
-                        kind: SegmentKind::Text,
-                        text: std::mem::take(&mut buf),
-                    });
-                }
+        if g.chars().count() == 1
+            && let Some(kind) = special_kind(g.chars().next().unwrap())
+        {
+            if !buf.is_empty() {
                 out.push(RawSegment {
-                    kind,
-                    text: g.to_string(),
+                    kind: SegmentKind::Text,
+                    text: std::mem::take(&mut buf),
                 });
-                continue;
             }
+            out.push(RawSegment {
+                kind,
+                text: g.to_string(),
+            });
+            continue;
         }
         buf.push_str(g);
     }

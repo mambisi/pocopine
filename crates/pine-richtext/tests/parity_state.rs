@@ -9,7 +9,7 @@ mod support;
 
 use pine_richtext::model::{Attrs, Fragment, Mark, NodeSpec, Schema};
 use pine_richtext::schema_basic;
-use pine_richtext::state::{EditorState, Plugin, Selection, META_APPENDED_TRANSACTION};
+use pine_richtext::state::{EditorState, META_APPENDED_TRANSACTION, Plugin, Selection};
 
 use support::*;
 
@@ -91,12 +91,14 @@ fn state_json_preserves_selection_stored_marks_and_plugin_state() {
 #[test]
 fn state_delete_selection_preserves_inclusive_marks() {
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo").into(),
-        tagged_marked_text("<a>bar<b>", vec![em]).into(),
-        tagged_text("baz").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo").into(),
+            tagged_marked_text("<a>bar<b>", vec![em]).into(),
+            tagged_text("baz").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let state = state_with_doc(tagged.node);
@@ -114,12 +116,14 @@ fn state_delete_selection_preserves_inclusive_marks() {
 fn state_delete_selection_drops_non_inclusive_boundary_marks() {
     let link = schema_basic::link("https://example.com", Option::<String>::None).unwrap();
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo").into(),
-        tagged_marked_text("<a>bar<b>", vec![link, em]).into(),
-        tagged_text("baz").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo").into(),
+            tagged_marked_text("<a>bar<b>", vec![link, em]).into(),
+            tagged_text("baz").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let state = state_with_doc(tagged.node);
@@ -165,18 +169,20 @@ fn state_delete_selection_does_not_preserve_marks_at_block_end() {
 fn state_delete_selection_keeps_non_inclusive_marks_when_still_inside_them() {
     let link = schema_basic::link("https://example.com", Option::<String>::None).unwrap();
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo").into(),
-        tagged_marked_text("b", vec![link.clone()]).into(),
-        tagged_marked_text("<a>a<b>", vec![link, em]).into(),
-        tagged_marked_text(
-            "r",
-            vec![schema_basic::link("https://example.com", Option::<String>::None).unwrap()],
-        )
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo").into(),
+            tagged_marked_text("b", vec![link.clone()]).into(),
+            tagged_marked_text("<a>a<b>", vec![link, em]).into(),
+            tagged_marked_text(
+                "r",
+                vec![schema_basic::link("https://example.com", Option::<String>::None).unwrap()],
+            )
+            .into(),
+            tagged_text("baz").into(),
+        ])
         .into(),
-        tagged_text("baz").into(),
-    ])
-    .into()]);
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let state = state_with_doc(tagged.node);
@@ -198,12 +204,14 @@ fn state_delete_selection_keeps_non_inclusive_marks_when_still_inside_them() {
 #[test]
 fn state_insert_text_inherits_marks_when_replacing_marked_text() {
     let em = schema_basic::em().unwrap();
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo ").into(),
-        tagged_marked_text("<a>bar<b>", vec![em.clone()]).into(),
-        tagged_text(" baz").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo ").into(),
+            tagged_marked_text("<a>bar<b>", vec![em.clone()]).into(),
+            tagged_text(" baz").into(),
+        ])
+        .into(),
+    ]);
     let from = tagged.tag("a");
     let to = tagged.tag("b");
     let state = state_with_doc(tagged.node);

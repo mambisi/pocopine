@@ -19,9 +19,9 @@
 use js_sys::{Array, Object, Reflect};
 use std::borrow::Cow;
 use std::future::Future;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
 use web_sys::Element;
 
 /// One entry in a WAAPI keyframe list — a bundle of CSS property
@@ -155,7 +155,7 @@ impl AnimationHandle {
     /// If the animation is cancelled before finishing, the future
     /// resolves anyway — the caller can check
     /// [`AnimationHandle::current_time`] or `playState` to disambiguate.
-    pub fn finished(&self) -> impl Future<Output = ()> {
+    pub fn finished(&self) -> impl Future<Output = ()> + use<> {
         // `Animation.finished` returns a Promise<Animation>. Wrap it
         // and discard the result.
         let promise: js_sys::Promise =

@@ -107,19 +107,19 @@ where
         // inner paragraph instead of the wrapper).
         let mut joined = false;
         let pre_join_doc = tr.doc().clone();
-        if let Ok(join_resolved) = pre_join_doc.resolve(range_start) {
-            if let Some(before) = join_resolved.node_before() {
-                let allow = join_predicate
-                    .as_ref()
-                    .map(|pred| pred(captures, &before))
-                    .unwrap_or(true);
-                if allow
-                    && before.type_name() == node_type_name
-                    && can_join(tr.doc(), range_start, state.schema())
-                    && tr.join(range_start).is_ok()
-                {
-                    joined = true;
-                }
+        if let Ok(join_resolved) = pre_join_doc.resolve(range_start)
+            && let Some(before) = join_resolved.node_before()
+        {
+            let allow = join_predicate
+                .as_ref()
+                .map(|pred| pred(captures, &before))
+                .unwrap_or(true);
+            if allow
+                && before.type_name() == node_type_name
+                && can_join(tr.doc(), range_start, state.schema())
+                && tr.join(range_start).is_ok()
+            {
+                joined = true;
             }
         }
 

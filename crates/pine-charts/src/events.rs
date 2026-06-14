@@ -19,11 +19,7 @@ fn from_event_detail<T: DeserializeOwned>(event: wasm_bindgen::JsValue) -> Optio
 }
 
 fn non_empty_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
-    if value.is_empty() {
-        fallback
-    } else {
-        value
-    }
+    if value.is_empty() { fallback } else { value }
 }
 
 fn pair_display_value(first: &str, second: &str, separator: &str, fallback: &str) -> String {

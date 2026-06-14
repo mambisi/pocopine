@@ -366,10 +366,10 @@ fn collect_ancestor_values(item_el: &web_sys::Element) -> Vec<String> {
         .parent_element()
         .and_then(|own_tag| own_tag.parent_element());
     while let Some(el) = cur {
-        if el.tag_name().eq_ignore_ascii_case("pine-tree-item") {
-            if let Some(v) = el.get_attribute("value") {
-                out.push(v);
-            }
+        if el.tag_name().eq_ignore_ascii_case("pine-tree-item")
+            && let Some(v) = el.get_attribute("value")
+        {
+            out.push(v);
         }
         cur = el.parent_element();
     }
@@ -405,12 +405,12 @@ pub struct PineTreeItemToggle {
 #[handlers]
 impl PineTreeItemToggle {
     fn on_setup(&mut self) {
-        if let Some(item) = ITEM.inject() {
-            if let Some(scope) = Scope::find(item) {
-                let s = scope.state.borrow();
-                self.expanded = s.get("expanded").as_bool().unwrap_or(false);
-                self.has_children = s.get("has_children").as_bool().unwrap_or(false);
-            }
+        if let Some(item) = ITEM.inject()
+            && let Some(scope) = Scope::find(item)
+        {
+            let s = scope.state.borrow();
+            self.expanded = s.get("expanded").as_bool().unwrap_or(false);
+            self.has_children = s.get("has_children").as_bool().unwrap_or(false);
         }
     }
 

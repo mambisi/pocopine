@@ -289,9 +289,11 @@ fn memory_backend_emits_job_lifecycle_trace_without_payload() {
         .find(|event| event.field("queue") == Some("trace"))
         .expect("job-start event should be captured");
     assert_eq!(started.field("backend"), Some("memory"));
-    assert!(started
-        .field("job_name")
-        .is_some_and(|value| value.ends_with("::traced_memory_job")));
+    assert!(
+        started
+            .field("job_name")
+            .is_some_and(|value| value.ends_with("::traced_memory_job"))
+    );
     assert_eq!(started.field("attempt"), Some("1"));
     assert_eq!(started.field("max_attempts"), Some("1"));
 
@@ -370,9 +372,11 @@ fn memory_backend_retry_emits_schedule_log_without_payload() {
         .find(|event| event.field("queue") == Some("retry"))
         .expect("retry-scheduled event should be captured");
     assert_eq!(event.field("backend"), Some("memory"));
-    assert!(event
-        .field("job_name")
-        .is_some_and(|value| value.ends_with("::retrying_memory_job")));
+    assert!(
+        event
+            .field("job_name")
+            .is_some_and(|value| value.ends_with("::retrying_memory_job"))
+    );
     assert_eq!(event.field("attempt"), Some("1"));
     assert_eq!(event.field("next_attempt"), Some("2"));
     assert_eq!(event.field("max_attempts"), Some("2"));

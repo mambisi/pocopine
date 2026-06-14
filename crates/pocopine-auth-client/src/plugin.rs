@@ -30,11 +30,11 @@ use pocopine_core::{
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
 };
 
-use crate::refresh::{set_refresh, TokenRefresh};
-use crate::session::{active_principal, AuthSession};
+use crate::refresh::{TokenRefresh, set_refresh};
+use crate::session::{AuthSession, active_principal};
 use crate::storage::{
-    current_session_snapshot_storage, install_session_snapshot_storage, install_storage,
-    SessionSnapshotStorage, TokenStorage,
+    SessionSnapshotStorage, TokenStorage, current_session_snapshot_storage,
+    install_session_snapshot_storage, install_storage,
 };
 
 /// Default query parameter name used for the post-login redirect
@@ -436,7 +436,7 @@ fn predicate_decision<P: Predicate>(predicate: &P, principal: &Principal) -> Rou
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pocopine_auth::{require_auth, require_role, AuthUser, Role};
+    use pocopine_auth::{AuthUser, Role, require_auth, require_role};
     use std::collections::HashMap;
 
     fn with_ctx<R>(path: &str, f: impl FnOnce(&RouteContext<'_>) -> R) -> R {
@@ -519,9 +519,11 @@ mod tests {
             query: &query,
             matched_pattern: Some("/dashboard"),
         };
-        assert!(handler
-            .handle(&ctx, &RouteRejection::Unauthorized)
-            .is_none());
+        assert!(
+            handler
+                .handle(&ctx, &RouteRejection::Unauthorized)
+                .is_none()
+        );
     }
 
     #[test]
@@ -656,9 +658,11 @@ mod tests {
             query: &query,
             matched_pattern: Some("/dashboard"),
         };
-        assert!(handler
-            .handle(&ctx, &RouteRejection::Forbidden("admins_only"))
-            .is_none());
+        assert!(
+            handler
+                .handle(&ctx, &RouteRejection::Forbidden("admins_only"))
+                .is_none()
+        );
         assert!(handler.handle(&ctx, &RouteRejection::NotFound).is_none());
     }
 

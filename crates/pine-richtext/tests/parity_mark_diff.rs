@@ -15,7 +15,7 @@ use serde_json::json;
 mod support;
 
 use pine_richtext::model::{
-    find_diff_end, find_diff_start, Attrs, Fragment, Mark, MarkSpec, NodeSpec, Schema,
+    Attrs, Fragment, Mark, MarkSpec, NodeSpec, Schema, find_diff_end, find_diff_start,
 };
 use pine_richtext::schema_basic;
 
@@ -342,11 +342,13 @@ fn diff_start_notices_differing_marks() {
     // Tag <a> sits right after "a", at the position where the marks differ.
     let em = schema_basic::em().unwrap();
     let strong = schema_basic::strong().unwrap();
-    let left_tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("a<a>").into(),
-        tagged_marked_text("b", vec![em]).into(),
-    ])
-    .into()]);
+    let left_tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("a<a>").into(),
+            tagged_marked_text("b", vec![em]).into(),
+        ])
+        .into(),
+    ]);
     let right = doc(vec![paragraph(vec![
         text("a"),
         support::marked_text("b", vec![strong]),
@@ -358,11 +360,13 @@ fn diff_start_notices_differing_marks() {
 fn diff_start_stops_at_longer_text() {
     // doc(p("foo<a>bar", em("b"))) vs doc(p("foo", em("b")))
     let em = schema_basic::em().unwrap();
-    let left_tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("foo<a>bar").into(),
-        tagged_marked_text("b", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let left_tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("foo<a>bar").into(),
+            tagged_marked_text("b", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let right = doc(vec![paragraph(vec![
         text("foo"),
         support::marked_text("b", vec![em]),
@@ -373,10 +377,9 @@ fn diff_start_stops_at_longer_text() {
 #[test]
 fn diff_start_stops_at_a_different_character() {
     // doc(p("foo<a>bar")) vs doc(p("foocar"))
-    let left_tagged = tagged_doc(vec![tagged_paragraph(
-        vec![tagged_text("foo<a>bar").into()],
-    )
-    .into()]);
+    let left_tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tagged_text("foo<a>bar").into()]).into(),
+    ]);
     let right = doc(vec![paragraph_text("foocar")]);
     assert_diff_start_at_tag(left_tagged, right);
 }
@@ -497,12 +500,14 @@ fn diff_end_notices_different_styles() {
     // doc(p("a", em("b"), "<a>c")) vs doc(p("a", strong("b"), "c"))
     let em = schema_basic::em().unwrap();
     let strong = schema_basic::strong().unwrap();
-    let left_tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("a").into(),
-        tagged_marked_text("b", vec![em]).into(),
-        tagged_text("<a>c").into(),
-    ])
-    .into()]);
+    let left_tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("a").into(),
+            tagged_marked_text("b", vec![em]).into(),
+            tagged_text("<a>c").into(),
+        ])
+        .into(),
+    ]);
     let right = doc(vec![paragraph(vec![
         text("a"),
         support::marked_text("b", vec![strong]),
@@ -515,11 +520,13 @@ fn diff_end_notices_different_styles() {
 fn diff_end_spots_longer_text() {
     // doc(p("bar<a>foo", em("b"))) vs doc(p("foo", em("b")))
     let em = schema_basic::em().unwrap();
-    let left_tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tagged_text("bar<a>foo").into(),
-        tagged_marked_text("b", vec![em.clone()]).into(),
-    ])
-    .into()]);
+    let left_tagged = tagged_doc(vec![
+        tagged_paragraph(vec![
+            tagged_text("bar<a>foo").into(),
+            tagged_marked_text("b", vec![em.clone()]).into(),
+        ])
+        .into(),
+    ]);
     let right = doc(vec![paragraph(vec![
         text("foo"),
         support::marked_text("b", vec![em]),
@@ -530,10 +537,9 @@ fn diff_end_spots_longer_text() {
 #[test]
 fn diff_end_spots_different_text() {
     // doc(p("foob<a>ar")) vs doc(p("foocar"))
-    let left_tagged = tagged_doc(vec![tagged_paragraph(
-        vec![tagged_text("foob<a>ar").into()],
-    )
-    .into()]);
+    let left_tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tagged_text("foob<a>ar").into()]).into(),
+    ]);
     let right = doc(vec![paragraph_text("foocar")]);
     assert_diff_end_at_tag(left_tagged, right);
 }

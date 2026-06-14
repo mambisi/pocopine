@@ -15,8 +15,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::DecodingKey;
+use jsonwebtoken::jwk::JwkSet;
 use tokio::sync::Mutex;
 
 use crate::error::JwtAuthError;
@@ -121,28 +121,24 @@ impl JwksResolver {
             let stale = state
                 .last_fetch
                 .is_none_or(|t| now.saturating_duration_since(t) >= self.inner.cache_ttl);
-            if !stale {
-                if let Some(jwk) = jwks.find(kid) {
-                    return DecodingKey::from_jwk(jwk).map_err(|e| {
-                        JwtAuthError::KeyResolutionFailed {
-                            reason: format!("decode jwk for kid `{kid}`: {e}"),
-                        }
-                    });
-                }
+            if !stale && let Some(jwk) = jwks.find(kid) {
+                return DecodingKey::from_jwk(jwk).map_err(|e| JwtAuthError::KeyResolutionFailed {
+                    reason: format!("decode jwk for kid `{kid}`: {e}"),
+                });
             }
         }
 
         // Slow path: refresh, but respect the cooldown.
-        if let Some(last) = state.last_attempt {
-            if now.saturating_duration_since(last) < self.inner.refresh_cooldown {
-                return Err(JwtAuthError::KeyResolutionFailed {
-                    reason: format!(
-                        "kid `{kid}` not in cache and refresh rate-limited; \
+        if let Some(last) = state.last_attempt
+            && now.saturating_duration_since(last) < self.inner.refresh_cooldown
+        {
+            return Err(JwtAuthError::KeyResolutionFailed {
+                reason: format!(
+                    "kid `{kid}` not in cache and refresh rate-limited; \
                          most recent attempt was {:?} ago",
-                        now.saturating_duration_since(last)
-                    ),
-                });
-            }
+                    now.saturating_duration_since(last)
+                ),
+            });
         }
         state.last_attempt = Some(now);
         let fetched = fetch_jwks(&self.inner.http, &self.inner.url).await?;

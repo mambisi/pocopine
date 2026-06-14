@@ -35,7 +35,7 @@ pub mod render;
 pub mod tokens;
 
 pub use diagnostics::{Diagnostic, Severity, Span};
-pub use project::{compile_project, ProjectCss, SourceFile};
+pub use project::{ProjectCss, SourceFile, compile_project};
 pub use registry::{CssType, Registry};
 pub use render::render;
 pub use tokens::ThemeTokens;

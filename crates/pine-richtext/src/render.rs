@@ -281,12 +281,12 @@ impl<'a> Renderer<'a> {
         out.push_str("<ol data-pos=\"");
         out.push_str(&outer_pos.to_string());
         out.push('"');
-        if let Some(order) = node.attrs().get("order").and_then(|v| v.as_i64()) {
-            if order != 1 {
-                out.push_str(" start=\"");
-                out.push_str(&order.to_string());
-                out.push('"');
-            }
+        if let Some(order) = node.attrs().get("order").and_then(|v| v.as_i64())
+            && order != 1
+        {
+            out.push_str(" start=\"");
+            out.push_str(&order.to_string());
+            out.push('"');
         }
         out.push('>');
         if node.content().size() == 0 {
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn escapes_html_in_text() {
         let p = schema_basic::paragraph(vec![
-            schema_basic::text("a < b & c > d", Vec::new()).unwrap()
+            schema_basic::text("a < b & c > d", Vec::new()).unwrap(),
         ])
         .unwrap();
         let doc = schema_basic::doc(vec![p]).unwrap();
@@ -536,12 +536,9 @@ mod tests {
 
     #[test]
     fn renders_nested_lists_with_increasing_positions() {
-        let li = schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-            "one",
-            Vec::new(),
-        )
-        .unwrap()])
-        .unwrap()])
+        let li = schema_basic::list_item(vec![
+            schema_basic::paragraph(vec![schema_basic::text("one", Vec::new()).unwrap()]).unwrap(),
+        ])
         .unwrap();
         let ul = schema_basic::bullet_list(vec![li]).unwrap();
         let doc = schema_basic::doc(vec![ul]).unwrap();
@@ -554,14 +551,10 @@ mod tests {
 
     #[test]
     fn renders_ordered_list_start_when_order_is_not_one() {
-        let item =
-            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-                "one",
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()])
-            .unwrap();
+        let item = schema_basic::list_item(vec![
+            schema_basic::paragraph(vec![schema_basic::text("one", Vec::new()).unwrap()]).unwrap(),
+        ])
+        .unwrap();
         let mut attrs = Attrs::new();
         attrs.insert("order".to_string(), json!(3));
         let list = schema_basic::schema()

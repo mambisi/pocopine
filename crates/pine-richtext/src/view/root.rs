@@ -15,9 +15,9 @@ use std::sync::Arc;
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, refs, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use wasm_bindgen::closure::Closure;
+use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use web_sys::{CustomEvent, Element, Event, Range};
 
 use crate::commands::{self, BoxedCommand};
@@ -28,7 +28,7 @@ use crate::state::{EditorState, EditorStateConfig, Plugin, Selection, Transactio
 use crate::transform::{AttrStep, Step};
 
 use super::input::{default_keymap, install_listeners, read_dom_selection};
-use super::reconciler::{reconcile_surface_with_outcome, ReconcileOutcome};
+use super::reconciler::{ReconcileOutcome, reconcile_surface_with_outcome};
 use super::selection::model_pos_to_dom;
 
 const DEBUG_LOG_VERSION: &str = concat!(
@@ -488,43 +488,41 @@ impl PineRichTextRoot {
                 // inside the surface (e.g., the user clicked outside), keep
                 // the model's stored selection.
                 let selection_started_at = perf_now_ms();
-                if live_selection {
-                    if let Some(live) = read_dom_selection(&surface_for_provider) {
-                        let live = normalize_live_selection(&state, live);
-                        // `with_selection` substitutes the selection without
-                        // running the plugin state-field loop or the
-                        // transaction filter/append hooks. For a no-op
-                        // selection-only update that's what we want — the
-                        // bigger cost in `state.apply` was the
-                        // `BTreeMap::clone` of plugin_state + the per-plugin
-                        // remove/reinsert dance even when no plugin actually
-                        // mutates. Arc-wrapped values mean the clone is now
-                        // O(plugins); skipping the loop saves the rest.
-                        if let Ok(next) = state.with_selection(live) {
-                            log_debug_json(
-                                debug_json,
-                                "state_provider.live_selection",
-                                json!({ "state": state_debug_json(&next) }),
-                            );
-                            log_perf(
-                                debug_perf,
-                                "state_provider",
-                                json!({
-                                    "runtime": runtime_for_provider.name(),
-                                    "live_selection": true,
-                                    "live_selection_requested": live_selection,
-                                    "cache_hit": cache_hit,
-                                    "doc_size": next.doc().content_size(),
-                                    "top_level_children": next.doc().child_count(),
-                                    "selection_from": next.selection().from(next.doc()),
-                                    "selection_to": next.selection().to(next.doc()),
-                                    "from_json_ms": round_ms(from_json_ms),
-                                    "selection_ms": round_ms(perf_now_ms() - selection_started_at),
-                                    "total_ms": round_ms(perf_now_ms() - started_at),
-                                }),
-                            );
-                            return Some(next);
-                        }
+                if live_selection && let Some(live) = read_dom_selection(&surface_for_provider) {
+                    let live = normalize_live_selection(&state, live);
+                    // `with_selection` substitutes the selection without
+                    // running the plugin state-field loop or the
+                    // transaction filter/append hooks. For a no-op
+                    // selection-only update that's what we want — the
+                    // bigger cost in `state.apply` was the
+                    // `BTreeMap::clone` of plugin_state + the per-plugin
+                    // remove/reinsert dance even when no plugin actually
+                    // mutates. Arc-wrapped values mean the clone is now
+                    // O(plugins); skipping the loop saves the rest.
+                    if let Ok(next) = state.with_selection(live) {
+                        log_debug_json(
+                            debug_json,
+                            "state_provider.live_selection",
+                            json!({ "state": state_debug_json(&next) }),
+                        );
+                        log_perf(
+                            debug_perf,
+                            "state_provider",
+                            json!({
+                                "runtime": runtime_for_provider.name(),
+                                "live_selection": true,
+                                "live_selection_requested": live_selection,
+                                "cache_hit": cache_hit,
+                                "doc_size": next.doc().content_size(),
+                                "top_level_children": next.doc().child_count(),
+                                "selection_from": next.selection().from(next.doc()),
+                                "selection_to": next.selection().to(next.doc()),
+                                "from_json_ms": round_ms(from_json_ms),
+                                "selection_ms": round_ms(perf_now_ms() - selection_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
+                        return Some(next);
                     }
                 }
                 log_perf(

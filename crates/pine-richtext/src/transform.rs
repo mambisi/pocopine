@@ -335,7 +335,7 @@ impl Step {
             _ => {
                 return Err(RichTextError::Step(
                     "step JSON must be an object".to_string(),
-                ))
+                ));
             }
         };
         let step_type = obj
@@ -1085,16 +1085,15 @@ impl Mapping {
         while index < self.maps.len() {
             let map = &self.maps[index];
             let result = map.map_result(pos, assoc);
-            if let Some(recover) = result.recover {
-                if let Some(corresponding) = self.get_mirror(index).filter(|corresponding| {
+            if let Some(recover) = result.recover
+                && let Some(corresponding) = self.get_mirror(index).filter(|corresponding| {
                     *corresponding > index && *corresponding < self.maps.len()
-                }) {
-                    if let Some(recovered) = self.maps[corresponding].recover(recover) {
-                        index = corresponding + 1;
-                        pos = recovered;
-                        continue;
-                    }
-                }
+                })
+                && let Some(recovered) = self.maps[corresponding].recover(recover)
+            {
+                index = corresponding + 1;
+                pos = recovered;
+                continue;
             }
             pos = result.pos;
             deleted |= result.deleted;
@@ -3569,12 +3568,12 @@ fn add_range(
             .ok_or_else(|| replace_error("range child index outside node"))?;
         add_replace_node(child.clone(), target);
     }
-    if let Some(end) = end {
-        if end.depth() == depth && end.text_offset() != 0 {
-            if let Some(before) = end.node_before() {
-                add_replace_node(before, target);
-            }
-        }
+    if let Some(end) = end
+        && end.depth() == depth
+        && end.text_offset() != 0
+        && let Some(before) = end.node_before()
+    {
+        add_replace_node(before, target);
     }
     Ok(())
 }
@@ -3609,17 +3608,15 @@ fn close_node(node: &Node, content: Fragment, schema: &Schema) -> RichTextResult
 }
 
 fn add_replace_node(child: Node, target: &mut Vec<Node>) {
-    if let Some(last) = target.last_mut() {
-        if last.is_text()
-            && child.is_text()
-            && last.marks() == child.marks()
-            && last.attrs() == child.attrs()
-        {
-            if let (Some(left), Some(right)) = (&mut last.text, child.text()) {
-                left.push_str(right);
-                return;
-            }
-        }
+    if let Some(last) = target.last_mut()
+        && last.is_text()
+        && child.is_text()
+        && last.marks() == child.marks()
+        && last.attrs() == child.attrs()
+        && let (Some(left), Some(right)) = (&mut last.text, child.text())
+    {
+        left.push_str(right);
+        return;
     }
     target.push(child);
 }
@@ -3812,12 +3809,10 @@ mod tests {
 
     fn doc() -> (Schema, Node) {
         let schema = schema_basic::schema();
-        let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
-            "hello",
-            Vec::new(),
-        )
-        .unwrap()])
-        .unwrap()])
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text("hello", Vec::new()).unwrap()])
+                .unwrap(),
+        ])
         .unwrap();
         (schema, doc)
     }
@@ -3876,12 +3871,10 @@ mod tests {
     #[test]
     fn split_join_wrap_and_lift_blocks() {
         let schema = schema_basic::schema();
-        let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
-            "hello",
-            Vec::new(),
-        )
-        .unwrap()])
-        .unwrap()])
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text("hello", Vec::new()).unwrap()])
+                .unwrap(),
+        ])
         .unwrap();
 
         assert!(can_split(&doc, 3, 1, &schema));

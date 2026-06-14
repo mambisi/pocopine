@@ -29,7 +29,7 @@ mod recursive_export {
     use std::{any::TypeId, collections::HashSet};
 
     use super::export_into;
-    use crate::{Config, ExportError, TypeVisitor, TS};
+    use crate::{Config, ExportError, TS, TypeVisitor};
 
     /// Exports `T` to the file specified by the `#[ts(export_to = ..)]` attribute within the given
     /// base directory.  
@@ -110,7 +110,7 @@ pub(crate) fn export_to<T: TS + ?Sized + 'static, P: AsRef<Path>>(
     #[cfg(feature = "format")]
     {
         use dprint_plugin_typescript::{
-            configuration::ConfigurationBuilder, format_text, FormatTextOptions,
+            FormatTextOptions, configuration::ConfigurationBuilder, format_text,
         };
 
         let fmt_cfg = ConfigurationBuilder::new().deno().build();

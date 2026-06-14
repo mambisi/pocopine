@@ -137,12 +137,11 @@ pub struct PineToggleGroupItem {
 #[handlers]
 impl PineToggleGroupItem {
     fn on_setup(&mut self) {
-        if let Some(root) = ROOT.inject() {
-            if let Some(scope) = Scope::find(root) {
-                if let Some(rc) = scope.typed::<PineToggleGroupRoot>() {
-                    self.pressed = rc.borrow().item_pressed(&self.value);
-                }
-            }
+        if let Some(root) = ROOT.inject()
+            && let Some(scope) = Scope::find(root)
+            && let Some(rc) = scope.typed::<PineToggleGroupRoot>()
+        {
+            self.pressed = rc.borrow().item_pressed(&self.value);
         }
     }
 

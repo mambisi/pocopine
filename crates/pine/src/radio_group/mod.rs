@@ -120,12 +120,12 @@ impl PineRadioGroupItem {
     fn on_setup(&mut self) {
         // Seed initial state from Root and publish this Item's
         // scope so a nested Indicator mirrors `checked`.
-        if let Some(root) = ROOT.inject() {
-            if let Some(scope) = Scope::find(root) {
-                let v = scope.state.borrow().get("value");
-                self.group_value = v.as_string().unwrap_or_default();
-                self.checked = self.group_value == self.value;
-            }
+        if let Some(root) = ROOT.inject()
+            && let Some(scope) = Scope::find(root)
+        {
+            let v = scope.state.borrow().get("value");
+            self.group_value = v.as_string().unwrap_or_default();
+            self.checked = self.group_value == self.value;
         }
         if let Some(scope) = current_scope_id() {
             CHECKED_OWNER.provide(scope);
@@ -189,11 +189,11 @@ impl PineRadioGroupIndicator {
     fn on_setup(&mut self) {
         // Read the parent Item's initial `checked` synchronously so
         // the first pp-show evaluation sees the right value.
-        if let Some(owner) = CHECKED_OWNER.inject() {
-            if let Some(scope) = Scope::find(owner) {
-                let v = scope.state.borrow().get("checked");
-                self.checked = v.as_bool().unwrap_or(false);
-            }
+        if let Some(owner) = CHECKED_OWNER.inject()
+            && let Some(scope) = Scope::find(owner)
+        {
+            let v = scope.state.borrow().get("checked");
+            self.checked = v.as_bool().unwrap_or(false);
         }
     }
 

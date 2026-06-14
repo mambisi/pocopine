@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::args::{SkillsArgs, SkillsCmd};
 
@@ -123,10 +123,10 @@ fn installed_skills(dir: &Path) -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
-            if entry.path().join("SKILL.md").is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    names.push(name.to_string());
-                }
+            if entry.path().join("SKILL.md").is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
             }
         }
     }

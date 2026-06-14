@@ -35,7 +35,7 @@ use crate::plugin::{
     ServerListening,
 };
 use crate::{
-    auth_middleware, install_server_functions, ServerFunctionRouteConflict, SharedAuthProvider,
+    ServerFunctionRouteConflict, SharedAuthProvider, auth_middleware, install_server_functions,
 };
 
 /// App-level extension point on the host side.

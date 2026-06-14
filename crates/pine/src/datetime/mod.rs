@@ -31,11 +31,11 @@ pub mod types;
 pub mod utils;
 
 pub use calendar::{
-    create_date_range, create_decade, create_month, create_month_grid, create_months, create_year,
-    create_year_grid, create_year_range, end_of_decade, end_of_month, end_of_year,
-    get_days_between, get_week_number, get_week_number_iso, get_week_number_us, get_week_starts_on,
-    start_of_decade, start_of_month, start_of_week, start_of_year, CreateMonthProps,
-    CreateMonthsProps, WeekMode,
+    CreateMonthProps, CreateMonthsProps, WeekMode, create_date_range, create_decade, create_month,
+    create_month_grid, create_months, create_year, create_year_grid, create_year_range,
+    end_of_decade, end_of_month, end_of_year, get_days_between, get_week_number,
+    get_week_number_iso, get_week_number_us, get_week_starts_on, start_of_decade, start_of_month,
+    start_of_week, start_of_year,
 };
 pub use comparators::{
     are_all_days_between_valid, are_all_months_between_valid, are_all_years_between_valid,

@@ -21,8 +21,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use js_sys::{Object, Reflect};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::prelude::*;
 use web_sys::Element;
 
 use crate::mount::track_effect_on;
@@ -302,10 +302,8 @@ fn serialise_class(v: &JsValue) -> Option<String> {
             let truthy = Reflect::get(&obj, &k)
                 .map(|val| val.as_bool().unwrap_or(!val.is_falsy()))
                 .unwrap_or(false);
-            if truthy {
-                if let Some(s) = k.as_string() {
-                    out.push(s);
-                }
+            if truthy && let Some(s) = k.as_string() {
+                out.push(s);
             }
         }
         return Some(out.join(" "));

@@ -796,16 +796,16 @@ mod host {
                 .front()
                 .map(|event| parse_memory_cursor(&event.cursor))
                 .transpose()?;
-            if let (Some(after_seq), Some(oldest_seq)) = (after_seq, oldest_seq) {
-                if after_seq < oldest_seq.saturating_sub(1) {
-                    tracing::debug!(
-                        target: TRACE_TARGET,
-                        event_name = "pocopine.events.memory.replay_gap",
-                        requested_after = after_seq,
-                        oldest_retained = oldest_seq,
-                    );
-                    return Ok(ReplayBatch::from_events(Vec::new(), true));
-                }
+            if let (Some(after_seq), Some(oldest_seq)) = (after_seq, oldest_seq)
+                && after_seq < oldest_seq.saturating_sub(1)
+            {
+                tracing::debug!(
+                    target: TRACE_TARGET,
+                    event_name = "pocopine.events.memory.replay_gap",
+                    requested_after = after_seq,
+                    oldest_retained = oldest_seq,
+                );
+                return Ok(ReplayBatch::from_events(Vec::new(), true));
             }
 
             let mut events = Vec::new();
@@ -967,7 +967,7 @@ mod host {
         use redis::aio::MultiplexedConnection;
         use redis::streams::{StreamId, StreamRangeReply};
 
-        use super::{validate_replay_request, EventBackend, EventBackendCapabilities};
+        use super::{EventBackend, EventBackendCapabilities, validate_replay_request};
         use crate::{
             Audience, EventCursor, EventDraft, EventEnvelope, EventError, EventFuture, EventId,
             EventKind, EventReceiver, EventReceiverFuture, EventResult, EventSubscription,
@@ -1643,10 +1643,12 @@ return {id, tostring(now_ms)}
             fn rejects_bad_redis_config() {
                 assert!(RedisEventConfig::new("", "app").is_err());
                 assert!(RedisEventConfig::new("redis://127.0.0.1/", "bad{app").is_err());
-                assert!(RedisEventConfig::new("redis://127.0.0.1/", "app")
-                    .unwrap()
-                    .with_stream_max_len(0)
-                    .is_err());
+                assert!(
+                    RedisEventConfig::new("redis://127.0.0.1/", "app")
+                        .unwrap()
+                        .with_stream_max_len(0)
+                        .is_err()
+                );
             }
 
             #[test]
@@ -1970,9 +1972,11 @@ return {id, tostring(now_ms)}
             let bad_cursor = EventCursor::new("redis:1-0").unwrap();
             let posts = Topic::new("posts").unwrap();
 
-            assert!(backend
-                .replay_now(ReplayRequest::new([posts]).after(Some(bad_cursor)))
-                .is_err());
+            assert!(
+                backend
+                    .replay_now(ReplayRequest::new([posts]).after(Some(bad_cursor)))
+                    .is_err()
+            );
             assert!(backend.replay_now(ReplayRequest::new([])).is_err());
         }
 
@@ -2018,8 +2022,8 @@ return {id, tostring(now_ms)}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{
-    build_event_backend, EventBackendConfig, MemoryEventBackend, MemoryEventConfig,
-    SharedEventBackend,
+    EventBackendConfig, MemoryEventBackend, MemoryEventConfig, SharedEventBackend,
+    build_event_backend,
 };
 #[cfg(all(feature = "redis", not(target_arch = "wasm32")))]
 pub use host::{RedisEventBackend, RedisEventConfig};

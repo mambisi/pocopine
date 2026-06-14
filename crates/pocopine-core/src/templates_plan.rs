@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{console, Element, Node};
+use web_sys::{Element, Node, console};
 
 use crate::directives::for_plan::{
     BindingKind, MatchCase, StaticBinding, StaticChildMount, StaticCondPlan, StaticForPlan,
@@ -325,22 +325,21 @@ pub fn hydrate_plan(
         }
     }
     for it in plan.interps {
-        if let Some(parent) = resolve_node_path(root, it.node_path) {
-            if let Some(target) =
+        if let Some(parent) = resolve_node_path(root, it.node_path)
+            && let Some(target) =
                 directives::interp::resolve_text_target(&parent, it.text_index as usize)
-            {
-                // Resolve through the scope's proxy-free reader — same as
-                // the binding evaluators and the client mount path. (A
-                // `None` root + an elided `UNDEFINED` proxy would leave
-                // dynamic segments unresolvable.)
-                directives::interp::install_planned_target(
-                    &parent,
-                    proxy,
-                    crate::scope::scoped_root_reader(scope_id),
-                    &target,
-                    it.segments,
-                );
-            }
+        {
+            // Resolve through the scope's proxy-free reader — same as
+            // the binding evaluators and the client mount path. (A
+            // `None` root + an elided `UNDEFINED` proxy would leave
+            // dynamic segments unresolvable.)
+            directives::interp::install_planned_target(
+                &parent,
+                proxy,
+                crate::scope::scoped_root_reader(scope_id),
+                &target,
+                it.segments,
+            );
         }
     }
     for l in plan.listeners {
@@ -450,8 +449,8 @@ fn hydrate_static_child_mount(
 /// disconnected right after, so there's no ongoing cost.
 fn defer_hydration_until_visible(host: &Element, claim: Box<dyn FnOnce()>) {
     use std::cell::Cell;
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     // Shared single-shot slots, swapped out when the host first intersects.
     type ClaimSlot = Rc<Cell<Option<Box<dyn FnOnce()>>>>;
@@ -1339,10 +1338,10 @@ pub fn stamp_if_body_with(
     // Slot-transparent recovery (see `stamp_if_body` doc).
     let kids = content_parent.child_nodes();
     for i in 0..kids.length() {
-        if let Some(n) = kids.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+        if let Some(n) = kids.item(i)
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
         }
     }
     None
@@ -1371,10 +1370,10 @@ fn parse_body_fragment_root(doc: &web_sys::Document, html: &str) -> Option<(Elem
 fn first_element_child(parent: &Node) -> Option<Element> {
     let kids = parent.child_nodes();
     for i in 0..kids.length() {
-        if let Some(n) = kids.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+        if let Some(n) = kids.item(i)
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
         }
     }
     None

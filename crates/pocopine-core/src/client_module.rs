@@ -99,7 +99,7 @@ mod wasm {
     use js_sys::{Function, Promise, Reflect};
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::{JsCast, JsValue};
-    use wasm_bindgen_futures::{spawn_local, JsFuture};
+    use wasm_bindgen_futures::{JsFuture, spawn_local};
 
     use super::{ClientModule, ClientModuleError, DeserializeOwned, ScopeId};
 
@@ -273,10 +273,10 @@ mod wasm {
         if let Some(message) = value.as_string() {
             return message;
         }
-        if let Ok(message) = Reflect::get(&value, &JsValue::from_str("message")) {
-            if let Some(message) = message.as_string() {
-                return message;
-            }
+        if let Ok(message) = Reflect::get(&value, &JsValue::from_str("message"))
+            && let Some(message) = message.as_string()
+        {
+            return message;
         }
         fallback.to_string()
     }

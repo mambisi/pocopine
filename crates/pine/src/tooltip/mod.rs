@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field_scoped, ScopeId};
+use pocopine::{ScopeId, create_context, current_scope_id, watch_scope_field_scoped};
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 
@@ -144,10 +144,10 @@ impl PineTooltipRoot {
         // Root tag always wins because static props apply before
         // `on_setup`, so `self.delay_duration` here already holds
         // whatever the author wrote.
-        if self.delay_duration == 700 {
-            if let Some(prov) = PROVIDER.inject() {
-                self.delay_duration = prov.with(|p| p.delay_duration);
-            }
+        if self.delay_duration == 700
+            && let Some(prov) = PROVIDER.inject()
+        {
+            self.delay_duration = prov.with(|p| p.delay_duration);
         }
     }
 
@@ -183,14 +183,12 @@ fn singleton_take_over(root_id: ScopeId, prov_id: ScopeId) {
         *slot = Some(root_id);
         prev
     });
-    if let Some(prev_id) = prev {
-        if prev_id != root_id {
-            if let Some(scope) = Scope::find(prev_id) {
-                if let Some(rc) = scope.typed::<PineTooltipRoot>() {
-                    Handle::new(rc, prev_id).update(|r: &mut PineTooltipRoot| r.open = false);
-                }
-            }
-        }
+    if let Some(prev_id) = prev
+        && prev_id != root_id
+        && let Some(scope) = Scope::find(prev_id)
+        && let Some(rc) = scope.typed::<PineTooltipRoot>()
+    {
+        Handle::new(rc, prev_id).update(|r: &mut PineTooltipRoot| r.open = false);
     }
 }
 
@@ -200,10 +198,10 @@ fn singleton_take_over(root_id: ScopeId, prov_id: ScopeId) {
 fn singleton_release(root_id: ScopeId, prov_id: ScopeId) {
     CURRENT_OPEN.with(|m| {
         let mut map = m.borrow_mut();
-        if let Some(slot) = map.get_mut(&prov_id) {
-            if *slot == Some(root_id) {
-                *slot = None;
-            }
+        if let Some(slot) = map.get_mut(&prov_id)
+            && *slot == Some(root_id)
+        {
+            *slot = None;
         }
     });
 }
@@ -322,18 +320,18 @@ impl PineTooltipContent {
         let Some(content) = refs.get("content") else {
             return;
         };
-        if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>() {
-            if let Some(root) = ROOT.inject() {
-                compound::install_anchor_to_trigger(
-                    &floater,
-                    root.scope_id(),
-                    SLUG,
-                    &self.side,
-                    &self.align,
-                    self.side_offset,
-                    true,
-                );
-            }
+        if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>()
+            && let Some(root) = ROOT.inject()
+        {
+            compound::install_anchor_to_trigger(
+                &floater,
+                root.scope_id(),
+                SLUG,
+                &self.side,
+                &self.align,
+                self.side_offset,
+                true,
+            );
         }
     }
 }

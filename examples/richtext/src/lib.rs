@@ -29,10 +29,10 @@ use pine_richtext::view::root::CommandRequest;
 use pine_richtext::view::{Editor as RichTextHandle, Markdown, PineRichTextRoot};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::wasm_bindgen;
-use wasm_bindgen::JsCast;
 use web_sys::{CustomEvent, CustomEventInit, Element, Event};
 
 #[derive(Default, Serialize, Deserialize)]
@@ -197,10 +197,10 @@ impl Editor {
         if md.is_empty() {
             return;
         }
-        if let Some(editor) = self.editor_handle() {
-            if let Err(err) = editor.set::<Markdown>(&md) {
-                self.exported_markdown = format!("(import error: {err})");
-            }
+        if let Some(editor) = self.editor_handle()
+            && let Err(err) = editor.set::<Markdown>(&md)
+        {
+            self.exported_markdown = format!("(import error: {err})");
         }
     }
 
@@ -412,7 +412,7 @@ fn bench_doc_json(spec: &BenchSpec) -> Value {
             for i in 0..spec.blocks {
                 blocks.push(
                     schema_basic::paragraph(vec![
-                        schema_basic::text(block_text(i), Vec::new()).unwrap()
+                        schema_basic::text(block_text(i), Vec::new()).unwrap(),
                     ])
                     .unwrap(),
                 );
@@ -439,12 +439,12 @@ fn bench_doc_json(spec: &BenchSpec) -> Value {
                 items.push(
                     schema_basic::task_item(
                         i % 2 == 0,
-                        vec![schema_basic::paragraph(vec![schema_basic::text(
-                            block_text(i),
-                            Vec::new(),
-                        )
-                        .unwrap()])
-                        .unwrap()],
+                        vec![
+                            schema_basic::paragraph(vec![
+                                schema_basic::text(block_text(i), Vec::new()).unwrap(),
+                            ])
+                            .unwrap(),
+                        ],
                     )
                     .unwrap(),
                 );
@@ -461,11 +461,9 @@ fn bench_doc_json(spec: &BenchSpec) -> Value {
 
 fn initial_doc_json() -> Value {
     let schema = schema_basic::schema();
-    let p1 = schema_basic::paragraph(vec![schema_basic::text(
-        "Hello, pine-richtext.",
-        Vec::new(),
-    )
-    .unwrap()])
+    let p1 = schema_basic::paragraph(vec![
+        schema_basic::text("Hello, pine-richtext.", Vec::new()).unwrap(),
+    ])
     .unwrap();
     let p2 = schema_basic::paragraph(vec![
         schema_basic::text("Select some text and use the toolbar: ", Vec::new()).unwrap(),
@@ -482,22 +480,22 @@ fn initial_doc_json() -> Value {
     let checklist = schema_basic::task_list(vec![
         schema_basic::task_item(
             true,
-            vec![schema_basic::paragraph(vec![schema_basic::text(
-                "Schema with task_list / task_item",
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()],
+            vec![
+                schema_basic::paragraph(vec![
+                    schema_basic::text("Schema with task_list / task_item", Vec::new()).unwrap(),
+                ])
+                .unwrap(),
+            ],
         )
         .unwrap(),
         schema_basic::task_item(
             false,
-            vec![schema_basic::paragraph(vec![schema_basic::text(
-                "Click the box to toggle this item",
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()],
+            vec![
+                schema_basic::paragraph(vec![
+                    schema_basic::text("Click the box to toggle this item", Vec::new()).unwrap(),
+                ])
+                .unwrap(),
+            ],
         )
         .unwrap(),
     ])

@@ -14,11 +14,11 @@
 mod support;
 
 use pine_richtext::commands::{
-    self, chain_commands, delete_selection, join_backward, join_down, join_forward,
+    self, Command, chain_commands, delete_selection, join_backward, join_down, join_forward,
     join_textblock_backward, join_textblock_forward, join_up, lift, lift_empty_block, select_all,
     select_node_backward, select_node_forward, select_parent_node, select_textblock_end,
     select_textblock_start, set_block_type, split_block, split_list_item, toggle_mark, wrap_in,
-    wrap_in_list, Command,
+    wrap_in_list,
 };
 use pine_richtext::model::Attrs;
 use pine_richtext::schema_basic;
@@ -79,11 +79,9 @@ fn commands_select_all_no_op_when_already_all() {
 #[test]
 fn commands_select_parent_node_walks_outward_one_level() {
     // doc(blockquote(p("foo<a>bar")))
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "foo<a>bar",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("foo<a>bar").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let state = state_with_doc(tagged.node);
     let mut tr = state.tr();
@@ -161,11 +159,9 @@ fn commands_chain_falls_through_until_one_applies() {
 
 #[test]
 fn commands_lift_paragraph_out_of_blockquote() {
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph_text(
-        "fo<a>o",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![tagged_paragraph_text("fo<a>o").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let state = state_with_doc(tagged.node);
     let mut tr = state.tr();
@@ -209,11 +205,9 @@ fn commands_lift_empty_block_lifts_only_child_from_blockquote() {
 
 #[test]
 fn commands_lift_empty_block_no_op_in_non_empty_paragraph() {
-    let tagged = tagged_doc(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("foo").into(),
-    ])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_paragraph(vec![tag("a"), tagged_text("foo").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let state = state_with_doc(tagged.node);
     let mut tr = state.tr();
@@ -335,11 +329,9 @@ fn commands_split_block_deletes_then_splits_a_range() {
 
 #[test]
 fn commands_split_list_item_keeps_selection_in_new_item_for_typing() {
-    let tagged = tagged_doc(vec![tagged_bullet_list(vec![tagged_list_item_text(
-        "one<a>",
-    )
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_bullet_list(vec![tagged_list_item_text("one<a>").into()]).into(),
+    ]);
     let pos = tagged.tag("a");
     let state = state_with_doc(tagged.node);
     let mut tr = state.tr();
@@ -535,12 +527,12 @@ fn commands_join_textblock_forward_joins_with_next_paragraph() {
 fn commands_join_backward_lifts_when_no_sibling_before() {
     // Cursor at start of a single paragraph inside a blockquote — no
     // sibling before to join with, so join_backward falls back to lift.
-    let tagged = tagged_doc(vec![tagged_blockquote(vec![tagged_paragraph(vec![
-        tag("a"),
-        tagged_text("foo").into(),
-    ])
-    .into()])
-    .into()]);
+    let tagged = tagged_doc(vec![
+        tagged_blockquote(vec![
+            tagged_paragraph(vec![tag("a"), tagged_text("foo").into()]).into(),
+        ])
+        .into(),
+    ]);
     let pos = tagged.tag("a");
     let state = state_with_doc(tagged.node);
     let mut tr = state.tr();

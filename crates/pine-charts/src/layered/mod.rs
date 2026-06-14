@@ -2,8 +2,8 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
-use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
-use crate::error::{finite, ChartError, ChartResult};
+use crate::animation::{DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_style};
+use crate::error::{ChartError, ChartResult, finite};
 use crate::geometry::Point;
 use crate::marks::{
     color_or, color_or_current, key_or_index, label_or_key, rotation_transform, text_anchor,
@@ -1308,11 +1308,7 @@ fn remove_by_key<T>(items: &mut Vec<T>, key: &str, key_of: impl Fn(&T) -> &str) 
 
 fn positive_or_default(field: &'static str, value: f64, default: f64) -> ChartResult<f64> {
     let value = finite(field, value)?;
-    if value <= 0.0 {
-        Ok(default)
-    } else {
-        Ok(value)
-    }
+    if value <= 0.0 { Ok(default) } else { Ok(value) }
 }
 
 fn non_negative(field: &'static str, value: f64) -> ChartResult<f64> {

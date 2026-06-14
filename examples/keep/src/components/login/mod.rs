@@ -6,7 +6,7 @@ use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::firebase::{publish_keep_auth_user, FirebaseAuthUser, KeepFirebaseAuth};
+use crate::firebase::{FirebaseAuthUser, KeepFirebaseAuth, publish_keep_auth_user};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(

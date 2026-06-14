@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use graphql_client::{GraphQLQuery, Response};
 use tracing::info;
 
@@ -78,7 +78,7 @@ impl RailwayClient {
     /// Point the client at an arbitrary GraphQL endpoint — used by the
     /// wiremock HTTP tests to assert on payload shape.
     pub fn with_endpoint(endpoint: impl Into<String>, token: impl AsRef<str>) -> Self {
-        use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
         if let Ok(mut value) = HeaderValue::from_str(&format!("Bearer {}", token.as_ref())) {
             value.set_sensitive(true);
@@ -106,17 +106,17 @@ impl RailwayClient {
             )
             .with_context(|| format!("railway graphql `{op}`: request failed"))?;
 
-        if let Some(errors) = resp.errors {
-            if !errors.is_empty() {
-                bail!(
-                    "railway graphql `{op}`: {}",
-                    errors
-                        .iter()
-                        .map(|e| e.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                );
-            }
+        if let Some(errors) = resp.errors
+            && !errors.is_empty()
+        {
+            bail!(
+                "railway graphql `{op}`: {}",
+                errors
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
         }
         resp.data
             .with_context(|| format!("railway graphql `{op}`: response carried no data"))

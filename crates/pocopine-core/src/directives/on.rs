@@ -164,12 +164,10 @@ pub fn install(
                             }
                             if let Some(sel) =
                                 el_for_closure.get_attribute("data-pp-outside-exempt")
+                                && let Ok(target_el) = node.clone().dyn_into::<Element>()
+                                && target_el.closest(&sel).ok().flatten().is_some()
                             {
-                                if let Ok(target_el) = node.clone().dyn_into::<Element>() {
-                                    if target_el.closest(&sel).ok().flatten().is_some() {
-                                        return;
-                                    }
-                                }
+                                return;
                             }
                         }
                         Err(_) => return,
@@ -199,10 +197,10 @@ pub fn install(
                     // definition — never fire.
                     return;
                 }
-                if let Some(target) = ev.target() {
-                    if target != *el_for_closure.as_ref() {
-                        return;
-                    }
+                if let Some(target) = ev.target()
+                    && target != *el_for_closure.as_ref()
+                {
+                    return;
                 }
             }
             if let (Some(ms), Some(invoke_fn)) = (debounce_ms, invoke_fn.as_ref()) {

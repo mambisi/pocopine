@@ -97,10 +97,10 @@ impl LocalFsStorageBackend {
         // Only remove if the entry is no longer in use (strong_count == 2:
         // one in the map, one on our local Arc). Other in-flight callers
         // would otherwise lose their serialization guarantee.
-        if let Some(existing) = locks.get(session.as_str()) {
-            if Arc::strong_count(existing) <= 2 {
-                locks.remove(session.as_str());
-            }
+        if let Some(existing) = locks.get(session.as_str())
+            && Arc::strong_count(existing) <= 2
+        {
+            locks.remove(session.as_str());
         }
     }
 
@@ -437,12 +437,12 @@ impl LocalFsStorageBackend {
 
         let actual = stored.public.next_offset.unwrap_or(0);
         self.reconcile_temp_len(&request.session, actual)?;
-        if let Some(expected) = stored.public.size {
-            if actual != expected {
-                return Err(StorageError::policy_rejected(format!(
-                    "upload is incomplete: expected {expected} bytes, got {actual}"
-                )));
-            }
+        if let Some(expected) = stored.public.size
+            && actual != expected
+        {
+            return Err(StorageError::policy_rejected(format!(
+                "upload is incomplete: expected {expected} bytes, got {actual}"
+            )));
         }
         ensure_size_limit(stored.max_bytes, stored.public.size, actual)?;
         let uploaded_bytes = fs::read(self.session_tmp_path(&request.session))

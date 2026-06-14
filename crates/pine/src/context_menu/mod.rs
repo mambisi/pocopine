@@ -207,11 +207,11 @@ fn init_roving_tabindex(menu: &web_sys::Element) {
         .ok();
     let Some(items) = items else { return };
     for i in 0..items.length() {
-        if let Some(node) = items.item(i) {
-            if let Ok(el) = node.dyn_into::<web_sys::Element>() {
-                let tabindex = if i == 0 { "0" } else { "-1" };
-                let _ = el.set_attribute("tabindex", tabindex);
-            }
+        if let Some(node) = items.item(i)
+            && let Ok(el) = node.dyn_into::<web_sys::Element>()
+        {
+            let tabindex = if i == 0 { "0" } else { "-1" };
+            let _ = el.set_attribute("tabindex", tabindex);
         }
     }
 }

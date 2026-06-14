@@ -16,7 +16,7 @@
 
 use js_sys::Promise;
 use pocopine_auth::{AuthUser, Principal};
-use pocopine_auth_client::{cross_tab, AuthSession};
+use pocopine_auth_client::{AuthSession, cross_tab};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};

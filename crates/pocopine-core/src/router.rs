@@ -24,20 +24,20 @@ use std::rc::Rc;
 
 use js_sys::{Array, Object, Reflect};
 use once_cell::unsync::OnceCell;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
-use web_sys::{Element, Event};
+use web_sys::{Element, Event, MouseEvent};
 
 use crate::app::{
-    push_encoded_route_path_segment, IntoRouteTarget, Loader, LoaderContext, PageMeta,
-    PageMetaContext, PageMetaFactory, PageMetaTag, Prefetch, RejectionSource, RouteContext,
-    RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader, RouteMeta, RouteName,
-    RouteQuery, RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
-    RouteTarget, RouteTargetError,
+    IntoRouteTarget, Loader, LoaderContext, PageMeta, PageMetaContext, PageMetaFactory,
+    PageMetaTag, Prefetch, RejectionSource, RouteContext, RouteErrorSurface, RouteGuard,
+    RouteGuardDecision, RouteLoader, RouteMeta, RouteName, RouteQuery, RouteRejection,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
+    RouteTargetError, push_encoded_route_path_segment,
 };
 use crate::mount;
-use crate::reactive::{trigger_scope, ScopeId};
+use crate::reactive::{ScopeId, trigger_scope};
 use crate::scope::{ComponentState, Scope};
 
 mod return_to;
@@ -576,16 +576,6 @@ pub fn register_route(pattern: &'static str, component_name: &'static str) {
     register_route_with_config(pattern, component_name, RouteRuntimeConfig::default());
 }
 
-/// RFC-099 Phase 4 — host-callable route resolution for SSR. Returns the
-/// matched route's component tag + captured `:param` / `*rest` values
-/// for `path`, without touching the DOM, guards, or loaders. `None` when
-/// no registered route matches. The SSR renderer uses this to stamp the
-/// route component into the `<pp-outlet>`; guards/loaders run only on the
-/// client (see the divergence policy).
-pub fn resolve_route(path: &str) -> Option<(&'static str, HashMap<String, String>)> {
-    match_route(path, false).map(|m| (m.component_name, m.params))
-}
-
 pub(crate) fn register_route_with_config(
     pattern: &'static str,
     component_name: &'static str,
@@ -896,35 +886,23 @@ pub fn init() {
     if INITIALISED.with(|b| b.replace(true)) {
         return; // idempotent
     }
-
     ensure_route_scope();
-
-    // popstate → re-mount.
-    let cb = Closure::wrap(Box::new(move |_: Event| {
-        let _ = mount_current();
-    }) as Box<dyn FnMut(Event)>);
-    if let Some(win) = web_sys::window() {
-        let _ = win.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
-    }
-    cb.forget();
-
+    install_router_listeners();
     let _ = mount_current();
 }
 
 /// RFC-099 Phase 4 — initialise the router for a HYDRATED app: seed the
-/// `$route` scope from the current URL and attach the `popstate`
-/// listener, but DO NOT paint the route — the server already rendered it
-/// into the `<pp-outlet>` and `App::hydrate` claimed it. The first
-/// client navigation (or popstate) re-mounts normally via
-/// [`mount_current`].
+/// `$route` scope from the current URL and attach the listeners, but DO
+/// NOT paint — the server already rendered the matched route into the
+/// `<pp-outlet>` and `App::hydrate` claimed it. The first navigation /
+/// popstate re-mounts normally via [`mount_current`].
 pub fn init_hydrated() {
     if INITIALISED.with(|b| b.replace(true)) {
         return; // idempotent
     }
     ensure_route_scope();
-
-    // Seed `$route` from the current URL so bindings on the claimed
-    // route see the right path/params/query — without mounting.
+    // Seed `$route` from the current URL so bindings on the claimed route
+    // see the right path/params/query — without mounting.
     if let Some(win) = web_sys::window() {
         let loc = win.location();
         let path = loc.pathname().unwrap_or_else(|_| "/".into());
@@ -934,7 +912,15 @@ pub fn init_hydrated() {
             .unwrap_or_default();
         update_route_state(&path, &params, parse_query(&search));
     }
+    install_router_listeners();
+}
 
+/// Attach the router's DOM listeners — `popstate` re-mount + the delegated
+/// `<a pp-route>` click interception that keeps internal navigation
+/// client-side (no full reload / wasm re-download). Shared by [`init`] and
+/// [`init_hydrated`] so a hydrated app intercepts links too.
+fn install_router_listeners() {
+    // popstate → re-mount.
     let cb = Closure::wrap(Box::new(move |_: Event| {
         let _ = mount_current();
     }) as Box<dyn FnMut(Event)>);
@@ -942,6 +928,63 @@ pub fn init_hydrated() {
         let _ = win.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
     }
     cb.forget();
+
+    // Delegated client-side navigation: intercept plain left-clicks on
+    // same-origin `<a pp-route>` links so internal navigation never triggers
+    // a full page reload (which would re-download + recompile the wasm).
+    // Attribute-based, so it also covers links inside `pp-for` clones. Modified
+    // clicks, `target`, `download`, external/scheme hrefs, and unmarked links
+    // fall through to the browser.
+    let on_click = Closure::wrap(Box::new(move |ev: Event| {
+        let Some(me) = ev.dyn_ref::<MouseEvent>() else {
+            return;
+        };
+        if me.default_prevented()
+            || me.button() != 0
+            || me.meta_key()
+            || me.ctrl_key()
+            || me.shift_key()
+            || me.alt_key()
+        {
+            return;
+        }
+        let Some(target) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        let Some(anchor) = target.closest("a[pp-route]").ok().flatten() else {
+            return;
+        };
+        if anchor
+            .get_attribute("target")
+            .is_some_and(|t| !t.is_empty() && t != "_self")
+            || anchor.has_attribute("download")
+        {
+            return;
+        }
+        let Some(href) = anchor.get_attribute("href") else {
+            return;
+        };
+        // Only intercept absolute internal paths; leave external URLs,
+        // schemes (`mailto:`, `http:`), and protocol-relative `//` to the
+        // browser.
+        if !href.starts_with('/') || href.starts_with("//") {
+            return;
+        }
+        ev.prevent_default();
+        navigate(&href);
+    }) as Box<dyn FnMut(Event)>);
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        let _ = doc.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref());
+    }
+    on_click.forget();
+}
+
+/// RFC-099 Phase 4 — host-callable route match: resolve `path` to its
+/// route component name + captured params, without mounting (the SSR
+/// renderer renders that component into the `<pp-outlet>`; guards/loaders
+/// run only on the client per the divergence policy).
+pub fn resolve_route(path: &str) -> Option<(&'static str, HashMap<String, String>)> {
+    match_route(path, false).map(|m| (m.component_name, m.params))
 }
 
 fn ensure_route_scope() {
@@ -1312,17 +1355,18 @@ fn finish_route_mount(
         // to a `*` wildcard route), mount it here. Otherwise the
         // outlet is left in its prior state — guards / loader
         // never ran because the route doesn't exist.
-        if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get()) {
-            if mount_component_into_outlet(fallback) && has_route_hooks {
-                apply_page_meta(None);
-                crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
-                    path: path.to_string(),
-                    route_pattern: None,
-                    component: Some(fallback),
-                    duration_ms: elapsed_since(start_ms),
-                });
-                return None;
-            }
+        if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get())
+            && mount_component_into_outlet(fallback)
+            && has_route_hooks
+        {
+            apply_page_meta(None);
+            crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+                path: path.to_string(),
+                route_pattern: None,
+                component: Some(fallback),
+                duration_ms: elapsed_since(start_ms),
+            });
+            return None;
         }
         apply_page_meta(None);
         if has_route_hooks {
@@ -1392,34 +1436,45 @@ fn finish_route_mount(
     for (k, v) in params {
         let _ = el.set_attribute(k, v);
     }
-    // RFC-099 — crossfade the route swap via the View Transitions API
-    // when the platform supports it and motion isn't reduced; fall back
-    // to an instant swap otherwise. The whole mount runs INSIDE the swap
-    // callback for two reasons: (a) View Transitions snapshots the new
-    // state when the callback returns, so the mount must complete there
-    // (an empty `<pp-outlet>` would crossfade to blank, then pop), and
-    // (b) the route's `Loader<T>` extractor consumes the pending slot
-    // during the mount's setup — `clear_pending_loader_data` MUST follow
-    // it in the same callback, or (since the callback runs a microtask
-    // later) the slot would be cleared before the route reads it.
-    // RFC-058 Phase 6.5 — the mount goes through the compiled-only entry:
-    // route components must be `#[component]` types so their template
-    // plan installs every binding/listener via the macro-emitted entries.
-    let crossfade = outlet.first_element_child().is_some();
-    let swap = move || {
-        outlet.replace_children_with_node_1(el.as_ref());
-        mount::mount_child_component(&el, name);
-        mount::finalize_compiled_subtree(&el);
-        clear_pending_loader_data();
-    };
-    if crossfade {
-        with_view_transition(swap);
-    } else {
-        // First mount (empty outlet): no transition — don't fade in the
-        // initial page (and SSR hydration claims, never reaching here).
-        swap();
+    outlet.replace_children_with_node_1(el.as_ref());
+    // RFC-058 Phase 6.5 — drive the route component's mount through
+    // the compiled-only entry. The mount's recursive directive
+    // scan is gone; route components must be `#[component]` types
+    // so their template plan installs every binding/listener via
+    // the macro-emitted entries.
+    mount::mount_child_component(&el, name);
+    mount::finalize_compiled_subtree(&el);
+    // Route enter transition (RFC-005): copy the outlet's `pp-transition*`
+    // config onto the freshly-mounted page root and play the enter sequence,
+    // so the incoming page animates in. Applied to `el` (fresh each nav) and
+    // copied after mount so the walker doesn't consume the attrs. A no-op
+    // when the outlet declares no transition — apps swap instantly as before.
+    for attr in [
+        // RFC-038 preset shorthand (`pp-transition="fade"` / `:in` / `:out`)…
+        "pp-transition",
+        "pp-transition:in",
+        "pp-transition:out",
+        // …or the explicit six-class form.
+        "pp-transition:enter",
+        "pp-transition:enter-start",
+        "pp-transition:enter-end",
+        "pp-transition:leave",
+        "pp-transition:leave-start",
+        "pp-transition:leave-end",
+    ] {
+        if let Some(v) = outlet.get_attribute(attr) {
+            let _ = el.set_attribute(attr, &v);
+        }
     }
+    crate::directives::transition::enter(&el, || {});
     apply_page_meta(page_meta);
+
+    // The component's `Loader<T>` extractor (if any) consumed the
+    // pending slot during setup; for routes without a loader the
+    // slot was never populated. Either way, drop any leftover so
+    // the next navigation starts fresh — defensive against
+    // `Option<Loader<T>>` extractors that opt out of consuming.
+    clear_pending_loader_data();
 
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
@@ -1430,44 +1485,6 @@ fn finish_route_mount(
         });
     }
     None
-}
-
-/// RFC-099 — run a DOM mutation inside a View Transition so route swaps
-/// crossfade instead of cutting. Feature-detects `document.startViewTransition`
-/// (via reflection, so no web-sys binding/feature is required and absence
-/// degrades cleanly) and honours `prefers-reduced-motion`. When either is
-/// unavailable, `mutate` runs synchronously — the swap is identical, only
-/// the animation differs. The browser's default root transition crossfades
-/// the changed region; unchanged chrome (header/nav) snapshots to itself,
-/// so it reads as just the outlet content transitioning. No CSS required.
-fn with_view_transition<F: FnOnce() + 'static>(mutate: F) {
-    use wasm_bindgen::closure::Closure;
-    use wasm_bindgen::{JsCast, JsValue};
-
-    let started: Option<(JsValue, js_sys::Function)> = if crate::animate::motion::is_reduced() {
-        None
-    } else {
-        web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|doc| {
-                let doc_val: JsValue = doc.into();
-                let f = js_sys::Reflect::get(&doc_val, &JsValue::from_str("startViewTransition"))
-                    .ok()?;
-                f.dyn_into::<js_sys::Function>().ok().map(|f| (doc_val, f))
-            })
-    };
-
-    match started {
-        // `startViewTransition(cb)`: the browser snapshots the old state,
-        // invokes `cb` (a microtask later) to update the DOM, snapshots
-        // the new state, then crossfades. `once_into_js` frees the closure
-        // after its single call.
-        Some((doc_val, start_fn)) => {
-            let cb = Closure::once_into_js(mutate);
-            let _ = start_fn.call1(&doc_val, &cb);
-        }
-        None => mutate(),
-    }
 }
 
 fn apply_page_meta(factory: Option<PageMetaFactory>) {
@@ -1755,10 +1772,10 @@ fn paint_route_error_surface(surface: &RouteErrorSurface) {
     // App-configured override wins. Mount the user's component
     // through the normal route-mount path so it has a full
     // `#[component]` surface (template, handlers, lifecycle).
-    if let Some(name) = ROUTE_ERROR_COMPONENT.with(|cell| cell.get()) {
-        if mount_component_into_outlet(name) {
-            return;
-        }
+    if let Some(name) = ROUTE_ERROR_COMPONENT.with(|cell| cell.get())
+        && mount_component_into_outlet(name)
+    {
+        return;
     }
     paint_default_route_error_surface(surface);
 }

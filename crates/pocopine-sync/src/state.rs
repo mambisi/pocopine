@@ -404,10 +404,10 @@ where
                     row.pending = true;
                     row.conflict = self.canonical_conflict(&row.key);
                     self.upsert_row(row);
-                } else if let Some(key) = &pending.key {
-                    if let Some(row) = self.row_mut(key) {
-                        row.pending = true;
-                    }
+                } else if let Some(key) = &pending.key
+                    && let Some(row) = self.row_mut(key)
+                {
+                    row.pending = true;
                 }
             }
             SyncOp::Delete => {
@@ -593,17 +593,17 @@ where
         let dropped_pending = self.pending_mutations.len() != before;
 
         let mut cleared_conflict = false;
-        if let Some(row) = self.canonical_row_mut(key) {
-            if row.conflict {
-                row.conflict = false;
-                cleared_conflict = true;
-            }
+        if let Some(row) = self.canonical_row_mut(key)
+            && row.conflict
+        {
+            row.conflict = false;
+            cleared_conflict = true;
         }
-        if let Some(row) = self.row_mut(key) {
-            if row.conflict {
-                row.conflict = false;
-                cleared_conflict = true;
-            }
+        if let Some(row) = self.row_mut(key)
+            && row.conflict
+        {
+            row.conflict = false;
+            cleared_conflict = true;
         }
 
         let changed = dropped_pending || cleared_conflict;
@@ -626,18 +626,18 @@ where
     pub fn clear_conflict(&mut self, key: &RowKey) -> bool {
         let mut changed = false;
 
-        if let Some(row) = self.canonical_row_mut(key) {
-            if row.conflict {
-                row.conflict = false;
-                changed = true;
-            }
+        if let Some(row) = self.canonical_row_mut(key)
+            && row.conflict
+        {
+            row.conflict = false;
+            changed = true;
         }
 
-        if let Some(row) = self.row_mut(key) {
-            if row.conflict {
-                row.conflict = false;
-                changed = true;
-            }
+        if let Some(row) = self.row_mut(key)
+            && row.conflict
+        {
+            row.conflict = false;
+            changed = true;
         }
 
         if changed {
@@ -1059,10 +1059,12 @@ mod tests {
             SyncPullResponse::snapshot(
                 SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
-                vec![SyncRow::new("post_1", "server v1".to_string())
-                    .unwrap()
-                    .version("row_1")
-                    .unwrap()],
+                vec![
+                    SyncRow::new("post_1", "server v1".to_string())
+                        .unwrap()
+                        .version("row_1")
+                        .unwrap(),
+                ],
                 Some(SyncCursor::new("1").unwrap()),
             ),
         );
@@ -1129,10 +1131,12 @@ mod tests {
             SyncPullResponse::snapshot(
                 SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
-                vec![SyncRow::new("post_1", "server v1".to_string())
-                    .unwrap()
-                    .version("row_1")
-                    .unwrap()],
+                vec![
+                    SyncRow::new("post_1", "server v1".to_string())
+                        .unwrap()
+                        .version("row_1")
+                        .unwrap(),
+                ],
                 Some(SyncCursor::new("1").unwrap()),
             ),
         );
@@ -1164,9 +1168,11 @@ mod tests {
 
         assert_eq!(state.rows[0].value, "local edit");
         assert!(state.rows[0].pending);
-        assert!(state
-            .base_version(&RowKey::new("post_1").unwrap())
-            .is_none());
+        assert!(
+            state
+                .base_version(&RowKey::new("post_1").unwrap())
+                .is_none()
+        );
 
         let mut rejected = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
         rejected.rejected.push(SyncRejectedMutation {
@@ -1189,10 +1195,12 @@ mod tests {
             SyncPullResponse::snapshot(
                 SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
-                vec![SyncRow::new("post_1", "server v1".to_string())
-                    .unwrap()
-                    .version("row_1")
-                    .unwrap()],
+                vec![
+                    SyncRow::new("post_1", "server v1".to_string())
+                        .unwrap()
+                        .version("row_1")
+                        .unwrap(),
+                ],
                 Some(SyncCursor::new("1").unwrap()),
             ),
         );
@@ -1210,10 +1218,12 @@ mod tests {
             SyncPullResponse::snapshot(
                 SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
-                vec![SyncRow::new("post_1", "server v2".to_string())
-                    .unwrap()
-                    .version("row_2")
-                    .unwrap()],
+                vec![
+                    SyncRow::new("post_1", "server v2".to_string())
+                        .unwrap()
+                        .version("row_2")
+                        .unwrap(),
+                ],
                 Some(SyncCursor::new("2").unwrap()),
             ),
         );
@@ -1365,10 +1375,12 @@ mod tests {
             SyncPullResponse::snapshot(
                 SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
-                vec![SyncRow::new("post_1", "server v1".to_string())
-                    .unwrap()
-                    .version("row_1")
-                    .unwrap()],
+                vec![
+                    SyncRow::new("post_1", "server v1".to_string())
+                        .unwrap()
+                        .version("row_1")
+                        .unwrap(),
+                ],
                 Some(SyncCursor::new("1").unwrap()),
             ),
         );

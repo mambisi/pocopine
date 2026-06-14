@@ -1,5 +1,5 @@
-use crate::storage_browser::server::storage::*;
 use crate::storage_browser::GcsConnectionInput;
+use crate::storage_browser::server::storage::*;
 
 #[test]
 fn normalize_prefix_accepts_root_and_nested_paths() {
@@ -80,19 +80,23 @@ fn connection_favicon_domain_uses_provider_or_endpoint_brand() {
 
 #[test]
 fn storage_browser_settings_validate_upload_policy_bounds() {
-    assert!(StorageBrowserSettings {
-        upload_max_bytes: 25 * MIB,
-        preferred_chunk_bytes: MIB,
-    }
-    .validate()
-    .is_ok());
+    assert!(
+        StorageBrowserSettings {
+            upload_max_bytes: 25 * MIB,
+            preferred_chunk_bytes: MIB,
+        }
+        .validate()
+        .is_ok()
+    );
 
-    assert!(StorageBrowserSettings {
-        upload_max_bytes: MIB,
-        preferred_chunk_bytes: 2 * MIB,
-    }
-    .validate()
-    .is_err());
+    assert!(
+        StorageBrowserSettings {
+            upload_max_bytes: MIB,
+            preferred_chunk_bytes: 2 * MIB,
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 #[test]

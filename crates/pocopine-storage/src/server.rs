@@ -9,11 +9,11 @@ use futures_core::Stream;
 use futures_util::TryStreamExt;
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_server::auth::{Decision, DenyReason, Predicate, RequestContext};
-use pocopine_server::axum::body::{to_bytes, Body};
+use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::extract::{Path, State};
 use pocopine_server::axum::http::{
-    header::{CACHE_CONTROL, CONTENT_LENGTH, SET_COOKIE, VARY},
     HeaderMap, HeaderValue, Request, StatusCode,
+    header::{CACHE_CONTROL, CONTENT_LENGTH, SET_COOKIE, VARY},
 };
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
 use pocopine_server::axum::routing::{get, head, options, post};
@@ -22,10 +22,10 @@ use uuid::Uuid;
 
 use crate::{
     AnonymousUploadBinding, CompleteUpload, CompleteUploadRequest, InitiateUpload,
-    InitiateUploadRequest, ObjectMetadata, PrincipalRef, SafeObjectKey, StorageBackendName,
-    StorageError, StorageKey, StorageResponse, StorageResult, UploadIntent, UploadPolicy,
-    UploadPolicyDescriptor, UploadSession, UploadSessionId, UploadStrategy, STORAGE_ANON_COOKIE,
-    STORAGE_PROTOCOL_V1, STORAGE_UPLOADS_PATH,
+    InitiateUploadRequest, ObjectMetadata, PrincipalRef, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1,
+    STORAGE_UPLOADS_PATH, SafeObjectKey, StorageBackendName, StorageError, StorageKey,
+    StorageResponse, StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor,
+    UploadSession, UploadSessionId, UploadStrategy,
 };
 
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
@@ -1886,16 +1886,16 @@ fn set_response_header(
 }
 
 fn apply_set_cookie(response: &mut Response, set_cookie: Option<String>) {
-    if let Some(set_cookie) = set_cookie {
-        if let Ok(value) = HeaderValue::from_str(&set_cookie) {
-            let headers = response.headers_mut();
-            headers.insert(SET_COOKIE, value);
-            // Lock the cookie-bearing response out of shared caches: a CDN
-            // that stored this would replay the binding cookie to every
-            // subsequent anonymous visitor of the same URL.
-            headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            headers.insert(VARY, HeaderValue::from_static("Cookie"));
-        }
+    if let Some(set_cookie) = set_cookie
+        && let Ok(value) = HeaderValue::from_str(&set_cookie)
+    {
+        let headers = response.headers_mut();
+        headers.insert(SET_COOKIE, value);
+        // Lock the cookie-bearing response out of shared caches: a CDN
+        // that stored this would replay the binding cookie to every
+        // subsequent anonymous visitor of the same URL.
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        headers.insert(VARY, HeaderValue::from_static("Cookie"));
     }
 }
 
@@ -2063,10 +2063,10 @@ where
     // so wrap unconditionally — a shared cache that stored an anonymous-binding
     // Set-Cookie would otherwise replay it to a different visitor.
     let mut response = no_store_response(response);
-    if let Some(set_cookie) = set_cookie {
-        if let Ok(value) = HeaderValue::from_str(&set_cookie) {
-            response.headers_mut().insert(SET_COOKIE, value);
-        }
+    if let Some(set_cookie) = set_cookie
+        && let Ok(value) = HeaderValue::from_str(&set_cookie)
+    {
+        response.headers_mut().insert(SET_COOKIE, value);
     }
     response
 }

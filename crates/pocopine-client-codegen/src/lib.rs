@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     BindingPattern, Declaration, ExportDefaultDeclarationKind, Expression, Function,
@@ -277,14 +277,13 @@ fn rust_type_from_oxc_ts_type(ty: &TSType<'_>, source: &str) -> String {
             let Some(name) = ts_type_name(&reference.type_name) else {
                 return ty.span().source_text(source).trim().to_string();
             };
-            if name == "Array" {
-                if let Some(argument) = reference
+            if name == "Array"
+                && let Some(argument) = reference
                     .type_arguments
                     .as_ref()
                     .and_then(|arguments| arguments.params.first())
-                {
-                    return format!("Vec<{}>", rust_type_from_oxc_ts_type(argument, source));
-                }
+            {
+                return format!("Vec<{}>", rust_type_from_oxc_ts_type(argument, source));
             }
             name
         }

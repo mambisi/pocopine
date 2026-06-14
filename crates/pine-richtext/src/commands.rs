@@ -14,7 +14,7 @@
 use crate::model::{Attrs, Fragment, Mark, Node, NodeRange, ResolvedPos, Schema};
 use crate::state::{EditorState, Selection, Transaction};
 use crate::transform::{
-    can_join, can_split_into, find_wrapping, join_point, lift_target, AttrStep, Step, TypeAfter,
+    AttrStep, Step, TypeAfter, can_join, can_split_into, find_wrapping, join_point, lift_target,
 };
 
 /// A reusable editor command. Implementors decide whether the command
@@ -195,11 +195,11 @@ fn enclosing_list_ancestor(doc: &Node, pos: usize) -> Option<(usize, usize, Node
     let resolved = doc.resolve(pos).ok()?;
     for depth in (1..=resolved.depth()).rev() {
         let ancestor = resolved.node(depth)?;
-        if let Some(first_child) = ancestor.content().child(0) {
-            if is_list_item_type(first_child.type_name()) {
-                let outer = resolved.before(depth)?;
-                return Some((outer, ancestor.node_size(), ancestor.clone()));
-            }
+        if let Some(first_child) = ancestor.content().child(0)
+            && is_list_item_type(first_child.type_name())
+        {
+            let outer = resolved.before(depth)?;
+            return Some((outer, ancestor.node_size(), ancestor.clone()));
         }
     }
     None
@@ -974,12 +974,9 @@ mod tests {
     /// empty one after it.
     #[test]
     fn split_list_item_creates_a_new_sibling_li() {
-        let li = schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-            "one",
-            Vec::new(),
-        )
-        .unwrap()])
-        .unwrap()])
+        let li = schema_basic::list_item(vec![
+            schema_basic::paragraph(vec![schema_basic::text("one", Vec::new()).unwrap()]).unwrap(),
+        ])
         .unwrap();
         let ul = schema_basic::bullet_list(vec![li]).unwrap();
         let doc = schema_basic::doc(vec![ul]).unwrap();
@@ -1131,12 +1128,10 @@ mod tests {
     fn wrap_in_list_converts_existing_list_type_in_place() {
         // bullet_list[list_item[paragraph("a")], list_item[paragraph("b")]]
         let item = |text: &str| -> Node {
-            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-                text,
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()])
+            schema_basic::list_item(vec![
+                schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()])
+                    .unwrap(),
+            ])
             .unwrap()
         };
         let bullet = schema_basic::bullet_list(vec![item("alpha"), item("bravo")]).unwrap();
@@ -1174,12 +1169,10 @@ mod tests {
     #[test]
     fn wrap_in_list_converts_bullet_to_task_rewriting_items() {
         let item = |text: &str| -> Node {
-            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-                text,
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()])
+            schema_basic::list_item(vec![
+                schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()])
+                    .unwrap(),
+            ])
             .unwrap()
         };
         let bullet = schema_basic::bullet_list(vec![item("alpha"), item("bravo")]).unwrap();
@@ -1222,18 +1215,18 @@ mod tests {
         let task = schema_basic::task_list(vec![
             schema_basic::task_item(
                 true,
-                vec![schema_basic::paragraph(
-                    vec![schema_basic::text("done", Vec::new()).unwrap()],
-                )
-                .unwrap()],
+                vec![
+                    schema_basic::paragraph(vec![schema_basic::text("done", Vec::new()).unwrap()])
+                        .unwrap(),
+                ],
             )
             .unwrap(),
             schema_basic::task_item(
                 false,
-                vec![schema_basic::paragraph(
-                    vec![schema_basic::text("todo", Vec::new()).unwrap()],
-                )
-                .unwrap()],
+                vec![
+                    schema_basic::paragraph(vec![schema_basic::text("todo", Vec::new()).unwrap()])
+                        .unwrap(),
+                ],
             )
             .unwrap(),
         ])
@@ -1276,14 +1269,11 @@ mod tests {
     /// double-wrap.
     #[test]
     fn wrap_in_list_returns_none_when_already_in_same_list_type() {
-        let item =
-            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-                "alpha",
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()])
-            .unwrap();
+        let item = schema_basic::list_item(vec![
+            schema_basic::paragraph(vec![schema_basic::text("alpha", Vec::new()).unwrap()])
+                .unwrap(),
+        ])
+        .unwrap();
         let bullet = schema_basic::bullet_list(vec![item]).unwrap();
         let doc = schema_basic::doc(vec![bullet]).unwrap();
 
@@ -1299,12 +1289,10 @@ mod tests {
     #[test]
     fn set_paragraph_unwraps_selected_list_items() {
         let item = |text: &str| -> Node {
-            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-                text,
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()])
+            schema_basic::list_item(vec![
+                schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()])
+                    .unwrap(),
+            ])
             .unwrap()
         };
         let bullet = schema_basic::bullet_list(vec![item("alpha"), item("bravo")]).unwrap();
@@ -1343,12 +1331,10 @@ mod tests {
     #[test]
     fn set_paragraph_unwraps_middle_ordered_item_and_preserves_tail_order() {
         let item = |text: &str| -> Node {
-            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
-                text,
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap()])
+            schema_basic::list_item(vec![
+                schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()])
+                    .unwrap(),
+            ])
             .unwrap()
         };
         let ordered =

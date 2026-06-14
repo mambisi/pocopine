@@ -17,10 +17,9 @@
 //!   motion.
 
 use pine_motion::{
-    animate, drag, focus, on_view, pan, play_layout, press, raise, scroll_progress,
-    snapshot_layout, tilt, AnimationHandleSlot, DragAxis, DragConfig, DragConstraints, Easing,
-    GestureHandleSlot, Origin, PanConfig, PanEvent, ScrollHandle, Spring, Stagger, TiltConfig,
-    Tween, ViewConfig,
+    AnimationHandleSlot, DragAxis, DragConfig, DragConstraints, Easing, GestureHandleSlot, Origin,
+    PanConfig, PanEvent, ScrollHandle, Spring, Stagger, TiltConfig, Tween, ViewConfig, animate,
+    drag, focus, on_view, pan, play_layout, press, raise, scroll_progress, snapshot_layout, tilt,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -210,13 +209,11 @@ impl AnimationDemo {
             .is_some()
         {
             let handle = scroll_progress(|progress| {
-                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                    if let Ok(Some(fill)) = doc.query_selector(".pm-scroll-fill") {
-                        let _ = fill.set_attribute(
-                            "style",
-                            &format!("width:{}%", (progress * 100.0).round()),
-                        );
-                    }
+                if let Some(doc) = web_sys::window().and_then(|w| w.document())
+                    && let Ok(Some(fill)) = doc.query_selector(".pm-scroll-fill")
+                {
+                    let _ = fill
+                        .set_attribute("style", &format!("width:{}%", (progress * 100.0).round()));
                 }
             });
             SCROLL_PROGRESS_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
@@ -571,11 +568,7 @@ fn state_transform(x: f64, y: f64, rotate: f64, scale: f64, raise: f64) -> Strin
 }
 
 fn effective_scale(scale: f64) -> f64 {
-    if scale <= 0.0 {
-        1.0
-    } else {
-        scale
-    }
+    if scale <= 0.0 { 1.0 } else { scale }
 }
 
 fn state_shadow(depth: f64) -> String {

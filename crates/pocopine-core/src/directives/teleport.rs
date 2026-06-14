@@ -14,9 +14,9 @@
 //! `pp-if`) means "always mount here."
 
 use js_sys::Reflect;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{console, Element, HtmlTemplateElement, Node};
+use wasm_bindgen::prelude::*;
+use web_sys::{Element, HtmlTemplateElement, Node, console};
 
 use crate::mount::{self, bind_borrowed_scope_to};
 
@@ -41,12 +41,12 @@ pub fn host_of(el: &Element) -> Option<Element> {
     let origin_key = JsValue::from_str(TELEPORT_ORIGIN_KEY);
     let mut cur: Option<Element> = Some(el.clone());
     while let Some(node) = cur {
-        if let Ok(v) = Reflect::get(node.as_ref(), &origin_key) {
-            if !v.is_undefined() && !v.is_null() {
-                if let Ok(template) = v.dyn_into::<Element>() {
-                    return template.parent_element();
-                }
-            }
+        if let Ok(v) = Reflect::get(node.as_ref(), &origin_key)
+            && !v.is_undefined()
+            && !v.is_null()
+            && let Ok(template) = v.dyn_into::<Element>()
+        {
+            return template.parent_element();
         }
         cur = node.parent_element();
     }
@@ -254,10 +254,10 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
     let fragment: Node = template.content().clone_node_with_deep(true).ok()?;
     let children = fragment.child_nodes();
     for i in 0..children.length() {
-        if let Some(n) = children.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
+        if let Some(n) = children.item(i)
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            return Some(el);
         }
     }
     None

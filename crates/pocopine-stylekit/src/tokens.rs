@@ -52,10 +52,11 @@ impl ThemeTokens {
                     continue;
                 };
                 let (name, value) = (name.trim(), value.trim());
-                if let Some(key) = name.strip_prefix("--") {
-                    if !key.is_empty() && !value.is_empty() {
-                        tokens.insert(key, value);
-                    }
+                if let Some(key) = name.strip_prefix("--")
+                    && !key.is_empty()
+                    && !value.is_empty()
+                {
+                    tokens.insert(key, value);
                 }
             }
         }
@@ -160,34 +161,34 @@ pub fn non_theme_css(css: &str) -> String {
             i += end;
             continue;
         }
-        if rest.starts_with("@theme") {
-            if let Some(open) = rest.find('{') {
-                let rb = rest.as_bytes();
-                let mut depth = 1i32;
-                let mut j = open + 1;
-                while j < rest.len() {
-                    match rb[j] {
-                        b'{' => depth += 1,
-                        b'}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                j += 1;
-                                break;
-                            }
+        if rest.starts_with("@theme")
+            && let Some(open) = rest.find('{')
+        {
+            let rb = rest.as_bytes();
+            let mut depth = 1i32;
+            let mut j = open + 1;
+            while j < rest.len() {
+                match rb[j] {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            j += 1;
+                            break;
                         }
-                        _ => {}
                     }
-                    j += 1;
+                    _ => {}
                 }
-                i += j;
-                continue;
+                j += 1;
             }
+            i += j;
+            continue;
         }
-        if rest.starts_with("@import") || rest.starts_with("@source") {
-            if let Some(semi) = rest.find(';') {
-                i += semi + 1;
-                continue;
-            }
+        if (rest.starts_with("@import") || rest.starts_with("@source"))
+            && let Some(semi) = rest.find(';')
+        {
+            i += semi + 1;
+            continue;
         }
         let ch = rest.chars().next().unwrap();
         out.push(ch);

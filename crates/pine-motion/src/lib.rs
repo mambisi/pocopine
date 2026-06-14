@@ -33,16 +33,16 @@ pub mod spring;
 pub mod stagger;
 pub mod tilt;
 
-pub use animate::{animate, AnimationHandle, Channel, IntoTiming, Tween};
-pub use drag::{drag, DragAxis, DragConfig, DragConstraints};
-pub use easing::{sample_to_linear_easing, Easing};
-pub use effects::{hover_motion, raise, scale, HoverMotion, HoverMotionConfig};
-pub use gesture::{focus, hover, pan, press, GestureHandle, PanConfig, PanEvent, PressEndHandler};
-pub use projection::{play_layout, project_with, snapshot_layout, LayoutRect, LayoutSnapshot};
-pub use scroll::{on_view, scroll_progress, ScrollHandle, ViewConfig};
+pub use animate::{AnimationHandle, Channel, IntoTiming, Tween, animate};
+pub use drag::{DragAxis, DragConfig, DragConstraints, drag};
+pub use easing::{Easing, sample_to_linear_easing};
+pub use effects::{HoverMotion, HoverMotionConfig, hover_motion, raise, scale};
+pub use gesture::{GestureHandle, PanConfig, PanEvent, PressEndHandler, focus, hover, pan, press};
+pub use projection::{LayoutRect, LayoutSnapshot, play_layout, project_with, snapshot_layout};
+pub use scroll::{ScrollHandle, ViewConfig, on_view, scroll_progress};
 pub use spring::Spring;
-pub use stagger::{stagger, Origin, Stagger};
-pub use tilt::{tilt, TiltConfig};
+pub use stagger::{Origin, Stagger, stagger};
+pub use tilt::{TiltConfig, tilt};
 
 /// Thread-local slot for handles whose lifetime must outlive the
 /// setup call that installed them.

@@ -151,7 +151,13 @@ pub fn catalog() -> Catalog {
                         "m/mx/my/mt/mb/ml/mr (auto allowed)",
                     ),
                     fam("gap", Spacing, false, "gap-2.5", "flex/grid gap"),
-                    fam("space-y", Spacing, false, "space-y-2", "space-y/space-x — margin between children"),
+                    fam(
+                        "space-y",
+                        Spacing,
+                        false,
+                        "space-y-2",
+                        "space-y/space-x — margin between children",
+                    ),
                 ],
             },
             Group {

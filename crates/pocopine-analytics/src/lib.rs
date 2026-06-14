@@ -11,14 +11,14 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{self, Write};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use pocopine_observe::{
-    emit_tracing, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, RedactionPolicy,
+    EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, RedactionPolicy, emit_tracing,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

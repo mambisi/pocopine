@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::Layer;
 
 #[derive(Clone, Debug)]
 pub struct CapturedEvent {

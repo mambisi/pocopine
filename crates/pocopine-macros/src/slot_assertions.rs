@@ -45,10 +45,10 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Path;
 
+use crate::HTML5_ELEMENTS;
 use crate::slot::SlotName;
 use crate::template_parser::{Element, Node, TemplateAst};
 use crate::uses::UsesTable;
-use crate::HTML5_ELEMENTS;
 
 /// Walk `ast` alongside `uses` and emit slot-contract
 /// assertions for every typed-parent / direct-child pair.
@@ -140,16 +140,16 @@ fn emit_assertions_for_parent(
         // <ActualChild/> </template>` — the actual slotted
         // children are this template's element children. RFC
         // 011 syntax.
-        if child_el.tag == "template" {
-            if let Some(slot_name) = pp_slot_name(child_el) {
-                let site = SlotName::Named(slot_name);
-                for slotted in &child_el.children {
-                    if let Node::Element(slotted_el) = slotted {
-                        emit_one_assertion(parent_path, &site, slotted_el, uses, out);
-                    }
+        if child_el.tag == "template"
+            && let Some(slot_name) = pp_slot_name(child_el)
+        {
+            let site = SlotName::Named(slot_name);
+            for slotted in &child_el.children {
+                if let Node::Element(slotted_el) = slotted {
+                    emit_one_assertion(parent_path, &site, slotted_el, uses, out);
                 }
-                continue;
             }
+            continue;
         }
 
         // Default slot — any non-template-wrapped direct child.
@@ -275,7 +275,7 @@ fn pp_slot_name(el: &Element) -> Option<String> {
 mod tests {
     use super::*;
     use crate::template_parser::parse;
-    use crate::uses::{resolve_uses, UsesEntry};
+    use crate::uses::{UsesEntry, resolve_uses};
 
     fn table(entries: Vec<UsesEntry>) -> UsesTable {
         resolve_uses(entries).unwrap()

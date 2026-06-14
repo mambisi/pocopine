@@ -9,9 +9,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use js_sys::{Array, Reflect};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::{Element, IntersectionObserver, IntersectionObserverEntry, IntersectionObserverInit};
 
 use crate::reactive::ScopeId;
@@ -146,12 +146,12 @@ fn resolve_threshold(modifiers: &[&str]) -> f64 {
     let mut explicit: Option<f64> = None;
     let mut i = 0;
     while i < modifiers.len() {
-        if modifiers[i] == "threshold" {
-            if let Some(n) = modifiers.get(i + 1).and_then(|s| s.parse::<f64>().ok()) {
-                explicit = Some((n / 100.0).clamp(0.0, 1.0));
-                i += 2;
-                continue;
-            }
+        if modifiers[i] == "threshold"
+            && let Some(n) = modifiers.get(i + 1).and_then(|s| s.parse::<f64>().ok())
+        {
+            explicit = Some((n / 100.0).clamp(0.0, 1.0));
+            i += 2;
+            continue;
         }
         i += 1;
     }

@@ -160,6 +160,8 @@ jobs:
           --exclude pocopine-jobs
           --exclude pocopine-launcher
           --exclude pocopine-server
+          --exclude pocopine-native
+          --exclude pocopine-native-tauri
           --exclude pocopine-storage-azure
           --exclude pocopine-storage-gcs
           --exclude pocopine-storage-s3

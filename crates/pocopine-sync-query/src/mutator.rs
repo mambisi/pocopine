@@ -17,7 +17,7 @@
 use std::pin::Pin;
 
 use pocopine_sync::{ClientMutation, MutationId, RowKey, SyncResult, SyncStreamName};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 /// Boxed future returned by [`Mutator::apply_remote`]. Aliased to keep

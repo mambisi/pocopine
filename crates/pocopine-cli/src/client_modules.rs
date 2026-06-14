@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pocopine_client_codegen::{self as client_codegen, DiscoveryPolicy};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::tools;
 
@@ -818,9 +818,11 @@ grep -q 'Tiny.client.ts' "$2"
 
         let bundled = build(&root, false).unwrap();
         assert_eq!(bundled, 1);
-        assert!(std::fs::read_to_string(root.join(CLIENT_BUNDLE_PATH))
-            .unwrap()
-            .contains("fake esbuild bundle"));
+        assert!(
+            std::fs::read_to_string(root.join(CLIENT_BUNDLE_PATH))
+                .unwrap()
+                .contains("fake esbuild bundle")
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

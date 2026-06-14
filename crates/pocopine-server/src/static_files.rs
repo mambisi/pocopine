@@ -37,11 +37,11 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use axum::http::{header, HeaderValue, Request, Response, Uri};
-use pocopine_assets::{is_hashed_bundle_name, ASSET_CACHE_CONTROL};
+use axum::http::{HeaderValue, Request, Response, Uri, header};
+use pocopine_assets::{ASSET_CACHE_CONTROL, is_hashed_bundle_name};
 use tower::Service;
-use tower_http::services::fs::{DefaultServeDirFallback, ServeFileSystemResponseBody};
 use tower_http::services::ServeDir;
+use tower_http::services::fs::{DefaultServeDirFallback, ServeFileSystemResponseBody};
 
 /// [`ServeDir`] with the pocopine cache-header policy (module docs).
 /// Returned by [`crate::static_files`].
@@ -103,10 +103,10 @@ pub fn index_file(dir: impl AsRef<Path>) -> PathBuf {
 impl<ReqBody, F> Service<Request<ReqBody>> for StaticFiles<F>
 where
     ServeDir<F>: Service<
-        Request<ReqBody>,
-        Response = Response<ServeFileSystemResponseBody>,
-        Error = Infallible,
-    >,
+            Request<ReqBody>,
+            Response = Response<ServeFileSystemResponseBody>,
+            Error = Infallible,
+        >,
     <ServeDir<F> as Service<Request<ReqBody>>>::Future: Send + 'static,
 {
     type Response = Response<ServeFileSystemResponseBody>;

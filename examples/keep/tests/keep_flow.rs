@@ -1,15 +1,15 @@
 #![cfg(pocopine_host)]
 
 use http_body_util::BodyExt;
-use keep_example::{live_backend, sync_server, KeepNote, KeepTag, KEEP_STREAM, KEEP_TAGS_STREAM};
-use pocopine_live::{build_live_stream_url, routes, LiveHub, LIVE_STREAM_PATH};
+use keep_example::{KEEP_STREAM, KEEP_TAGS_STREAM, KeepNote, KeepTag, live_backend, sync_server};
+use pocopine_live::{LIVE_STREAM_PATH, LiveHub, build_live_stream_url, routes};
+use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
-use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, sync_stream_tag, ClientMutation, MutationId, RowKey, SyncOp, SyncPullMode,
+    ClientMutation, MutationId, RowKey, SYNC_PULL_PATH, SYNC_PUSH_PATH, SyncOp, SyncPullMode,
     SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncStreamName,
-    SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    sync_server_plugin, sync_stream_tag,
 };
 use tower::ServiceExt;
 
@@ -24,8 +24,10 @@ async fn keep_push_and_live_wakeup_share_the_stream_topic() {
     ));
     let _ = std::fs::remove_file(&test_path);
     let _ = std::fs::remove_file(&test_tags_path);
-    std::env::set_var("POCOPINE_KEEP_NOTES_DB_PATH", &test_path);
-    std::env::set_var("POCOPINE_KEEP_TAGS_DB_PATH", &test_tags_path);
+    // SAFETY: test-only; set before the server reads it.
+    unsafe { std::env::set_var("POCOPINE_KEEP_NOTES_DB_PATH", &test_path) };
+    // SAFETY: test-only; set before the server reads it.
+    unsafe { std::env::set_var("POCOPINE_KEEP_TAGS_DB_PATH", &test_tags_path) };
 
     let sync = sync_server();
     let sync_topic_prefixes = sync.live_topic_prefixes();

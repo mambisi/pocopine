@@ -75,7 +75,7 @@ pub trait ContentFormat {
 
     /// Serialize `state.doc()` back to [`Self::Owned`].
     fn serialize(state: &EditorState, runtime: &EditorRuntime)
-        -> Result<Self::Owned, ContentError>;
+    -> Result<Self::Owned, ContentError>;
 }
 
 /// Parse-or-serialize failure inside a [`ContentFormat`]

@@ -22,6 +22,10 @@ pub enum Cmd {
     /// Same as `run`, with src/ watched for changes that retrigger the
     /// wasm build.
     Dev(ServeArgs),
+    /// Native desktop target (RFC-104): run/build the app inside a Tauri
+    /// webview with `#[server]` functions served in-process. Needs the
+    /// platform webview libraries (`webkit2gtk-4.1` + friends on Linux).
+    Native(NativeArgs),
     /// Check local tools and project configuration used by Pocopine.
     Doctor(DoctorArgs),
     /// Fetch + refresh the pocopine-skills agent guides in `.claude/skills/`.
@@ -121,11 +125,13 @@ pub struct ServeArgs {
     /// from here.
     #[arg(long, default_value = ".")]
     pub path: PathBuf,
-    /// Port to listen on in static mode. Ignored in server-bin mode -
-    /// the bin controls its own addr. If the port is taken, the next
-    /// available port is tried (up to `port + 20`).
-    #[arg(long, default_value_t = 5243)]
-    pub port: u16,
+    /// Override the listen port (no `Cargo.toml` edit needed). In static
+    /// mode the CLI listens here (default 5243; if taken, the next free
+    /// port up to +20 is used). In server-bin mode the configured bin is
+    /// launched with `PORT=<this>`, overriding
+    /// `[package.metadata.pocopine].port` — pocopine server bins read `PORT`.
+    #[arg(long)]
+    pub port: Option<u16>,
     /// Build in release mode.
     #[arg(long)]
     pub release: bool,
@@ -135,6 +141,71 @@ pub struct ServeArgs {
     /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
     #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
     pub no_stylekit: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NativeArgs {
+    /// Path to the project crate (defaults to current dir).
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+    #[command(subcommand)]
+    pub cmd: NativeCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum NativeCmd {
+    /// Scaffold the `src-tauri` host crate for this project (idempotent;
+    /// never overwrites existing files).
+    Init,
+    /// Build the wasm bundle + CSS, then run the native window with the
+    /// live project directory as the asset root — a rebuild is picked up
+    /// on reload. Scaffolds `src-tauri/` first if it is missing.
+    Dev(NativeDevArgs),
+    /// Build the wasm bundle (release) + CSS, then build the native
+    /// binary (and the installer bundle via `cargo tauri build` when the
+    /// Tauri CLI is available).
+    Build(NativeBuildArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NativeDevArgs {
+    /// Build the wasm bundle in release mode (default: debug, for a fast
+    /// edit loop).
+    #[arg(long)]
+    pub release: bool,
+    /// Forward the app's `#[server]` calls to this deployed server URL
+    /// ("server" mode). Omitted → "standalone": the functions run
+    /// in-process. Point `dev` at a local `pocopine run` or staging.
+    #[arg(long)]
+    pub backend: Option<String>,
+    /// Force the Pine Stylekit CSS stage on. On by default.
+    #[arg(long)]
+    pub stylekit: bool,
+    /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
+    #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
+    pub no_stylekit: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NativeBuildArgs {
+    /// Build the wasm bundle in debug mode (default: release).
+    #[arg(long)]
+    pub debug: bool,
+    /// Forward the app's `#[server]` calls to this deployed server URL
+    /// ("server" mode). Omitted → "standalone": the functions run
+    /// in-process. The URL comes from `pocopine deploy status`.
+    #[arg(long)]
+    pub backend: Option<String>,
+    /// Force the Pine Stylekit CSS stage on. On by default.
+    #[arg(long)]
+    pub stylekit: bool,
+    /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
+    #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
+    pub no_stylekit: bool,
+    /// Skip the installer/bundle step (`cargo tauri build`) even when the
+    /// Tauri CLI is present; build only the host binary with `cargo`.
+    #[arg(long)]
+    pub no_bundle: bool,
 }
 
 #[derive(Parser, Debug, Clone)]

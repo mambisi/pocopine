@@ -16,7 +16,7 @@ use crate::render::render_doc_to_html;
 use crate::{schema_basic, state::Plugin};
 
 use super::registry::lock_tests;
-use super::{registry, EditorRuntime, NodeViewSpec, RuntimeBuilder};
+use super::{EditorRuntime, NodeViewSpec, RuntimeBuilder, registry};
 
 fn seed_doc(schema: &crate::model::Schema) -> Node {
     let title = schema
@@ -423,10 +423,11 @@ fn runtime_plugins_include_user_extension_plugins() {
         .with(PluginExt)
         .build();
 
-    assert!(rt
-        .plugins()
-        .iter()
-        .any(|p| p.key() == "runtime-test-plugin"));
+    assert!(
+        rt.plugins()
+            .iter()
+            .any(|p| p.key() == "runtime-test-plugin")
+    );
 }
 
 #[test]

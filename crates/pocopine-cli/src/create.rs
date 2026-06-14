@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::args::NewArgs;
 use crate::skills;
@@ -60,10 +60,10 @@ pub fn run(args: &NewArgs) -> Result<()> {
         .status();
 
     // 5. optionally fetch the living skills now.
-    if args.skills {
-        if let Err(e) = skills::install(&target, false) {
-            eprintln!("  ! skipped --skills: {e}");
-        }
+    if args.skills
+        && let Err(e) = skills::install(&target, false)
+    {
+        eprintln!("  ! skipped --skills: {e}");
     }
 
     println!("✓ created {}", target.display());

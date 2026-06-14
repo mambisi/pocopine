@@ -23,7 +23,7 @@
 //! per RFC 049 §4.7 — two entries resolving to the same tag
 //! string would make slot checks nondeterministic.
 
-use syn::{spanned::Spanned, Expr, ExprLit, ExprPath, Lit, LitStr, Path};
+use syn::{Expr, ExprLit, ExprPath, Lit, LitStr, Path, spanned::Spanned};
 
 /// One entry in a `uses = [...]` list, before tag-string
 /// resolution.

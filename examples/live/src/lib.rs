@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use {
     pocopine_events::{EventBackend, MemoryEventBackend},
     std::sync::{
-        atomic::{AtomicU64, Ordering},
         Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
 };
 

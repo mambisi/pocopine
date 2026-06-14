@@ -8,7 +8,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{delegate_nav, Row2, Row4};
+use crate::components::{Row2, Row4, delegate_nav};
 use crate::gen_code::motion;
 
 /// Catalogue of techniques. `slug` is the route param, the
