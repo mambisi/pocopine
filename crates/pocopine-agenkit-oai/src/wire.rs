@@ -1,9 +1,56 @@
 //! OpenAI Chat Completions wire types and the mapping to/from Agenkit's
 //! neutral request/response.
 
+use std::collections::HashMap;
+
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult, Content, Message, Role, ToolCall, Usage};
+use pocopine_agenkit_core::{
+    AgenkitError, AgenkitResult, Content, Message, Role, ToolCall, ToolDescriptor, Usage,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::MaxTokensParam;
+
+/// OpenAI requires tool/function names to match `^[a-zA-Z0-9_-]{1,64}$`. Map
+/// every other byte to `_` and cap at 64; an empty/all-invalid name becomes
+/// `_`. Passing an id through unsanitized (e.g. one with a `.`) earns an opaque
+/// 400 from the API, so the provider sanitizes on the way out and reverses the
+/// mapping on the way back (see [`tool_name_map`]).
+pub(crate) fn sanitize_tool_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    // Every char is now ASCII (1 byte), so byte index 64 is a char boundary.
+    out.truncate(64);
+    if out.is_empty() {
+        out.push('_');
+    }
+    out
+}
+
+/// Build the reverse map (sanitized name → original tool id) for a request's
+/// tools, so a tool call the model makes under the sanitized name dispatches to
+/// the real tool. Identity for already-valid ids.
+pub(crate) fn tool_name_map(tools: &[ToolDescriptor]) -> HashMap<String, String> {
+    tools
+        .iter()
+        .map(|tool| (sanitize_tool_name(&tool.id), tool.id.clone()))
+        .collect()
+}
+
+/// Resolve a wire tool-call name back to the original tool id; passes names
+/// through unchanged when there is no mapping (no tools declared, or an
+/// already-valid name).
+pub(crate) fn resolve_tool_name(name: String, name_map: &HashMap<String, String>) -> String {
+    name_map.get(&name).cloned().unwrap_or(name)
+}
 
 // ---- request ----------------------------------------------------------------
 
@@ -15,8 +62,13 @@ pub(crate) struct ChatRequest {
     pub(crate) tools: Vec<WireTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) response_format: Option<ResponseFormat>,
+    /// Legacy output-token cap, accepted by most compatible gateways.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) max_tokens: Option<u32>,
+    /// Output-token cap required by OpenAI's o-series / gpt-5-class models
+    /// (which reject `max_tokens`). Exactly one of the two is ever set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,11 +82,13 @@ pub(crate) struct StreamOptions {
 
 impl ChatRequest {
     /// Map a neutral request. `stream` toggles SSE; `strict_schema` selects
-    /// native `json_schema` structured output (vs `json_object`).
+    /// native `json_schema` structured output (vs `json_object`);
+    /// `max_tokens_param` selects which output-token field to send.
     pub(crate) fn from_agenkit(
         request: &GenerateRequest,
         stream: bool,
         strict_schema: bool,
+        max_tokens_param: MaxTokensParam,
     ) -> Self {
         let structured = request.json_schema.is_some();
 
@@ -55,6 +109,12 @@ impl ChatRequest {
         messages.extend(request.messages.iter().map(WireMessage::from_message));
 
         let has_tools = !request.tools.is_empty();
+        // o-series / gpt-5-class models reject `max_tokens`; compatible gateways
+        // reject `max_completion_tokens`. Send exactly the one the endpoint wants.
+        let (max_tokens, max_completion_tokens) = match max_tokens_param {
+            MaxTokensParam::MaxTokens => (request.max_tokens, None),
+            MaxTokensParam::MaxCompletionTokens => (None, request.max_tokens),
+        };
         Self {
             model: request.model.model().to_string(),
             messages,
@@ -68,7 +128,8 @@ impl ChatRequest {
                 strict_schema,
                 has_tools,
             ),
-            max_tokens: request.max_tokens,
+            max_tokens,
+            max_completion_tokens,
             stream: stream.then_some(true),
             stream_options: stream.then_some(StreamOptions {
                 include_usage: true,
@@ -289,7 +350,9 @@ impl WireToolCall {
             id: call.id.clone(),
             kind: "function",
             function: WireFunctionCall {
-                name: call.tool_id.clone(),
+                // Match the sanitized name the tool was offered under, so a
+                // replayed assistant turn stays consistent with the tool defs.
+                name: sanitize_tool_name(&call.tool_id),
                 arguments: serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_string()),
             },
         }
@@ -319,7 +382,7 @@ impl WireTool {
         Self {
             kind: "function",
             function: WireFunctionDef {
-                name: descriptor.id.clone(),
+                name: sanitize_tool_name(&descriptor.id),
                 description: descriptor.description.clone(),
                 parameters,
             },
@@ -359,7 +422,10 @@ pub(crate) struct ChatResponse {
 }
 
 impl ChatResponse {
-    pub(crate) fn into_agenkit(self) -> AgenkitResult<GenerateResponse> {
+    pub(crate) fn into_agenkit(
+        self,
+        name_map: &HashMap<String, String>,
+    ) -> AgenkitResult<GenerateResponse> {
         let choice = self
             .choices
             .into_iter()
@@ -371,7 +437,7 @@ impl ChatResponse {
             .message
             .tool_calls
             .into_iter()
-            .map(ResponseToolCall::into_call)
+            .map(|call| call.into_call(name_map))
             .collect();
         let finish_reason = finish_reason(choice.finish_reason.as_deref());
         let usage = self.usage.map(WireUsage::into_usage);
@@ -407,10 +473,14 @@ pub(crate) struct ResponseToolCall {
 }
 
 impl ResponseToolCall {
-    fn into_call(self) -> ToolCall {
+    fn into_call(self, name_map: &HashMap<String, String>) -> ToolCall {
         let args =
             serde_json::from_str(&self.function.arguments).unwrap_or(serde_json::Value::Null);
-        ToolCall::new(self.id, self.function.name, args)
+        ToolCall::new(
+            self.id,
+            resolve_tool_name(self.function.name, name_map),
+            args,
+        )
     }
 }
 
@@ -509,6 +579,34 @@ mod tests {
         assert!(required.contains(&serde_json::json!("count")));
         assert!(schema.get("$schema").is_none());
         assert!(schema["properties"]["count"].get("format").is_none());
+    }
+
+    #[test]
+    fn sanitize_tool_name_conforms_to_openai_pattern() {
+        // Valid names pass through unchanged.
+        assert_eq!(sanitize_tool_name("search_docs"), "search_docs");
+        assert_eq!(sanitize_tool_name("a-b_C9"), "a-b_C9");
+        // Disallowed bytes (dots, spaces, slashes, non-ASCII) become `_`.
+        assert_eq!(sanitize_tool_name("weather.lookup"), "weather_lookup");
+        assert_eq!(sanitize_tool_name("my tool/v2"), "my_tool_v2");
+        assert_eq!(sanitize_tool_name("café"), "caf_");
+        // Over-long names are capped at 64 bytes.
+        assert_eq!(sanitize_tool_name(&"x".repeat(100)).len(), 64);
+        // An all-invalid / empty name still produces a non-empty valid name.
+        assert_eq!(sanitize_tool_name(""), "_");
+    }
+
+    #[test]
+    fn tool_name_map_reverses_sanitization() {
+        use pocopine_agenkit_core::ToolDescriptor;
+        let tools = [ToolDescriptor::new("weather.lookup", "Look up weather")];
+        let map = tool_name_map(&tools);
+        assert_eq!(
+            resolve_tool_name("weather_lookup".to_string(), &map),
+            "weather.lookup"
+        );
+        // An unmapped name (already valid, or no tools) passes through.
+        assert_eq!(resolve_tool_name("other".to_string(), &map), "other");
     }
 
     #[test]
