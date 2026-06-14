@@ -25,6 +25,13 @@
  * navigations), so it doesn't reappear on every navigation. The top bar
  * still shows. */
 html[data-pp-no-splash] #pp-splash { display: none !important; }
+/* RFC-099 — server-rendered apps: when the document arrives with the real
+ * content already painted (a component root with `data-pp-scope-id` inside
+ * `[pp-app]`), the splash would only hide it until hydration. Suppress it
+ * automatically — SSR is the splash. The top progress bar still shows, so
+ * the wasm download that drives hydration stays visible. SPA cold boots
+ * (an empty `[pp-app]` shell, no scope-id) are unaffected and still splash. */
+body:has([pp-app] [data-pp-scope-id]) #pp-splash { display: none !important; }
 .pp-splash__logo {
   width: 96px;
   height: 96px;
