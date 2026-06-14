@@ -73,14 +73,14 @@ pub fn install_eval(
 
     let id = crate::reactive::effect_install(move |suppressed| {
         let v = evaluator(&parent_proxy_owned);
-        // RFC-099 — hydration claim: subscribed above, the server
-        // already rendered this attribute (and a child host's props are
-        // claimed with the child, not here); skip the write.
-        if suppressed {
-            return;
-        }
         match &child_target {
             Some(child_scope_id) => {
+                // RFC-099 — hydration claim: a child host's props are
+                // claimed WITH the child (from its own state island), so
+                // the parent doesn't re-write them on the hydration pass.
+                if suppressed {
+                    return;
+                }
                 let target_field =
                     crate::model_runtime::resolve_model_key(*child_scope_id, &child_field)
                         .unwrap_or_else(|| child_field.clone());
@@ -103,7 +103,7 @@ pub fn install_eval(
                     },
                 );
             }
-            None => apply_memoised(&el_owned, &attr_owned, &v, &prev),
+            None => apply_memoised(&el_owned, &attr_owned, &v, &prev, suppressed),
         }
     });
     track_effect_on(el, id);
@@ -112,7 +112,13 @@ pub fn install_eval(
 /// [`apply`] wrapped with a last-value memo. Skips `set_attribute`
 /// / `remove_attribute` when the serialised form matches the last
 /// write.
-fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Option<String>>>) {
+fn apply_memoised(
+    el: &Element,
+    attr: &str,
+    v: &JsValue,
+    prev: &Rc<RefCell<Option<String>>>,
+    suppressed: bool,
+) {
     let dom_attr = dom_attr_name(el, attr);
     let dom_attr = dom_attr.as_ref();
     // Shape handling diverges on whether this is a *state* attribute
@@ -143,6 +149,15 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
     if should_remove {
         let mut p = prev.borrow_mut();
         if p.is_none() {
+            // Memo says absent. On the hydration pass the server may have
+            // rendered the attribute anyway — remove it to heal; else
+            // there's nothing to do.
+            if suppressed && el.has_attribute(dom_attr) {
+                let _ = el.remove_attribute(dom_attr);
+                if dom_attr != attr {
+                    let _ = el.remove_attribute(attr);
+                }
+            }
             return;
         }
         *p = None;
@@ -174,6 +189,13 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
         if p.as_deref() == Some(serialised.as_str()) {
             return;
         }
+    }
+    // RFC-099 — self-healing claim: on the hydration pass also skip the
+    // write if the DOM attribute already holds this exact value (the
+    // server stamped it); otherwise write to fill it in / correct it.
+    if suppressed && el.get_attribute(dom_attr).as_deref() == Some(serialised.as_str()) {
+        *prev.borrow_mut() = Some(serialised);
+        return;
     }
     // Write + memo.
     if dom_attr != attr {

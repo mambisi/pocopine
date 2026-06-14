@@ -38,11 +38,26 @@ pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue
     let initial = Cell::new(true);
     let id = crate::reactive::effect_install(move |suppressed| {
         let truthy = !evaluator(&proxy_owned).is_falsy();
-        // RFC-099 — hydration claim: subscribed above, the server
-        // already rendered the correct display state; skip the write
-        // (leaving `initial` set so the first post-hydrate change
-        // applies display directly, with no enter/leave flash).
+        // RFC-099 — self-healing claim: on the hydration pass the server
+        // already rendered a display state. Consume the `initial` flag
+        // (so later changes don't flash an enter/leave), then skip the
+        // write only if the DOM already matches; otherwise apply the
+        // correct display directly (no transition) to heal it.
         if suppressed {
+            initial.set(false);
+            let style = html_el.style();
+            let dom_hidden = style
+                .get_property_value("display")
+                .map(|d| d == "none")
+                .unwrap_or(false);
+            let want_hidden = !truthy;
+            if dom_hidden != want_hidden {
+                if want_hidden {
+                    let _ = style.set_property("display", "none");
+                } else {
+                    let _ = style.remove_property("display");
+                }
+            }
             return;
         }
         let style = html_el.style();
