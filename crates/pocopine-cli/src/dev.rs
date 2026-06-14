@@ -60,7 +60,14 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     // In static mode the CLI owns the socket and runs on a background thread.
     server::check_configured_port_available(&cfg, args.port)?;
     if cfg.bin.is_some() || cfg.worker_bin.is_some() {
-        spawn_configured_bins(&mut children, &project, &cfg, args.release, &dev_env, args.port)?;
+        spawn_configured_bins(
+            &mut children,
+            &project,
+            &cfg,
+            args.release,
+            &dev_env,
+            args.port,
+        )?;
     } else {
         {
             let serve_path = project.clone();
