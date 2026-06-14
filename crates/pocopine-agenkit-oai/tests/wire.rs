@@ -6,8 +6,8 @@ use futures::StreamExt;
 use pocopine_agenkit::server::{
     Agenkit, AiFlowContext, Flow, GenerateRequest, Provider, StreamChunk,
 };
-use pocopine_agenkit_core::{AgenkitResult, FlowStreamEvent, Message, ModelRef};
-use pocopine_agenkit_oai::OpenAiProvider;
+use pocopine_agenkit_core::{AgenkitResult, FlowStreamEvent, Message, ModelRef, ToolDescriptor};
+use pocopine_agenkit_oai::{MaxTokensParam, OpenAiProvider};
 use serde::Deserialize;
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
@@ -114,6 +114,147 @@ async fn maps_tool_calls_from_the_response() {
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].tool_id, "search_docs");
     assert_eq!(response.tool_calls[0].args, json!({"query": "uploads"}));
+}
+
+#[tokio::test]
+async fn gateway_base_url_sends_legacy_max_tokens() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            // A non-official base URL defaults to the legacy field.
+            assert_eq!(body["max_tokens"], 128);
+            assert!(body.get("max_completion_tokens").is_none());
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"choices": [{"message": {"content": "ok"}}]}))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        max_tokens: Some(128),
+        ..text_request("hi")
+    };
+    provider(&server).generate(request).await.unwrap();
+}
+
+#[tokio::test]
+async fn max_completion_tokens_override_is_sent() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            // The override forces the new field (what o-series / gpt-5 require).
+            assert_eq!(body["max_completion_tokens"], 128);
+            assert!(body.get("max_tokens").is_none());
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"choices": [{"message": {"content": "ok"}}]}))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        max_tokens: Some(128),
+        ..text_request("hi")
+    };
+    provider(&server)
+        .with_max_tokens_param(MaxTokensParam::MaxCompletionTokens)
+        .generate(request)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn retries_a_transient_server_error_then_succeeds() {
+    let server = MockServer::start().await;
+    // First a 503 (retryable), then a 200. `up_to_n_times` + ordering: mount the
+    // 503 mock with a hit cap so the second attempt falls through to the 200.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(json!({
+            "error": {"type": "server_error"}
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{"message": {"content": "recovered"}, "finish_reason": "stop"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let response = provider(&server)
+        .generate(text_request("hi"))
+        .await
+        .unwrap();
+    assert_eq!(response.text_output(), "recovered");
+}
+
+#[tokio::test]
+async fn gives_up_after_max_retries_without_leaking_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "error": {"message": "internal boom sk-proj-LEAK", "type": "server_error"}
+        })))
+        .mount(&server)
+        .await;
+
+    let error = provider(&server)
+        .with_max_retries(1)
+        .generate(text_request("hi"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), "provider");
+    let rendered = error.to_string();
+    assert!(rendered.contains("500"));
+    assert!(
+        !rendered.contains("sk-proj-LEAK"),
+        "leaked body: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn sanitizes_tool_names_outbound_and_maps_them_back() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            // The dotted tool id was sanitized for the wire.
+            assert_eq!(body["tools"][0]["function"]["name"], "weather_lookup");
+            // The model replies using that sanitized name.
+            ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "weather_lookup", "arguments": "{}"}
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            }))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        tools: vec![ToolDescriptor::new("weather.lookup", "Look up weather")],
+        ..text_request("weather?")
+    };
+    let response = provider(&server).generate(request).await.unwrap();
+    // ...and the response maps it back to the real tool id so dispatch works.
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].tool_id, "weather.lookup");
 }
 
 #[tokio::test]
