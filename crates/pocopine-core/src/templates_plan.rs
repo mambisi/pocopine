@@ -348,6 +348,23 @@ pub fn hydrate_plan(
             install_static_listener(&el, scope_id, proxy, l, template_name);
         }
     }
+    // RFC-099 — claim opaque directives (pp-intersect scroll-spy,
+    // pp-resize, pp-anchor, pp-roving, pp-flip). They attach observers /
+    // listeners to the element; the server rendered no behavior, so they
+    // install exactly as on mount.
+    for d in plan.opaque_directives {
+        if let Some(el) = resolve_node_path(root, d.node_path) {
+            install_static_opaque_directive(&el, scope_id, proxy, d, template_name);
+        }
+    }
+    // RFC-099 — claim native two-way models (pp-model on <input> /
+    // <select> / <textarea>): wires the input→state listener and the
+    // initial state→element sync the server couldn't run.
+    for m in plan.native_models {
+        if let Some(el) = resolve_node_path(root, m.node_path) {
+            install_static_native_model(&el, scope_id, proxy, m);
+        }
+    }
     // RFC-099 Phase 3 — claim the structural controllers the server
     // stamped (pp-if chains so far). Each finds its decision anchor by
     // label, adopts the server-rendered clone, installs its body
