@@ -180,6 +180,16 @@ impl RenderedPage {
     }
 }
 
+/// RFC-099 — the `<style data-pp-component>` blocks for every component
+/// registered on this host, in registration order. Embed these in the
+/// SSR document (head, or anywhere before the app root) so the page
+/// paints fully styled before the wasm bundle boots; the client
+/// `inject_style` dedups against them during hydration. Empty until
+/// components register — call after `App`/`boot_app` registration.
+pub fn collected_style_tags() -> String {
+    pocopine_core::styles::collected_style_tags()
+}
+
 /// Render bindings + interps into `cleaned_html` AND capture `state` as
 /// a script-safe JSON island — the decoupled core (no registry). See
 /// [`render_to_string`] for the component-level entry.

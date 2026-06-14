@@ -29,9 +29,15 @@ fn main() {
     let page = pocopine_ssr::render_app_to_string(&WebsiteApp::default(), &url)
         .expect("WebsiteApp is registered");
 
+    // RFC-099 — every registered component's CSS, so the SSR'd page paints
+    // fully styled before the wasm bundle boots (no FOUC). Placed inside
+    // `[pp-app]` but BEFORE `<website-app>`, so it doesn't shift the app
+    // root's node paths; the client `inject_style` dedups against it.
+    let styles = pocopine_ssr::collected_style_tags();
+
     // The [pp-app] custom-element-host document shape App::hydrate claims.
     let doc = format!(
-        "<div pp-app><website-app>{}{}</website-app></div>",
+        "<div pp-app>{styles}<website-app>{}{}</website-app></div>",
         page.body,
         page.state_island()
     );

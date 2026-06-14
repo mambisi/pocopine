@@ -21,12 +21,15 @@ pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue
     let proxy_owned = proxy.clone();
     let id = crate::reactive::effect_install(move |suppressed| {
         let v = evaluator(&proxy_owned);
-        // RFC-099 — hydration claim: subscribed above, server already
-        // rendered this inner HTML; skip the redundant write.
-        if suppressed {
+        let s = v.as_string().unwrap_or_default();
+        // RFC-099 — the hydration claim is self-healing: if the server
+        // already rendered exactly this inner HTML, skip the redundant
+        // write (zero DOM mutation). If it did NOT — e.g. a value derived
+        // in `on_setup`, which the server doesn't run, like pine-icon's
+        // looked-up SVG — the DOM differs and we DO write, filling it in.
+        if suppressed && el_owned.inner_html() == s {
             return;
         }
-        let s = v.as_string().unwrap_or_default();
         el_owned.set_inner_html(&s);
     });
     track_effect_on(el, id);
