@@ -138,7 +138,7 @@ fn service_unavailable() -> http::Response<Cow<'static, [u8]>> {
 /// the CLI's `BACKEND_ENV` (RFC-104 contract).
 const BACKEND_ENV: &str = "POCOPINE_NATIVE_BACKEND";
 
-/// Server-channel proxy target from the environment: the backend base URL
+/// Server-mode proxy target from the environment: the backend base URL
 /// (trailing slash trimmed) plus a reusable HTTP client. `None` →
 /// standalone (in-process).
 fn backend_target() -> Option<(String, reqwest::Client)> {
@@ -146,6 +146,14 @@ fn backend_target() -> Option<(String, reqwest::Client)> {
         .ok()
         .map(|value| value.trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())?;
+
+    // rustls 0.23 refuses to auto-pick a CryptoProvider when the build
+    // graph enables more than one (this workspace pulls in both aws-lc-rs
+    // and ring transitively), panicking at first TLS use. Install ring's
+    // provider explicitly before reqwest builds its TLS config. Idempotent
+    // — a second call (or one from elsewhere) returns Err, which we ignore.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     Some((base, reqwest::Client::new()))
 }
 
