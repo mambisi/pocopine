@@ -235,91 +235,66 @@ Both reuse the existing wasm + CSS pipeline (`build::wasm`,
 the `src-tauri` host crate.
 
 - **`pocopine native dev`** — build the wasm bundle (debug) + CSS, then
-  `cargo run` the `src-tauri` bin with `--features tauri` and
-  `POCOPINE_NATIVE_DEV_DIR=<project>` in the environment. The shell
-  resolves that env var as the static root, so the window serves the
-  live on-disk `pkg/` + `index.html` and a rebuild is picked up on
-  reload — no asset copying in the dev loop.
+  `cargo run` the `src-tauri` bin with `POCOPINE_NATIVE_DEV_DIR=<project>`
+  in the environment. The shell resolves that env var as the static root,
+  so the window serves the live on-disk `pkg/` + `index.html` and a
+  rebuild is picked up on reload — no asset copying in the dev loop.
 - **`pocopine native build`** — build the wasm bundle (release) + CSS,
   then bundle. If the Tauri CLI is available it shells `cargo tauri
-  build` (icons, installers, signing); otherwise it falls back to
-  `cargo build --release --features tauri` and prints how to produce
-  installers. Bundled apps resolve the static root from the Tauri
-  resource directory (`pkg/` copied via `tauri.conf.json`
-  `bundle.resources`), so `POCOPINE_NATIVE_DEV_DIR` is unset in
-  production.
+  build` (icons, installers, signing); otherwise it falls back to `cargo
+  build --release` and prints how to produce installers. Bundled apps
+  resolve the static root from the Tauri resource directory (`pkg/`
+  copied via `tauri.conf.json` `bundle.resources`), so
+  `POCOPINE_NATIVE_DEV_DIR` is unset in production.
 
-`pocopine native` (no sub-verb, or against a project without
+`pocopine native init` (and `dev`/`build` against a project without
 `src-tauri/`) scaffolds the `src-tauri/` directory from the same string
 templates the example ships, then prints next steps.
 
-### 6.1 Config — `[package.metadata.pocopine.native]`
+### 6.1 No config block — convention + flags
 
-Mirrors the existing `tailwind` / `stylekit` / `assets` blocks. All
-fields optional:
+The native target has **no `[package.metadata.pocopine.native]` block**.
+The host crate is `src-tauri/` by convention with a single binary that
+already enables `pocopine-native-tauri/tauri`, so `cargo run`/`cargo
+build` need no `--bin` or `--features`. Everything else is a flag —
+nothing about where the app talks to is a source fact baked into
+`Cargo.toml`.
 
-```toml
-[package.metadata.pocopine.native]
-# Directory holding the Tauri host crate (default: "src-tauri").
-src-tauri = "src-tauri"
-# Host bin to run/build (default: the src-tauri crate's bin).
-bin = "app-native"
-# Extra cargo features to enable on the host bin (default: none — the
-# scaffolded src-tauri crate already enables pocopine-native-tauri/tauri).
-features = []
-# Window title (default: the crate name).
-title = "My App"
-```
+### 6.2 Backend selection — standalone vs server
 
-### 6.2 Build channels — standalone vs server
-
-Where the app's `#[server]` calls run is a **build choice**, expressed as
-named channels (not a code change — the wasm UI is identical either way):
-
-```toml
-# No channel selected → "standalone": #[server] functions run in-process
-# (the default; nothing to deploy).
-[package.metadata.pocopine.native]
-# default-channel = "server"          # optional: channel when --channel is omitted
-
-# A channel that names a deployed backend → "server": the native shell
-# forwards #[server] calls to that URL. The server URL comes straight from
-# `pocopine deploy status`.
-[package.metadata.pocopine.native.channels.server]
-backend = "https://myapp.up.railway.app"
-```
+Where the app's `#[server]` calls run is a **build-invocation choice**, a
+single flag — not a code change (the wasm UI is identical either way):
 
 ```sh
-pocopine native build                       # standalone (in-process)
-pocopine native build --channel server      # desktop client of the deployed server
-pocopine native dev   --channel server --backend http://localhost:3024   # dev override
+pocopine native build                              # standalone — #[server] runs in-process
+pocopine native build --backend https://myapp.up.railway.app   # server — desktop client of the deploy
+pocopine native dev   --backend http://localhost:3024          # dev against a local `pocopine run`
 ```
 
-The mode is **emergent**: a channel with no `backend` is standalone; a
-channel with a `backend` is server. The CLI resolves the active channel
-(`--backend` override → `--channel` → `default-channel` → none) and passes
-the URL to the shell via `POCOPINE_NATIVE_BACKEND`.
+- **standalone** (no `--backend`) → the functions run in-process; nothing
+  to deploy.
+- **server** (`--backend <url>`) → the CLI passes the URL to the shell via
+  `POCOPINE_NATIVE_BACKEND`; the shell forwards the `#[server]`/storage
+  routes (`/_pocopine/*`, `/__pocopine/*`) to that URL.
 
-**How "server" works (host-side proxy).** The shell keeps serving the
+The URL is a build argument, so CI passes it from a secret/env and the
+prod URL never lives in the repo. It comes straight from `pocopine deploy
+status`:
+
+```text
+pocopine deploy                                  # ship the server
+pocopine deploy status                           # read the URL
+pocopine native build --backend "<that url>"     # desktop client points at it
+```
+
+**How "server" works (host-side forward).** The shell keeps serving the
 document + wasm + CSS locally over the custom scheme, but forwards the
-`#[server]`/storage routes (`/_pocopine/*`, `/__pocopine/*`) to the
-backend with an HTTP client (`reqwest`). Because the forward is
-**host-to-host**, not a browser request:
+server/storage routes to the backend with an HTTP client (`reqwest`).
+Because the forward is **host-to-host**, not a browser request:
 
 - there is **no browser CORS** to configure on the server;
 - the webview stays same-origin (it only ever talks to the custom scheme);
 - auth headers the app already sets flow through unchanged.
-
-End-to-end it dovetails with deploy:
-
-```text
-pocopine deploy            # ship the server
-pocopine deploy status     # copy the printed URL → channels.server.backend
-pocopine native build --channel server      # desktop client points at it
-```
-
-Channels double as release flavors: a `staging` channel with its own
-`backend` (and, later, its own identifier for side-by-side installs).
 
 ## 7. Interaction with RFC-099 (SSR) — future, not a dependency
 

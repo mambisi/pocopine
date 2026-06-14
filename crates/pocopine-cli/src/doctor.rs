@@ -84,7 +84,7 @@ pub fn run(args: &DoctorArgs) -> Result<()> {
             check_tailwind(&mut report, project, cfg, &project_tools);
             check_configured_bins(&mut report, project, cfg, &project_tools);
         }
-        check_native(&mut report, project, cfg.as_ref());
+        check_native(&mut report, project);
     }
 
     report.print();
@@ -433,32 +433,18 @@ fn check_editor_extension(report: &mut Report) {
     }
 }
 
-/// RFC-104 native (Tauri) target. Only runs the prerequisite checks when
-/// the project opts in (a `[package.metadata.pocopine.native]` block or a
-/// `src-tauri/` host crate is present), so web-only projects stay quiet.
-fn check_native(report: &mut Report, project: &Path, cfg: Option<&config::PocopineConfig>) {
-    let native_cfg = cfg.and_then(|c| c.native.as_ref());
-    let src_tauri = native_cfg
-        .map(|n| n.src_tauri.clone())
-        .unwrap_or_else(|| "src-tauri".to_string());
-    let src_tauri_dir = project.join(&src_tauri);
-    let has_src_tauri = src_tauri_dir.join("Cargo.toml").is_file();
-
-    if native_cfg.is_none() && !has_src_tauri {
-        report.ok("native target", "not enabled");
+/// RFC-104 native (Tauri) target. The target is convention-based: it's
+/// enabled when a `src-tauri/` host crate is present, so web-only
+/// projects stay quiet.
+fn check_native(report: &mut Report, project: &Path) {
+    let src_tauri_dir = project.join("src-tauri");
+    if !src_tauri_dir.join("Cargo.toml").is_file() {
+        report.ok("native target", "not enabled (no src-tauri/)");
         return;
     }
 
-    if has_src_tauri {
-        report.ok("native target", format!("Tauri host crate at {src_tauri}/"));
-        check_native_icon(report, &src_tauri_dir, &src_tauri);
-    } else {
-        report.ok(
-            "native target",
-            format!("configured — run `pocopine native init` to scaffold {src_tauri}/"),
-        );
-    }
-
+    report.ok("native target", "Tauri host crate at src-tauri/");
+    check_native_icon(report, &src_tauri_dir, "src-tauri");
     check_native_webview(report);
     check_tauri_cli(report);
 }

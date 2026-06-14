@@ -173,14 +173,9 @@ pub struct NativeDevArgs {
     /// edit loop).
     #[arg(long)]
     pub release: bool,
-    /// Build channel (RFC-104): selects a
-    /// `[package.metadata.pocopine.native.channels.<name>]`. Omitted →
-    /// the configured `default-channel`, else standalone (in-process).
-    #[arg(long)]
-    pub channel: Option<String>,
-    /// Forward `#[server]` calls to this deployed server URL, overriding
-    /// the channel's `backend` for this run. Handy for pointing `dev` at
-    /// a local `pocopine run` or staging server.
+    /// Forward the app's `#[server]` calls to this deployed server URL
+    /// ("server" mode). Omitted → "standalone": the functions run
+    /// in-process. Point `dev` at a local `pocopine run` or staging.
     #[arg(long)]
     pub backend: Option<String>,
     /// Force the Pine Stylekit CSS stage on. On by default.
@@ -196,13 +191,9 @@ pub struct NativeBuildArgs {
     /// Build the wasm bundle in debug mode (default: release).
     #[arg(long)]
     pub debug: bool,
-    /// Build channel (RFC-104): selects a
-    /// `[package.metadata.pocopine.native.channels.<name>]`. Omitted →
-    /// the configured `default-channel`, else standalone (in-process).
-    #[arg(long)]
-    pub channel: Option<String>,
-    /// Forward `#[server]` calls to this deployed server URL, overriding
-    /// the channel's `backend` for this build.
+    /// Forward the app's `#[server]` calls to this deployed server URL
+    /// ("server" mode). Omitted → "standalone": the functions run
+    /// in-process. The URL comes from `pocopine deploy status`.
     #[arg(long)]
     pub backend: Option<String>,
     /// Force the Pine Stylekit CSS stage on. On by default.
