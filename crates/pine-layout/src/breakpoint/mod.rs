@@ -93,6 +93,24 @@ impl Breakpoint {
     }
 }
 
+/// Derive the adaptive navigation mode (`drawer`/`rail`/`sidebar`) for a
+/// breakpoint, given the tiers at which the nav becomes a persistent rail
+/// and then a full sidebar. Shared by `app_shell` and `workspace` so both
+/// step the nav identically. Unknown tokens fall back to the AppShell
+/// defaults (`rail_at = md`, `sidebar_at = xl`).
+pub fn nav_mode(breakpoint: &str, rail_at: &str, sidebar_at: &str) -> &'static str {
+    let bp = Breakpoint::from_token(breakpoint).unwrap_or(Breakpoint::Base);
+    let rail = Breakpoint::from_token(rail_at).unwrap_or(Breakpoint::Md);
+    let sidebar = Breakpoint::from_token(sidebar_at).unwrap_or(Breakpoint::Xl);
+    if bp.rank() >= sidebar.rank() {
+        "sidebar"
+    } else if bp.rank() >= rail.rank() {
+        "rail"
+    } else {
+        "drawer"
+    }
+}
+
 /// Live `matchMedia` `change` listeners, retained for the scope's
 /// lifetime and detached together on unmount.
 #[cfg(target_arch = "wasm32")]

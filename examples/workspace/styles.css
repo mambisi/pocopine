@@ -1,0 +1,175 @@
+/* ===========================================================================
+   pine-workspace demo — the ENTIRE layout is here; the library ships none.
+   Regions expose: data-state / data-aside-mode / data-flyout / data-dragging
+   and a --pine-*-size custom property for the one dynamic (resizable) dimension.
+   =========================================================================== */
+
+:root {
+  --cocoa: #1a130c;
+  --cocoa-2: #241a10;
+  --amber: #f8ae45;
+  --amber-ink: #3a2a10;
+  --cream: #fbf7f0;
+  --card: #ffffff;
+  --ink: #2a2018;
+  --muted: #8a7d6d;
+  --line: #ece4d8;
+  --line-dark: #3a2c1c;
+  --header-h: 48px;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+code { font-family: ui-monospace, Menlo, monospace; font-size: 0.85em; color: #b5560f; background: #fff3e2; padding: 0.05em 0.35em; border-radius: 4px; }
+a { color: inherit; text-decoration: none; }
+
+/* While any region is mid-drag, freeze transitions so the splitter tracks
+   the pointer 1:1 (the lesson from the v1 drawer). */
+[data-dragging] { transition: none !important; }
+
+/* ── the grid ──────────────────────────────────────────────────────────── */
+
+.ws {
+  display: grid;
+  height: 100vh;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: var(--header-h) 1fr auto auto;
+  grid-template-areas:
+    "header  header  header"
+    "sidebar main    aside"
+    "sidebar bottom  aside"
+    "footer  footer  footer";
+  background: var(--cream);
+  position: relative;
+  overflow: hidden;
+}
+.ws-header { grid-area: header; }
+.ws-sidebar { grid-area: sidebar; }
+.ws-main   { grid-area: main; }
+.ws-aside  { grid-area: aside; }
+.ws-bottom { grid-area: bottom; }
+.ws-footer { grid-area: footer; }
+
+/* ── header ────────────────────────────────────────────────────────────── */
+
+.ws-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  background: color-mix(in oklab, var(--card) 90%, transparent);
+  border-bottom: 1px solid var(--line);
+  z-index: 30;
+}
+.ws-brand { font-weight: 650; letter-spacing: -0.01em; }
+.ws-logo { color: var(--amber); }
+.ws-grow { flex: 1; }
+.ws-btn {
+  font: inherit; font-size: 0.82rem; padding: 0.35rem 0.7rem; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer;
+}
+.ws-btn:hover { border-color: var(--amber); background: #fff7ec; }
+.ws-btn-accent { background: var(--amber); border-color: var(--amber); color: var(--amber-ink); font-weight: 600; }
+.ws-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); cursor: pointer;
+}
+.ws-icon-btn:hover { border-color: var(--amber); }
+.ws-burger, .ws-burger::before, .ws-burger::after { content: ""; display: block; width: 16px; height: 2px; background: currentColor; border-radius: 2px; }
+.ws-burger { position: relative; }
+.ws-burger::before { position: absolute; top: -5px; }
+.ws-burger::after  { position: absolute; top: 5px; }
+
+/* ── sidebar: width from the var; collapses to a rail; hover flyout ───── */
+
+.ws-sidebar {
+  position: relative;
+  width: var(--pine-sidebar-size, 260px);
+  background: var(--cocoa);
+  color: #cdbfab;
+  border-right: 1px solid var(--line-dark);
+  padding: 0.6rem 0.5rem;
+  overflow: hidden;
+  transition: width 0.16s ease;
+}
+.ws-nav { display: flex; flex-direction: column; gap: 0.15rem; }
+.ws-nav-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.55rem 0.6rem; border-radius: 8px; color: #cdbfab; white-space: nowrap; }
+.ws-ico { width: 1.2rem; text-align: center; flex: none; font-size: 1rem; }
+.ws-nav-item:hover { background: var(--cocoa-2); color: var(--cream); }
+.ws-nav-item.is-active { background: var(--amber); color: var(--amber-ink); font-weight: 600; }
+
+.ws-sidebar[data-state="collapsed"] .nav-label { display: none; }
+.ws-sidebar[data-state="collapsed"] .ws-nav-item { justify-content: center; padding: 0.55rem 0; }
+/* flyout: overlay-expand the rail on hover (doesn't push content) */
+.ws-sidebar[data-state="collapsed"][data-flyout] {
+  position: absolute; inset: 0 auto 0 0; z-index: 60; width: 240px;
+  box-shadow: 0.35rem 0 1.5rem rgba(0, 0, 0, 0.35);
+}
+.ws-sidebar[data-state="collapsed"][data-flyout] .nav-label { display: inline; }
+.ws-sidebar[data-state="collapsed"][data-flyout] .ws-nav-item { justify-content: flex-start; padding: 0.55rem 0.6rem; }
+
+/* ── resize handles (sidebar right edge, aside left edge, bottom top edge) ─ */
+
+.pine-workspace-sidebar-resize,
+.pine-workspace-aside-resize { position: absolute; top: 0; width: 10px; height: 100%; cursor: ew-resize; z-index: 5; }
+.pine-workspace-sidebar-resize { right: 0; }
+.pine-workspace-aside-resize { left: 0; }
+.pine-workspace-bottom-resize { position: absolute; left: 0; right: 0; top: 0; height: 10px; cursor: ns-resize; z-index: 5; }
+/* a 2px indicator flush on the region's edge (= the visual border) */
+.pine-workspace-sidebar-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; }
+.pine-workspace-aside-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; }
+.pine-workspace-bottom-resize::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; }
+.pine-workspace-sidebar-resize:hover::after,
+.pine-workspace-aside-resize:hover::after,
+.pine-workspace-bottom-resize:hover::after { background: var(--amber); }
+
+/* ── main ──────────────────────────────────────────────────────────────── */
+
+.ws-main { overflow: auto; }
+.ws-main-inner { max-width: 64rem; margin-inline: auto; padding: 1.75rem 1.5rem; }
+.ws-main h1 { margin: 0 0 0.5rem; font-size: 1.6rem; letter-spacing: -0.02em; }
+.ws-main p { max-width: 60ch; color: #5b4f40; }
+.ws-tips { color: #5b4f40; padding-left: 1.1rem; }
+.ws-tips li { margin: 0.3rem 0; }
+.ws-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.9rem; margin-top: 1.25rem; }
+.ws-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.ws-card span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.ws-card strong { color: var(--cocoa); }
+@media (max-width: 700px) { .ws-cards { grid-template-columns: 1fr; } }
+
+/* ── aside: anchored column ↔ floating overlay ↔ closed ─────────────────── */
+
+.ws-aside {
+  position: relative;
+  width: var(--pine-aside-size, 320px);
+  background: var(--card);
+  border-left: 1px solid var(--line);
+  overflow: auto;
+  transition: width 0.16s ease;
+}
+.ws-aside[data-aside-state="closed"] { display: none; }
+.ws-aside-inner { padding: 1rem 1.1rem; }
+.ws-aside-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.ws-muted { color: var(--muted); font-size: 0.85rem; }
+
+/* ── bottom console ────────────────────────────────────────────────────── */
+
+.ws-bottom {
+  position: relative;
+  height: var(--pine-bottom-size, 240px);
+  background: var(--cocoa);
+  color: #cdbfab;
+  border-top: 1px solid var(--line-dark);
+  overflow: auto;
+}
+.ws-bottom[data-state="closed"] { display: none; }
+.ws-bottom-head { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--line-dark); }
+.ws-bottom-head .ws-icon-btn { background: transparent; border-color: var(--line-dark); color: #cdbfab; }
+.ws-console { margin: 0; padding: 0.75rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; color: #b9a98f; }
+
+/* ── footer / status bar ───────────────────────────────────────────────── */
+
+.ws-footer { display: flex; align-items: center; gap: 0.75rem; padding: 0.3rem 0.9rem; background: var(--card); border-top: 1px solid var(--line); color: var(--muted); font-size: 0.78rem; }
+.ws-bp { font-family: ui-monospace, monospace; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber-ink); background: var(--amber); border-radius: 999px; padding: 0.1rem 0.5rem; }
+.ws-bp:empty::before { content: "…"; }

@@ -1,0 +1,18 @@
+[package]
+name = "workspace-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+port = 3012
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pine-layout = { path = "../../crates/pine-layout" }
+pocopine = { path = "../../crates/pocopine" }
+serde = { workspace = true }
+wasm-bindgen = { workspace = true }

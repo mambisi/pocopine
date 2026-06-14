@@ -78,6 +78,7 @@ members = [
     "examples/sync",
     "examples/tailwind",
     "examples/todo",
+    "examples/workspace",
 ]
 
 # RFC-104 native host crate (Tauri shell for the file-browser example).

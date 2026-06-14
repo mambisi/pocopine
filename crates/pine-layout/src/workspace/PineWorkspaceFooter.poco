@@ -1,0 +1,3 @@
+<root class="pine-workspace-footer" role="contentinfo">
+  <slot></slot>
+</root>

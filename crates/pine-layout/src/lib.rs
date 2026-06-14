@@ -44,9 +44,11 @@
 pub mod app_shell;
 pub mod breakpoint;
 pub mod container;
+mod floating;
 pub mod grid;
 pub mod inline;
 pub mod stack;
+pub mod workspace;
 
 pub use app_shell::{
     PineAppShell, PineAppShellContent, PineAppShellFooter, PineAppShellHeader, PineAppShellSidebar,
@@ -57,6 +59,10 @@ pub use container::PineContainer;
 pub use grid::{PineGrid, PineGridItem};
 pub use inline::PineInline;
 pub use stack::PineStack;
+pub use workspace::{
+    PineWorkspace, PineWorkspaceAside, PineWorkspaceBottom, PineWorkspaceFooter,
+    PineWorkspaceHeader, PineWorkspaceMain, PineWorkspacePanel, PineWorkspaceSidebar,
+};
 
 /// Register every Pine Layout custom-element tag. Call once at
 /// startup, before mounting any template that uses the tags.
@@ -73,4 +79,12 @@ pub fn register_all() {
     PineAppShellContent::register();
     PineAppShellFooter::register();
     PineAppShellTrigger::register();
+    PineWorkspace::register();
+    PineWorkspaceHeader::register();
+    PineWorkspaceFooter::register();
+    PineWorkspaceMain::register();
+    PineWorkspaceSidebar::register();
+    PineWorkspaceAside::register();
+    PineWorkspacePanel::register();
+    PineWorkspaceBottom::register();
 }

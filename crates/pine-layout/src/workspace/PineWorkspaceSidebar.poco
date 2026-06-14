@@ -1,0 +1,26 @@
+<root class="pine-workspace-sidebar"
+      pp-ref="sidebar"
+      role="navigation"
+      :id="id"
+      :aria-label="label"
+      :data-state="display_collapsed ? 'collapsed' : 'expanded'"
+      :data-flyout="flyout"
+      :data-dragging="dragging"
+      :style="'--pine-sidebar-size:' + display_size + 'px'"
+      @mouseenter="on_hover"
+      @mouseleave="on_unhover">
+  <slot></slot>
+  <div class="pine-workspace-sidebar-resize"
+       role="separator"
+       aria-orientation="vertical"
+       :aria-valuenow="size"
+       :aria-valuemin="collapse_at"
+       :aria-valuemax="max"
+       :tabindex="display_collapsed ? -1 : 0"
+       @pointerdown="on_resize_start"
+       @keydown.arrow-right.prevent="nudge_grow"
+       @keydown.arrow-left.prevent="nudge_shrink"
+       @keydown.home.prevent="to_min"
+       @keydown.end.prevent="to_max"
+       @dblclick="reset_size"></div>
+</root>
