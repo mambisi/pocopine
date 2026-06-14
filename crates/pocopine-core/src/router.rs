@@ -1392,22 +1392,34 @@ fn finish_route_mount(
     for (k, v) in params {
         let _ = el.set_attribute(k, v);
     }
-    outlet.replace_children_with_node_1(el.as_ref());
-    // RFC-058 Phase 6.5 — drive the route component's mount through
-    // the compiled-only entry. The mount's recursive directive
-    // scan is gone; route components must be `#[component]` types
-    // so their template plan installs every binding/listener via
-    // the macro-emitted entries.
-    mount::mount_child_component(&el, name);
-    mount::finalize_compiled_subtree(&el);
+    // RFC-099 — crossfade the route swap via the View Transitions API
+    // when the platform supports it and motion isn't reduced; fall back
+    // to an instant swap otherwise. The whole mount runs INSIDE the swap
+    // callback for two reasons: (a) View Transitions snapshots the new
+    // state when the callback returns, so the mount must complete there
+    // (an empty `<pp-outlet>` would crossfade to blank, then pop), and
+    // (b) the route's `Loader<T>` extractor consumes the pending slot
+    // during the mount's setup — `clear_pending_loader_data` MUST follow
+    // it in the same callback, or (since the callback runs a microtask
+    // later) the slot would be cleared before the route reads it.
+    // RFC-058 Phase 6.5 — the mount goes through the compiled-only entry:
+    // route components must be `#[component]` types so their template
+    // plan installs every binding/listener via the macro-emitted entries.
+    let crossfade = outlet.first_element_child().is_some();
+    let swap = move || {
+        outlet.replace_children_with_node_1(el.as_ref());
+        mount::mount_child_component(&el, name);
+        mount::finalize_compiled_subtree(&el);
+        clear_pending_loader_data();
+    };
+    if crossfade {
+        with_view_transition(swap);
+    } else {
+        // First mount (empty outlet): no transition — don't fade in the
+        // initial page (and SSR hydration claims, never reaching here).
+        swap();
+    }
     apply_page_meta(page_meta);
-
-    // The component's `Loader<T>` extractor (if any) consumed the
-    // pending slot during setup; for routes without a loader the
-    // slot was never populated. Either way, drop any leftover so
-    // the next navigation starts fresh — defensive against
-    // `Option<Loader<T>>` extractors that opt out of consuming.
-    clear_pending_loader_data();
 
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
@@ -1418,6 +1430,44 @@ fn finish_route_mount(
         });
     }
     None
+}
+
+/// RFC-099 — run a DOM mutation inside a View Transition so route swaps
+/// crossfade instead of cutting. Feature-detects `document.startViewTransition`
+/// (via reflection, so no web-sys binding/feature is required and absence
+/// degrades cleanly) and honours `prefers-reduced-motion`. When either is
+/// unavailable, `mutate` runs synchronously — the swap is identical, only
+/// the animation differs. The browser's default root transition crossfades
+/// the changed region; unchanged chrome (header/nav) snapshots to itself,
+/// so it reads as just the outlet content transitioning. No CSS required.
+fn with_view_transition<F: FnOnce() + 'static>(mutate: F) {
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let started: Option<(JsValue, js_sys::Function)> = if crate::animate::motion::is_reduced() {
+        None
+    } else {
+        web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|doc| {
+                let doc_val: JsValue = doc.into();
+                let f = js_sys::Reflect::get(&doc_val, &JsValue::from_str("startViewTransition"))
+                    .ok()?;
+                f.dyn_into::<js_sys::Function>().ok().map(|f| (doc_val, f))
+            })
+    };
+
+    match started {
+        // `startViewTransition(cb)`: the browser snapshots the old state,
+        // invokes `cb` (a microtask later) to update the DOM, snapshots
+        // the new state, then crossfades. `once_into_js` frees the closure
+        // after its single call.
+        Some((doc_val, start_fn)) => {
+            let cb = Closure::once_into_js(mutate);
+            let _ = start_fn.call1(&doc_val, &cb);
+        }
+        None => mutate(),
+    }
 }
 
 fn apply_page_meta(factory: Option<PageMetaFactory>) {
