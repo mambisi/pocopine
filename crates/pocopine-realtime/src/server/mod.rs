@@ -10,6 +10,7 @@ mod error;
 mod fanout;
 mod frame;
 mod gateway;
+mod handler;
 #[cfg(feature = "redis")]
 mod redis_fanout;
 mod route;
@@ -22,6 +23,7 @@ pub use fanout::{
 };
 pub use frame::{Frame, FrameKind};
 pub use gateway::{GatewayConfig, TopicPolicy, TopicResolver, WS_PROTOCOL_V1, WsGateway};
+pub use handler::{InboundData, Reaction, SubprotocolHandler};
 #[cfg(feature = "redis")]
 pub use redis_fanout::{DEFAULT_REDIS_MAX_LEN, RedisFanout};
 pub use route::{WS_STREAM_PATH, routes};

@@ -38,6 +38,7 @@ use super::error::WsError;
 use super::fanout::TopicStream;
 use super::frame::{Frame, FrameKind};
 use super::gateway::{GatewayConfig, WS_PROTOCOL_V1, WsGateway};
+use super::handler::InboundData;
 
 /// Mount path for the gateway upgrade endpoint.
 pub const WS_STREAM_PATH: &str = "/__pocopine/ws/v1";
@@ -289,6 +290,33 @@ impl Session {
         if !self.gateway.authorize(&self.ctx, &topic) {
             return Err(WsError::forbidden(name));
         }
+
+        // A registered sub-protocol handler (e.g. collab) intercepts the frame
+        // and runs stateful server logic; every other sub-protocol is a pure
+        // publish-to-fan-out relay.
+        if let Some(handler) = self.gateway.handler(frame.subprotocol_id) {
+            let reaction = handler
+                .on_data(InboundData {
+                    topic: &topic,
+                    payload: &frame.payload,
+                })
+                .await?;
+            for payload in reaction.replies {
+                // Out-of-band reply to THIS connection only (seq 0; the
+                // per-subscription seq is reserved for fanned-out Data frames).
+                // Non-blocking enqueue keeps the heartbeat watchdog live.
+                let reply = Frame::data(frame.subprotocol_id, frame.topic_ref, 0, payload);
+                if self.out.try_send(Message::Binary(reply.encode())).is_err() {
+                    self.should_close = true;
+                    break;
+                }
+            }
+            for payload in reaction.broadcasts {
+                self.gateway.fanout().publish(&topic, payload).await?;
+            }
+            return Ok(());
+        }
+
         self.gateway
             .fanout()
             .publish(&topic, frame.payload.clone())

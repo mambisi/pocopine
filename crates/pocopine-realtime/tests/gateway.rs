@@ -1,8 +1,13 @@
 //! End-to-end gateway tests: boot the axum router on an ephemeral port and
 //! drive it with a real WebSocket client (tokio-tungstenite).
 
+use std::sync::Arc;
+
 use futures_util::{SinkExt, Stream, StreamExt};
-use pocopine_realtime::{Control, Frame, FrameKind, GatewayConfig, TopicSeq, WsGateway, routes};
+use pocopine_realtime::{
+    Control, Frame, FrameKind, GatewayConfig, InboundData, Reaction, SubprotocolHandler, TopicSeq,
+    WsGateway, routes,
+};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
 
@@ -202,4 +207,63 @@ async fn subscription_cap_rejects_extra_topics() {
         Control::Error { code, .. } => assert_eq!(code, "too_many_subscriptions"),
         other => panic!("expected too_many_subscriptions, got {other:?}"),
     }
+}
+
+/// A toy handler proving both [`Reaction`] paths: a `reply:`-prefixed echo back
+/// to the sender and a `bcast:`-prefixed message fanned out to every subscriber.
+struct PrefixHandler;
+
+#[async_trait::async_trait]
+impl SubprotocolHandler for PrefixHandler {
+    async fn on_data(
+        &self,
+        inbound: InboundData<'_>,
+    ) -> Result<Reaction, pocopine_realtime::WsError> {
+        let mut reaction = Reaction::new();
+        reaction.reply([b"reply:", &inbound.payload[..]].concat());
+        reaction.broadcast([b"bcast:", &inbound.payload[..]].concat());
+        Ok(reaction)
+    }
+}
+
+#[tokio::test]
+async fn handler_replies_to_sender_and_broadcasts_to_all() {
+    const SUB: u64 = 7;
+    let gateway = WsGateway::local()
+        .allow_all_topics()
+        .with_handler(SUB, Arc::new(PrefixHandler));
+    let url = spawn(gateway).await;
+
+    // Two clients on the same topic.
+    let (mut a, _ra) = connect_async(url.clone()).await.unwrap();
+    let (mut b, _rb) = connect_async(url).await.unwrap();
+    assert!(matches!(next_control(&mut a).await, Control::Hello { .. }));
+    assert!(matches!(next_control(&mut b).await, Control::Hello { .. }));
+    for ws in [&mut a, &mut b] {
+        ws.send(send_bytes(Frame::subscribe(SUB, "room:1")))
+            .await
+            .unwrap();
+        assert!(matches!(
+            next_control(ws).await,
+            Control::SubscribeAck { .. }
+        ));
+    }
+
+    // A sends one Data frame; the handler intercepts it (no raw relay).
+    a.send(send_bytes(Frame::data(SUB, 1, 0, &b"hi"[..])))
+        .await
+        .unwrap();
+
+    // A sees BOTH its direct reply (seq 0) and the broadcast (seq 1), in either
+    // order; B sees only the broadcast.
+    let f1 = next_data(&mut a).await;
+    let f2 = next_data(&mut a).await;
+    let mut a_payloads = [f1.payload_str().unwrap(), f2.payload_str().unwrap()];
+    a_payloads.sort_unstable();
+    assert_eq!(a_payloads, ["bcast:hi", "reply:hi"]);
+
+    let on_b = next_data(&mut b).await;
+    assert_eq!(on_b.payload_str().unwrap(), "bcast:hi");
+    assert_eq!(on_b.seq, 1, "broadcast is a normal sequenced Data frame");
+    assert_eq!(on_b.subprotocol_id, SUB);
 }

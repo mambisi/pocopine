@@ -1,6 +1,7 @@
 //! The gateway hub: configuration, topic policy/resolver, and shared state
 //! (RFC 073 §10–§11).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,6 +10,7 @@ use pocopine_events::Topic;
 
 use super::error::WsError;
 use super::fanout::{Fanout, LocalFanout};
+use super::handler::SubprotocolHandler;
 
 /// WebSocket sub-protocol identifier advertised in `Sec-WebSocket-Protocol`
 /// and the [`crate::Control::Hello`] frame.
@@ -77,6 +79,9 @@ pub struct WsGateway {
     resolver: TopicResolver,
     config: GatewayConfig,
     sessions: Arc<AtomicU64>,
+    /// Stateful inbound handlers keyed by `subprotocol_id`. A sub-protocol with
+    /// no entry uses the default publish-to-fan-out relay.
+    handlers: Arc<HashMap<u64, Arc<dyn SubprotocolHandler>>>,
 }
 
 impl WsGateway {
@@ -93,6 +98,7 @@ impl WsGateway {
             resolver: Arc::new(|topic| Topic::new(topic).map_err(WsError::from)),
             config: GatewayConfig::default(),
             sessions: Arc::new(AtomicU64::new(0)),
+            handlers: Arc::new(HashMap::new()),
         }
     }
 
@@ -156,6 +162,21 @@ impl WsGateway {
         self
     }
 
+    /// Register a stateful inbound [`SubprotocolHandler`] for `subprotocol_id`.
+    ///
+    /// Data frames tagged with that id are routed to the handler instead of the
+    /// default publish-to-fan-out relay; every other sub-protocol still relays.
+    /// Registering twice for the same id replaces the earlier handler.
+    pub fn with_handler(
+        mut self,
+        subprotocol_id: u64,
+        handler: Arc<dyn SubprotocolHandler>,
+    ) -> Self {
+        // Uniquely owned during the builder chain, so this never deep-clones.
+        Arc::make_mut(&mut self.handlers).insert(subprotocol_id, handler);
+        self
+    }
+
     // --- internal accessors used by the route/session machinery ---
 
     pub(crate) fn fanout(&self) -> &Arc<dyn Fanout> {
@@ -172,6 +193,10 @@ impl WsGateway {
 
     pub(crate) fn authorize(&self, ctx: &RequestContext, topic: &Topic) -> bool {
         (self.policy)(ctx, topic)
+    }
+
+    pub(crate) fn handler(&self, subprotocol_id: u64) -> Option<&Arc<dyn SubprotocolHandler>> {
+        self.handlers.get(&subprotocol_id)
     }
 
     pub(crate) fn next_session_id(&self) -> String {
