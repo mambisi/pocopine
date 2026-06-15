@@ -7,7 +7,7 @@
 //! #[server(public)]
 //! pub async fn summarize(input: In) -> ServerResult<Out> {
 //!     active_plugin::<Agenkit>().unwrap()
-//!         .flow("summarize").input(input).run().await
+//!         .flow(Summarize).input(input).run().await   // typed marker from #[ai_flow]
 //!         .map_err(|e| pocopine_agenkit::server::to_server_error(&e))
 //! }
 //! ```

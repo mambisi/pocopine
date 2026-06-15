@@ -2,10 +2,10 @@
 //! context manifest is declared in the attribute.
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{Ident, ItemFn, LitStr, Meta, Token, parse_quote};
+use syn::{FnArg, Ident, ItemFn, LitStr, Meta, Token, parse_quote};
 
 use crate::util;
 
@@ -87,19 +87,32 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             "`#[ai_flow]` requires an `async fn`",
         ));
     }
-    if func.sig.inputs.len() != 2 {
+    let inputs: Vec<&FnArg> = func.sig.inputs.iter().collect();
+    if inputs.len() != 2 {
         return Err(syn::Error::new_spanned(
             &func.sig.inputs,
             "`#[ai_flow]` fn must take exactly two arguments: \
              `(input: YourInput, ctx: AiFlowContext)`",
         ));
     }
+    let FnArg::Typed(input_pat) = inputs[0] else {
+        return Err(syn::Error::new_spanned(
+            inputs[0],
+            "`#[ai_flow]` fn cannot take `self`",
+        ));
+    };
+    // The flow's typed input/output, lifted onto the marker's `FlowDef` so
+    // `agenkit.flow(Marker).input(..).run()` is type-checked and schema-derivable.
+    let input_ty = &input_pat.ty;
+    let output_ty = util::result_ok_type(&func.sig.output)?;
 
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
     let id = args.id.unwrap_or_else(|| fn_ident.to_string());
+    // The marker is the PascalCase of the fn name (like `#[ai_tool]`'s struct).
+    let struct_ident = format_ident!("{}", util::pascal_case(&fn_ident.to_string()));
 
-    // The body becomes a private, hidden handler fn the constructor references.
+    // The body becomes a private, hidden handler fn the impl references.
     let impl_ident = Ident::new(&format!("__{fn_ident}_handler"), fn_ident.span());
     let mut handler = func.clone();
     handler.sig.ident = impl_ident.clone();
@@ -122,14 +135,64 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     Ok(quote! {
         #handler
 
-        #vis fn #fn_ident() -> impl ::pocopine_agenkit::server::FlowHandler {
-            ::pocopine_agenkit::server::Flow::new(#id, #impl_ident)
-                #public
-                #stream
-                #( .uses_agent(#agents) )*
-                #( .uses_tool(#tools) )*
-                #( .uses_retriever(#retrievers) )*
-                #( .uses_state(#state) )*
+        #vis struct #struct_ident;
+
+        impl ::pocopine_agenkit::server::FlowDef for #struct_ident {
+            const ID: &'static str = #id;
+            type Input = #input_ty;
+            type Output = #output_ty;
+        }
+
+        impl ::pocopine_agenkit::server::FlowKey for #struct_ident {
+            type Call = ::pocopine_agenkit::server::TypedFlowCall<Self>;
+            fn into_call(
+                self,
+                agenkit: ::pocopine_agenkit::server::Agenkit,
+            ) -> Self::Call {
+                ::pocopine_agenkit::server::TypedFlowCall::from_handle(agenkit)
+            }
+        }
+
+        impl ::pocopine_agenkit::server::FlowHandler for #struct_ident {
+            fn id(&self) -> &str {
+                #id
+            }
+
+            fn descriptor(&self) -> ::pocopine_agenkit::server::FlowDescriptor {
+                // Reuse `Flow::new` to derive the I/O schemas + manifest, then
+                // take its descriptor — the schema-derivation logic lives in
+                // one place.
+                ::pocopine_agenkit::server::FlowHandler::descriptor(
+                    &::pocopine_agenkit::server::Flow::new(#id, #impl_ident)
+                        #public
+                        #stream
+                        #( .uses_agent(#agents) )*
+                        #( .uses_tool(#tools) )*
+                        #( .uses_retriever(#retrievers) )*
+                        #( .uses_state(#state) )*,
+                )
+            }
+
+            fn run_json<'flow>(
+                &'flow self,
+                input: ::pocopine_agenkit::serde_json::Value,
+                ctx: ::pocopine_agenkit::server::AiFlowContext,
+            ) -> ::pocopine_agenkit::server::BoxFuture<
+                'flow,
+                ::pocopine_agenkit::prelude::AgenkitResult<::pocopine_agenkit::serde_json::Value>,
+            > {
+                ::std::boxed::Box::pin(async move {
+                    let input: #input_ty = ::pocopine_agenkit::serde_json::from_value(input)
+                        .map_err(|err| ::pocopine_agenkit::prelude::AgenkitError::validation(
+                            ::std::format!("flow `{}` input: {err}", #id),
+                        ))?;
+                    let output: #output_ty = #impl_ident(input, ctx).await?;
+                    ::pocopine_agenkit::serde_json::to_value(output)
+                        .map_err(|err| ::pocopine_agenkit::prelude::AgenkitError::validation(
+                            ::std::format!("flow `{}` output: {err}", #id),
+                        ))
+                })
+            }
         }
     })
 }

@@ -38,21 +38,26 @@ pub fn ai_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Turn a flow body into a `FlowHandler` constructor, with the context manifest
-/// declared in the attribute.
+/// Turn a flow body into a typed marker — a unit struct (like `#[ai_tool]`'s)
+/// that implements `FlowHandler` (register it), `FlowDef` (its id + typed
+/// input/output), and `FlowKey` (the typed `agenkit.flow(Marker)` call).
 ///
 /// ```ignore
 /// #[ai_flow(public, agents("researcher"), tools("lookup"))]
 /// async fn research(input: Question, ctx: AiFlowContext) -> AgenkitResult<Answer> {
 ///     ctx.agent::<Researcher>().input(input).run().await
 /// }
-/// // register: .flow(research())
+/// // register: .flow(Research)
+/// // call:     agenkit.flow(Research).input(q).run().await   // typed, no string id
 /// ```
 ///
-/// The fn becomes `fn research() -> impl FlowHandler`. The flow id defaults to
-/// the fn name (override with `id = "..."`). Declare resources with
-/// `agents(..)`, `tools(..)`, `retrievers(..)`, `state(..)`, mark the flow
-/// `public`, and optionally set `stream = "progress"`.
+/// The generated marker is the PascalCase of the fn name (`research` →
+/// `Research`), so the fn name must not collide with its input/output type
+/// names. The flow id defaults to the fn name (override with `id = "..."`).
+/// Declare resources with `agents(..)`, `tools(..)`, `retrievers(..)`,
+/// `state(..)`, mark the flow `public`, and optionally set `stream =
+/// "progress"`. The id string still works as a dynamic escape hatch:
+/// `agenkit.flow("research")`.
 #[proc_macro_attribute]
 pub fn ai_flow(attr: TokenStream, item: TokenStream) -> TokenStream {
     ai_flow::expand(attr.into(), item.into())

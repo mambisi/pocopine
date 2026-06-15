@@ -26,16 +26,17 @@ pub mod stream_route;
 pub mod thread;
 pub mod tool;
 
-pub use agenkit::{Agenkit, AgenkitBuilder, FlowCall, with_principal};
+pub use agenkit::{Agenkit, AgenkitBuilder, FlowCall, FlowKey, TypedFlowCall, with_principal};
 pub use agent::{AgentRun, AiAgent, AiAgentBuilder};
 pub use bridge::to_server_error;
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};
 pub use embed::{AiEmbedder, DynEmbedder, EmbedderRegistry};
-pub use flow::{AiFlowContext, Flow, FlowHandler, FlowRegistry, RetrieveBuilder};
+pub use flow::{AiFlowContext, Flow, FlowDef, FlowHandler, FlowRegistry, RetrieveBuilder};
 pub use generate::{Ai, AiStructured};
 pub use observe::{emit_trace_event, to_observed_event};
 pub use parallel::ParallelBuilder;
 pub use plugin::{PrincipalLayer, PrincipalService, agenkit_server_plugin, principal_layer};
+pub use pocopine_agenkit_core::FlowDescriptor;
 pub use provider::{
     BoxFuture, BoxStream, FinishReason, GenerateRequest, GenerateResponse, MockProvider, Provider,
     ProviderCapabilities, ProviderRegistry, StreamChunk,

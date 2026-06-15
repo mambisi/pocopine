@@ -1,10 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 //! End-to-end test of the `#[ai_tool]` / `#[ai_flow]` macros against the real
-//! runtime: the generated `AiTool` impl and `FlowHandler` constructor must
-//! register and run, and carry the descriptor metadata derived from the
-//! attribute + doc comment (#216).
+//! runtime: the generated `AiTool` impl and flow marker (`FlowHandler` +
+//! `FlowDef` + `FlowKey`) must register and run, carry the descriptor metadata
+//! derived from the attribute + doc comment, and drive the typed
+//! `agenkit.flow(Marker)` call (#216).
 
 use pocopine_agenkit::prelude::*;
+use pocopine_agenkit::server::FlowDef;
 use pocopine_agenkit::{ai_flow, ai_tool};
 use pocopine_agenkit_core::ToolSideEffectPolicy;
 use serde::{Deserialize, Serialize};
@@ -43,8 +45,11 @@ struct Answer {
     answer: String,
 }
 
-#[ai_flow(public, tools("lookup"))]
-async fn answer(input: Question, ctx: AiFlowContext) -> AgenkitResult<Answer> {
+// The fn name (`answer_question`) must differ from its output type (`Answer`);
+// the marker is the PascalCase of the fn name. The id is pinned to "answer" to
+// show that the marker name and the registered id are independent.
+#[ai_flow(public, id = "answer", tools("lookup"))]
+async fn answer_question(input: Question, ctx: AiFlowContext) -> AgenkitResult<Answer> {
     ctx.ai()
         .prompt(input.q)
         .schema::<Answer>()
@@ -60,7 +65,7 @@ fn runtime() -> Agenkit {
         .default_model(ModelRef::new("local/default"))
         .tool(Lookup) // generated unit struct from #[ai_tool]
         .tool(WriteFile)
-        .flow(answer()) // generated `fn answer() -> impl FlowHandler`
+        .flow(AnswerQuestion) // generated marker struct from #[ai_flow]
         .build()
         .unwrap()
 }
@@ -84,8 +89,10 @@ async fn ai_flow_registers_runs_and_is_public() {
     let agenkit = runtime();
     // `#[ai_flow(public)]` emits `.public()` — recorded in the manifest.
     assert!(agenkit.flow_is_public("answer"));
+    // Typed call: `.input(..)` is checked against `Question`, `.run()` infers
+    // `Answer` (no turbofish, no string id).
     let out: Answer = agenkit
-        .flow("answer")
+        .flow(AnswerQuestion)
         .input(Question {
             q: "hi".to_string(),
         })
@@ -97,5 +104,20 @@ async fn ai_flow_registers_runs_and_is_public() {
         Answer {
             answer: "ok".to_string()
         }
+    );
+}
+
+#[test]
+fn ai_flow_marker_exposes_typed_contract() {
+    // The marker carries the id and typed I/O, so the input schema is derivable
+    // from the type alone — no stringly-typed call site (#216).
+    assert_eq!(<AnswerQuestion as FlowDef>::ID, "answer");
+    let input_schema = serde_json::to_string(&pocopine_agenkit::schemars::schema_for!(
+        <AnswerQuestion as FlowDef>::Input
+    ))
+    .unwrap();
+    assert!(
+        input_schema.contains("\"q\""),
+        "input schema derivable from the marker: {input_schema}"
     );
 }

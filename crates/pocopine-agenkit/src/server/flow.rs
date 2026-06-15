@@ -46,6 +46,26 @@ pub trait FlowHandler: Send + Sync + 'static {
     ) -> BoxFuture<'a, AgenkitResult<serde_json::Value>>;
 }
 
+/// The compile-time identity of a flow: its registered id and typed
+/// input/output. `#[ai_flow]` generates a marker (e.g. `Summarize`) that
+/// implements this, enabling the type-checked `agenkit.flow(Summarize)`
+/// invocation — the id can't be mistyped, `.input(..)` is checked against
+/// [`FlowDef::Input`], `.run()` infers [`FlowDef::Output`], and the input
+/// schema is derivable from `Input` (no stringly-typed call site). The bare
+/// `agenkit.flow("id")` path stays as the dynamic escape hatch.
+///
+/// `Input`/`Output` require *both* directions (a flow's input is serialized at
+/// the typed call site and deserialized in the handler; its output the reverse),
+/// plus `JsonSchema` so the public client contract is derivable from the marker.
+pub trait FlowDef: Send + Sync + 'static {
+    /// The registered flow id (matches `FlowHandler::id`).
+    const ID: &'static str;
+    /// The typed flow input.
+    type Input: Serialize + DeserializeOwned + JsonSchema;
+    /// The typed flow output.
+    type Output: Serialize + DeserializeOwned + JsonSchema;
+}
+
 /// A typed flow: `id` + a body `Fn(Input, AiFlowContext) -> Future<Output>`.
 pub struct Flow<I, O, F> {
     descriptor: FlowDescriptor,
