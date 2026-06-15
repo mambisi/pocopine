@@ -434,7 +434,13 @@ impl<'a> SseDecoder<'a> {
             }
             StreamEvent::MessageDelta { usage } => {
                 if let Some(usage) = usage {
+                    // `message_delta` usage is cumulative, so the latest value
+                    // wins. It may also restate `input_tokens` (e.g. when a
+                    // server-side tool inflated the prompt); take it when given.
                     self.output_tokens = usage.output_tokens;
+                    if usage.input_tokens > 0 {
+                        self.input_tokens = usage.input_tokens;
+                    }
                 }
             }
             StreamEvent::MessageStop => {
