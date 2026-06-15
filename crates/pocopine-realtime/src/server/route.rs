@@ -82,6 +82,9 @@ async fn upgrade_handler(State(gateway): State<WsGateway>, request: Request<Body
 struct TopicEntry {
     topic: Topic,
     name: String,
+    /// The sub-protocol this topic was joined under (to notify the right
+    /// handler on the topic's active/idle lifecycle).
+    subprotocol_id: u64,
     pump: JoinHandle<()>,
 }
 
@@ -271,6 +274,8 @@ impl Session {
         if let Some(entry) = self.topics.remove(&frame.topic_ref) {
             entry.pump.abort();
             self.topic_by_name.remove(&entry.name);
+            self.gateway
+                .topic_unsubscribed(&entry.topic, entry.subprotocol_id);
             self.send(&Control::Unsubscribed { topic: entry.name });
         }
         Ok(())
@@ -408,11 +413,18 @@ impl Session {
             topic_ref,
             topic_name.to_string(),
         ));
+        // A genuinely new subscription (not a re-subscribe of a topic this
+        // connection already holds) bumps the process-wide count, which fires
+        // the handler's topic-active lifecycle on 0→1.
+        if !already_subscribed {
+            self.gateway.topic_subscribed(&topic, subprotocol_id);
+        }
         self.topics.insert(
             topic_ref,
             TopicEntry {
                 topic,
                 name: topic_name.to_string(),
+                subprotocol_id,
                 pump,
             },
         );
@@ -434,6 +446,8 @@ impl Session {
     fn shutdown(&mut self) {
         for (_, entry) in self.topics.drain() {
             entry.pump.abort();
+            self.gateway
+                .topic_unsubscribed(&entry.topic, entry.subprotocol_id);
         }
         self.topic_by_name.clear();
     }

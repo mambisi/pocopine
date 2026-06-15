@@ -69,9 +69,10 @@ pub struct CollabSync {
 /// Per-topic state: the document and the apply loop keeping it converged.
 struct TopicState {
     doc: Arc<Mutex<CollabDocument>>,
-    /// Held so the loop can be aborted when the topic is evicted (a follow-up);
-    /// the task also ends when the fan-out closes.
-    _apply_loop: JoinHandle<()>,
+    /// The convergence apply loop. Aborted when the topic goes idle (its last
+    /// local subscriber leaves); the document then reloads from the store on the
+    /// next subscriber.
+    apply_loop: JoinHandle<()>,
 }
 
 impl CollabSync {
@@ -119,10 +120,7 @@ impl CollabSync {
             topic.clone(),
             doc.clone(),
         ));
-        let state = Arc::new(TopicState {
-            doc,
-            _apply_loop: apply_loop,
-        });
+        let state = Arc::new(TopicState { doc, apply_loop });
         topics.insert(topic.clone(), state.clone());
         Ok(state)
     }
@@ -176,6 +174,28 @@ impl SubprotocolHandler for CollabSync {
             }
         }
         Ok(reaction)
+    }
+
+    /// First local subscriber: start the topic's convergence apply loop so this
+    /// process folds in peer edits even before any local client writes.
+    fn on_topic_active(&self, topic: &Topic) {
+        // Creating the state spawns the apply loop. Errors only on a poisoned
+        // lock, where the next `on_data` will surface it.
+        let _ = self.topic_state(topic);
+    }
+
+    /// Last local subscriber left: free the topic's document and stop its apply
+    /// loop. State is durable (checkpointed to the store) and reloads on the
+    /// next subscriber, so this is pure resource reclamation.
+    fn on_topic_idle(&self, topic: &Topic) {
+        let evicted = self
+            .topics
+            .lock()
+            .ok()
+            .and_then(|mut topics| topics.remove(topic));
+        if let Some(state) = evicted {
+            state.apply_loop.abort();
+        }
     }
 }
 
@@ -687,5 +707,56 @@ mod tests {
             reloaded,
             "a fresh process should reload the document from the store"
         );
+    }
+
+    #[tokio::test]
+    async fn idle_eviction_frees_the_topic_then_reactivation_reloads_it() {
+        use super::super::store::{CollabStore, MemoryCollabStore};
+
+        let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
+        let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+        let server = CollabSync::new(fanout.clone())
+            .with_store(store.clone())
+            .with_checkpoint_every(1);
+        let topic = Topic::new("collab:doc").unwrap();
+
+        // First subscriber activates the topic; an edit is folded + checkpointed.
+        server.on_topic_active(&topic);
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "kept");
+        let reaction = feed(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(edit.full_update())),
+        )
+        .await;
+        for payload in reaction.broadcasts() {
+            fanout.publish(&topic, payload.clone()).await.unwrap();
+        }
+        for _ in 0..200 {
+            if store.load_snapshot(topic.as_str()).await.unwrap().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // Last subscriber leaves: the topic's document + apply loop are released.
+        server.on_topic_idle(&topic);
+        assert!(
+            server.topics.lock().unwrap().get(&topic).is_none(),
+            "an idle topic must be freed"
+        );
+
+        // A new subscriber reactivates it; the document comes back from the store.
+        server.on_topic_active(&topic);
+        let mut recovered = false;
+        for _ in 0..200 {
+            if handler_text(&server, &topic, "body").await.contains("kept") {
+                recovered = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(recovered, "reactivating an evicted topic should recover it");
     }
 }
