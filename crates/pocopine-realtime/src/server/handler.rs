@@ -103,4 +103,17 @@ pub trait SubprotocolHandler: Send + Sync + 'static {
     /// gateway logs it and sends the peer a `bad_frame` control error) without
     /// tearing down the connection.
     async fn on_data(&self, inbound: InboundData<'_>) -> Result<Reaction, WsError>;
+
+    /// `topic` gained its first local subscriber on this process (the gateway's
+    /// per-topic subscriber count went 0→1). A stateful handler spins up
+    /// per-topic resources here — collab starts the convergence apply loop.
+    /// Default: no-op (pure relays keep no per-topic state). Called
+    /// synchronously from the session loop, so do not block.
+    fn on_topic_active(&self, _topic: &Topic) {}
+
+    /// `topic` lost its last local subscriber on this process (the count went
+    /// 1→0). A stateful handler frees per-topic resources here — collab aborts
+    /// the apply loop and drops the document (which reloads from the store on
+    /// the next subscriber). Default: no-op.
+    fn on_topic_idle(&self, _topic: &Topic) {}
 }

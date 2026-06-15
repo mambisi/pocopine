@@ -1,9 +1,10 @@
 //! End-to-end gateway tests: boot the axum router on an ephemeral port and
 //! drive it with a real WebSocket client (tokio-tungstenite).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, Stream, StreamExt};
+use pocopine_events::Topic;
 use pocopine_realtime::{
     Control, Frame, FrameKind, GatewayConfig, InboundData, Reaction, SubprotocolHandler, TopicSeq,
     WsGateway, routes,
@@ -299,4 +300,87 @@ async fn handler_replies_to_sender_and_broadcasts_to_all() {
     assert_eq!(on_b.payload_str().unwrap(), "bcast:hi");
     assert_eq!(on_b.seq, 1, "broadcast is a normal sequenced Data frame");
     assert_eq!(on_b.subprotocol_id, SUB);
+}
+
+/// Records topic active/idle lifecycle transitions; `on_data` is a no-op.
+struct LifecycleRecorder {
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl SubprotocolHandler for LifecycleRecorder {
+    async fn on_data(
+        &self,
+        _inbound: InboundData<'_>,
+    ) -> Result<Reaction, pocopine_realtime::WsError> {
+        Ok(Reaction::new())
+    }
+
+    fn on_topic_active(&self, topic: &Topic) {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("active:{}", topic.as_str()));
+    }
+
+    fn on_topic_idle(&self, topic: &Topic) {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("idle:{}", topic.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn topic_active_idle_fires_on_first_and_last_subscriber() {
+    const SUB: u64 = 5;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let gateway = WsGateway::local().allow_all_topics().with_handler(
+        SUB,
+        Arc::new(LifecycleRecorder {
+            events: events.clone(),
+        }),
+    );
+    let url = spawn(gateway).await;
+
+    // Two clients join the same topic; active fires once (0→1), not per client.
+    let (mut a, _ra) = connect_async(url.clone()).await.unwrap();
+    let (mut b, _rb) = connect_async(url).await.unwrap();
+    assert!(matches!(next_control(&mut a).await, Control::Hello { .. }));
+    assert!(matches!(next_control(&mut b).await, Control::Hello { .. }));
+    let mut refs = Vec::new();
+    for ws in [&mut a, &mut b] {
+        ws.send(send_bytes(Frame::subscribe(SUB, "room:1")))
+            .await
+            .unwrap();
+        match next_control(ws).await {
+            Control::SubscribeAck { topic_ref, .. } => refs.push(topic_ref),
+            other => panic!("expected SubscribeAck, got {other:?}"),
+        }
+    }
+    // The lifecycle hook fires before the ack is sent, so by now it has run.
+    assert_eq!(*events.lock().unwrap(), vec!["active:room:1"]);
+
+    // A unsubscribes (2→1): no idle yet.
+    a.send(send_bytes(Frame::unsubscribe(refs[0])))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_control(&mut a).await,
+        Control::Unsubscribed { .. }
+    ));
+    assert_eq!(*events.lock().unwrap(), vec!["active:room:1"]);
+
+    // B unsubscribes (1→0): idle fires.
+    b.send(send_bytes(Frame::unsubscribe(refs[1])))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_control(&mut b).await,
+        Control::Unsubscribed { .. }
+    ));
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["active:room:1", "idle:room:1"]
+    );
 }

@@ -2,8 +2,8 @@
 //! (RFC 073 §10–§11).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use pocopine_auth::RequestContext;
 use pocopine_events::Topic;
@@ -86,6 +86,9 @@ pub struct WsGateway {
     /// Stateful inbound handlers keyed by `subprotocol_id`. A sub-protocol with
     /// no entry uses the default publish-to-fan-out relay.
     handlers: Arc<HashMap<u64, Arc<dyn SubprotocolHandler>>>,
+    /// Per-topic count of live subscriptions across all of this process's
+    /// connections. Drives the handler's topic active/idle lifecycle (0↔1).
+    subscriber_counts: Arc<Mutex<HashMap<Topic, usize>>>,
 }
 
 impl WsGateway {
@@ -104,6 +107,7 @@ impl WsGateway {
             config: GatewayConfig::default(),
             sessions: Arc::new(AtomicU64::new(0)),
             handlers: Arc::new(HashMap::new()),
+            subscriber_counts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -219,6 +223,43 @@ impl WsGateway {
 
     pub(crate) fn handler(&self, subprotocol_id: u64) -> Option<&Arc<dyn SubprotocolHandler>> {
         self.handlers.get(&subprotocol_id)
+    }
+
+    /// Record a new subscription to `topic`; notify the sub-protocol's handler
+    /// if this is the topic's first live subscriber on this process (0→1).
+    pub(crate) fn topic_subscribed(&self, topic: &Topic, subprotocol_id: u64) {
+        let first = {
+            let mut counts = self.subscriber_counts.lock().expect("counts poisoned");
+            let n = counts.entry(topic.clone()).or_insert(0);
+            *n += 1;
+            *n == 1
+        };
+        if first && let Some(handler) = self.handler(subprotocol_id) {
+            handler.on_topic_active(topic);
+        }
+    }
+
+    /// Record a dropped subscription to `topic`; notify the sub-protocol's
+    /// handler if that was the topic's last live subscriber on this process
+    /// (1→0). Idempotent for an unknown topic.
+    pub(crate) fn topic_unsubscribed(&self, topic: &Topic, subprotocol_id: u64) {
+        let last = {
+            let mut counts = self.subscriber_counts.lock().expect("counts poisoned");
+            match counts.get_mut(topic) {
+                Some(n) => {
+                    *n = n.saturating_sub(1);
+                    let drained = *n == 0;
+                    if drained {
+                        counts.remove(topic);
+                    }
+                    drained
+                }
+                None => false,
+            }
+        };
+        if last && let Some(handler) = self.handler(subprotocol_id) {
+            handler.on_topic_idle(topic);
+        }
     }
 
     pub(crate) fn next_session_id(&self) -> String {
