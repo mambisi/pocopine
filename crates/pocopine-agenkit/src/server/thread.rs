@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, AgentThreadId, StepKind, StepStatus, ThreadMessage,
@@ -125,6 +125,15 @@ impl InMemoryThreadStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Lock the thread map, surfacing a poisoned mutex as a propagable error
+    /// rather than panicking. Poisoning means another task panicked mid-write;
+    /// callers get an internal error they can handle instead of a crash.
+    fn lock(&self) -> AgenkitResult<MutexGuard<'_, HashMap<String, ThreadEntry>>> {
+        self.threads
+            .lock()
+            .map_err(|_| AgenkitError::internal("thread store mutex poisoned"))
+    }
 }
 
 impl AgentThreadStore for InMemoryThreadStore {
@@ -136,14 +145,18 @@ impl AgentThreadStore for InMemoryThreadStore {
     ) -> BoxFuture<'_, AgenkitResult<AgentThreadId>> {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
         let id = AgentThreadId::new(format!("th-{agent_id}-{seq}"));
-        self.threads.lock().unwrap().insert(
-            id.as_str().to_string(),
-            ThreadEntry {
-                owner: owner.key().map(str::to_string),
-                messages: Vec::new(),
-            },
-        );
-        Box::pin(async move { Ok(id) })
+        let owner = owner.key().map(str::to_string);
+        let result = self.lock().map(|mut threads| {
+            threads.insert(
+                id.as_str().to_string(),
+                ThreadEntry {
+                    owner,
+                    messages: Vec::new(),
+                },
+            );
+            id
+        });
+        Box::pin(async move { result })
     }
 
     fn load(
@@ -153,14 +166,13 @@ impl AgentThreadStore for InMemoryThreadStore {
     ) -> BoxFuture<'_, AgenkitResult<Option<Vec<ThreadMessage>>>> {
         // A thread owned by a different principal reads as not-found, so a
         // caller probing ids learns nothing about other principals' threads.
-        let result = self
-            .threads
-            .lock()
-            .unwrap()
-            .get(id.as_str())
-            .filter(|entry| entry.owner.as_deref() == owner.key())
-            .map(|entry| entry.messages.clone());
-        Box::pin(async move { Ok(result) })
+        let result = self.lock().map(|threads| {
+            threads
+                .get(id.as_str())
+                .filter(|entry| entry.owner.as_deref() == owner.key())
+                .map(|entry| entry.messages.clone())
+        });
+        Box::pin(async move { result })
     }
 
     fn append(
@@ -169,15 +181,16 @@ impl AgentThreadStore for InMemoryThreadStore {
         owner: ThreadOwner<'_>,
         messages: Vec<ThreadMessage>,
     ) -> BoxFuture<'_, AgenkitResult<()>> {
-        let mut threads = self.threads.lock().unwrap();
-        let result = match threads.get_mut(id.as_str()) {
-            Some(entry) if entry.owner.as_deref() == owner.key() => {
-                entry.messages.extend(messages);
-                Ok(())
+        let result = self.lock().and_then(|mut threads| {
+            match threads.get_mut(id.as_str()) {
+                Some(entry) if entry.owner.as_deref() == owner.key() => {
+                    entry.messages.extend(messages);
+                    Ok(())
+                }
+                // Missing, or owned by someone else: refuse without revealing which.
+                _ => Err(AgenkitError::not_found("thread not found")),
             }
-            // Missing, or owned by someone else: refuse without revealing which.
-            _ => Err(AgenkitError::not_found("thread not found")),
-        };
+        });
         Box::pin(async move { result })
     }
 
@@ -188,14 +201,15 @@ impl AgentThreadStore for InMemoryThreadStore {
     ) -> BoxFuture<'_, AgenkitResult<()>> {
         // Idempotent: only the owner can delete; a foreign/missing id is a
         // silent no-op so deletion never doubles as an existence oracle.
-        let mut threads = self.threads.lock().unwrap();
-        if threads
-            .get(id.as_str())
-            .is_some_and(|entry| entry.owner.as_deref() == owner.key())
-        {
-            threads.remove(id.as_str());
-        }
-        Box::pin(async move { Ok(()) })
+        let result = self.lock().map(|mut threads| {
+            if threads
+                .get(id.as_str())
+                .is_some_and(|entry| entry.owner.as_deref() == owner.key())
+            {
+                threads.remove(id.as_str());
+            }
+        });
+        Box::pin(async move { result })
     }
 }
 
@@ -390,5 +404,30 @@ mod tests {
         assert!(store.load(&id, alice).await.unwrap().is_none());
         // But another anonymous caller shares the anonymous bucket.
         assert!(store.load(&id, anon).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn poisoned_lock_surfaces_an_error_instead_of_panicking() {
+        let store = Arc::new(InMemoryThreadStore::new());
+        // Poison the mutex: panic while holding the lock on another thread.
+        let poisoner = store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.threads.lock().unwrap();
+            panic!("intentionally poison the lock");
+        })
+        .join();
+
+        // Every store access now returns an internal error, not a panic.
+        let owner = ThreadOwner::anonymous();
+        let id = AgentThreadId::new("th-x");
+        assert_eq!(store.load(&id, owner).await.unwrap_err().kind(), "internal");
+        assert_eq!(
+            store
+                .create("debugger", owner, ThreadRetention::Session)
+                .await
+                .unwrap_err()
+                .kind(),
+            "internal"
+        );
     }
 }
