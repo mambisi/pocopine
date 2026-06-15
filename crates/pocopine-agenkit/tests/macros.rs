@@ -82,9 +82,10 @@ fn ai_tool_derives_descriptor_from_fn_and_doc() {
 #[tokio::test]
 async fn ai_flow_registers_runs_and_is_public() {
     let agenkit = runtime();
-    // run_public_flow only succeeds if `#[ai_flow(public)]` emitted `.public()`.
+    // `#[ai_flow(public)]` emits `.public()` — recorded in the manifest.
+    assert!(agenkit.flow_is_public("answer"));
     let out: Answer = agenkit
-        .run_public_flow(
+        .run_flow(
             "answer",
             Question {
                 q: "hi".to_string(),

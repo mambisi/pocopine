@@ -24,8 +24,8 @@ tokio::task_local! {
     pub(crate) static CURRENT_PRINCIPAL: Principal;
 }
 
-/// Run `future` with `principal` in scope so any `run_public_flow` / `run_flow`
-/// call within it executes under that identity. This is the seam an axum
+/// Run `future` with `principal` in scope so any `run_flow` call within it
+/// executes under that identity. This is the seam an axum
 /// middleware uses after reading `Principal` from request extensions (§D15 DC-5).
 pub async fn with_principal<F: Future>(principal: Principal, future: F) -> F::Output {
     CURRENT_PRINCIPAL.scope(principal, future).await
@@ -125,27 +125,18 @@ impl Agenkit {
         self.inner.flows.contains(id)
     }
 
-    /// Run a registered flow over JSON input under a fresh trace tree.
+    /// Run a registered flow over **untyped** JSON input under a fresh trace
+    /// tree — the escape hatch; prefer the typed [`Agenkit::run_flow`].
     ///
     /// Emits `ai_flow_started` / `ai_flow_completed` / `ai_flow_failed`; the
     /// flow body emits its own step/retrieval/model events under the same
     /// `trace_id`.
-    pub async fn run_flow(
+    pub async fn run_flow_json(
         &self,
         id: &str,
         input: serde_json::Value,
     ) -> AgenkitResult<serde_json::Value> {
         self.run_flow_inner(id, input, None, None).await
-    }
-
-    /// Run a flow explicitly under `principal` (the in-facade adapter path).
-    pub async fn run_flow_as(
-        &self,
-        principal: Principal,
-        id: &str,
-        input: serde_json::Value,
-    ) -> AgenkitResult<serde_json::Value> {
-        self.run_flow_inner(id, input, Some(principal), None).await
     }
 
     /// Run a flow while streaming public [`FlowStreamEvent`]s into `sink`.
@@ -247,15 +238,38 @@ impl Agenkit {
         result
     }
 
-    /// Typed convenience over [`Agenkit::run_flow`].
-    pub async fn run_flow_typed<I, O>(&self, id: &str, input: I) -> AgenkitResult<O>
+    /// Run a registered flow with typed input/output under a fresh trace tree.
+    /// The caller principal is the ambient one (the request principal when the
+    /// [`crate::server::PrincipalLayer`] scoped it; anonymous otherwise).
+    pub async fn run_flow<I, O>(&self, id: &str, input: I) -> AgenkitResult<O>
     where
         I: Serialize,
         O: DeserializeOwned,
     {
         let input = serde_json::to_value(input)
             .map_err(|err| AgenkitError::validation(format!("flow `{id}` input: {err}")))?;
-        let output = self.run_flow(id, input).await?;
+        let output = self.run_flow_json(id, input).await?;
+        serde_json::from_value(output)
+            .map_err(|err| AgenkitError::validation(format!("flow `{id}` output: {err}")))
+    }
+
+    /// Run a typed flow explicitly under `principal`, bypassing the ambient
+    /// task-local — for tests and non-request contexts.
+    pub async fn run_flow_as<I, O>(
+        &self,
+        principal: Principal,
+        id: &str,
+        input: I,
+    ) -> AgenkitResult<O>
+    where
+        I: Serialize,
+        O: DeserializeOwned,
+    {
+        let input = serde_json::to_value(input)
+            .map_err(|err| AgenkitError::validation(format!("flow `{id}` input: {err}")))?;
+        let output = self
+            .run_flow_inner(id, input, Some(principal), None)
+            .await?;
         serde_json::from_value(output)
             .map_err(|err| AgenkitError::validation(format!("flow `{id}` output: {err}")))
     }

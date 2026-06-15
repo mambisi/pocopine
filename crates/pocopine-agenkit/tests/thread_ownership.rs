@@ -96,13 +96,13 @@ fn principal_cannot_resume_another_principals_thread() {
     let agenkit = runtime();
 
     // Bob starts a thread; the agent run appends one user + one assistant msg.
-    let bobs: ThreadOut = block_on(agenkit.run_public_flow_as(bob(), "start", ())).unwrap();
+    let bobs: ThreadOut = block_on(agenkit.run_flow_as(bob(), "start", ())).unwrap();
     assert_eq!(bobs.history_len, 2);
 
     // Alice tries to resume Bob's thread id: resume is rejected, she gets a
     // fresh empty thread with a different id — never Bob's history.
     let alices: ThreadOut =
-        block_on(agenkit.run_public_flow_as(alice(), "peek", bobs.thread_id.clone())).unwrap();
+        block_on(agenkit.run_flow_as(alice(), "peek", bobs.thread_id.clone())).unwrap();
     assert_eq!(alices.history_len, 0, "Alice must not see Bob's history");
     assert_ne!(
         alices.thread_id, bobs.thread_id,
@@ -110,13 +110,12 @@ fn principal_cannot_resume_another_principals_thread() {
     );
 
     // An anonymous caller is likewise denied Bob's authenticated thread.
-    let anons: ThreadOut =
-        block_on(agenkit.run_public_flow("peek", bobs.thread_id.clone())).unwrap();
+    let anons: ThreadOut = block_on(agenkit.run_flow("peek", bobs.thread_id.clone())).unwrap();
     assert_eq!(anons.history_len, 0, "anonymous must not see Bob's history");
 
     // Bob himself resumes his own thread and sees its history intact.
     let resumed: ThreadOut =
-        block_on(agenkit.run_public_flow_as(bob(), "peek", bobs.thread_id.clone())).unwrap();
+        block_on(agenkit.run_flow_as(bob(), "peek", bobs.thread_id.clone())).unwrap();
     assert_eq!(resumed.thread_id, bobs.thread_id);
     assert_eq!(resumed.history_len, 2, "owner must resume their own thread");
 }

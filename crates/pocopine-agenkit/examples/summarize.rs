@@ -17,7 +17,7 @@
 //! pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
 //!     pocopine_server::active_plugin::<Agenkit>()
 //!         .expect("agenkit_server_plugin installed")
-//!         .run_flow_typed("summarize", input)
+//!         .run_flow("summarize", input)
 //!         .await
 //!         .map_err(|e| pocopine_agenkit::server::to_server_error(&e))
 //! }
@@ -85,10 +85,10 @@ mod host {
 
     pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // In a server this is the body of a `#[server]` fn (see the module docs);
-        // here we run the flow directly. `run_flow_typed` runs it under the
+        // here we run the flow directly. `run_flow` runs it under the
         // ambient principal (anonymous in this standalone example).
         let summary: Summary = agenkit()
-            .run_flow_typed(
+            .run_flow(
                 "summarize",
                 SummarizeInput {
                     prompt: "How do uploads work?".to_string(),

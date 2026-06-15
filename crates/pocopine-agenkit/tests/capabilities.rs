@@ -114,7 +114,7 @@ fn agent_with_tools_on_a_toolless_provider_fails_fast() {
         .build()
         .unwrap();
 
-    let result: Result<Answer, _> = block_on(agenkit.run_flow_typed(
+    let result: Result<Answer, _> = block_on(agenkit.run_flow(
         "research",
         Question {
             question: "hi".to_string(),

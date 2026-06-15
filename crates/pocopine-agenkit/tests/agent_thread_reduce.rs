@@ -128,7 +128,7 @@ fn runtime() -> Agenkit {
 #[test]
 fn agent_runs_tool_loop_then_answers() {
     let trace = capture(|| {
-        let answer: AgentAnswer = block_on(runtime().run_flow_typed(
+        let answer: AgentAnswer = block_on(runtime().run_flow(
             "research",
             Question {
                 question: "how do uploads work?".to_string(),
@@ -161,7 +161,7 @@ fn agent_runs_tool_loop_then_answers() {
 
 #[test]
 fn threaded_agent_persists_exchange() {
-    let count: usize = block_on(runtime().run_flow_typed(
+    let count: usize = block_on(runtime().run_flow(
         "threaded",
         Question {
             question: "how do uploads work?".to_string(),
@@ -175,7 +175,7 @@ fn threaded_agent_persists_exchange() {
 #[test]
 fn deterministic_reduce_folds_candidates() {
     let trace = capture(|| {
-        let max: u32 = block_on(runtime().run_flow_typed("reduce_fold", ())).unwrap();
+        let max: u32 = block_on(runtime().run_flow("reduce_fold", ())).unwrap();
         assert_eq!(max, 5);
     });
     assert!(trace.contains("ai_reducer_started"));
@@ -184,7 +184,7 @@ fn deterministic_reduce_folds_candidates() {
 
 #[test]
 fn model_judge_reduce_returns_typed_answer() {
-    let answer: AgentAnswer = block_on(runtime().run_flow_typed("judge", ())).unwrap();
+    let answer: AgentAnswer = block_on(runtime().run_flow("judge", ())).unwrap();
     assert_eq!(
         answer,
         AgentAnswer {

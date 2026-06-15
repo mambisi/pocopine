@@ -141,7 +141,7 @@ fn runtime() -> (Agenkit, Arc<AtomicBool>) {
 #[test]
 fn answer_with_review_fans_out_then_reduces() {
     let (agenkit, _) = runtime();
-    let answer: FinalAnswer = block_on(agenkit.run_flow_typed(
+    let answer: FinalAnswer = block_on(agenkit.run_flow(
         "answer_with_review",
         Question {
             q: "how do uploads work?".to_string(),
@@ -160,7 +160,7 @@ fn answer_with_review_fans_out_then_reduces() {
 #[test]
 fn first_success_aborts_losing_branch_in_flight() {
     let (agenkit, loser_done) = runtime();
-    let winner: i32 = block_on(agenkit.run_flow_typed("race", ())).unwrap();
+    let winner: i32 = block_on(agenkit.run_flow("race", ())).unwrap();
     assert_eq!(winner, 1);
     // The slow branch was aborted mid-sleep, so it never reached the store.
     assert!(
@@ -174,7 +174,7 @@ fn all_join_fails_when_a_branch_panics() {
     // A panicked branch is a branch failure, not a silent skip: `All` must
     // refuse to return a partial result set.
     let (agenkit, _) = runtime();
-    let result: Result<Vec<i32>, _> = block_on(agenkit.run_flow_typed("strict_with_panic", ()));
+    let result: Result<Vec<i32>, _> = block_on(agenkit.run_flow("strict_with_panic", ()));
     let error = result.expect_err("All join must fail on a panicked branch");
     assert_eq!(error.kind(), "internal", "error: {error}");
 }
@@ -182,8 +182,7 @@ fn all_join_fails_when_a_branch_panics() {
 #[test]
 fn all_settled_join_records_a_panicked_branch_but_keeps_survivors() {
     let (agenkit, _) = runtime();
-    let mut survivors: Vec<i32> =
-        block_on(agenkit.run_flow_typed("settled_with_panic", ())).unwrap();
+    let mut survivors: Vec<i32> = block_on(agenkit.run_flow("settled_with_panic", ())).unwrap();
     // Settled results arrive in completion order; only membership matters.
     survivors.sort_unstable();
     assert_eq!(survivors, vec![1, 3]);
