@@ -75,6 +75,16 @@ struct TopicState {
     apply_loop: JoinHandle<()>,
 }
 
+impl Drop for TopicState {
+    fn drop(&mut self) {
+        // A dropped `JoinHandle` only DETACHES the task, leaving the loop parked
+        // on the fan-out forever (it holds its own `Fanout`/`Doc` clones). Abort
+        // on every drop path — eviction, `CollabSync` drop, reconfiguration — so
+        // eviction is not the only way the loop stops. `abort` is idempotent.
+        self.apply_loop.abort();
+    }
+}
+
 impl CollabSync {
     /// Build a handler over the fan-out the gateway also publishes to. They MUST
     /// be the same [`Fanout`] instance, or peer updates will not converge.
@@ -155,22 +165,16 @@ impl SubprotocolHandler for CollabSync {
             }
             CollabMessage::SyncStep2(update) => {
                 ensure_writable(&inbound)?;
+                apply_update(&doc, &update)?;
                 // Relabel a handshake SyncStep2 as a live Update for peers.
-                if let Some(payload) = broadcast_if_advanced(&doc, &update, || {
-                    CollabMessage::Update(update.clone()).encode()
-                })? {
-                    reaction.broadcast(payload);
-                }
+                reaction.broadcast(CollabMessage::Update(update).encode());
             }
             CollabMessage::Update(update) => {
                 ensure_writable(&inbound)?;
+                apply_update(&doc, &update)?;
                 // Already a tagged Update on the wire — forward the original
                 // payload verbatim (a cheap `Bytes` refcount bump, no re-encode).
-                if let Some(payload) =
-                    broadcast_if_advanced(&doc, &update, || inbound.payload.clone())?
-                {
-                    reaction.broadcast(payload);
-                }
+                reaction.broadcast(inbound.payload.clone());
             }
         }
         Ok(reaction)
@@ -199,20 +203,18 @@ impl SubprotocolHandler for CollabSync {
     }
 }
 
-/// Apply `update` to `doc`; return the to-broadcast payload (built lazily by
-/// `payload`) only if the document actually advanced. A no-op update — a
-/// duplicate, or a peer that had nothing new — is applied but NOT fanned out,
-/// so it never wakes every subscriber or burns a slot of the bounded fan-out
-/// replay window.
-fn broadcast_if_advanced(
-    doc: &CollabDocument,
-    update: &[u8],
-    payload: impl FnOnce() -> Bytes,
-) -> Result<Option<Bytes>, WsError> {
-    let before = doc.state_vector();
+/// Apply an inbound `update` to the local document.
+///
+/// We deliberately do NOT suppress "no-op-looking" updates by comparing state
+/// vectors: a yrs delete-only update does not advance the state vector (deletes
+/// live in the delete-set), and an out-of-order update that references
+/// not-yet-integrated state is buffered as *pending* without advancing it
+/// either. Both are real edits that MUST still be fanned out, so the caller
+/// broadcasts unconditionally on success. (Suppressing a genuinely-empty
+/// update would need to inspect the update's own content, not the doc's SV.)
+fn apply_update(doc: &CollabDocument, update: &[u8]) -> Result<(), WsError> {
     doc.apply_update(update)
-        .map_err(|err| WsError::protocol(err.to_string()))?;
-    Ok((doc.state_vector() != before).then(payload))
+        .map_err(|err| WsError::protocol(err.to_string()))
 }
 
 /// Refuse a document-mutating message (Update / SyncStep2) from a connection the
@@ -265,6 +267,12 @@ async fn run_apply_loop(
         None => return,
     };
 
+    // The durable cursor must only move FORWARD. `highest_seq` tracks the
+    // furthest seq folded; a recovery replay (which re-reads the retained tail
+    // from a lower seq) must never checkpoint a cursor below what we already
+    // persisted, or a restart could resume into an evicted gap.
+    let mut highest_seq = after.unwrap_or(0);
+    let mut last_checkpointed = after.unwrap_or(0);
     let mut folded = 0u64;
     loop {
         match stream.next().await {
@@ -276,12 +284,16 @@ async fn run_apply_loop(
                 {
                     let _ = doc.apply_update(&update);
                 }
+                highest_seq = highest_seq.max(seq);
                 folded += 1;
                 if let Some(store) = &store
                     && folded >= checkpoint_every
                 {
                     folded = 0;
-                    checkpoint(store.as_ref(), doc_key, &doc, seq).await;
+                    if highest_seq > last_checkpointed {
+                        checkpoint(store.as_ref(), doc_key, &doc, highest_seq).await;
+                        last_checkpointed = highest_seq;
+                    }
                 }
             }
             // Fan-out closed (topic torn down / shutdown).
@@ -413,23 +425,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_noop_update_is_applied_but_not_rebroadcast() {
+    async fn a_delete_only_update_is_still_broadcast() {
+        // Regression guard: a delete does NOT advance the yrs state vector
+        // (deletes live in the delete-set), so the old state-vector "no-op
+        // guard" silently dropped every deletion from the fan-out. It must be
+        // fanned out like any other edit.
         let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
-        let edit = CollabDocument::new();
-        edit.insert_text("body", 0, "hello");
-        let update = Bytes::from(edit.full_update());
 
-        // First application advances the document and fans out.
-        let first = feed(&server, &topic, CollabMessage::Update(update.clone())).await;
-        assert_eq!(first.broadcasts().len(), 1);
+        // Seed "hello" on the server.
+        let base = CollabDocument::new();
+        base.insert_text("body", 0, "hello");
+        feed(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(base.full_update())),
+        )
+        .await;
 
-        // Re-applying the identical update changes nothing: still applied, but
-        // NOT fanned out again (no subscriber wake, no replay-window slot burnt).
-        let second = feed(&server, &topic, CollabMessage::Update(update)).await;
-        assert!(
-            second.broadcasts().is_empty(),
-            "a duplicate / no-op update must not be rebroadcast"
+        // Produce a delete-only delta: load the same state, delete, diff.
+        let editor = CollabDocument::from_snapshot(&base.full_update()).unwrap();
+        let before = editor.state_vector();
+        editor.delete_text("body", 0, 2); // remove "he"
+        let delete_delta = editor.diff(&before).unwrap();
+
+        let reaction = feed(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(delete_delta)),
+        )
+        .await;
+        assert_eq!(
+            reaction.broadcasts().len(),
+            1,
+            "a delete-only update must still be fanned out"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_out_of_order_update_is_still_broadcast() {
+        // Regression guard: an update that references not-yet-integrated state
+        // is buffered by yrs as pending and does NOT advance the state vector,
+        // so the old guard dropped it — yet it is a real edit peers need.
+        let server = sync();
+        let topic = Topic::new("collab:doc").unwrap();
+
+        // Build U2 ("def" at index 3) that causally depends on U1 ("abc"),
+        // which the server is NOT given — U2 will buffer pending on apply.
+        let source = CollabDocument::new();
+        source.insert_text("body", 0, "abc");
+        let before_u2 = source.state_vector();
+        source.insert_text("body", 3, "def");
+        let u2 = source.diff(&before_u2).unwrap();
+
+        let reaction = feed(&server, &topic, CollabMessage::Update(Bytes::from(u2))).await;
+        assert_eq!(
+            reaction.broadcasts().len(),
+            1,
+            "an out-of-order (pending) update must still be fanned out"
         );
     }
 
