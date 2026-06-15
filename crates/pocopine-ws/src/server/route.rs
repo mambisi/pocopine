@@ -419,12 +419,18 @@ async fn pump_topic(
                     break; // connection closed
                 }
             }
-            Ok(None) => break, // topic channel closed
-            Err(WsError::Lagged(_)) | Err(WsError::Gap) => {
-                let _ = send_control(&out, &Control::gap(&topic_name, "subscription_lagged")).await;
-                break; // client must re-subscribe fresh
+            Ok(None) => break, // topic source closed cleanly
+            Err(err) => {
+                // Any source error (lag, gap, backend/connection loss) tells the
+                // client to re-subscribe fresh from its cursor; never die silent.
+                let reason = match err {
+                    WsError::Lagged(_) => "subscription_lagged",
+                    WsError::Gap => "cursor_not_replayable",
+                    _ => "source_error",
+                };
+                let _ = send_control(&out, &Control::gap(&topic_name, reason)).await;
+                break;
             }
-            Err(_) => break,
         }
     }
 }

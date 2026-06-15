@@ -102,6 +102,24 @@ impl WsGateway {
         Self::new(Arc::new(LocalFanout::new()))
     }
 
+    /// Build a gateway backed by Redis for multi-process fan-out (RFC 073
+    /// Phase C). Requires the `redis` feature.
+    #[cfg(feature = "redis")]
+    pub async fn redis(url: &str, app: impl Into<String>) -> Result<Self, WsError> {
+        Ok(Self::new(Arc::new(
+            super::redis_fanout::RedisFanout::connect(url, app).await?,
+        )))
+    }
+
+    /// Build a Redis-backed gateway, reading `POCOPINE_REDIS_URL`. Requires the
+    /// `redis` feature.
+    #[cfg(feature = "redis")]
+    pub async fn redis_from_env(app: impl Into<String>) -> Result<Self, WsError> {
+        Ok(Self::new(Arc::new(
+            super::redis_fanout::RedisFanout::from_env(app).await?,
+        )))
+    }
+
     /// Replace the per-topic authorization policy.
     pub fn with_topic_policy(
         mut self,

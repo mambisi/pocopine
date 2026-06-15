@@ -8,8 +8,8 @@ description = "Generic bidirectional WebSocket gateway for pocopine apps (RFC 07
 
 [features]
 default = []
-# Forwards through pocopine-events for multi-process fan-out (Phase C).
-redis = ["pocopine-events/redis"]
+# Native Redis-backed Fanout for multi-process fan-out (RFC 073 Phase C).
+redis = ["dep:redis"]
 
 # The gateway is host-only (axum WebSocket server). Mirrors pocopine-live:
 # all deps live under cfg(not(target_arch = "wasm32")) so the crate compiles
@@ -23,6 +23,10 @@ tracing = { workspace = true }
 async-trait = "0.1"
 serde = { workspace = true }
 serde_json = "1"
+redis = { version = "0.27", features = [
+    "tokio-comp",
+    "connection-manager",
+], optional = true }
 pocopine-auth = { workspace = true }
 pocopine-events = { workspace = true }
 pocopine-observe = { workspace = true }
@@ -39,3 +43,6 @@ tokio = { version = "1", features = [
 ] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+redis = { version = "0.27", features = ["tokio-comp"] }
+bytes = "1"
+pocopine-events = { workspace = true }
