@@ -45,4 +45,5 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 redis = { version = "0.27", features = ["tokio-comp"] }
 bytes = "1"
+async-trait = "0.1"
 pocopine-events = { workspace = true }
