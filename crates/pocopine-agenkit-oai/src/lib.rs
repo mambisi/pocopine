@@ -36,7 +36,7 @@ use pocopine_agenkit::server::{
     BoxFuture, BoxStream, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities,
     StreamChunk,
 };
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ToolCall, ToolNameMap};
+use pocopine_agenkit_core::{AgenkitError, AgenkitResult, SseFraming, ToolCall, ToolNameMap};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -262,115 +262,51 @@ impl OpenAiProvider {
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
 
-        // Buffer raw bytes and only decode whole `\n`-terminated lines. `\n`
-        // (0x0A) never appears inside a multi-byte UTF-8 sequence, so a line cut
-        // at a newline is always valid UTF-8 — decoding per network chunk with
-        // `from_utf8_lossy` would instead corrupt any codepoint split across two
-        // chunks into replacement characters.
+        // `SseFraming` buffers raw bytes and yields whole events; tool-call
+        // fragments accumulate across events until `[DONE]` / EOF.
         let mut bytes = response.bytes_stream();
-        let mut buffer: Vec<u8> = Vec::new();
+        let mut framing = SseFraming::new();
         let mut tools: BTreeMap<u32, ToolAccumulator> = BTreeMap::new();
-        let mut decoder = SseDecoder::default();
 
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk
                 .map_err(|err| AgenkitError::provider(format!("stream read failed: {err}")))?;
-            buffer.extend_from_slice(&chunk);
-
-            while let Some(newline) = buffer.iter().position(|&b| b == b'\n') {
-                let done = decoder.feed_line(&buffer[..newline], &mut tools, &tx);
-                buffer.drain(..=newline);
-                if done {
+            for data in framing.push(&chunk) {
+                if handle_event(&data, &mut tools, &tx) {
+                    // Terminal `[DONE]`: emit the accumulated tool calls and stop.
                     emit_tool_calls(tools, &tx, &names);
                     return Ok(());
                 }
             }
         }
-
-        // A final line that arrived without a trailing newline, then flush any
-        // event still buffered with no terminating blank line (a gateway that
-        // closes the body right after the last `data:` and omits `[DONE]`).
-        if !buffer.is_empty() {
-            decoder.feed_line(&buffer, &mut tools, &tx);
+        // A gateway that closes the body right after the last `data:` (no
+        // terminating blank line and no `[DONE]`): flush the buffered event.
+        if let Some(data) = framing.flush() {
+            handle_event(&data, &mut tools, &tx);
         }
-        decoder.flush(&mut tools, &tx);
         emit_tool_calls(tools, &tx, &names);
         Ok(())
     }
 }
 
-/// Reassembles SSE events from individual lines. Per the spec an event is
-/// terminated by a blank line and may carry several `data:` fields that join
-/// with `\n` — so a gateway that splits one JSON payload across multiple
-/// `data:` lines is parsed correctly instead of being silently dropped.
-#[derive(Default)]
-struct SseDecoder {
-    /// `data:` field values accumulated for the in-progress event.
-    data: Vec<String>,
-}
-
-impl SseDecoder {
-    /// Feed one line (without its trailing `\n`). Returns `true` when the
-    /// terminal `[DONE]` sentinel was dispatched.
-    fn feed_line(
-        &mut self,
-        line: &[u8],
-        tools: &mut BTreeMap<u32, ToolAccumulator>,
-        tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
-    ) -> bool {
-        let Ok(text) = std::str::from_utf8(line) else {
-            return false;
-        };
-        // Tolerate CRLF: strip a `\r` left by splitting a `\r\n` stream on `\n`.
-        let text = text.strip_suffix('\r').unwrap_or(text);
-        // A blank line is the event boundary: dispatch what we've buffered.
-        if text.is_empty() {
-            return self.dispatch(tools, tx);
-        }
-        // A comment / keep-alive line (starts with `:`).
-        if text.starts_with(':') {
-            return false;
-        }
-        // Accumulate `data:` fields; ignore other SSE fields (event:, id:, ...).
-        if let Some(value) = text.strip_prefix("data:") {
-            // SSE strips exactly one optional leading space after the colon.
-            let value = value.strip_prefix(' ').unwrap_or(value);
-            self.data.push(value.to_string());
-        }
-        false
+/// Apply one decoded SSE event payload (its joined `data:` fields) to the
+/// in-progress tool accumulators and the chunk stream. Returns `true` on the
+/// terminal `[DONE]` sentinel. Transport framing is handled by
+/// [`pocopine_agenkit_core::SseFraming`].
+fn handle_event(
+    data: &str,
+    tools: &mut BTreeMap<u32, ToolAccumulator>,
+    tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
+) -> bool {
+    let data = data.trim();
+    if data == "[DONE]" {
+        return true;
     }
-
-    /// Dispatch the buffered event: join its `data:` fields with `\n` and apply.
-    /// Returns `true` if it was `[DONE]`. Clears the buffer either way.
-    fn dispatch(
-        &mut self,
-        tools: &mut BTreeMap<u32, ToolAccumulator>,
-        tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
-    ) -> bool {
-        if self.data.is_empty() {
-            return false;
-        }
-        let data = std::mem::take(&mut self.data).join("\n");
-        let data = data.trim();
-        if data == "[DONE]" {
-            return true;
-        }
-        // Ignore unparseable keep-alive / comment payloads.
-        if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-            apply_event(event, tools, tx);
-        }
-        false
+    // Ignore unparseable keep-alive / comment payloads.
+    if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
+        apply_event(event, tools, tx);
     }
-
-    /// Flush an event buffered with no terminating blank line. Returns `true`
-    /// if it was `[DONE]`.
-    fn flush(
-        &mut self,
-        tools: &mut BTreeMap<u32, ToolAccumulator>,
-        tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
-    ) -> bool {
-        self.dispatch(tools, tx)
-    }
+    false
 }
 
 /// Apply one decoded stream event: forward text deltas, accumulate tool-call
@@ -548,18 +484,15 @@ mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = BTreeMap::new();
-        let mut decoder = SseDecoder::default();
-        let mut buffer: Vec<u8> = Vec::new();
-        // Drive the exact buffering loop from `stream_into`, chunking every 3
-        // bytes so multi-byte sequences straddle chunk boundaries.
+        let mut framing = SseFraming::new();
+        // Drive the buffering loop from `stream_into`, chunking every 3 bytes so
+        // multi-byte sequences straddle chunk boundaries.
         let mut done = false;
         for chunk in sse.chunks(3) {
-            buffer.extend_from_slice(chunk);
-            while let Some(newline) = buffer.iter().position(|&b| b == b'\n') {
-                if decoder.feed_line(&buffer[..newline], &mut tools, &tx) {
+            for data in framing.push(chunk) {
+                if handle_event(&data, &mut tools, &tx) {
                     done = true;
                 }
-                buffer.drain(..=newline);
             }
         }
         assert!(done, "should have seen [DONE]");
@@ -572,11 +505,12 @@ mod tests {
         // lines; they must join with `\n` and parse as a single event.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = BTreeMap::new();
-        let mut decoder = SseDecoder::default();
-        decoder.feed_line(br#"data: {"choices":[{"delta":"#, &mut tools, &tx);
-        decoder.feed_line(br#"data: {"content":"joined"}}]}"#, &mut tools, &tx);
-        let done = decoder.feed_line(b"", &mut tools, &tx); // blank line dispatches
-        assert!(!done);
+        let mut framing = SseFraming::new();
+        for data in
+            framing.push(b"data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"joined\"}}]}\n\n")
+        {
+            handle_event(&data, &mut tools, &tx);
+        }
         assert_eq!(drain_text(&mut rx), "joined");
     }
 
@@ -585,13 +519,13 @@ mod tests {
         // A final `data:` event with no terminating blank line and no `[DONE]`.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = BTreeMap::new();
-        let mut decoder = SseDecoder::default();
-        decoder.feed_line(
-            br#"data: {"choices":[{"delta":{"content":"last"}}]}"#,
-            &mut tools,
-            &tx,
-        );
-        decoder.flush(&mut tools, &tx);
+        let mut framing = SseFraming::new();
+        for data in framing.push(br#"data: {"choices":[{"delta":{"content":"last"}}]}"#) {
+            handle_event(&data, &mut tools, &tx);
+        }
+        if let Some(data) = framing.flush() {
+            handle_event(&data, &mut tools, &tx);
+        }
         assert_eq!(drain_text(&mut rx), "last");
     }
 

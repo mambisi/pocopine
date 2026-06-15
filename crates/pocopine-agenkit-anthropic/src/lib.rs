@@ -37,7 +37,9 @@ use pocopine_agenkit::server::{
     BoxFuture, BoxStream, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities,
     StreamChunk,
 };
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ToolCall, ToolNameMap, Usage};
+use pocopine_agenkit_core::{
+    AgenkitError, AgenkitResult, SseFraming, ToolCall, ToolNameMap, Usage,
+};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -240,32 +242,27 @@ impl AnthropicProvider {
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
 
-        // Buffer raw bytes and decode whole `\n`-terminated lines. `\n` (0x0A)
-        // never appears mid multi-byte UTF-8 sequence, so a line cut at a
-        // newline is always valid UTF-8 — unlike per-chunk `from_utf8_lossy`.
+        // `SseFraming` buffers raw bytes and yields whole events; the decoder
+        // applies each and holds the cross-event tool/usage state.
         let mut bytes = response.bytes_stream();
-        let mut buffer: Vec<u8> = Vec::new();
+        let mut framing = SseFraming::new();
         let mut decoder = SseDecoder::new(&names);
 
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk
                 .map_err(|err| AgenkitError::provider(format!("stream read failed: {err}")))?;
-            buffer.extend_from_slice(&chunk);
-            while let Some(newline) = buffer.iter().position(|&b| b == b'\n') {
-                let done = decoder.feed_line(&buffer[..newline], &tx);
-                buffer.drain(..=newline);
-                if done {
+            for data in framing.push(&chunk) {
+                // `message_stop`: the decoder already drained tools + usage.
+                if decoder.apply_data(&data, &tx) {
                     return Ok(());
                 }
             }
         }
-        // Flush a final event buffered with no terminating blank line. If either
-        // the trailing line or the buffered event is `message_stop`, the stream
-        // closed cleanly and `finish` already ran.
-        if !buffer.is_empty() && decoder.feed_line(&buffer, &tx) {
-            return Ok(());
-        }
-        if decoder.flush(&tx) {
+        // A final event buffered with no terminating blank line — if it's
+        // `message_stop`, the stream closed cleanly and `finish` already ran.
+        if let Some(data) = framing.flush()
+            && decoder.apply_data(&data, &tx)
+        {
             return Ok(());
         }
         // EOF before `message_stop`: a well-behaved Anthropic stream always ends
@@ -330,10 +327,11 @@ struct ToolAccumulator {
     structured: bool,
 }
 
-/// Reassembles Anthropic SSE events from individual lines (blank-line-delimited
-/// per spec) and applies them to the chunk stream.
+/// Applies decoded Anthropic SSE events to the chunk stream, holding the
+/// cross-event tool/usage state. Transport framing (byte buffering, line
+/// splitting, `data:` joining) is handled by
+/// [`pocopine_agenkit_core::SseFraming`].
 struct SseDecoder<'a> {
-    data: Vec<String>,
     tools: BTreeMap<u32, ToolAccumulator>,
     input_tokens: u64,
     output_tokens: u64,
@@ -343,7 +341,6 @@ struct SseDecoder<'a> {
 impl<'a> SseDecoder<'a> {
     fn new(name_map: &'a ToolNameMap) -> Self {
         Self {
-            data: Vec::new(),
             tools: BTreeMap::new(),
             input_tokens: 0,
             output_tokens: 0,
@@ -351,43 +348,14 @@ impl<'a> SseDecoder<'a> {
         }
     }
 
-    /// Feed one line (without trailing `\n`). Returns `true` once the stream is
-    /// complete (`message_stop`).
-    fn feed_line(&mut self, line: &[u8], tx: &UnboundedSender<AgenkitResult<StreamChunk>>) -> bool {
-        let Ok(text) = std::str::from_utf8(line) else {
-            return false;
-        };
-        let text = text.strip_suffix('\r').unwrap_or(text);
-        if text.is_empty() {
-            return self.dispatch(tx);
+    /// Parse and apply one SSE event payload (its joined `data:` fields). Returns
+    /// `true` on `message_stop` (after which `apply` has already drained tools +
+    /// usage via `finish`). Unparseable keep-alive payloads are ignored.
+    fn apply_data(&mut self, data: &str, tx: &UnboundedSender<AgenkitResult<StreamChunk>>) -> bool {
+        match serde_json::from_str::<StreamEvent>(data.trim()) {
+            Ok(event) => self.apply(event, tx),
+            Err(_) => false,
         }
-        if text.starts_with(':') {
-            return false; // comment / keep-alive
-        }
-        // Anthropic sends `event:` and `data:` lines; the data payload is
-        // self-describing via its `type`, so only `data:` matters here.
-        if let Some(value) = text.strip_prefix("data:") {
-            self.data
-                .push(value.strip_prefix(' ').unwrap_or(value).to_string());
-        }
-        false
-    }
-
-    /// Dispatch the buffered event. Returns `true` on `message_stop`.
-    fn dispatch(&mut self, tx: &UnboundedSender<AgenkitResult<StreamChunk>>) -> bool {
-        if self.data.is_empty() {
-            return false;
-        }
-        let data = std::mem::take(&mut self.data).join("\n");
-        let Ok(event) = serde_json::from_str::<StreamEvent>(data.trim()) else {
-            return false;
-        };
-        self.apply(event, tx)
-    }
-
-    /// Flush a final event with no terminating blank line.
-    fn flush(&mut self, tx: &UnboundedSender<AgenkitResult<StreamChunk>>) -> bool {
-        self.dispatch(tx)
     }
 
     fn apply(

@@ -46,6 +46,7 @@ pub mod manifest;
 pub mod reduce;
 pub mod retrieval;
 pub mod schema;
+pub mod sse;
 pub mod stream;
 pub mod thread;
 pub mod tool;
@@ -70,6 +71,7 @@ pub use retrieval::{
     Citation, RetrievalHit, RetrievalQuery, RetrievalSet, RetrieverDescriptor, SourceRef,
 };
 pub use schema::SchemaRef;
+pub use sse::SseFraming;
 pub use stream::FlowStreamEvent;
 pub use thread::{AgentThreadDescriptor, ThreadCheckpoint, ThreadMessage};
 pub use tool::{ToolCall, ToolDescriptor, ToolResult};
