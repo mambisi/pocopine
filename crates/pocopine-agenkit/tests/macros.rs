@@ -5,9 +5,8 @@
 //! attribute + doc comment (#216).
 
 use pocopine_agenkit::prelude::*;
-use pocopine_agenkit::{ai_flow, ai_server_flow, ai_tool};
+use pocopine_agenkit::{ai_flow, ai_tool};
 use pocopine_agenkit_core::ToolSideEffectPolicy;
-use pocopine_core::ServerError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, JsonSchema)]
@@ -78,31 +77,6 @@ fn ai_tool_derives_descriptor_from_fn_and_doc() {
     assert_eq!(w.id, "writer"); // attribute override
     assert_eq!(w.description, "Write a file");
     assert_eq!(w.side_effect, ToolSideEffectPolicy::SideEffecting);
-}
-
-// The runtime accessor the generated bridge calls on the host.
-fn agenkit() -> Agenkit {
-    runtime()
-}
-
-/// The public-flow bridge. On the host this body becomes
-/// `agenkit().run_public_flow("answer", input)`.
-#[ai_server_flow(flow = "answer", runtime = agenkit)]
-pub async fn call_answer(input: Question) -> Result<Answer, ServerError> {}
-
-#[tokio::test]
-async fn ai_server_flow_host_bridges_to_run_public_flow() {
-    let out = call_answer(Question {
-        q: "hi".to_string(),
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        out,
-        Answer {
-            answer: "ok".to_string()
-        }
-    );
 }
 
 #[tokio::test]

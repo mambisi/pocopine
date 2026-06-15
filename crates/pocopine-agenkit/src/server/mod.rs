@@ -12,11 +12,11 @@ pub mod bridge;
 pub mod context;
 pub mod embed;
 pub mod flow;
-pub mod flow_route;
 pub mod generate;
 pub mod observe;
 pub mod parallel;
 mod partial_json;
+pub mod plugin;
 pub mod provider;
 pub mod reduce;
 pub mod retrieval;
@@ -32,10 +32,10 @@ pub use bridge::to_server_error;
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};
 pub use embed::{AiEmbedder, DynEmbedder, EmbedderRegistry};
 pub use flow::{AiFlowContext, Flow, FlowHandler, FlowRegistry, RetrieveBuilder};
-pub use flow_route::{AI_FLOW_PATH, ai_flow_router};
 pub use generate::{Ai, AiStructured};
 pub use observe::{emit_trace_event, to_observed_event};
 pub use parallel::ParallelBuilder;
+pub use plugin::{PrincipalLayer, PrincipalService, agenkit_server_plugin, principal_layer};
 pub use provider::{
     BoxFuture, BoxStream, FinishReason, GenerateRequest, GenerateResponse, MockProvider, Provider,
     ProviderCapabilities, ProviderRegistry, StreamChunk,
