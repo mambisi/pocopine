@@ -39,7 +39,7 @@ impl LayoutDemo {
 
 #[cfg(target_arch = "wasm32")]
 fn slide_drawer(open: bool) {
-    use pine_motion::{animate, AnimationHandle, Tween};
+    use pine_motion::{AnimationHandle, Tween, animate};
     use std::cell::RefCell;
 
     // Retain the latest handle past this call (dropping it would cancel

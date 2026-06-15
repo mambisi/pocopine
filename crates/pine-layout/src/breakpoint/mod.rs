@@ -128,8 +128,8 @@ type ChangeListeners =
 pub fn install(on_change: std::rc::Rc<dyn Fn(Breakpoint)>) {
     use std::cell::RefCell;
     use std::rc::Rc;
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     let Some(window) = web_sys::window() else {
         return;

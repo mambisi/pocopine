@@ -55,7 +55,7 @@ pub(crate) fn start_drag(
     on_size: std::rc::Rc<dyn Fn(f64)>,
     on_commit: std::rc::Rc<dyn Fn(f64)>,
 ) {
-    use pocopine::events::{self, ev, ListenerHandle};
+    use pocopine::events::{self, ListenerHandle, ev};
     use std::cell::RefCell;
     use std::rc::Rc;
     use web_sys::PointerEvent;
