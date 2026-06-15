@@ -8,7 +8,7 @@
 //! #[server(public)]
 //! pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
 //!     active_plugin::<Agenkit>().expect("agenkit_server_plugin installed")
-//!         .flow("summarize").input(input).run().await
+//!         .flow(Summarize).input(input).run().await   // typed marker from #[ai_flow]
 //!         .map_err(|e| to_server_error(&e))
 //! }
 //! ```

@@ -46,6 +46,12 @@ pub mod prelude;
 #[cfg(not(target_arch = "wasm32"))]
 pub use schemars;
 
+/// Re-exported for the `#[ai_flow]` macro's generated `FlowHandler` impl, whose
+/// `run_json` names `serde_json::Value`. Not part of the public API.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub use serde_json;
+
 /// Authoring macros (RFC-093 §D14): `#[ai_tool]` derives an `AiTool` from a
 /// typed async fn; `#[ai_flow]` turns a flow body into a `FlowHandler`
 /// constructor with its manifest declared in the attribute. Server-only — the
