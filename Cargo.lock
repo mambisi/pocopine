@@ -7153,6 +7153,7 @@ dependencies = [
  "futures-util",
  "pocopine-crypto",
  "pocopine-events",
+ "pocopine-observe",
  "pocopine-realtime",
  "tokio",
  "tokio-tungstenite",
