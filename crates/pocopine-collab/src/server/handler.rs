@@ -35,11 +35,17 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pocopine_events::Topic;
 use pocopine_observe::LOG_TARGET;
-use pocopine_realtime::{Fanout, InboundData, Reaction, SubprotocolHandler, WsError};
+use pocopine_realtime::{Fanout, InboundData, Reaction, SubprotocolHandler, TopicStream, WsError};
 use tokio::task::JoinHandle;
 
 use super::protocol::CollabMessage;
+use super::store::{CollabSnapshot, CollabStore};
 use super::sync::CollabDocument;
+
+/// Save a checkpoint snapshot once this many fan-out updates have been folded
+/// in. Far below the fan-out's retention window, so the snapshot cursor always
+/// stays replayable and the durable base never lags into an eviction gap.
+const CHECKPOINT_EVERY: u64 = 64;
 
 /// Server-side CRDT collaboration over the realtime gateway.
 ///
@@ -49,8 +55,14 @@ use super::sync::CollabDocument;
 /// loop that folds every fanned-out update — including those published by other
 /// processes — into the local document. Without this, a process's document only
 /// ever saw its own clients' edits and replicas behind a Redis fan-out diverged.
+///
+/// With a [`CollabStore`] ([`Self::with_store`]) the loop also loads the durable
+/// snapshot on start and checkpoints the folded document back, so state survives
+/// process restart and fan-out retention eviction.
 pub struct CollabSync {
     fanout: Arc<dyn Fanout>,
+    store: Option<Arc<dyn CollabStore>>,
+    checkpoint_every: u64,
     topics: Mutex<HashMap<Topic, Arc<TopicState>>>,
 }
 
@@ -68,8 +80,25 @@ impl CollabSync {
     pub fn new(fanout: Arc<dyn Fanout>) -> Self {
         Self {
             fanout,
+            store: None,
+            checkpoint_every: CHECKPOINT_EVERY,
             topics: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Attach a durable [`CollabStore`]: each topic's apply loop then loads the
+    /// snapshot on start and checkpoints the folded document back periodically.
+    pub fn with_store(mut self, store: Arc<dyn CollabStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// Checkpoint to the [`CollabStore`] every `n` folded updates (default
+    /// [`CHECKPOINT_EVERY`]). Lower trades more write load for a fresher durable
+    /// base; keep it well under the fan-out retention window.
+    pub fn with_checkpoint_every(mut self, n: u64) -> Self {
+        self.checkpoint_every = n.max(1);
+        self
     }
 
     /// The per-topic state, created — and its apply loop spawned — on first
@@ -85,6 +114,8 @@ impl CollabSync {
         let doc = Arc::new(Mutex::new(CollabDocument::new()));
         let apply_loop = tokio::spawn(run_apply_loop(
             self.fanout.clone(),
+            self.store.clone(),
+            self.checkpoint_every,
             topic.clone(),
             doc.clone(),
         ));
@@ -179,17 +210,45 @@ fn ensure_writable(inbound: &InboundData<'_>) -> Result<(), WsError> {
 /// (the local `on_data` path only ever sees this process's own clients). yrs
 /// makes re-applying our own published updates a no-op, so this is safe to run
 /// alongside the optimistic apply in `on_data`.
-async fn run_apply_loop(fanout: Arc<dyn Fanout>, topic: Topic, doc: Arc<Mutex<CollabDocument>>) {
-    let mut stream = match fanout.subscribe(&topic, None).await {
-        Ok(stream) => stream,
-        Err(err) => {
-            tracing::warn!(target: LOG_TARGET, error = %err, "collab apply loop: subscribe failed");
-            return;
+///
+/// With a [`CollabStore`] the loop also seeds the document from the durable
+/// snapshot on start (resuming the fan-out at the snapshot's cursor) and
+/// checkpoints the folded document back every [`CHECKPOINT_EVERY`] updates.
+async fn run_apply_loop(
+    fanout: Arc<dyn Fanout>,
+    store: Option<Arc<dyn CollabStore>>,
+    checkpoint_every: u64,
+    topic: Topic,
+    doc: Arc<Mutex<CollabDocument>>,
+) {
+    let doc_key = topic.as_str();
+
+    // Seed from the durable snapshot, then resume the fan-out at its cursor.
+    let mut after = None;
+    if let Some(store) = &store {
+        match store.load_snapshot(doc_key).await {
+            Ok(Some(snapshot)) => {
+                if let Ok(doc) = doc.lock() {
+                    let _ = doc.apply_update(&snapshot.blob);
+                }
+                after = Some(snapshot.last_seq);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: load_snapshot failed");
+            }
         }
+    }
+
+    let mut stream = match subscribe_recovering(&fanout, &topic, after).await {
+        Some(stream) => stream,
+        None => return,
     };
+
+    let mut folded = 0u64;
     loop {
         match stream.next().await {
-            Ok(Some((_seq, payload))) => {
+            Ok(Some((seq, payload))) => {
                 // Broadcasts are tagged `Update` messages; a malformed or
                 // non-Update frame must never kill the convergence loop.
                 if let Ok(CollabMessage::Update(update)) = CollabMessage::decode(&payload)
@@ -197,19 +256,73 @@ async fn run_apply_loop(fanout: Arc<dyn Fanout>, topic: Topic, doc: Arc<Mutex<Co
                 {
                     let _ = doc.apply_update(&update);
                 }
+                folded += 1;
+                if let Some(store) = &store
+                    && folded >= checkpoint_every
+                {
+                    folded = 0;
+                    checkpoint(store.as_ref(), doc_key, &doc, seq).await;
+                }
             }
             // Fan-out closed (topic torn down / shutdown).
             Ok(None) => break,
-            // Lagged or gapped: re-subscribe fresh to replay the retained tail
-            // and resume — never die silently on a recoverable hiccup.
-            Err(_) => match fanout.subscribe(&topic, None).await {
-                Ok(replacement) => stream = replacement,
-                Err(err) => {
-                    tracing::warn!(target: LOG_TARGET, error = %err, "collab apply loop: resubscribe failed");
-                    break;
-                }
+            // Lagged or gapped: re-subscribe to replay the retained tail and
+            // resume — never die silently on a recoverable hiccup.
+            Err(_) => match subscribe_recovering(&fanout, &topic, None).await {
+                Some(replacement) => stream = replacement,
+                None => break,
             },
         }
+    }
+}
+
+/// Subscribe to `topic` at `after`, transparently recovering an unreplayable
+/// cursor by replaying the whole retained tail. Returns `None` if the fan-out
+/// itself is unreachable.
+async fn subscribe_recovering(
+    fanout: &Arc<dyn Fanout>,
+    topic: &Topic,
+    after: Option<u64>,
+) -> Option<TopicStream> {
+    match fanout.subscribe(topic, after).await {
+        Ok(stream) if !stream.gap() => Some(stream),
+        Ok(_gapped) => {
+            // The snapshot cursor aged past retention; replay what is retained.
+            // The evicted middle is unrecoverable (the retention bound).
+            tracing::warn!(target: LOG_TARGET, topic = topic.as_str(), "collab apply loop: resume gap, replaying retained tail");
+            match fanout.subscribe(topic, None).await {
+                Ok(stream) => Some(stream),
+                Err(err) => {
+                    tracing::warn!(target: LOG_TARGET, error = %err, "collab apply loop: subscribe failed");
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(target: LOG_TARGET, error = %err, "collab apply loop: subscribe failed");
+            None
+        }
+    }
+}
+
+/// Persist the folded document as the new durable base, current to `last_seq`.
+/// The document lock is never held across the `.await`.
+async fn checkpoint(
+    store: &dyn CollabStore,
+    doc_key: &str,
+    doc: &Arc<Mutex<CollabDocument>>,
+    last_seq: u64,
+) {
+    let snapshot = {
+        let Ok(doc) = doc.lock() else { return };
+        CollabSnapshot {
+            blob: Bytes::from(doc.full_update()),
+            state_vector: Bytes::from(doc.state_vector()),
+            last_seq,
+        }
+    };
+    if let Err(err) = store.save_snapshot(doc_key, snapshot).await {
+        tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: save_snapshot failed");
     }
 }
 
@@ -520,6 +633,59 @@ mod tests {
         assert!(
             converged,
             "process B should converge to A's edit via the shared fan-out"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoints_to_the_store_and_a_fresh_process_reloads_it() {
+        use super::super::store::{CollabStore, MemoryCollabStore};
+
+        let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
+        let topic = Topic::new("collab:doc").unwrap();
+
+        // Process 1 checkpoints on every folded update.
+        let fanout1: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+        let p1 = CollabSync::new(fanout1.clone())
+            .with_store(store.clone())
+            .with_checkpoint_every(1);
+
+        // An edit on p1; publish the broadcast so p1's apply loop folds + saves.
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "durable");
+        let reaction = feed(
+            &p1,
+            &topic,
+            CollabMessage::Update(Bytes::from(edit.full_update())),
+        )
+        .await;
+        for payload in reaction.broadcasts() {
+            fanout1.publish(&topic, payload.clone()).await.unwrap();
+        }
+        let mut saved = false;
+        for _ in 0..200 {
+            if store.load_snapshot(topic.as_str()).await.unwrap().is_some() {
+                saved = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(saved, "the apply loop should checkpoint a snapshot");
+
+        // Process 2 starts on a DIFFERENT (empty) fan-out — a restart — and must
+        // recover the document from the durable store, not the stream.
+        let fanout2: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+        let p2 = CollabSync::new(fanout2).with_store(store.clone());
+        let mut reloaded = false;
+        for _ in 0..200 {
+            if handler_text(&p2, &topic, "body").await.contains("durable") {
+                reloaded = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            reloaded,
+            "a fresh process should reload the document from the store"
         );
     }
 }
