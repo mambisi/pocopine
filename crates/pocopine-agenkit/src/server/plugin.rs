@@ -8,7 +8,7 @@
 //! #[server(public)]
 //! pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
 //!     active_plugin::<Agenkit>().expect("agenkit_server_plugin installed")
-//!         .run_flow_typed("summarize", input).await
+//!         .run_flow("summarize", input).await
 //!         .map_err(|e| to_server_error(&e))
 //! }
 //! ```
@@ -135,10 +135,7 @@ mod tests {
 
     // A plain handler that runs a flow by id, exactly like a `#[server]` fn.
     async fn run_whoami(State(agenkit): State<Agenkit>) -> String {
-        agenkit
-            .run_flow_typed::<(), String>("whoami", ())
-            .await
-            .unwrap()
+        agenkit.run_flow::<(), String>("whoami", ()).await.unwrap()
     }
 
     async fn whoami_through_layer(principal: Option<Principal>) -> String {
@@ -161,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn layer_threads_request_principal_into_a_flow() {
-        // DC-5: the principal in extensions reaches `run_flow_typed` via the
+        // DC-5: the principal in extensions reaches `run_flow` via the
         // task-local the layer scopes — without the flow body touching it.
         let who = whoami_through_layer(Some(Principal::from_user(AuthUser::new("alice")))).await;
         assert_eq!(who, "alice");

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use common::block_on;
 use pocopine_agenkit::server::{
     Agenkit, AiFlowContext, BoxFuture, Flow, GenerateRequest, GenerateResponse, Provider,
+    to_server_error,
 };
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult, FlowStreamEvent, ModelRef};
 
@@ -78,7 +79,9 @@ fn provider_error_does_not_leak_through_server_error() {
         .build()
         .unwrap();
 
-    let error = block_on(agenkit.run_public_flow::<(), String>("ask", ())).unwrap_err();
+    // The `#[server]` boundary maps the flow error via `to_server_error`.
+    let agenkit_err = block_on(agenkit.run_flow::<(), String>("ask", ())).unwrap_err();
+    let error = to_server_error(&agenkit_err);
     let rendered = error.to_string();
     assert!(
         !rendered.contains(PLANTED_SECRET),
@@ -138,13 +141,13 @@ fn non_allowlisted_alias_is_rejected_before_any_provider_call() {
         .build()
         .unwrap();
 
-    let error =
-        block_on(agenkit.run_public_flow::<(), String>("ask_denied_model", ())).unwrap_err();
+    let agenkit_err = block_on(agenkit.run_flow::<(), String>("ask_denied_model", ())).unwrap_err();
     assert!(
         !called.load(Ordering::SeqCst),
         "the provider was called despite a non-allowlisted model alias"
     );
     // The boundary returns a generic error, not provider internals.
+    let error = to_server_error(&agenkit_err);
     assert!(
         error.to_string().starts_with("server error"),
         "unexpected: {error}"
@@ -152,7 +155,7 @@ fn non_allowlisted_alias_is_rejected_before_any_provider_call() {
 }
 
 #[test]
-fn private_flows_are_not_callable_from_the_boundary() {
+fn non_public_flows_are_not_client_reachable() {
     let agenkit = Agenkit::builder()
         .provider(RecordingProvider {
             called: Arc::new(AtomicBool::new(false)),
@@ -163,9 +166,10 @@ fn private_flows_are_not_callable_from_the_boundary() {
         .build()
         .unwrap();
 
-    let error = block_on(agenkit.run_public_flow::<(), String>("ask", ())).unwrap_err();
-    // Indistinguishable from an unknown flow.
-    assert!(error.to_string().contains("unknown AI flow"));
+    // Flows are internal; `#[server]` fns are the boundary. A flow not marked
+    // `.public()` is gated out of the only client-facing surface — the stream
+    // route — so it is indistinguishable from an unknown flow to a client.
+    assert!(!agenkit.flow_is_public("ask"));
 }
 
 /// Representative of the wasm-artifact scan: client-facing payloads (the only
