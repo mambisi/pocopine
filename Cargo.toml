@@ -22,6 +22,7 @@ members = [
     "crates/pocopine-client-codegen",
     "crates/pocopine-cli",
     "crates/pocopine-codec",
+    "crates/pocopine-collab",
     "crates/pocopine-core",
     "crates/pocopine-crypto",
     "crates/pocopine-directives",
