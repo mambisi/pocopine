@@ -29,7 +29,9 @@ fn flow_streams_incremental_output_deltas() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let result: String = block_on(async {
         let value = agenkit
-            .run_flow_streaming("chat", serde_json::Value::Null, tx)
+            .flow("chat")
+            .input(serde_json::Value::Null)
+            .stream(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()
@@ -87,7 +89,9 @@ fn structured_flow_streams_partial_objects() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let result: Summary = block_on(async {
         let value = agenkit
-            .run_flow_streaming("summarize", serde_json::Value::Null, tx)
+            .flow("summarize")
+            .input(serde_json::Value::Null)
+            .stream(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()
@@ -156,7 +160,9 @@ fn non_streaming_flow_still_emits_the_result_once() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let _: String = block_on(async {
         let value = agenkit
-            .run_flow_streaming("computed", serde_json::Value::Null, tx)
+            .flow("computed")
+            .input(serde_json::Value::Null)
+            .stream(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()

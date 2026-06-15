@@ -168,7 +168,7 @@ streaming becomes a normal streaming `#[server]` fn:
 pub async fn summarize_stream(input: SummarizeInput) -> StreamServerResult<FlowStreamEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
     let agenkit = active_plugin::<Agenkit>().unwrap();
-    tokio::spawn(async move { let _ = agenkit.run_flow_streaming("summarize", to_value(input)?, tx).await; });
+    tokio::spawn(async move { let _ = agenkit.flow("summarize").input(input).stream(tx).await; });
     Ok(UnboundedReceiverStream::new(rx).map(Ok).boxed())   // FlowStreamEvent is client-safe by construction (§D8)
 }
 ```

@@ -80,7 +80,7 @@ fn provider_error_does_not_leak_through_server_error() {
         .unwrap();
 
     // The `#[server]` boundary maps the flow error via `to_server_error`.
-    let agenkit_err = block_on(agenkit.run_flow::<(), String>("ask", ())).unwrap_err();
+    let agenkit_err = block_on(agenkit.flow("ask").run::<String>()).unwrap_err();
     let error = to_server_error(&agenkit_err);
     let rendered = error.to_string();
     assert!(
@@ -108,7 +108,12 @@ fn provider_error_does_not_leak_through_the_stream() {
         .unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let _ = block_on(agenkit.run_flow_streaming("ask", serde_json::Value::Null, tx));
+    let _ = block_on(
+        agenkit
+            .flow("ask")
+            .input(serde_json::Value::Null)
+            .stream(tx),
+    );
 
     let mut joined = String::new();
     let mut saw_failure = false;
@@ -141,7 +146,7 @@ fn non_allowlisted_alias_is_rejected_before_any_provider_call() {
         .build()
         .unwrap();
 
-    let agenkit_err = block_on(agenkit.run_flow::<(), String>("ask_denied_model", ())).unwrap_err();
+    let agenkit_err = block_on(agenkit.flow("ask_denied_model").run::<String>()).unwrap_err();
     assert!(
         !called.load(Ordering::SeqCst),
         "the provider was called despite a non-allowlisted model alias"

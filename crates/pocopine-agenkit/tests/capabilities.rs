@@ -114,12 +114,14 @@ fn agent_with_tools_on_a_toolless_provider_fails_fast() {
         .build()
         .unwrap();
 
-    let result: Result<Answer, _> = block_on(agenkit.run_flow(
-        "research",
-        Question {
-            question: "hi".to_string(),
-        },
-    ));
+    let result: Result<Answer, _> = block_on(
+        agenkit
+            .flow("research")
+            .input(Question {
+                question: "hi".to_string(),
+            })
+            .run(),
+    );
     let error = result.expect_err("a toolless provider must reject a tool-using agent");
     assert_eq!(error.kind(), "config", "error: {error}");
 }

@@ -148,12 +148,12 @@ async fn stream_handler(
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // Run the flow under the caller principal; the task-local seam lets
-    // `run_flow_streaming` pick it up (§D15 DC-5). The run emits the final
+    // Run the flow under the caller principal; the task-local seam lets the
+    // `flow(..).stream(..)` run pick it up (§D15 DC-5). The run emits the final
     // result (OutputDelta/OutputCompleted) before FlowCompleted, and FlowFailed
     // on error — so the handler only forwards the channel.
     tokio::spawn(with_principal(principal, async move {
-        let _ = agenkit.run_flow_streaming(&id, input, tx).await;
+        let _ = agenkit.flow(id).input(input).stream(tx).await;
     }));
 
     let stream = UnboundedReceiverStream::new(rx).filter_map(move |event| async move {

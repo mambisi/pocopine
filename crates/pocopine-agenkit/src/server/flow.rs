@@ -240,7 +240,7 @@ impl AiFlowContext {
     }
 
     /// The caller principal this flow runs under (anonymous unless invoked with
-    /// one via `run_flow_as` or the `PrincipalLayer` task-local scope) (§D5/§D10).
+    /// one via `flow(id).principal(..)` or the `PrincipalLayer` scope) (§D5/§D10).
     pub fn principal(&self) -> &pocopine_auth::Principal {
         &self.run.principal
     }

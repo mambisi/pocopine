@@ -17,7 +17,7 @@
 //! pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
 //!     pocopine_server::active_plugin::<Agenkit>()
 //!         .expect("agenkit_server_plugin installed")
-//!         .run_flow("summarize", input)
+//!         .flow("summarize").input(input).run()
 //!         .await
 //!         .map_err(|e| pocopine_agenkit::server::to_server_error(&e))
 //! }
@@ -88,12 +88,11 @@ mod host {
         // here we run the flow directly. `run_flow` runs it under the
         // ambient principal (anonymous in this standalone example).
         let summary: Summary = agenkit()
-            .run_flow(
-                "summarize",
-                SummarizeInput {
-                    prompt: "How do uploads work?".to_string(),
-                },
-            )
+            .flow("summarize")
+            .input(SummarizeInput {
+                prompt: "How do uploads work?".to_string(),
+            })
+            .run()
             .await?;
         println!("summary: {summary:?}");
         Ok(())

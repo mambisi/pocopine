@@ -297,7 +297,9 @@ async fn streams_structured_object_deltas_via_forced_tool() {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let value = agenkit
-        .run_flow_streaming("summarize", serde_json::Value::Null, tx)
+        .flow("summarize")
+        .input(serde_json::Value::Null)
+        .stream(tx)
         .await
         .unwrap();
     let result: Summary = serde_json::from_value(value).unwrap();
