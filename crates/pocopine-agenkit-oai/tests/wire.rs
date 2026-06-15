@@ -86,6 +86,77 @@ async fn structured_request_sets_response_format_and_strips_namespace() {
 }
 
 #[tokio::test]
+async fn json_object_fallback_conveys_schema_in_prompt() {
+    // When the request can't use native strict `json_schema` (here: user tools
+    // are present, which forces the `json_object` fallback), the model gets
+    // validity but NOT shape — so the provider must convey the full schema in the
+    // prompt, or the model guesses field names and the runtime's deserialize fails.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            assert_eq!(body["response_format"], json!({"type": "json_object"}));
+            let system = body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["role"] == "system")
+                .and_then(|m| m["content"].as_str())
+                .unwrap_or_default();
+            assert!(
+                system.contains("conforms to this JSON Schema") && system.contains("title"),
+                "json_object fallback must carry the schema in the prompt: {system}"
+            );
+            ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "{\"title\":\"Uploads\"}"}, "finish_reason": "stop"}]
+            }))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        tools: vec![ToolDescriptor::new("noop", "No-op")],
+        json_schema: Some(json!({"type": "object", "properties": {"title": {"type": "string"}}})),
+        ..text_request("summarize")
+    };
+    let response = provider(&server).generate(request).await.unwrap();
+    assert_eq!(response.text_output(), "{\"title\":\"Uploads\"}");
+}
+
+#[tokio::test]
+async fn tool_call_with_empty_arguments_defaults_to_empty_object() {
+    // A non-streaming tool call with empty `""` arguments must surface as `{}`,
+    // never `null` (which fails struct-typed tool-input deserialization).
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "ping", "arguments": ""}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        tools: vec![ToolDescriptor::new("ping", "Ping")],
+        ..text_request("ping")
+    };
+    let response = provider(&server).generate(request).await.unwrap();
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].args, json!({}));
+}
+
+#[tokio::test]
 async fn maps_tool_calls_from_the_response() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

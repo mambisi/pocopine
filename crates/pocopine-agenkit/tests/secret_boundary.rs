@@ -161,9 +161,10 @@ fn non_allowlisted_alias_is_rejected_before_any_provider_call() {
 
 #[test]
 fn non_public_flows_are_not_client_reachable() {
+    let called = Arc::new(AtomicBool::new(false));
     let agenkit = Agenkit::builder()
         .provider(RecordingProvider {
-            called: Arc::new(AtomicBool::new(false)),
+            called: called.clone(),
         })
         .default_model(ModelRef::new("local/default"))
         // NOTE: no `.public()`.
@@ -173,8 +174,13 @@ fn non_public_flows_are_not_client_reachable() {
 
     // Flows are internal; `#[server]` fns are the boundary. A flow not marked
     // `.public()` is gated out of the only client-facing surface — the stream
-    // route — so it is indistinguishable from an unknown flow to a client.
+    // route (`stream_route` checks `flow_is_public`) — so it is indistinguishable
+    // from an unknown flow to a client, and nothing has touched the provider.
     assert!(!agenkit.flow_is_public("ask"));
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "probing a non-public flow must not invoke the provider"
+    );
 }
 
 /// Representative of the wasm-artifact scan: client-facing payloads (the only

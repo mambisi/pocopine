@@ -259,11 +259,19 @@ impl AnthropicProvider {
                 }
             }
         }
-        // Flush a final event buffered with no terminating blank line.
-        if !buffer.is_empty() {
-            decoder.feed_line(&buffer, &tx);
+        // Flush a final event buffered with no terminating blank line. If either
+        // the trailing line or the buffered event is `message_stop`, the stream
+        // closed cleanly and `finish` already ran.
+        if !buffer.is_empty() && decoder.feed_line(&buffer, &tx) {
+            return Ok(());
         }
-        decoder.flush(&tx);
+        if decoder.flush(&tx) {
+            return Ok(());
+        }
+        // EOF before `message_stop`: a well-behaved Anthropic stream always ends
+        // in `message_stop`, so reaching here means the body was truncated. Drain
+        // any pending tool calls + usage rather than losing them silently.
+        decoder.finish(&tx);
         Ok(())
     }
 }
@@ -274,12 +282,16 @@ impl Provider for AnthropicProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        // Anthropic streams natively and calls tools, but has no native
-        // schema-constrained mode — structured output is done via a forced
-        // tool, so the runtime's JSON-mode fallback path applies.
+        // Anthropic streams natively, calls tools, and owns its structured-output
+        // strategy in `MessagesRequest::from_agenkit`: with no user tools it
+        // forces a schema-typed `structured_output` tool; with user tools present
+        // (forcing a tool would suppress them) it injects a schema instruction
+        // into the system prompt. Either way the provider handles the schema, so
+        // it reports `json_schema: true` to suppress the runtime's prompt
+        // fallback — otherwise the schema would be sent twice (§D13).
         ProviderCapabilities {
             streaming: true,
-            json_schema: false,
+            json_schema: true,
             tools: true,
         }
     }
@@ -444,22 +456,31 @@ impl<'a> SseDecoder<'a> {
                 }
             }
             StreamEvent::MessageStop => {
-                // Close out any tool block that never got a stop, then usage.
-                let indices: Vec<u32> = self.tools.keys().copied().collect();
-                for index in indices {
-                    self.emit_tool(index, tx);
-                }
-                if self.input_tokens > 0 || self.output_tokens > 0 {
-                    let _ = tx.send(Ok(StreamChunk::Usage(Usage::new(
-                        self.input_tokens,
-                        self.output_tokens,
-                    ))));
-                }
+                self.finish(tx);
                 return true;
             }
             StreamEvent::Other => {}
         }
         false
+    }
+
+    /// Close out the stream: drain any tool block that never received a stop,
+    /// then emit the final usage. Called on `message_stop` and — crucially — on
+    /// a truncated stream (EOF before `message_stop`, e.g. a proxy that closed
+    /// the body mid-response), so accumulated tool calls and usage are never
+    /// silently dropped. Runs at most once per stream (the `message_stop` path
+    /// returns early before the EOF path can re-run it).
+    fn finish(&mut self, tx: &UnboundedSender<AgenkitResult<StreamChunk>>) {
+        let indices: Vec<u32> = self.tools.keys().copied().collect();
+        for index in indices {
+            self.emit_tool(index, tx);
+        }
+        if self.input_tokens > 0 || self.output_tokens > 0 {
+            let _ = tx.send(Ok(StreamChunk::Usage(Usage::new(
+                self.input_tokens,
+                self.output_tokens,
+            ))));
+        }
     }
 
     /// Emit a finished (non-structured) tool call, resolving its name back to

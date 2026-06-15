@@ -103,24 +103,32 @@ impl MessagesRequest {
             .collect();
         let has_user_tools = !tools.is_empty();
 
-        // Structured output: Anthropic has no `response_format`. With no user
-        // tools, force a single tool whose `input_schema` is the requested
-        // shape — the model must "call" it, yielding schema-constrained JSON.
-        // With user tools present we cannot force (it would suppress them), so
-        // we fall back to plain text the runtime parses (graceful degrade).
+        // Structured output: Anthropic has no `response_format`.
         let mut tool_choice = None;
-        if let Some(schema) = &request.json_schema
-            && !has_user_tools
-        {
-            tools.push(WireTool {
-                name: STRUCTURED_TOOL_NAME.to_string(),
-                description: "Return the final answer as a structured JSON object.".to_string(),
-                input_schema: normalize_schema(schema),
-            });
-            tool_choice = Some(ToolChoice {
-                kind: "tool",
-                name: STRUCTURED_TOOL_NAME.to_string(),
-            });
+        if let Some(schema) = &request.json_schema {
+            if !has_user_tools {
+                // With no user tools, force a single tool whose `input_schema` is
+                // the requested shape — the model must "call" it, yielding
+                // schema-constrained JSON.
+                tools.push(WireTool {
+                    name: STRUCTURED_TOOL_NAME.to_string(),
+                    description: "Return the final answer as a structured JSON object.".to_string(),
+                    input_schema: normalize_schema(schema),
+                });
+                tool_choice = Some(ToolChoice {
+                    kind: "tool",
+                    name: STRUCTURED_TOOL_NAME.to_string(),
+                });
+            } else {
+                // With user tools present we cannot force the structured tool —
+                // Anthropic forces at most one tool per turn, which would suppress
+                // the user tools (`tool_choice: tool` prefills a tool_use and emits
+                // no other tools). Instead instruct the model to emit the
+                // schema-shaped JSON as its final answer once it is done calling
+                // tools; the runtime parses that JSON. This is the documented
+                // "auto + prompt" approach and is the path the agent loop takes.
+                append_system(&mut system, structured_instruction(schema));
+            }
         }
 
         Self {
@@ -196,6 +204,17 @@ fn tool_result_blocks(message: &Message) -> Vec<ContentBlock> {
         tool_use_id,
         content: message.content.as_text(),
     }]
+}
+
+/// The system-prompt instruction used when structured output cannot be forced
+/// via a tool (user tools are present). Mirrors the runtime's JSON-mode fallback
+/// so the model emits a single schema-shaped JSON object as its final answer.
+fn structured_instruction(schema: &serde_json::Value) -> String {
+    format!(
+        "After any tool use is complete, respond with a single JSON object that conforms to \
+         this JSON Schema, and nothing else:\n{}",
+        normalize_schema(schema)
+    )
 }
 
 /// Anthropic's `input_schema` is plain JSON Schema; drop the `$schema` meta key
@@ -300,6 +319,15 @@ impl MessagesResponse {
             match block {
                 ResponseBlock::Text { text: fragment } => text.push_str(&fragment),
                 ResponseBlock::ToolUse { id, name, input } => {
+                    // A `tool_use` input is normally an object (`{}` for a no-arg
+                    // tool), but normalize a missing/`null` input to `{}` — a
+                    // struct-typed tool input deserializes from `{}`, never from
+                    // `null` (which would fail with a cryptic "expected object").
+                    let input = if input.is_null() {
+                        serde_json::json!({})
+                    } else {
+                        input
+                    };
                     if name == STRUCTURED_TOOL_NAME {
                         // The forced structured tool: its input IS the answer.
                         structured = Some(input);
