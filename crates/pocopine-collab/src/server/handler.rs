@@ -15,11 +15,14 @@
 //! reply-vs-broadcast delivery the gateway provides is safe, and a client
 //! applying its own echoed Update is a no-op.
 //!
+//! Write access is enforced via the gateway's write policy
+//! ([`InboundData::can_write`]): a read-only connection may run SyncStep1 (read
+//! down) but its Update / SyncStep2 messages are refused, and it is never
+//! prompted with the server's SyncStep1. This is the realtime-layer counterpart
+//! of [`CollabAccess`](super::doc::CollabAccess).
+//!
 //! This increment keeps documents in process memory; durable load/compaction
-//! through [`CollabStore`](super::store::CollabStore) is the next step. Write
-//! authorization is the gateway's per-topic policy; finer-grained
-//! read-only-vs-read-write access ([`CollabAccess`](super::doc::CollabAccess))
-//! is layered by a richer authorizer in a follow-up.
+//! through [`CollabStore`](super::store::CollabStore) is the next step.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -79,15 +82,20 @@ impl SubprotocolHandler for CollabSync {
         let mut reaction = Reaction::new();
         match message {
             CollabMessage::SyncStep1(state_vector) => {
-                // Reply with what this peer is missing...
+                // Reply with what this peer is missing (read access is enough).
                 let diff = doc
                     .diff(&state_vector)
                     .map_err(|err| WsError::protocol(err.to_string()))?;
                 reaction.reply(CollabMessage::SyncStep2(Bytes::from(diff)).encode());
-                // ...and our own state vector, so it sends back what WE lack.
-                reaction.reply(CollabMessage::SyncStep1(Bytes::from(doc.state_vector())).encode());
+                // Only writers are asked for what WE lack: prompting a read-only
+                // peer with our state vector would invite a write it cannot make.
+                if inbound.can_write {
+                    reaction
+                        .reply(CollabMessage::SyncStep1(Bytes::from(doc.state_vector())).encode());
+                }
             }
             CollabMessage::SyncStep2(update) => {
+                ensure_writable(&inbound)?;
                 // Relabel a handshake SyncStep2 as a live Update for peers.
                 if let Some(payload) = broadcast_if_advanced(&doc, &update, || {
                     CollabMessage::Update(update.clone()).encode()
@@ -96,6 +104,7 @@ impl SubprotocolHandler for CollabSync {
                 }
             }
             CollabMessage::Update(update) => {
+                ensure_writable(&inbound)?;
                 // Already a tagged Update on the wire — forward the original
                 // payload verbatim (a cheap `Bytes` refcount bump, no re-encode).
                 if let Some(payload) =
@@ -125,6 +134,16 @@ fn broadcast_if_advanced(
     Ok((doc.state_vector() != before).then(payload))
 }
 
+/// Refuse a document-mutating message (Update / SyncStep2) from a connection the
+/// gateway's write policy marked read-only.
+fn ensure_writable(inbound: &InboundData<'_>) -> Result<(), WsError> {
+    if inbound.can_write {
+        Ok(())
+    } else {
+        Err(WsError::forbidden("read-only collab connection"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,16 +153,29 @@ mod tests {
         CollabMessage::decode(bytes).expect("decode collab message")
     }
 
-    /// Feed one inbound collab message to the server and return its reaction.
+    /// Feed one inbound collab message from a writer and return its reaction.
     async fn feed(server: &CollabSync, topic: &Topic, message: CollabMessage) -> Reaction {
+        feed_as(server, topic, message, true)
+            .await
+            .expect("handler accepted the message")
+    }
+
+    /// Feed one message with an explicit write capability, returning the raw
+    /// result so read-only rejections can be asserted.
+    async fn feed_as(
+        server: &CollabSync,
+        topic: &Topic,
+        message: CollabMessage,
+        can_write: bool,
+    ) -> Result<Reaction, WsError> {
         let payload = message.encode();
         server
             .on_data(InboundData {
                 topic,
                 payload: &payload,
+                can_write,
             })
             .await
-            .expect("handler accepted the message")
     }
 
     #[tokio::test]
@@ -303,9 +335,56 @@ mod tests {
             .on_data(InboundData {
                 topic: &topic,
                 payload: &empty,
+                can_write: true,
             })
             .await
             .unwrap_err();
         assert!(matches!(err, WsError::Protocol(_)));
+    }
+
+    #[tokio::test]
+    async fn read_only_connection_can_sync_down_but_not_write() {
+        let server = CollabSync::new();
+        let topic = Topic::new("collab:doc").unwrap();
+
+        // Seed the server with some state (via a writer).
+        let seed = CollabDocument::new();
+        seed.insert_text("body", 0, "shared");
+        feed(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(seed.full_update())),
+        )
+        .await;
+
+        // A read-only peer's SyncStep1 is honored (it may catch up) but it is
+        // NOT prompted with the server's SyncStep1 (no write is invited).
+        let viewer = CollabDocument::new();
+        let reaction = feed_as(
+            &server,
+            &topic,
+            CollabMessage::SyncStep1(Bytes::from(viewer.state_vector())),
+            false,
+        )
+        .await
+        .expect("read is allowed");
+        assert_eq!(reaction.replies().len(), 1, "only the catch-up SyncStep2");
+        assert!(matches!(
+            decode(&reaction.replies()[0]),
+            CollabMessage::SyncStep2(_)
+        ));
+
+        // A read-only peer attempting to write is refused.
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "sneaky");
+        let err = feed_as(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(edit.full_update())),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, WsError::Forbidden(_)));
     }
 }

@@ -286,10 +286,13 @@ impl Session {
                 )));
             }
         };
-        // Re-check write authorization on every inbound write (RFC 073 §10.1).
+        // Re-check join authorization on every inbound frame (RFC 073 §10.1).
         if !self.gateway.authorize(&self.ctx, &topic) {
             return Err(WsError::forbidden(name));
         }
+        // Publish authorization is a second, finer gate (read-only connections
+        // may join but not write); handlers receive it, the relay enforces it.
+        let can_write = self.gateway.authorize_write(&self.ctx, &topic);
 
         // A registered sub-protocol handler (e.g. collab) intercepts the frame
         // and runs stateful server logic; every other sub-protocol is a pure
@@ -299,6 +302,7 @@ impl Session {
                 .on_data(InboundData {
                     topic: &topic,
                     payload: &frame.payload,
+                    can_write,
                 })
                 .await?;
             for payload in reaction.replies {
@@ -317,6 +321,11 @@ impl Session {
             return Ok(());
         }
 
+        // Default relay: a Data frame IS a publish, so it requires write
+        // authorization (the handler path delegates this gate to the handler).
+        if !can_write {
+            return Err(WsError::forbidden(name));
+        }
         self.gateway
             .fanout()
             .publish(&topic, frame.payload.clone())
