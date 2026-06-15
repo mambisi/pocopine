@@ -7,6 +7,12 @@
 //! state vector, and the fan-out cursor; the document registry, ownership, and
 //! permissions belong to the app's own database. See
 //! `docs/internal/collab-persistence.md`.
+//!
+//! The key is the document's **topic string** (`collab:{doc_hash}`, via
+//! [`CollabDoc::topic`](super::doc::CollabDoc::topic)). The topic — not the full
+//! [`CollabDoc`](super::doc::CollabDoc) — is what both the convergence apply
+//! loop and the compaction path actually hold (the hash is one-way), so the
+//! store keys by it directly.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -14,7 +20,6 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use super::doc::CollabDoc;
 use super::error::{CollabError, CollabResult};
 
 /// The persisted state of a document.
@@ -31,20 +36,22 @@ pub struct CollabSnapshot {
     pub last_seq: u64,
 }
 
-/// Durable, DB-agnostic blob-by-document persistence.
+/// Durable, DB-agnostic blob-by-document persistence, keyed by the document's
+/// topic string (`collab:{doc_hash}`).
 ///
 /// Implement this for your database; the framework ships [`MemoryCollabStore`]
-/// plus reference adapters, and never forces a specific engine. The store is
-/// keyed by the document — it does not expose registry/list queries (those
-/// belong to the app's own schema). The compaction worker is the only writer;
-/// the `web` process is a reader (loading a snapshot to serve a join).
+/// plus reference adapters, and never forces a specific engine. The store does
+/// not expose registry/list queries (those belong to the app's own schema). A
+/// process loads a snapshot when it first opens a topic and checkpoints the
+/// folded document back periodically, so the durable base survives restart and
+/// fan-out retention eviction.
 #[async_trait]
 pub trait CollabStore: Send + Sync + 'static {
     /// Load a document's latest snapshot, or `None` if it has never been saved.
-    async fn load_snapshot(&self, doc: &CollabDoc) -> CollabResult<Option<CollabSnapshot>>;
+    async fn load_snapshot(&self, doc_key: &str) -> CollabResult<Option<CollabSnapshot>>;
 
     /// Persist a document's compacted snapshot (overwriting any prior one).
-    async fn save_snapshot(&self, doc: &CollabDoc, snapshot: CollabSnapshot) -> CollabResult<()>;
+    async fn save_snapshot(&self, doc_key: &str, snapshot: CollabSnapshot) -> CollabResult<()>;
 }
 
 /// In-process [`CollabStore`] for tests and single-node dev (no database).
@@ -62,21 +69,21 @@ impl MemoryCollabStore {
 
 #[async_trait]
 impl CollabStore for MemoryCollabStore {
-    async fn load_snapshot(&self, doc: &CollabDoc) -> CollabResult<Option<CollabSnapshot>> {
+    async fn load_snapshot(&self, doc_key: &str) -> CollabResult<Option<CollabSnapshot>> {
         // std::Mutex held without crossing an .await — safe in async.
         let map = self
             .snapshots
             .lock()
             .map_err(|_| CollabError::store("memory store mutex poisoned"))?;
-        Ok(map.get(&doc.doc_hash()).cloned())
+        Ok(map.get(doc_key).cloned())
     }
 
-    async fn save_snapshot(&self, doc: &CollabDoc, snapshot: CollabSnapshot) -> CollabResult<()> {
+    async fn save_snapshot(&self, doc_key: &str, snapshot: CollabSnapshot) -> CollabResult<()> {
         let mut map = self
             .snapshots
             .lock()
             .map_err(|_| CollabError::store("memory store mutex poisoned"))?;
-        map.insert(doc.doc_hash(), snapshot);
+        map.insert(doc_key.to_string(), snapshot);
         Ok(())
     }
 }
@@ -96,19 +103,19 @@ mod tests {
     #[tokio::test]
     async fn round_trips_and_overwrites() {
         let store = MemoryCollabStore::new();
-        let doc = CollabDoc::new("app", "docs", "1", "main");
+        let key = "collab:doc1";
 
-        assert_eq!(store.load_snapshot(&doc).await.unwrap(), None);
+        assert_eq!(store.load_snapshot(key).await.unwrap(), None);
 
-        store.save_snapshot(&doc, snapshot(b"v1", 3)).await.unwrap();
+        store.save_snapshot(key, snapshot(b"v1", 3)).await.unwrap();
         assert_eq!(
-            store.load_snapshot(&doc).await.unwrap(),
+            store.load_snapshot(key).await.unwrap(),
             Some(snapshot(b"v1", 3))
         );
 
-        store.save_snapshot(&doc, snapshot(b"v2", 7)).await.unwrap();
+        store.save_snapshot(key, snapshot(b"v2", 7)).await.unwrap();
         assert_eq!(
-            store.load_snapshot(&doc).await.unwrap(),
+            store.load_snapshot(key).await.unwrap(),
             Some(snapshot(b"v2", 7))
         );
     }
@@ -116,10 +123,19 @@ mod tests {
     #[tokio::test]
     async fn documents_are_isolated() {
         let store = MemoryCollabStore::new();
-        let a = CollabDoc::new("app", "docs", "a", "main");
-        let b = CollabDoc::new("app", "docs", "b", "main");
-        store.save_snapshot(&a, snapshot(b"a", 1)).await.unwrap();
-        assert_eq!(store.load_snapshot(&b).await.unwrap(), None);
-        assert_eq!(store.load_snapshot(&a).await.unwrap().unwrap().last_seq, 1);
+        store
+            .save_snapshot("collab:a", snapshot(b"a", 1))
+            .await
+            .unwrap();
+        assert_eq!(store.load_snapshot("collab:b").await.unwrap(), None);
+        assert_eq!(
+            store
+                .load_snapshot("collab:a")
+                .await
+                .unwrap()
+                .unwrap()
+                .last_seq,
+            1
+        );
     }
 }
