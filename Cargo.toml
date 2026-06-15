@@ -12,6 +12,7 @@ members = [
     "crates/pocopine-agenkit",
     "crates/pocopine-agenkit-anthropic",
     "crates/pocopine-agenkit-core",
+    "crates/pocopine-agenkit-macros",
     "crates/pocopine-agenkit-oai",
     "crates/pocopine-analytics",
     "crates/pocopine-assets",
@@ -112,6 +113,7 @@ repository = "https://github.com/mambisi/pocopine"
 pocopine-agenkit = { path = "crates/pocopine-agenkit", version = "0.1.0" }
 pocopine-agenkit-anthropic = { path = "crates/pocopine-agenkit-anthropic", version = "0.1.0" }
 pocopine-agenkit-core = { path = "crates/pocopine-agenkit-core", version = "0.1.0" }
+pocopine-agenkit-macros = { path = "crates/pocopine-agenkit-macros", version = "0.1.0" }
 pocopine-agenkit-oai = { path = "crates/pocopine-agenkit-oai", version = "0.1.0" }
 pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-assets = { path = "crates/pocopine-assets", version = "0.1.0" }

@@ -45,3 +45,10 @@ pub mod prelude;
 /// without depending on `schemars` directly.
 #[cfg(not(target_arch = "wasm32"))]
 pub use schemars;
+
+/// Authoring macros (RFC-093 §D14): `#[ai_tool]` derives an `AiTool` from a
+/// typed async fn; `#[ai_flow]` turns a flow body into a `FlowHandler`
+/// constructor with its manifest declared in the attribute. Server-only — the
+/// generated code references the host runtime.
+#[cfg(not(target_arch = "wasm32"))]
+pub use pocopine_agenkit_macros::{ai_flow, ai_tool};

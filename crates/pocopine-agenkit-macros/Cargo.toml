@@ -1,0 +1,18 @@
+[package]
+name = "pocopine-agenkit-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Attribute macros for Pocopine Agenkit: #[ai_tool], #[ai_flow], and the generated public-flow #[server] bridge. Sugar over the hand-written pocopine-agenkit API."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+
+[dev-dependencies]
+trybuild = "1"

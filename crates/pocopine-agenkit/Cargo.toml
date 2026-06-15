@@ -22,6 +22,9 @@ pocopine-auth = { workspace = true }
 # AI events ride the existing observability stack: TraceEvent -> ObservedEvent
 # -> emit_tracing. No parallel telemetry runtime (§D12).
 pocopine-observe = { workspace = true }
+# Authoring sugar re-exported as `pocopine_agenkit::{ai_tool, ai_flow}` (RFC-093
+# §D14). A proc-macro crate (host-built); the code it generates is server-side.
+pocopine-agenkit-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Provider runtime + bounded parallel branches (JoinSet/abort) + timeouts.
