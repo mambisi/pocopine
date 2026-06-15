@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, Stream, StreamExt};
 use pocopine_collab::{COLLAB_SUBPROTOCOL, CollabDocument, CollabMessage, CollabSync};
-use pocopine_realtime::{Control, Frame, FrameKind, WsGateway, routes};
+use pocopine_realtime::{Control, Fanout, Frame, FrameKind, LocalFanout, WsGateway, routes};
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
@@ -15,11 +15,13 @@ use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
 /// Quiet window after which the handshake/broadcast chatter is considered drained.
 const IDLE: Duration = Duration::from_millis(400);
 
-/// Boot a collab-enabled gateway on a random port; return its ws:// URL.
+/// Boot a collab-enabled gateway on a random port; return its ws:// URL. The
+/// handler and gateway share one fan-out (required for the apply loop).
 async fn spawn() -> String {
-    let gateway = WsGateway::local()
+    let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+    let gateway = WsGateway::new(fanout.clone())
         .allow_all_topics()
-        .with_handler(COLLAB_SUBPROTOCOL, Arc::new(CollabSync::new()));
+        .with_handler(COLLAB_SUBPROTOCOL, Arc::new(CollabSync::new(fanout)));
     let app = routes(gateway);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

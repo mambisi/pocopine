@@ -21,8 +21,12 @@
 //! prompted with the server's SyncStep1. This is the realtime-layer counterpart
 //! of [`CollabAccess`](super::doc::CollabAccess).
 //!
-//! This increment keeps documents in process memory; durable load/compaction
-//! through [`CollabStore`](super::store::CollabStore) is the next step.
+//! Every process **self-subscribes** to each topic's fan-out and folds peer
+//! updates into its local document, so replicas behind a multi-process fan-out
+//! (Redis) converge — not just the clients of one process. This closes the gap
+//! where the document was only ever mutated by inbound frames on the local
+//! connection. Durable load/compaction through
+//! [`CollabStore`](super::store::CollabStore) is the next step.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,41 +34,66 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pocopine_events::Topic;
-use pocopine_realtime::{InboundData, Reaction, SubprotocolHandler, WsError};
+use pocopine_observe::LOG_TARGET;
+use pocopine_realtime::{Fanout, InboundData, Reaction, SubprotocolHandler, WsError};
+use tokio::task::JoinHandle;
 
 use super::protocol::CollabMessage;
 use super::sync::CollabDocument;
 
 /// Server-side CRDT collaboration over the realtime gateway.
 ///
-/// Shared across every connection and topic (held behind an `Arc` by the
-/// gateway). Each topic's authoritative document lives behind its OWN `Mutex`,
-/// so a slow operation on one document (e.g. encoding a large state vector)
-/// never blocks edits to any other topic; the outer map lock is held only long
-/// enough to look up the per-topic handle. The document operations are
-/// synchronous and never cross an `.await`, so neither lock is held across a
-/// suspension point.
-#[derive(Default)]
+/// Holds one authoritative document per topic, each behind its own `Mutex` (a
+/// slow op on one topic never blocks another). Crucially, [`CollabSync`] owns
+/// the SAME [`Fanout`] the gateway publishes to and spawns a per-topic apply
+/// loop that folds every fanned-out update — including those published by other
+/// processes — into the local document. Without this, a process's document only
+/// ever saw its own clients' edits and replicas behind a Redis fan-out diverged.
 pub struct CollabSync {
-    docs: Mutex<HashMap<Topic, Arc<Mutex<CollabDocument>>>>,
+    fanout: Arc<dyn Fanout>,
+    topics: Mutex<HashMap<Topic, Arc<TopicState>>>,
+}
+
+/// Per-topic state: the document and the apply loop keeping it converged.
+struct TopicState {
+    doc: Arc<Mutex<CollabDocument>>,
+    /// Held so the loop can be aborted when the topic is evicted (a follow-up);
+    /// the task also ends when the fan-out closes.
+    _apply_loop: JoinHandle<()>,
 }
 
 impl CollabSync {
-    /// A handler with no documents yet; each is created on its topic's first
-    /// message.
-    pub fn new() -> Self {
-        Self::default()
+    /// Build a handler over the fan-out the gateway also publishes to. They MUST
+    /// be the same [`Fanout`] instance, or peer updates will not converge.
+    pub fn new(fanout: Arc<dyn Fanout>) -> Self {
+        Self {
+            fanout,
+            topics: Mutex::new(HashMap::new()),
+        }
     }
 
-    /// The per-topic document handle, created on first access.
-    fn document(&self, topic: &Topic) -> Result<Arc<Mutex<CollabDocument>>, WsError> {
-        let mut docs = self
-            .docs
+    /// The per-topic state, created — and its apply loop spawned — on first
+    /// access.
+    fn topic_state(&self, topic: &Topic) -> Result<Arc<TopicState>, WsError> {
+        let mut topics = self
+            .topics
             .lock()
-            .map_err(|_| WsError::backend("collab document map poisoned"))?;
-        Ok(Arc::clone(docs.entry(topic.clone()).or_insert_with(|| {
-            Arc::new(Mutex::new(CollabDocument::new()))
-        })))
+            .map_err(|_| WsError::backend("collab topic map poisoned"))?;
+        if let Some(state) = topics.get(topic) {
+            return Ok(state.clone());
+        }
+        let doc = Arc::new(Mutex::new(CollabDocument::new()));
+        let apply_loop = tokio::spawn(run_apply_loop(
+            self.fanout.clone(),
+            topic.clone(),
+            doc.clone(),
+        ));
+        let state = Arc::new(TopicState {
+            doc,
+            _apply_loop: apply_loop,
+        });
+        topics.insert(topic.clone(), state.clone());
+        Ok(state)
     }
 }
 
@@ -74,8 +103,9 @@ impl SubprotocolHandler for CollabSync {
         let message = CollabMessage::decode(inbound.payload)
             .map_err(|err| WsError::protocol(err.to_string()))?;
 
-        let document = self.document(inbound.topic)?;
-        let doc = document
+        let state = self.topic_state(inbound.topic)?;
+        let doc = state
+            .doc
             .lock()
             .map_err(|_| WsError::backend("collab document mutex poisoned"))?;
 
@@ -144,9 +174,57 @@ fn ensure_writable(inbound: &InboundData<'_>) -> Result<(), WsError> {
     }
 }
 
+/// Subscribe to `topic`'s fan-out and fold every update into `doc` forever, so
+/// edits made through *other* processes converge into this process's document
+/// (the local `on_data` path only ever sees this process's own clients). yrs
+/// makes re-applying our own published updates a no-op, so this is safe to run
+/// alongside the optimistic apply in `on_data`.
+async fn run_apply_loop(fanout: Arc<dyn Fanout>, topic: Topic, doc: Arc<Mutex<CollabDocument>>) {
+    let mut stream = match fanout.subscribe(&topic, None).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            tracing::warn!(target: LOG_TARGET, error = %err, "collab apply loop: subscribe failed");
+            return;
+        }
+    };
+    loop {
+        match stream.next().await {
+            Ok(Some((_seq, payload))) => {
+                // Broadcasts are tagged `Update` messages; a malformed or
+                // non-Update frame must never kill the convergence loop.
+                if let Ok(CollabMessage::Update(update)) = CollabMessage::decode(&payload)
+                    && let Ok(doc) = doc.lock()
+                {
+                    let _ = doc.apply_update(&update);
+                }
+            }
+            // Fan-out closed (topic torn down / shutdown).
+            Ok(None) => break,
+            // Lagged or gapped: re-subscribe fresh to replay the retained tail
+            // and resume — never die silently on a recoverable hiccup.
+            Err(_) => match fanout.subscribe(&topic, None).await {
+                Ok(replacement) => stream = replacement,
+                Err(err) => {
+                    tracing::warn!(target: LOG_TARGET, error = %err, "collab apply loop: resubscribe failed");
+                    break;
+                }
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use pocopine_realtime::LocalFanout;
+
     use super::*;
+
+    /// A handler over a fresh in-process fan-out (no peers).
+    fn sync() -> CollabSync {
+        CollabSync::new(Arc::new(LocalFanout::new()))
+    }
 
     /// Decode one collab message from raw frame bytes.
     fn decode(bytes: &Bytes) -> CollabMessage {
@@ -180,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_update_is_applied_and_broadcast() {
-        let server = CollabSync::new();
+        let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
 
         let edit = CollabDocument::new();
@@ -203,7 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_noop_update_is_applied_but_not_rebroadcast() {
-        let server = CollabSync::new();
+        let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
         let edit = CollabDocument::new();
         edit.insert_text("body", 0, "hello");
@@ -224,7 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_converges_server_and_client_both_ways() {
-        let server = CollabSync::new();
+        let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
 
         // Seed the server with prior shared state (an earlier peer's edit).
@@ -297,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn topics_are_isolated() {
-        let server = CollabSync::new();
+        let server = sync();
         let a = Topic::new("collab:a").unwrap();
         let b = Topic::new("collab:b").unwrap();
 
@@ -328,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_a_malformed_payload() {
-        let server = CollabSync::new();
+        let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
         let empty = Bytes::new();
         let err = server
@@ -344,7 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_only_connection_can_sync_down_but_not_write() {
-        let server = CollabSync::new();
+        let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
 
         // Seed the server with some state (via a writer).
@@ -386,5 +464,62 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, WsError::Forbidden(_)));
+    }
+
+    /// Read a handler's current document text by running a fresh SyncStep1
+    /// against it (the same way a brand-new client would catch up).
+    async fn handler_text(server: &CollabSync, topic: &Topic, field: &str) -> String {
+        let probe = CollabDocument::new();
+        let reaction = feed(
+            server,
+            topic,
+            CollabMessage::SyncStep1(Bytes::from(probe.state_vector())),
+        )
+        .await;
+        if let CollabMessage::SyncStep2(update) = decode(&reaction.replies()[0]) {
+            probe.apply_update(&update).unwrap();
+        }
+        probe.text(field)
+    }
+
+    #[tokio::test]
+    async fn peer_updates_converge_through_a_shared_fanout() {
+        // Two handlers sharing ONE fan-out simulate two web processes on one
+        // Redis bus (the gateway publishes each Reaction.broadcast to it).
+        let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+        let process_a = CollabSync::new(fanout.clone());
+        let process_b = CollabSync::new(fanout.clone());
+        let topic = Topic::new("collab:doc").unwrap();
+
+        // A client edits on process A; the gateway publishes A's broadcast.
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "from-A");
+        let reaction = feed(
+            &process_a,
+            &topic,
+            CollabMessage::Update(Bytes::from(edit.full_update())),
+        )
+        .await;
+        for payload in reaction.broadcasts() {
+            fanout.publish(&topic, payload.clone()).await.unwrap();
+        }
+
+        // Process B never saw a client for this topic, yet its apply loop folds
+        // A's edit in. Poll until converged (bounded; in-process is near-instant).
+        let mut converged = false;
+        for _ in 0..200 {
+            if handler_text(&process_b, &topic, "body")
+                .await
+                .contains("from-A")
+            {
+                converged = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            converged,
+            "process B should converge to A's edit via the shared fan-out"
+        );
     }
 }

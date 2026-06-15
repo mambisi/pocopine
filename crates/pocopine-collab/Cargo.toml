@@ -18,8 +18,10 @@ default = []
 yrs = "0.27"
 bytes = "1"
 async-trait = "0.1"
+tokio = { version = "1", features = ["rt"] }
 tracing = { workspace = true }
 pocopine-crypto = { workspace = true }
+pocopine-observe = { workspace = true }
 pocopine-realtime = { workspace = true }
 pocopine-events = { workspace = true }
 
