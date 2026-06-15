@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
 use super::agenkit::AgenkitInner;
-use super::provider::{FinishReason, GenerateRequest, GenerateResponse, StreamChunk};
+use super::provider::{FinishReason, GenerateRequest, GenerateResponse, Provider, StreamChunk};
 use super::run::RunState;
 use super::schema::json_schema_for;
 
@@ -121,9 +121,10 @@ impl Ai {
     }
 
     async fn run(&self, json_schema: Option<serde_json::Value>) -> AgenkitResult<GenerateResponse> {
-        let request = self.build_request(json_schema)?;
+        let mut request = self.build_request(json_schema)?;
         self.inner.check_model_allowed(&request.model)?;
         let provider = self.inner.providers.resolve(&request.model)?;
+        apply_structured_fallback(&mut request, provider.as_ref());
         let model = request.model.clone();
 
         let Some(run) = &self.tracer else {
@@ -204,9 +205,10 @@ impl Ai {
         json_schema: Option<serde_json::Value>,
         structured: bool,
     ) -> AgenkitResult<GenerateResponse> {
-        let request = self.build_request(json_schema)?;
+        let mut request = self.build_request(json_schema)?;
         self.inner.check_model_allowed(&request.model)?;
         let provider = self.inner.providers.resolve(&request.model)?;
+        apply_structured_fallback(&mut request, provider.as_ref());
         let model = request.model.clone();
 
         let model_step = self.tracer.as_ref().map(|run| {
@@ -227,7 +229,14 @@ impl Ai {
             step_id
         });
 
-        let mut stream = provider.generate_stream(request);
+        // Honor the provider's declared streaming capability: stream natively
+        // when supported, else fall back to a one-shot generation adapted to the
+        // streaming contract (§D13).
+        let mut stream = if provider.capabilities().streaming {
+            provider.generate_stream(request)
+        } else {
+            super::provider::fallback_stream(provider.as_ref(), request)
+        };
         let mut text = String::new();
         let mut tool_calls = Vec::new();
         let mut usage = None;
@@ -328,6 +337,29 @@ impl Ai {
     }
 }
 
+/// Capability-gated structured-output degrade path (§D13): when the resolved
+/// provider reports no native schema-constrained output
+/// (`capabilities().json_schema == false`), append an explicit instruction so
+/// the model still returns a JSON object conforming to the requested schema.
+/// The schema stays on the request (a provider that *does* support it natively
+/// — `json_schema == true` — gets no instruction and uses it directly). No-op
+/// for non-structured requests.
+fn apply_structured_fallback(request: &mut GenerateRequest, provider: &dyn Provider) {
+    let Some(schema) = request.json_schema.clone() else {
+        return;
+    };
+    if provider.capabilities().json_schema {
+        return;
+    }
+    let note = format!(
+        "Respond with a single JSON object that conforms to this JSON Schema, and nothing else:\n{schema}"
+    );
+    request.system = Some(match request.system.take() {
+        Some(existing) => format!("{existing}\n\n{note}"),
+        None => note,
+    });
+}
+
 /// An [`Ai`] request bound to a structured output type `T`.
 pub struct AiStructured<T> {
     ai: Ai,
@@ -401,15 +433,83 @@ impl<T: DeserializeOwned + JsonSchema> AiStructured<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::super::agenkit::Agenkit;
-    use super::super::provider::MockProvider;
-    use pocopine_agenkit_core::ModelRef;
+    use super::super::provider::{
+        BoxFuture, BoxStream, GenerateRequest, GenerateResponse, MockProvider, Provider,
+        ProviderCapabilities, StreamChunk,
+    };
+    use pocopine_agenkit_core::{AgenkitResult, ModelRef};
     use serde::Deserialize;
 
     fn runtime(provider: MockProvider) -> Agenkit {
         Agenkit::builder()
             .provider(provider)
             .default_model(ModelRef::new("local/default"))
+            .build()
+            .unwrap()
+    }
+
+    /// A provider with configurable capabilities that records the `system` of
+    /// the request it receives, so tests can assert how the runtime degrades.
+    #[derive(Clone)]
+    struct ProbeProvider {
+        caps: ProviderCapabilities,
+        last_system: Arc<Mutex<Option<String>>>,
+        panic_on_stream: bool,
+    }
+
+    impl ProbeProvider {
+        fn new(caps: ProviderCapabilities) -> Self {
+            Self {
+                caps,
+                last_system: Arc::new(Mutex::new(None)),
+                panic_on_stream: false,
+            }
+        }
+    }
+
+    impl Provider for ProbeProvider {
+        fn id(&self) -> &str {
+            "probe"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.caps
+        }
+
+        fn generate<'a>(
+            &'a self,
+            request: GenerateRequest,
+        ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
+            *self.last_system.lock().unwrap() = request.system.clone();
+            let structured = request.json_schema.is_some();
+            Box::pin(async move {
+                Ok(if structured {
+                    GenerateResponse::structured(serde_json::json!({"title": "X", "words": 1}))
+                } else {
+                    GenerateResponse::text("plain")
+                })
+            })
+        }
+
+        fn generate_stream<'a>(
+            &'a self,
+            request: GenerateRequest,
+        ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
+            assert!(
+                !self.panic_on_stream,
+                "runtime must not call generate_stream when streaming is unsupported"
+            );
+            super::super::provider::fallback_stream(self, request)
+        }
+    }
+
+    fn probe_runtime(provider: ProbeProvider) -> Agenkit {
+        Agenkit::builder()
+            .provider(provider)
+            .default_model(ModelRef::new("probe/default"))
             .build()
             .unwrap()
     }
@@ -477,6 +577,64 @@ mod tests {
             .unwrap();
         let result = agenkit.ai().prompt("x").generate_text().await;
         assert_eq!(result.unwrap_err().kind(), "config");
+    }
+
+    #[tokio::test]
+    async fn no_native_json_schema_injects_a_prompt_instruction() {
+        // A provider reporting `json_schema: false` gets an explicit instruction
+        // to emit conforming JSON (the capability-gated degrade path).
+        let provider = ProbeProvider::new(ProviderCapabilities {
+            streaming: true,
+            json_schema: false,
+            tools: true,
+        });
+        let seen = provider.last_system.clone();
+        let agenkit = probe_runtime(provider);
+        let _: Summary = agenkit
+            .ai()
+            .prompt("summarize")
+            .schema::<Summary>()
+            .generate_structured()
+            .await
+            .unwrap();
+        let system = seen.lock().unwrap().clone().unwrap_or_default();
+        assert!(
+            system.contains("JSON Schema"),
+            "expected an injected schema instruction, got: {system:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_json_schema_provider_gets_no_injection() {
+        // A provider reporting `json_schema: true` constrains generation itself,
+        // so the runtime must not inject a fallback instruction.
+        let provider = ProbeProvider::new(ProviderCapabilities::all());
+        let seen = provider.last_system.clone();
+        let agenkit = probe_runtime(provider);
+        let _: Summary = agenkit
+            .ai()
+            .system("be terse")
+            .prompt("summarize")
+            .schema::<Summary>()
+            .generate_structured()
+            .await
+            .unwrap();
+        assert_eq!(seen.lock().unwrap().clone(), Some("be terse".to_string()));
+    }
+
+    #[tokio::test]
+    async fn no_native_streaming_uses_one_shot_fallback() {
+        // A provider reporting `streaming: false` must be driven via the one-shot
+        // fallback — the runtime must not call its native `generate_stream`.
+        let mut provider = ProbeProvider::new(ProviderCapabilities {
+            streaming: false,
+            json_schema: true,
+            tools: true,
+        });
+        provider.panic_on_stream = true; // fails the test if generate_stream is hit
+        let agenkit = probe_runtime(provider);
+        let text = agenkit.ai().prompt("hi").stream_text().await.unwrap();
+        assert_eq!(text, "plain");
     }
 
     #[test]
