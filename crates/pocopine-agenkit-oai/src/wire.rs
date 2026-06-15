@@ -1,56 +1,16 @@
 //! OpenAI Chat Completions wire types and the mapping to/from Agenkit's
 //! neutral request/response.
 
-use std::collections::HashMap;
-
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Content, Message, Role, ToolCall, ToolDescriptor, Usage,
+    AgenkitError, AgenkitResult, Content, Message, Role, ToolCall, ToolNameMap, Usage,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::MaxTokensParam;
 
-/// OpenAI requires tool/function names to match `^[a-zA-Z0-9_-]{1,64}$`. Map
-/// every other byte to `_` and cap at 64; an empty/all-invalid name becomes
-/// `_`. Passing an id through unsanitized (e.g. one with a `.`) earns an opaque
-/// 400 from the API, so the provider sanitizes on the way out and reverses the
-/// mapping on the way back (see [`tool_name_map`]).
-pub(crate) fn sanitize_tool_name(name: &str) -> String {
-    let mut out: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    // Every char is now ASCII (1 byte), so byte index 64 is a char boundary.
-    out.truncate(64);
-    if out.is_empty() {
-        out.push('_');
-    }
-    out
-}
-
-/// Build the reverse map (sanitized name → original tool id) for a request's
-/// tools, so a tool call the model makes under the sanitized name dispatches to
-/// the real tool. Identity for already-valid ids.
-pub(crate) fn tool_name_map(tools: &[ToolDescriptor]) -> HashMap<String, String> {
-    tools
-        .iter()
-        .map(|tool| (sanitize_tool_name(&tool.id), tool.id.clone()))
-        .collect()
-}
-
-/// Resolve a wire tool-call name back to the original tool id; passes names
-/// through unchanged when there is no mapping (no tools declared, or an
-/// already-valid name).
-pub(crate) fn resolve_tool_name(name: String, name_map: &HashMap<String, String>) -> String {
-    name_map.get(&name).cloned().unwrap_or(name)
-}
+// Tool-name sanitization and the collision-safe reverse map live in
+// `pocopine_agenkit_core::tool_name` (shared with the Anthropic provider).
 
 // ---- request ----------------------------------------------------------------
 
@@ -91,6 +51,9 @@ impl ChatRequest {
         max_tokens_param: MaxTokensParam,
     ) -> Self {
         let has_tools = !request.tools.is_empty();
+        // Collision-safe tool-name map for this request's tools, used for both
+        // the tool defs and any replayed assistant tool calls in history.
+        let names = ToolNameMap::from_descriptors(&request.tools);
         // Whether the request will get native strict `json_schema` enforcement
         // (vs the `json_object` fallback, which guarantees valid JSON but NOT the
         // schema shape) — mirrors the decision in `response_format`.
@@ -124,7 +87,12 @@ impl ChatRequest {
         if let Some(system) = system {
             messages.push(WireMessage::text("system", system));
         }
-        messages.extend(request.messages.iter().map(WireMessage::from_message));
+        messages.extend(
+            request
+                .messages
+                .iter()
+                .map(|message| WireMessage::from_message(message, &names)),
+        );
         // o-series / gpt-5-class models reject `max_tokens`; compatible gateways
         // reject `max_completion_tokens`. Send exactly the one the endpoint wants.
         let (max_tokens, max_completion_tokens) = match max_tokens_param {
@@ -137,7 +105,7 @@ impl ChatRequest {
             tools: request
                 .tools
                 .iter()
-                .map(WireTool::from_descriptor)
+                .map(|tool| WireTool::from_descriptor(tool, &names))
                 .collect(),
             response_format: response_format(
                 request.json_schema.as_ref(),
@@ -326,7 +294,7 @@ impl WireMessage {
         }
     }
 
-    pub(crate) fn from_message(message: &Message) -> Self {
+    pub(crate) fn from_message(message: &Message, names: &ToolNameMap) -> Self {
         let role = match message.role {
             Role::System => "system",
             Role::User => "user",
@@ -336,7 +304,7 @@ impl WireMessage {
         let tool_calls = message
             .tool_calls
             .iter()
-            .map(WireToolCall::from_tool_call)
+            .map(|call| WireToolCall::from_tool_call(call, names))
             .collect();
         let content = if message.content.is_empty() && !message.tool_calls.is_empty() {
             None
@@ -361,14 +329,14 @@ pub(crate) struct WireToolCall {
 }
 
 impl WireToolCall {
-    fn from_tool_call(call: &ToolCall) -> Self {
+    fn from_tool_call(call: &ToolCall, names: &ToolNameMap) -> Self {
         Self {
             id: call.id.clone(),
             kind: "function",
             function: WireFunctionCall {
-                // Match the sanitized name the tool was offered under, so a
-                // replayed assistant turn stays consistent with the tool defs.
-                name: sanitize_tool_name(&call.tool_id),
+                // Match the wire name the tool was offered under, so a replayed
+                // assistant turn stays consistent with the tool defs.
+                name: names.wire(&call.tool_id),
                 arguments: serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_string()),
             },
         }
@@ -389,7 +357,10 @@ pub(crate) struct WireTool {
 }
 
 impl WireTool {
-    fn from_descriptor(descriptor: &pocopine_agenkit_core::ToolDescriptor) -> Self {
+    fn from_descriptor(
+        descriptor: &pocopine_agenkit_core::ToolDescriptor,
+        names: &ToolNameMap,
+    ) -> Self {
         let parameters = descriptor
             .input
             .json_schema
@@ -398,7 +369,7 @@ impl WireTool {
         Self {
             kind: "function",
             function: WireFunctionDef {
-                name: sanitize_tool_name(&descriptor.id),
+                name: names.wire(&descriptor.id),
                 description: descriptor.description.clone(),
                 parameters,
             },
@@ -438,10 +409,7 @@ pub(crate) struct ChatResponse {
 }
 
 impl ChatResponse {
-    pub(crate) fn into_agenkit(
-        self,
-        name_map: &HashMap<String, String>,
-    ) -> AgenkitResult<GenerateResponse> {
+    pub(crate) fn into_agenkit(self, names: &ToolNameMap) -> AgenkitResult<GenerateResponse> {
         let choice = self
             .choices
             .into_iter()
@@ -453,7 +421,7 @@ impl ChatResponse {
             .message
             .tool_calls
             .into_iter()
-            .map(|call| call.into_call(name_map))
+            .map(|call| call.into_call(names))
             .collect();
         let finish_reason = finish_reason(choice.finish_reason.as_deref());
         let usage = self.usage.map(WireUsage::into_usage);
@@ -489,7 +457,7 @@ pub(crate) struct ResponseToolCall {
 }
 
 impl ResponseToolCall {
-    fn into_call(self, name_map: &HashMap<String, String>) -> ToolCall {
+    fn into_call(self, names: &ToolNameMap) -> ToolCall {
         // Empty (zero-argument tool) or unparseable args default to `{}`, not
         // `null` — a struct-typed tool input deserializes from `{}` but not from
         // `null`, so `null` would turn a valid no-arg call into a cryptic
@@ -500,11 +468,7 @@ impl ResponseToolCall {
         } else {
             serde_json::from_str(&self.function.arguments).unwrap_or_else(|_| serde_json::json!({}))
         };
-        ToolCall::new(
-            self.id,
-            resolve_tool_name(self.function.name, name_map),
-            args,
-        )
+        ToolCall::new(self.id, names.resolve(&self.function.name), args)
     }
 }
 
@@ -605,33 +569,8 @@ mod tests {
         assert!(schema["properties"]["count"].get("format").is_none());
     }
 
-    #[test]
-    fn sanitize_tool_name_conforms_to_openai_pattern() {
-        // Valid names pass through unchanged.
-        assert_eq!(sanitize_tool_name("search_docs"), "search_docs");
-        assert_eq!(sanitize_tool_name("a-b_C9"), "a-b_C9");
-        // Disallowed bytes (dots, spaces, slashes, non-ASCII) become `_`.
-        assert_eq!(sanitize_tool_name("weather.lookup"), "weather_lookup");
-        assert_eq!(sanitize_tool_name("my tool/v2"), "my_tool_v2");
-        assert_eq!(sanitize_tool_name("café"), "caf_");
-        // Over-long names are capped at 64 bytes.
-        assert_eq!(sanitize_tool_name(&"x".repeat(100)).len(), 64);
-        // An all-invalid / empty name still produces a non-empty valid name.
-        assert_eq!(sanitize_tool_name(""), "_");
-    }
-
-    #[test]
-    fn tool_name_map_reverses_sanitization() {
-        use pocopine_agenkit_core::ToolDescriptor;
-        let tools = [ToolDescriptor::new("weather.lookup", "Look up weather")];
-        let map = tool_name_map(&tools);
-        assert_eq!(
-            resolve_tool_name("weather_lookup".to_string(), &map),
-            "weather.lookup"
-        );
-        // An unmapped name (already valid, or no tools) passes through.
-        assert_eq!(resolve_tool_name("other".to_string(), &map), "other");
-    }
+    // Tool-name sanitization + the collision-safe reverse map are tested in
+    // `pocopine_agenkit_core::tool_name`.
 
     #[test]
     fn tool_descriptor_schema_becomes_function_parameters() {
@@ -646,7 +585,8 @@ mod tests {
         let descriptor = ToolDescriptor::new("search_docs", "Search project docs")
             .with_input(SchemaRef::named("SearchInput").with_json_schema(schema.clone()));
 
-        let wire = WireTool::from_descriptor(&descriptor);
+        let names = ToolNameMap::from_descriptors(std::slice::from_ref(&descriptor));
+        let wire = WireTool::from_descriptor(&descriptor, &names);
         assert_eq!(wire.function.name, "search_docs");
         assert_eq!(wire.function.parameters, schema);
     }
@@ -655,7 +595,8 @@ mod tests {
     fn tool_without_a_schema_falls_back_to_an_object() {
         use pocopine_agenkit_core::ToolDescriptor;
         let descriptor = ToolDescriptor::new("noop", "Does nothing");
-        let wire = WireTool::from_descriptor(&descriptor);
+        let names = ToolNameMap::from_descriptors(std::slice::from_ref(&descriptor));
+        let wire = WireTool::from_descriptor(&descriptor, &names);
         assert_eq!(
             wire.function.parameters,
             serde_json::json!({"type": "object"})

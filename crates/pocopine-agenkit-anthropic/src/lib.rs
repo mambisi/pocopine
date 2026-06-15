@@ -29,7 +29,7 @@
 
 mod wire;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -37,7 +37,7 @@ use pocopine_agenkit::server::{
     BoxFuture, BoxStream, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities,
     StreamChunk,
 };
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ToolCall, Usage};
+use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ToolCall, ToolNameMap, Usage};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -215,7 +215,7 @@ impl AnthropicProvider {
     }
 
     async fn message(&self, request: GenerateRequest) -> AgenkitResult<GenerateResponse> {
-        let name_map = wire::tool_name_map(&request.tools);
+        let names = ToolNameMap::from_descriptors(&request.tools);
         let wire = MessagesRequest::from_agenkit(&request, false, self.default_max_tokens);
         let response = self
             .send_with_retry(&wire, Some(self.request_timeout))
@@ -225,7 +225,7 @@ impl AnthropicProvider {
         })?;
         let parsed = serde_json::from_str::<MessagesResponse>(&body)
             .map_err(|err| AgenkitError::provider(format!("invalid response shape: {err}")))?;
-        Ok(parsed.into_agenkit(&name_map))
+        Ok(parsed.into_agenkit(&names))
     }
 
     /// Read the SSE stream into `tx`, forwarding text deltas and accumulating
@@ -235,7 +235,7 @@ impl AnthropicProvider {
         request: GenerateRequest,
         tx: UnboundedSender<AgenkitResult<StreamChunk>>,
     ) -> AgenkitResult<()> {
-        let name_map = wire::tool_name_map(&request.tools);
+        let names = ToolNameMap::from_descriptors(&request.tools);
         let wire = MessagesRequest::from_agenkit(&request, true, self.default_max_tokens);
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
@@ -245,7 +245,7 @@ impl AnthropicProvider {
         // newline is always valid UTF-8 — unlike per-chunk `from_utf8_lossy`.
         let mut bytes = response.bytes_stream();
         let mut buffer: Vec<u8> = Vec::new();
-        let mut decoder = SseDecoder::new(&name_map);
+        let mut decoder = SseDecoder::new(&names);
 
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk
@@ -337,11 +337,11 @@ struct SseDecoder<'a> {
     tools: BTreeMap<u32, ToolAccumulator>,
     input_tokens: u64,
     output_tokens: u64,
-    name_map: &'a HashMap<String, String>,
+    name_map: &'a ToolNameMap,
 }
 
 impl<'a> SseDecoder<'a> {
-    fn new(name_map: &'a HashMap<String, String>) -> Self {
+    fn new(name_map: &'a ToolNameMap) -> Self {
         Self {
             data: Vec::new(),
             tools: BTreeMap::new(),
@@ -497,7 +497,7 @@ impl<'a> SseDecoder<'a> {
         } else {
             serde_json::from_str(&acc.json).unwrap_or_else(|_| serde_json::json!({}))
         };
-        let name = wire::resolve_tool_name(acc.name, self.name_map);
+        let name = self.name_map.resolve(&acc.name);
         let _ = tx.send(Ok(StreamChunk::ToolCall(ToolCall::new(acc.id, name, args))));
     }
 }

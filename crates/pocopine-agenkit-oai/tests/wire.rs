@@ -156,6 +156,40 @@ async fn tool_call_with_empty_arguments_defaults_to_empty_object() {
     assert_eq!(response.tool_calls[0].args, json!({}));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn streaming_ignores_choices_beyond_the_first() {
+    // The runtime is single-completion. A chunk carrying multiple choices (n>1,
+    // or a non-conformant gateway) must not interleave a second choice's text
+    // into the stream.
+    let server = MockServer::start().await;
+    let body = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices": [
+            {"index": 0, "delta": {"content": "hello"}},
+            {"index": 1, "delta": {"content": "OTHER"}}
+        ]})
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+
+    let client = provider(&server);
+    let mut stream = client.generate_stream(text_request("hi"));
+    let mut text = String::new();
+    while let Some(chunk) = stream.next().await {
+        if let StreamChunk::Text(t) = chunk.unwrap() {
+            text.push_str(&t);
+        }
+    }
+    assert_eq!(text, "hello", "only the first choice should be streamed");
+}
+
 #[tokio::test]
 async fn maps_tool_calls_from_the_response() {
     let server = MockServer::start().await;

@@ -49,6 +49,7 @@ pub mod schema;
 pub mod stream;
 pub mod thread;
 pub mod tool;
+pub mod tool_name;
 pub mod trace;
 
 pub use agent::AiAgentDescriptor;
@@ -72,4 +73,5 @@ pub use schema::SchemaRef;
 pub use stream::FlowStreamEvent;
 pub use thread::{AgentThreadDescriptor, ThreadCheckpoint, ThreadMessage};
 pub use tool::{ToolCall, ToolDescriptor, ToolResult};
+pub use tool_name::{ToolNameMap, sanitize_tool_name};
 pub use trace::{CostEstimate, TraceEvent, TraceSpan, Usage};
