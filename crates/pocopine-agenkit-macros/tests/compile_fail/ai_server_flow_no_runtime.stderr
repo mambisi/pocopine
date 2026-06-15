@@ -1,5 +1,0 @@
-error: `#[ai_server_flow]` requires `runtime = <path to a fn returning Agenkit>`
- --> tests/compile_fail/ai_server_flow_no_runtime.rs:2:1
-  |
-2 | async fn call_x(input: u8) -> Result<u8, u8> {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

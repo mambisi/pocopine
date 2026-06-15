@@ -6927,6 +6927,7 @@ dependencies = [
  "pocopine-auth",
  "pocopine-core",
  "pocopine-observe",
+ "pocopine-server",
  "schemars 0.8.22",
  "serde",
  "serde_json",

@@ -1,21 +1,39 @@
 //! The canonical Agenkit example (RFC-093), authored with the `#[ai_tool]` /
-//! `#[ai_flow]` / `#[ai_server_flow]` macros (RFC-093 §D14).
+//! `#[ai_flow]` macros (RFC-093 §D14).
 //!
 //! Run with: `cargo run -p pocopine-agenkit --example summarize`
 //!
-//! A real app swaps `MockProvider` for a hosted provider (server-only
-//! credentials). The browser calls `summarize_endpoint(input)`; the generated
-//! bridge fetches the principal-aware flow route on wasm and calls
-//! `run_public_flow` on the host.
+//! **Flows are internal logic, not endpoints.** A real app exposes a flow
+//! through a plain `#[server]` function and threads the caller identity with
+//! the Agenkit server plugin:
 //!
-//! The runtime is host-only, so the example body is gated off `wasm32`; the
-//! workspace's wasm build keeps a no-op `main`.
+//! ```ignore
+//! Server::new(router)
+//!     .with_auth(my_auth)
+//!     .plugin(pocopine_agenkit::server::agenkit_server_plugin(agenkit))
+//!     .serve(addr).await?;
+//!
+//! #[server(public)]
+//! pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
+//!     pocopine_server::active_plugin::<Agenkit>()
+//!         .expect("agenkit_server_plugin installed")
+//!         .run_flow_typed("summarize", input)
+//!         .await
+//!         .map_err(|e| pocopine_agenkit::server::to_server_error(&e))
+//! }
+//! ```
+//!
+//! The plugin's principal layer scopes the request `Principal`, so the flow's
+//! tools/retrieval/threads run under the caller (§D5/§D10/§D15 DC-5) — the
+//! `#[server]` body never touches the principal directly.
+//!
+//! This example just runs the flow in-process (no server); the runtime is
+//! host-only, so the body is gated off `wasm32`.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use pocopine_agenkit::prelude::*;
-    use pocopine_agenkit::{ai_flow, ai_server_flow, ai_tool};
-    use pocopine_core::ServerError;
+    use pocopine_agenkit::{ai_flow, ai_tool};
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -40,8 +58,8 @@ mod host {
         Ok(input.text.split_whitespace().count() as u32)
     }
 
-    /// The app-callable flow: typed input, typed structured output, one trace tree.
-    #[ai_flow(public, tools("word_count"))]
+    /// The flow: typed input, typed structured output, one trace tree.
+    #[ai_flow(tools("word_count"))]
     async fn summarize(input: SummarizeInput, ctx: AiFlowContext) -> AgenkitResult<Summary> {
         ctx.ai()
             .system("Summarize the prompt as a title and a word count.")
@@ -50,11 +68,6 @@ mod host {
             .generate_structured()
             .await
     }
-
-    /// The public-flow bridge the browser calls. Host body becomes
-    /// `agenkit().run_public_flow("summarize", input)`.
-    #[ai_server_flow(flow = "summarize", runtime = agenkit)]
-    pub async fn summarize_endpoint(input: SummarizeInput) -> Result<Summary, ServerError> {}
 
     /// Configure AI once (§D3).
     fn agenkit() -> Agenkit {
@@ -71,10 +84,17 @@ mod host {
     }
 
     pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-        let summary = summarize_endpoint(SummarizeInput {
-            prompt: "How do uploads work?".to_string(),
-        })
-        .await?;
+        // In a server this is the body of a `#[server]` fn (see the module docs);
+        // here we run the flow directly. `run_flow_typed` runs it under the
+        // ambient principal (anonymous in this standalone example).
+        let summary: Summary = agenkit()
+            .run_flow_typed(
+                "summarize",
+                SummarizeInput {
+                    prompt: "How do uploads work?".to_string(),
+                },
+            )
+            .await?;
         println!("summary: {summary:?}");
         Ok(())
     }
