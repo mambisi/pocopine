@@ -1,0 +1,26 @@
+[package]
+name = "pocopine-collab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Server-side CRDT collaboration (yrs) for pocopine apps (RFC 073 Part II)."
+
+[features]
+default = []
+
+# Host-only: the yrs engine + sync handshake run server-side (browsers use Yjs
+# JS, not this crate). All deps live under cfg(not(target_arch = "wasm32")) so
+# the crate compiles to an empty lib on wasm32 (client-server-modules skill).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Held at 0.23 (newest confirmed to build here): yrs 0.27 trips a
+# freshly-destabilized `if let` match guard that the workspace's pinned nightly
+# (rust-toolchain) rejects. Bump once yrs/the toolchain resolve it.
+yrs = "0.23"
+bytes = "1"
+async-trait = "0.1"
+tracing = { workspace = true }
+pocopine-crypto = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
