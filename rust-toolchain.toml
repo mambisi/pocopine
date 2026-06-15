@@ -2,7 +2,10 @@
 # `proc_macro::Span` at expansion time, which still requires the
 # `proc_macro_span` feature gate. Pin the workspace to a known-good
 # nightly so contributors and CI use the same rustc.
+#
+# 2026-02-21 is the first pin past Rust 1.95 (Feb 2026), which stabilized
+# `if let` match guards — needed by yrs 0.27 (pocopine-collab).
 [toolchain]
-channel = "nightly-2025-12-18"
+channel = "nightly-2026-02-21"
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown"]

@@ -33,7 +33,7 @@
 //! </pine-app-shell>
 //! ```
 
-use crate::breakpoint::{install, Breakpoint};
+use crate::breakpoint::{Breakpoint, install};
 use crate::floating as drawer;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};

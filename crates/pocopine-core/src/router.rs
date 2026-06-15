@@ -1669,7 +1669,7 @@ fn route_navigation_key_from_query(path: &str, query: &HashMap<String, String>) 
         return path.to_string();
     }
     let mut pairs: Vec<_> = query.iter().collect();
-    pairs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    pairs.sort_by_key(|(left, _)| *left);
     let mut out = path.to_string();
     out.push('?');
     for (idx, (key, value)) in pairs.into_iter().enumerate() {
