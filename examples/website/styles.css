@@ -202,6 +202,27 @@ section {
   font-size: 0.82rem;
   line-height: 1.6;
 }
+/* Mermaid diagrams (rendered client-side from <pre class="mermaid">). Drop the
+   code-panel chrome and center the SVG; the panel surface fits the theme. */
+.doc-body pre.mermaid {
+  background: var(--bg-subtle);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  text-align: center;
+  line-height: normal;
+}
+.doc-body pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Before mermaid.js processes it, keep the raw source from flashing as a wall
+   of monospace text (it still renders if scripts are blocked, just plainer). */
+.doc-body pre.mermaid:not([data-processed]) {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--fg-muted, var(--fg));
+  white-space: pre-wrap;
+}
 .doc-body table {
   width: 100%;
   border-collapse: collapse;

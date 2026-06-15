@@ -1323,10 +1323,22 @@ fn render(hl: &Hl, md: &str, page_path: &str) -> (String, Vec<(u8, String, Strin
                 i += 1;
             }
             i += 1; // skip End(CodeBlock)
-            let inner = hl.code(src.trim_end_matches('\n'), &lang);
-            out_events.push(Event::Html(CowStr::from(format!(
-                "<pre><code>{inner}</code></pre>"
-            ))));
+            let body = src.trim_end_matches('\n');
+            if lang.eq_ignore_ascii_case("mermaid") {
+                // Hand the raw diagram source to the client-side mermaid.js
+                // (see index.html). Escape it so `<br/>`, `-->`, `&` survive as
+                // text — mermaid reads `textContent`, which the browser
+                // un-escapes back to the literal source.
+                out_events.push(Event::Html(CowStr::from(format!(
+                    "<pre class=\"mermaid\">{}</pre>",
+                    esc(body)
+                ))));
+            } else {
+                let inner = hl.code(body, &lang);
+                out_events.push(Event::Html(CowStr::from(format!(
+                    "<pre><code>{inner}</code></pre>"
+                ))));
+            }
         } else {
             out_events.push(events[i].clone());
             i += 1;

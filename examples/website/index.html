@@ -36,5 +36,68 @@
     import init from "/pkg/website.js";
     init();
   </script>
+
+  <!-- Mermaid diagram rendering for docs. The build emits fenced ```mermaid
+       blocks as <pre class="mermaid">…raw source…</pre> (see build.rs); this
+       renders them client-side. The SPA injects doc fragments after navigation,
+       so a MutationObserver re-renders whenever new diagrams appear, and a
+       second observer re-themes them when the site theme toggles. -->
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+    const mermaidTheme = () =>
+      document.documentElement.dataset.theme === "light" ? "neutral" : "dark";
+    const config = () => ({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: mermaidTheme(),
+      fontFamily: "inherit",
+    });
+    mermaid.initialize(config());
+
+    // Render every not-yet-processed .mermaid node. Stash the raw source the
+    // first time so a theme change can re-render (mermaid replaces the text
+    // with an SVG once processed).
+    function render() {
+      const pending = [];
+      document.querySelectorAll("pre.mermaid").forEach((n) => {
+        if (n.dataset.src === undefined) n.dataset.src = n.textContent;
+        if (n.dataset.processed === undefined) pending.push(n);
+      });
+      if (pending.length) {
+        mermaid.run({ nodes: pending }).catch(() => {});
+      }
+    }
+
+    // Coalesce DOM mutations (SPA renders + mermaid's own SVG writes) to one
+    // render per frame.
+    let scheduled = false;
+    function schedule() {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        render();
+      });
+    }
+    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+
+    // Re-theme rendered diagrams when the site toggles light/dark: restore the
+    // stashed source, clear the processed flag, and re-run under the new theme.
+    new MutationObserver(() => {
+      mermaid.initialize(config());
+      document.querySelectorAll("pre.mermaid[data-processed]").forEach((n) => {
+        if (n.dataset.src !== undefined) {
+          n.removeAttribute("data-processed");
+          n.removeAttribute("aria-roledescription");
+          n.innerHTML = "";
+          n.textContent = n.dataset.src;
+        }
+      });
+      schedule();
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+    schedule();
+  </script>
 </body>
 </html>
