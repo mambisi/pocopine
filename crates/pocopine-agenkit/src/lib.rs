@@ -52,3 +52,7 @@ pub use schemars;
 /// generated code references the host runtime.
 #[cfg(not(target_arch = "wasm32"))]
 pub use pocopine_agenkit_macros::{ai_flow, ai_tool};
+
+/// The public-flow bridge macro (`#[ai_server_flow]`). Unlike the others this
+/// generates a wasm client half too, so it is re-exported on every target.
+pub use pocopine_agenkit_macros::ai_server_flow;

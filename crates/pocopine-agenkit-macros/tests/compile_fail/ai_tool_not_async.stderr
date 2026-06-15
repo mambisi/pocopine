@@ -1,0 +1,5 @@
+error: `#[ai_tool]` requires an `async fn`
+ --> tests/compile_fail/ai_tool_not_async.rs:2:1
+  |
+2 | fn lookup(input: u8, ctx: u8) -> Result<u8, u8> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

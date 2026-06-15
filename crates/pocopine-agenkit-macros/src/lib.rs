@@ -14,6 +14,7 @@
 use proc_macro::TokenStream;
 
 mod ai_flow;
+mod ai_server_flow;
 mod ai_tool;
 mod util;
 
@@ -56,6 +57,27 @@ pub fn ai_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn ai_flow(attr: TokenStream, item: TokenStream) -> TokenStream {
     ai_flow::expand(attr.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Generate the typed public-flow bridge: a `#[server]`-symmetric fn that
+/// fetches the principal-aware flow route on wasm and calls `run_public_flow`
+/// on the host.
+///
+/// ```ignore
+/// #[ai_server_flow(flow = "summarize", runtime = crate::agenkit)]
+/// pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {}
+/// // browser: summarize(input).await  → POST /__pocopine/agenkit/v1/flow/summarize
+/// ```
+///
+/// `flow` defaults to the fn name; `runtime` is a path to a `fn() -> Agenkit`
+/// the host body calls. The author writes the signature (input type + return
+/// `ServerResult<Output>`); the macro fills both bodies. The flow runs under the
+/// request principal via the route's DC-5 adapter.
+#[proc_macro_attribute]
+pub fn ai_server_flow(attr: TokenStream, item: TokenStream) -> TokenStream {
+    ai_server_flow::expand(attr.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
