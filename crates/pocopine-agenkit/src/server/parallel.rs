@@ -20,6 +20,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use super::flow::AiFlowContext;
+use super::run::RunState;
 
 type BranchFuture<T> = Pin<Box<dyn Future<Output = AgenkitResult<T>> + Send + 'static>>;
 
@@ -185,46 +186,21 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
         let mut settled = vec![false; branch_steps.len()];
 
         while let Some(joined) = set.join_next().await {
-            let (index, result) = match joined {
-                Ok(pair) => pair,
-                // An aborted loser (cancelled by `abort_all`) is expected and
-                // carries no branch outcome — skip it.
-                Err(join_error) if join_error.is_cancelled() => continue,
-                // A panicked branch is a branch FAILURE, not a no-op: surface
-                // it through the normal failure path so `All` aborts the group
-                // and `AllSettled` records it instead of returning partial Ok.
-                Err(join_error) => {
-                    let Some(index) = task_branch.get(&join_error.id()).copied() else {
-                        continue;
-                    };
-                    (
-                        index,
-                        Err(AgenkitError::internal(format!(
-                            "parallel branch `{}` panicked",
-                            branch_names[index]
-                        ))),
-                    )
-                }
+            let Some((index, result)) = branch_outcome(joined, &task_branch, &branch_names) else {
+                // An aborted loser (cancelled by `abort_all`) carries no branch
+                // outcome — skip it.
+                continue;
             };
-            let step_id = branch_steps[index].clone();
-            let name = branch_names[index].clone();
+            emit_branch_terminal(
+                &run,
+                &group_id,
+                &branch_steps[index],
+                &branch_names[index],
+                &result,
+            );
+            settled[index] = true;
             match result {
                 Ok(value) => {
-                    run.emit(
-                        run.event(
-                            events::AI_STEP_COMPLETED,
-                            StepKind::Agent,
-                            StepStatus::Completed,
-                        )
-                        .with_step(step_id.clone())
-                        .with_parallel_group(group_id.clone())
-                        .with_field("branch", name),
-                    );
-                    run.stream(FlowStreamEvent::BranchCompleted {
-                        group_id: group_id.clone(),
-                        step_id,
-                    });
-                    settled[index] = true;
                     successes.push(value);
                     success_count += 1;
                     if success_count >= target
@@ -233,29 +209,36 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                             ParallelJoin::FirstSuccess | ParallelJoin::Quorum(_)
                         )
                     {
-                        // Cancel the losing branches in flight (§D15 DC-7).
+                        // Branches that already finished keep their real terminal
+                        // (drained here); cancel only the still-running losers in
+                        // flight (§D15 DC-7).
+                        drain_ready(
+                            &mut set,
+                            &task_branch,
+                            &run,
+                            &group_id,
+                            &branch_steps,
+                            &branch_names,
+                            &mut settled,
+                        );
                         set.abort_all();
                         break;
                     }
                 }
                 Err(error) => {
-                    run.emit(
-                        run.event(events::AI_STEP_FAILED, StepKind::Agent, StepStatus::Failed)
-                            .with_step(step_id.clone())
-                            .with_parallel_group(group_id.clone())
-                            .with_field("branch", name)
-                            .with_error(error.clone()),
-                    );
-                    run.stream(FlowStreamEvent::BranchFailed {
-                        group_id: group_id.clone(),
-                        step_id,
-                        error_kind: error.kind().to_string(),
-                    });
-                    settled[index] = true;
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
                     if matches!(self.join, ParallelJoin::All) {
+                        drain_ready(
+                            &mut set,
+                            &task_branch,
+                            &run,
+                            &group_id,
+                            &branch_steps,
+                            &branch_names,
+                            &mut settled,
+                        );
                         set.abort_all();
                         break;
                     }
@@ -338,5 +321,103 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
         }
 
         Ok(successes)
+    }
+}
+
+/// Interpret a `JoinSet` result: an aborted (cancelled) loser carries no
+/// outcome and is skipped (`None`); a panicked branch is mapped to a branch
+/// *failure* so the join policy treats it uniformly.
+fn branch_outcome<T>(
+    joined: Result<(usize, AgenkitResult<T>), tokio::task::JoinError>,
+    task_branch: &HashMap<tokio::task::Id, usize>,
+    branch_names: &[String],
+) -> Option<(usize, AgenkitResult<T>)> {
+    match joined {
+        Ok(pair) => Some(pair),
+        Err(join_error) if join_error.is_cancelled() => None,
+        Err(join_error) => {
+            let index = task_branch.get(&join_error.id()).copied()?;
+            Some((
+                index,
+                Err(AgenkitError::internal(format!(
+                    "parallel branch `{}` panicked",
+                    branch_names[index]
+                ))),
+            ))
+        }
+    }
+}
+
+/// Emit the terminal trace + stream events for a finished branch
+/// (completed/failed).
+fn emit_branch_terminal<T>(
+    run: &RunState,
+    group_id: &ParallelGroupId,
+    step_id: &StepId,
+    name: &str,
+    result: &AgenkitResult<T>,
+) {
+    match result {
+        Ok(_) => {
+            run.emit(
+                run.event(
+                    events::AI_STEP_COMPLETED,
+                    StepKind::Agent,
+                    StepStatus::Completed,
+                )
+                .with_step(step_id.clone())
+                .with_parallel_group(group_id.clone())
+                .with_field("branch", name.to_string()),
+            );
+            run.stream(FlowStreamEvent::BranchCompleted {
+                group_id: group_id.clone(),
+                step_id: step_id.clone(),
+            });
+        }
+        Err(error) => {
+            run.emit(
+                run.event(events::AI_STEP_FAILED, StepKind::Agent, StepStatus::Failed)
+                    .with_step(step_id.clone())
+                    .with_parallel_group(group_id.clone())
+                    .with_field("branch", name.to_string())
+                    .with_error(error.clone()),
+            );
+            run.stream(FlowStreamEvent::BranchFailed {
+                group_id: group_id.clone(),
+                step_id: step_id.clone(),
+                error_kind: error.kind().to_string(),
+            });
+        }
+    }
+}
+
+/// Before an early-exit abort, drain branches whose result is already available
+/// (non-blocking) so each keeps its real terminal (completed/failed) instead of
+/// being mislabeled `cancelled` by the post-loop closeout. Does not change the
+/// success tally — the join target is already met, so drained successes are not
+/// added to the result set (preserving `FirstSuccess`/`Quorum` semantics).
+fn drain_ready<T: 'static>(
+    set: &mut JoinSet<(usize, AgenkitResult<T>)>,
+    task_branch: &HashMap<tokio::task::Id, usize>,
+    run: &RunState,
+    group_id: &ParallelGroupId,
+    branch_steps: &[StepId],
+    branch_names: &[String],
+    settled: &mut [bool],
+) {
+    while let Some(joined) = set.try_join_next() {
+        let Some((index, result)) = branch_outcome(joined, task_branch, branch_names) else {
+            continue;
+        };
+        if !settled[index] {
+            emit_branch_terminal(
+                run,
+                group_id,
+                &branch_steps[index],
+                &branch_names[index],
+                &result,
+            );
+            settled[index] = true;
+        }
     }
 }

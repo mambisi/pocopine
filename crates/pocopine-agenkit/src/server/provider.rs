@@ -188,10 +188,15 @@ pub trait Provider: Send + Sync + 'static {
     /// The provider alias this implementation serves (e.g. `"local"`).
     fn id(&self) -> &str;
 
-    /// What this provider supports. Defaults to nothing beyond `generate`, so
-    /// the runtime uses fallbacks; real providers override.
+    /// What this provider supports. Defaults to [`ProviderCapabilities::all`]:
+    /// a provider is assumed capable unless it declares otherwise, so a custom
+    /// `Provider` that only implements `generate` (+ optionally a native
+    /// `generate_stream`) keeps working — streaming falls back to one-shot when
+    /// the method isn't overridden, and tool/structured requests are attempted
+    /// rather than rejected. Providers that genuinely lack a capability override
+    /// this to opt out (e.g. `MockProvider` reports `json_schema: false`).
     fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities::default()
+        ProviderCapabilities::all()
     }
 
     /// Generate a response for `request`.
@@ -564,5 +569,25 @@ mod tests {
         assert!(registry.resolve(&ModelRef::new("openai/gpt")).is_err());
         // Unnamespaced resolves because there is exactly one provider.
         assert!(registry.resolve(&ModelRef::new("default")).is_ok());
+    }
+
+    #[test]
+    fn default_capabilities_assume_full_support() {
+        // A provider that only implements `generate` is assumed capable, so the
+        // capability gating doesn't silently regress it (streaming falls back to
+        // one-shot; tool/structured requests are attempted, not rejected).
+        struct Bare;
+        impl Provider for Bare {
+            fn id(&self) -> &str {
+                "bare"
+            }
+            fn generate<'a>(
+                &'a self,
+                _request: GenerateRequest,
+            ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
+                Box::pin(async { Ok(GenerateResponse::text("ok")) })
+            }
+        }
+        assert_eq!(Bare.capabilities(), ProviderCapabilities::all());
     }
 }

@@ -28,7 +28,7 @@
 
 mod wire;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -36,7 +36,7 @@ use pocopine_agenkit::server::{
     BoxFuture, BoxStream, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities,
     StreamChunk,
 };
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ToolCall};
+use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ToolCall, ToolNameMap};
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -235,7 +235,7 @@ impl OpenAiProvider {
     }
 
     async fn chat(&self, request: GenerateRequest) -> AgenkitResult<GenerateResponse> {
-        let name_map = wire::tool_name_map(&request.tools);
+        let names = ToolNameMap::from_descriptors(&request.tools);
         let wire =
             ChatRequest::from_agenkit(&request, false, self.strict_schema, self.max_tokens_param());
         let response = self
@@ -246,7 +246,7 @@ impl OpenAiProvider {
         })?;
         serde_json::from_str::<ChatResponse>(&body)
             .map_err(|err| AgenkitError::provider(format!("invalid response shape: {err}")))?
-            .into_agenkit(&name_map)
+            .into_agenkit(&names)
     }
 
     /// Read the SSE stream into `tx`, forwarding text deltas and accumulating
@@ -256,7 +256,7 @@ impl OpenAiProvider {
         request: GenerateRequest,
         tx: UnboundedSender<AgenkitResult<StreamChunk>>,
     ) -> AgenkitResult<()> {
-        let name_map = wire::tool_name_map(&request.tools);
+        let names = ToolNameMap::from_descriptors(&request.tools);
         let wire =
             ChatRequest::from_agenkit(&request, true, self.strict_schema, self.max_tokens_param());
         // No total timeout on a stream; retry only the connect/status handshake.
@@ -281,7 +281,7 @@ impl OpenAiProvider {
                 let done = decoder.feed_line(&buffer[..newline], &mut tools, &tx);
                 buffer.drain(..=newline);
                 if done {
-                    emit_tool_calls(tools, &tx, &name_map);
+                    emit_tool_calls(tools, &tx, &names);
                     return Ok(());
                 }
             }
@@ -294,7 +294,7 @@ impl OpenAiProvider {
             decoder.feed_line(&buffer, &mut tools, &tx);
         }
         decoder.flush(&mut tools, &tx);
-        emit_tool_calls(tools, &tx, &name_map);
+        emit_tool_calls(tools, &tx, &names);
         Ok(())
     }
 }
@@ -380,7 +380,12 @@ fn apply_event(
     tools: &mut BTreeMap<u32, ToolAccumulator>,
     tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
 ) {
-    for choice in event.choices {
+    // Single completion only: the runtime never requests `n > 1`, and the neutral
+    // `StreamChunk` model has no choice dimension. Process only the first choice —
+    // iterating all of them would interleave their text into one stream and key
+    // every choice's tool calls into the same per-choice `index` accumulator,
+    // corrupting both.
+    if let Some(choice) = event.choices.into_iter().next() {
         if let Some(content) = choice.delta.content
             && !content.is_empty()
         {
@@ -466,7 +471,7 @@ struct ToolAccumulator {
 fn emit_tool_calls(
     tools: BTreeMap<u32, ToolAccumulator>,
     tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
-    name_map: &HashMap<String, String>,
+    names: &ToolNameMap,
 ) {
     for (_, acc) in tools {
         // Empty (zero-argument tool) or truncated args default to `{}`, not
@@ -479,7 +484,7 @@ fn emit_tool_calls(
             serde_json::from_str(&acc.arguments).unwrap_or_else(|_| serde_json::json!({}))
         };
         // Reverse the outbound name sanitization so dispatch finds the real tool.
-        let name = wire::resolve_tool_name(acc.name, name_map);
+        let name = names.resolve(&acc.name);
         let _ = tx.send(Ok(StreamChunk::ToolCall(ToolCall::new(acc.id, name, args))));
     }
 }
@@ -602,7 +607,7 @@ mod tests {
                 arguments: String::new(), // a zero-argument tool call
             },
         );
-        emit_tool_calls(tools, &tx, &HashMap::new());
+        emit_tool_calls(tools, &tx, &ToolNameMap::default());
         let Ok(StreamChunk::ToolCall(call)) = rx.try_recv().unwrap() else {
             panic!("expected a tool call");
         };
@@ -623,9 +628,11 @@ mod tests {
                 arguments: "{}".to_string(),
             },
         );
-        let name_map =
-            HashMap::from([("weather_lookup".to_string(), "weather.lookup".to_string())]);
-        emit_tool_calls(tools, &tx, &name_map);
+        let names = ToolNameMap::from_descriptors(&[pocopine_agenkit_core::ToolDescriptor::new(
+            "weather.lookup",
+            "w",
+        )]);
+        emit_tool_calls(tools, &tx, &names);
         let Ok(StreamChunk::ToolCall(call)) = rx.try_recv().unwrap() else {
             panic!("expected a tool call");
         };

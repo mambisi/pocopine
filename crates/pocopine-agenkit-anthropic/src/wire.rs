@@ -8,55 +8,16 @@
 //! structured output is obtained by forcing a single tool whose `input_schema`
 //! is the desired shape.
 
-use std::collections::HashMap;
-
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
-use pocopine_agenkit_core::{Content, Message, Role, ToolCall, ToolDescriptor, Usage};
+use pocopine_agenkit_core::{Content, Message, Role, ToolCall, ToolDescriptor, ToolNameMap, Usage};
 use serde::{Deserialize, Serialize};
 
 /// Name of the synthetic tool used to coax schema-shaped structured output.
 /// Conforms to Anthropic's `^[a-zA-Z0-9_-]{1,64}$` tool-name rule.
 pub(crate) const STRUCTURED_TOOL_NAME: &str = "structured_output";
 
-// ---- tool-name sanitization -------------------------------------------------
-
-/// Anthropic requires tool names to match `^[a-zA-Z0-9_-]{1,64}$` (same rule as
-/// OpenAI). Map every other byte to `_` and cap at 64; an empty/all-invalid
-/// name becomes `_`. The provider sanitizes on the way out and reverses the
-/// mapping on the way back (see [`tool_name_map`]).
-pub(crate) fn sanitize_tool_name(name: &str) -> String {
-    let mut out: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    out.truncate(64);
-    if out.is_empty() {
-        out.push('_');
-    }
-    out
-}
-
-/// Reverse map (sanitized name → original tool id) for a request's tools, so a
-/// tool call the model makes under the sanitized name dispatches to the real
-/// tool. Identity for already-valid ids.
-pub(crate) fn tool_name_map(tools: &[ToolDescriptor]) -> HashMap<String, String> {
-    tools
-        .iter()
-        .map(|tool| (sanitize_tool_name(&tool.id), tool.id.clone()))
-        .collect()
-}
-
-/// Resolve a wire tool-call name back to the original tool id; passes names
-/// through unchanged when there is no mapping.
-pub(crate) fn resolve_tool_name(name: String, name_map: &HashMap<String, String>) -> String {
-    name_map.get(&name).cloned().unwrap_or(name)
-}
+// Tool-name sanitization and the collision-safe reverse map live in
+// `pocopine_agenkit_core::tool_name` (shared with the OpenAI provider).
 
 // ---- request ----------------------------------------------------------------
 
@@ -94,12 +55,15 @@ impl MessagesRequest {
             }
         }
 
-        let messages = fold_messages(&request.messages);
+        // Collision-safe tool-name map for this request's tools, used for both
+        // the tool defs and any replayed assistant tool calls in history.
+        let names = ToolNameMap::from_descriptors(&request.tools);
+        let messages = fold_messages(&request.messages, &names);
 
         let mut tools: Vec<WireTool> = request
             .tools
             .iter()
-            .map(WireTool::from_descriptor)
+            .map(|tool| WireTool::from_descriptor(tool, &names))
             .collect();
         let has_user_tools = !tools.is_empty();
 
@@ -156,13 +120,13 @@ fn append_system(system: &mut Option<String>, text: String) {
 /// Map neutral messages to Anthropic messages, folding consecutive same-role
 /// messages into one (the Messages API expects content blocks grouped per
 /// turn — e.g. several tool results belong in one user message).
-fn fold_messages(messages: &[Message]) -> Vec<WireMessage> {
+fn fold_messages(messages: &[Message], names: &ToolNameMap) -> Vec<WireMessage> {
     let mut folded: Vec<WireMessage> = Vec::new();
     for message in messages {
         let (role, blocks) = match message.role {
             Role::System => continue, // hoisted to top-level `system`
             Role::User => ("user", text_block(&message.content).into_iter().collect()),
-            Role::Assistant => assistant_blocks(message),
+            Role::Assistant => assistant_blocks(message, names),
             Role::Tool => ("user", tool_result_blocks(message)),
         };
         if blocks.is_empty() {
@@ -184,12 +148,12 @@ fn text_block(content: &Content) -> Option<ContentBlock> {
     (!text.is_empty()).then_some(ContentBlock::Text { text })
 }
 
-fn assistant_blocks(message: &Message) -> (&'static str, Vec<ContentBlock>) {
+fn assistant_blocks(message: &Message, names: &ToolNameMap) -> (&'static str, Vec<ContentBlock>) {
     let mut blocks: Vec<ContentBlock> = text_block(&message.content).into_iter().collect();
     for call in &message.tool_calls {
         blocks.push(ContentBlock::ToolUse {
             id: call.id.clone(),
-            name: sanitize_tool_name(&call.tool_id),
+            name: names.wire(&call.tool_id),
             input: call.args.clone(),
         });
     }
@@ -197,13 +161,18 @@ fn assistant_blocks(message: &Message) -> (&'static str, Vec<ContentBlock>) {
 }
 
 fn tool_result_blocks(message: &Message) -> Vec<ContentBlock> {
-    let Some(tool_use_id) = message.tool_call_id.clone() else {
-        return Vec::new();
-    };
-    vec![ContentBlock::ToolResult {
-        tool_use_id,
-        content: message.content.as_text(),
-    }]
+    match message.tool_call_id.clone() {
+        Some(tool_use_id) => vec![ContentBlock::ToolResult {
+            tool_use_id,
+            content: message.content.as_text(),
+        }],
+        // A tool message without a `tool_call_id` can't form a valid
+        // `tool_result` (which must reference a `tool_use_id`, or the Messages
+        // API 400s). Rather than silently dropping the turn, surface its content
+        // as plain user text so the model still sees the output. The agent loop
+        // always sets the id; a missing one only occurs in a hand-built history.
+        None => text_block(&message.content).into_iter().collect(),
+    }
 }
 
 /// The system-prompt instruction used when structured output cannot be forced
@@ -265,7 +234,7 @@ pub(crate) struct WireTool {
 }
 
 impl WireTool {
-    fn from_descriptor(descriptor: &ToolDescriptor) -> Self {
+    fn from_descriptor(descriptor: &ToolDescriptor, names: &ToolNameMap) -> Self {
         let input_schema = descriptor
             .input
             .json_schema
@@ -273,7 +242,7 @@ impl WireTool {
             .map(|schema| normalize_schema(&schema))
             .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
         Self {
-            name: sanitize_tool_name(&descriptor.id),
+            name: names.wire(&descriptor.id),
             description: descriptor.description.clone(),
             input_schema,
         }
@@ -310,7 +279,7 @@ pub(crate) enum ResponseBlock {
 }
 
 impl MessagesResponse {
-    pub(crate) fn into_agenkit(self, name_map: &HashMap<String, String>) -> GenerateResponse {
+    pub(crate) fn into_agenkit(self, names: &ToolNameMap) -> GenerateResponse {
         let mut text = String::new();
         let mut tool_calls = Vec::new();
         let mut structured: Option<serde_json::Value> = None;
@@ -332,11 +301,7 @@ impl MessagesResponse {
                         // The forced structured tool: its input IS the answer.
                         structured = Some(input);
                     } else {
-                        tool_calls.push(ToolCall::new(
-                            id,
-                            resolve_tool_name(name, name_map),
-                            input,
-                        ));
+                        tool_calls.push(ToolCall::new(id, names.resolve(&name), input));
                     }
                 }
                 ResponseBlock::Other => {}
@@ -445,14 +410,8 @@ mod tests {
         serde_json::to_value(request).unwrap()
     }
 
-    #[test]
-    fn sanitize_tool_name_conforms_to_pattern() {
-        assert_eq!(sanitize_tool_name("get_weather"), "get_weather");
-        assert_eq!(sanitize_tool_name("weather.lookup"), "weather_lookup");
-        assert_eq!(sanitize_tool_name("café"), "caf_");
-        assert_eq!(sanitize_tool_name(&"x".repeat(100)).len(), 64);
-        assert_eq!(sanitize_tool_name(""), "_");
-    }
+    // Tool-name sanitization + the collision-safe reverse map are tested in
+    // `pocopine_agenkit_core::tool_name`.
 
     #[test]
     fn hoists_system_field_and_system_messages() {
@@ -503,6 +462,53 @@ mod tests {
     }
 
     #[test]
+    fn colliding_tool_ids_get_distinct_wire_names() {
+        // Two ids that sanitize to the same wire name must stay distinct, or a
+        // model tool call would dispatch to the wrong tool (#5).
+        let request = GenerateRequest {
+            model: ModelRef::new("anthropic/claude-opus-4-8"),
+            messages: vec![Message::new(Role::User, "hi")],
+            tools: vec![
+                ToolDescriptor::new("weather.lookup", "a"),
+                ToolDescriptor::new("weather/lookup", "b"),
+            ],
+            ..GenerateRequest::default()
+        };
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let names: Vec<&str> = value["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert_ne!(names[0], names[1], "colliding ids must get distinct names");
+    }
+
+    #[test]
+    fn tool_message_without_id_becomes_user_text_not_dropped() {
+        // A tool turn with no `tool_call_id` can't form a valid `tool_result`;
+        // its content must still reach the model as user text, never be dropped
+        // (which would leave a preceding tool_use unpaired → 400) (#6).
+        let request = GenerateRequest {
+            model: ModelRef::new("anthropic/claude-opus-4-8"),
+            messages: vec![Message {
+                role: Role::Tool,
+                content: Content::text("tool output"),
+                tool_calls: vec![],
+                tool_call_id: None,
+            }],
+            ..GenerateRequest::default()
+        };
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let messages = value["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1, "the turn must not be dropped");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["type"], "text");
+        assert_eq!(messages[0]["content"][0]["text"], "tool output");
+    }
+
+    #[test]
     fn folds_assistant_tool_use_and_tool_result_turns() {
         let request = GenerateRequest {
             model: ModelRef::new("anthropic/claude-opus-4-8"),
@@ -539,7 +545,7 @@ mod tests {
 
     #[test]
     fn response_maps_text_tool_and_structured() {
-        let name_map = tool_name_map(&[ToolDescriptor::new("weather.lookup", "w")]);
+        let names = ToolNameMap::from_descriptors(&[ToolDescriptor::new("weather.lookup", "w")]);
         // A real tool call: sanitized name maps back to the original id.
         let resp: MessagesResponse = serde_json::from_value(serde_json::json!({
             "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather_lookup", "input": {"city": "Paris"}}],
@@ -547,7 +553,7 @@ mod tests {
             "usage": {"input_tokens": 5, "output_tokens": 3}
         }))
         .unwrap();
-        let mapped = resp.into_agenkit(&name_map);
+        let mapped = resp.into_agenkit(&names);
         assert_eq!(mapped.tool_calls.len(), 1);
         assert_eq!(mapped.tool_calls[0].tool_id, "weather.lookup");
 
@@ -557,7 +563,7 @@ mod tests {
             "stop_reason": "tool_use"
         }))
         .unwrap();
-        let mapped = resp.into_agenkit(&HashMap::new());
+        let mapped = resp.into_agenkit(&ToolNameMap::default());
         assert!(mapped.tool_calls.is_empty());
         assert_eq!(
             mapped.structured_value(),
