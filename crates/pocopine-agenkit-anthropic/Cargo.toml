@@ -1,0 +1,31 @@
+[package]
+name = "pocopine-agenkit-anthropic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native Anthropic Claude (Messages API) provider for Pocopine Agenkit. Implements the Agenkit Provider trait against /v1/messages with content-block mapping, forced-tool structured output, and native SSE streaming. Server-only credentials."
+
+# Host-only: depends on the host-side pocopine-agenkit runtime + reqwest, which
+# do not build for wasm32. The browser never calls a provider directly (§D10).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-agenkit = { workspace = true }
+pocopine-agenkit-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `stream` for SSE streaming (response.bytes_stream()).
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls-webpki-roots",
+] }
+futures = "0.3"
+# Stream the SSE response off a spawned reader task.
+tokio = { version = "1", features = ["rt", "sync"] }
+tokio-stream = "0.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+wiremock = "0.6"
+# A structured-output type for the forced-tool / streaming tests.
+schemars = "0.8"
