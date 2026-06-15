@@ -125,20 +125,6 @@ impl Agenkit {
         self.inner.flows.contains(id)
     }
 
-    /// Run a registered flow over **untyped** JSON input under a fresh trace
-    /// tree — the escape hatch; prefer the typed [`Agenkit::run_flow`].
-    ///
-    /// Emits `ai_flow_started` / `ai_flow_completed` / `ai_flow_failed`; the
-    /// flow body emits its own step/retrieval/model events under the same
-    /// `trace_id`.
-    pub async fn run_flow_json(
-        &self,
-        id: &str,
-        input: serde_json::Value,
-    ) -> AgenkitResult<serde_json::Value> {
-        self.run_flow_inner(id, input, None, None).await
-    }
-
     /// Run a flow while streaming public [`FlowStreamEvent`]s into `sink`.
     ///
     /// The sink carries client-safe events by construction (§D8); the Phase 3.3
@@ -241,6 +227,12 @@ impl Agenkit {
     /// Run a registered flow with typed input/output under a fresh trace tree.
     /// The caller principal is the ambient one (the request principal when the
     /// [`crate::server::PrincipalLayer`] scoped it; anonymous otherwise).
+    ///
+    /// Emits `ai_flow_started` / `ai_flow_completed` / `ai_flow_failed`; the
+    /// flow body emits its own step/retrieval/model events under the same
+    /// `trace_id`. `serde_json::Value` satisfies both bounds, so this also
+    /// serves untyped JSON in/out (`run_flow::<Value, Value>(..)`) — there is no
+    /// separate JSON method.
     pub async fn run_flow<I, O>(&self, id: &str, input: I) -> AgenkitResult<O>
     where
         I: Serialize,
@@ -248,7 +240,7 @@ impl Agenkit {
     {
         let input = serde_json::to_value(input)
             .map_err(|err| AgenkitError::validation(format!("flow `{id}` input: {err}")))?;
-        let output = self.run_flow_json(id, input).await?;
+        let output = self.run_flow_inner(id, input, None, None).await?;
         serde_json::from_value(output)
             .map_err(|err| AgenkitError::validation(format!("flow `{id}` output: {err}")))
     }
