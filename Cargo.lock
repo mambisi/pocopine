@@ -6923,6 +6923,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "pocopine-agenkit-core",
+ "pocopine-agenkit-macros",
  "pocopine-auth",
  "pocopine-core",
  "pocopine-observe",
@@ -6958,6 +6959,16 @@ version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "pocopine-agenkit-macros"
+version = "0.1.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "trybuild",
 ]
 
 [[package]]
