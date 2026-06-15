@@ -8,6 +8,11 @@ description = "Pocopine Agenkit runtime facade — the unified generative-AI app
 
 [dependencies]
 pocopine-agenkit-core = { workspace = true }
+# Authoring macros, re-exported as `pocopine_agenkit::{ai_tool, ai_flow,
+# ai_server_flow}` (RFC-093 §D14). A proc-macro crate — host-built for every
+# target — so it stays in the base deps; `ai_server_flow` also generates a wasm
+# client half, so its re-export is not gated.
+pocopine-agenkit-macros = { workspace = true }
 
 # The runtime is host-side; its dependencies are gated so the workspace
 # `wasm32-unknown-unknown` build keeps compiling this crate as an (empty)
@@ -22,9 +27,6 @@ pocopine-auth = { workspace = true }
 # AI events ride the existing observability stack: TraceEvent -> ObservedEvent
 # -> emit_tracing. No parallel telemetry runtime (§D12).
 pocopine-observe = { workspace = true }
-# Authoring sugar re-exported as `pocopine_agenkit::{ai_tool, ai_flow}` (RFC-093
-# §D14). A proc-macro crate (host-built); the code it generates is server-side.
-pocopine-agenkit-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Provider runtime + bounded parallel branches (JoinSet/abort) + timeouts.

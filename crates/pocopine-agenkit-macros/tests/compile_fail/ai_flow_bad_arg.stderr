@@ -1,0 +1,5 @@
+error: unsupported `#[ai_flow]` argument; expected `public`, `id = "..."`, `stream = "..."`, or `agents(..)` / `tools(..)` / `retrievers(..)` / `state(..)`
+ --> tests/compile_fail/ai_flow_bad_arg.rs:1:36
+  |
+1 | #[pocopine_agenkit_macros::ai_flow(nope)]
+  |                                    ^^^^
