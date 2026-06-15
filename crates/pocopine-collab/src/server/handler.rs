@@ -22,7 +22,7 @@
 //! is layered by a richer authorizer in a follow-up.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -35,12 +35,15 @@ use super::sync::CollabDocument;
 /// Server-side CRDT collaboration over the realtime gateway.
 ///
 /// Shared across every connection and topic (held behind an `Arc` by the
-/// gateway). One authoritative document per topic lives behind a `Mutex`; the
-/// document operations are synchronous and never cross an `.await`, so the lock
-/// is never held across a suspension point.
+/// gateway). Each topic's authoritative document lives behind its OWN `Mutex`,
+/// so a slow operation on one document (e.g. encoding a large state vector)
+/// never blocks edits to any other topic; the outer map lock is held only long
+/// enough to look up the per-topic handle. The document operations are
+/// synchronous and never cross an `.await`, so neither lock is held across a
+/// suspension point.
 #[derive(Default)]
 pub struct CollabSync {
-    docs: Mutex<HashMap<Topic, CollabDocument>>,
+    docs: Mutex<HashMap<Topic, Arc<Mutex<CollabDocument>>>>,
 }
 
 impl CollabSync {
@@ -48,6 +51,17 @@ impl CollabSync {
     /// message.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The per-topic document handle, created on first access.
+    fn document(&self, topic: &Topic) -> Result<Arc<Mutex<CollabDocument>>, WsError> {
+        let mut docs = self
+            .docs
+            .lock()
+            .map_err(|_| WsError::backend("collab document map poisoned"))?;
+        Ok(Arc::clone(docs.entry(topic.clone()).or_insert_with(|| {
+            Arc::new(Mutex::new(CollabDocument::new()))
+        })))
     }
 }
 
@@ -57,13 +71,10 @@ impl SubprotocolHandler for CollabSync {
         let message = CollabMessage::decode(inbound.payload)
             .map_err(|err| WsError::protocol(err.to_string()))?;
 
-        let mut docs = self
-            .docs
+        let document = self.document(inbound.topic)?;
+        let doc = document
             .lock()
-            .map_err(|_| WsError::backend("collab document map poisoned"))?;
-        let doc = docs
-            .entry(inbound.topic.clone())
-            .or_insert_with(CollabDocument::new);
+            .map_err(|_| WsError::backend("collab document mutex poisoned"))?;
 
         let mut reaction = Reaction::new();
         match message {
@@ -76,14 +87,42 @@ impl SubprotocolHandler for CollabSync {
                 // ...and our own state vector, so it sends back what WE lack.
                 reaction.reply(CollabMessage::SyncStep1(Bytes::from(doc.state_vector())).encode());
             }
-            CollabMessage::SyncStep2(update) | CollabMessage::Update(update) => {
-                doc.apply_update(&update)
-                    .map_err(|err| WsError::protocol(err.to_string()))?;
-                reaction.broadcast(CollabMessage::Update(update).encode());
+            CollabMessage::SyncStep2(update) => {
+                // Relabel a handshake SyncStep2 as a live Update for peers.
+                if let Some(payload) = broadcast_if_advanced(&doc, &update, || {
+                    CollabMessage::Update(update.clone()).encode()
+                })? {
+                    reaction.broadcast(payload);
+                }
+            }
+            CollabMessage::Update(update) => {
+                // Already a tagged Update on the wire — forward the original
+                // payload verbatim (a cheap `Bytes` refcount bump, no re-encode).
+                if let Some(payload) =
+                    broadcast_if_advanced(&doc, &update, || inbound.payload.clone())?
+                {
+                    reaction.broadcast(payload);
+                }
             }
         }
         Ok(reaction)
     }
+}
+
+/// Apply `update` to `doc`; return the to-broadcast payload (built lazily by
+/// `payload`) only if the document actually advanced. A no-op update — a
+/// duplicate, or a peer that had nothing new — is applied but NOT fanned out,
+/// so it never wakes every subscriber or burns a slot of the bounded fan-out
+/// replay window.
+fn broadcast_if_advanced(
+    doc: &CollabDocument,
+    update: &[u8],
+    payload: impl FnOnce() -> Bytes,
+) -> Result<Option<Bytes>, WsError> {
+    let before = doc.state_vector();
+    doc.apply_update(update)
+        .map_err(|err| WsError::protocol(err.to_string()))?;
+    Ok((doc.state_vector() != before).then(payload))
 }
 
 #[cfg(test)]
@@ -128,6 +167,27 @@ mod tests {
             decode(&reaction.broadcasts()[0]),
             CollabMessage::Update(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_noop_update_is_applied_but_not_rebroadcast() {
+        let server = CollabSync::new();
+        let topic = Topic::new("collab:doc").unwrap();
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "hello");
+        let update = Bytes::from(edit.full_update());
+
+        // First application advances the document and fans out.
+        let first = feed(&server, &topic, CollabMessage::Update(update.clone())).await;
+        assert_eq!(first.broadcasts().len(), 1);
+
+        // Re-applying the identical update changes nothing: still applied, but
+        // NOT fanned out again (no subscriber wake, no replay-window slot burnt).
+        let second = feed(&server, &topic, CollabMessage::Update(update)).await;
+        assert!(
+            second.broadcasts().is_empty(),
+            "a duplicate / no-op update must not be rebroadcast"
+        );
     }
 
     #[tokio::test]
