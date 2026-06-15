@@ -44,25 +44,55 @@ pub trait Fanout: Send + Sync + 'static {
     async fn subscribe(&self, topic: &Topic, after: Option<u64>) -> Result<TopicStream, WsError>;
 }
 
-/// A per-topic message stream: retained replay followed by live broadcast.
+/// Backend-polymorphic source behind a [`TopicStream`]: replayed messages
+/// first, then live ones. Each [`Fanout`] implementation provides its own
+/// (the in-process broadcast here; a Redis Stream tail for the multi-process
+/// backend).
+#[async_trait]
+pub trait TopicSource: Send {
+    /// Next message: drained replay first, then live. `Ok(None)` = source
+    /// closed; `Err(WsError::Lagged)` = the live tail lost ordering.
+    async fn next(&mut self) -> Result<Option<TopicMessage>, WsError>;
+
+    /// True if the requested resume cursor was unreplayable, so a hole exists
+    /// before the replayed messages (resolved at subscribe time). The client
+    /// must re-subscribe fresh (and, for collab, re-run the sync handshake).
+    fn gap(&self) -> bool;
+}
+
+/// A per-topic message stream: retained replay followed by live delivery.
+/// Backend-agnostic — a thin wrapper over a [`TopicSource`].
 pub struct TopicStream {
+    source: Box<dyn TopicSource>,
+}
+
+impl TopicStream {
+    /// Wrap a backend source.
+    pub fn new(source: Box<dyn TopicSource>) -> Self {
+        Self { source }
+    }
+
+    /// True if the resume cursor was unreplayable; see [`TopicSource::gap`].
+    pub fn gap(&self) -> bool {
+        self.source.gap()
+    }
+
+    /// Return the next message; see [`TopicSource::next`].
+    pub async fn next(&mut self) -> Result<Option<TopicMessage>, WsError> {
+        self.source.next().await
+    }
+}
+
+/// In-process [`TopicSource`]: drained replay then a `tokio::broadcast` tail.
+struct LocalTopicSource {
     replay: std::vec::IntoIter<TopicMessage>,
     gap: bool,
     rx: broadcast::Receiver<TopicMessage>,
 }
 
-impl TopicStream {
-    /// True if the requested resume cursor was older than retention, so a hole
-    /// exists before the replayed messages. The client must re-subscribe fresh
-    /// (and, for collab, re-run the sync handshake).
-    pub fn gap(&self) -> bool {
-        self.gap
-    }
-
-    /// Return the next message: drained replay first, then live broadcast.
-    /// `Ok(None)` means the topic channel closed; `Err(WsError::Lagged)` means
-    /// the live subscription fell behind and lost ordering.
-    pub async fn next(&mut self) -> Result<Option<TopicMessage>, WsError> {
+#[async_trait]
+impl TopicSource for LocalTopicSource {
+    async fn next(&mut self) -> Result<Option<TopicMessage>, WsError> {
         if let Some(msg) = self.replay.next() {
             return Ok(Some(msg));
         }
@@ -71,6 +101,10 @@ impl TopicStream {
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(skipped)) => Err(WsError::Lagged(skipped)),
         }
+    }
+
+    fn gap(&self) -> bool {
+        self.gap
     }
 }
 
@@ -207,11 +241,11 @@ impl Fanout for LocalFanout {
             .or_insert_with(|| TopicChannel::new(self.capacity));
         let (events, gap) = channel.log.replay_after(after);
         let rx = channel.tx.subscribe();
-        Ok(TopicStream {
+        Ok(TopicStream::new(Box::new(LocalTopicSource {
             replay: events.into_iter(),
             gap,
             rx,
-        })
+        })))
     }
 }
 

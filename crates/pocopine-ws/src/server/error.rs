@@ -29,6 +29,9 @@ pub enum WsError {
     /// The peer violated the protocol (e.g. a Data frame for an unknown
     /// `topic_ref`).
     Protocol(String),
+    /// A backend / transport failure in a fan-out implementation (e.g. a
+    /// Redis I/O or scripting error).
+    Backend(String),
     /// The underlying transport or fan-out source closed.
     Closed,
 }
@@ -48,6 +51,11 @@ impl WsError {
     pub fn forbidden(msg: impl Into<String>) -> Self {
         Self::Forbidden(msg.into())
     }
+
+    /// Build a [`WsError::Backend`] from anything stringy.
+    pub fn backend(msg: impl Into<String>) -> Self {
+        Self::Backend(msg.into())
+    }
 }
 
 impl fmt::Display for WsError {
@@ -64,6 +72,7 @@ impl fmt::Display for WsError {
             Self::Gap => write!(f, "ws resume cursor not replayable (gap)"),
             Self::Forbidden(topic) => write!(f, "ws topic forbidden: {topic}"),
             Self::Protocol(msg) => write!(f, "ws protocol error: {msg}"),
+            Self::Backend(msg) => write!(f, "ws backend error: {msg}"),
             Self::Closed => write!(f, "ws transport closed"),
         }
     }
