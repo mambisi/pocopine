@@ -134,6 +134,7 @@ pocopine-live = { path = "crates/pocopine-live", version = "0.1.0" }
 pocopine-logging = { path = "crates/pocopine-logging", version = "0.1.0" }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
 pocopine-observe = { path = "crates/pocopine-observe", version = "0.1.0" }
+pocopine-realtime = { path = "crates/pocopine-realtime", version = "0.1.0" }
 pocopine-server = { path = "crates/pocopine-server", version = "0.1.0" }
 pocopine-storage = { path = "crates/pocopine-storage", version = "0.1.0" }
 pocopine-storage-azure = { path = "crates/pocopine-storage-azure", version = "0.1.0" }

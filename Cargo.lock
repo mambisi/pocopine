@@ -7148,9 +7148,14 @@ name = "pocopine-collab"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "axum 0.7.9",
  "bytes",
+ "futures-util",
  "pocopine-crypto",
+ "pocopine-events",
+ "pocopine-realtime",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "yrs",
 ]
