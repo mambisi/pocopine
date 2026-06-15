@@ -86,9 +86,10 @@ pub struct WsGateway {
     /// Stateful inbound handlers keyed by `subprotocol_id`. A sub-protocol with
     /// no entry uses the default publish-to-fan-out relay.
     handlers: Arc<HashMap<u64, Arc<dyn SubprotocolHandler>>>,
-    /// Per-topic count of live subscriptions across all of this process's
-    /// connections. Drives the handler's topic active/idle lifecycle (0↔1).
-    subscriber_counts: Arc<Mutex<HashMap<Topic, usize>>>,
+    /// Live subscription count per `(topic, subprotocol_id)` across all of this
+    /// process's connections. Keyed by sub-protocol too, so the active/idle
+    /// lifecycle (0↔1) always reaches the handler that owns that sub-protocol.
+    subscriber_counts: Arc<Mutex<HashMap<(Topic, u64), usize>>>,
 }
 
 impl WsGateway {
@@ -225,40 +226,46 @@ impl WsGateway {
         self.handlers.get(&subprotocol_id)
     }
 
-    /// Record a new subscription to `topic`; notify the sub-protocol's handler
-    /// if this is the topic's first live subscriber on this process (0→1).
+    /// Record a new subscription to `(topic, subprotocol_id)`; notify the
+    /// sub-protocol's handler if this is its first live subscriber on this
+    /// process (0→1).
+    ///
+    /// The handler is notified WHILE the count lock is held: the lock orders the
+    /// 0→1 / 1→0 transitions, and notifying inside it makes the active/idle
+    /// callbacks arrive in that same order. Otherwise a concurrent unsubscribe
+    /// (1→0) and subscribe (0→1) on one topic could deliver idle-after-active
+    /// and leave a live topic with no handler state. (Lock order is always
+    /// counts → handler's own lock; nothing takes them the other way, so no
+    /// deadlock.)
     pub(crate) fn topic_subscribed(&self, topic: &Topic, subprotocol_id: u64) {
-        let first = {
-            let mut counts = self.subscriber_counts.lock().expect("counts poisoned");
-            let n = counts.entry(topic.clone()).or_insert(0);
-            *n += 1;
-            *n == 1
-        };
-        if first && let Some(handler) = self.handler(subprotocol_id) {
+        let mut counts = self.subscriber_counts.lock().expect("counts poisoned");
+        let n = counts.entry((topic.clone(), subprotocol_id)).or_insert(0);
+        *n += 1;
+        if *n == 1
+            && let Some(handler) = self.handler(subprotocol_id)
+        {
             handler.on_topic_active(topic);
         }
     }
 
-    /// Record a dropped subscription to `topic`; notify the sub-protocol's
-    /// handler if that was the topic's last live subscriber on this process
-    /// (1→0). Idempotent for an unknown topic.
+    /// Record a dropped subscription to `(topic, subprotocol_id)`; notify the
+    /// sub-protocol's handler (under the lock) if that was its last live
+    /// subscriber on this process (1→0). Idempotent for an unknown key.
     pub(crate) fn topic_unsubscribed(&self, topic: &Topic, subprotocol_id: u64) {
-        let last = {
-            let mut counts = self.subscriber_counts.lock().expect("counts poisoned");
-            match counts.get_mut(topic) {
-                Some(n) => {
-                    *n = n.saturating_sub(1);
-                    let drained = *n == 0;
-                    if drained {
-                        counts.remove(topic);
-                    }
-                    drained
-                }
-                None => false,
+        let mut counts = self.subscriber_counts.lock().expect("counts poisoned");
+        let key = (topic.clone(), subprotocol_id);
+        let drained = match counts.get_mut(&key) {
+            Some(n) => {
+                *n = n.saturating_sub(1);
+                *n == 0
             }
+            None => return,
         };
-        if last && let Some(handler) = self.handler(subprotocol_id) {
-            handler.on_topic_idle(topic);
+        if drained {
+            counts.remove(&key);
+            if let Some(handler) = self.handler(subprotocol_id) {
+                handler.on_topic_idle(topic);
+            }
         }
     }
 

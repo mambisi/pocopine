@@ -396,11 +396,28 @@ impl Session {
             return;
         }
 
-        // Commit: replace any existing subscription to this topic.
-        if let Some(old_ref) = self.topic_by_name.remove(topic_name)
+        // Commit: replace any existing subscription to this topic, capturing the
+        // sub-protocol it was joined under so the lifecycle counts rebalance.
+        let replaced = if let Some(old_ref) = self.topic_by_name.remove(topic_name)
             && let Some(entry) = self.topics.remove(&old_ref)
         {
             entry.pump.abort();
+            Some(entry.subprotocol_id)
+        } else {
+            None
+        };
+
+        // Rebalance the per-(topic, sub-protocol) subscriber count and fire the
+        // active/idle lifecycle. A re-subscribe under the SAME sub-protocol
+        // leaves the count untouched; switching sub-protocols releases the old
+        // and acquires the new (so neither handler is left unbalanced).
+        match replaced {
+            Some(old) if old == subprotocol_id => {}
+            Some(old) => {
+                self.gateway.topic_unsubscribed(&topic, old);
+                self.gateway.topic_subscribed(&topic, subprotocol_id);
+            }
+            None => self.gateway.topic_subscribed(&topic, subprotocol_id),
         }
 
         let topic_ref = self.next_topic_ref;
@@ -413,12 +430,6 @@ impl Session {
             topic_ref,
             topic_name.to_string(),
         ));
-        // A genuinely new subscription (not a re-subscribe of a topic this
-        // connection already holds) bumps the process-wide count, which fires
-        // the handler's topic-active lifecycle on 0→1.
-        if !already_subscribed {
-            self.gateway.topic_subscribed(&topic, subprotocol_id);
-        }
         self.topics.insert(
             topic_ref,
             TopicEntry {
