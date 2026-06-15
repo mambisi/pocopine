@@ -245,4 +245,19 @@ mod tests {
         let query = descriptor.query.json_schema.expect("query schema derived");
         assert_eq!(query["properties"]["question"]["type"], "string");
     }
+
+    #[test]
+    fn builder_registers_a_retriever_as_a_tool() {
+        // `tool_dyn(R::as_tool())` puts the retriever in the tool registry under
+        // its id, so an agent can call it (the documented §D5 "as a tool" path).
+        use crate::server::{Agenkit, MockProvider};
+        use pocopine_agenkit_core::ModelRef;
+        let agenkit = Agenkit::builder()
+            .provider(MockProvider::new("local"))
+            .default_model(ModelRef::new("local/default"))
+            .tool_dyn(ProjectDocs::as_tool())
+            .build()
+            .unwrap();
+        assert!(agenkit.tools().get("project_docs").is_some());
+    }
 }

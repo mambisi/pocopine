@@ -129,6 +129,18 @@ pages = [
 
 [[group]]
 section = "Docs"
+title = "AI (Agenkit)"
+pages = [
+  { title = "Overview",                  path = "guides/agenkit/README.md" },
+  { title = "Traceable flow design",     path = "guides/agenkit/traceable-flows.md" },
+  { title = "Retrieval: direct vs tool", path = "guides/agenkit/retrieval.md" },
+  { title = "Streams & secrets",         path = "guides/agenkit/streaming-and-secrets.md" },
+  { title = "Parallel & cancellation",   path = "guides/agenkit/parallel.md" },
+  { title = "Agent threads",             path = "guides/agenkit/threads.md" },
+]
+
+[[group]]
+section = "Docs"
 title = "Observability"
 pages = [
   { title = "Logging & tracing", path = "guides/observability/logging-tracing.md" },

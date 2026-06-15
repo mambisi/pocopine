@@ -46,7 +46,7 @@ use super::provider::{Provider, ProviderRegistry};
 use super::retrieval::{AiRetriever, RetrieverRegistry};
 use super::run::RunState;
 use super::thread::{AgentThreadStore, InMemoryThreadStore};
-use super::tool::{AiTool, ToolRegistry};
+use super::tool::{AiTool, DynTool, ToolRegistry};
 
 /// Shared, immutable runtime state behind an [`Agenkit`] handle.
 pub(crate) struct AgenkitInner {
@@ -419,6 +419,13 @@ impl AgenkitBuilder {
     /// Register a typed tool.
     pub fn tool<T: AiTool>(mut self, tool: T) -> Self {
         self.tools.register(tool);
+        self
+    }
+
+    /// Register an already-erased tool — e.g. a retriever exposed to agents via
+    /// [`AiRetriever::as_tool`], so the model can invoke it (§D5).
+    pub fn tool_dyn(mut self, tool: Arc<dyn DynTool>) -> Self {
+        self.tools.register_dyn(tool);
         self
     }
 
