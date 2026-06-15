@@ -85,12 +85,11 @@ async fn ai_flow_registers_runs_and_is_public() {
     // `#[ai_flow(public)]` emits `.public()` — recorded in the manifest.
     assert!(agenkit.flow_is_public("answer"));
     let out: Answer = agenkit
-        .run_flow(
-            "answer",
-            Question {
-                q: "hi".to_string(),
-            },
-        )
+        .flow("answer")
+        .input(Question {
+            q: "hi".to_string(),
+        })
+        .run()
         .await
         .unwrap();
     assert_eq!(

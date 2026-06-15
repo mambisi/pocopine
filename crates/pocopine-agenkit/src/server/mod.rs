@@ -26,7 +26,7 @@ pub mod stream_route;
 pub mod thread;
 pub mod tool;
 
-pub use agenkit::{Agenkit, AgenkitBuilder, with_principal};
+pub use agenkit::{Agenkit, AgenkitBuilder, FlowCall, with_principal};
 pub use agent::{AgentRun, AiAgent, AiAgentBuilder};
 pub use bridge::to_server_error;
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};

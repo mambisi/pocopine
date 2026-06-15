@@ -141,12 +141,14 @@ fn runtime() -> (Agenkit, Arc<AtomicBool>) {
 #[test]
 fn answer_with_review_fans_out_then_reduces() {
     let (agenkit, _) = runtime();
-    let answer: FinalAnswer = block_on(agenkit.run_flow(
-        "answer_with_review",
-        Question {
-            q: "how do uploads work?".to_string(),
-        },
-    ))
+    let answer: FinalAnswer = block_on(
+        agenkit
+            .flow("answer_with_review")
+            .input(Question {
+                q: "how do uploads work?".to_string(),
+            })
+            .run(),
+    )
     .unwrap();
     // Three agent branches (AllSettled, min_success 2) reduced by a model judge.
     assert_eq!(
@@ -160,7 +162,7 @@ fn answer_with_review_fans_out_then_reduces() {
 #[test]
 fn first_success_aborts_losing_branch_in_flight() {
     let (agenkit, loser_done) = runtime();
-    let winner: i32 = block_on(agenkit.run_flow("race", ())).unwrap();
+    let winner: i32 = block_on(agenkit.flow("race").run()).unwrap();
     assert_eq!(winner, 1);
     // The slow branch was aborted mid-sleep, so it never reached the store.
     assert!(
@@ -174,7 +176,7 @@ fn all_join_fails_when_a_branch_panics() {
     // A panicked branch is a branch failure, not a silent skip: `All` must
     // refuse to return a partial result set.
     let (agenkit, _) = runtime();
-    let result: Result<Vec<i32>, _> = block_on(agenkit.run_flow("strict_with_panic", ()));
+    let result: Result<Vec<i32>, _> = block_on(agenkit.flow("strict_with_panic").run());
     let error = result.expect_err("All join must fail on a panicked branch");
     assert_eq!(error.kind(), "internal", "error: {error}");
 }
@@ -182,7 +184,7 @@ fn all_join_fails_when_a_branch_panics() {
 #[test]
 fn all_settled_join_records_a_panicked_branch_but_keeps_survivors() {
     let (agenkit, _) = runtime();
-    let mut survivors: Vec<i32> = block_on(agenkit.run_flow("settled_with_panic", ())).unwrap();
+    let mut survivors: Vec<i32> = block_on(agenkit.flow("settled_with_panic").run()).unwrap();
     // Settled results arrive in completion order; only membership matters.
     survivors.sort_unstable();
     assert_eq!(survivors, vec![1, 3]);
@@ -197,7 +199,9 @@ fn first_success_emits_cancelled_terminal_for_aborted_loser() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let winner: i32 = block_on(async {
         let value = agenkit
-            .run_flow_streaming("race", serde_json::json!(null), tx)
+            .flow("race")
+            .input(serde_json::json!(null))
+            .stream(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()
@@ -247,11 +251,9 @@ fn streaming_emits_public_flow_events() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let answer: FinalAnswer = block_on(async {
         let value = agenkit
-            .run_flow_streaming(
-                "answer_with_review",
-                serde_json::json!({"q": "how do uploads work?"}),
-                tx,
-            )
+            .flow("answer_with_review")
+            .input(serde_json::json!({"q": "how do uploads work?"}))
+            .stream(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()

@@ -47,14 +47,14 @@ fn alice() -> Principal {
 #[test]
 fn explicit_principal_flows_into_the_flow() {
     let agenkit = runtime();
-    let id: String = block_on(agenkit.run_flow_as(alice(), "whoami", ())).unwrap();
+    let id: String = block_on(agenkit.flow("whoami").principal(alice()).run()).unwrap();
     assert_eq!(id, "alice");
 }
 
 #[test]
 fn anonymous_when_no_principal() {
     let agenkit = runtime();
-    let id: String = block_on(agenkit.run_flow("whoami", ())).unwrap();
+    let id: String = block_on(agenkit.flow("whoami").run()).unwrap();
     assert_eq!(id, "anon");
 }
 
@@ -62,7 +62,7 @@ fn anonymous_when_no_principal() {
 fn scoped_principal_is_picked_up_by_run_flow() {
     let agenkit = runtime();
     let id: String = block_on(with_principal(alice(), async {
-        agenkit.run_flow::<(), String>("whoami", ()).await
+        agenkit.flow("whoami").run::<String>().await
     }))
     .unwrap();
     assert_eq!(id, "alice");
@@ -71,6 +71,6 @@ fn scoped_principal_is_picked_up_by_run_flow() {
 #[test]
 fn principal_flows_into_a_parallel_branch() {
     let agenkit = runtime();
-    let id: String = block_on(agenkit.run_flow_as(alice(), "whoami_in_branch", ())).unwrap();
+    let id: String = block_on(agenkit.flow("whoami_in_branch").principal(alice()).run()).unwrap();
     assert_eq!(id, "alice");
 }

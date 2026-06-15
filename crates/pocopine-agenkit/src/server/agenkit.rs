@@ -125,20 +125,6 @@ impl Agenkit {
         self.inner.flows.contains(id)
     }
 
-    /// Run a flow while streaming public [`FlowStreamEvent`]s into `sink`.
-    ///
-    /// The sink carries client-safe events by construction (§D8); the Phase 3.3
-    /// route applies the redaction chokepoint before the wire. Provider
-    /// credentials, raw prompts, and tool args never reach this channel.
-    pub async fn run_flow_streaming(
-        &self,
-        id: &str,
-        input: serde_json::Value,
-        sink: UnboundedSender<FlowStreamEvent>,
-    ) -> AgenkitResult<serde_json::Value> {
-        self.run_flow_inner(id, input, None, Some(sink)).await
-    }
-
     async fn run_flow_inner(
         &self,
         id: &str,
@@ -224,46 +210,72 @@ impl Agenkit {
         result
     }
 
-    /// Run a registered flow with typed input/output under a fresh trace tree.
-    /// The caller principal is the ambient one (the request principal when the
-    /// [`crate::server::PrincipalLayer`] scoped it; anonymous otherwise).
+    /// Begin a flow invocation: `agenkit.flow(id).input(x).run().await`.
     ///
-    /// Emits `ai_flow_started` / `ai_flow_completed` / `ai_flow_failed`; the
-    /// flow body emits its own step/retrieval/model events under the same
-    /// `trace_id`. `serde_json::Value` satisfies both bounds, so this also
-    /// serves untyped JSON in/out (`run_flow::<Value, Value>(..)`) — there is no
-    /// separate JSON method.
-    pub async fn run_flow<I, O>(&self, id: &str, input: I) -> AgenkitResult<O>
-    where
-        I: Serialize,
-        O: DeserializeOwned,
-    {
-        let input = serde_json::to_value(input)
-            .map_err(|err| AgenkitError::validation(format!("flow `{id}` input: {err}")))?;
-        let output = self.run_flow_inner(id, input, None, None).await?;
-        serde_json::from_value(output)
-            .map_err(|err| AgenkitError::validation(format!("flow `{id}` output: {err}")))
+    /// The chain replaces the old `run_flow*` methods. `.input(..)` is optional
+    /// (defaults to `null`, which deserializes to a `()`-input flow);
+    /// `.principal(..)` is optional (defaults to the ambient principal scoped by
+    /// [`crate::server::PrincipalLayer`]); the terminal is `.run::<O>()` (typed
+    /// output) or `.stream(sink)` (public [`FlowStreamEvent`]s).
+    pub fn flow(&self, id: impl Into<String>) -> FlowCall<'_> {
+        FlowCall {
+            agenkit: self,
+            id: id.into(),
+            input: Ok(serde_json::Value::Null),
+            principal: None,
+        }
+    }
+}
+
+/// A pending flow invocation built by [`Agenkit::flow`].
+pub struct FlowCall<'a> {
+    agenkit: &'a Agenkit,
+    id: String,
+    /// Serialized eagerly in [`FlowCall::input`]; a serialize failure is stashed
+    /// and surfaced at the terminal.
+    input: AgenkitResult<serde_json::Value>,
+    principal: Option<Principal>,
+}
+
+impl FlowCall<'_> {
+    /// Set the typed flow input (serialized now). Omit for a `()`-input flow.
+    pub fn input(mut self, input: impl Serialize) -> Self {
+        self.input = serde_json::to_value(input)
+            .map_err(|err| AgenkitError::validation(format!("flow `{}` input: {err}", self.id)));
+        self
     }
 
-    /// Run a typed flow explicitly under `principal`, bypassing the ambient
-    /// task-local — for tests and non-request contexts.
-    pub async fn run_flow_as<I, O>(
-        &self,
-        principal: Principal,
-        id: &str,
-        input: I,
-    ) -> AgenkitResult<O>
-    where
-        I: Serialize,
-        O: DeserializeOwned,
-    {
-        let input = serde_json::to_value(input)
-            .map_err(|err| AgenkitError::validation(format!("flow `{id}` input: {err}")))?;
+    /// Run explicitly under `principal`, bypassing the ambient task-local — for
+    /// tests and non-request contexts.
+    pub fn principal(mut self, principal: Principal) -> Self {
+        self.principal = Some(principal);
+        self
+    }
+
+    /// Run the flow and deserialize its typed output. `O` is inferred from the
+    /// binding (`Value` works for untyped output). Emits `ai_flow_started` /
+    /// `ai_flow_completed` / `ai_flow_failed` under a fresh trace tree.
+    pub async fn run<O: DeserializeOwned>(self) -> AgenkitResult<O> {
+        let input = self.input?;
         let output = self
-            .run_flow_inner(id, input, Some(principal), None)
+            .agenkit
+            .run_flow_inner(&self.id, input, self.principal, None)
             .await?;
         serde_json::from_value(output)
-            .map_err(|err| AgenkitError::validation(format!("flow `{id}` output: {err}")))
+            .map_err(|err| AgenkitError::validation(format!("flow `{}` output: {err}", self.id)))
+    }
+
+    /// Run the flow streaming public [`FlowStreamEvent`]s into `sink` (client-
+    /// safe by construction, §D8). Returns the final raw output (which also
+    /// rides the sink as `OutputDelta`/`OutputCompleted`).
+    pub async fn stream(
+        self,
+        sink: UnboundedSender<FlowStreamEvent>,
+    ) -> AgenkitResult<serde_json::Value> {
+        let input = self.input?;
+        self.agenkit
+            .run_flow_inner(&self.id, input, self.principal, Some(sink))
+            .await
     }
 }
 

@@ -8,7 +8,7 @@
 //! #[server(public)]
 //! pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
 //!     active_plugin::<Agenkit>().expect("agenkit_server_plugin installed")
-//!         .run_flow("summarize", input).await
+//!         .flow("summarize").input(input).run().await
 //!         .map_err(|e| to_server_error(&e))
 //! }
 //! ```
@@ -135,7 +135,7 @@ mod tests {
 
     // A plain handler that runs a flow by id, exactly like a `#[server]` fn.
     async fn run_whoami(State(agenkit): State<Agenkit>) -> String {
-        agenkit.run_flow::<(), String>("whoami", ()).await.unwrap()
+        agenkit.flow("whoami").run::<String>().await.unwrap()
     }
 
     async fn whoami_through_layer(principal: Option<Principal>) -> String {

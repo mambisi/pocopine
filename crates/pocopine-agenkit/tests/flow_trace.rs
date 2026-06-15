@@ -106,12 +106,14 @@ fn runtime() -> Agenkit {
 #[test]
 fn flow_runs_and_emits_correlated_trace_tree() {
     let trace = capture(|| {
-        let answer: Answer = block_on(runtime().run_flow(
-            "answer_question",
-            QuestionInput {
-                question: "how do uploads work?".to_string(),
-            },
-        ))
+        let answer: Answer = block_on(
+            runtime()
+                .flow("answer_question")
+                .input(QuestionInput {
+                    question: "how do uploads work?".to_string(),
+                })
+                .run(),
+        )
         .unwrap();
         assert_eq!(
             answer,
@@ -151,12 +153,14 @@ fn undeclared_retriever_emits_advisory_context_gap() {
         .unwrap();
 
     let trace = capture(|| {
-        let _: Answer = block_on(agenkit.run_flow(
-            "answer_question",
-            QuestionInput {
-                question: "q".to_string(),
-            },
-        ))
+        let _: Answer = block_on(
+            agenkit
+                .flow("answer_question")
+                .input(QuestionInput {
+                    question: "q".to_string(),
+                })
+                .run(),
+        )
         .unwrap();
     });
 
