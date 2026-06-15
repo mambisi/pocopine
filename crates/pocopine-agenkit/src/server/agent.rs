@@ -237,6 +237,16 @@ async fn run_loop<A: AiAgent>(
         .iter()
         .filter_map(|id| run.inner.tools.get(id).map(|tool| tool.descriptor()))
         .collect();
+    // Honor the provider's declared tool capability: there is no graceful
+    // degrade for tool calling, so an agent that needs tools on a provider that
+    // can't call them fails fast rather than silently looping without them.
+    if !tools.is_empty() && !provider.capabilities().tools {
+        return Err(AgenkitError::config(format!(
+            "provider `{}` does not support tool calling, but agent `{}` declares tools",
+            provider.id(),
+            A::ID
+        )));
+    }
     let schema = super::schema::json_schema_for::<A::Output>();
 
     let mut messages = Vec::new();

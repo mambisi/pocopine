@@ -214,6 +214,19 @@ pub trait Provider: Send + Sync + 'static {
     }
 }
 
+/// One-shot stream fallback the runtime uses for a provider that reports no
+/// native streaming (`capabilities().streaming == false`): run `generate` and
+/// adapt its result to the streaming contract. This is the capability-gated
+/// degrade path — distinct from the [`Provider::generate_stream`] trait default,
+/// because here the runtime decides based on the declared capability rather than
+/// on whether the method was overridden.
+pub(crate) fn fallback_stream(
+    provider: &dyn Provider,
+    request: GenerateRequest,
+) -> BoxStream<'_, AgenkitResult<StreamChunk>> {
+    default_stream(provider.generate(request))
+}
+
 /// Turn a one-shot generation future into a [`StreamChunk`] stream.
 fn default_stream<'a>(
     future: BoxFuture<'a, AgenkitResult<GenerateResponse>>,
