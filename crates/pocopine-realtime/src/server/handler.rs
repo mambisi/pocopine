@@ -22,14 +22,19 @@ use super::error::WsError;
 
 /// One inbound Data frame, handed to a [`SubprotocolHandler`].
 ///
-/// The connection has already passed the gateway's topic authorization, so the
-/// handler only sees frames it is allowed to act on. The payload is the opaque
-/// sub-protocol body (the frame envelope has been stripped).
+/// The connection has already passed the gateway's topic (join) authorization,
+/// so the handler only sees frames on topics it may read. The payload is the
+/// opaque sub-protocol body (the frame envelope has been stripped).
 pub struct InboundData<'a> {
     /// The resolved topic the frame targets.
     pub topic: &'a Topic,
     /// The opaque sub-protocol payload (the Data frame body).
     pub payload: &'a Bytes,
+    /// Whether this connection is authorized to *publish* on the topic
+    /// (the gateway's write policy; defaults to allow). A handler that
+    /// distinguishes read-only from read-write access (e.g. collab) gates
+    /// its mutating messages on this; pure relays ignore it.
+    pub can_write: bool,
 }
 
 /// What the gateway should emit after a [`SubprotocolHandler`] processes a

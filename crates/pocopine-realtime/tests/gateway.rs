@@ -209,6 +209,39 @@ async fn subscription_cap_rejects_extra_topics() {
     }
 }
 
+#[tokio::test]
+async fn write_policy_allows_subscribe_but_denies_publish() {
+    // Read-only: any topic may be joined, none may be published to.
+    let gateway = WsGateway::local()
+        .allow_all_topics()
+        .with_write_policy(|_, _| false);
+    let url = spawn(gateway).await;
+    let (mut ws, _resp) = connect_async(url).await.unwrap();
+    assert!(matches!(next_control(&mut ws).await, Control::Hello { .. }));
+
+    // Joining is allowed by the (separate) topic policy.
+    ws.send(send_bytes(Frame::subscribe(1, "topic:1")))
+        .await
+        .unwrap();
+    let topic_ref = match next_control(&mut ws).await {
+        Control::SubscribeAck { topic_ref, .. } => topic_ref,
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    };
+
+    // Publishing is refused by the write policy — the relay returns an error
+    // instead of echoing the frame back.
+    ws.send(send_bytes(Frame::data(1, topic_ref, 0, &b"x"[..])))
+        .await
+        .unwrap();
+    match next_control(&mut ws).await {
+        Control::Error { message, .. } => assert!(
+            message.contains("forbidden"),
+            "expected a forbidden write, got {message:?}"
+        ),
+        other => panic!("expected a forbidden error, got {other:?}"),
+    }
+}
+
 /// A toy handler proving both [`Reaction`] paths: a `reply:`-prefixed echo back
 /// to the sender and a `bcast:`-prefixed message fanned out to every subscriber.
 struct PrefixHandler;

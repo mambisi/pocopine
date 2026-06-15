@@ -76,6 +76,10 @@ impl Default for GatewayConfig {
 pub struct WsGateway {
     fanout: Arc<dyn Fanout>,
     policy: TopicPolicy,
+    /// Per-topic *publish* authorization, layered on top of the join `policy`.
+    /// Defaults to allow, so any connection that may join may also publish
+    /// (the relay's historical behavior); set it to express read-only access.
+    write_policy: TopicPolicy,
     resolver: TopicResolver,
     config: GatewayConfig,
     sessions: Arc<AtomicU64>,
@@ -95,6 +99,7 @@ impl WsGateway {
         Self {
             fanout,
             policy: Arc::new(|_, _| false),
+            write_policy: Arc::new(|_, _| true),
             resolver: Arc::new(|topic| Topic::new(topic).map_err(WsError::from)),
             config: GatewayConfig::default(),
             sessions: Arc::new(AtomicU64::new(0)),
@@ -126,12 +131,25 @@ impl WsGateway {
         )))
     }
 
-    /// Replace the per-topic authorization policy.
+    /// Replace the per-topic join authorization policy.
     pub fn with_topic_policy(
         mut self,
         policy: impl Fn(&RequestContext, &Topic) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.policy = Arc::new(policy);
+        self
+    }
+
+    /// Replace the per-topic *publish* policy (layered on top of the join
+    /// policy). Returning `false` makes the connection read-only for that
+    /// topic: inbound Data frames are refused by the relay, and handlers see
+    /// [`InboundData::can_write`](super::handler::InboundData) `= false`. The
+    /// default allows any joiner to publish.
+    pub fn with_write_policy(
+        mut self,
+        policy: impl Fn(&RequestContext, &Topic) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.write_policy = Arc::new(policy);
         self
     }
 
@@ -193,6 +211,10 @@ impl WsGateway {
 
     pub(crate) fn authorize(&self, ctx: &RequestContext, topic: &Topic) -> bool {
         (self.policy)(ctx, topic)
+    }
+
+    pub(crate) fn authorize_write(&self, ctx: &RequestContext, topic: &Topic) -> bool {
+        (self.write_policy)(ctx, topic)
     }
 
     pub(crate) fn handler(&self, subprotocol_id: u64) -> Option<&Arc<dyn SubprotocolHandler>> {
