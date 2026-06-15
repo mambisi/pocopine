@@ -58,7 +58,7 @@ members = [
     "crates/pocopine-template-parser",
     "crates/pocopine-ts-rs",
     "crates/pocopine-ts-rs-macros",
-    "crates/pocopine-ws",
+    "crates/pocopine-realtime",
     "examples/blog",
     "examples/charts",
     "examples/counter",

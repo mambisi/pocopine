@@ -7340,6 +7340,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-realtime"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum 0.7.9",
+ "bytes",
+ "futures-util",
+ "pocopine-auth",
+ "pocopine-crypto",
+ "pocopine-events",
+ "pocopine-observe",
+ "redis",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "pocopine-server"
 version = "0.1.1"
 dependencies = [
@@ -7604,26 +7624,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "termcolor",
-]
-
-[[package]]
-name = "pocopine-ws"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "bytes",
- "futures-util",
- "pocopine-auth",
- "pocopine-crypto",
- "pocopine-events",
- "pocopine-observe",
- "redis",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tracing",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-//! Error type for the `pocopine-ws` gateway.
+//! Error type for the `pocopine-realtime` gateway.
 //!
 //! Hand-rolled `Display`/`Error` impls (no `thiserror`) to match the
 //! convention in `pocopine-events`, which also rolls its own error enum.

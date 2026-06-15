@@ -1,10 +1,10 @@
 [package]
-name = "pocopine-ws"
+name = "pocopine-realtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Generic bidirectional WebSocket gateway for pocopine apps (RFC 073)."
+description = "Generic bidirectional realtime gateway (WebSocket transport) for pocopine apps (RFC 073)."
 
 [features]
 default = []

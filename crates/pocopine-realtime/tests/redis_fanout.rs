@@ -6,7 +6,7 @@
 //!
 //! ```sh
 //! docker run --rm -p 6379:6379 redis:7-alpine
-//! REDIS_TEST_URL=redis://127.0.0.1:6379/ cargo test -p pocopine-ws --features redis --test redis_fanout
+//! REDIS_TEST_URL=redis://127.0.0.1:6379/ cargo test -p pocopine-realtime --features redis --test redis_fanout
 //! ```
 
 #![cfg(all(feature = "redis", not(target_arch = "wasm32")))]
@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use pocopine_events::Topic;
-use pocopine_ws::{Fanout, RedisFanout, TopicStream, WsError};
+use pocopine_realtime::{Fanout, RedisFanout, TopicStream, WsError};
 
 /// Return the test Redis URL, or `None` (with a skip notice) when unset.
 fn redis_url() -> Option<String> {

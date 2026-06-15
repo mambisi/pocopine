@@ -2,7 +2,7 @@
 //! drive it with a real WebSocket client (tokio-tungstenite).
 
 use futures_util::{SinkExt, Stream, StreamExt};
-use pocopine_ws::{Control, Frame, FrameKind, GatewayConfig, TopicSeq, WsGateway, routes};
+use pocopine_realtime::{Control, Frame, FrameKind, GatewayConfig, TopicSeq, WsGateway, routes};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
 

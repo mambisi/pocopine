@@ -151,7 +151,7 @@ If a crate is purely host-only, move **all** deps (serde included) under the
 
 ## Reference implementations
 
-- **`pocopine-ws`** — host-only gateway; everything under `src/server/`, one
+- **`pocopine-realtime`** — host-only gateway; everything under `src/server/`, one
   `pub mod server;` gate. The canonical example of this skill.
 - **`pocopine-live`** — uses the older `mod host` / `mod browser` names with
   root re-exports (`pub use host::{LiveHub, routes};`). Same idea; new crates
