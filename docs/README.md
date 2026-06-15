@@ -43,6 +43,11 @@ New here? Start with **[Getting Started](./getting-started/introduction.md)**.
 - [Sync (client)](./guides/data/sync-client.md) · [Sync (server)](./guides/data/sync-server.md)
 - [Object-storage uploads](./guides/data/storage-uploads.md) · [Browser storage](./guides/data/browser-storage.md)
 
+**AI (Agenkit)**
+
+- [Overview & authoring guide](./guides/agenkit/README.md) — the runtime, the `#[ai_tool]`/`#[ai_flow]` macros, the flow context, and the `#[server]` boundary.
+- [Traceable flow design](./guides/agenkit/traceable-flows.md) · [Retrieval: direct vs tool](./guides/agenkit/retrieval.md) · [Streams & secrets](./guides/agenkit/streaming-and-secrets.md) · [Parallel & cancellation](./guides/agenkit/parallel.md) · [Agent threads](./guides/agenkit/threads.md)
+
 **Auth**
 
 - [Credentials](./guides/auth/credentials.md) · [JWT providers](./guides/auth/jwt-providers.md) · [Client bridge](./guides/auth/client.md)
