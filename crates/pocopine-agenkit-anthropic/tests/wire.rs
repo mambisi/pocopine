@@ -135,6 +135,78 @@ async fn forces_a_tool_for_structured_output() {
     );
 }
 
+#[tokio::test]
+async fn structured_with_user_tools_injects_prompt_not_forced_tool() {
+    // Anthropic forces at most one tool per turn, so with user tools present the
+    // provider must NOT force the structured tool (that would suppress them) —
+    // it injects the schema as a system-prompt instruction instead. This is the
+    // path the agent loop (tools + json_schema) relies on for structured output.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            assert!(
+                body.get("tool_choice").is_none(),
+                "must not force a tool when user tools are present"
+            );
+            let names: Vec<&str> = body["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                names,
+                vec!["weather_lookup"],
+                "no synthetic structured tool"
+            );
+            let system = body["system"].as_str().unwrap_or_default();
+            assert!(
+                system.contains("conforms to this JSON Schema") && system.contains("title"),
+                "system prompt should carry the schema instruction: {system}"
+            );
+            ResponseTemplate::new(200).set_body_json(json!({
+                "content": [{"type": "text", "text": "{\"title\":\"Uploads\"}"}],
+                "stop_reason": "end_turn"
+            }))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        tools: vec![ToolDescriptor::new("weather.lookup", "Look up weather")],
+        json_schema: Some(json!({"type": "object", "properties": {"title": {"type": "string"}}})),
+        ..text_request("summarize")
+    };
+    // The model emits the JSON as text; the runtime parses it downstream.
+    let response = provider(&server).generate(request).await.unwrap();
+    assert_eq!(response.text_output(), "{\"title\":\"Uploads\"}");
+}
+
+#[tokio::test]
+async fn tool_use_with_missing_input_defaults_to_empty_object() {
+    // A `tool_use` block with no `input` must surface as `{}`, never `null` —
+    // struct-typed tool inputs deserialize from `{}`, not from `null`.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "ping"}],
+            "stop_reason": "tool_use"
+        })))
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        tools: vec![ToolDescriptor::new("ping", "Ping")],
+        ..text_request("ping")
+    };
+    let response = provider(&server).generate(request).await.unwrap();
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].args, json!({}));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn streams_text_deltas_and_usage() {
     let server = MockServer::start().await;
@@ -236,6 +308,64 @@ async fn streams_a_tool_call_from_input_json_deltas() {
     let call = tool_call.expect("expected a streamed tool call");
     assert_eq!(call.tool_id, "get_weather");
     assert_eq!(call.args, json!({"city": "Paris"}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn truncated_stream_still_emits_tool_call_and_usage() {
+    // A stream that ends (EOF) before `content_block_stop`/`message_stop` — e.g.
+    // a proxy that closed the body mid-response — must still surface the
+    // accumulated tool call and the token usage, not silently drop them.
+    let server = MockServer::start().await;
+    let body = format!(
+        "{}{}{}{}",
+        sse(
+            "message_start",
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 3, "output_tokens": 0}}})
+        ),
+        sse(
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}})
+        ),
+        sse(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"city\":\"Paris\"}"}})
+        ),
+        // Usage restated, then the body ends — NO content_block_stop / message_stop.
+        sse(
+            "message_delta",
+            json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}})
+        ),
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+
+    let client = provider(&server);
+    let mut stream = client.generate_stream(text_request("weather?"));
+    let mut tool_call = None;
+    let mut usage = None;
+    while let Some(chunk) = stream.next().await {
+        match chunk.unwrap() {
+            StreamChunk::ToolCall(call) => tool_call = Some(call),
+            StreamChunk::Usage(reported) => usage = Some(reported),
+            StreamChunk::Text(_) => {}
+        }
+    }
+    let call = tool_call.expect("truncated stream must still emit the tool call");
+    assert_eq!(call.tool_id, "get_weather");
+    assert_eq!(call.args, json!({"city": "Paris"}));
+    assert_eq!(
+        usage
+            .expect("truncated stream must still emit usage")
+            .total(),
+        8
+    );
 }
 
 #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

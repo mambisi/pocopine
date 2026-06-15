@@ -90,25 +90,41 @@ impl ChatRequest {
         strict_schema: bool,
         max_tokens_param: MaxTokensParam,
     ) -> Self {
-        let structured = request.json_schema.is_some();
+        let has_tools = !request.tools.is_empty();
+        // Whether the request will get native strict `json_schema` enforcement
+        // (vs the `json_object` fallback, which guarantees valid JSON but NOT the
+        // schema shape) — mirrors the decision in `response_format`.
+        let use_strict = request
+            .json_schema
+            .as_ref()
+            .is_some_and(|schema| strict_schema && !has_tools && is_strict_compatible(schema));
 
         let mut messages = Vec::new();
-        // `json_object` mode requires the word "json" in the conversation, so
-        // fold a structured instruction into the system turn either way.
         let mut system = request.system.clone();
-        if structured {
-            let note = "Respond with a single valid JSON object.";
+        // `json_object` mode requires the word "json" in the conversation, so fold
+        // a structured instruction into the system turn. Under native strict mode
+        // the shape is enforced by the API; otherwise (the `json_object` fallback,
+        // which the agent loop always hits since it sends tools) the model gets
+        // validity but no shape — so convey the full schema, or it guesses field
+        // names and the runtime's `from_value::<T>` fails.
+        if let Some(schema) = &request.json_schema {
+            let note = if use_strict {
+                "Respond with a single valid JSON object.".to_string()
+            } else {
+                format!(
+                    "Respond with a single JSON object that conforms to this JSON Schema, \
+                     and nothing else:\n{schema}"
+                )
+            };
             system = Some(match system {
                 Some(existing) => format!("{existing}\n{note}"),
-                None => note.to_string(),
+                None => note,
             });
         }
         if let Some(system) = system {
             messages.push(WireMessage::text("system", system));
         }
         messages.extend(request.messages.iter().map(WireMessage::from_message));
-
-        let has_tools = !request.tools.is_empty();
         // o-series / gpt-5-class models reject `max_tokens`; compatible gateways
         // reject `max_completion_tokens`. Send exactly the one the endpoint wants.
         let (max_tokens, max_completion_tokens) = match max_tokens_param {
@@ -474,8 +490,16 @@ pub(crate) struct ResponseToolCall {
 
 impl ResponseToolCall {
     fn into_call(self, name_map: &HashMap<String, String>) -> ToolCall {
-        let args =
-            serde_json::from_str(&self.function.arguments).unwrap_or(serde_json::Value::Null);
+        // Empty (zero-argument tool) or unparseable args default to `{}`, not
+        // `null` — a struct-typed tool input deserializes from `{}` but not from
+        // `null`, so `null` would turn a valid no-arg call into a cryptic
+        // "expected object" validation error downstream. Mirrors the streaming
+        // path's `emit_tool_calls`.
+        let args = if self.function.arguments.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&self.function.arguments).unwrap_or_else(|_| serde_json::json!({}))
+        };
         ToolCall::new(
             self.id,
             resolve_tool_name(self.function.name, name_map),

@@ -345,12 +345,14 @@ impl Ai {
 /// — `json_schema == true` — gets no instruction and uses it directly). No-op
 /// for non-structured requests.
 fn apply_structured_fallback(request: &mut GenerateRequest, provider: &dyn Provider) {
-    let Some(schema) = request.json_schema.clone() else {
-        return;
-    };
+    // Check the capability before touching the schema: a provider with native
+    // schema support (the common case) returns here with no clone.
     if provider.capabilities().json_schema {
         return;
     }
+    let Some(schema) = request.json_schema.clone() else {
+        return;
+    };
     let note = format!(
         "Respond with a single JSON object that conforms to this JSON Schema, and nothing else:\n{schema}"
     );
