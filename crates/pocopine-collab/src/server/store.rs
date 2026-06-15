@@ -50,7 +50,13 @@ pub trait CollabStore: Send + Sync + 'static {
     /// Load a document's latest snapshot, or `None` if it has never been saved.
     async fn load_snapshot(&self, doc_key: &str) -> CollabResult<Option<CollabSnapshot>>;
 
-    /// Persist a document's compacted snapshot (overwriting any prior one).
+    /// Persist a document's compacted snapshot — but ONLY if it is fresher than
+    /// the stored one (`snapshot.last_seq` strictly greater). The cursor must be
+    /// monotonic: replicas share one fan-out cursor and a lagging process can
+    /// otherwise overwrite a newer checkpoint with an older blob, rolling
+    /// `last_seq` backward so a restart resumes into an already-evicted gap. A
+    /// SQL adapter expresses this as a conditional upsert
+    /// (`... ON CONFLICT DO UPDATE WHERE excluded.last_seq > last_seq`).
     async fn save_snapshot(&self, doc_key: &str, snapshot: CollabSnapshot) -> CollabResult<()>;
 }
 
@@ -83,7 +89,13 @@ impl CollabStore for MemoryCollabStore {
             .snapshots
             .lock()
             .map_err(|_| CollabError::store("memory store mutex poisoned"))?;
-        map.insert(doc_key.to_string(), snapshot);
+        // Monotonic: ignore a checkpoint that does not advance the cursor.
+        match map.get(doc_key) {
+            Some(existing) if existing.last_seq >= snapshot.last_seq => {}
+            _ => {
+                map.insert(doc_key.to_string(), snapshot);
+            }
+        }
         Ok(())
     }
 }
@@ -136,6 +148,45 @@ mod tests {
                 .unwrap()
                 .last_seq,
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn ignores_a_stale_or_equal_checkpoint() {
+        let store = MemoryCollabStore::new();
+        let key = "collab:doc";
+        store
+            .save_snapshot(key, snapshot(b"fresh", 10))
+            .await
+            .unwrap();
+
+        // A lagging replica writing an OLDER cursor must not roll it back.
+        store
+            .save_snapshot(key, snapshot(b"stale", 5))
+            .await
+            .unwrap();
+        let got = store.load_snapshot(key).await.unwrap().unwrap();
+        assert_eq!(got.last_seq, 10);
+        assert_eq!(got.blob, Bytes::from_static(b"fresh"));
+
+        // An equal cursor is also ignored (no churn).
+        store
+            .save_snapshot(key, snapshot(b"equal", 10))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load_snapshot(key).await.unwrap().unwrap().blob,
+            Bytes::from_static(b"fresh")
+        );
+
+        // A newer cursor still advances.
+        store
+            .save_snapshot(key, snapshot(b"newer", 11))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load_snapshot(key).await.unwrap().unwrap().last_seq,
+            11
         );
     }
 }

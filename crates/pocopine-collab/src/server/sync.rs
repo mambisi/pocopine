@@ -85,6 +85,14 @@ impl CollabDocument {
         text.insert(&mut txn, index, content);
     }
 
+    /// Remove `len` characters from a root text field at `index`. A delete is
+    /// recorded in the delete-set, not the state vector.
+    pub fn delete_text(&self, field: &str, index: u32, len: u32) {
+        let text = self.doc.get_or_insert_text(field);
+        let mut txn = self.doc.transact_mut();
+        text.remove_range(&mut txn, index, len);
+    }
+
     /// Read a root text field as a string.
     pub fn text(&self, field: &str) -> String {
         let text = self.doc.get_or_insert_text(field);
