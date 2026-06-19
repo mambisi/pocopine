@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use pocopine_collab::{COLLAB_SUBPROTOCOL, CollabMessage};
-use pocopine_realtime::client::{RealtimeClient, SessionEvent};
+use pocopine_realtime::client::{ConnectionStatus, RealtimeClient, SessionEvent};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, HtmlElement, PointerEvent};
@@ -231,6 +231,30 @@ fn install_handshake(room: &Rc<Room>) {
     }
 }
 
+/// Reflect the transport's connection liveness in the `#status` pill, so a
+/// dropped-then-recovered session (e.g. after the tab was backgrounded long
+/// enough for the server to reap it) is visible. The transport reconnects and
+/// re-subscribes on its own; this only mirrors the state.
+fn install_status(client: &RealtimeClient, document: &web_sys::Document) {
+    let Some(pill) = document
+        .get_element_by_id("status")
+        .and_then(|el| el.dyn_into::<HtmlElement>().ok())
+    else {
+        return;
+    };
+    client.on_status(move |status| {
+        let (text, color) = match status {
+            ConnectionStatus::Open => ("● live", "#7bb86f"),
+            ConnectionStatus::Reconnecting => ("○ reconnecting…", "#e26a48"),
+            ConnectionStatus::Closed => ("", "transparent"),
+        };
+        pill.set_text_content(Some(text));
+        let style = pill.style();
+        let _ = style.set_property("color", color);
+        let _ = style.set_property("opacity", if text.is_empty() { "0" } else { "1" });
+    });
+}
+
 /// Wire pointer drag on the board: down picks a shape, move writes its position,
 /// up ends the drag. Writes go to the CRDT, which repaints + broadcasts.
 fn install_pointer(room: &Rc<Room>) {
@@ -339,6 +363,7 @@ pub fn start() -> Result<(), JsValue> {
     }
 
     install_handshake(&room);
+    install_status(&room.client, &document);
     install_pointer(&room);
 
     {
