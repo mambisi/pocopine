@@ -16,7 +16,7 @@ A registered `AiRetriever` can be reached two ways, and the choice is about
 ```mermaid
 graph LR
   subgraph direct["Direct — flow decides"]
-    F["flow body"] -->|ctx.retrieve::&lt;Docs&gt;| R1["retrieve once,<br/>deterministic query"]
+    F["flow body"] -->|ctx.retrieve::#lt;Docs#gt;| R1["retrieve once,<br/>deterministic query"]
     R1 --> P["assemble prompt → ctx.ai()"]
   end
   subgraph tool["As a tool — model decides"]

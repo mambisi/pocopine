@@ -14,13 +14,13 @@ principal-scoped tools.
 
 ```mermaid
 graph LR
-  app["#[server] fn<br/>(the endpoint)"] -->|active_plugin::&lt;Agenkit&gt;| AK["Agenkit"]
+  app["#[server] fn<br/>(the endpoint)"] -->|active_plugin::#lt;Agenkit#gt;| AK["Agenkit"]
   AK --> FL["flow(Marker)<br/>typed input/output"]
   FL --> CTX["AiFlowContext"]
   CTX --> AI["ctx.ai() · generate"]
   CTX --> ST["ctx.step() · custom work"]
-  CTX --> RT["ctx.retrieve::&lt;R&gt;()"]
-  CTX --> AG["ctx.agent::&lt;A&gt;() · tool loop"]
+  CTX --> RT["ctx.retrieve::#lt;R#gt;()"]
+  CTX --> AG["ctx.agent::#lt;A#gt;() · tool loop"]
   CTX --> PAR["ctx.parallel() · fan-out"]
   CTX --> RED["ctx.reduce() · fold/judge"]
   AK --> PV["Provider<br/>Anthropic · OpenAI"]

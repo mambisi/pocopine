@@ -22,11 +22,11 @@ what it touches. This page is the contract (§D6).
 ```mermaid
 graph TB
   subgraph good["✅ through ctx — traced + principal-scoped"]
-    b1["ctx.retrieve::&lt;Docs&gt;()"] --> t1["ai_retrieval_started/completed"]
-    b2["ctx.state::&lt;Db&gt;(\"db\")"] --> t2["recorded vs manifest"]
+    b1["ctx.retrieve::#lt;Docs#gt;()"] --> t1["ai_retrieval_started/completed"]
+    b2["ctx.state::#lt;Db#gt;(#quot;db#quot;)"] --> t2["recorded vs manifest"]
   end
   subgraph bad["❌ raw read in the body — invisible"]
-    r1["sqlx::query(&amp;pool)"] -.->|no trace event| X1["not in the tree"]
+    r1["sqlx::query(#amp;pool)"] -.->|no trace event| X1["not in the tree"]
     r1 -.->|no identity| X2["not principal-scoped"]
   end
 ```

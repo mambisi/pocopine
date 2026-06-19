@@ -442,7 +442,7 @@ shapes — pick the right one for your auth model:
 
 ```mermaid
 flowchart TD
-    Resource["SourceResource&lt;S, IdOf&gt;"]
+    Resource["SourceResource#lt;S, IdOf#gt;"]
     Public["SyncServerBuilder::public_stream(resource)"]
     Guarded["SyncServerBuilder::guarded_stream(resource, predicate)"]
     GuardedWith["SyncServerBuilder::guarded_stream_with(resource, guard)"]
