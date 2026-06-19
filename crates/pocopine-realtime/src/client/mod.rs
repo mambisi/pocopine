@@ -5,7 +5,7 @@
 //! is `wasm32`-only.
 
 mod session;
-pub use session::{ClientSession, SessionEvent};
+pub use session::{ClientSession, ConnectionStatus, SessionEvent, reconnect_delay_ms};
 
 #[cfg(target_arch = "wasm32")]
 mod transport;

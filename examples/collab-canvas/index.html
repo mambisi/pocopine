@@ -22,10 +22,28 @@
           linear-gradient(90deg, #241a0e 1px, transparent 1px) 0 0 / 24px 24px,
           #1a130c;
       }
+      /* Connection-liveness pill — the wasm app toggles its text/colour as the
+         transport drops and auto-reconnects. */
+      #status {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        z-index: 5;
+        font: 600 0.72rem/1 system-ui, sans-serif;
+        letter-spacing: 0.04em;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(20, 14, 6, 0.72);
+        color: #7bb86f;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
     </style>
   </head>
   <body>
     <div id="board"></div>
+    <div id="status"></div>
     <script type="module">
       import init from "/pkg/collab_canvas.js";
       init();

@@ -11,6 +11,35 @@ use std::collections::HashMap;
 use crate::protocol::{Control, Frame, FrameKind, ProtocolError};
 use bytes::Bytes;
 
+/// The transport-level liveness of the connection, surfaced to consumers via
+/// `RealtimeClient::on_status` so a UI can show "reconnecting…". Distinct from
+/// [`SessionEvent`], which reports *protocol* events on a live socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionStatus {
+    /// The socket is OPEN; the session is live (or has just been re-established).
+    Open,
+    /// The socket dropped; a reconnect is scheduled or in flight. The transport
+    /// re-subscribes every topic automatically once it reconnects.
+    Reconnecting,
+    /// The client was dropped / closed deliberately; no further reconnects.
+    Closed,
+}
+
+/// Capped exponential backoff (milliseconds) before the `attempt`-th reconnect
+/// (0-based: the first retry after a drop is `attempt == 0`).
+///
+/// Pure and target-agnostic so the schedule is unit-tested on the host; the
+/// wasm transport drives it from a `setTimeout`.
+pub fn reconnect_delay_ms(attempt: u32) -> u32 {
+    /// Delay before the first retry.
+    const BASE_MS: u32 = 500;
+    /// Ceiling so a long outage settles to a steady retry cadence.
+    const CAP_MS: u32 = 10_000;
+    // `min(5)` caps the shift well below `u32` overflow; `BASE_MS << 5` = 16_000,
+    // already past the cap, so every later attempt clamps to `CAP_MS`.
+    BASE_MS.saturating_mul(1u32 << attempt.min(5)).min(CAP_MS)
+}
+
 /// Something the consumer should react to, produced from an inbound frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -261,5 +290,19 @@ mod tests {
     fn heartbeat_builds_a_control_frame() {
         let s = ClientSession::new();
         assert_eq!(s.heartbeat().unwrap().kind, FrameKind::Control);
+    }
+
+    #[test]
+    fn reconnect_backoff_grows_then_caps() {
+        // Doubles from the 500ms base, then clamps at the 10s ceiling and stays.
+        assert_eq!(reconnect_delay_ms(0), 500);
+        assert_eq!(reconnect_delay_ms(1), 1_000);
+        assert_eq!(reconnect_delay_ms(2), 2_000);
+        assert_eq!(reconnect_delay_ms(3), 4_000);
+        assert_eq!(reconnect_delay_ms(4), 8_000);
+        assert_eq!(reconnect_delay_ms(5), 10_000);
+        assert_eq!(reconnect_delay_ms(6), 10_000);
+        // Never panics on a large attempt count (no shift overflow).
+        assert_eq!(reconnect_delay_ms(u32::MAX), 10_000);
     }
 }

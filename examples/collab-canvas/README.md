@@ -29,6 +29,13 @@ change-detection; this doesn't.)
 The canvas itself is rendered imperatively via `web_sys` — a freeform surface is
 a custom renderer, not reactive document DOM.
 
+**Resilience is in the transport, not here.** If the socket drops — leave a tab
+backgrounded long enough and the server reaps the idle connection — the
+`RealtimeClient` reconnects with backoff and re-subscribes on its own. Because
+this app re-runs its `SyncStep1` handshake on every `Subscribed` event, the
+canvas re-converges automatically; the `#status` pill (top-right) shows
+`reconnecting…` then `live`. No reconnection logic lives in this example.
+
 ## Run
 
 Use the pocopine CLI — it builds the wasm client and launches the server bin
@@ -52,7 +59,7 @@ on `/` work too.)
 |------|------|
 | `src/lib.rs` | The wasm client: the yrs Map schema, the collab handshake wiring, and the imperative canvas (pointer drag + render). |
 | `src/bin/server.rs` | The dev server bin: mounts the gateway with a `CollabSync` handler and serves the static files. Reads `PORT` (set by `pocopine run`). |
-| `index.html` | A single canvas session — the page `pocopine build` hash-rewrites. |
+| `index.html` | A single canvas session (with the `#status` connection pill) — the page `pocopine build` hash-rewrites. |
 | `dual.html` | The two-session side-by-side view (two iframes of `/`). |
 
 ## How the sync flows
