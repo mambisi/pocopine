@@ -8,7 +8,7 @@ use pocopine_agenkit::server::session::{
     JsonlSessionStore, Session, SessionStore, SqliteSessionStore, ThreadId,
 };
 use pocopine_agenkit::server::{AgentThreadStore, AuthUser, Principal, SessionThreadStore};
-use pocopine_agenkit_core::{Role, ThreadMessage, ThreadRetention};
+use pocopine_agenkit_core::{Message, ThreadRetention};
 
 #[tokio::test]
 async fn jsonl_store_survives_a_reopen() {
@@ -167,11 +167,7 @@ async fn sqlite_thread_store_keeps_owner_scope_across_a_reopen() {
             .await
             .unwrap();
         store
-            .append(
-                &id,
-                alice,
-                vec![ThreadMessage::new(Role::User, "remembered")],
-            )
+            .append(&id, alice, vec![Message::user("remembered")])
             .await
             .unwrap();
         id

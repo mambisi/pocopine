@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, StepKind, StepStatus, ThreadMessage,
-    ThreadRetention, events,
+    AgenkitError, AgenkitResult, AgentThreadId, Message, StepKind, StepStatus, ThreadRetention,
+    events,
 };
 use pocopine_auth::Principal;
 
@@ -88,14 +88,14 @@ pub trait AgentThreadStore: Send + Sync + 'static {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<ThreadMessage>>>>;
+    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<Message>>>>;
 
     /// Append messages to a thread owned by `owner`.
     fn append(
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-        messages: Vec<ThreadMessage>,
+        messages: Vec<Message>,
     ) -> BoxFuture<'_, AgenkitResult<()>>;
 
     /// Delete a thread and its state if it is owned by `owner`. A missing or
@@ -119,8 +119,8 @@ pub trait AgentThreadStore: Send + Sync + 'static {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-        summary: ThreadMessage,
-        kept: Vec<ThreadMessage>,
+        summary: Message,
+        kept: Vec<Message>,
     ) -> BoxFuture<'_, AgenkitResult<()>> {
         let _ = kept;
         self.append(id, owner, vec![summary])
@@ -133,7 +133,7 @@ pub trait AgentThreadStore: Send + Sync + 'static {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<ThreadMessage>>>> {
+    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<Message>>>> {
         self.load(id, owner)
     }
 
@@ -187,7 +187,7 @@ impl SessionThreadStore {
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
         compacted: bool,
-    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<ThreadMessage>>>> {
+    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<Message>>>> {
         let sessions = self.sessions.clone();
         let tid = session::ThreadId::new(id.as_str());
         let want = owner.key().map(str::to_string);
@@ -210,7 +210,7 @@ impl SessionThreadStore {
                 match record.kind {
                     // Full view = Message records only.
                     RecordKind::Message => {
-                        let message: ThreadMessage =
+                        let message: Message =
                             serde_json::from_value(record.data).map_err(|e| {
                                 AgenkitError::internal(format!("thread message decode: {e}"))
                             })?;
@@ -259,9 +259,9 @@ fn session_err(err: session::SessionError) -> AgenkitError {
 /// `[summary, ...kept]`.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CheckpointPayload {
-    summary: ThreadMessage,
+    summary: Message,
     #[serde(default)]
-    kept: Vec<ThreadMessage>,
+    kept: Vec<Message>,
 }
 
 impl CheckpointPayload {
@@ -297,7 +297,7 @@ impl AgentThreadStore for SessionThreadStore {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<ThreadMessage>>>> {
+    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<Message>>>> {
         // The full message history (a foreign owner reads as not-found).
         self.read(id, owner, false)
     }
@@ -306,7 +306,7 @@ impl AgentThreadStore for SessionThreadStore {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<ThreadMessage>>>> {
+    ) -> BoxFuture<'_, AgenkitResult<Option<Vec<Message>>>> {
         // The compacted view: from the last checkpoint (its summary leads).
         self.read(id, owner, true)
     }
@@ -315,7 +315,7 @@ impl AgentThreadStore for SessionThreadStore {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-        messages: Vec<ThreadMessage>,
+        messages: Vec<Message>,
     ) -> BoxFuture<'_, AgenkitResult<()>> {
         let sessions = self.sessions.clone();
         let tid = session::ThreadId::new(id.as_str());
@@ -365,8 +365,8 @@ impl AgentThreadStore for SessionThreadStore {
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
-        summary: ThreadMessage,
-        kept: Vec<ThreadMessage>,
+        summary: Message,
+        kept: Vec<Message>,
     ) -> BoxFuture<'_, AgenkitResult<()>> {
         let sessions = self.sessions.clone();
         let tid = session::ThreadId::new(id.as_str());
@@ -442,7 +442,7 @@ impl AgentThreadHandle {
     }
 
     /// Load the full message history.
-    pub async fn history(&self) -> AgenkitResult<Vec<ThreadMessage>> {
+    pub async fn history(&self) -> AgenkitResult<Vec<Message>> {
         Ok(self
             .store
             .load(&self.id, self.owner())
@@ -451,7 +451,7 @@ impl AgentThreadHandle {
     }
 
     /// The compacted history to send the model (from the last checkpoint).
-    pub async fn active_history(&self) -> AgenkitResult<Vec<ThreadMessage>> {
+    pub async fn active_history(&self) -> AgenkitResult<Vec<Message>> {
         Ok(self
             .store
             .active_history(&self.id, self.owner())
@@ -461,11 +461,7 @@ impl AgentThreadHandle {
 
     /// Append a compaction checkpoint: the summary of the folded prefix plus
     /// `kept`, the recent messages retained verbatim in the active context.
-    pub async fn checkpoint(
-        &self,
-        summary: ThreadMessage,
-        kept: Vec<ThreadMessage>,
-    ) -> AgenkitResult<()> {
+    pub async fn checkpoint(&self, summary: Message, kept: Vec<Message>) -> AgenkitResult<()> {
         self.store
             .checkpoint(&self.id, self.owner(), summary, kept)
             .await
@@ -590,7 +586,7 @@ mod tests {
             .append(
                 &id,
                 owner,
-                vec![ThreadMessage::new(Role::User, "why did it fail?")],
+                vec![Message::new(Role::User, "why did it fail?")],
             )
             .await
             .unwrap();
@@ -613,7 +609,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .append(&id, alice, vec![ThreadMessage::new(Role::User, "secret")])
+            .append(&id, alice, vec![Message::new(Role::User, "secret")])
             .await
             .unwrap();
 
@@ -622,7 +618,7 @@ mod tests {
         // Bob cannot append to it.
         assert!(
             store
-                .append(&id, bob, vec![ThreadMessage::new(Role::User, "inject")])
+                .append(&id, bob, vec![Message::new(Role::User, "inject")])
                 .await
                 .is_err()
         );
@@ -667,11 +663,7 @@ mod tests {
                 .await
                 .unwrap();
             store
-                .append(
-                    &id,
-                    alice,
-                    vec![ThreadMessage::new(Role::User, "remembered")],
-                )
+                .append(&id, alice, vec![Message::new(Role::User, "remembered")])
                 .await
                 .unwrap();
             id
@@ -700,8 +692,8 @@ mod tests {
                 &id,
                 owner,
                 vec![
-                    ThreadMessage::new(Role::User, "q1"),
-                    ThreadMessage::new(Role::Assistant, "a1"),
+                    Message::new(Role::User, "q1"),
+                    Message::new(Role::Assistant, "a1"),
                 ],
             )
             .await
@@ -711,13 +703,13 @@ mod tests {
             .checkpoint(
                 &id,
                 owner,
-                ThreadMessage::new(Role::System, "summary of q1"),
-                vec![ThreadMessage::new(Role::Assistant, "a1")],
+                Message::new(Role::System, "summary of q1"),
+                vec![Message::new(Role::Assistant, "a1")],
             )
             .await
             .unwrap();
         store
-            .append(&id, owner, vec![ThreadMessage::new(Role::User, "q2")])
+            .append(&id, owner, vec![Message::new(Role::User, "q2")])
             .await
             .unwrap();
 
@@ -754,8 +746,8 @@ mod tests {
                 &id,
                 alice,
                 vec![
-                    ThreadMessage::new(Role::User, "shared"),
-                    ThreadMessage::new(Role::Assistant, "shared-reply"),
+                    Message::new(Role::User, "shared"),
+                    Message::new(Role::Assistant, "shared-reply"),
                 ],
             )
             .await
@@ -771,7 +763,7 @@ mod tests {
             .append(
                 &branch_id,
                 alice,
-                vec![ThreadMessage::new(Role::User, "branch-only")],
+                vec![Message::new(Role::User, "branch-only")],
             )
             .await
             .unwrap();
