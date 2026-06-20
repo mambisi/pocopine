@@ -15,6 +15,7 @@
 //! later plug into a contract that already exists here.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, Role, ThreadMessage,
@@ -115,7 +116,7 @@ pub enum AgentEvent {
 /// Configuration for a conversational agent: the same knobs as
 /// [`AiAgentBuilder`](super::agent::AiAgentBuilder) minus typed I/O (the runtime
 /// is a free-text conversation, not a typed flow unit).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AgentConfig {
     pub(crate) model: Option<ModelRef>,
     pub(crate) system: Option<String>,
@@ -124,13 +125,25 @@ pub struct AgentConfig {
     pub(crate) max_steps_per_turn: u32,
 }
 
+impl Default for AgentConfig {
+    /// No model/system/tools, an 8-step per-turn budget. Hand-written (not
+    /// derived) so the step budget defaults to 8, not 0 — a derived `0` would
+    /// make a loop run zero model calls and silently "succeed".
+    fn default() -> Self {
+        Self {
+            model: None,
+            system: None,
+            tool_ids: Vec::new(),
+            max_tokens: None,
+            max_steps_per_turn: 8,
+        }
+    }
+}
+
 impl AgentConfig {
     /// A config with the default per-turn step budget (8).
     pub fn new() -> Self {
-        Self {
-            max_steps_per_turn: 8,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     /// Set the model (defaults to the runtime default).
@@ -304,9 +317,11 @@ impl AgentLoop {
             ProviderContext::for_request(credential)
         };
 
-        for _ in 0..self.config.max_steps_per_turn {
+        for _ in 0..self.config.max_steps_per_turn.max(1) {
             // Abort is checked between steps (cancels after the current call).
-            if controls.aborted() {
+            // A dropped event receiver is treated the same: the consumer left, so
+            // stop rather than keep making paid model/tool calls nobody reads.
+            if controls.aborted() || events.is_closed() {
                 return Ok(StopReason::Aborted);
             }
 
@@ -431,7 +446,8 @@ impl AgentLoop {
 /// layer: `open` (or resume) once, then [`prompt`](AgentSession::prompt) over
 /// time. Each prompt loads the compacted history, runs one turn via
 /// [`AgentLoop`], persists the user + assistant messages, and compacts if the
-/// window would overflow — all owner-scoped, durable, and forkable.
+/// window would overflow — all owner-scoped and forkable. Persistence is the
+/// configured store's (the default is in-memory; see [`open`](AgentSessionBuilder::open)).
 #[derive(Clone)]
 pub struct AgentSession {
     inner: Arc<AgenkitInner>,
@@ -442,6 +458,10 @@ pub struct AgentSession {
     /// Shared steering controls (queue + abort + hooks). Cloning the session
     /// shares these (Arc-backed), so `steer`/`abort` reach the running turn.
     controls: TurnControls,
+    /// Single-active-turn guard (Arc-shared across clones): a turn holds it for
+    /// its duration so a concurrent `prompt` is rejected rather than corrupting
+    /// the shared thread/queue/abort.
+    busy: Arc<AtomicBool>,
 }
 
 impl AgentSession {
@@ -458,8 +478,9 @@ impl AgentSession {
 
     /// Inject a follow-up message into the **currently running** turn: instead of
     /// going idle when the model next answers, the loop continues with this
-    /// message (the "talk to it mid-run" steering). If no turn is running it is
-    /// picked up by the next [`prompt`](AgentSession::prompt).
+    /// message (the "talk to it mid-run" steering). A steer queued just before a
+    /// `prompt` is picked up by that turn; anything left unconsumed is cleared
+    /// when the turn ends (it never leaks into a later prompt).
     pub fn steer(&self, text: impl Into<String>) {
         if let Ok(mut queue) = self.controls.queue.lock() {
             queue.push_back(text.into());
@@ -482,16 +503,46 @@ impl AgentSession {
     }
 
     /// Prompt the conversation: run one turn and stream its [`AgentEvent`]s. The
-    /// turn runs on a spawned task; drain the returned stream to observe it. The
-    /// terminal event is [`AgentEvent::Stopped`] (success) or
-    /// [`AgentEvent::Failed`].
+    /// turn runs on a spawned task (so this **requires a Tokio runtime** — it
+    /// panics otherwise); drain the returned stream to observe it. The terminal
+    /// event is [`AgentEvent::Stopped`] (success) or [`AgentEvent::Failed`].
+    ///
+    /// **One turn at a time:** if a turn is already running on this session (or a
+    /// clone of it), the prompt is rejected with a `Failed` event rather than run
+    /// concurrently — concurrent turns would corrupt the shared thread and
+    /// steering state. Await the stream to completion (or `abort`) before the
+    /// next prompt.
     pub fn prompt(&self, text: impl Into<String>) -> UnboundedReceiverStream<AgentEvent> {
         let (tx, rx) = unbounded_channel();
-        let session = self.clone();
         let text = text.into();
+
+        // Single-active-turn guard: claim the turn lock, or reject.
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            let _ = tx.send(AgentEvent::Failed {
+                error: "a turn is already running on this session".to_string(),
+            });
+            return UnboundedReceiverStream::new(rx);
+        }
+        // Reset abort SYNCHRONOUSLY (before the task is spawned), so an `abort()`
+        // the caller issues right after `prompt()` targets THIS turn and can't be
+        // clobbered by a reset inside the spawned task.
+        self.controls.abort.store(false, Ordering::Relaxed);
+
+        let session = self.clone();
         tokio::spawn(async move {
             let _ = tx.send(AgentEvent::Started);
-            match session.run_one_prompt(text, &tx).await {
+            let result = session.run_one_prompt(text, &tx).await;
+            // Release the turn lock and drop any steer left unconsumed, so it
+            // can't leak into the next prompt.
+            if let Ok(mut queue) = session.controls.queue.lock() {
+                queue.clear();
+            }
+            session.busy.store(false, Ordering::Release);
+            match result {
                 Ok(reason) => {
                     let _ = tx.send(AgentEvent::Stopped { reason });
                 }
@@ -516,25 +567,22 @@ impl AgentSession {
             thread,
             agent_id: self.agent_id.clone(),
             // The branch is an independent conversation: same hooks, fresh
-            // queue + abort.
+            // queue + abort + turn lock.
             controls: TurnControls {
                 hooks: self.controls.hooks.clone(),
                 ..TurnControls::default()
             },
+            busy: Arc::new(AtomicBool::new(false)),
         }))
     }
 
-    /// One prompt's work: load history → run the turn → persist → compact.
+    /// One prompt's work: load history → persist the prompt → run the turn →
+    /// persist the answer → compact.
     async fn run_one_prompt(
         &self,
         text: String,
         events: &UnboundedSender<AgentEvent>,
     ) -> AgenkitResult<StopReason> {
-        // A fresh prompt clears any stale abort from a previous turn.
-        self.controls
-            .abort
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-
         // Seed the model context from the compacted history (W7), then the prompt.
         let mut messages: Vec<Message> = self
             .thread
@@ -544,7 +592,19 @@ impl AgentSession {
             .map(|m| Message::new(m.role, m.content))
             .collect();
         let persist_from = messages.len();
-        messages.push(Message::user(text));
+        messages.push(Message::user(text.clone()));
+
+        // Persist the prompt UP FRONT so it survives a mid-turn error (the turn
+        // below may fail before producing an answer — the question must not be
+        // lost from a "durable, resumable" session).
+        self.thread
+            .store
+            .append(
+                &self.thread.id,
+                self.thread.owner(),
+                vec![ThreadMessage::new(Role::User, text)],
+            )
+            .await?;
 
         let agent_loop = AgentLoop::new(
             self.inner.clone(),
@@ -555,23 +615,27 @@ impl AgentSession {
             .run_turn(&mut messages, events, &self.controls)
             .await?;
 
-        // Persist the turn's user + assistant *text* messages (the initial prompt,
-        // any steered follow-ups, and the answers) so the conversation replays on
-        // resume. Tool calls/results are transient and re-derivable.
-        let to_persist: Vec<ThreadMessage> = messages[persist_from..]
+        // Persist what the turn produced (everything after the already-stored
+        // prompt): any steered follow-up prompts + the assistant **answers** —
+        // assistant messages with NO tool calls. Narration that rides a tool call,
+        // and tool results, are NOT stored, so resume replays a clean alternating
+        // Q&A rather than a transcript referencing tool calls that are gone.
+        let to_persist: Vec<ThreadMessage> = messages[persist_from + 1..]
             .iter()
             .filter_map(|m| match m.role {
                 Role::User => Some(ThreadMessage::new(Role::User, m.content.as_text())),
-                Role::Assistant if !m.content.as_text().is_empty() => {
+                Role::Assistant if m.tool_calls.is_empty() && !m.content.as_text().is_empty() => {
                     Some(ThreadMessage::new(Role::Assistant, m.content.as_text()))
                 }
                 _ => None,
             })
             .collect();
-        self.thread
-            .store
-            .append(&self.thread.id, self.thread.owner(), to_persist)
-            .await?;
+        if !to_persist.is_empty() {
+            self.thread
+                .store
+                .append(&self.thread.id, self.thread.owner(), to_persist)
+                .await?;
+        }
 
         // Compact if the (now longer) history would overflow the window.
         let model = self
@@ -642,7 +706,14 @@ impl AgentSessionBuilder {
     }
 
     /// Open the session: resume the thread `id` if it exists **and** is owned by
-    /// the principal, otherwise create a fresh durable thread.
+    /// the principal, otherwise create a fresh thread.
+    ///
+    /// Persistence is the configured store's: the runtime's **default**
+    /// `thread_store` is in-memory (process-local — resume works within the
+    /// process, but the thread is lost on restart). For across-restart durability,
+    /// build the runtime with a durable store, e.g.
+    /// `Agenkit::builder().thread_store(SessionThreadStore::new(Arc::new(
+    /// SqliteSessionStore::open(path)?)))`.
     pub async fn open(self, id: Option<AgentThreadId>) -> AgenkitResult<AgentSession> {
         let store = self.inner.thread_store.clone();
         let owner = ThreadOwner::from_principal(&self.principal);
@@ -671,6 +742,7 @@ impl AgentSessionBuilder {
                 hooks: self.hooks,
                 ..TurnControls::default()
             },
+            busy: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -984,5 +1056,87 @@ mod tests {
         let history = session.history().await.unwrap();
         assert_eq!(history[0].content.as_text(), "first");
         assert_eq!(history[2].content.as_text(), "and another thing");
+    }
+
+    // ── review fixes ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_concurrent_prompt_is_rejected_not_run() {
+        // current-thread runtime: the two prompt() calls run synchronously before
+        // either spawned turn does, so the second sees the turn lock held.
+        let agenkit = chat("ok");
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let a = session.prompt("A"); // claims the turn lock (sync), spawns the turn
+        let b: Vec<AgentEvent> = session.prompt("B").collect().await; // rejected
+        assert!(
+            matches!(b.as_slice(), [AgentEvent::Failed { .. }]),
+            "second concurrent prompt must be rejected: {b:?}"
+        );
+        let _ = a.collect::<Vec<_>>().await; // let A finish, releasing the lock
+        // A fresh prompt works once the lock is free.
+        let c: Vec<AgentEvent> = session.prompt("C").collect().await;
+        assert!(
+            matches!(c.last(), Some(AgentEvent::Stopped { .. })),
+            "{c:?}"
+        );
+        // A persisted (prompt+answer); B persisted nothing; C persisted.
+        assert_eq!(session.history().await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn the_prompt_is_persisted_even_when_the_turn_errors() {
+        // The model calls a tool the agent never allow-listed → run_turn errors.
+        let agenkit = Agenkit::builder()
+            .provider(MockProvider::new("local").on_prompt_tool(
+                "go",
+                "ghost",
+                serde_json::json!({}),
+            ))
+            .default_model(ModelRef::new("local/default"))
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let events: Vec<AgentEvent> = session.prompt("go").collect().await;
+        assert!(
+            matches!(events.last(), Some(AgentEvent::Failed { .. })),
+            "{events:?}"
+        );
+        // The question survived the error (persisted up front), so resume isn't blank.
+        let history = session.history().await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content.as_text(), "go");
+    }
+
+    #[tokio::test]
+    async fn a_tool_using_turn_persists_only_the_question_and_final_answer() {
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("weather", "echo", serde_json::json!({ "text": "x" }))
+                    .default_text("it's sunny"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Echo)
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit)
+            .config(AgentConfig::new().tools(["echo"]))
+            .open(None)
+            .await
+            .unwrap();
+        let _ = session.prompt("weather?").collect::<Vec<_>>().await;
+        // The assistant tool-call turn and the tool result are NOT persisted —
+        // only the user question and the final answer (a clean alternating Q&A).
+        let history = session.history().await.unwrap();
+        assert_eq!(history.len(), 2, "{history:?}");
+        assert_eq!(history[0].content.as_text(), "weather?");
+        assert_eq!(history[1].content.as_text(), "it's sunny");
+    }
+
+    #[test]
+    fn agent_config_default_has_a_nonzero_step_budget() {
+        // Regression: the derived Default gave max_steps_per_turn = 0 (a no-op turn).
+        assert_eq!(AgentConfig::default().max_steps_per_turn, 8);
+        assert_eq!(AgentConfig::new().max_steps_per_turn, 8);
     }
 }
