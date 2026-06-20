@@ -29,7 +29,9 @@
 //! [`CollabStore`](super::store::CollabStore) is the next step.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -47,6 +49,19 @@ use crate::sync::CollabDocument;
 /// stays replayable and the durable base never lags into an eviction gap.
 const CHECKPOINT_EVERY: u64 = 64;
 
+/// Bound on a single inbound document update / catch-up (RFC 073 §12: "Update
+/// size caps are mandatory"). The realtime gateway also caps the whole frame,
+/// but the collab handler enforces its own ceiling so the guarantee does not
+/// depend on transport configuration. Generous enough for a large paste; small
+/// enough that a hostile peer cannot force an unbounded `yrs` allocation.
+const MAX_UPDATE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Cap on how long a single checkpoint may block the convergence apply loop. A
+/// slow or stalled store must not wedge folding indefinitely: on timeout the
+/// checkpoint is abandoned (the next batch retries; the store's monotonic guard
+/// makes a later, fresher checkpoint correct regardless).
+const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Server-side CRDT collaboration over the realtime gateway.
 ///
 /// Holds one authoritative document per topic, each behind its own `Mutex` (a
@@ -63,12 +78,19 @@ pub struct CollabSync {
     fanout: Arc<dyn Fanout>,
     store: Option<Arc<dyn CollabStore>>,
     checkpoint_every: u64,
+    max_update_bytes: usize,
     topics: Mutex<HashMap<Topic, Arc<TopicState>>>,
 }
 
 /// Per-topic state: the document and the apply loop keeping it converged.
 struct TopicState {
     doc: Arc<Mutex<CollabDocument>>,
+    /// The furthest fan-out cursor the apply loop has folded into `doc`,
+    /// published by the loop. Read by [`CollabSync::on_topic_idle`] to flush a
+    /// final checkpoint at the right cursor before the loop is torn down, so an
+    /// idle eviction never strands updates that were folded since the last
+    /// periodic checkpoint.
+    last_folded: Arc<AtomicU64>,
     /// The convergence apply loop. Aborted when the topic goes idle (its last
     /// local subscriber leaves); the document then reloads from the store on the
     /// next subscriber.
@@ -93,6 +115,7 @@ impl CollabSync {
             fanout,
             store: None,
             checkpoint_every: CHECKPOINT_EVERY,
+            max_update_bytes: MAX_UPDATE_BYTES,
             topics: Mutex::new(HashMap::new()),
         }
     }
@@ -112,6 +135,13 @@ impl CollabSync {
         self
     }
 
+    /// Cap a single inbound document update / catch-up at `n` bytes (default
+    /// [`MAX_UPDATE_BYTES`]). A larger frame is refused before it reaches `yrs`.
+    pub fn with_max_update_bytes(mut self, n: usize) -> Self {
+        self.max_update_bytes = n.max(1);
+        self
+    }
+
     /// The per-topic state, created — and its apply loop spawned — on first
     /// access.
     fn topic_state(&self, topic: &Topic) -> Result<Arc<TopicState>, WsError> {
@@ -123,14 +153,20 @@ impl CollabSync {
             return Ok(state.clone());
         }
         let doc = Arc::new(Mutex::new(CollabDocument::new()));
+        let last_folded = Arc::new(AtomicU64::new(0));
         let apply_loop = tokio::spawn(run_apply_loop(
             self.fanout.clone(),
             self.store.clone(),
             self.checkpoint_every,
             topic.clone(),
             doc.clone(),
+            last_folded.clone(),
         ));
-        let state = Arc::new(TopicState { doc, apply_loop });
+        let state = Arc::new(TopicState {
+            doc,
+            last_folded,
+            apply_loop,
+        });
         topics.insert(topic.clone(), state.clone());
         Ok(state)
     }
@@ -176,12 +212,14 @@ impl SubprotocolHandler for CollabSync {
             }
             CollabMessage::SyncStep2(update) => {
                 ensure_writable(&inbound)?;
+                ensure_within_cap(&update, self.max_update_bytes)?;
                 apply_update(&doc, &update)?;
                 // Relabel a handshake SyncStep2 as a live Update for peers.
                 reaction.broadcast(CollabMessage::Update(update).encode());
             }
             CollabMessage::Update(update) => {
                 ensure_writable(&inbound)?;
+                ensure_within_cap(&update, self.max_update_bytes)?;
                 apply_update(&doc, &update)?;
                 // Already a tagged Update on the wire — forward the original
                 // payload verbatim (a cheap `Bytes` refcount bump, no re-encode).
@@ -203,16 +241,33 @@ impl SubprotocolHandler for CollabSync {
 
     /// Last local subscriber left: free the topic's document and stop its apply
     /// loop. State is durable (checkpointed to the store) and reloads on the
-    /// next subscriber, so this is pure resource reclamation.
+    /// next subscriber, so this is resource reclamation — but it must not strand
+    /// updates folded since the last periodic checkpoint, so we flush a final
+    /// checkpoint first.
     fn on_topic_idle(&self, topic: &Topic) {
         let evicted = self
             .topics
             .lock()
             .ok()
             .and_then(|mut topics| topics.remove(topic));
-        if let Some(state) = evicted {
-            state.apply_loop.abort();
+        let Some(state) = evicted else { return };
+
+        // Flush a final checkpoint at the furthest folded cursor BEFORE aborting
+        // the loop. The detached task holds its own `doc`/`store`/`fanout`
+        // clones, so the document outlives the (about-to-be-aborted) loop until
+        // the save completes — closing the window where an idle eviction between
+        // periodic checkpoints would otherwise lose those updates if the fan-out
+        // tail had aged out by the time the topic reactivated.
+        if let Some(store) = self.store.clone() {
+            let doc = state.doc.clone();
+            let fanout = self.fanout.clone();
+            let topic = topic.clone();
+            let seq = state.last_folded.load(Ordering::Relaxed);
+            tokio::spawn(async move {
+                checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, seq).await;
+            });
         }
+        state.apply_loop.abort();
     }
 }
 
@@ -240,6 +295,21 @@ fn ensure_writable(inbound: &InboundData<'_>) -> Result<(), WsError> {
     }
 }
 
+/// Refuse an inbound update whose body exceeds `cap` bytes before it is decoded
+/// or applied (RFC 073 §12: update size caps are mandatory). Enforced here, not
+/// only at the transport frame boundary, so the bound holds regardless of how
+/// the gateway is configured.
+fn ensure_within_cap(update: &[u8], cap: usize) -> Result<(), WsError> {
+    if update.len() <= cap {
+        Ok(())
+    } else {
+        Err(WsError::protocol(format!(
+            "collab update too large: {} bytes exceeds cap {cap}",
+            update.len()
+        )))
+    }
+}
+
 /// Subscribe to `topic`'s fan-out and fold every update into `doc` forever, so
 /// edits made through *other* processes converge into this process's document
 /// (the local `on_data` path only ever sees this process's own clients). yrs
@@ -248,43 +318,38 @@ fn ensure_writable(inbound: &InboundData<'_>) -> Result<(), WsError> {
 ///
 /// With a [`CollabStore`] the loop also seeds the document from the durable
 /// snapshot on start (resuming the fan-out at the snapshot's cursor) and
-/// checkpoints the folded document back every [`CHECKPOINT_EVERY`] updates.
+/// checkpoints the folded document back every [`CHECKPOINT_EVERY`] updates,
+/// trimming the now-durable fan-out prefix after each successful save.
+///
+/// Recovery from a lag/gap is two-tier: first resume at the loop's OWN folded
+/// cursor (cheap — no store round-trip — and correct whenever the fan-out still
+/// retains everything past it); only when THAT gaps (a peer trimmed the durable
+/// prefix past us) reload the durable snapshot and resume at its cursor, which
+/// is gap-free by the trim invariant ([`checkpoint_and_trim`] only ever trims
+/// `<= durable`). Reloading on that gap is what stops a replica that fell behind
+/// from skipping an unfolded-but-trimmed range and silently diverging.
 async fn run_apply_loop(
     fanout: Arc<dyn Fanout>,
     store: Option<Arc<dyn CollabStore>>,
     checkpoint_every: u64,
     topic: Topic,
     doc: Arc<Mutex<CollabDocument>>,
+    last_folded: Arc<AtomicU64>,
 ) {
     let doc_key = topic.as_str();
 
     // Seed from the durable snapshot, then resume the fan-out at its cursor.
-    let mut after = None;
-    if let Some(store) = &store {
-        match store.load_snapshot(doc_key).await {
-            Ok(Some(snapshot)) => {
-                if let Ok(doc) = doc.lock() {
-                    let _ = doc.apply_update(&snapshot.blob);
-                }
-                after = Some(snapshot.last_seq);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: load_snapshot failed");
-            }
-        }
-    }
-
+    let mut after = seed_from_snapshot(store.as_deref(), &doc, doc_key).await;
     let mut stream = match subscribe_recovering(&fanout, &topic, after).await {
         Some(stream) => stream,
         None => return,
     };
 
-    // The durable cursor must only move FORWARD. `highest_seq` tracks the
-    // furthest seq folded; a recovery replay (which re-reads the retained tail
-    // from a lower seq) must never checkpoint a cursor below what we already
-    // persisted, or a restart could resume into an evicted gap.
+    // `highest_seq` tracks the furthest seq folded; published to `last_folded` so
+    // an idle eviction can flush a final checkpoint at the right cursor. The
+    // durable cursor only ever moves forward.
     let mut highest_seq = after.unwrap_or(0);
+    last_folded.store(highest_seq, Ordering::Relaxed);
     let mut last_checkpointed = after.unwrap_or(0);
     let mut folded = 0u64;
     loop {
@@ -298,25 +363,65 @@ async fn run_apply_loop(
                     let _ = doc.apply_update(&update);
                 }
                 highest_seq = highest_seq.max(seq);
+                last_folded.store(highest_seq, Ordering::Relaxed);
                 folded += 1;
                 if let Some(store) = &store
                     && folded >= checkpoint_every
                 {
                     folded = 0;
-                    if highest_seq > last_checkpointed {
-                        checkpoint(store.as_ref(), doc_key, &doc, highest_seq).await;
+                    if highest_seq > last_checkpointed
+                        && checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, highest_seq)
+                            .await
+                    {
                         last_checkpointed = highest_seq;
                     }
                 }
             }
             // Fan-out closed (topic torn down / shutdown).
-            Ok(None) => break,
-            // Lagged or gapped: re-subscribe to replay the retained tail and
-            // resume — never die silently on a recoverable hiccup.
-            Err(_) => match subscribe_recovering(&fanout, &topic, None).await {
-                Some(replacement) => stream = replacement,
-                None => break,
+            Ok(None) => return,
+            // Lagged or gapped — recover (two-tier, see the fn doc).
+            Err(_) => match fanout.subscribe(&topic, Some(highest_seq)).await {
+                // Our own progress is still retained: resume with no reload.
+                Ok(resumed) if !resumed.gap() => stream = resumed,
+                // Trimmed past us (or unreachable): reload the snapshot and
+                // resume at its cursor. The snapshot covers `<= after`, so
+                // re-folding from there cannot lose the trimmed range.
+                _ => {
+                    after = seed_from_snapshot(store.as_deref(), &doc, doc_key).await;
+                    highest_seq = highest_seq.max(after.unwrap_or(0));
+                    last_checkpointed = last_checkpointed.max(after.unwrap_or(0));
+                    last_folded.store(highest_seq, Ordering::Relaxed);
+                    match subscribe_recovering(&fanout, &topic, after).await {
+                        Some(resumed) => stream = resumed,
+                        None => return,
+                    }
+                }
             },
+        }
+    }
+}
+
+/// Seed `doc` from the durable snapshot (if a store is configured), returning
+/// the fan-out cursor to resume at. Idempotent: applying the snapshot to a
+/// document already ahead of it is a CRDT no-op, so it is safe to call again on
+/// recovery.
+async fn seed_from_snapshot(
+    store: Option<&dyn CollabStore>,
+    doc: &Arc<Mutex<CollabDocument>>,
+    doc_key: &str,
+) -> Option<u64> {
+    let store = store?;
+    match store.load_snapshot(doc_key).await {
+        Ok(Some(snapshot)) => {
+            if let Ok(doc) = doc.lock() {
+                let _ = doc.apply_update(&snapshot.blob);
+            }
+            Some(snapshot.last_seq)
+        }
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: load_snapshot failed");
+            None
         }
     }
 }
@@ -350,25 +455,57 @@ async fn subscribe_recovering(
     }
 }
 
-/// Persist the folded document as the new durable base, current to `last_seq`.
-/// The document lock is never held across the `.await`.
-async fn checkpoint(
+/// Persist the folded document as the new durable base current to `last_seq`,
+/// then — only on a confirmed save — release the now-durable fan-out prefix.
+/// Returns whether the save succeeded, so the caller advances its checkpoint
+/// cursor (and trims) only when the durable base actually covers `last_seq`.
+///
+/// The document lock is never held across an `.await`. The save is bounded by
+/// [`CHECKPOINT_TIMEOUT`]: a slow store degrades to "checkpoint skipped, retry
+/// next batch" instead of stalling convergence, and the store's monotonic guard
+/// makes a later fresher checkpoint correct regardless.
+async fn checkpoint_and_trim(
     store: &dyn CollabStore,
-    doc_key: &str,
+    fanout: &Arc<dyn Fanout>,
+    topic: &Topic,
     doc: &Arc<Mutex<CollabDocument>>,
     last_seq: u64,
-) {
+) -> bool {
+    let doc_key = topic.as_str();
     let snapshot = {
-        let Ok(doc) = doc.lock() else { return };
+        let Ok(doc) = doc.lock() else { return false };
         CollabSnapshot {
             blob: Bytes::from(doc.full_update()),
             state_vector: Bytes::from(doc.state_vector()),
             last_seq,
         }
     };
-    if let Err(err) = store.save_snapshot(doc_key, snapshot).await {
-        tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: save_snapshot failed");
+    let saved = match tokio::time::timeout(
+        CHECKPOINT_TIMEOUT,
+        store.save_snapshot(doc_key, snapshot),
+    )
+    .await
+    {
+        Ok(Ok(())) => true,
+        Ok(Err(err)) => {
+            tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: save_snapshot failed");
+            false
+        }
+        Err(_) => {
+            tracing::warn!(target: LOG_TARGET, topic = doc_key, "collab apply loop: save_snapshot timed out");
+            false
+        }
+    };
+
+    // After a successful save_snapshot, everything `<= last_seq` is durable —
+    // whether the store wrote our snapshot or skipped it for a fresher one (its
+    // cursor is then `>= last_seq`). Either way the fan-out no longer needs to
+    // retain `<= last_seq` for crash recovery, so release it (a no-op on a
+    // non-durable in-process fan-out).
+    if saved && let Err(err) = fanout.trim_after(topic, last_seq).await {
+        tracing::warn!(target: LOG_TARGET, error = %err, topic = doc_key, "collab apply loop: trim_after failed");
     }
+    saved
 }
 
 #[cfg(test)]
@@ -859,5 +996,161 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert!(recovered, "reactivating an evicted topic should recover it");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_update_is_refused_before_apply() {
+        // RFC 073 §12: update size caps are mandatory, enforced in the handler
+        // (not only at the transport frame boundary) and BEFORE decode/apply.
+        let server = CollabSync::new(Arc::new(LocalFanout::new())).with_max_update_bytes(16);
+        let topic = Topic::new("collab:doc").unwrap();
+
+        let oversized = CollabMessage::Update(Bytes::from(vec![0u8; 64]));
+        let err = feed_as(&server, &topic, oversized, true).await.unwrap_err();
+        assert!(
+            matches!(err, WsError::Protocol(_)),
+            "an update past the cap must be refused, got {err:?}"
+        );
+
+        // The same cap applies to a handshake SyncStep2.
+        let oversized_step2 = CollabMessage::SyncStep2(Bytes::from(vec![0u8; 64]));
+        let err = feed_as(&server, &topic, oversized_step2, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WsError::Protocol(_)));
+    }
+
+    /// A [`Fanout`] that delegates to an inner [`LocalFanout`] but records every
+    /// `trim_after` cursor, so a test can assert a checkpoint released the
+    /// fan-out prefix.
+    struct RecordingFanout {
+        inner: LocalFanout,
+        trims: Arc<Mutex<Vec<u64>>>,
+    }
+
+    #[async_trait]
+    impl Fanout for RecordingFanout {
+        async fn publish(&self, topic: &Topic, payload: Bytes) -> Result<u64, WsError> {
+            self.inner.publish(topic, payload).await
+        }
+        async fn subscribe(
+            &self,
+            topic: &Topic,
+            after: Option<u64>,
+        ) -> Result<TopicStream, WsError> {
+            self.inner.subscribe(topic, after).await
+        }
+        async fn trim_after(&self, topic: &Topic, durable_seq: u64) -> Result<(), WsError> {
+            self.trims.lock().unwrap().push(durable_seq);
+            self.inner.trim_after(topic, durable_seq).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_successful_checkpoint_trims_the_fanout() {
+        use super::super::store::MemoryCollabStore;
+
+        // C3: "trim ... only after durable save." A folded + checkpointed update
+        // releases the now-durable fan-out prefix via `trim_after`.
+        let trims = Arc::new(Mutex::new(Vec::new()));
+        let fanout: Arc<dyn Fanout> = Arc::new(RecordingFanout {
+            inner: LocalFanout::new(),
+            trims: trims.clone(),
+        });
+        let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
+        let server = CollabSync::new(fanout.clone())
+            .with_store(store)
+            .with_checkpoint_every(1);
+        let topic = Topic::new("collab:doc").unwrap();
+        server.on_topic_active(&topic);
+
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "x");
+        let reaction = feed(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(edit.full_update())),
+        )
+        .await;
+        for payload in reaction.broadcasts() {
+            fanout.publish(&topic, payload.clone()).await.unwrap();
+        }
+
+        let mut trimmed = false;
+        for _ in 0..200 {
+            if !trims.lock().unwrap().is_empty() {
+                trimmed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(trimmed, "a successful checkpoint must trim the fan-out");
+        assert!(
+            trims.lock().unwrap().iter().copied().max().unwrap_or(0) >= 1,
+            "trim cursor should be the folded seq"
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_eviction_flushes_a_final_checkpoint() {
+        use super::super::store::{CollabStore, MemoryCollabStore};
+
+        // Cadence set so high the periodic checkpoint NEVER fires for one edit:
+        // only the idle flush can persist it. Guards the abort-mid-checkpoint
+        // data-loss path — an idle eviction must not strand folded updates.
+        let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
+        let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+        let server = CollabSync::new(fanout.clone())
+            .with_store(store.clone())
+            .with_checkpoint_every(1_000_000);
+        let topic = Topic::new("collab:doc").unwrap();
+        server.on_topic_active(&topic);
+
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "only-in-memory");
+        let reaction = feed(
+            &server,
+            &topic,
+            CollabMessage::Update(Bytes::from(edit.full_update())),
+        )
+        .await;
+        for payload in reaction.broadcasts() {
+            fanout.publish(&topic, payload.clone()).await.unwrap();
+        }
+
+        // Nothing is persisted yet — the cadence is far out of reach.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            store.load_snapshot(topic.as_str()).await.unwrap().is_none(),
+            "the periodic checkpoint must not fire at this cadence"
+        );
+
+        // Idle eviction flushes a final checkpoint of the current document.
+        server.on_topic_idle(&topic);
+        let mut saved = false;
+        for _ in 0..200 {
+            if store.load_snapshot(topic.as_str()).await.unwrap().is_some() {
+                saved = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(saved, "idle eviction must flush a final checkpoint");
+
+        // A fresh process reloads exactly that flushed state.
+        let fanout2: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+        let p2 = CollabSync::new(fanout2).with_store(store.clone());
+        let mut reloaded = false;
+        for _ in 0..200 {
+            if handler_text(&p2, &topic, "body")
+                .await
+                .contains("only-in-memory")
+            {
+                reloaded = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(reloaded, "the final-checkpoint state must reload");
     }
 }
