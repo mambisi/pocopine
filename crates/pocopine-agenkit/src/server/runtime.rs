@@ -13,6 +13,15 @@
 //! **L3** = steering queue + typed hooks + abort. The event/decision types are
 //! shaped to **pre-image the WASM/WIT extension world** (parked) so extensions
 //! later plug into a contract that already exists here.
+//!
+//! Known follow-up (deferred — a focused refactor, not a quick fix): this loop
+//! ([`AgentLoop::run_turn`]) and the single-shot [`run_loop`](super::agent) share
+//! only `compact_thread` — the model↔tool core is duplicated, and this runtime
+//! emits the [`AgentEvent`] firehose but **not** the `pocopine.trace` events /
+//! usage that `run_loop` feeds (no cost metering for conversational turns yet).
+//! The fix is to unify them behind one observer (RunState-emit vs AgentEvent
+//! sink), which also brings trace + usage here — done carefully so the merged
+//! single-shot path isn't regressed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -283,12 +292,15 @@ impl AgentLoop {
     /// and stop when the model answers without tool calls or the step budget is
     /// hit. Appends every produced message (assistant text, tool-call turns, tool
     /// results) to `messages`, emits events, and returns the [`StopReason`].
+    /// Returns the stop reason and the resolved [`ProviderContext`] it used, so
+    /// the caller can reuse the (credential-resolved) context for compaction
+    /// instead of resolving the credential a second time.
     pub(crate) async fn run_turn(
         &self,
         messages: &mut Vec<Message>,
         events: &UnboundedSender<AgentEvent>,
         controls: &TurnControls,
-    ) -> AgenkitResult<StopReason> {
+    ) -> AgenkitResult<(StopReason, ProviderContext)> {
         let model = self.model()?;
         self.inner.check_model_allowed(&model)?;
         let provider = self.inner.providers.resolve(&model)?;
@@ -322,7 +334,7 @@ impl AgentLoop {
             // A dropped event receiver is treated the same: the consumer left, so
             // stop rather than keep making paid model/tool calls nobody reads.
             if controls.aborted() || events.is_closed() {
-                return Ok(StopReason::Aborted);
+                return Ok((StopReason::Aborted, cx.clone()));
             }
 
             let request = GenerateRequest {
@@ -355,7 +367,7 @@ impl AgentLoop {
                         messages.push(Message::user(steer));
                         continue;
                     }
-                    None => return Ok(StopReason::Idle),
+                    None => return Ok((StopReason::Idle, cx.clone())),
                 }
             }
 
@@ -438,7 +450,7 @@ impl AgentLoop {
             }
         }
 
-        Ok(StopReason::MaxSteps)
+        Ok((StopReason::MaxSteps, cx))
     }
 }
 
@@ -611,7 +623,9 @@ impl AgentSession {
             self.principal.clone(),
             self.config.clone(),
         );
-        let reason = agent_loop
+        // Reuse the credential-resolved context the turn already produced for
+        // compaction, so a BYOK store isn't hit a second time per prompt.
+        let (reason, cx) = agent_loop
             .run_turn(&mut messages, events, &self.controls)
             .await?;
 
@@ -637,7 +651,9 @@ impl AgentSession {
                 .await?;
         }
 
-        // Compact if the (now longer) history would overflow the window.
+        // Compact if the (now longer) history would overflow the window. Model +
+        // provider re-resolution is a cheap registry lookup (no IO); the credential
+        // (the costly part) is reused from `cx` above.
         let model = self
             .config
             .model
@@ -645,14 +661,6 @@ impl AgentSession {
             .or_else(|| self.inner.default_model.clone())
             .ok_or_else(|| AgenkitError::config("agent runtime has no model"))?;
         let provider = self.inner.providers.resolve(&model)?;
-        let cx = {
-            let credential = self
-                .inner
-                .credentials
-                .resolve(provider.id(), &self.principal)
-                .await?;
-            ProviderContext::for_request(credential)
-        };
         let max_output = self.config.max_tokens.unwrap_or(1024);
         if let Some((folded, _kept)) =
             super::agent::compact_thread(&self.thread, &model, &provider, &cx, max_output).await?
@@ -814,7 +822,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("use the tool then answer")];
 
-        let stop = loop_
+        let (stop, _) = loop_
             .run_turn(&mut messages, &tx, &TurnControls::default())
             .await
             .unwrap();
@@ -871,7 +879,7 @@ mod tests {
         );
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("go")];
-        let stop = loop_
+        let (stop, _) = loop_
             .run_turn(&mut messages, &tx, &TurnControls::default())
             .await
             .unwrap();
@@ -972,7 +980,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("hi")];
 
-        let stop = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
+        let (stop, _) = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
         drop(tx);
         assert_eq!(stop, StopReason::Aborted);
         // Aborted before the model call → no assistant text was produced.
