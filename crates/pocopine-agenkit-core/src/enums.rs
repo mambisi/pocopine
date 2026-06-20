@@ -166,6 +166,28 @@ pub enum ThreadRetention {
     Durable,
 }
 
+/// How much reasoning ("thinking") budget a generation should request
+/// (roadmap W4). Providers map this to their own knob — Anthropic's
+/// `budget_tokens`, OpenAI's `reasoning_effort` — and only models whose catalog
+/// entry has `reasoning == true` actually request it; others ignore the level.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingLevel {
+    /// No extended reasoning requested (the default; nothing sent on the wire).
+    #[default]
+    Off,
+    /// The smallest reasoning budget the provider supports.
+    Minimal,
+    /// A low reasoning budget.
+    Low,
+    /// A moderate reasoning budget.
+    Medium,
+    /// A high reasoning budget.
+    High,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +224,22 @@ mod tests {
         );
         assert_eq!(StreamMode::default(), StreamMode::FinalOnly);
         assert_eq!(ParallelJoin::default(), ParallelJoin::AllSettled);
+        assert_eq!(ThinkingLevel::default(), ThinkingLevel::Off);
+    }
+
+    #[test]
+    fn thinking_level_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ThinkingLevel::Off).unwrap(),
+            "\"off\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingLevel::Minimal).unwrap(),
+            "\"minimal\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingLevel::High).unwrap(),
+            "\"high\""
+        );
     }
 }

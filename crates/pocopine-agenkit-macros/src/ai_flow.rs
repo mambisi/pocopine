@@ -13,6 +13,7 @@ use crate::util;
 struct Args {
     id: Option<String>,
     public: bool,
+    reasoning: bool,
     agents: Vec<String>,
     tools: Vec<String>,
     retrievers: Vec<String>,
@@ -34,6 +35,7 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
     for meta in metas {
         match &meta {
             Meta::Path(p) if p.is_ident("public") => args.public = true,
+            Meta::Path(p) if p.is_ident("reasoning") => args.reasoning = true,
             Meta::NameValue(nv) if nv.path.is_ident("id") => {
                 args.id = Some(util::lit_string(&nv.value)?);
             }
@@ -49,8 +51,9 @@ fn parse_args(attr: TokenStream) -> syn::Result<Args> {
             _ => {
                 return Err(syn::Error::new_spanned(
                     meta,
-                    "unsupported `#[ai_flow]` argument; expected `public`, `id = \"...\"`, \
-                     `stream = \"...\"`, or `agents(..)` / `tools(..)` / `retrievers(..)` / `state(..)`",
+                    "unsupported `#[ai_flow]` argument; expected `public`, `reasoning`, \
+                     `id = \"...\"`, `stream = \"...\"`, or \
+                     `agents(..)` / `tools(..)` / `retrievers(..)` / `state(..)`",
                 ));
             }
         }
@@ -120,6 +123,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     handler.attrs = vec![parse_quote!(#[doc(hidden)])];
 
     let public = args.public.then(|| quote!(.public()));
+    let reasoning = args.reasoning.then(|| quote!(.expose_reasoning()));
     let agents = &args.agents;
     let tools = &args.tools;
     let retrievers = &args.retrievers;
@@ -165,6 +169,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 ::pocopine_agenkit::server::FlowHandler::descriptor(
                     &::pocopine_agenkit::server::Flow::new(#id, #impl_ident)
                         #public
+                        #reasoning
                         #stream
                         #( .uses_agent(#agents) )*
                         #( .uses_tool(#tools) )*

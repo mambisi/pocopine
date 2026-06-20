@@ -15,31 +15,61 @@ use crate::{
 /// Token usage for a model call or an aggregate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Usage {
-    /// Prompt/input tokens.
+    /// Prompt/input tokens, **excluding** any cached-input tokens (those are
+    /// counted separately below). Normalized this way so cost is unambiguous
+    /// across providers (OpenAI's `prompt_tokens` includes the cached subset;
+    /// the wire parser subtracts it).
     pub input_tokens: u64,
     /// Completion/output tokens.
     pub output_tokens: u64,
+    /// Cached input tokens read on a prompt-cache hit (billed at the cheaper
+    /// cache-read rate).
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the prompt cache (billed at the cache-creation
+    /// rate; 0 for providers that don't bill cache writes, e.g. OpenAI).
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
 }
 
 impl Usage {
-    /// Usage from input/output token counts.
+    /// Usage from uncached input/output token counts (cache tokens zero).
     pub fn new(input_tokens: u64, output_tokens: u64) -> Self {
         Self {
             input_tokens,
             output_tokens,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }
     }
 
-    /// Total tokens (input + output).
-    pub fn total(&self) -> u64 {
-        self.input_tokens.saturating_add(self.output_tokens)
+    /// Set the cache token counts: `cache_read` = prompt-cache hits,
+    /// `cache_creation` = prompt-cache writes.
+    pub fn with_cache(mut self, cache_read_tokens: u64, cache_creation_tokens: u64) -> Self {
+        self.cache_read_tokens = cache_read_tokens;
+        self.cache_creation_tokens = cache_creation_tokens;
+        self
     }
 
-    /// Sum two usage records.
+    /// Total processed tokens (input + output + cache read + cache creation).
+    pub fn total(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_creation_tokens)
+    }
+
+    /// Sum two usage records (all four token classes).
     pub fn merge(self, other: Self) -> Self {
         Self {
             input_tokens: self.input_tokens.saturating_add(other.input_tokens),
             output_tokens: self.output_tokens.saturating_add(other.output_tokens),
+            cache_read_tokens: self
+                .cache_read_tokens
+                .saturating_add(other.cache_read_tokens),
+            cache_creation_tokens: self
+                .cache_creation_tokens
+                .saturating_add(other.cache_creation_tokens),
         }
     }
 }
@@ -174,6 +204,12 @@ impl TraceEvent {
         self
     }
 
+    /// Attach a cost estimate.
+    pub fn with_cost(mut self, cost: CostEstimate) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+
     /// Attach an error.
     pub fn with_error(mut self, error: AgenkitError) -> Self {
         self.error = Some(error);
@@ -262,6 +298,19 @@ mod tests {
         let b = Usage::new(3, 7);
         assert_eq!(a.total(), 15);
         assert_eq!(a.merge(b), Usage::new(13, 12));
+    }
+
+    #[test]
+    fn usage_counts_and_merges_cache_tokens() {
+        let u = Usage::new(100, 20).with_cache(80, 10);
+        assert_eq!(u.cache_read_tokens, 80);
+        assert_eq!(u.cache_creation_tokens, 10);
+        assert_eq!(u.total(), 210); // 100 + 20 + 80 + 10
+        let merged = u.merge(Usage::new(1, 2).with_cache(3, 4));
+        assert_eq!(merged, Usage::new(101, 22).with_cache(83, 14));
+        // Old payloads without the cache fields still deserialize (serde default).
+        let back: Usage = serde_json::from_str(r#"{"input_tokens":5,"output_tokens":6}"#).unwrap();
+        assert_eq!(back, Usage::new(5, 6));
     }
 
     /// Exit-gate proof: a nested-parallel trace tree round-trips with the

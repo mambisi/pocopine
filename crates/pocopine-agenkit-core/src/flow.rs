@@ -26,6 +26,12 @@ pub struct FlowDescriptor {
     /// The public streaming mode for this flow (§D8).
     #[serde(default)]
     pub stream_mode: StreamMode,
+    /// Whether this flow may stream the model's reasoning ("thinking") *text* to
+    /// the client (§D10). Off by default: reasoning stays server-side and only a
+    /// redacted activity count crosses. An author opts in per flow when the UX
+    /// wants to show the reasoning (e.g. a coding-agent "thinking" panel).
+    #[serde(default)]
+    pub expose_reasoning: bool,
     /// The declared context manifest (§D6).
     #[serde(default)]
     pub manifest: ContextManifest,
@@ -40,6 +46,7 @@ impl FlowDescriptor {
             input: SchemaRef::default(),
             output: SchemaRef::default(),
             stream_mode: StreamMode::FinalOnly,
+            expose_reasoning: false,
             manifest: ContextManifest::new(),
         }
     }
@@ -65,6 +72,13 @@ impl FlowDescriptor {
     /// Set the public stream mode.
     pub fn stream_mode(mut self, mode: StreamMode) -> Self {
         self.stream_mode = mode;
+        self
+    }
+
+    /// Opt this flow into streaming the model's reasoning ("thinking") text to
+    /// the client (§D10). Off by default — see [`FlowDescriptor::expose_reasoning`].
+    pub fn expose_reasoning(mut self) -> Self {
+        self.expose_reasoning = true;
         self
     }
 
