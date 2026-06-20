@@ -142,6 +142,17 @@ impl SubprotocolHandler for CollabSync {
         let message = CollabMessage::decode(inbound.payload)
             .map_err(|err| WsError::protocol(err.to_string()))?;
 
+        // Ephemeral awareness (presence/cursors) never touches the document: relay
+        // it to peers verbatim without taking the doc lock. It is high-frequency (a
+        // cursor move per keystroke), so keeping it off the lock avoids contending
+        // the convergence apply loop; and it is allowed from read-only peers — a
+        // viewer's cursor is presence, not a mutation.
+        if let CollabMessage::Awareness(_) = message {
+            let mut reaction = Reaction::new();
+            reaction.broadcast(inbound.payload.clone());
+            return Ok(reaction);
+        }
+
         let state = self.topic_state(inbound.topic)?;
         let doc = state
             .doc
@@ -176,6 +187,8 @@ impl SubprotocolHandler for CollabSync {
                 // payload verbatim (a cheap `Bytes` refcount bump, no re-encode).
                 reaction.broadcast(inbound.payload.clone());
             }
+            // Relayed before the doc lock above; never reaches here.
+            CollabMessage::Awareness(_) => unreachable!("awareness is relayed pre-lock"),
         }
         Ok(reaction)
     }
@@ -422,6 +435,41 @@ mod tests {
             decode(&reaction.broadcasts()[0]),
             CollabMessage::Update(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn awareness_is_relayed_verbatim_and_never_applied() {
+        let server = sync();
+        let topic = Topic::new("collab:doc").unwrap();
+
+        let presence = Bytes::from_static(b"cursor@42");
+        let reaction = feed(&server, &topic, CollabMessage::Awareness(presence.clone())).await;
+
+        // Relayed to peers (broadcast), no direct reply, body preserved verbatim.
+        assert!(reaction.replies().is_empty());
+        assert_eq!(reaction.broadcasts().len(), 1);
+        assert_eq!(
+            decode(&reaction.broadcasts()[0]),
+            CollabMessage::Awareness(presence)
+        );
+    }
+
+    #[tokio::test]
+    async fn awareness_is_allowed_from_a_read_only_peer() {
+        // A viewer's cursor is presence, not a mutation — read-only peers may
+        // publish awareness even though their Update/SyncStep2 are refused.
+        let server = sync();
+        let topic = Topic::new("collab:doc").unwrap();
+
+        let reaction = feed_as(
+            &server,
+            &topic,
+            CollabMessage::Awareness(Bytes::from_static(b"viewing")),
+            false,
+        )
+        .await
+        .expect("read-only awareness is accepted");
+        assert_eq!(reaction.broadcasts().len(), 1);
     }
 
     #[tokio::test]

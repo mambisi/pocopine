@@ -9,10 +9,16 @@
 //!
 //! ```text
 //! message := u8(tag) body
-//!   tag 0  SyncStep1   body = state vector   ("what I have")
-//!   tag 1  SyncStep2   body = update diff    ("what you were missing")
-//!   tag 2  Update      body = update         (a live edit to converge)
+//!   tag 0  SyncStep1   body = state vector       ("what I have")
+//!   tag 1  SyncStep2   body = update diff        ("what you were missing")
+//!   tag 2  Update      body = update             (a live edit to converge)
+//!   tag 3  Awareness   body = awareness update   (ephemeral presence/cursors)
 //! ```
+//!
+//! `Awareness` is **ephemeral**: the server relays it to peers (broadcast) but
+//! never applies it to the document and never persists it. It carries
+//! presence/cursor state (see `pocopine_collab::awareness`), which is meaningless
+//! once a peer disconnects, so there is nothing to converge or checkpoint.
 
 use bytes::Bytes;
 
@@ -26,6 +32,7 @@ pub const COLLAB_SUBPROTOCOL: u64 = 1;
 const TAG_SYNC_STEP1: u8 = 0;
 const TAG_SYNC_STEP2: u8 = 1;
 const TAG_UPDATE: u8 = 2;
+const TAG_AWARENESS: u8 = 3;
 
 /// One collab sub-protocol message (the body of a single Data frame).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +43,9 @@ pub enum CollabMessage {
     SyncStep2(Bytes),
     /// A live document update to merge and converge everywhere (Update).
     Update(Bytes),
+    /// An ephemeral awareness/presence update (cursors, selections, identity).
+    /// Relayed to peers but never applied to the document or persisted.
+    Awareness(Bytes),
 }
 
 impl CollabMessage {
@@ -45,6 +55,7 @@ impl CollabMessage {
             Self::SyncStep1(body) => (TAG_SYNC_STEP1, body),
             Self::SyncStep2(body) => (TAG_SYNC_STEP2, body),
             Self::Update(body) => (TAG_UPDATE, body),
+            Self::Awareness(body) => (TAG_AWARENESS, body),
         };
         let mut out = Vec::with_capacity(body.len() + 1);
         out.push(tag);
@@ -63,6 +74,7 @@ impl CollabMessage {
             TAG_SYNC_STEP1 => Ok(Self::SyncStep1(body)),
             TAG_SYNC_STEP2 => Ok(Self::SyncStep2(body)),
             TAG_UPDATE => Ok(Self::Update(body)),
+            TAG_AWARENESS => Ok(Self::Awareness(body)),
             other => Err(CollabError::Decode(format!(
                 "unknown collab message tag {other}"
             ))),
@@ -84,6 +96,7 @@ mod tests {
         roundtrip(CollabMessage::SyncStep1(Bytes::from_static(b"\x00\x01sv")));
         roundtrip(CollabMessage::SyncStep2(Bytes::from_static(b"diff")));
         roundtrip(CollabMessage::Update(Bytes::from_static(b"update")));
+        roundtrip(CollabMessage::Awareness(Bytes::from_static(b"presence")));
     }
 
     #[test]
