@@ -15,6 +15,10 @@ pub mod credentials;
 pub mod embed;
 pub mod flow;
 pub mod generate;
+/// Shared model↔tool loop primitives (the model call + tool dispatch + a trace
+/// observer) used by both the single-shot typed agent loop and the long-lived
+/// runtime, so the engine lives once and both lifecycles emit the same trace.
+mod loop_core;
 pub mod oauth;
 pub mod observe;
 pub mod overflow;

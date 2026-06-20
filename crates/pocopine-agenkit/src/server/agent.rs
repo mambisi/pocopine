@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::context::AiContext;
+use super::loop_core::{self, ToolErrorMode};
 use super::overflow::{context_headroom, estimate_input_tokens};
 use super::provider::{GenerateRequest, Provider, ProviderContext};
 use super::run::RunState;
@@ -261,6 +262,15 @@ async fn run_loop<A: AiAgent>(
         super::provider::ProviderContext::for_request(credential)
     };
 
+    // The shared loop core projects each step onto a `LoopObserver`; for the
+    // typed run that's the trace projection (model request/response + usage, tool
+    // spans), all parented to this agent step.
+    let observer = loop_core::TraceObserver {
+        run,
+        agent_step: agent_step.clone(),
+    };
+    let agent_label = format!("agent `{}`", A::ID);
+
     for _ in 0..config.max_steps {
         let request = GenerateRequest {
             model: model.clone(),
@@ -273,37 +283,7 @@ async fn run_loop<A: AiAgent>(
             // generate builder); defaults to `ThinkingLevel::Off`.
             thinking: Default::default(),
         };
-
-        let model_step = run.next_step_id();
-        run.emit(
-            run.event(
-                events::AI_MODEL_REQUEST,
-                StepKind::Generation,
-                StepStatus::Started,
-            )
-            .with_step(model_step.clone())
-            .with_parent(agent_step.clone())
-            .with_model(model.clone()),
-        );
-        // Reclassify an "input too long" provider error as ContextOverflow (W3),
-        // so callers/UI can branch on the kind — parity with the `Ai` paths.
-        let response = provider
-            .generate(request, &cx)
-            .await
-            .map_err(super::generate::reclassify_overflow)?;
-        let mut completed = run
-            .event(
-                events::AI_MODEL_RESPONSE,
-                StepKind::Generation,
-                StepStatus::Completed,
-            )
-            .with_step(model_step)
-            .with_parent(agent_step.clone())
-            .with_model(model.clone());
-        if let Some(usage) = response.usage {
-            completed = completed.with_usage(usage);
-        }
-        run.emit(completed);
+        let response = loop_core::run_model_step(provider, request, &cx, model, &observer).await?;
 
         if response.tool_calls.is_empty() {
             let value = response
@@ -340,49 +320,23 @@ async fn run_loop<A: AiAgent>(
             return Ok(output);
         }
 
-        // Record the assistant's tool-request turn so the next request carries
-        // the protocol linkage real providers (OpenAI, ...) require — keeping
-        // any text the model emitted alongside the calls.
-        messages.push(Message::assistant_tool_calls(
-            response.content.clone(),
-            response.tool_calls.clone(),
-        ));
-
-        for call in &response.tool_calls {
-            // Enforce the agent's explicit tool allowlist (§D5/§D10).
-            if !config.tool_ids.iter().any(|id| id == &call.tool_id) {
-                return Err(AgenkitError::tool_policy(format!(
-                    "agent `{}` called non-allowlisted tool `{}`",
-                    A::ID,
-                    call.tool_id
-                )));
-            }
-            let tool = run.inner.tools.get(&call.tool_id).ok_or_else(|| {
-                AgenkitError::tool_policy(format!("tool `{}` is not registered", call.tool_id))
-            })?;
-            let tool_step = run.next_step_id();
-            run.emit(
-                run.event(events::AI_TOOL_STARTED, StepKind::Tool, StepStatus::Started)
-                    .with_step(tool_step.clone())
-                    .with_parent(agent_step.clone())
-                    .with_field("tool_id", call.tool_id.clone()),
-            );
-            let output = tool.call_json(call.args.clone(), ctx.clone()).await?;
-            run.emit(
-                run.event(
-                    events::AI_TOOL_COMPLETED,
-                    StepKind::Tool,
-                    StepStatus::Completed,
-                )
-                .with_step(tool_step)
-                .with_parent(agent_step.clone())
-                .with_field("tool_id", call.tool_id.clone()),
-            );
-            let output_json = serde_json::to_string(&output).map_err(|e| {
-                AgenkitError::internal(format!("tool `{}` output encode: {e}", call.tool_id))
-            })?;
-            messages.push(Message::tool_result(call.id.clone(), output_json));
-        }
+        // Run the tool batch via the shared dispatcher. A tool error propagates
+        // (a typed run fails as a whole); no `before_tool_call` hook on this path.
+        messages.extend(
+            loop_core::dispatch_tool_calls(
+                &run.inner,
+                &config.tool_ids,
+                &ctx,
+                &response,
+                &agent_label,
+                // No steering hook on the typed run; `+ Sync` keeps the loop's
+                // future `Send` (it runs inside Send flow handlers).
+                None::<&(dyn Fn(&str, &serde_json::Value) -> loop_core::ToolDecision + Sync)>,
+                ToolErrorMode::Propagate,
+                &observer,
+            )
+            .await?,
+        );
     }
 
     Err(AgenkitError::budget_exhausted(format!(
