@@ -7,9 +7,9 @@ mod common;
 use common::{block_on, capture};
 use pocopine_agenkit::server::{
     Agenkit, AiAgent, AiAgentBuilder, AiFlowContext, AiTool, AiToolContext, BoxFuture, Flow,
-    MockProvider,
+    MockProvider, models,
 };
-use pocopine_agenkit_core::{AgenkitResult, ModelRef, ToolDescriptor};
+use pocopine_agenkit_core::{AgenkitResult, ModelRef, Role, ToolDescriptor};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -46,7 +46,7 @@ impl AiTool for Lookup {
     }
 }
 
-#[derive(Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct Question {
     question: String,
 }
@@ -194,5 +194,112 @@ fn model_judge_reduce_returns_typed_answer() {
         AgentAnswer {
             answer: "best".to_string()
         }
+    );
+}
+
+// ── W7: thread compaction wired into the agent loop ──────────────────────────
+
+/// A no-tool agent on a small-context model, so a couple of big turns overflow
+/// the window and trip compaction.
+struct Compactor;
+
+impl AiAgent for Compactor {
+    const ID: &'static str = "compactor";
+    type Input = Question;
+    type Output = AgentAnswer;
+
+    fn configure(builder: AiAgentBuilder<Self>) -> AiAgentBuilder<Self> {
+        builder.max_steps(1)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, schemars::JsonSchema)]
+struct CompactReport {
+    active_len: usize,
+    active_is_summary: bool,
+    full_len: usize,
+}
+
+async fn compaction_flow(input: Question, ctx: AiFlowContext) -> AgenkitResult<CompactReport> {
+    let thread = ctx.thread::<Compactor>().create().await?;
+    // Two big turns accumulate ≥4 messages and overflow gpt-3.5-turbo's context
+    // window, so the second run's post-turn compaction fires.
+    ctx.agent::<Compactor>()
+        .thread(thread.clone())
+        .input(input.clone())
+        .run()
+        .await?;
+    ctx.agent::<Compactor>()
+        .thread(thread.clone())
+        .input(input)
+        .run()
+        .await?;
+
+    let active = thread.active_history().await?;
+    let full = thread.history().await?;
+    Ok(CompactReport {
+        active_len: active.len(),
+        active_is_summary: active.first().is_some_and(|m| {
+            m.role == Role::System && m.content.as_text().contains("COMPACTED-SUMMARY")
+        }),
+        full_len: full.len(),
+    })
+}
+
+fn compaction_runtime() -> Agenkit {
+    // A 40k-char answer per turn: two turns (~20k tokens) overflow gpt-3.5-turbo's
+    // 16385-token window, tripping post-turn compaction.
+    let huge = "x".repeat(40_000);
+    Agenkit::builder()
+        .provider(
+            MockProvider::new("openai")
+                // The summarize call is the only plain-text (no-schema) request,
+                // so it takes the `default_text` path; the agent call carries a
+                // json_schema and takes `default_structured`.
+                .default_text("COMPACTED-SUMMARY")
+                .default_structured(serde_json::json!({ "answer": huge })),
+        )
+        .default_model(models::openai::GPT_3_5_TURBO)
+        .flow(Flow::new("compaction", compaction_flow))
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn agent_loop_compacts_an_overflowing_thread() {
+    let trace = capture(|| {
+        let report: CompactReport = block_on(
+            compaction_runtime()
+                .flow("compaction")
+                .input(Question {
+                    question: "go".to_string(),
+                })
+                .run(),
+        )
+        .unwrap();
+
+        // The thread was compacted. Each turn here is a 40k-char (~10k-token)
+        // answer that alone exceeds the keep-verbatim TOKEN budget, so the
+        // token-bounded keep folds everything into the summary (active = just the
+        // summary) rather than retaining an oversized turn that would re-overflow
+        // the window. The full log still holds all 4 original turn messages.
+        assert_eq!(
+            report.active_len, 1,
+            "oversized turns are summarized, not kept verbatim"
+        );
+        assert!(
+            report.active_is_summary,
+            "active context should lead with the summary"
+        );
+        assert_eq!(
+            report.full_len, 4,
+            "full history retains every turn message (the kept tail is not duplicated)"
+        );
+    });
+
+    assert!(
+        trace.contains("ai_thread_checkpointed"),
+        "compaction should emit ai_thread_checkpointed; got {:?}",
+        trace.names()
     );
 }
