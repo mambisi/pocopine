@@ -19,6 +19,11 @@ pub enum Axis {
 /// Pure resize math (host-testable): apply a pointer `delta` to a starting
 /// size, flip it for end-anchored handles (`invert`), clamp to `[min, max]`,
 /// and snap to `min` when the result falls below `collapse_at`.
+///
+/// Its callers are the `wasm32`-only drag handler below and the host unit tests,
+/// so a plain host (non-test) lib build sees no caller — allow it there rather
+/// than gate the function out of the build it is documented to be tested in.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
 pub(crate) fn resolve_size(
     start: f64,
     delta: f64,
