@@ -27,6 +27,20 @@ use crate::BindError;
 /// before invoking it (the handler may re-enter the connection).
 type ChangeHandler = Rc<RefCell<Option<Rc<dyn Fn(&Node)>>>>;
 
+/// Mint a yrs `client_id` for a browser session: a random 53-bit integer
+/// (`Math.random`-derived), RNG-free so it needs no `getrandom` on wasm.
+///
+/// This is the id to pass to [`CollabConnection::open`] / [`CollabEditor::new`]
+/// (crate::CollabEditor::new). Unlike a per-process `ws-N` session counter it
+/// never collides across server replicas — two tabs, wherever they connect, get
+/// distinct ids — so concurrent writers never share a yrs client id and the CRDT
+/// stays correct. Collisions are astronomically unlikely (birthday bound over
+/// 2^53, far beyond any realistic peer count for one document).
+pub fn random_client_id() -> u64 {
+    // 2^53 - 1 — the largest integer `Math.random()` can address exactly.
+    (js_sys::Math::random() * 9_007_199_254_740_991.0) as u64
+}
+
 /// A live collaborative rich-text session over the realtime gateway.
 ///
 /// # Multi-writer
@@ -47,7 +61,10 @@ pub struct CollabConnection {
 impl CollabConnection {
     /// Open a collaborative session: connect to `url`, subscribe to `topic`
     /// under the collab sub-protocol, and run the sync handshake. `client_id`
-    /// must be globally unique (e.g. the realtime `ws-N` session number).
+    /// must be unique across every concurrent writer of the document, including
+    /// writers on other server processes — pass [`random_client_id`], NOT a
+    /// per-process `ws-N` session number (which collides across replicas; see
+    /// [`CollabEditor::new`](crate::CollabEditor::new)).
     pub fn open(
         url: &str,
         topic: impl Into<String>,
@@ -123,8 +140,21 @@ impl CollabConnection {
     /// Register a callback fired with the new document whenever a remote change
     /// is merged — wire it to load the document into the view editor. A no-op
     /// apply (the gateway echoing your own edit, or a duplicate) does NOT fire it.
+    ///
+    /// A connection drives ONE editor: this REPLACES any previously registered
+    /// handler (so a second [`bind`](Self::bind) silently detaches the first
+    /// editor). The replacement is logged so the footgun is not silent; open a
+    /// separate [`CollabConnection`] per editor instead.
     pub fn on_change(&self, callback: impl Fn(&Node) + 'static) {
-        *self.on_change.borrow_mut() = Some(Rc::new(callback));
+        let mut slot = self.on_change.borrow_mut();
+        if slot.is_some() {
+            tracing::warn!(
+                target: "pocopine.log",
+                "collab: on_change handler replaced — a CollabConnection drives one editor; \
+                 a second bind()/on_change detaches the previous one"
+            );
+        }
+        *slot = Some(Rc::new(callback));
     }
 
     /// Commit a local edit coarsely (a whole-document rebuild) and broadcast it.

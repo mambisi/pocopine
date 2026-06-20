@@ -50,8 +50,10 @@ pub struct CollabSyncClient {
 }
 
 impl CollabSyncClient {
-    /// A fresh client with a globally-unique `client_id` (e.g. the realtime
-    /// `ws-N` session number).
+    /// A fresh client with a `client_id` unique across every concurrent writer
+    /// of the document (see [`CollabEditor::new`](crate::CollabEditor::new) — a
+    /// per-process `ws-N` counter is NOT safe; use a random 53-bit id, e.g. the
+    /// `random_client_id` helper).
     pub fn new(client_id: u64, schema: Schema) -> Self {
         Self {
             editor: CollabEditor::new(client_id, schema),
