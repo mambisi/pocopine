@@ -14,7 +14,7 @@
 //! (raw reasoning is not client-safe streamed output, §D8), not a wire gap.
 
 use futures::StreamExt;
-use pocopine_agenkit::server::{GenerateRequest, Provider, StreamChunk};
+use pocopine_agenkit::server::{GenerateRequest, Provider, ProviderContext, StreamChunk};
 use pocopine_agenkit_core::{Message, ModelRef, SchemaRef, ToolDescriptor};
 use serde_json::json;
 
@@ -50,7 +50,7 @@ async fn text_generation() {
     for m in MODELS {
         let mut req = base_request(m);
         req.messages = vec![Message::user("Reply with exactly one word: pong")];
-        match p.generate(req).await {
+        match p.generate(req, &ProviderContext::default()).await {
             Ok(r) => println!(
                 "  ✓ {m:32}  {:?}  usage={:?}",
                 r.text_output().trim(),
@@ -69,7 +69,8 @@ async fn streaming() {
     for m in MODELS {
         let mut req = base_request(m);
         req.messages = vec![Message::user("Count: one two three")];
-        let mut stream = p.generate_stream(req);
+        let cx = ProviderContext::default();
+        let mut stream = p.generate_stream(req, &cx);
         let (mut text, mut deltas, mut err) = (String::new(), 0u32, None);
         while let Some(chunk) = stream.next().await {
             match chunk {
@@ -106,7 +107,7 @@ async fn tool_calling() {
         req.messages = vec![Message::user(
             "What is the weather in Paris? Use the get_weather tool.",
         )];
-        match p.generate(req).await {
+        match p.generate(req, &ProviderContext::default()).await {
             Ok(r) if !r.tool_calls.is_empty() => println!(
                 "  ✓ {m:32}  calls={:?}",
                 r.tool_calls
@@ -140,7 +141,7 @@ async fn structured_output() {
         req.messages = vec![Message::user(
             "Return a JSON object for Paris at 20 degrees C with keys city and temp_c.",
         )];
-        match p.generate(req).await {
+        match p.generate(req, &ProviderContext::default()).await {
             Ok(r) => {
                 let raw = if r.text_output().is_empty() {
                     r.structured_value()

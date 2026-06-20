@@ -1,0 +1,11 @@
+[package]
+name = "gen-model-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Dev tool: codegen the agenkit model catalog from LiteLLM's model_prices_and_context_window.json. Host-only; never built for wasm."
+
+[dependencies]
+serde_json = { workspace = true }

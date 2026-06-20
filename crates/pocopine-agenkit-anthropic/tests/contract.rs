@@ -8,9 +8,9 @@
 //! memory). If Anthropic changes the wire shape, refresh these strings.
 
 use futures::StreamExt;
-use pocopine_agenkit::server::{GenerateRequest, Provider, StreamChunk};
+use pocopine_agenkit::server::{GenerateRequest, Provider, ProviderContext, StreamChunk, models};
 use pocopine_agenkit_anthropic::AnthropicProvider;
-use pocopine_agenkit_core::{Message, ModelRef};
+use pocopine_agenkit_core::Message;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -21,7 +21,7 @@ fn provider(server: &MockServer) -> AnthropicProvider {
 
 fn text_request() -> GenerateRequest {
     GenerateRequest {
-        model: ModelRef::new("anthropic/claude-opus-4-8"),
+        model: models::anthropic::CLAUDE_OPUS_4_8,
         messages: vec![Message::user("hi")],
         ..GenerateRequest::default()
     }
@@ -42,13 +42,15 @@ async fn mount_sse(server: &MockServer, body: &'static str) {
 async fn drain(
     provider: &AnthropicProvider,
 ) -> (String, Vec<pocopine_agenkit_core::ToolCall>, Option<u64>) {
-    let mut stream = provider.generate_stream(text_request());
+    let cx = ProviderContext::default();
+    let mut stream = provider.generate_stream(text_request(), &cx);
     let (mut text, mut tools, mut usage) = (String::new(), Vec::new(), None);
     while let Some(chunk) = stream.next().await {
         match chunk.unwrap() {
             StreamChunk::Text(t) => text.push_str(&t),
             StreamChunk::ToolCall(c) => tools.push(c),
             StreamChunk::Usage(u) => usage = Some(u.total()),
+            StreamChunk::Thinking { .. } => {}
         }
     }
     (text, tools, usage)
@@ -172,7 +174,10 @@ async fn decodes_the_documented_message_response() {
         .mount(&server)
         .await;
 
-    let response = provider(&server).generate(text_request()).await.unwrap();
+    let response = provider(&server)
+        .generate(text_request(), &ProviderContext::default())
+        .await
+        .unwrap();
     assert_eq!(response.text_output(), "Hi! My name is Claude.");
     assert_eq!(response.usage.unwrap().total(), 35);
 }

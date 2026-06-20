@@ -4,9 +4,11 @@
 
 use futures::StreamExt;
 use pocopine_agenkit::server::{
-    Agenkit, AiFlowContext, Flow, GenerateRequest, Provider, StreamChunk,
+    Agenkit, AiFlowContext, Flow, GenerateRequest, Provider, ProviderContext, StreamChunk, models,
 };
-use pocopine_agenkit_core::{AgenkitResult, FlowStreamEvent, Message, ModelRef, ToolDescriptor};
+use pocopine_agenkit_core::{
+    AgenkitResult, FlowStreamEvent, Message, ThinkingLevel, ToolDescriptor,
+};
 use pocopine_agenkit_oai::{MaxTokensParam, OpenAiProvider};
 use serde::Deserialize;
 use serde_json::json;
@@ -25,7 +27,7 @@ fn sse_content_chunk(content: &str) -> String {
 
 fn text_request(prompt: &str) -> GenerateRequest {
     GenerateRequest {
-        model: ModelRef::new("openai/gpt-4o-mini"),
+        model: models::openai::GPT_4O_MINI,
         messages: vec![Message::user(prompt)],
         ..GenerateRequest::default()
     }
@@ -48,7 +50,10 @@ async fn maps_text_completion_and_sends_bearer_auth() {
         .await;
 
     let response = provider(&server)
-        .generate(text_request("how do uploads work?"))
+        .generate(
+            text_request("how do uploads work?"),
+            &ProviderContext::default(),
+        )
         .await
         .unwrap();
     assert_eq!(response.text_output(), "uploads use presigned URLs");
@@ -81,7 +86,10 @@ async fn structured_request_sets_response_format_and_strips_namespace() {
         json_schema: Some(json!({"type": "object"})),
         ..text_request("summarize")
     };
-    let response = provider(&server).generate(request).await.unwrap();
+    let response = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
     assert_eq!(response.text_output(), "{\"title\":\"Uploads\"}");
 }
 
@@ -120,7 +128,10 @@ async fn json_object_fallback_conveys_schema_in_prompt() {
         json_schema: Some(json!({"type": "object", "properties": {"title": {"type": "string"}}})),
         ..text_request("summarize")
     };
-    let response = provider(&server).generate(request).await.unwrap();
+    let response = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
     assert_eq!(response.text_output(), "{\"title\":\"Uploads\"}");
 }
 
@@ -151,7 +162,10 @@ async fn tool_call_with_empty_arguments_defaults_to_empty_object() {
         tools: vec![ToolDescriptor::new("ping", "Ping")],
         ..text_request("ping")
     };
-    let response = provider(&server).generate(request).await.unwrap();
+    let response = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].args, json!({}));
 }
@@ -180,7 +194,8 @@ async fn streaming_ignores_choices_beyond_the_first() {
         .await;
 
     let client = provider(&server);
-    let mut stream = client.generate_stream(text_request("hi"));
+    let cx = ProviderContext::default();
+    let mut stream = client.generate_stream(text_request("hi"), &cx);
     let mut text = String::new();
     while let Some(chunk) = stream.next().await {
         if let StreamChunk::Text(t) = chunk.unwrap() {
@@ -213,7 +228,7 @@ async fn maps_tool_calls_from_the_response() {
         .await;
 
     let response = provider(&server)
-        .generate(text_request("find docs"))
+        .generate(text_request("find docs"), &ProviderContext::default())
         .await
         .unwrap();
     assert_eq!(response.tool_calls.len(), 1);
@@ -241,7 +256,10 @@ async fn gateway_base_url_sends_legacy_max_tokens() {
         max_tokens: Some(128),
         ..text_request("hi")
     };
-    provider(&server).generate(request).await.unwrap();
+    provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -266,7 +284,7 @@ async fn max_completion_tokens_override_is_sent() {
     };
     provider(&server)
         .with_max_tokens_param(MaxTokensParam::MaxCompletionTokens)
-        .generate(request)
+        .generate(request, &ProviderContext::default())
         .await
         .unwrap();
 }
@@ -293,7 +311,7 @@ async fn retries_a_transient_server_error_then_succeeds() {
         .await;
 
     let response = provider(&server)
-        .generate(text_request("hi"))
+        .generate(text_request("hi"), &ProviderContext::default())
         .await
         .unwrap();
     assert_eq!(response.text_output(), "recovered");
@@ -312,7 +330,7 @@ async fn gives_up_after_max_retries_without_leaking_body() {
 
     let error = provider(&server)
         .with_max_retries(1)
-        .generate(text_request("hi"))
+        .generate(text_request("hi"), &ProviderContext::default())
         .await
         .unwrap_err();
     assert_eq!(error.kind(), "provider");
@@ -356,7 +374,10 @@ async fn sanitizes_tool_names_outbound_and_maps_them_back() {
         tools: vec![ToolDescriptor::new("weather.lookup", "Look up weather")],
         ..text_request("weather?")
     };
-    let response = provider(&server).generate(request).await.unwrap();
+    let response = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
     // ...and the response maps it back to the real tool id so dispatch works.
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].tool_id, "weather.lookup");
@@ -378,7 +399,7 @@ async fn http_error_maps_to_provider_error_without_leaking_message() {
         .await;
 
     let error = provider(&server)
-        .generate(text_request("hi"))
+        .generate(text_request("hi"), &ProviderContext::default())
         .await
         .unwrap_err();
     assert_eq!(error.kind(), "provider");
@@ -403,7 +424,7 @@ async fn integrates_as_an_agenkit_provider() {
 
     let agenkit = Agenkit::builder()
         .provider(provider(&server))
-        .default_model(ModelRef::new("openai/gpt-4o-mini"))
+        .default_model(models::openai::GPT_4O_MINI)
         .build()
         .unwrap();
 
@@ -431,7 +452,8 @@ async fn streams_text_deltas_and_usage_from_sse() {
         .await;
 
     let client = provider(&server);
-    let mut stream = client.generate_stream(text_request("how do uploads work?"));
+    let cx = ProviderContext::default();
+    let mut stream = client.generate_stream(text_request("how do uploads work?"), &cx);
     let mut text = String::new();
     let mut usage = None;
     let mut delta_count = 0;
@@ -442,7 +464,7 @@ async fn streams_text_deltas_and_usage_from_sse() {
                 text.push_str(&fragment);
             }
             StreamChunk::Usage(reported) => usage = Some(reported),
-            StreamChunk::ToolCall(_) => {}
+            StreamChunk::ToolCall(_) | StreamChunk::Thinking { .. } => {}
         }
     }
     assert_eq!(text, "uploads use presigned URLs");
@@ -491,7 +513,7 @@ async fn streams_structured_object_deltas_across_sse_chunks() {
 
     let agenkit = Agenkit::builder()
         .provider(provider(&server))
-        .default_model(ModelRef::new("openai/gpt-4o-mini"))
+        .default_model(models::openai::GPT_4O_MINI)
         .flow(Flow::new("summarize", summarize).public())
         .build()
         .unwrap();
@@ -500,7 +522,7 @@ async fn streams_structured_object_deltas_across_sse_chunks() {
     let value = agenkit
         .flow("summarize")
         .input(serde_json::Value::Null)
-        .stream(tx)
+        .stream_into(tx)
         .await
         .unwrap();
     let result: Summary = serde_json::from_value(value).unwrap();
@@ -563,6 +585,141 @@ async fn real_schema_uses_strict_json_schema_mode() {
         json_schema: Some(json!({"type": "object", "properties": {"title": {"type": "string"}}})),
         ..text_request("summarize")
     };
-    let response = provider(&server).generate(request).await.unwrap();
+    let response = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
     assert_eq!(response.text_output(), "{\"title\":\"Uploads\"}");
+}
+
+// ── W4: reasoning ("thinking") content ───────────────────────────────────────
+
+fn reasoning_request(prompt: &str) -> GenerateRequest {
+    GenerateRequest {
+        model: models::openai::O4_MINI,
+        messages: vec![Message::user(prompt)],
+        ..GenerateRequest::default()
+    }
+}
+
+#[tokio::test]
+async fn reasoning_effort_set_for_reasoning_model() {
+    // A reasoning-capable model (o4-mini) maps `ThinkingLevel::High` to
+    // `reasoning_effort: "high"`.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            assert_eq!(body["reasoning_effort"], "high");
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"choices": [{"message": {"content": "ok"}}]}))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        thinking: ThinkingLevel::High,
+        ..reasoning_request("think hard")
+    };
+    let response = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
+    assert_eq!(response.text_output(), "ok");
+}
+
+#[tokio::test]
+async fn reasoning_effort_omitted_for_non_reasoning_model() {
+    // A non-reasoning model (gpt-4o-mini) ignores the thinking level entirely.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "non-reasoning model must not request reasoning effort"
+            );
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"choices": [{"message": {"content": "ok"}}]}))
+        })
+        .mount(&server)
+        .await;
+
+    let request = GenerateRequest {
+        thinking: ThinkingLevel::High,
+        ..text_request("hi")
+    };
+    let _ = provider(&server)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn parses_reasoning_content_into_a_server_side_part() {
+    // A response with `reasoning_content` surfaces a Thinking part (no signature
+    // — OpenAI exposes none) that `text_output()` skips (§D10).
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "let me work through this",
+                    "content": "the answer is 42"
+                },
+                "finish_reason": "stop"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let response = provider(&server)
+        .generate(reasoning_request("q"), &ProviderContext::default())
+        .await
+        .unwrap();
+    assert_eq!(response.text_output(), "the answer is 42");
+    let thinking = response.content.parts.iter().find_map(|p| p.as_thinking());
+    assert_eq!(thinking, Some(("let me work through this", None)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streams_reasoning_content_as_an_internal_chunk() {
+    // `reasoning_content` deltas accumulate and surface as one internal Thinking
+    // chunk at the terminal — never as a client text delta (W4).
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"let me \"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"the answer\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .mount(&server)
+        .await;
+
+    let client = provider(&server);
+    let cx = ProviderContext::default();
+    let mut stream = client.generate_stream(reasoning_request("q"), &cx);
+    let mut text = String::new();
+    let mut thinking = None;
+    while let Some(chunk) = stream.next().await {
+        match chunk.unwrap() {
+            StreamChunk::Text(t) => text.push_str(&t),
+            StreamChunk::Thinking { text, signature } => thinking = Some((text, signature)),
+            _ => {}
+        }
+    }
+    // Reasoning is surfaced separately from the user-visible text.
+    assert_eq!(text, "the answer");
+    assert_eq!(thinking, Some(("let me reason".to_string(), None)));
 }

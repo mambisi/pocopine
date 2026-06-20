@@ -3,11 +3,33 @@
 
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Content, Message, Role, ToolCall, ToolNameMap, Usage,
+    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel,
+    ToolCall, ToolNameMap, Usage,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::MaxTokensParam;
+
+/// Whether a model is reasoning-capable per the W1 catalog. Only such models get
+/// a `reasoning_effort`; everything else ignores [`ThinkingLevel`]. An unknown
+/// alias (e.g. an OpenRouter model the catalog doesn't index) is treated as
+/// non-reasoning.
+fn model_supports_reasoning(model: &ModelRef) -> bool {
+    pocopine_agenkit::server::catalog::lookup(model)
+        .map(|m| m.reasoning)
+        .unwrap_or(false)
+}
+
+/// Map a [`ThinkingLevel`] to OpenAI's `reasoning_effort`. `Off` requests none.
+fn reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal => Some("minimal"),
+        ThinkingLevel::Low => Some("low"),
+        ThinkingLevel::Medium => Some("medium"),
+        ThinkingLevel::High => Some("high"),
+    }
+}
 
 // Tool-name sanitization and the collision-safe reverse map live in
 // `pocopine_agenkit_core::tool_name` (shared with the Anthropic provider).
@@ -33,6 +55,10 @@ pub(crate) struct ChatRequest {
     pub(crate) stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stream_options: Option<StreamOptions>,
+    /// Reasoning budget for o-series / reasoning models (roadmap W4); omitted
+    /// unless requested for a reasoning-capable model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_effort: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -118,6 +144,11 @@ impl ChatRequest {
             stream_options: stream.then_some(StreamOptions {
                 include_usage: true,
             }),
+            // Reasoning effort (W4): only for reasoning-capable models; `Off` and
+            // unknown/non-reasoning models send nothing.
+            reasoning_effort: model_supports_reasoning(&request.model)
+                .then(|| reasoning_effort(request.thinking))
+                .flatten(),
         }
     }
 }
@@ -416,7 +447,18 @@ impl ChatResponse {
             .next()
             .ok_or_else(|| AgenkitError::provider("OpenAI response contained no choices"))?;
 
-        let content = Content::text(choice.message.content.unwrap_or_default());
+        // Reasoning ("thinking") content (W4): OpenAI-compatible reasoning models
+        // return it in `reasoning_content`. It rides the response server-side
+        // (replay/observability) but `Content::as_text()` skips it, so it never
+        // reaches user-visible text. OpenAI exposes no replay signature → `None`.
+        let text = choice.message.content.unwrap_or_default();
+        let content = match choice.message.reasoning_content.filter(|r| !r.is_empty()) {
+            Some(reasoning) => Content::from_parts(vec![
+                ContentPart::thinking(reasoning, None),
+                ContentPart::text(text),
+            ]),
+            None => Content::text(text),
+        };
         let tool_calls = choice
             .message
             .tool_calls
@@ -446,6 +488,11 @@ pub(crate) struct Choice {
 pub(crate) struct ChoiceMessage {
     #[serde(default)]
     pub(crate) content: Option<String>,
+    /// Reasoning text from a reasoning model (W4). Non-standard but emitted by
+    /// DeepSeek-R1, many OpenRouter reasoning models, and OpenAI-compatible
+    /// gateways. Absent on non-reasoning responses.
+    #[serde(default)]
+    pub(crate) reasoning_content: Option<String>,
     #[serde(default)]
     pub(crate) tool_calls: Vec<ResponseToolCall>,
 }
@@ -484,11 +531,31 @@ pub(crate) struct WireUsage {
     pub(crate) prompt_tokens: u64,
     #[serde(default)]
     pub(crate) completion_tokens: u64,
+    // OpenAI's `prompt_tokens` INCLUDES the cached subset; subtract it so
+    // `Usage.input_tokens` is the uncached count.
+    #[serde(default)]
+    pub(crate) prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PromptTokensDetails {
+    #[serde(default)]
+    pub(crate) cached_tokens: u64,
 }
 
 impl WireUsage {
     pub(crate) fn into_usage(self) -> Usage {
-        Usage::new(self.prompt_tokens, self.completion_tokens)
+        let cached = self
+            .prompt_tokens_details
+            .map(|d| d.cached_tokens)
+            .unwrap_or(0);
+        // `prompt_tokens` includes `cached`; report the uncached remainder as
+        // input. OpenAI doesn't bill cache writes, so cache_creation = 0.
+        Usage::new(
+            self.prompt_tokens.saturating_sub(cached),
+            self.completion_tokens,
+        )
+        .with_cache(cached, 0)
     }
 }
 
@@ -521,6 +588,9 @@ pub(crate) struct StreamChoice {
 pub(crate) struct StreamDelta {
     #[serde(default)]
     pub(crate) content: Option<String>,
+    /// Incremental reasoning text from a reasoning model (W4).
+    #[serde(default)]
+    pub(crate) reasoning_content: Option<String>,
     #[serde(default)]
     pub(crate) tool_calls: Vec<StreamToolCallDelta>,
 }
@@ -723,5 +793,25 @@ mod tests {
             schema["properties"]["note"]["type"],
             serde_json::json!(["string", "null"])
         );
+    }
+
+    #[test]
+    fn wire_usage_subtracts_cached_from_prompt_tokens() {
+        // OpenAI's prompt_tokens INCLUDES the cached subset; into_usage subtracts it.
+        let u: super::WireUsage = serde_json::from_str(
+            r#"{"prompt_tokens":150,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":120}}"#,
+        )
+        .unwrap();
+        let usage = u.into_usage();
+        assert_eq!(usage.input_tokens, 30); // 150 - 120
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cache_read_tokens, 120);
+        assert_eq!(usage.cache_creation_tokens, 0); // OpenAI doesn't bill cache writes
+        // No details → no cached subset.
+        let plain: super::WireUsage =
+            serde_json::from_str(r#"{"prompt_tokens":10,"completion_tokens":2}"#).unwrap();
+        let usage = plain.into_usage();
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.cache_read_tokens, 0);
     }
 }
