@@ -272,16 +272,19 @@ Phase 2  ✅ HOST reader: XmlFragment → Node (decode_doc via diff(); embeds in
 Phase 3  ✅ HOST editor binding (coarse, SINGLE-WRITER): CollabEditor in pine-richtext-collab — set_document
          ("pm" origin) / apply_remote ("remote") / full_update. Two editors converge through updates (tested).
          block_id minted per block (RNG-free). Compiles + clippy-clean for host AND wasm32.
-Phase 4  ⛔ CLIENT half — BLOCKED on a NEW component: pocopine-realtime is host-only (no wasm client). Needs a
-         realtime WASM client (web_sys::WebSocket, ws.v1 handshake + collab frames) + view-editor wiring
-         (pine-richtext view::on_update → set_document; apply_remote → dispatch) + an example app to run a
-         two-browser session. The binder is wasm-ready; the transport client and app are the work.
+Phase 4  🔄 CLIENT half. ✅ UNBLOCKED: pocopine-realtime now compiles to wasm — protocol + client modules in
+         the SAME crate (cfg-gated, no extra crates). ClientSession (host-tested handshake→subscribe→data→
+         heartbeat state machine) + RealtimeClient (wasm web_sys::WebSocket shell). ☐ REMAINING: the collab
+         bridge — wire RealtimeClient ⇄ CollabEditor (view::on_update → set_document → send_data; inbound Data →
+         apply_remote → dispatch) under a collab subprotocol_id — plus an example app to run a two-browser session.
 Phase 5  ☐ v2 fine-diff: Step-driven incremental write (replaces the coarse re-encode) + StickyIndex cursor
          preservation → multi-writer co-edit. A substantial algorithm; split/merge/move content-loss stays
          permanent (schema-A property).
 ```
 
 > Status: **Phases 0–3 done** (the schema, codec, block_id, and a tested live
-> binding that converges — all wasm-ready). **Phase 4** needs a realtime wasm
-> client + example app (its own project). **Phase 5** is the multi-writer
-> fine-diff algorithm.
+> binding that converges — all wasm-ready). **Phase 4 in progress**: the realtime
+> wasm client landed (pocopine-realtime now builds for wasm via cfg-gated
+> `protocol` + `client` modules); what remains is the collab bridge wiring the
+> client to `CollabEditor` plus a two-browser example app. **Phase 5** is the
+> multi-writer fine-diff algorithm.

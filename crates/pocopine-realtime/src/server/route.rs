@@ -33,15 +33,12 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval};
 
-use super::control::Control;
+use crate::protocol::{Control, Frame, FrameKind, WS_PROTOCOL_V1, WS_STREAM_PATH};
+
 use super::error::WsError;
 use super::fanout::TopicStream;
-use super::frame::{Frame, FrameKind};
-use super::gateway::{GatewayConfig, WS_PROTOCOL_V1, WsGateway};
+use super::gateway::{GatewayConfig, WsGateway};
 use super::handler::InboundData;
-
-/// Mount path for the gateway upgrade endpoint.
-pub const WS_STREAM_PATH: &str = "/__pocopine/ws/v1";
 
 /// Build the axum router for the gateway. Mirrors `pocopine_live::routes`:
 /// the [`WsGateway`] is the router state, reachable in the handler via

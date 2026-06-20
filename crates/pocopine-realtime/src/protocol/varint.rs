@@ -5,7 +5,7 @@
 //! internally, so the envelope and the application payload can share one
 //! decoder. This module is the shared decoder.
 
-use super::error::WsError;
+use super::error::ProtocolError;
 
 /// Maximum bytes a `u64` LEB128 value may occupy (ceil(64 / 7) == 10).
 const MAX_VARUINT_BYTES: usize = 10;
@@ -27,7 +27,7 @@ pub fn write_var_uint(buf: &mut Vec<u8>, mut value: u64) {
 /// Read a lib0 `varUint` starting at `*pos`, advancing `*pos` past it.
 ///
 /// Errors if the buffer ends mid-value or the value would overflow `u64`.
-pub fn read_var_uint(buf: &[u8], pos: &mut usize) -> Result<u64, WsError> {
+pub fn read_var_uint(buf: &[u8], pos: &mut usize) -> Result<u64, ProtocolError> {
     let mut result: u64 = 0;
     let mut shift: u32 = 0;
     let mut read = 0usize;
@@ -35,18 +35,18 @@ pub fn read_var_uint(buf: &[u8], pos: &mut usize) -> Result<u64, WsError> {
     loop {
         let byte = *buf
             .get(*pos)
-            .ok_or_else(|| WsError::frame("varuint: unexpected end of buffer"))?;
+            .ok_or_else(|| ProtocolError::frame("varuint: unexpected end of buffer"))?;
         *pos += 1;
         read += 1;
 
         // The final (10th) byte of a u64 may only carry the top bit; reject
         // anything that would shift past 64 bits.
         if shift >= 64 || read > MAX_VARUINT_BYTES {
-            return Err(WsError::frame("varuint: value overflows u64"));
+            return Err(ProtocolError::frame("varuint: value overflows u64"));
         }
         result |= u64::from(byte & 0x7f)
             .checked_shl(shift)
-            .ok_or_else(|| WsError::frame("varuint: value overflows u64"))?;
+            .ok_or_else(|| ProtocolError::frame("varuint: value overflows u64"))?;
 
         if byte & 0x80 == 0 {
             return Ok(result);

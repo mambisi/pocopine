@@ -48,8 +48,19 @@
 //! `pocopine-events` Redis spine is the RFC 073 Phase C follow-up; the
 //! [`Fanout`] trait is the seam it slots into.
 
+// The wire protocol is target-agnostic — shared by the server and the client.
+pub mod protocol;
+pub use protocol::{
+    Control, Frame, FrameKind, ProtocolError, TopicSeq, WS_PROTOCOL_V1, WS_STREAM_PATH,
+};
+
+// The browser client. Its session state machine is target-agnostic
+// (host-testable); the WebSocket I/O is gated to wasm32 inside the module.
+pub mod client;
+
+// The host gateway (axum/tokio/redis): a single `cfg` gate, the
+// client-server-modules convention.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::*;

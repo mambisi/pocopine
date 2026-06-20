@@ -96,3 +96,11 @@ impl From<EventError> for WsError {
         }
     }
 }
+
+impl From<crate::protocol::ProtocolError> for WsError {
+    fn from(err: crate::protocol::ProtocolError) -> Self {
+        match err {
+            crate::protocol::ProtocolError::Frame(msg) => Self::Frame(msg),
+        }
+    }
+}
