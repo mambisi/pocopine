@@ -195,6 +195,55 @@ origin (recommend `transact_mut_with("remote")`); the binder early-returns only 
 `"pm"`. The origin each call site uses is an RFC-pinned contract between
 `pine-richtext-collab` and `pocopine-collab`.
 
+### 4.4 Client wiring — `view::Editor` ⇄ `CollabConnection` (the app glue)
+
+The bridge is built and tested; an app wires it to the browser editor in ~15
+lines. The view editor exposes the doc as the `DocNode` content format
+(`Repr = Owned = pine_richtext::model::Node` — `view/content.rs:171`), which is
+exactly the `Node` `CollabConnection` speaks, so no conversion is needed:
+
+```rust
+use std::cell::Cell;
+use std::rc::Rc;
+use pine_richtext::view::{Editor, content::DocNode};
+use pine_richtext::model::Node;
+use pine_richtext_collab::CollabConnection;
+
+// `ws-N` session id → the yrs client_id; topic = collab:{doc_hash} (CollabDoc::topic).
+let conn = Rc::new(CollabConnection::open(ws_url, topic, client_id, schema)?);
+
+// Break the coarse-write feedback loop: while we apply a REMOTE change to the
+// editor, suppress the on_update it triggers (v1 set_document re-encodes the
+// whole doc, so an un-suppressed echo would thrash — see §6 / the binder doc).
+let applying = Rc::new(Cell::new(false));
+
+// remote change → load into the editor
+{
+    let editor = editor.clone();
+    let applying = applying.clone();
+    conn.on_change(move |node: &Node| {
+        applying.set(true);
+        let _ = editor.set::<DocNode>(node);
+        applying.set(false);
+    });
+}
+
+// local edit → broadcast (unless it's our own remote-apply echo)
+{
+    let conn = conn.clone();
+    let _sub = editor.on_update::<DocNode, _>(move |node: Node| {
+        if !applying.get() {
+            let _ = conn.push_local(&node);
+        }
+    });
+    // keep `_sub` alive for the editor's lifetime
+}
+```
+
+The suppression flag is a v1 artefact: Phase 5's `Step`-driven incremental write
+makes the remote-apply a minimal patch that no longer re-emits the whole doc, so
+the flag (and the single-writer restriction) goes away.
+
 ---
 
 ## 5. Migration from today's `text("body")` root
@@ -272,19 +321,27 @@ Phase 2  ✅ HOST reader: XmlFragment → Node (decode_doc via diff(); embeds in
 Phase 3  ✅ HOST editor binding (coarse, SINGLE-WRITER): CollabEditor in pine-richtext-collab — set_document
          ("pm" origin) / apply_remote ("remote") / full_update. Two editors converge through updates (tested).
          block_id minted per block (RNG-free). Compiles + clippy-clean for host AND wasm32.
-Phase 4  🔄 CLIENT half. ✅ UNBLOCKED: pocopine-realtime now compiles to wasm — protocol + client modules in
-         the SAME crate (cfg-gated, no extra crates). ClientSession (host-tested handshake→subscribe→data→
-         heartbeat state machine) + RealtimeClient (wasm web_sys::WebSocket shell). ☐ REMAINING: the collab
-         bridge — wire RealtimeClient ⇄ CollabEditor (view::on_update → set_document → send_data; inbound Data →
-         apply_remote → dispatch) under a collab subprotocol_id — plus an example app to run a two-browser session.
+Phase 4  🔄 CLIENT half — stack DONE + tested; only the runnable demo remains.
+         ✅ pocopine-realtime → wasm: protocol + client modules in ONE crate (cfg-gated). ClientSession
+            (host-tested state machine) + RealtimeClient (wasm web_sys shell). Integration-tested: ClientSession
+            drives the real gateway end to end.
+         ✅ pocopine-collab sync core (protocol/sync/doc/error) made wasm-reachable (same split), so the client
+            speaks the same CollabMessage handshake as the server.
+         ✅ CollabEditor gained state_vector()/diff() (SyncStep1/SyncStep2 primitives).
+         ✅ The bridge in pine-richtext-collab: CollabSyncClient (target-agnostic handshake driver, host-tested:
+            two clients converge; a fresh client catches up) + CollabConnection (wasm I/O shell over
+            RealtimeClient: subscribe → SyncStep1 on ack → route inbound → reply + on_change(new doc)).
+         ☐ REMAINING: a runnable two-browser example (server binary mounting the gateway + CollabSync; a wasm
+            client wiring the view Editor — see §4.4). Browser-verifiable only.
 Phase 5  ☐ v2 fine-diff: Step-driven incremental write (replaces the coarse re-encode) + StickyIndex cursor
          preservation → multi-writer co-edit. A substantial algorithm; split/merge/move content-loss stays
          permanent (schema-A property).
 ```
 
 > Status: **Phases 0–3 done** (the schema, codec, block_id, and a tested live
-> binding that converges — all wasm-ready). **Phase 4 in progress**: the realtime
-> wasm client landed (pocopine-realtime now builds for wasm via cfg-gated
-> `protocol` + `client` modules); what remains is the collab bridge wiring the
-> client to `CollabEditor` plus a two-browser example app. **Phase 5** is the
+> binding that converges — all wasm-ready). **Phase 4**: the client stack is
+> complete and tested end to end (realtime wasm client, the wasm-reachable collab
+> sync core, and the `CollabConnection` bridge in `pine-richtext-collab`); only a
+> runnable two-browser demo remains (see §4.4 for the exact view wiring). **Phase
+> 5** is the
 > multi-writer fine-diff algorithm.

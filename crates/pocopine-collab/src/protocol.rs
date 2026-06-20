@@ -16,7 +16,7 @@
 
 use bytes::Bytes;
 
-use super::error::{CollabError, CollabResult};
+use crate::error::{CollabError, CollabResult};
 
 /// The conventional `subprotocol_id` apps register the collab handler under and
 /// tag collab Data frames with. Apps may choose another id; this is the default

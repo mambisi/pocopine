@@ -39,9 +39,11 @@ pub fn read_var_uint(buf: &[u8], pos: &mut usize) -> Result<u64, ProtocolError> 
         *pos += 1;
         read += 1;
 
-        // The final (10th) byte of a u64 may only carry the top bit; reject
-        // anything that would shift past 64 bits.
-        if shift >= 64 || read > MAX_VARUINT_BYTES {
+        // Reject anything that would shift past 64 bits. The final (10th) byte
+        // sits at shift 63, where only bit 0 fits in a u64 — a larger value
+        // overflows even though `checked_shl(63)` would silently keep just bit
+        // 63 and drop the rest, so guard the value bits explicitly here.
+        if shift >= 64 || read > MAX_VARUINT_BYTES || (shift == 63 && byte & 0x7f > 1) {
             return Err(ProtocolError::frame("varuint: value overflows u64"));
         }
         result |= u64::from(byte & 0x7f)
@@ -116,6 +118,22 @@ mod tests {
         let buf = [0xffu8; 11];
         let mut pos = 0;
         assert!(read_var_uint(&buf, &mut pos).is_err());
+    }
+
+    #[test]
+    fn noncanonical_tenth_byte_overflows() {
+        // 9 continuation bytes then a 10th byte whose value bits exceed bit 0
+        // (0x7f, not 0x01): a u64 can't hold it, so it must error rather than
+        // silently truncate via checked_shl(63).
+        let mut buf = vec![0x80u8; 9];
+        buf.push(0x7f);
+        let mut pos = 0;
+        assert!(read_var_uint(&buf, &mut pos).is_err());
+        // The canonical 10-byte max (0x01 final byte) still decodes.
+        let mut max = vec![0xffu8; 9];
+        max.push(0x01);
+        let mut pos = 0;
+        assert_eq!(read_var_uint(&max, &mut pos).unwrap(), u64::MAX);
     }
 
     #[test]

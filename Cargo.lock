@@ -6776,8 +6776,13 @@ dependencies = [
 name = "pine-richtext-collab"
 version = "0.1.1"
 dependencies = [
+ "bytes",
  "pine-richtext",
+ "pocopine-collab",
+ "pocopine-realtime",
  "serde_json",
+ "tracing",
+ "wasm-bindgen-test",
  "yrs",
 ]
 

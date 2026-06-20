@@ -31,6 +31,7 @@ use pine_richtext::model::{Node, Schema};
 use pine_richtext::{RichTextError, RichTextResult};
 use yrs::types::xml::{XmlFragment, XmlFragmentRef};
 use yrs::updates::decoder::Decode;
+use yrs::updates::encoder::Encode;
 use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 
 use crate::{decode_doc, encode_doc};
@@ -45,6 +46,10 @@ pub enum BindError {
     Crdt(String),
     /// The document model rejected a node (schema validation / codec).
     Model(RichTextError),
+    /// A collab wire message could not be decoded (bad tag / empty body).
+    Protocol(String),
+    /// The realtime transport failed to connect (bad URL / WebSocket error).
+    Connect(String),
 }
 
 impl From<RichTextError> for BindError {
@@ -58,6 +63,8 @@ impl fmt::Display for BindError {
         match self {
             Self::Crdt(msg) => write!(f, "collab crdt error: {msg}"),
             Self::Model(err) => write!(f, "collab model error: {err}"),
+            Self::Protocol(msg) => write!(f, "collab protocol error: {msg}"),
+            Self::Connect(msg) => write!(f, "collab connect error: {msg}"),
         }
     }
 }
@@ -132,6 +139,21 @@ impl CollabEditor {
             .transact()
             .encode_state_as_update_v1(&StateVector::default())
     }
+
+    /// This editor's state vector — "what I already have" — encoded as the
+    /// SyncStep1 payload of the collab handshake.
+    pub fn state_vector(&self) -> Vec<u8> {
+        self.doc.transact().state_vector().encode_v1()
+    }
+
+    /// The update a peer whose state vector is `remote_sv` is missing (the
+    /// SyncStep2 reply). With an empty `remote_sv` this equals
+    /// [`full_update`](Self::full_update).
+    pub fn diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, BindError> {
+        let sv =
+            StateVector::decode_v1(remote_sv).map_err(|err| BindError::Crdt(err.to_string()))?;
+        Ok(self.doc.transact().encode_state_as_update_v1(&sv))
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +185,22 @@ mod tests {
         a.apply_remote(&update2).unwrap();
         assert_eq!(a.document().unwrap(), doc_b);
         assert_eq!(a.document().unwrap(), b.document().unwrap());
+    }
+
+    #[test]
+    fn fresh_peer_catches_up_via_the_sync_handshake() {
+        // A authors a document.
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let doc = schema_basic::doc(vec![para("shared")]).unwrap();
+        a.set_document(&doc).unwrap();
+
+        // A fresh peer runs SyncStep1 (its empty state vector); A answers with
+        // the SyncStep2 diff; the peer applies it and converges.
+        let mut fresh = CollabEditor::new(2, schema_basic::schema());
+        let step2 = a.diff(&fresh.state_vector()).unwrap();
+        let got = fresh.apply_remote(&step2).unwrap();
+        assert_eq!(got, doc);
+        assert_eq!(fresh.document().unwrap(), a.document().unwrap());
     }
 
     #[test]

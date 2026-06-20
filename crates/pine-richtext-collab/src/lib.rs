@@ -26,6 +26,14 @@
 mod binder;
 pub use binder::{BindError, CollabEditor};
 
+// The browser collab client. Compiled on wasm32 (the real target) and under
+// `test` (so the sync driver is host-tested) — but NOT in a plain host build,
+// to keep the codec's host deps lean.
+#[cfg(any(target_arch = "wasm32", test))]
+mod client;
+#[cfg(target_arch = "wasm32")]
+pub use client::{CollabConnection, CollabSyncClient, SyncOutcome};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

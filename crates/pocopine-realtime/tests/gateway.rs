@@ -1,10 +1,15 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end gateway tests: boot the axum router on an ephemeral port and
-//! drive it with a real WebSocket client (tokio-tungstenite).
+//! drive it with a real WebSocket client (tokio-tungstenite). Host-only (axum /
+//! tokio): the wasm CI gate runs `--all-targets`, so this guard keeps it empty
+//! on wasm32 rather than failing to resolve the host-only dev-deps.
 
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
 use futures_util::{SinkExt, Stream, StreamExt};
 use pocopine_events::Topic;
+use pocopine_realtime::client::{ClientSession, SessionEvent};
 use pocopine_realtime::{
     Control, Frame, FrameKind, GatewayConfig, InboundData, Reaction, SubprotocolHandler, TopicSeq,
     WsGateway, routes,
@@ -23,18 +28,20 @@ async fn spawn(gateway: WsGateway) -> String {
     format!("ws://{addr}/__pocopine/ws/v1")
 }
 
-/// Read the next binary frame, skipping ping/pong/text.
+/// Read the next binary frame, skipping ping/pong/text. Each read is bounded by
+/// a timeout so a regression that stops the expected traffic fails loudly with a
+/// clear message instead of hanging until the whole CI job is killed.
 async fn next_frame<S>(ws: &mut S) -> Frame
 where
     S: Stream<Item = Result<WsMessage, TungError>> + Unpin,
 {
     loop {
-        match ws
-            .next()
+        let message = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
             .await
+            .expect("timed out waiting for a frame")
             .expect("stream ended")
-            .expect("ws transport error")
-        {
+            .expect("ws transport error");
+        match message {
             WsMessage::Binary(data) => return Frame::decode(&data).expect("decode frame"),
             WsMessage::Close(_) => panic!("server closed unexpectedly"),
             _ => {}
@@ -383,4 +390,61 @@ async fn topic_active_idle_fires_on_first_and_last_subscriber() {
         *events.lock().unwrap(),
         vec!["active:room:1", "idle:room:1"]
     );
+}
+
+/// The wasm client's session state machine ([`ClientSession`]) drives the real
+/// gateway end to end: it must turn the live Hello/SubscribeAck/Data frames into
+/// the right events and produce addressable Subscribe/Data frames the server
+/// accepts. Proves the browser client's protocol half interoperates with the
+/// host server (the wasm WebSocket I/O shell is the only untested layer above).
+#[tokio::test]
+async fn client_session_drives_the_gateway() {
+    let url = spawn(WsGateway::local().allow_all_topics()).await;
+    let (mut ws, _) = connect_async(&url).await.unwrap();
+    let mut session = ClientSession::new();
+
+    // Hello -> Connected.
+    let hello = next_frame(&mut ws).await;
+    match session.on_frame(&hello).unwrap() {
+        Some(SessionEvent::Connected { heartbeat_ms, .. }) => assert!(heartbeat_ms > 0),
+        other => panic!("expected Connected, got {other:?}"),
+    }
+    assert!(session.session_id().is_some());
+
+    // Subscribe -> SubscribeAck binds the topic_ref.
+    let topic = "room:1";
+    ws.send(send_bytes(session.subscribe(topic, 1)))
+        .await
+        .unwrap();
+    let ack = next_frame(&mut ws).await;
+    let topic_ref = match session.on_frame(&ack).unwrap() {
+        Some(SessionEvent::Subscribed {
+            topic: acked,
+            topic_ref,
+        }) => {
+            assert_eq!(acked, topic);
+            topic_ref
+        }
+        other => panic!("expected Subscribed, got {other:?}"),
+    };
+    assert!(topic_ref > 0);
+
+    // Before the ack there was no ref; now data() can address the topic. The
+    // default relay echoes the publish back to this subscriber.
+    let frame = session
+        .data(topic, 1, Bytes::from_static(b"ping"))
+        .expect("topic_ref is bound after the ack");
+    ws.send(send_bytes(frame)).await.unwrap();
+
+    let data = next_data(&mut ws).await;
+    match session.on_frame(&data).unwrap() {
+        Some(SessionEvent::Data {
+            topic: from,
+            payload,
+        }) => {
+            assert_eq!(from, topic);
+            assert_eq!(payload, Bytes::from_static(b"ping"));
+        }
+        other => panic!("expected Data, got {other:?}"),
+    }
 }

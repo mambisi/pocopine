@@ -19,7 +19,7 @@
 //! ([`InboundData::can_write`]): a read-only connection may run SyncStep1 (read
 //! down) but its Update / SyncStep2 messages are refused, and it is never
 //! prompted with the server's SyncStep1. This is the realtime-layer counterpart
-//! of [`CollabAccess`](super::doc::CollabAccess).
+//! of [`CollabAccess`](crate::doc::CollabAccess).
 //!
 //! Every process **self-subscribes** to each topic's fan-out and folds peer
 //! updates into its local document, so replicas behind a multi-process fan-out
@@ -38,9 +38,9 @@ use pocopine_observe::LOG_TARGET;
 use pocopine_realtime::{Fanout, InboundData, Reaction, SubprotocolHandler, TopicStream, WsError};
 use tokio::task::JoinHandle;
 
-use super::protocol::CollabMessage;
 use super::store::{CollabSnapshot, CollabStore};
-use super::sync::CollabDocument;
+use crate::protocol::CollabMessage;
+use crate::sync::CollabDocument;
 
 /// Save a checkpoint snapshot once this many fan-out updates have been folded
 /// in. Far below the fan-out's retention window, so the snapshot cursor always
