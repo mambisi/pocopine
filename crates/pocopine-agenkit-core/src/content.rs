@@ -23,6 +23,18 @@ pub enum ContentPart {
         /// The JSON payload.
         value: serde_json::Value,
     },
+    /// Model reasoning ("thinking") content. **Server-side only** — it rides the
+    /// message model for replay + observability but is redaction-gated at the
+    /// wire (§D10) and never crosses to the client. `signature` is a
+    /// provider-opaque token replayed verbatim on the next turn (extended-
+    /// thinking providers require it); the framework never interprets it.
+    Thinking {
+        /// The reasoning text.
+        text: String,
+        /// Opaque provider signature, replayed verbatim next turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
 }
 
 impl ContentPart {
@@ -31,10 +43,27 @@ impl ContentPart {
         Self::Text { text: text.into() }
     }
 
+    /// A reasoning ("thinking") part. `signature` is the provider-opaque token
+    /// replayed verbatim next turn (`None` where the provider doesn't sign).
+    pub fn thinking(text: impl Into<String>, signature: Option<String>) -> Self {
+        Self::Thinking {
+            text: text.into(),
+            signature,
+        }
+    }
+
     /// The text of this part, if it is a [`ContentPart::Text`].
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text { text } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The reasoning text and signature, if this is a [`ContentPart::Thinking`].
+    pub fn as_thinking(&self) -> Option<(&str, Option<&str>)> {
+        match self {
+            Self::Thinking { text, signature } => Some((text, signature.as_deref())),
             _ => None,
         }
     }
@@ -233,5 +262,38 @@ mod tests {
             ContentPart::text("b"),
         ]);
         assert_eq!(content.as_text(), "ab");
+    }
+
+    #[test]
+    fn thinking_part_round_trips_with_signature() {
+        let part = ContentPart::thinking("let me reason", Some("sig-abc".to_string()));
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains(r#""type":"thinking""#));
+        assert!(json.contains(r#""text":"let me reason""#));
+        assert!(json.contains(r#""signature":"sig-abc""#));
+        assert_eq!(serde_json::from_str::<ContentPart>(&json).unwrap(), part);
+        assert_eq!(part.as_thinking(), Some(("let me reason", Some("sig-abc"))));
+    }
+
+    #[test]
+    fn thinking_part_omits_absent_signature() {
+        let part = ContentPart::thinking("reasoning", None);
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(!json.contains("signature"));
+        // A wire payload without a signature deserializes to `None`.
+        let back: ContentPart = serde_json::from_str(r#"{"type":"thinking","text":"r"}"#).unwrap();
+        assert_eq!(back, ContentPart::thinking("r", None));
+        assert_eq!(part.as_thinking(), Some(("reasoning", None)));
+    }
+
+    #[test]
+    fn as_text_skips_thinking_parts() {
+        // Thinking content never leaks into user-visible text (§D10).
+        let content = Content::from_parts(vec![
+            ContentPart::text("answer "),
+            ContentPart::thinking("secret reasoning", Some("sig".to_string())),
+            ContentPart::text("here"),
+        ]);
+        assert_eq!(content.as_text(), "answer here");
     }
 }

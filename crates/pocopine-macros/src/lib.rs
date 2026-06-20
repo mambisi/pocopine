@@ -4657,6 +4657,20 @@ fn parse_server_path_value(value: Expr) -> syn::Result<LitStr> {
     Ok(lit)
 }
 
+/// True when a `#[server]` fn returns a streaming result
+/// (`StreamServerResult<T>` / `ServerStream<T>`) — detected syntactically from
+/// the return type's head ident (RFC-107).
+fn returns_stream(sig: &syn::Signature) -> bool {
+    if let syn::ReturnType::Type(_, ty) = &sig.output
+        && let syn::Type::Path(type_path) = ty.as_ref()
+        && let Some(seg) = type_path.path.segments.last()
+    {
+        let ident = seg.ident.to_string();
+        return ident == "StreamServerResult" || ident == "ServerStream";
+    }
+    false
+}
+
 #[proc_macro_attribute]
 pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let policy = match parse_server_policy(attr) {
@@ -4667,6 +4681,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let vis = &input.vis;
     let sig = &input.sig;
     let body = &input.block;
+    let streaming = returns_stream(sig);
 
     let fn_ident = sig.ident.clone();
     let fn_name_str = fn_ident.to_string();
@@ -4773,19 +4788,33 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let sig_without_body = quote! { #vis #sig };
 
-    let client_call = if policy.idempotent {
-        quote! { ::pocopine::fetch::call_replay_safe::<#args_tuple_type, _> }
+    let client_body = if streaming {
+        quote! {
+            ::pocopine::fetch::call_stream::<#args_tuple_type, _>(
+                #path_ident(),
+                &#args_tuple_value,
+            ).await
+        }
+    } else if policy.idempotent {
+        quote! {
+            ::pocopine::fetch::call_replay_safe::<#args_tuple_type, _>(
+                #path_ident(),
+                &#args_tuple_value,
+            ).await
+        }
     } else {
-        quote! { ::pocopine::fetch::call::<#args_tuple_type, _> }
+        quote! {
+            ::pocopine::fetch::call::<#args_tuple_type, _>(
+                #path_ident(),
+                &#args_tuple_value,
+            ).await
+        }
     };
 
     let client = quote! {
         #[cfg(target_arch = "wasm32")]
         #sig_without_body {
-            #client_call(
-                #path_ident(),
-                &#args_tuple_value,
-            ).await
+            #client_body
         }
     };
 
@@ -4795,6 +4824,22 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         build_warning_tokens(&format!(
             "pocopine #[server] function `{fn_name_str}` has no access policy. Write #[server(public)] for an intentional public endpoint or #[server(guard = path::to_guard)] to enforce auth. Missing server-function access policy is currently a warning and may become a hard error."
         ))
+    };
+
+    // RFC-107 — a streaming `#[server]` frames its result (and any pre-body
+    // error) as SSE; a unary one stays JSON. Branch the response sites once.
+    let error_return = if streaming {
+        quote! { return ::pocopine_server::sse_error_response(__pocopine_error); }
+    } else {
+        quote! {
+            let result = ::core::result::Result::Err(__pocopine_error);
+            return ::pocopine_server::axum::Json(result);
+        }
+    };
+    let final_return = if streaming {
+        quote! { ::pocopine_server::sse_stream_response(result) }
+    } else {
+        quote! { ::pocopine_server::axum::Json(result) }
     };
 
     // Always destructure the request into parts so the
@@ -4848,8 +4893,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                         },
                     );
                 }
-                let result = ::core::result::Result::Err(__pocopine_error);
-                return ::pocopine_server::axum::Json(result);
+                #error_return
             }
         },
         None => proc_macro2::TokenStream::new(),
@@ -4914,8 +4958,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     },
                                 );
                             }
-                            let result = ::core::result::Result::Err(__pocopine_error);
-                            return ::pocopine_server::axum::Json(result);
+                            #error_return
                         }
                     };
                     let __pocopine_body_bytes = body_bytes.len() as u64;
@@ -4950,8 +4993,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                         },
                                     );
                                 }
-                                let result = ::core::result::Result::Err(__pocopine_error);
-                                return ::pocopine_server::axum::Json(result);
+                                #error_return
                             }
                         };
                     let result = #fn_ident( #(#arg_idents),* ).await;
@@ -5013,7 +5055,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             }
                         }
                     }
-                    ::pocopine_server::axum::Json(result)
+                    #final_return
                 }
                 .instrument(::pocopine_server::tracing::info_span!(
                     target: "pocopine.trace",

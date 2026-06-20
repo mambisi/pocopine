@@ -21,6 +21,10 @@ pub type AgenkitResult<T> = Result<T, AgenkitError>;
 pub enum AgenkitError {
     /// A model provider call failed (network, provider error, bad response).
     Provider { message: String },
+    /// The request exceeded the model's context window (input + requested output
+    /// too large). A refined provider failure callers can branch on to compact
+    /// and retry, rather than treating it as an opaque provider error (W3).
+    ContextOverflow { message: String },
     /// Structured output or a tool argument failed schema validation.
     Validation { message: String },
     /// A tool was rejected by policy: not allowlisted, side-effect not
@@ -50,6 +54,13 @@ impl AgenkitError {
     /// A model provider failure.
     pub fn provider(message: impl Into<String>) -> Self {
         Self::Provider {
+            message: message.into(),
+        }
+    }
+
+    /// A context-window-overflow failure (request too long for the model).
+    pub fn context_overflow(message: impl Into<String>) -> Self {
+        Self::ContextOverflow {
             message: message.into(),
         }
     }
@@ -107,6 +118,7 @@ impl AgenkitError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Provider { .. } => "provider",
+            Self::ContextOverflow { .. } => "context_overflow",
             Self::Validation { .. } => "validation",
             Self::ToolPolicy { .. } => "tool_policy",
             Self::BudgetExhausted { .. } => "budget_exhausted",
@@ -130,6 +142,7 @@ impl fmt::Display for AgenkitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Provider { message } => write!(f, "provider error: {message}"),
+            Self::ContextOverflow { message } => write!(f, "context overflow: {message}"),
             Self::Validation { message } => write!(f, "validation error: {message}"),
             Self::ToolPolicy { message } => write!(f, "tool policy error: {message}"),
             Self::BudgetExhausted { message } => write!(f, "budget exhausted: {message}"),
@@ -171,6 +184,16 @@ mod tests {
         assert!(AgenkitError::provider("timeout").is_retryable());
         assert!(!AgenkitError::validation("bad").is_retryable());
         assert!(!AgenkitError::Cancelled.is_retryable());
+    }
+
+    #[test]
+    fn context_overflow_has_its_own_kind_and_is_not_retryable() {
+        let e = AgenkitError::context_overflow("prompt is too long");
+        assert_eq!(e.kind(), "context_overflow");
+        assert!(!e.is_retryable());
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"kind\":\"context_overflow\""));
+        assert_eq!(serde_json::from_str::<AgenkitError>(&json).unwrap(), e);
     }
 
     #[test]

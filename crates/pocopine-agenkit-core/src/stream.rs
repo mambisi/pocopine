@@ -169,12 +169,34 @@ pub enum FlowStreamEvent {
         /// The reducer step id.
         step_id: StepId,
     },
-    /// An optional aggregate usage update.
+    /// The model produced reasoning ("thinking") content (roadmap W5).
+    ///
+    /// `chars` is always a redaction-safe count, so a client can show a
+    /// "thinking…" indicator and roughly how much the model reasoned
+    /// (e.g. ChatGPT's "Thought for a moment"). `text` carries the reasoning
+    /// itself and is present **only when the flow author opts in**
+    /// (`Flow::expose_reasoning` / `#[ai_flow(reasoning)]`); otherwise the
+    /// boundary strips it to `None` so reasoning stays server-side (§D10).
+    ThinkingDelta {
+        /// Reasoning characters in this block (always present).
+        chars: u32,
+        /// The reasoning text — present only for a flow that opted into exposing
+        /// it; `None` keeps the reasoning server-side (the redacted default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    /// An optional aggregate usage update (token counts only — client-safe).
     UsageUpdate {
-        /// Aggregate input tokens so far.
+        /// Aggregate uncached input tokens so far.
         input_tokens: u64,
         /// Aggregate output tokens so far.
         output_tokens: u64,
+        /// Aggregate cached input tokens read so far.
+        #[serde(default)]
+        cache_read_tokens: u64,
+        /// Aggregate cache-creation tokens so far.
+        #[serde(default)]
+        cache_creation_tokens: u64,
     },
     /// A public error (kind + trace id, never provider internals).
     Error {
@@ -214,6 +236,48 @@ mod tests {
         };
         let json = serde_json::to_string(&delta).unwrap();
         assert!(json.contains(r#""event":"output_delta""#));
+    }
+
+    #[test]
+    fn thinking_delta_redacted_form_is_count_only() {
+        // The default (non-exposed) form carries only the count — `text` is
+        // skipped, so the serialized event cannot hold reasoning (§D10).
+        let event = FlowStreamEvent::ThinkingDelta {
+            chars: 16,
+            text: None,
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        assert_eq!(value["event"], "thinking_delta");
+        assert_eq!(value["chars"], 16);
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["chars", "event"]);
+        assert_eq!(
+            serde_json::from_value::<FlowStreamEvent>(value).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn thinking_delta_exposed_form_round_trips_with_text() {
+        // When a flow opts in, the reasoning text rides the event.
+        let event = FlowStreamEvent::ThinkingDelta {
+            chars: 16,
+            text: Some("let me reason".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""event":"thinking_delta""#));
+        assert!(json.contains(r#""text":"let me reason""#));
+        assert_eq!(
+            serde_json::from_str::<FlowStreamEvent>(&json).unwrap(),
+            event
+        );
     }
 
     #[test]

@@ -92,6 +92,11 @@ string_id!(
 ///
 /// The server allowlists aliases per app/flow before resolving them to a
 /// host-side provider; clients never send raw provider ids (§D10).
+///
+/// Holds a `Cow<'static, str>` so a known model can be a `const` — the
+/// generated `models` handles (`models::anthropic::CLAUDE_OPUS_4_8`) are
+/// borrowed-`'static`, while [`ModelRef::new`] owns an arbitrary alias (an
+/// open-weight model behind a gateway the catalog doesn't index).
 #[derive(
     Clone,
     Debug,
@@ -105,12 +110,18 @@ string_id!(
     serde::Deserialize,
 )]
 #[serde(transparent)]
-pub struct ModelRef(String);
+pub struct ModelRef(std::borrow::Cow<'static, str>);
 
 impl ModelRef {
-    /// Wrap a `"provider/model"` alias.
+    /// Wrap a `"provider/model"` alias (owns the string).
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(std::borrow::Cow::Owned(value.into()))
+    }
+
+    /// Wrap a `'static` `"provider/model"` alias without allocating — the
+    /// `const` constructor the generated [`models`](crate) handles use.
+    pub const fn from_static(value: &'static str) -> Self {
+        Self(std::borrow::Cow::Borrowed(value))
     }
 
     /// Borrow the full alias string.
@@ -121,15 +132,15 @@ impl ModelRef {
     /// The provider-alias portion (before the first `/`), if the ref is
     /// namespaced.
     pub fn provider(&self) -> Option<&str> {
-        self.0.split_once('/').map(|(provider, _)| provider)
+        let s: &str = &self.0;
+        s.split_once('/').map(|(provider, _)| provider)
     }
 
     /// The model portion (after the first `/`), or the whole string when the
     /// ref is not namespaced.
     pub fn model(&self) -> &str {
-        self.0
-            .split_once('/')
-            .map_or(self.0.as_str(), |(_, model)| model)
+        let s: &str = &self.0;
+        s.split_once('/').map_or(s, |(_, model)| model)
     }
 }
 
@@ -141,13 +152,13 @@ impl std::fmt::Display for ModelRef {
 
 impl From<&str> for ModelRef {
     fn from(value: &str) -> Self {
-        Self(value.to_owned())
+        Self(std::borrow::Cow::Owned(value.to_owned()))
     }
 }
 
 impl From<String> for ModelRef {
     fn from(value: String) -> Self {
-        Self(value)
+        Self(std::borrow::Cow::Owned(value))
     }
 }
 
@@ -178,5 +189,19 @@ mod tests {
         let m = ModelRef::new("default");
         assert_eq!(m.provider(), None);
         assert_eq!(m.model(), "default");
+    }
+
+    #[test]
+    fn model_ref_from_static_is_const_and_equals_owned() {
+        // A generated handle is a `const` borrowed ref; it must compare/serialize
+        // exactly like the owned form so it's a drop-in alias.
+        const HANDLE: ModelRef = ModelRef::from_static("anthropic/claude-opus-4-8");
+        assert_eq!(HANDLE, ModelRef::new("anthropic/claude-opus-4-8"));
+        assert_eq!(HANDLE.provider(), Some("anthropic"));
+        assert_eq!(HANDLE.model(), "claude-opus-4-8");
+        assert_eq!(
+            serde_json::to_string(&HANDLE).unwrap(),
+            "\"anthropic/claude-opus-4-8\""
+        );
     }
 }

@@ -58,7 +58,7 @@ pub use content::{Content, ContentPart, MediaPart, Message};
 pub use embed::{EmbedderDescriptor, Embedding, EmbeddingBatch};
 pub use enums::{
     BranchFailurePolicy, ParallelJoin, ReducerKind, ResourceKind, Role, StepKind, StepStatus,
-    StreamMode, ThreadRetention, ToolSideEffectPolicy,
+    StreamMode, ThinkingLevel, ThreadRetention, ToolSideEffectPolicy,
 };
 pub use error::{AgenkitError, AgenkitResult};
 pub use flow::{FlowDescriptor, FlowInputSchema, FlowOutputSchema};
