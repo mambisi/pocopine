@@ -118,6 +118,8 @@ async fn drive(ws: &mut Ws, topic_ref: u64, doc: &CollabDocument) {
             CollabMessage::SyncStep2(update) | CollabMessage::Update(update) => {
                 doc.apply_update(&update).unwrap();
             }
+            // Ephemeral presence — never applied to the document.
+            CollabMessage::Awareness(_) => {}
         }
     }
 }
