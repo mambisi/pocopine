@@ -12,6 +12,7 @@ description = "Codec + binding between the pine-richtext ProseMirror model and a
 [dependencies]
 pine-richtext = { workspace = true }
 yrs = "0.27"
+serde = { workspace = true }
 serde_json = "1"
 
 # The `client` module (collab sync driver + wasm connection) is the browser

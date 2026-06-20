@@ -115,8 +115,8 @@ fn node_is_inline(node: &Node, schema: &Schema) -> bool {
 /// offset within that block)`, but ONLY when the position lands strictly inside a
 /// **flat textblock** (a top-level block that takes inline content — paragraph,
 /// heading). Returns `None` for positions at block boundaries or inside nested
-/// block structures (lists, blockquotes), which the caller handles coarsely.
-fn flat_block_offset(doc: &Node, schema: &Schema, pos: usize) -> Option<(usize, u32)> {
+/// block structures (lists, blockquotes). Shared with the caret codec.
+pub(crate) fn flat_block_offset(doc: &Node, schema: &Schema, pos: usize) -> Option<(usize, u32)> {
     let mut base = 0usize; // model position just before block `i`
     for i in 0..doc.child_count() {
         let block = doc.child(i)?;

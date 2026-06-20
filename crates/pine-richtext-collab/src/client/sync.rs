@@ -26,6 +26,7 @@
 use bytes::Bytes;
 use pine_richtext::RichTextResult;
 use pine_richtext::model::{Node, Schema};
+use pine_richtext::transform::Step;
 use pocopine_collab::CollabMessage;
 
 use crate::binder::{BindError, CollabEditor};
@@ -109,11 +110,36 @@ impl CollabSyncClient {
         }
     }
 
-    /// Commit a local edit (the coarse v1 write); returns the `Update` to
-    /// broadcast to peers.
+    /// Commit a local edit, coarsely (a whole-document rebuild). Prefer
+    /// [`push_local_steps`](Self::push_local_steps) when the editor's transaction
+    /// steps are available — it preserves peers' cursors and converges
+    /// concurrent in-block edits.
     pub fn push_local(&mut self, doc: &Node) -> Result<CollabMessage, BindError> {
-        let update = self.editor.set_document(doc)?;
+        self.push_local_steps(doc, &[])
+    }
+
+    /// Commit a local edit as a fine-grained incremental update from the editor's
+    /// transaction `steps` (`new_doc` is the document after them), falling back to
+    /// a coarse rebuild for structural steps. Returns the `Update` to broadcast.
+    pub fn push_local_steps(
+        &mut self,
+        new_doc: &Node,
+        steps: &[Step],
+    ) -> Result<CollabMessage, BindError> {
+        let update = self.editor.apply_local(new_doc, steps)?;
         Ok(CollabMessage::Update(Bytes::from(update)))
+    }
+
+    /// Anchor a model caret/selection endpoint so it survives concurrent edits —
+    /// capture before applying a remote update, then [`resolve_point`]
+    /// (Self::resolve_point) after to find where it moved.
+    pub fn point_at(&self, model_pos: usize) -> RichTextResult<Option<crate::StickyPoint>> {
+        self.editor.point_at(model_pos)
+    }
+
+    /// Resolve a [`StickyPoint`](crate::StickyPoint) to its current model position.
+    pub fn resolve_point(&self, point: &crate::StickyPoint) -> RichTextResult<Option<usize>> {
+        self.editor.point_model_pos(point)
     }
 }
 
@@ -143,6 +169,42 @@ mod tests {
 
         assert!(out.reply.is_none());
         assert_eq!(out.document.unwrap(), a.document().unwrap());
+    }
+
+    #[test]
+    fn fine_diff_edit_converges_and_preserves_a_caret() {
+        use pine_richtext::model::{Fragment, Slice};
+        use pine_richtext::transform::ReplaceStep;
+
+        let schema = schema_basic::schema();
+        let mut a = CollabSyncClient::new(1, schema_basic::schema());
+        let mut b = CollabSyncClient::new(2, schema_basic::schema());
+
+        // Both start on "hello world".
+        let base = doc(vec![para("hello world")]);
+        let CollabMessage::Update(init) = a.push_local(&base).unwrap() else {
+            panic!("update");
+        };
+        b.on_message(CollabMessage::Update(init)).unwrap();
+
+        // B holds a caret after "hello " (pos 7); A inserts "XYZ" at the start.
+        let caret = b.point_at(7).unwrap().expect("caret");
+        let text = schema_basic::text("XYZ", vec![]).unwrap();
+        let step = Step::Replace(ReplaceStep {
+            from: 1,
+            to: 1,
+            slice: Slice::new(Fragment::new(vec![text]), 0, 0),
+            structure: false,
+        });
+        let new_a = step.apply(&base, &schema).unwrap().doc;
+        let CollabMessage::Update(edit) = a.push_local_steps(&new_a, &[step]).unwrap() else {
+            panic!("update");
+        };
+
+        // B merges A's fine-diff edit, converges, and its caret tracked the insert.
+        let out = b.on_message(CollabMessage::Update(edit)).unwrap();
+        assert_eq!(out.document.unwrap(), a.document().unwrap());
+        assert_eq!(b.resolve_point(&caret).unwrap(), Some(10), "caret 7 -> 10");
     }
 
     #[test]

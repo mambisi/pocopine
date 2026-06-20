@@ -174,6 +174,30 @@ impl CollabEditor {
         Ok(self.doc.transact().encode_diff_v1(&before))
     }
 
+    /// Anchor an absolute model position to a [`StickyPoint`] that tracks the
+    /// document through concurrent edits — used to preserve a local caret across a
+    /// remote edit, or to publish a live remote cursor. `None` outside a flat
+    /// textblock (block boundaries / nested blocks aren't anchored).
+    pub fn point_at(&self, model_pos: usize) -> RichTextResult<Option<crate::StickyPoint>> {
+        let txn = self.doc.transact();
+        let doc = decode_doc(&txn, &self.root, &self.schema)?;
+        Ok(crate::caret::point_at(
+            &txn,
+            &self.root,
+            &doc,
+            &self.schema,
+            model_pos,
+        ))
+    }
+
+    /// Resolve a [`StickyPoint`] back to an absolute model position in the current
+    /// document, or `None` if its block is gone (a coarse rebuild re-minted ids).
+    pub fn point_model_pos(&self, point: &crate::StickyPoint) -> RichTextResult<Option<usize>> {
+        let txn = self.doc.transact();
+        let doc = decode_doc(&txn, &self.root, &self.schema)?;
+        Ok(crate::caret::point_model_pos(&txn, &self.root, &doc, point))
+    }
+
     /// Apply an inbound network update; returns the new document.
     pub fn apply_remote(&mut self, update: &[u8]) -> Result<Node, BindError> {
         let update = Update::decode_v1(update).map_err(|err| BindError::Crdt(err.to_string()))?;
@@ -371,6 +395,47 @@ mod tests {
         assert_eq!(a.document().unwrap(), plain, "mark cleared locally");
         b.apply_remote(&update).unwrap();
         assert_eq!(b.document().unwrap(), plain, "peer converges unmarked");
+    }
+
+    #[test]
+    fn caret_survives_a_remote_in_block_insert() {
+        // A2: a StickyPoint caret tracks the document through a peer's fine-diff
+        // edit. (This only works because A1 preserves the items it anchors to.)
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello world")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // A anchors a caret after "hello " (model pos 7).
+        let caret = a.point_at(7).unwrap().expect("caret in a textblock");
+        assert_eq!(a.point_model_pos(&caret).unwrap(), Some(7), "round-trips");
+
+        // B inserts "XYZ" at the start (pos 1) via fine-diff; A merges it.
+        let (step, new_b) = insert_step(&doc0, &schema, 1, "XYZ");
+        a.apply_remote(&b.apply_local(&new_b, &[step]).unwrap())
+            .unwrap();
+
+        // A's caret tracked the 3-char insertion before it: 7 -> 10.
+        assert_eq!(a.point_model_pos(&caret).unwrap(), Some(10));
+    }
+
+    #[test]
+    fn caret_is_lost_after_a_coarse_rebuild() {
+        // The documented limitation: a coarse write re-mints block_ids, so a
+        // StickyPoint can no longer find its block (the caller re-derives it).
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        a.set_document(&doc0).unwrap();
+        let caret = a.point_at(3).unwrap().expect("caret");
+
+        a.set_document(&schema_basic::doc(vec![para("hello")]).unwrap())
+            .unwrap();
+        assert_eq!(
+            a.point_model_pos(&caret).unwrap(),
+            None,
+            "block id re-minted"
+        );
     }
 
     #[test]
