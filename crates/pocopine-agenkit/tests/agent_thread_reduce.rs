@@ -75,14 +75,26 @@ async fn research_flow(input: Question, ctx: AiFlowContext) -> AgenkitResult<Age
     ctx.agent::<Researcher>().input(input).run().await
 }
 
-async fn threaded_flow(input: Question, ctx: AiFlowContext) -> AgenkitResult<usize> {
+/// Run the tool-using `Researcher` on a thread and return a compact shape of each
+/// persisted record (`role` + tool-call / tool-result marker), so a test can
+/// assert the FULL transcript was stored, not a lossy Q&A.
+async fn threaded_flow(input: Question, ctx: AiFlowContext) -> AgenkitResult<Vec<String>> {
     let thread = ctx.thread::<Researcher>().create().await?;
     ctx.agent::<Researcher>()
         .thread(thread.clone())
         .input(input)
         .run()
         .await?;
-    Ok(thread.history().await?.len())
+    Ok(thread
+        .history()
+        .await?
+        .iter()
+        .map(|m| match (&m.tool_calls.first(), &m.tool_call_id) {
+            (Some(call), _) => format!("{:?}+call:{}", m.role, call.tool_id),
+            (None, Some(_)) => format!("{:?}+result", m.role),
+            (None, None) => format!("{:?}", m.role),
+        })
+        .collect())
 }
 
 async fn reduce_fold_flow(_input: (), ctx: AiFlowContext) -> AgenkitResult<u32> {
@@ -162,8 +174,8 @@ fn agent_runs_tool_loop_then_answers() {
 }
 
 #[test]
-fn threaded_agent_persists_exchange() {
-    let count: usize = block_on(
+fn threaded_agent_persists_the_full_tool_transcript() {
+    let shape: Vec<String> = block_on(
         runtime()
             .flow("threaded")
             .input(Question {
@@ -172,8 +184,19 @@ fn threaded_agent_persists_exchange() {
             .run(),
     )
     .unwrap();
-    // The run appends one user + one assistant message to the thread.
-    assert_eq!(count, 2);
+    // P3: the single-shot agent loop persists the WHOLE transcript — the question,
+    // the assistant tool-call turn, the tool result (linked to the call), and the
+    // final structured answer — so a resumed thread replays the tool use.
+    assert_eq!(
+        shape,
+        vec![
+            "User".to_string(),
+            "Assistant+call:lookup".to_string(),
+            "Tool+result".to_string(),
+            "Assistant".to_string(),
+        ],
+        "expected the full tool transcript, got {shape:?}"
+    );
 }
 
 #[test]
