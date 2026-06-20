@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>collab-canvas — two live sessions</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #0f0b06;
+        color: #e8ddca;
+      }
+      header {
+        padding: 16px 20px 4px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.1rem;
+        color: #f8ae45;
+      }
+      p {
+        margin: 0.5rem 0 0;
+        opacity: 0.75;
+        font-size: 0.85rem;
+        max-width: 64ch;
+        line-height: 1.5;
+      }
+      a {
+        color: #f8ae45;
+      }
+      .sessions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        padding: 14px 12px;
+        height: 72vh;
+      }
+      .pane {
+        position: relative;
+        border: 1px solid #3a2c1a;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .pane > span {
+        position: absolute;
+        top: 8px;
+        left: 10px;
+        z-index: 2;
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.55;
+        pointer-events: none;
+      }
+      iframe {
+        border: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>collab-canvas — two live sessions</h1>
+      <p>
+        Two independent sessions (each a separate <code>/</code> in its own
+        iframe) sharing one room over the pocopine-realtime gateway. Drag a
+        rectangle in either pane and watch it converge in the other. Moving
+        <em>different</em> rects never conflicts — each shape's position is its
+        own key in a <code>yrs</code> Map (the move-friendly map-of-objects
+        CRDT). The single canvas is at <a href="/">/</a>.
+      </p>
+    </header>
+    <div class="sessions">
+      <div class="pane"><span>session A</span><iframe src="/"></iframe></div>
+      <div class="pane"><span>session B</span><iframe src="/"></iframe></div>
+    </div>
+  </body>
+</html>

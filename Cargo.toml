@@ -63,6 +63,7 @@ members = [
     "crates/pocopine-realtime",
     "examples/blog",
     "examples/charts",
+    "examples/collab-canvas",
     "examples/counter",
     "examples/file-browser",
     "examples/hn",

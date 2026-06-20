@@ -1526,6 +1526,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "collab-canvas"
+version = "0.1.1"
+dependencies = [
+ "bytes",
+ "js-sys",
+ "pocopine-collab",
+ "pocopine-realtime",
+ "pocopine-server",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+ "yrs",
+]
+
+[[package]]
 name = "collection_literals"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
