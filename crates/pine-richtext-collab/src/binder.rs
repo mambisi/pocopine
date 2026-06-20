@@ -397,6 +397,73 @@ mod tests {
         assert_eq!(b.document().unwrap(), plain, "peer converges unmarked");
     }
 
+    /// A tiny deterministic xorshift PRNG, so a fuzz failure reproduces exactly.
+    fn rng_next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// A random in-block edit (insert a char, or delete one) against the single
+    /// paragraph of `base`, plus the resulting document.
+    fn random_edit(base: &Node, schema: &Schema, rng: &mut u64) -> (Step, Node) {
+        let content_size = base.child(0).unwrap().content_size();
+        if content_size > 0 && rng_next(rng).is_multiple_of(3) {
+            // Delete one char at a random in-content offset.
+            let from = 1 + (rng_next(rng) as usize % content_size);
+            let step = Step::Replace(ReplaceStep {
+                from,
+                to: from + 1,
+                slice: Slice::new(Fragment::new(vec![]), 0, 0),
+                structure: false,
+            });
+            let new_doc = step.apply(base, schema).unwrap().doc;
+            (step, new_doc)
+        } else {
+            // Insert a char at a random position in the content range [1, size+1].
+            let pos = 1 + (rng_next(rng) as usize % (content_size + 1));
+            let alphabet = ['a', 'b', 'c', 'd', 'e'];
+            let ch = alphabet[rng_next(rng) as usize % alphabet.len()].to_string();
+            insert_step(base, schema, pos, &ch)
+        }
+    }
+
+    #[test]
+    fn fuzz_concurrent_in_block_edits_always_converge() {
+        // A4 convergence gate: 100 rounds of two writers each making an
+        // independent in-block edit off the shared state, then exchanging — the
+        // two replicas must reconcile to the same document every round.
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let start = schema_basic::doc(vec![para("the quick brown fox")]).unwrap();
+        b.apply_remote(&a.set_document(&start).unwrap()).unwrap();
+
+        let mut rng = 0x2545_F491_4F6C_DD1D_u64;
+        for round in 0..100 {
+            let base = a.document().unwrap();
+            assert_eq!(
+                base,
+                b.document().unwrap(),
+                "synced at the top of round {round}"
+            );
+
+            let (sa, da) = random_edit(&base, &schema, &mut rng);
+            let (sb, db) = random_edit(&base, &schema, &mut rng);
+            let ua = a.apply_local(&da, &[sa]).unwrap();
+            let ub = b.apply_local(&db, &[sb]).unwrap();
+
+            a.apply_remote(&ub).unwrap();
+            b.apply_remote(&ua).unwrap();
+            assert_eq!(
+                a.document().unwrap(),
+                b.document().unwrap(),
+                "diverged after round {round}"
+            );
+        }
+    }
+
     #[test]
     fn caret_survives_a_remote_in_block_insert() {
         // A2: a StickyPoint caret tracks the document through a peer's fine-diff
