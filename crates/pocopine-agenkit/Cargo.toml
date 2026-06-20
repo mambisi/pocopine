@@ -32,6 +32,9 @@ pocopine-agenkit-macros = { workspace = true }
 # AI events ride the existing observability stack: TraceEvent -> ObservedEvent
 # -> emit_tracing. No parallel telemetry runtime (§D12).
 pocopine-observe = { workspace = true }
+# Framework logging (RFC-069): `tracing::warn!(target: "pocopine.log", …)` for
+# best-effort paths (e.g. a swallowed usage-provenance write) that must surface.
+tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Provider runtime + bounded parallel branches (JoinSet/abort) + timeouts;

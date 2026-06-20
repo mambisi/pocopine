@@ -249,6 +249,29 @@ fn redact_tool_payloads(messages: Vec<Message>) -> Vec<Message> {
         .collect()
 }
 
+/// A per-turn usage/cost provenance entry — a typed [`RecordKind::StateChange`]
+/// payload. Typed (not hand-built JSON) so the write site and the `usage()`/`cost()`
+/// readers share one schema: a renamed/missing field is a compile error, not a
+/// silent zero. The `kind` discriminator distinguishes this from any future
+/// state-change payload that also rides `RecordKind::StateChange`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UsageRecord {
+    /// Discriminator within `RecordKind::StateChange` — always `"usage"` here.
+    kind: String,
+    /// The model the turn used.
+    model: String,
+    /// The turn's aggregate token usage.
+    usage: Usage,
+    /// The catalog-derived cost, if the model had pricing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cost: Option<CostEstimate>,
+}
+
+impl UsageRecord {
+    /// The discriminator value for a usage entry.
+    const KIND: &'static str = "usage";
+}
+
 /// Typed steering hooks (L3) — host-side closures that *steer* the loop. The
 /// shapes pre-image the WIT extension world so extensions later supply the same
 /// decisions across the component boundary.
@@ -613,37 +636,48 @@ impl AgentSession {
         self.thread.history().await
     }
 
+    /// The durable usage provenance entries for this thread (this thread's own
+    /// turns only — a fork reports its own usage, not the inherited prefix's).
+    /// Empty if the backing store doesn't record provenance.
+    async fn usage_records(&self) -> AgenkitResult<Vec<UsageRecord>> {
+        Ok(self
+            .thread
+            .state_changes()
+            .await?
+            .into_iter()
+            // Typed decode also filters: a non-usage state-change payload fails to
+            // deserialize into `UsageRecord` and is skipped.
+            .filter_map(|v| serde_json::from_value::<UsageRecord>(v).ok())
+            .filter(|r| r.kind == UsageRecord::KIND)
+            .collect())
+    }
+
     /// Aggregate token [`Usage`] across this conversation's turns, summed from the
     /// durable usage provenance (P5). Zero if the backing store doesn't record
     /// provenance (e.g. a custom store that no-ops `append_state_change`).
     pub async fn usage(&self) -> AgenkitResult<Usage> {
-        let mut total = Usage::default();
-        for entry in self.thread.state_changes().await? {
-            if entry.get("kind").and_then(serde_json::Value::as_str) == Some("usage")
-                && let Some(u) = entry
-                    .get("usage")
-                    .and_then(|u| serde_json::from_value::<Usage>(u.clone()).ok())
-            {
-                total = total.merge(u);
-            }
-        }
-        Ok(total)
+        Ok(self
+            .usage_records()
+            .await?
+            .into_iter()
+            .fold(Usage::default(), |acc, r| acc.merge(r.usage)))
     }
 
     /// Aggregate estimated cost across this conversation's turns, summed from the
     /// durable usage provenance (P5). `None` if no turn recorded a cost (no
-    /// provenance, or no catalog pricing for the model).
+    /// provenance, or no catalog pricing for the model). Entries in a currency
+    /// other than the first seen are skipped rather than summed as if fungible.
     pub async fn cost(&self) -> AgenkitResult<Option<CostEstimate>> {
         let mut amount = 0.0;
         let mut currency: Option<String> = None;
-        for entry in self.thread.state_changes().await? {
-            if let Some(cost) = entry
-                .get("cost")
-                .filter(|c| !c.is_null())
-                .and_then(|c| serde_json::from_value::<CostEstimate>(c.clone()).ok())
-            {
-                currency.get_or_insert(cost.currency);
-                amount += cost.amount;
+        for record in self.usage_records().await? {
+            let Some(cost) = record.cost else { continue };
+            match &currency {
+                Some(seen) if *seen != cost.currency => continue, // don't add a different currency
+                _ => {
+                    currency.get_or_insert(cost.currency);
+                    amount += cost.amount;
+                }
             }
         }
         Ok(currency.map(|currency| CostEstimate::new(currency, amount)))
@@ -774,7 +808,17 @@ impl AgentSession {
         // half-open tool call. (Per-step streaming durability — surviving a crash
         // *mid-turn* — would need a transactional batch append; tracked as a
         // follow-up.)
-        let to_persist = messages[persist_from + 1..].to_vec();
+        // Drop any truly-empty message (no content parts, no tool calls, no
+        // result linkage) — e.g. an empty completion — so resume doesn't replay a
+        // contentless turn that some providers reject. A thinking-only or
+        // tool-call turn has parts/tool_calls and is kept.
+        let to_persist: Vec<Message> = messages[persist_from + 1..]
+            .iter()
+            .filter(|m| {
+                !m.content.is_empty() || !m.tool_calls.is_empty() || m.tool_call_id.is_some()
+            })
+            .cloned()
+            .collect();
         // §D10 capture policy: optionally redact tool payloads before they hit disk
         // (the linkage is kept, so resume stays coherent — see `CapturePolicy`).
         let to_persist = match self.capture {
@@ -802,18 +846,32 @@ impl AgentSession {
         // Record this turn's usage + catalog cost as a provenance entry (P5) — a
         // `StateChange` outside the conversation history (it never reaches the
         // model), so a session's running cost is auditable from its durable log.
-        // Best-effort: a provenance write must not fail the prompt.
+        // Best-effort: a provenance write must not fail the prompt, but a failure
+        // is logged (not silently swallowed) so a divergence is observable.
         if usage.total() > 0 {
-            let cost = super::catalog::lookup(&model).map(|m| m.estimate_cost(&usage));
-            let _ = self
-                .thread
-                .append_state_change(serde_json::json!({
-                    "kind": "usage",
-                    "model": model.as_str(),
-                    "usage": usage,
-                    "cost": cost,
-                }))
-                .await;
+            let record = UsageRecord {
+                kind: UsageRecord::KIND.to_string(),
+                model: model.as_str().to_string(),
+                usage,
+                cost: super::catalog::lookup(&model).map(|m| m.estimate_cost(&usage)),
+            };
+            match serde_json::to_value(&record) {
+                Ok(data) => {
+                    if let Err(error) = self.thread.append_state_change(data).await {
+                        tracing::warn!(
+                            target: "pocopine.log",
+                            thread_id = self.thread.id().as_str(),
+                            error = %error,
+                            "failed to record turn usage provenance",
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "pocopine.log",
+                    error = %error,
+                    "failed to encode turn usage provenance",
+                ),
+            }
         }
 
         let max_output = self.config.max_tokens.unwrap_or(1024);
@@ -1391,6 +1449,37 @@ mod tests {
             "expected ~{}, got {cost:?}",
             per_turn * 2.0
         );
+    }
+
+    #[tokio::test]
+    async fn fork_usage_is_local_not_double_counted() {
+        // A fork inherits the parent's MESSAGES for replay, but usage()/cost()
+        // report only this thread's OWN turns — so summing across the tree never
+        // double-counts the shared prefix (review #5).
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("anthropic")
+                    .default_text("hi")
+                    .with_usage(pocopine_agenkit_core::Usage::new(1_000, 500)),
+            )
+            .default_model(ModelRef::new("anthropic/claude-sonnet-4-6"))
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let _ = session.prompt("first").collect::<Vec<_>>().await; // parent: 1 turn
+
+        let forked = session.fork().await.unwrap().expect("store can branch");
+        let _ = forked.prompt("second").collect::<Vec<_>>().await; // fork: 1 turn
+
+        // The fork reports ONLY its own turn (1000/500), not the parent's too.
+        let fork_usage = forked.usage().await.unwrap();
+        assert_eq!(
+            fork_usage.input_tokens, 1_000,
+            "fork double-counted the parent"
+        );
+        assert_eq!(fork_usage.output_tokens, 500);
+        // The parent still reports its own single turn.
+        assert_eq!(session.usage().await.unwrap().input_tokens, 1_000);
     }
 
     #[tokio::test]
