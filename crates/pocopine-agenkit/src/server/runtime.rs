@@ -31,13 +31,15 @@ use super::thread::{AgentThreadHandle, ThreadOwner};
 
 /// How a [`prompt`](AgentSession::prompt) turn ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StopReason {
     /// The model answered with no tool calls (and no queued follow-up) — the
     /// conversation is idle, waiting for the next prompt.
     Idle,
     /// The per-turn model↔tool step budget was hit.
     MaxSteps,
-    // L3 adds: `Terminated` (a tool requested stop) and `Aborted`.
+    /// An [`AbortHandle`] cancelled the turn (checked between steps).
+    Aborted,
 }
 
 /// A host-side firehose event from a running turn. Richer than the redacted
@@ -46,6 +48,7 @@ pub enum StopReason {
 /// the (parked) `pocopine:agent/extension` WIT `agent-event` so the extension
 /// world is a projection of this contract.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum AgentEvent {
     /// A prompt was accepted; the loop begins.
     Started,
@@ -81,6 +84,16 @@ pub enum AgentEvent {
         tool: String,
         /// The error (stable kind/text — no provider internals).
         error: String,
+    },
+    /// A `before_tool_call` hook blocked a tool (e.g. an approval/trust gate);
+    /// the block reason is fed back to the model instead of running the tool.
+    ToolBlocked {
+        /// The provider's call id.
+        id: String,
+        /// The tool's registry id.
+        tool: String,
+        /// Why the hook blocked it.
+        reason: String,
     },
     /// The thread was compacted (L2): `folded` older messages → one summary.
     Compacted {
@@ -156,6 +169,74 @@ impl AgentConfig {
     }
 }
 
+/// A `before_tool_call` hook's decision for one tool call (L3). Mirrors the
+/// (parked) WIT `hook-decision` so the extension world projects onto it.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ToolDecision {
+    /// Run the tool with its requested arguments.
+    Proceed,
+    /// Don't run the tool; feed `reason` back to the model (an approval/trust
+    /// gate, or a policy block).
+    Block {
+        /// Why the call is blocked.
+        reason: String,
+    },
+    /// Run the tool, but with these arguments instead (e.g. inject a sandbox
+    /// path, redact a field).
+    ReplaceArgs {
+        /// The arguments to use.
+        args: serde_json::Value,
+    },
+}
+
+/// Typed steering hooks (L3) — host-side closures that *steer* the loop. The
+/// shapes pre-image the WIT extension world so extensions later supply the same
+/// decisions across the component boundary.
+#[derive(Clone, Default)]
+pub(crate) struct Hooks {
+    #[allow(clippy::type_complexity)]
+    before_tool_call: Option<Arc<dyn Fn(&str, &serde_json::Value) -> ToolDecision + Send + Sync>>,
+}
+
+/// A handle to cancel a running turn. Cloneable; calling [`abort`](AbortHandle::abort)
+/// stops the loop at the next step boundary (between model/tool calls).
+#[derive(Clone)]
+pub struct AbortHandle(Arc<std::sync::atomic::AtomicBool>);
+
+impl AbortHandle {
+    /// Request cancellation of the in-flight turn.
+    pub fn abort(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether cancellation has been requested.
+    pub fn is_aborted(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Per-turn steering controls passed into [`AgentLoop::run_turn`]: the mid-run
+/// message queue, the abort flag, and the hooks. [`Default`] is the inert form
+/// (empty queue, never aborted, no hooks) — the plain L1 loop.
+#[derive(Clone, Default)]
+pub(crate) struct TurnControls {
+    queue: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    abort: Arc<std::sync::atomic::AtomicBool>,
+    hooks: Hooks,
+}
+
+impl TurnControls {
+    fn aborted(&self) -> bool {
+        self.abort.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Pop the next steered follow-up message, if any.
+    fn next_steer(&self) -> Option<String> {
+        self.queue.lock().ok().and_then(|mut q| q.pop_front())
+    }
+}
+
 /// The in-memory conversational loop core (L1). It owns no durable state — it
 /// runs one model↔tool turn over a `messages` transcript, emitting
 /// [`AgentEvent`]s, and returns where it stopped. [`AgentSession`] (L2) wraps it
@@ -193,6 +274,7 @@ impl AgentLoop {
         &self,
         messages: &mut Vec<Message>,
         events: &UnboundedSender<AgentEvent>,
+        controls: &TurnControls,
     ) -> AgenkitResult<StopReason> {
         let model = self.model()?;
         self.inner.check_model_allowed(&model)?;
@@ -223,6 +305,11 @@ impl AgentLoop {
         };
 
         for _ in 0..self.config.max_steps_per_turn {
+            // Abort is checked between steps (cancels after the current call).
+            if controls.aborted() {
+                return Ok(StopReason::Aborted);
+            }
+
             let request = GenerateRequest {
                 model: model.clone(),
                 system: self.config.system.clone(),
@@ -243,10 +330,18 @@ impl AgentLoop {
             }
 
             if response.tool_calls.is_empty() {
-                // The model answered — the turn is done. Persist the assistant's
-                // text so the conversation replays on resume.
+                // The model answered. Persist the assistant text so the
+                // conversation replays on resume.
                 messages.push(Message::new(Role::Assistant, text));
-                return Ok(StopReason::Idle);
+                // Steering: a queued follow-up message continues the turn instead
+                // of going idle ("talk to it mid-run"); otherwise the turn ends.
+                match controls.next_steer() {
+                    Some(steer) => {
+                        messages.push(Message::user(steer));
+                        continue;
+                    }
+                    None => return Ok(StopReason::Idle),
+                }
             }
 
             // Record the assistant's tool-request turn (keeps the provider's
@@ -271,31 +366,57 @@ impl AgentLoop {
                     tool: call.tool_id.clone(),
                     args: call.args.clone(),
                 });
-                // A tool failure is fed back to the model (so it can recover),
-                // not propagated — a long conversation shouldn't die on one bad
-                // tool call. The runaway case is bounded by `max_steps_per_turn`.
-                let result_text = match tool.call_json(call.args.clone(), ctx.clone()).await {
-                    Ok(output) => {
-                        let _ = events.send(AgentEvent::ToolCompleted {
+
+                // `before_tool_call` hook (L3): block (approval/trust gate) or
+                // replace the arguments before running.
+                let decision = controls
+                    .hooks
+                    .before_tool_call
+                    .as_ref()
+                    .map(|hook| hook(&call.tool_id, &call.args))
+                    .unwrap_or(ToolDecision::Proceed);
+
+                let result_text = match decision {
+                    ToolDecision::Block { reason } => {
+                        let _ = events.send(AgentEvent::ToolBlocked {
                             id: call.id.clone(),
                             tool: call.tool_id.clone(),
-                            output: output.clone(),
+                            reason: reason.clone(),
                         });
-                        serde_json::to_string(&output).map_err(|e| {
-                            AgenkitError::internal(format!(
-                                "tool `{}` output encode: {e}",
-                                call.tool_id
-                            ))
-                        })?
+                        serde_json::json!({ "blocked": reason }).to_string()
                     }
-                    Err(error) => {
-                        let kind = error.to_string();
-                        let _ = events.send(AgentEvent::ToolFailed {
-                            id: call.id.clone(),
-                            tool: call.tool_id.clone(),
-                            error: kind.clone(),
-                        });
-                        serde_json::json!({ "error": kind }).to_string()
+                    decision => {
+                        let args = match decision {
+                            ToolDecision::ReplaceArgs { args } => args,
+                            _ => call.args.clone(),
+                        };
+                        // A tool failure is fed back to the model (so it can
+                        // recover), not propagated — a long conversation shouldn't
+                        // die on one bad tool call (bounded by max_steps_per_turn).
+                        match tool.call_json(args, ctx.clone()).await {
+                            Ok(output) => {
+                                let _ = events.send(AgentEvent::ToolCompleted {
+                                    id: call.id.clone(),
+                                    tool: call.tool_id.clone(),
+                                    output: output.clone(),
+                                });
+                                serde_json::to_string(&output).map_err(|e| {
+                                    AgenkitError::internal(format!(
+                                        "tool `{}` output encode: {e}",
+                                        call.tool_id
+                                    ))
+                                })?
+                            }
+                            Err(error) => {
+                                let kind = error.to_string();
+                                let _ = events.send(AgentEvent::ToolFailed {
+                                    id: call.id.clone(),
+                                    tool: call.tool_id.clone(),
+                                    error: kind.clone(),
+                                });
+                                serde_json::json!({ "error": kind }).to_string()
+                            }
+                        }
                     }
                 };
                 messages.push(Message::tool_result(call.id.clone(), result_text));
@@ -318,6 +439,9 @@ pub struct AgentSession {
     config: AgentConfig,
     thread: AgentThreadHandle,
     agent_id: String,
+    /// Shared steering controls (queue + abort + hooks). Cloning the session
+    /// shares these (Arc-backed), so `steer`/`abort` reach the running turn.
+    controls: TurnControls,
 }
 
 impl AgentSession {
@@ -328,7 +452,23 @@ impl AgentSession {
             principal: Principal::anonymous(),
             config: AgentConfig::new(),
             agent_id: "kitty".to_string(),
+            hooks: Hooks::default(),
         }
+    }
+
+    /// Inject a follow-up message into the **currently running** turn: instead of
+    /// going idle when the model next answers, the loop continues with this
+    /// message (the "talk to it mid-run" steering). If no turn is running it is
+    /// picked up by the next [`prompt`](AgentSession::prompt).
+    pub fn steer(&self, text: impl Into<String>) {
+        if let Ok(mut queue) = self.controls.queue.lock() {
+            queue.push_back(text.into());
+        }
+    }
+
+    /// A handle to cancel the running turn (stops at the next step boundary).
+    pub fn abort_handle(&self) -> AbortHandle {
+        AbortHandle(self.controls.abort.clone())
     }
 
     /// The durable thread id (persist this to resume the conversation later).
@@ -375,6 +515,12 @@ impl AgentSession {
             config: self.config.clone(),
             thread,
             agent_id: self.agent_id.clone(),
+            // The branch is an independent conversation: same hooks, fresh
+            // queue + abort.
+            controls: TurnControls {
+                hooks: self.controls.hooks.clone(),
+                ..TurnControls::default()
+            },
         }))
     }
 
@@ -384,6 +530,11 @@ impl AgentSession {
         text: String,
         events: &UnboundedSender<AgentEvent>,
     ) -> AgenkitResult<StopReason> {
+        // A fresh prompt clears any stale abort from a previous turn.
+        self.controls
+            .abort
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
         // Seed the model context from the compacted history (W7), then the prompt.
         let mut messages: Vec<Message> = self
             .thread
@@ -392,33 +543,34 @@ impl AgentSession {
             .into_iter()
             .map(|m| Message::new(m.role, m.content))
             .collect();
-        messages.push(Message::user(text.clone()));
+        let persist_from = messages.len();
+        messages.push(Message::user(text));
 
         let agent_loop = AgentLoop::new(
             self.inner.clone(),
             self.principal.clone(),
             self.config.clone(),
         );
-        let reason = agent_loop.run_turn(&mut messages, events).await?;
+        let reason = agent_loop
+            .run_turn(&mut messages, events, &self.controls)
+            .await?;
 
-        // Persist the turn (user prompt + the assistant's final answer) so the
-        // conversation replays on resume. Tool detail is transient/re-derivable.
-        let answer = messages
+        // Persist the turn's user + assistant *text* messages (the initial prompt,
+        // any steered follow-ups, and the answers) so the conversation replays on
+        // resume. Tool calls/results are transient and re-derivable.
+        let to_persist: Vec<ThreadMessage> = messages[persist_from..]
             .iter()
-            .rev()
-            .find(|m| m.role == Role::Assistant)
-            .map(|m| m.content.as_text())
-            .unwrap_or_default();
+            .filter_map(|m| match m.role {
+                Role::User => Some(ThreadMessage::new(Role::User, m.content.as_text())),
+                Role::Assistant if !m.content.as_text().is_empty() => {
+                    Some(ThreadMessage::new(Role::Assistant, m.content.as_text()))
+                }
+                _ => None,
+            })
+            .collect();
         self.thread
             .store
-            .append(
-                &self.thread.id,
-                self.thread.owner(),
-                vec![
-                    ThreadMessage::new(Role::User, text),
-                    ThreadMessage::new(Role::Assistant, answer),
-                ],
-            )
+            .append(&self.thread.id, self.thread.owner(), to_persist)
             .await?;
 
         // Compact if the (now longer) history would overflow the window.
@@ -453,6 +605,7 @@ pub struct AgentSessionBuilder {
     principal: Principal,
     config: AgentConfig,
     agent_id: String,
+    hooks: Hooks,
 }
 
 impl AgentSessionBuilder {
@@ -460,6 +613,19 @@ impl AgentSessionBuilder {
     /// Defaults to anonymous.
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = principal;
+        self
+    }
+
+    /// Set a `before_tool_call` steering hook (L3): called with the tool id and
+    /// arguments before every tool runs, returning a [`ToolDecision`] to proceed,
+    /// **block** it (an approval/trust gate — the reason is fed back to the
+    /// model), or **replace** its arguments. This is the host-side mirror of the
+    /// (parked) WIT extension hook.
+    pub fn before_tool_call<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&str, &serde_json::Value) -> ToolDecision + Send + Sync + 'static,
+    {
+        self.hooks.before_tool_call = Some(Arc::new(hook));
         self
     }
 
@@ -501,6 +667,10 @@ impl AgentSessionBuilder {
             config: self.config,
             thread,
             agent_id: self.agent_id,
+            controls: TurnControls {
+                hooks: self.hooks,
+                ..TurnControls::default()
+            },
         })
     }
 }
@@ -572,7 +742,10 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("use the tool then answer")];
 
-        let stop = loop_.run_turn(&mut messages, &tx).await.unwrap();
+        let stop = loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
         drop(tx);
         assert_eq!(stop, StopReason::Idle);
 
@@ -626,7 +799,10 @@ mod tests {
         );
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("go")];
-        let stop = loop_.run_turn(&mut messages, &tx).await.unwrap();
+        let stop = loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
         drop(tx);
         // The failed tool did NOT abort the turn — the model recovered and answered.
         assert_eq!(stop, StopReason::Idle);
@@ -705,5 +881,108 @@ mod tests {
         let _ = forked.prompt("second").collect::<Vec<_>>().await;
         assert_eq!(forked.history().await.unwrap().len(), 4);
         assert_eq!(session.history().await.unwrap().len(), 2);
+    }
+
+    // ── L3: steering queue + typed hooks + abort ─────────────────────────────
+
+    #[tokio::test]
+    async fn pre_set_abort_stops_the_turn_immediately() {
+        let agenkit = chat("won't run");
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new(),
+        );
+        let controls = TurnControls::default();
+        controls
+            .abort
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("hi")];
+
+        let stop = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
+        drop(tx);
+        assert_eq!(stop, StopReason::Aborted);
+        // Aborted before the model call → no assistant text was produced.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn before_tool_call_block_prevents_execution() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Recorder(Arc<AtomicBool>);
+        impl AiTool for Recorder {
+            const ID: &'static str = "recorder";
+            type Input = EchoIn;
+            type Output = EchoOut;
+            fn descriptor() -> Td {
+                Td::new("recorder", "Records that it ran")
+            }
+            fn call(
+                &self,
+                input: EchoIn,
+                _c: AiToolContext,
+            ) -> BoxFuture<'_, AgenkitResult<EchoOut>> {
+                self.0.store(true, Ordering::Relaxed);
+                Box::pin(async move { Ok(EchoOut { echoed: input.text }) })
+            }
+        }
+        let ran = Arc::new(AtomicBool::new(false));
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("go", "recorder", serde_json::json!({ "text": "x" }))
+                    .default_text("after block"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Recorder(ran.clone()))
+            .build()
+            .unwrap();
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new().tools(["recorder"]),
+        );
+        let controls = TurnControls {
+            hooks: Hooks {
+                before_tool_call: Some(Arc::new(|_tool, _args| ToolDecision::Block {
+                    reason: "needs approval".to_string(),
+                })),
+            },
+            ..TurnControls::default()
+        };
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("go")];
+        let _ = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
+        drop(tx);
+
+        // The hook blocked the call → the tool never executed, and a ToolBlocked
+        // event was emitted instead.
+        assert!(
+            !ran.load(Ordering::Relaxed),
+            "the blocked tool must not run"
+        );
+        let mut saw_block = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AgentEvent::ToolBlocked { .. }) {
+                saw_block = true;
+            }
+        }
+        assert!(saw_block, "should have emitted ToolBlocked");
+    }
+
+    #[tokio::test]
+    async fn steered_follow_up_continues_the_same_turn() {
+        let agenkit = chat("answer");
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        // Queue a follow-up *before* prompting: when the model answers the first
+        // prompt and would go idle, the steered message continues the turn.
+        session.steer("and another thing");
+        let _ = session.prompt("first").collect::<Vec<_>>().await;
+        // One prompt processed two exchanges: user/assistant ×2 = 4 messages.
+        assert_eq!(session.history().await.unwrap().len(), 4);
+        let history = session.history().await.unwrap();
+        assert_eq!(history[0].content.as_text(), "first");
+        assert_eq!(history[2].content.as_text(), "and another thing");
     }
 }
