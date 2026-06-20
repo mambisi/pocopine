@@ -9,18 +9,14 @@
 #[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use std::sync::Arc;
-
-    use pocopine_collab::{COLLAB_SUBPROTOCOL, CollabSync};
-    use pocopine_realtime::{Fanout, LocalFanout, WsGateway, routes};
+    use pocopine_collab::WsGatewayCollabExt;
+    use pocopine_realtime::{WsGateway, routes};
     use pocopine_server::{axum::Router, serve, static_files};
 
-    // One shared fan-out: the gateway and the CollabSync handler must publish
-    // and subscribe through the same instance (the convergence apply loop).
-    let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-    let gateway = WsGateway::new(fanout.clone())
-        .allow_all_topics()
-        .with_handler(COLLAB_SUBPROTOCOL, Arc::new(CollabSync::new(fanout)));
+    // `with_collab` registers the CollabSync handler on the gateway's OWN
+    // fan-out, so the handler and gateway share one instance by construction (a
+    // single-process demo, so no durable store — `with_collab_store` adds one).
+    let gateway = WsGateway::local().allow_all_topics().with_collab();
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let router = Router::new()

@@ -9,7 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, Stream, StreamExt};
-use pocopine_collab::{COLLAB_SUBPROTOCOL, CollabDocument, CollabMessage, CollabSync};
+use pocopine_collab::{
+    COLLAB_SUBPROTOCOL, CollabDocument, CollabMessage, CollabStore, MemoryCollabStore,
+    WsGatewayCollabExt,
+};
 use pocopine_realtime::{Control, Fanout, Frame, FrameKind, LocalFanout, WsGateway, routes};
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
@@ -18,13 +21,28 @@ use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
 /// Quiet window after which the handshake/broadcast chatter is considered drained.
 const IDLE: Duration = Duration::from_millis(400);
 
-/// Boot a collab-enabled gateway on a random port; return its ws:// URL. The
-/// handler and gateway share one fan-out (required for the apply loop).
+/// Boot a single collab-enabled gateway on a fresh in-process fan-out; return
+/// its ws:// URL. Wired via the `with_collab` helper (the handler shares the
+/// gateway's own fan-out by construction).
 async fn spawn() -> String {
     let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-    let gateway = WsGateway::new(fanout.clone())
-        .allow_all_topics()
-        .with_handler(COLLAB_SUBPROTOCOL, Arc::new(CollabSync::new(fanout)));
+    serve_gateway(WsGateway::new(fanout).allow_all_topics().with_collab()).await
+}
+
+/// Boot a collab-enabled gateway on a CALLER-PROVIDED fan-out and store, so two
+/// gateways can share one fan-out + store to simulate two web replicas behind a
+/// single Redis bus. Wired via `with_collab_store`.
+async fn spawn_replica(fanout: Arc<dyn Fanout>, store: Arc<dyn CollabStore>) -> String {
+    serve_gateway(
+        WsGateway::new(fanout)
+            .allow_all_topics()
+            .with_collab_store(store),
+    )
+    .await
+}
+
+/// Serve `gateway` on a random local port; return its ws:// URL.
+async fn serve_gateway(gateway: WsGateway) -> String {
     let app = routes(gateway);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -167,6 +185,50 @@ async fn two_clients_converge_over_the_gateway() {
     assert!(
         doc_b.text("body").contains("beta"),
         "B should receive A's live update, got {:?}",
+        doc_b.text("body")
+    );
+}
+
+#[tokio::test]
+async fn two_replicas_converge_through_a_shared_fanout() {
+    // The multi-process guarantee the C-series exists for: two gateways (two web
+    // replicas) on ONE shared fan-out + store — exactly how `with_collab_store`
+    // wires a Redis deployment. A client on replica 1 edits; a client on replica
+    // 2, which never saw that client, converges via the shared bus.
+    let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
+    let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
+    let url1 = spawn_replica(fanout.clone(), store.clone()).await;
+    let url2 = spawn_replica(fanout.clone(), store.clone()).await;
+    let topic = "collab:replicated";
+
+    // A on replica 1 authors an edit and syncs it up; replica 1 publishes it to
+    // the shared fan-out, where replica 2's apply loop folds it in.
+    let (mut a, _) = connect_async(&url1).await.unwrap();
+    let a_ref = join(&mut a, topic).await;
+    let doc_a = CollabDocument::new();
+    doc_a.insert_text("body", 0, "shared-state");
+    open_sync(&mut a, a_ref, &doc_a).await;
+    drive(&mut a, a_ref, &doc_a).await;
+
+    // B on replica 2 joins fresh. Replica 2 only begins folding the topic when B
+    // subscribes, so poll the handshake a few times until its apply loop has
+    // caught replica 2 up across the process boundary.
+    let (mut b, _) = connect_async(&url2).await.unwrap();
+    let b_ref = join(&mut b, topic).await;
+    let doc_b = CollabDocument::new();
+    let mut converged = false;
+    for _ in 0..20 {
+        open_sync(&mut b, b_ref, &doc_b).await;
+        drive(&mut b, b_ref, &doc_b).await;
+        if doc_b.text("body").contains("shared-state") {
+            converged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        converged,
+        "B on replica 2 should converge to replica 1's edit, got {:?}",
         doc_b.text("body")
     );
 }

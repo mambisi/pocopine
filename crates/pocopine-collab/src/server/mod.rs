@@ -6,11 +6,13 @@
 //! skill). The target-agnostic sync core (protocol, document, doc identity,
 //! error) lives at the crate root so the wasm client speaks the same handshake.
 
+mod gateway_ext;
 mod handler;
 #[cfg(feature = "sqlite")]
 mod sqlite_store;
 mod store;
 
+pub use gateway_ext::WsGatewayCollabExt;
 pub use handler::CollabSync;
 #[cfg(feature = "sqlite")]
 pub use sqlite_store::SqliteCollabStore;
