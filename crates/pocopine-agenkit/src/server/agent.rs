@@ -244,11 +244,13 @@ async fn run_loop<A: AiAgent>(
         // `Vec<Message>`, so it carries any persisted tool-call linkage verbatim.
         messages.extend(thread.active_history().await?);
     }
-    // Serialize the input once (reused when persisting the turn). A failure is a
-    // real error, not an empty prompt sent to the model.
+    // Serialize the input. A failure is a real error, not an empty prompt sent to
+    // the model. `persist_from` marks where this turn's new records begin — the
+    // seeded history before it is already stored, so only the suffix is persisted.
     let input_json = serde_json::to_string(input)
         .map_err(|e| AgenkitError::internal(format!("agent `{}` input encode: {e}", A::ID)))?;
-    messages.push(Message::user(input_json.clone()));
+    let persist_from = messages.len();
+    messages.push(Message::user(input_json));
 
     // Resolve the provider credential once (W6): the principal and provider are
     // fixed across the agent loop, so the per-request context is too.
@@ -303,16 +305,15 @@ async fn run_loop<A: AiAgent>(
                 let output_json = serde_json::to_string(&output).map_err(|e| {
                     AgenkitError::internal(format!("agent `{}` output encode: {e}", A::ID))
                 })?;
+                // Full fidelity: the user input + every tool turn the loop produced
+                // (in `messages` from `persist_from`) + the final structured answer.
+                // So a resumed thread replays the tool calls/results, not just the
+                // question and answer.
+                let mut records = messages[persist_from..].to_vec();
+                records.push(Message::assistant(output_json));
                 thread
                     .store
-                    .append(
-                        &thread.id,
-                        thread.owner(),
-                        vec![
-                            Message::user(input_json.clone()),
-                            Message::assistant(output_json),
-                        ],
-                    )
+                    .append(&thread.id, thread.owner(), records)
                     .await?;
                 maybe_compact::<A>(run, config, model, provider, &cx, thread).await?;
             }
