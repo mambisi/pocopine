@@ -2,15 +2,19 @@
 //! with a yrs CRDT `Doc` so edits converge across replicas over the
 //! `pocopine-collab` transport.
 //!
-//! ## v1 scope — single-writer / convergence-only
+//! ## Two write paths
 //!
 //! [`CollabEditor::set_document`] re-encodes the whole document (a **coarse**
-//! write). It is correct for one author at a time but, per edit, tombstones the
-//! old tree and emits an update proportional to the whole doc. The incremental,
-//! `Step`-driven write — efficient and multi-writer, preserving a second
-//! writer's cursor via `StickyIndex` — is the v2 follow-up. The read path
-//! ([`CollabEditor::apply_remote`] → whole-doc decode) is coarse by design,
-//! which is exactly why v1 cannot keep two live cursors from fighting.
+//! write): correct for one author, but it tombstones the tree on every edit, so
+//! two writers fight and `StickyIndex` anchors are destroyed.
+//!
+//! [`CollabEditor::apply_local`] is the **fine-grained** (Phase 5) write: it maps
+//! a pine-richtext `Step` directly to a targeted yrs mutation (see [`step_writer`]
+//! (crate::step_writer)), so an in-block edit touches only that block's `XmlText`
+//! and concurrent edits to different spans converge without loss. Structural steps
+//! (block split/merge/move, lists, attrs) fall back to a coarse rebuild — they
+//! carry permanent concurrent-loss anyway (schema-A, design doc §6). This is what
+//! unblocks multi-writer co-editing and surviving `StickyIndex` cursors.
 //!
 //! ## App glue
 //!
@@ -28,6 +32,7 @@
 use std::fmt;
 
 use pine_richtext::model::{Node, Schema};
+use pine_richtext::transform::Step;
 use pine_richtext::{RichTextError, RichTextResult};
 use yrs::types::xml::{XmlFragment, XmlFragmentRef};
 use yrs::updates::decoder::Decode;
@@ -105,6 +110,14 @@ impl CollabEditor {
     /// Returns the yrs update to broadcast — the diff since the prior state.
     pub fn set_document(&mut self, doc: &Node) -> RichTextResult<Vec<u8>> {
         let before = self.doc.transact().state_vector();
+        self.rebuild(doc)?;
+        Ok(self.doc.transact().encode_diff_v1(&before))
+    }
+
+    /// Coarse rebuild: tombstone the whole tree and re-encode `doc`. Shared by
+    /// [`set_document`](Self::set_document) and the [`apply_local`](Self::apply_local)
+    /// structural fallback.
+    fn rebuild(&mut self, doc: &Node) -> RichTextResult<()> {
         let client_id = self.client_id;
         let mut seq = self.block_seq;
         {
@@ -118,6 +131,46 @@ impl CollabEditor {
             encode_doc(&mut txn, &self.root, doc, &self.schema, &mut next_block_id)?;
         }
         self.block_seq = seq;
+        Ok(())
+    }
+
+    /// Commit a local edit as a **fine-grained incremental** update when every
+    /// step is an in-block inline edit (typing, deleting, marks), falling back to
+    /// a coarse rebuild for structural steps (block split/merge/move, lists,
+    /// attrs). `new_doc` is the document *after* `steps`; returns the yrs update
+    /// to broadcast — the diff since the prior state.
+    ///
+    /// This is the Phase 5 write path: unlike [`set_document`](Self::set_document)
+    /// it does not tombstone the tree on an ordinary edit, so two writers editing
+    /// different spans converge without loss and `StickyIndex` cursors survive.
+    pub fn apply_local(&mut self, new_doc: &Node, steps: &[Step]) -> RichTextResult<Vec<u8>> {
+        let before = self.doc.transact().state_vector();
+        let mut coarse = steps.is_empty();
+        if !coarse {
+            // Resolve each step against the model as of just before it; keep the
+            // model in lockstep so positions stay correct across the batch.
+            let mut current = self.document()?;
+            let mut txn = self.doc.transact_mut_with(ORIGIN_LOCAL.to_string());
+            for step in steps {
+                if crate::step_writer::try_apply_fine(
+                    &mut txn,
+                    &self.root,
+                    &current,
+                    &self.schema,
+                    step,
+                )? {
+                    current = step.apply(&current, &self.schema)?.doc;
+                } else {
+                    coarse = true;
+                    break;
+                }
+            }
+        }
+        if coarse {
+            // A partial fine application above is harmless: the rebuild tombstones
+            // it and re-encodes `new_doc`, so the final state is correct either way.
+            self.rebuild(new_doc)?;
+        }
         Ok(self.doc.transact().encode_diff_v1(&before))
     }
 
@@ -159,10 +212,180 @@ impl CollabEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pine_richtext::model::{Fragment, Slice};
     use pine_richtext::schema_basic;
+    use pine_richtext::transform::{MarkStep, ReplaceStep};
 
     fn para(text: &str) -> Node {
         schema_basic::paragraph(vec![schema_basic::text(text, vec![]).unwrap()]).unwrap()
+    }
+
+    /// Build an inline text-insertion step at model position `pos` and the
+    /// document that results from applying it.
+    fn insert_step(doc: &Node, schema: &Schema, pos: usize, text: &str) -> (Step, Node) {
+        let node = schema_basic::text(text, vec![]).unwrap();
+        let slice = Slice::new(Fragment::new(vec![node]), 0, 0);
+        let step = Step::Replace(ReplaceStep {
+            from: pos,
+            to: pos,
+            slice,
+            structure: false,
+        });
+        let new_doc = step.apply(doc, schema).unwrap().doc;
+        (step, new_doc)
+    }
+
+    #[test]
+    fn apply_local_inserts_text_incrementally_and_converges() {
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // Insert "X" at the start of the paragraph's content (model pos 1).
+        let (step, new_doc) = insert_step(&doc0, &schema, 1, "X");
+        let update = a.apply_local(&new_doc, &[step]).unwrap();
+        assert_eq!(a.document().unwrap(), new_doc); // == para("Xhello")
+
+        b.apply_remote(&update).unwrap();
+        assert_eq!(b.document().unwrap(), new_doc);
+        assert_eq!(a.document().unwrap(), b.document().unwrap());
+    }
+
+    #[test]
+    fn concurrent_in_block_edits_both_survive() {
+        // The headline: two writers editing different spans of the SAME block
+        // converge with BOTH edits. The coarse write would tombstone the block on
+        // each side and the merge would duplicate/clobber — this asserts otherwise.
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello world")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // A prepends "A" (pos 1); B appends "B" (pos 12 — end of the 11-char body).
+        let (step_a, new_a) = insert_step(&doc0, &schema, 1, "A");
+        let (step_b, new_b) = insert_step(&doc0, &schema, 12, "B");
+        let ua = a.apply_local(&new_a, &[step_a]).unwrap();
+        let ub = b.apply_local(&new_b, &[step_b]).unwrap();
+
+        // Cross-apply; both converge to a doc carrying BOTH insertions.
+        a.apply_remote(&ub).unwrap();
+        b.apply_remote(&ua).unwrap();
+        let expected = schema_basic::doc(vec![para("Ahello worldB")]).unwrap();
+        assert_eq!(a.document().unwrap(), expected);
+        assert_eq!(b.document().unwrap(), expected);
+    }
+
+    #[test]
+    fn apply_local_deletes_text_incrementally_and_converges() {
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // Delete the leading 'h' (range [1,2) with an empty slice).
+        let slice = Slice::new(Fragment::new(vec![]), 0, 0);
+        let step = Step::Replace(ReplaceStep {
+            from: 1,
+            to: 2,
+            slice,
+            structure: false,
+        });
+        let new_doc = step.apply(&doc0, &schema).unwrap().doc; // para("ello")
+        let update = a.apply_local(&new_doc, &[step]).unwrap();
+        assert_eq!(a.document().unwrap(), new_doc);
+        b.apply_remote(&update).unwrap();
+        assert_eq!(b.document().unwrap(), new_doc);
+    }
+
+    #[test]
+    fn apply_local_adds_a_mark_incrementally_and_converges() {
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // Bold "hell" (model range [1,5)).
+        let step = Step::AddMark(MarkStep {
+            from: 1,
+            to: 5,
+            mark: schema_basic::strong().unwrap(),
+        });
+        let new_doc = step.apply(&doc0, &schema).unwrap().doc;
+        let update = a.apply_local(&new_doc, &[step]).unwrap();
+        assert_eq!(a.document().unwrap(), new_doc, "local doc carries the mark");
+        b.apply_remote(&update).unwrap();
+        assert_eq!(
+            b.document().unwrap(),
+            new_doc,
+            "peer converges with the mark"
+        );
+    }
+
+    #[test]
+    fn apply_local_applies_a_multi_step_batch() {
+        // Two steps in one commit: the second must resolve against the model as
+        // updated by the first (position lockstep).
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        let (s1, d1) = insert_step(&doc0, &schema, 1, "X"); // "Xhello"
+        let (s2, d2) = insert_step(&d1, &schema, 2, "Y"); // "XYhello"
+        let update = a.apply_local(&d2, &[s1, s2]).unwrap();
+        assert_eq!(a.document().unwrap(), d2);
+        b.apply_remote(&update).unwrap();
+        assert_eq!(b.document().unwrap(), d2);
+    }
+
+    #[test]
+    fn apply_local_removes_a_mark_incrementally_and_converges() {
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        // Start with "hell" bolded + "o" plain.
+        let bolded = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![
+                schema_basic::text("hell", vec![schema_basic::strong().unwrap()]).unwrap(),
+                schema_basic::text("o", vec![]).unwrap(),
+            ])
+            .unwrap(),
+        ])
+        .unwrap();
+        b.apply_remote(&a.set_document(&bolded).unwrap()).unwrap();
+
+        // Remove strong over [1,5) → the whole paragraph becomes plain "hello".
+        let step = Step::RemoveMark(MarkStep {
+            from: 1,
+            to: 5,
+            mark: schema_basic::strong().unwrap(),
+        });
+        let plain = step.apply(&bolded, &schema).unwrap().doc;
+        let update = a.apply_local(&plain, &[step]).unwrap();
+        assert_eq!(a.document().unwrap(), plain, "mark cleared locally");
+        b.apply_remote(&update).unwrap();
+        assert_eq!(b.document().unwrap(), plain, "peer converges unmarked");
+    }
+
+    #[test]
+    fn structural_change_falls_back_to_coarse_and_converges() {
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // No steps but a changed doc → the coarse rebuild path; still converges.
+        let doc2 = schema_basic::doc(vec![para("hello"), para("world")]).unwrap();
+        let update = a.apply_local(&doc2, &[]).unwrap();
+        assert_eq!(a.document().unwrap(), doc2);
+        b.apply_remote(&update).unwrap();
+        assert_eq!(b.document().unwrap(), doc2);
     }
 
     #[test]

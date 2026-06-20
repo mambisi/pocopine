@@ -24,6 +24,7 @@
 //! live editor binding are follow-ups.
 
 mod binder;
+mod step_writer;
 pub use binder::{BindError, CollabEditor};
 
 // The browser collab client. Compiled on wasm32 (the real target) and under
@@ -163,11 +164,20 @@ fn write_block<P: XmlFragment, F: FnMut() -> String>(
 }
 
 fn write_inline(txn: &mut TransactionMut, xtext: &XmlTextRef, content: &Fragment) {
-    // Insert ALL text/embeds first, recording each marked run, THEN format.
-    // If we formatted as we went, the next insert would land on a format
-    // boundary and yrs would expand the mark into it (e.g. bold bleeding past
-    // its run). Applying formats after every char is placed keeps ranges exact.
-    let mut index = 0u32;
+    insert_inline(txn, xtext, 0, content);
+}
+
+/// Insert a fragment of inline content into `xtext` starting at character index
+/// `at`. Inserts all text/embeds first, then applies marks (the two-phase write
+/// that keeps a mark from bleeding past its run when the next insert lands on its
+/// boundary). Shared by the whole-doc codec and the incremental [`step_writer`].
+pub(crate) fn insert_inline(
+    txn: &mut TransactionMut,
+    xtext: &XmlTextRef,
+    at: u32,
+    content: &Fragment,
+) {
+    let mut index = at;
     let mut runs: Vec<(u32, u32, &[Mark])> = Vec::new();
     for node in content.iter() {
         if let Some(text) = node.text() {
@@ -188,7 +198,7 @@ fn write_inline(txn: &mut TransactionMut, xtext: &XmlTextRef, content: &Fragment
     }
 }
 
-fn marks_to_yattrs(marks: &[Mark]) -> YAttrs {
+pub(crate) fn marks_to_yattrs(marks: &[Mark]) -> YAttrs {
     marks
         .iter()
         .map(|mark| {
@@ -202,7 +212,7 @@ fn marks_to_yattrs(marks: &[Mark]) -> YAttrs {
         .collect()
 }
 
-fn atom_to_any(node: &Node) -> Any {
+pub(crate) fn atom_to_any(node: &Node) -> Any {
     let mut map: HashMap<String, Any> = node
         .attrs()
         .iter()

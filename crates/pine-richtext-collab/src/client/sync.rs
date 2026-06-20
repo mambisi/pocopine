@@ -100,6 +100,12 @@ impl CollabSyncClient {
                     document: (before.as_ref() != Some(&after)).then_some(after),
                 })
             }
+            // Ephemeral presence — handled by the connection's awareness layer,
+            // never the document sync driver.
+            CollabMessage::Awareness(_) => Ok(SyncOutcome {
+                reply: None,
+                document: None,
+            }),
         }
     }
 
