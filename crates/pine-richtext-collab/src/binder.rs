@@ -423,7 +423,9 @@ mod tests {
         } else {
             // Insert a char at a random position in the content range [1, size+1].
             let pos = 1 + (rng_next(rng) as usize % (content_size + 1));
-            let alphabet = ['a', 'b', 'c', 'd', 'e'];
+            // Mix multi-byte chars (é = 2 bytes, 🎉 = 4) so the fuzz exercises the
+            // char↔byte offset conversion, not just ASCII.
+            let alphabet = ['a', 'b', 'é', '🎉', 'z'];
             let ch = alphabet[rng_next(rng) as usize % alphabet.len()].to_string();
             insert_step(base, schema, pos, &ch)
         }
@@ -462,6 +464,96 @@ mod tests {
                 "diverged after round {round}"
             );
         }
+    }
+
+    #[test]
+    fn codec_round_trips_a_mark_over_an_emoji() {
+        // The coarse codec's format-range write must also use byte offsets: bold
+        // "a👍" then plain "b". A char-offset format range would mis-cover the
+        // multi-byte emoji.
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![
+                schema_basic::text("a👍", vec![schema_basic::strong().unwrap()]).unwrap(),
+                schema_basic::text("b", vec![]).unwrap(),
+            ])
+            .unwrap(),
+        ])
+        .unwrap();
+        b.apply_remote(&a.set_document(&doc).unwrap()).unwrap();
+        assert_eq!(a.document().unwrap(), doc, "encode/decode round-trips");
+        assert_eq!(b.document().unwrap(), doc, "and converges to a peer");
+    }
+
+    #[test]
+    fn fine_diff_handles_multibyte_text() {
+        // Regression for the char-vs-byte offset bug: yrs XmlText indexes in UTF-8
+        // bytes. An edit positioned by a char offset would land mid-emoji (panic or
+        // corruption). "a👍b" — insert "X" before 'b' (model pos 3, after the emoji).
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("a👍b")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        let (step, new_doc) = insert_step(&doc0, &schema, 3, "X"); // "a👍Xb"
+        let update = a.apply_local(&new_doc, &[step]).unwrap();
+        assert_eq!(a.document().unwrap(), new_doc);
+        b.apply_remote(&update).unwrap();
+        assert_eq!(a.document().unwrap(), b.document().unwrap());
+    }
+
+    #[test]
+    fn fine_diff_deletes_and_marks_across_an_emoji() {
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("x🎉yz")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // Delete the emoji (char range [2,3)).
+        let del = Step::Replace(ReplaceStep {
+            from: 2,
+            to: 3,
+            slice: Slice::new(Fragment::new(vec![]), 0, 0),
+            structure: false,
+        });
+        let after_del = del.apply(&doc0, &schema).unwrap().doc; // "xyz"
+        a.apply_remote(&b.apply_local(&after_del, &[del]).unwrap())
+            .unwrap();
+        assert_eq!(a.document().unwrap(), after_del);
+
+        // Bold across what is now "xyz" (range [1,4)).
+        let mark = Step::AddMark(MarkStep {
+            from: 1,
+            to: 4,
+            mark: schema_basic::strong().unwrap(),
+        });
+        let bolded = mark.apply(&after_del, &schema).unwrap().doc;
+        b.apply_remote(&a.apply_local(&bolded, &[mark]).unwrap())
+            .unwrap();
+        assert_eq!(a.document().unwrap(), bolded);
+        assert_eq!(a.document().unwrap(), b.document().unwrap());
+    }
+
+    #[test]
+    fn caret_after_an_emoji_survives_a_remote_insert() {
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("👍hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        // Caret after the emoji + "he" (model pos 4: emoji=1 char, h=2, e=3, |=4).
+        let caret = a.point_at(4).unwrap().expect("caret");
+        assert_eq!(a.point_model_pos(&caret).unwrap(), Some(4));
+
+        // B prepends "Z" before the emoji (pos 1); A's caret shifts 4 -> 5.
+        let (step, new_b) = insert_step(&doc0, &schema, 1, "Z");
+        a.apply_remote(&b.apply_local(&new_b, &[step]).unwrap())
+            .unwrap();
+        assert_eq!(a.point_model_pos(&caret).unwrap(), Some(5));
     }
 
     #[test]

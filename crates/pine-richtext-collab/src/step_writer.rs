@@ -111,24 +111,29 @@ fn node_is_inline(node: &Node, schema: &Schema) -> bool {
             .unwrap_or(false)
 }
 
-/// Resolve an absolute model position to `(top-level block index, inline char
-/// offset within that block)`, but ONLY when the position lands strictly inside a
-/// **flat textblock** (a top-level block that takes inline content — paragraph,
-/// heading). Returns `None` for positions at block boundaries or inside nested
-/// block structures (lists, blockquotes). Shared with the caret codec.
+/// Resolve an absolute model position to `(top-level block index, inline **byte**
+/// offset within that block's XmlText)`, but ONLY when the position lands strictly
+/// inside a **flat textblock** (a top-level block that takes inline content —
+/// paragraph, heading). Returns `None` for positions at block boundaries or inside
+/// nested block structures (lists, blockquotes). Shared with the caret codec.
+///
+/// The returned offset is in UTF-8 bytes (yrs' `XmlText` unit), converted from the
+/// model's char offset via [`char_to_byte`](crate::char_to_byte) — so an edit in
+/// text containing multi-byte characters lands at the right yrs position.
 pub(crate) fn flat_block_offset(doc: &Node, schema: &Schema, pos: usize) -> Option<(usize, u32)> {
     let mut base = 0usize; // model position just before block `i`
     for i in 0..doc.child_count() {
         let block = doc.child(i)?;
         let size = block.node_size();
         // Block `i` spans [base, base+size); its inline content spans the open
-        // interval (base, base+size), i.e. offsets [base+1, base+size-1].
+        // interval (base, base+size), i.e. char offsets [base+1, base+size-1].
         if pos > base && pos < base + size {
             let node_type = schema.node_type(block.type_name()).ok()?;
             if !node_type.inline_content(schema) {
                 return None; // a nested block-content block — coarse path
             }
-            return Some((i, (pos - base - 1) as u32));
+            let char_off = pos - base - 1;
+            return Some((i, crate::char_to_byte(block.content(), char_off)));
         }
         base += size;
     }

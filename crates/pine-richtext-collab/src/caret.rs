@@ -62,14 +62,17 @@ pub(crate) fn point_model_pos<T: ReadTxn>(
     point: &StickyPoint,
 ) -> Option<usize> {
     let block_index = block_index_by_id(txn, root, &point.block_id)?;
-    let offset = point.sticky.get_offset(txn)?.index as usize;
+    // yrs resolves the sticky to a UTF-8 byte offset; convert it back to a char
+    // offset against the block's content before mapping into model space.
+    let byte_off = point.sticky.get_offset(txn)?.index;
+    let char_off = crate::byte_to_char(doc.child(block_index)?.content(), byte_off);
     // The block's content starts one token (its open tag) past the sum of the
     // sizes of the blocks before it.
     let mut base = 0usize;
     for i in 0..block_index {
         base += doc.child(i)?.node_size();
     }
-    Some(base + 1 + offset)
+    Some(base + 1 + char_off)
 }
 
 /// Read a block element's `block_id` attribute.
