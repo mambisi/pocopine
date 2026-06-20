@@ -196,9 +196,13 @@ impl WsGateway {
         self
     }
 
-    // --- internal accessors used by the route/session machinery ---
-
-    pub(crate) fn fanout(&self) -> &Arc<dyn Fanout> {
+    /// The [`Fanout`] this gateway publishes to. Exposed so a sub-protocol that
+    /// also folds the fan-out itself — notably `pocopine-collab`'s convergence
+    /// apply loop — can be wired to the SAME instance, which is the one
+    /// correctness requirement for multi-process convergence. Prefer the
+    /// `WsGateway::with_collab*` helpers (in `pocopine-collab`), which use this
+    /// to make that wiring correct by construction.
+    pub fn fanout(&self) -> &Arc<dyn Fanout> {
         &self.fanout
     }
 

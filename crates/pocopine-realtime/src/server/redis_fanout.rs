@@ -265,6 +265,29 @@ impl Fanout for RedisFanout {
             last_seen,
         })))
     }
+
+    async fn trim_after(&self, topic: &Topic, durable_seq: u64) -> Result<(), WsError> {
+        // Everything `<= durable_seq` is durable, so drop it: keep ids whose seq
+        // is strictly greater, i.e. `MINID (durable_seq + 1)-0`. `~` lets Redis
+        // trim by whole macro-nodes — it only ever keeps MORE than asked, never
+        // less, so a resume at `durable_seq` stays gap-free. A `durable_seq` of 0
+        // would keep everything (nothing is durable yet); skip the call.
+        if durable_seq == 0 {
+            return Ok(());
+        }
+        let min_id = format!("{}-0", durable_seq.saturating_add(1));
+        let keys = self.keys(topic);
+        let mut conn = self.conn.clone();
+        redis::cmd("XTRIM")
+            .arg(&keys.stream)
+            .arg("MINID")
+            .arg("~")
+            .arg(&min_id)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|err| WsError::backend(format!("redis xtrim minid: {err}")))?;
+        Ok(())
+    }
 }
 
 /// Source for an unreplayable resume cursor: reports a gap and yields nothing.
