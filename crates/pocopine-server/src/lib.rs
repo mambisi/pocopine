@@ -37,6 +37,7 @@ mod observability;
 pub mod plugin;
 mod server;
 mod server_functions;
+mod sse_response;
 mod static_files;
 
 pub use assets::{
@@ -59,6 +60,7 @@ pub use server::{Server, ServerPlugin};
 pub use server_functions::{
     ServerFunctionRoute, ServerFunctionRouteConflict, install_server_functions,
 };
+pub use sse_response::{sse_error_response, sse_stream_response};
 pub use static_files::{StaticFiles, index_file};
 
 #[doc(hidden)]

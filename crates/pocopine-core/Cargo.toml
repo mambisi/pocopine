@@ -50,6 +50,10 @@ js-sys = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
 serde-wasm-bindgen = { workspace = true }
+# RFC-107 — the `Stream` trait backing `StreamServerResult<T>` (streaming
+# server fns). Trait-defs only; no monomorphized code, so no bundle cost
+# beyond the vtable the boxed stream already needs.
+futures-core = "0.3"
 once_cell = { workspace = true }
 unicode-segmentation = "1"
 # RFC 060 Tier 4 — `&'static phf::Map<&'static str,
@@ -136,6 +140,9 @@ features = [
     "PointerEvent",
     "PopStateEvent",
     "ProgressEvent",
+    # RFC-107 — streaming server-fn client reads the SSE response body.
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
     "Request",
     "RequestInit",
     "RequestMode",

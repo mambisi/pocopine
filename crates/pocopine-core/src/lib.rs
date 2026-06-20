@@ -54,6 +54,7 @@ pub mod server;
 pub mod signal;
 pub mod slot_fragment;
 pub mod slot_scope;
+pub mod sse;
 pub mod storage;
 pub mod store;
 pub mod styles;
@@ -128,7 +129,7 @@ pub use scope::{
     invalidate_field_cache, js_bridge, patch_list_at_inline, patch_list_indices_inline,
     prepend_list_inline, remove_list_at_inline, replace_field_inline, swap_list_indices_inline,
 };
-pub use server::{Result as ServerResult, ServerError};
+pub use server::{Result as ServerResult, ServerError, ServerStream, StreamServerResult};
 pub use signal::{RwSignal, Setter, Signal, rw_signal, signal};
 pub use storage::{LocalStorage, StorageError};
 pub use store::{Store, StoreHandle, register_store_scope, store, store_scope, stores_object};

@@ -34,7 +34,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AbortSignal, Request, RequestInit, Response};
 
-use crate::server::{Result as ServerResult, ServerError};
+use crate::server::{Result as ServerResult, ServerError, ServerStream};
 
 // ─── middleware types ───────────────────────────────────────────────
 
@@ -292,6 +292,14 @@ fn snapshot_chain() -> MiddlewareChain {
 }
 
 // ─── public call ────────────────────────────────────────────────────
+//
+// FOLLOW-UP (RFC-107): collapse `call` / `call_replay_safe` /
+// `call_with_options` / `call_stream` into one builder —
+// `call(url, &args).get::<R>()` / `.stream::<R>()` / `.replay_safe()`. Deferred
+// from the streaming-server-fn work: these entry points are macro-generated
+// (app authors never write them), so the change is internal-only and touches
+// ~30 call sites across pocopine-sync / sync-query / auth-client + tests. Do it
+// as its own focused PR, separate from the streaming feature.
 
 /// Post `args` as JSON to `url` and deserialize the JSON response into
 /// `Result<R>`. The server is expected to respond with a JSON encoding
@@ -412,6 +420,184 @@ where
     R: DeserializeOwned,
 {
     call_with_options(url, args, FetchOptions::default().replay_safe(true)).await
+}
+
+// ─── streaming (RFC-107) ─────────────────────────────────────────────
+
+/// Post `args` and consume the response as a stream of `ServerResult<R>`
+/// items (RFC-107 streaming server functions).
+///
+/// The outer `Result` is the HTTP handshake (non-2xx / transport → `Err`);
+/// each streamed item is in-band, and a mid-stream `Err` is terminal. The
+/// `#[server]` macro generates this call for functions returning
+/// `StreamServerResult<R>`; application code calls the generated function.
+///
+/// Unlike [`call`], `call_stream` does **not** run the buffering middleware
+/// chain (that reads the whole body via `Response::text`); request signing /
+/// auth-retry for streaming calls is future work (RFC-107 open question).
+pub async fn call_stream<A, R>(url: &str, args: &A) -> ServerResult<ServerStream<R>>
+where
+    A: Serialize,
+    R: DeserializeOwned + 'static,
+{
+    let body = serde_json::to_string(args)
+        .map_err(|err| ServerError::Network(format!("serialize args: {err}")))?;
+    stream_call(url, &body, current_abort_signal()).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn stream_call<R>(
+    url: &str,
+    body: &str,
+    abort: Option<AbortSignal>,
+) -> ServerResult<ServerStream<R>>
+where
+    R: DeserializeOwned + 'static,
+{
+    let init = RequestInit::new();
+    init.set_method("POST");
+    init.set_body(&JsValue::from_str(body));
+    init.set_signal(abort.as_ref());
+
+    let headers =
+        web_sys::Headers::new().map_err(|e| ServerError::Network(format!("headers: {e:?}")))?;
+    let _ = headers.set("content-type", "application/json");
+    let _ = headers.set("accept", "text/event-stream");
+    init.set_headers(&headers);
+
+    let req = Request::new_with_str_and_init(url, &init)
+        .map_err(|e| ServerError::Network(format!("build request: {e:?}")))?;
+    let win =
+        web_sys::window().ok_or_else(|| ServerError::Network("no window available".to_string()))?;
+    let resp_js = JsFuture::from(win.fetch_with_request(&req))
+        .await
+        .map_err(|e| ServerError::Network(format!("fetch failed: {e:?}")))?;
+    let resp: Response = resp_js
+        .dyn_into()
+        .map_err(|_| ServerError::Network("fetch returned non-Response".into()))?;
+
+    let status = resp.status();
+    if !(200..300).contains(&status) {
+        return Err(ServerError::Network(format!("HTTP {status}")));
+    }
+
+    let body_stream = resp
+        .body()
+        .ok_or_else(|| ServerError::Network("response had no body".into()))?;
+    let reader = body_stream
+        .get_reader()
+        .dyn_into::<web_sys::ReadableStreamDefaultReader>()
+        .map_err(|_| ServerError::Network("could not read the response stream".into()))?;
+
+    Ok(Box::pin(SseStream::<R>::new(reader)))
+}
+
+/// Host build compiles this stub but never calls it — the generated client
+/// stub that calls `call_stream` is `wasm32`-gated.
+#[cfg(not(target_arch = "wasm32"))]
+async fn stream_call<R>(
+    _url: &str,
+    _body: &str,
+    _abort: Option<AbortSignal>,
+) -> ServerResult<ServerStream<R>>
+where
+    R: DeserializeOwned + 'static,
+{
+    Err(ServerError::Network(
+        "streaming server-function clients run on wasm".into(),
+    ))
+}
+
+/// A `Stream` over an SSE response body, decoding `data:` frames into
+/// `ServerResult<R>` items. Hand-rolled (no `futures-util`) to keep
+/// `pocopine-core`'s wasm bundle lean.
+#[cfg(target_arch = "wasm32")]
+struct SseStream<R> {
+    reader: web_sys::ReadableStreamDefaultReader,
+    decoder: crate::sse::SseDecoder,
+    pending: std::collections::VecDeque<ServerResult<R>>,
+    in_flight: Option<JsFuture>,
+    done: bool,
+}
+
+// Every field is `Unpin` (web-sys handles, `SseDecoder`, `VecDeque`, and
+// `JsFuture` are all `Unpin`); the generic param doesn't change that, so assert
+// it unconditionally to allow `Pin::get_mut` in `poll_next`.
+#[cfg(target_arch = "wasm32")]
+impl<R> Unpin for SseStream<R> {}
+
+#[cfg(target_arch = "wasm32")]
+impl<R: DeserializeOwned + 'static> SseStream<R> {
+    fn new(reader: web_sys::ReadableStreamDefaultReader) -> Self {
+        Self {
+            reader,
+            decoder: crate::sse::SseDecoder::new(),
+            pending: std::collections::VecDeque::new(),
+            in_flight: None,
+            done: false,
+        }
+    }
+
+    fn ingest(&mut self, payload: &str) {
+        match crate::sse::decode_payload::<R>(payload) {
+            crate::sse::Decoded::Item(item) => self.pending.push_back(item),
+            crate::sse::Decoded::Done => self.done = true,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<R: DeserializeOwned + 'static> futures_core::Stream for SseStream<R> {
+    type Item = ServerResult<R>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            if let Some(item) = this.pending.pop_front() {
+                return Poll::Ready(Some(item));
+            }
+            if this.done {
+                return Poll::Ready(None);
+            }
+            if this.in_flight.is_none() {
+                this.in_flight = Some(JsFuture::from(this.reader.read()));
+            }
+            let fut = this.in_flight.as_mut().expect("in_flight just set");
+            match Pin::new(fut).poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(read_result) => {
+                    this.in_flight = None;
+                    match read_result {
+                        Err(e) => {
+                            this.done = true;
+                            return Poll::Ready(Some(Err(ServerError::Network(format!(
+                                "stream read failed: {e:?}"
+                            )))));
+                        }
+                        Ok(obj) => {
+                            let is_done = js_sys::Reflect::get(&obj, &JsValue::from_str("done"))
+                                .ok()
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let value = js_sys::Reflect::get(&obj, &JsValue::from_str("value"))
+                                .unwrap_or(JsValue::UNDEFINED);
+                            if let Ok(chunk) = value.dyn_into::<js_sys::Uint8Array>() {
+                                for payload in this.decoder.push(&chunk.to_vec()) {
+                                    this.ingest(&payload);
+                                }
+                            }
+                            if is_done {
+                                if let Some(payload) = this.decoder.flush() {
+                                    this.ingest(&payload);
+                                }
+                                this.done = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ─── transport ──────────────────────────────────────────────────────
