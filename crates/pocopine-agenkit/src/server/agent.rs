@@ -16,7 +16,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::context::AiContext;
-use super::provider::GenerateRequest;
+use super::overflow::{context_headroom, estimate_input_tokens};
+use super::provider::{GenerateRequest, Provider, ProviderContext};
 use super::run::RunState;
 use super::thread::AgentThreadHandle;
 
@@ -200,23 +201,9 @@ impl<A: AiAgent> AgentRun<A> {
             ),
         }
 
-        let output = result?;
-        if let Some(thread) = &thread {
-            let input_text = serde_json::to_string(&input).unwrap_or_default();
-            let output_text = serde_json::to_string(&output).unwrap_or_default();
-            thread
-                .store
-                .append(
-                    &thread.id,
-                    thread.owner(),
-                    vec![
-                        ThreadMessage::new(Role::User, input_text),
-                        ThreadMessage::new(Role::Assistant, output_text),
-                    ],
-                )
-                .await?;
-        }
-        Ok(output)
+        // The thread turn-append + compaction now happen inside `run_loop` on
+        // the success path (it holds the resolved credential context).
+        result
     }
 }
 
@@ -251,13 +238,28 @@ async fn run_loop<A: AiAgent>(
 
     let mut messages = Vec::new();
     if let Some(thread) = thread {
-        for message in thread.history().await? {
+        // The compacted view (from the last checkpoint) — keeps a long-running
+        // thread inside the model's context window (W7 compaction).
+        for message in thread.active_history().await? {
             messages.push(Message::new(message.role, message.content));
         }
     }
-    messages.push(Message::user(
-        serde_json::to_string(input).unwrap_or_default(),
-    ));
+    // Serialize the input once (reused when persisting the turn). A failure is a
+    // real error, not an empty prompt sent to the model.
+    let input_json = serde_json::to_string(input)
+        .map_err(|e| AgenkitError::internal(format!("agent `{}` input encode: {e}", A::ID)))?;
+    messages.push(Message::user(input_json.clone()));
+
+    // Resolve the provider credential once (W6): the principal and provider are
+    // fixed across the agent loop, so the per-request context is too.
+    let cx = {
+        let credential = run
+            .inner
+            .credentials
+            .resolve(provider.id(), &run.principal)
+            .await?;
+        super::provider::ProviderContext::for_request(credential)
+    };
 
     for _ in 0..config.max_steps {
         let request = GenerateRequest {
@@ -267,6 +269,9 @@ async fn run_loop<A: AiAgent>(
             tools: tools.clone(),
             json_schema: Some(schema.clone()),
             max_tokens: config.max_tokens,
+            // The agent loop doesn't request reasoning (W4 is scoped to the `Ai`
+            // generate builder); defaults to `ThinkingLevel::Off`.
+            thinking: Default::default(),
         };
 
         let model_step = run.next_step_id();
@@ -280,7 +285,12 @@ async fn run_loop<A: AiAgent>(
             .with_parent(agent_step.clone())
             .with_model(model.clone()),
         );
-        let response = provider.generate(request).await?;
+        // Reclassify an "input too long" provider error as ContextOverflow (W3),
+        // so callers/UI can branch on the kind — parity with the `Ai` paths.
+        let response = provider
+            .generate(request, &cx)
+            .await
+            .map_err(super::generate::reclassify_overflow)?;
         let mut completed = run
             .event(
                 events::AI_MODEL_RESPONSE,
@@ -303,9 +313,31 @@ async fn run_loop<A: AiAgent>(
                 .ok_or_else(|| {
                     AgenkitError::validation(format!("agent `{}` returned no JSON", A::ID))
                 })?;
-            return serde_json::from_value(value).map_err(|err| {
+            let output: A::Output = serde_json::from_value(value).map_err(|err| {
                 AgenkitError::validation(format!("agent `{}` output: {err}", A::ID))
-            });
+            })?;
+            // Persist this turn to the thread, then compact it if the history now
+            // overflows the model's context window (W7).
+            if let Some(thread) = thread {
+                // A serialize failure persists nothing and errors, rather than
+                // writing an empty turn to the durable thread.
+                let output_json = serde_json::to_string(&output).map_err(|e| {
+                    AgenkitError::internal(format!("agent `{}` output encode: {e}", A::ID))
+                })?;
+                thread
+                    .store
+                    .append(
+                        &thread.id,
+                        thread.owner(),
+                        vec![
+                            ThreadMessage::new(Role::User, input_json.clone()),
+                            ThreadMessage::new(Role::Assistant, output_json),
+                        ],
+                    )
+                    .await?;
+                maybe_compact::<A>(run, config, model, provider, &cx, thread).await?;
+            }
+            return Ok(output);
         }
 
         // Record the assistant's tool-request turn so the next request carries
@@ -346,10 +378,10 @@ async fn run_loop<A: AiAgent>(
                 .with_parent(agent_step.clone())
                 .with_field("tool_id", call.tool_id.clone()),
             );
-            messages.push(Message::tool_result(
-                call.id.clone(),
-                serde_json::to_string(&output).unwrap_or_default(),
-            ));
+            let output_json = serde_json::to_string(&output).map_err(|e| {
+                AgenkitError::internal(format!("tool `{}` output encode: {e}", call.tool_id))
+            })?;
+            messages.push(Message::tool_result(call.id.clone(), output_json));
         }
     }
 
@@ -358,4 +390,148 @@ async fn run_loop<A: AiAgent>(
         A::ID,
         config.max_steps
     )))
+}
+
+/// After a turn is persisted, compact the thread if its (compacted) history
+/// would overflow the model's context window (W7 — consumes the W3 headroom
+/// signal). Summarizes the history into a checkpoint; `active_history` then
+/// resumes from it, while the full log is retained for audit/fork.
+async fn maybe_compact<A: AiAgent>(
+    run: &Arc<RunState>,
+    config: &AiAgentBuilder<A>,
+    model: &ModelRef,
+    provider: &Arc<dyn Provider>,
+    cx: &ProviderContext,
+    thread: &AgentThreadHandle,
+) -> AgenkitResult<()> {
+    // Without catalog metadata we can't size the window — skip (degrade, no error).
+    let Some(catalog_model) = super::catalog::lookup(model) else {
+        return Ok(());
+    };
+    let history = thread.active_history().await?;
+    if history.len() < 4 {
+        return Ok(()); // nothing meaningful to summarize yet
+    }
+    let messages: Vec<Message> = history
+        .iter()
+        .map(|m| Message::new(m.role, m.content.clone()))
+        .collect();
+    let max_output = config.max_tokens.unwrap_or(1024);
+    if !context_headroom(catalog_model, &messages, max_output).over {
+        return Ok(()); // still fits — no compaction
+    }
+
+    // Keep the recent tail verbatim (token-bounded — see `recent_keep_count`),
+    // fold the older prefix into the summary.
+    let keep = recent_keep_count(&messages, KEEP_RECENT_VERBATIM_TOKENS);
+    let (older, recent) = history.split_at(history.len() - keep);
+
+    let transcript = older
+        .iter()
+        .map(|m| format!("[{:?}] {}", m.role, m.content.as_text()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = summarize(transcript, model, provider, cx).await?;
+    thread
+        .checkpoint(ThreadMessage::new(Role::System, summary), recent.to_vec())
+        .await?;
+    run.emit(
+        run.event(
+            events::AI_THREAD_CHECKPOINTED,
+            StepKind::Custom,
+            StepStatus::Completed,
+        )
+        .with_field("thread_id", thread.id().as_str())
+        .with_field("agent_id", A::ID)
+        .with_field("compacted_messages", older.len() as u64)
+        .with_field("kept_verbatim", recent.len() as u64),
+    );
+    Ok(())
+}
+
+/// The token budget for the recent tail [`maybe_compact`] keeps verbatim. Older
+/// turns fold into one summary; the most recent turns stay literal up to this
+/// budget, so the model still sees the live turns it is mid-way through — but
+/// bounded in tokens, so the kept tail can't re-overflow the window.
+const KEEP_RECENT_VERBATIM_TOKENS: u64 = 2048;
+
+/// How many of the most recent `messages` to keep verbatim on compaction: the
+/// newest turns whose cumulative token estimate stays within `budget`, always
+/// leaving at least one message to summarize. A single turn larger than `budget`
+/// is kept zero times (summarized instead) — so the kept tail can never itself
+/// re-overflow the window, and a huge recent turn isn't copied into the
+/// checkpoint payload (which would re-inline its externalized blob).
+fn recent_keep_count(messages: &[Message], budget: u64) -> usize {
+    let max_keep = messages.len().saturating_sub(1);
+    let mut kept_tokens = 0u64;
+    let mut keep = 0usize;
+    for message in messages.iter().rev() {
+        if keep == max_keep {
+            break;
+        }
+        let cost = estimate_input_tokens(std::slice::from_ref(message));
+        if kept_tokens.saturating_add(cost) > budget {
+            break;
+        }
+        kept_tokens = kept_tokens.saturating_add(cost);
+        keep += 1;
+    }
+    keep
+}
+
+/// Summarize a conversation transcript into a single compaction summary via a
+/// plain-text model call (no tools, no schema).
+async fn summarize(
+    transcript: String,
+    model: &ModelRef,
+    provider: &Arc<dyn Provider>,
+    cx: &ProviderContext,
+) -> AgenkitResult<String> {
+    let request = GenerateRequest {
+        model: model.clone(),
+        system: Some(
+            "You are compacting an agent conversation to fit its context window. \
+             Summarize the transcript below concisely, preserving facts, decisions, \
+             tool results, and open tasks. Output only the summary."
+                .to_string(),
+        ),
+        messages: vec![Message::user(transcript)],
+        tools: Vec::new(),
+        json_schema: None,
+        max_tokens: Some(1024),
+        thinking: Default::default(),
+    };
+    Ok(provider
+        .generate(request, cx)
+        .await
+        .map_err(super::generate::reclassify_overflow)?
+        .text_output())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pocopine_agenkit_core::Role;
+
+    fn msg(text: &str) -> Message {
+        Message::new(Role::User, text)
+    }
+
+    #[test]
+    fn recent_keep_count_is_token_bounded_not_count_bounded() {
+        // Tiny messages + a generous budget → keep all but one (≥1 to summarize).
+        let tiny: Vec<Message> = (0..4).map(|i| msg(&format!("m{i}"))).collect();
+        assert_eq!(recent_keep_count(&tiny, 10_000), 3);
+
+        // A huge most-recent turn that alone exceeds the budget → keep 0, so it is
+        // summarized; the kept tail can never itself re-overflow the window.
+        let huge = msg(&"x".repeat(40_000)); // ~10k tokens
+        let mixed = vec![msg("a"), msg("b"), msg("c"), huge];
+        assert_eq!(recent_keep_count(&mixed, 2048), 0);
+
+        // Small recent turns accumulate up to the budget, then stop (~1004 tok
+        // each: 2 fit in 2500, the 3rd would be 3012).
+        let many: Vec<Message> = (0..10).map(|_| msg(&"y".repeat(4000))).collect();
+        assert_eq!(recent_keep_count(&many, 2500), 2);
+    }
 }
