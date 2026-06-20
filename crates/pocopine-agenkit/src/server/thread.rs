@@ -148,6 +148,33 @@ pub trait AgentThreadStore: Send + Sync + 'static {
         let _ = (id, owner);
         Box::pin(async move { Ok(None) })
     }
+
+    /// Record a `state-change` provenance entry (model / usage / cost) alongside
+    /// the messages, *without* placing it in the conversation history (it never
+    /// reaches the model). The default is a no-op — provenance is best-effort, so
+    /// a store that doesn't model it simply drops it. A session-backed store writes
+    /// a [`RecordKind::StateChange`] record.
+    fn append_state_change(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+        data: serde_json::Value,
+    ) -> BoxFuture<'_, AgenkitResult<()>> {
+        let _ = (id, owner, data);
+        Box::pin(async move { Ok(()) })
+    }
+
+    /// The `state-change` provenance entries for a thread, in order (the inverse of
+    /// [`append_state_change`](AgentThreadStore::append_state_change)). The default
+    /// is empty — a store that doesn't record provenance has none to return.
+    fn state_changes(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+    ) -> BoxFuture<'_, AgenkitResult<Vec<serde_json::Value>>> {
+        let _ = (id, owner);
+        Box::pin(async move { Ok(Vec::new()) })
+    }
 }
 
 /// The default agent-thread store: agent threads run **on the durable session
@@ -417,6 +444,60 @@ impl AgentThreadStore for SessionThreadStore {
             Ok(Some(AgentThreadId::new(child.id().as_str())))
         })
     }
+
+    fn append_state_change(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+        data: serde_json::Value,
+    ) -> BoxFuture<'_, AgenkitResult<()>> {
+        let sessions = self.sessions.clone();
+        let tid = session::ThreadId::new(id.as_str());
+        let want = owner.key().map(str::to_string);
+        Box::pin(async move {
+            // Owner-scoped, like every other mutation (no existence oracle).
+            if owner_checked_meta(sessions.as_ref(), &tid, want.as_deref())
+                .await?
+                .is_none()
+            {
+                return Err(AgenkitError::not_found("thread not found"));
+            }
+            sessions
+                .append(&tid, RecordKind::StateChange, data)
+                .await
+                .map_err(session_err)?;
+            Ok(())
+        })
+    }
+
+    fn state_changes(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+    ) -> BoxFuture<'_, AgenkitResult<Vec<serde_json::Value>>> {
+        let sessions = self.sessions.clone();
+        let tid = session::ThreadId::new(id.as_str());
+        let want = owner.key().map(str::to_string);
+        Box::pin(async move {
+            if owner_checked_meta(sessions.as_ref(), &tid, want.as_deref())
+                .await?
+                .is_none()
+            {
+                return Ok(Vec::new()); // missing/foreign reads as empty
+            }
+            // The materialized log (a fork includes its inherited prefix), keeping
+            // only the `StateChange` payloads.
+            let records = session::Session::open(sessions.clone(), tid)
+                .history()
+                .await
+                .map_err(session_err)?;
+            Ok(records
+                .into_iter()
+                .filter(|r| r.kind == RecordKind::StateChange)
+                .map(|r| r.data)
+                .collect())
+        })
+    }
 }
 
 /// A handle to a thread within a flow run: its id, the store to reach it, and
@@ -480,6 +561,19 @@ impl AgentThreadHandle {
                 store: self.store.clone(),
                 owner,
             }))
+    }
+
+    /// Record a provenance entry (model / usage / cost) outside the conversation
+    /// history (see [`AgentThreadStore::append_state_change`]).
+    pub async fn append_state_change(&self, data: serde_json::Value) -> AgenkitResult<()> {
+        self.store
+            .append_state_change(&self.id, self.owner(), data)
+            .await
+    }
+
+    /// The provenance entries recorded for this thread, in order.
+    pub async fn state_changes(&self) -> AgenkitResult<Vec<serde_json::Value>> {
+        self.store.state_changes(&self.id, self.owner()).await
     }
 }
 
