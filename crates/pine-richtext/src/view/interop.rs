@@ -32,6 +32,7 @@ use super::root::{
 };
 use crate::runtime::{self, EditorRuntime};
 use crate::state::EditorState;
+use crate::transform::Step;
 
 /// CSS selector the [`Editor`] handle uses to locate the
 /// surface's custom-element host under any DOM ancestor.
@@ -354,6 +355,57 @@ impl Editor {
                 return;
             };
             callback(owned);
+        }) as Box<dyn FnMut(Event)>);
+        let _ =
+            target.add_event_listener_with_callback(DOC_CHANGED_EVENT, cb.as_ref().unchecked_ref());
+        DocChangeSubscription {
+            target,
+            closure: Some(cb),
+        }
+    }
+
+    /// Like [`on_update`](Self::on_update), but also delivers the committed
+    /// transaction's [`Step`](crate::transform::Step)s. A collab binding maps the
+    /// steps to a *fine-grained* CRDT write (one block's text, not the whole doc),
+    /// so concurrent edits converge without loss and peers' cursors survive — see
+    /// `pine_richtext_collab::CollabConnection::push_local_steps`. The `Vec` is
+    /// empty for a transaction with no steps (a selection-only change).
+    pub fn on_update_steps<F, Cb>(&self, mut callback: Cb) -> DocChangeSubscription
+    where
+        F: ContentFormat,
+        Cb: FnMut(F::Owned, Vec<Step>) + 'static,
+    {
+        let runtime = self.resolve_runtime();
+        let target = self.surface.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            let Ok(custom) = event.dyn_into::<CustomEvent>() else {
+                return;
+            };
+            let Ok(detail) = serde_wasm_bindgen::from_value::<Value>(custom.detail()) else {
+                return;
+            };
+            // The extra `steps` field is ignored by `from_json` (it reads only
+            // doc/selection/stored_marks), so the doc reconstruction is unchanged.
+            let Ok(state) = EditorState::from_json(
+                runtime.schema().clone(),
+                runtime_plugins_view(&runtime),
+                detail.clone(),
+            ) else {
+                return;
+            };
+            let Ok(owned) = F::serialize(&state, &runtime) else {
+                return;
+            };
+            let steps = detail
+                .get("steps")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| Step::from_json(runtime.schema(), v.clone()).ok())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            callback(owned, steps);
         }) as Box<dyn FnMut(Event)>);
         let _ =
             target.add_event_listener_with_callback(DOC_CHANGED_EVENT, cb.as_ref().unchecked_ref());

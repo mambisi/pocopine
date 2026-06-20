@@ -597,7 +597,13 @@ impl PineRichTextRoot {
                     }
                 };
                 let from_json_ms = perf_now_ms() - from_json_started_at;
-                let step_count = tr.transform().steps().len();
+                // Capture the transaction's steps (serialized) BEFORE `apply` moves
+                // `tr`, so the doc-changed event can carry them — a collab binding
+                // turns them into a fine-grained CRDT write (see
+                // `Editor::on_update_steps`).
+                let steps_json: Vec<Value> =
+                    tr.transform().steps().iter().map(|s| s.to_json()).collect();
+                let step_count = steps_json.len();
                 if current.doc() != state.doc() {
                     log_debug_json(
                         debug_json,
@@ -663,7 +669,7 @@ impl PineRichTextRoot {
                 let event_started_at = perf_now_ms();
                 let doc_changed_event = !root.suppress_doc_changed;
                 if doc_changed_event {
-                    let slim = doc_changed_event_payload(&next);
+                    let slim = doc_changed_event_payload(&next, steps_json);
                     dispatch_doc_changed_event(&surface_for_inner, &slim);
                 }
                 let event_ms = perf_now_ms() - event_started_at;
@@ -1097,16 +1103,19 @@ fn apply_position(
 }
 
 /// Slim state payload for [`DOC_CHANGED_EVENT`]: `{ doc, selection,
-/// stored_marks }` only. `plugin_state` is intentionally omitted —
+/// stored_marks, steps }`. `plugin_state` is intentionally omitted —
 /// it grows with the user's history and isn't read by any of the
 /// in-tree subscribers (see the call site for the rationale).
 /// Consumers that need a full state snapshot can dispatch
-/// [`EXPORT_STATE_REQUEST_EVENT`] instead.
-fn doc_changed_event_payload(state: &EditorState) -> Value {
+/// [`EXPORT_STATE_REQUEST_EVENT`] instead. `steps` is the
+/// transaction's serialized steps, for a collab binding that maps
+/// them to an incremental CRDT write ([`super::Editor::on_update_steps`]).
+fn doc_changed_event_payload(state: &EditorState, steps: Vec<Value>) -> Value {
     json!({
         "doc": state.doc(),
         "selection": state.selection(),
         "stored_marks": state.stored_marks(),
+        "steps": steps,
     })
 }
 
