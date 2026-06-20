@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, RunId, StepId, StepKind,
-    StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
+    AgenkitError, AgenkitResult, AgentThreadId, CostEstimate, Message, ModelRef, RunId, StepId,
+    StepKind, StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -275,15 +275,16 @@ impl AgentLoop {
     /// and stop when the model answers without tool calls or the step budget is
     /// hit. Appends every produced message (assistant text, tool-call turns, tool
     /// results) to `messages`, emits events, and returns the [`StopReason`].
-    /// Returns the stop reason and the resolved [`ProviderContext`] it used, so
-    /// the caller can reuse the (credential-resolved) context for compaction
-    /// instead of resolving the credential a second time.
+    /// Returns the stop reason, the resolved [`ProviderContext`] it used (so the
+    /// caller can reuse the credential for compaction instead of resolving it a
+    /// second time), and the turn's aggregate token [`Usage`] (summed across its
+    /// model calls, for cost provenance).
     pub(crate) async fn run_turn(
         &self,
         messages: &mut Vec<Message>,
         events: &UnboundedSender<AgentEvent>,
         controls: &TurnControls,
-    ) -> AgenkitResult<(StopReason, ProviderContext)> {
+    ) -> AgenkitResult<(StopReason, ProviderContext, Usage)> {
         let model = self.model()?;
         self.inner.check_model_allowed(&model)?;
         let provider = self.inner.providers.resolve(&model)?;
@@ -334,13 +335,15 @@ impl AgentLoop {
             .with_model(model.clone()),
         );
         // The runtime's observer: the `AgentEvent` firehose *and* (via the wrapped
-        // `TraceObserver`) the trace spans.
+        // `TraceObserver`) the trace spans, accumulating the turn's token usage.
+        let turn_usage = std::sync::Mutex::new(Usage::default());
         let observer = RuntimeObserver {
             trace: TraceObserver {
                 run: &run,
                 agent_step: agent_step.clone(),
             },
             events,
+            turn_usage: &turn_usage,
         };
         // Adapt the `Arc` hook into a borrowable `&dyn Fn` for the shared dispatcher.
         let before = controls.hooks.before_tool_call.as_deref();
@@ -427,7 +430,8 @@ impl AgentLoop {
             ),
         }
 
-        outcome.map(|reason| (reason, cx))
+        let usage = turn_usage.lock().map(|g| *g).unwrap_or_default();
+        outcome.map(|reason| (reason, cx, usage))
     }
 }
 
@@ -438,6 +442,9 @@ impl AgentLoop {
 struct RuntimeObserver<'a> {
     trace: TraceObserver<'a>,
     events: &'a UnboundedSender<AgentEvent>,
+    /// Accumulates token usage across the turn's model calls, so the turn can be
+    /// recorded as one usage provenance entry (P5 cost auditing).
+    turn_usage: &'a std::sync::Mutex<Usage>,
 }
 
 impl LoopObserver for RuntimeObserver<'_> {
@@ -446,6 +453,11 @@ impl LoopObserver for RuntimeObserver<'_> {
     }
 
     fn model_response(&self, step: Option<StepId>, model: &ModelRef, usage: Option<Usage>) {
+        if let Some(u) = usage
+            && let Ok(mut total) = self.turn_usage.lock()
+        {
+            *total = total.merge(u);
+        }
         self.trace.model_response(step, model, usage);
     }
 
@@ -542,6 +554,42 @@ impl AgentSession {
     /// The full stored conversation (every turn, pre-compaction view).
     pub async fn history(&self) -> AgenkitResult<Vec<Message>> {
         self.thread.history().await
+    }
+
+    /// Aggregate token [`Usage`] across this conversation's turns, summed from the
+    /// durable usage provenance (P5). Zero if the backing store doesn't record
+    /// provenance (e.g. a custom store that no-ops `append_state_change`).
+    pub async fn usage(&self) -> AgenkitResult<Usage> {
+        let mut total = Usage::default();
+        for entry in self.thread.state_changes().await? {
+            if entry.get("kind").and_then(serde_json::Value::as_str) == Some("usage")
+                && let Some(u) = entry
+                    .get("usage")
+                    .and_then(|u| serde_json::from_value::<Usage>(u.clone()).ok())
+            {
+                total = total.merge(u);
+            }
+        }
+        Ok(total)
+    }
+
+    /// Aggregate estimated cost across this conversation's turns, summed from the
+    /// durable usage provenance (P5). `None` if no turn recorded a cost (no
+    /// provenance, or no catalog pricing for the model).
+    pub async fn cost(&self) -> AgenkitResult<Option<CostEstimate>> {
+        let mut amount = 0.0;
+        let mut currency: Option<String> = None;
+        for entry in self.thread.state_changes().await? {
+            if let Some(cost) = entry
+                .get("cost")
+                .filter(|c| !c.is_null())
+                .and_then(|c| serde_json::from_value::<CostEstimate>(c.clone()).ok())
+            {
+                currency.get_or_insert(cost.currency);
+                amount += cost.amount;
+            }
+        }
+        Ok(currency.map(|currency| CostEstimate::new(currency, amount)))
     }
 
     /// Prompt the conversation: run one turn and stream its [`AgentEvent`]s. The
@@ -651,7 +699,7 @@ impl AgentSession {
         );
         // Reuse the credential-resolved context the turn already produced for
         // compaction, so a BYOK store isn't hit a second time per prompt.
-        let (reason, cx) = agent_loop
+        let (reason, cx, usage) = agent_loop
             .run_turn(&mut messages, events, &self.controls)
             .await?;
 
@@ -686,6 +734,24 @@ impl AgentSession {
             .or_else(|| self.inner.default_model.clone())
             .ok_or_else(|| AgenkitError::config("agent runtime has no model"))?;
         let provider = self.inner.providers.resolve(&model)?;
+
+        // Record this turn's usage + catalog cost as a provenance entry (P5) — a
+        // `StateChange` outside the conversation history (it never reaches the
+        // model), so a session's running cost is auditable from its durable log.
+        // Best-effort: a provenance write must not fail the prompt.
+        if usage.total() > 0 {
+            let cost = super::catalog::lookup(&model).map(|m| m.estimate_cost(&usage));
+            let _ = self
+                .thread
+                .append_state_change(serde_json::json!({
+                    "kind": "usage",
+                    "model": model.as_str(),
+                    "usage": usage,
+                    "cost": cost,
+                }))
+                .await;
+        }
+
         let max_output = self.config.max_tokens.unwrap_or(1024);
         if let Some((folded, _kept)) =
             super::agent::compact_thread(&self.thread, &model, &provider, &cx, max_output).await?
@@ -847,7 +913,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("use the tool then answer")];
 
-        let (stop, _) = loop_
+        let (stop, _, _) = loop_
             .run_turn(&mut messages, &tx, &TurnControls::default())
             .await
             .unwrap();
@@ -904,7 +970,7 @@ mod tests {
         );
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("go")];
-        let (stop, _) = loop_
+        let (stop, _, _) = loop_
             .run_turn(&mut messages, &tx, &TurnControls::default())
             .await
             .unwrap();
@@ -1005,7 +1071,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut messages = vec![Message::user("hi")];
 
-        let (stop, _) = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
+        let (stop, _, _) = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
         drop(tx);
         assert_eq!(stop, StopReason::Aborted);
         // Aborted before the model call → no assistant text was produced.
@@ -1220,6 +1286,38 @@ mod tests {
             Some(history[1].tool_calls[0].id.as_str())
         );
         assert_eq!(history[3].content.as_text(), "it's sunny");
+    }
+
+    #[tokio::test]
+    async fn turn_usage_and_cost_are_recorded_as_provenance() {
+        // P5: each turn writes a usage `StateChange`; `usage()`/`cost()` aggregate
+        // them from the durable log (a catalog model so cost is resolvable).
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("anthropic")
+                    .default_text("hi")
+                    .with_usage(pocopine_agenkit_core::Usage::new(1_000, 500)),
+            )
+            .default_model(ModelRef::new("anthropic/claude-sonnet-4-6"))
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let _ = session.prompt("first").collect::<Vec<_>>().await;
+        let _ = session.prompt("second").collect::<Vec<_>>().await;
+
+        // Two turns × (1000 in / 500 out) summed from the provenance log.
+        let usage = session.usage().await.unwrap();
+        assert_eq!(usage.input_tokens, 2_000);
+        assert_eq!(usage.output_tokens, 1_000);
+
+        // And the catalog cost, aggregated. sonnet-4-6: in 3.0, out 15.0 per 1e6.
+        let per_turn = (1_000.0 * 3.0 + 500.0 * 15.0) / 1_000_000.0;
+        let cost = session.cost().await.unwrap().expect("a cost was recorded");
+        assert!(
+            (cost.amount - per_turn * 2.0).abs() < 1e-9,
+            "expected ~{}, got {cost:?}",
+            per_turn * 2.0
+        );
     }
 
     #[test]
