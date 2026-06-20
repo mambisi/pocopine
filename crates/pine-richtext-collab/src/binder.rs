@@ -467,6 +467,38 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_conflicting_marks_converge() {
+        // Two writers apply a link with DIFFERENT hrefs to the same range. yrs
+        // last-write-wins on the format value + deterministic normalize-on-read
+        // must reconcile both replicas (design §6).
+        let schema = schema_basic::schema();
+        let mut a = CollabEditor::new(1, schema_basic::schema());
+        let mut b = CollabEditor::new(2, schema_basic::schema());
+        let doc0 = schema_basic::doc(vec![para("hello")]).unwrap();
+        b.apply_remote(&a.set_document(&doc0).unwrap()).unwrap();
+
+        let link_a = Step::AddMark(MarkStep {
+            from: 1,
+            to: 6,
+            mark: schema_basic::link("https://a.example", None::<String>).unwrap(),
+        });
+        let link_b = Step::AddMark(MarkStep {
+            from: 1,
+            to: 6,
+            mark: schema_basic::link("https://b.example", None::<String>).unwrap(),
+        });
+        let da = link_a.apply(&doc0, &schema).unwrap().doc;
+        let db = link_b.apply(&doc0, &schema).unwrap().doc;
+        let ua = a.apply_local(&da, &[link_a]).unwrap();
+        let ub = b.apply_local(&db, &[link_b]).unwrap();
+
+        a.apply_remote(&ub).unwrap();
+        b.apply_remote(&ua).unwrap();
+        // One href wins (LWW), but both replicas agree on which.
+        assert_eq!(a.document().unwrap(), b.document().unwrap());
+    }
+
+    #[test]
     fn codec_round_trips_a_mark_over_an_emoji() {
         // The coarse codec's format-range write must also use byte offsets: bold
         // "a👍" then plain "b". A char-offset format range would mis-cover the
