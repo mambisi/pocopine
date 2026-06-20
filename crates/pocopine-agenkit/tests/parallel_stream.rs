@@ -201,7 +201,7 @@ fn first_success_emits_cancelled_terminal_for_aborted_loser() {
         let value = agenkit
             .flow("race")
             .input(serde_json::json!(null))
-            .stream(tx)
+            .stream_into(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()
@@ -253,7 +253,7 @@ fn streaming_emits_public_flow_events() {
         let value = agenkit
             .flow("answer_with_review")
             .input(serde_json::json!({"q": "how do uploads work?"}))
-            .stream(tx)
+            .stream_into(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()

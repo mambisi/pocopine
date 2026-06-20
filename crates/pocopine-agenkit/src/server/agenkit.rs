@@ -15,9 +15,11 @@ use pocopine_agenkit_core::{
     events,
 };
 use pocopine_auth::Principal;
+use pocopine_core::{ServerError, StreamServerResult};
 use serde::{Serialize, de::DeserializeOwned};
 use std::future::Future;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 tokio::task_local! {
     /// The caller principal in scope for the current request (set by the
@@ -32,7 +34,7 @@ pub async fn with_principal<F: Future>(principal: Principal, future: F) -> F::Ou
     CURRENT_PRINCIPAL.scope(principal, future).await
 }
 
-fn current_principal() -> Principal {
+pub(crate) fn current_principal() -> Principal {
     CURRENT_PRINCIPAL
         .try_with(Clone::clone)
         .unwrap_or_else(|_| Principal::anonymous())
@@ -45,12 +47,15 @@ use super::generate::Ai;
 use super::provider::{Provider, ProviderRegistry};
 use super::retrieval::{AiRetriever, RetrieverRegistry};
 use super::run::RunState;
-use super::thread::{AgentThreadStore, InMemoryThreadStore};
+use super::thread::{AgentThreadStore, SessionThreadStore};
 use super::tool::{AiTool, DynTool, ToolRegistry};
 
 /// Shared, immutable runtime state behind an [`Agenkit`] handle.
 pub(crate) struct AgenkitInner {
     pub(crate) providers: ProviderRegistry,
+    /// Resolves the provider credential per request (W6), possibly per principal
+    /// (BYOK). Defaults to [`EnvCredentials`](super::credentials::EnvCredentials).
+    pub(crate) credentials: Arc<dyn super::credentials::ProviderCredentials>,
     pub(crate) default_model: Option<ModelRef>,
     pub(crate) tools: ToolRegistry,
     pub(crate) retrievers: RetrieverRegistry,
@@ -224,7 +229,7 @@ impl Agenkit {
     /// `.input(..)` is optional (defaults to `null`, which deserializes to a
     /// `()`-input flow); `.principal(..)` is optional (defaults to the ambient
     /// principal scoped by [`crate::server::PrincipalLayer`]); the terminal is
-    /// `.run()` (typed output) or `.stream(sink)` (public [`FlowStreamEvent`]s).
+    /// `.run()` (typed output) or `.stream_into(sink)` (public [`FlowStreamEvent`]s).
     pub fn flow<K: FlowKey>(&self, key: K) -> K::Call {
         key.into_call(self.clone())
     }
@@ -265,6 +270,7 @@ pub struct FlowCall {
     /// and surfaced at the terminal.
     input: AgenkitResult<serde_json::Value>,
     principal: Option<Principal>,
+    request_reasoning: bool,
 }
 
 impl FlowCall {
@@ -274,6 +280,7 @@ impl FlowCall {
             id,
             input: Ok(serde_json::Value::Null),
             principal: None,
+            request_reasoning: false,
         }
     }
 
@@ -291,6 +298,20 @@ impl FlowCall {
         self
     }
 
+    /// Request the model's reasoning ("thinking") text on the [`stream`] wire.
+    /// This is the **caller** half of the reasoning gate: text crosses only when
+    /// this is `true` **and** the flow author permitted it via
+    /// [`Flow::expose_reasoning`](crate::server::Flow::expose_reasoning) (the
+    /// ceiling). Off → only a redacted character count crosses (§D10). A
+    /// `#[server]` fn wires this from the client's request (a query flag/header),
+    /// so the client sees reasoning when it asks and the author allows.
+    ///
+    /// [`stream`]: FlowCall::stream
+    pub fn request_reasoning(mut self, requested: bool) -> Self {
+        self.request_reasoning = requested;
+        self
+    }
+
     /// Run the flow and deserialize its typed output. `O` is inferred from the
     /// binding (`Value` works for untyped output). Emits `ai_flow_started` /
     /// `ai_flow_completed` / `ai_flow_failed` under a fresh trace tree.
@@ -304,10 +325,20 @@ impl FlowCall {
             .map_err(|err| AgenkitError::validation(format!("flow `{}` output: {err}", self.id)))
     }
 
-    /// Run the flow streaming public [`FlowStreamEvent`]s into `sink` (client-
-    /// safe by construction, §D8). Returns the final raw output (which also
-    /// rides the sink as `OutputDelta`/`OutputCompleted`).
-    pub async fn stream(
+    /// Stream the flow's [`FlowStreamEvent`]s into a caller-owned `sink`,
+    /// returning the final raw output (which also rides the sink as
+    /// `OutputDelta`/`OutputCompleted`).
+    ///
+    /// **Full fidelity, server-side.** Unlike [`stream`](FlowCall::stream) (the
+    /// wire boundary), this applies **no** redaction or [`StreamMode`] cap — the
+    /// sink receives every event verbatim, including `ThinkingDelta` carrying the
+    /// model's raw reasoning text. It is for trusted in-process consumers (a dev
+    /// building/observing an agent). Do **not** forward these events to an
+    /// untrusted client as-is; use [`stream`](FlowCall::stream), which gates
+    /// reasoning (author ceiling × caller request) and enforces visibility (§D10).
+    ///
+    /// [`StreamMode`]: pocopine_agenkit_core::StreamMode
+    pub async fn stream_into(
         self,
         sink: UnboundedSender<FlowStreamEvent>,
     ) -> AgenkitResult<serde_json::Value> {
@@ -315,6 +346,35 @@ impl FlowCall {
         self.agenkit
             .run_flow_inner(&self.id, input, self.principal, Some(sink))
             .await
+    }
+
+    /// Expose this flow as a streaming `#[server]` fn (RFC-107): returns a
+    /// [`StreamServerResult`] of redacted public [`FlowStreamEvent`]s. Only a
+    /// `public` flow is reachable (a private one is indistinguishable from
+    /// unknown); the author-declared [`StreamMode`](pocopine_agenkit_core::StreamMode)
+    /// caps visibility (§D8). Reasoning text crosses only when the author allowed
+    /// it (`expose_reasoning()`) **and** the caller asked via
+    /// [`request_reasoning`](FlowCall::request_reasoning).
+    ///
+    /// ```ignore
+    /// #[server(public)]
+    /// pub async fn summarize_stream(input: In, want_reasoning: bool)
+    ///     -> StreamServerResult<FlowStreamEvent>
+    /// {
+    ///     active_plugin::<Agenkit>().unwrap()
+    ///         .flow("summarize").input(input)
+    ///         .request_reasoning(want_reasoning) // from the client's request
+    ///         .stream()
+    /// }
+    /// ```
+    pub fn stream(self) -> StreamServerResult<FlowStreamEvent> {
+        stream_flow_to_client(
+            self.agenkit,
+            self.id,
+            self.input,
+            self.principal,
+            self.request_reasoning,
+        )
     }
 }
 
@@ -325,6 +385,7 @@ pub struct TypedFlowCall<F: FlowDef> {
     agenkit: Agenkit,
     input: AgenkitResult<serde_json::Value>,
     principal: Option<Principal>,
+    request_reasoning: bool,
     _marker: PhantomData<fn() -> F>,
 }
 
@@ -337,6 +398,7 @@ impl<F: FlowDef> TypedFlowCall<F> {
             agenkit,
             input: Ok(serde_json::Value::Null),
             principal: None,
+            request_reasoning: false,
             _marker: PhantomData,
         }
     }
@@ -356,6 +418,15 @@ impl<F: FlowDef> TypedFlowCall<F> {
         self
     }
 
+    /// Request the model's reasoning text on the [`stream`](TypedFlowCall::stream)
+    /// wire — see [`FlowCall::request_reasoning`]. Honored only when the author
+    /// also permitted it via
+    /// [`Flow::expose_reasoning`](crate::server::Flow::expose_reasoning).
+    pub fn request_reasoning(mut self, requested: bool) -> Self {
+        self.request_reasoning = requested;
+        self
+    }
+
     /// Run the flow, returning its [`FlowDef::Output`] (inferred — no turbofish).
     /// Emits `ai_flow_started` / `ai_flow_completed` / `ai_flow_failed` under a
     /// fresh trace tree.
@@ -369,10 +440,15 @@ impl<F: FlowDef> TypedFlowCall<F> {
             .map_err(|err| AgenkitError::validation(format!("flow `{}` output: {err}", F::ID)))
     }
 
-    /// Run the flow streaming public [`FlowStreamEvent`]s into `sink` (client-
-    /// safe by construction, §D8). Returns the final typed [`FlowDef::Output`]
-    /// (which also rides the sink as `OutputDelta`/`OutputCompleted`).
-    pub async fn stream(self, sink: UnboundedSender<FlowStreamEvent>) -> AgenkitResult<F::Output> {
+    /// Stream the flow's [`FlowStreamEvent`]s into a caller-owned `sink`,
+    /// returning the final typed [`FlowDef::Output`]. **Full fidelity,
+    /// server-side** — no redaction or [`StreamMode`](pocopine_agenkit_core::StreamMode)
+    /// cap is applied (raw `ThinkingDelta` text included); for an untrusted client
+    /// use [`stream`](TypedFlowCall::stream). See [`FlowCall::stream_into`].
+    pub async fn stream_into(
+        self,
+        sink: UnboundedSender<FlowStreamEvent>,
+    ) -> AgenkitResult<F::Output> {
         let input = self.input?;
         let output = self
             .agenkit
@@ -381,12 +457,73 @@ impl<F: FlowDef> TypedFlowCall<F> {
         serde_json::from_value(output)
             .map_err(|err| AgenkitError::validation(format!("flow `{}` output: {err}", F::ID)))
     }
+
+    /// Expose this flow as a streaming `#[server]` fn (RFC-107). See
+    /// [`FlowCall::stream`].
+    pub fn stream(self) -> StreamServerResult<FlowStreamEvent> {
+        stream_flow_to_client(
+            self.agenkit,
+            F::ID.to_string(),
+            self.input,
+            self.principal,
+            self.request_reasoning,
+        )
+    }
+}
+
+/// Shared body of `FlowCall`/`TypedFlowCall`'s `stream`: gate the flow
+/// as `public`, spawn it under the caller principal feeding a channel, and
+/// return a redacted [`StreamServerResult`] of public [`FlowStreamEvent`]s. The
+/// redaction chokepoint ([`super::bridge::stream_filter`]) is applied to every
+/// event before it reaches the SSE frame (§D8/§D10).
+fn stream_flow_to_client(
+    agenkit: Agenkit,
+    id: String,
+    input: AgenkitResult<serde_json::Value>,
+    principal: Option<Principal>,
+    request_reasoning: bool,
+) -> StreamServerResult<FlowStreamEvent> {
+    use futures::StreamExt;
+
+    // Only public flows are reachable; a private one is indistinguishable from
+    // an unknown one (§D9/§D10).
+    if !agenkit.flow_is_public(&id) {
+        return Err(ServerError::bad_request("unknown AI flow"));
+    }
+    // An input-serialization error is the outer (handshake-level) failure.
+    let input = input.map_err(|e| super::bridge::to_server_error(&e))?;
+    // The author-declared visibility cap; the filter is the wire chokepoint (§D8).
+    let mode = agenkit.flow_stream_mode(&id);
+    // Reasoning text crosses only when the author permits it (the ceiling) AND
+    // the caller requested it; either off → only a redacted count crosses (§D10),
+    // so a public flow's reasoning can't be extracted by a caller it didn't opt in.
+    let expose_reasoning = agenkit.flow_exposes_reasoning(&id) && request_reasoning;
+    // Capture the ambient principal now — the spawned task loses the task-local.
+    let principal = principal.unwrap_or_else(current_principal);
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let _ = agenkit
+            .run_flow_inner(&id, input, Some(principal), Some(tx))
+            .await;
+    });
+
+    let stream = UnboundedReceiverStream::new(rx)
+        .filter_map(move |event| async move {
+            // Per-flow reasoning gate first (strip text unless exposed), then the
+            // visibility-cap chokepoint — both before the event hits the wire.
+            let event = super::bridge::redact_reasoning(event, expose_reasoning);
+            super::bridge::stream_filter(&event, mode).then_some(Ok::<_, ServerError>(event))
+        })
+        .boxed();
+    Ok(stream)
 }
 
 /// Builder for [`Agenkit`].
 #[derive(Default)]
 pub struct AgenkitBuilder {
     providers: ProviderRegistry,
+    credentials: Option<Arc<dyn super::credentials::ProviderCredentials>>,
     default_model: Option<ModelRef>,
     tools: ToolRegistry,
     retrievers: RetrieverRegistry,
@@ -407,6 +544,15 @@ impl AgenkitBuilder {
     /// Register an already-shared provider.
     pub fn provider_arc(mut self, provider: Arc<dyn Provider>) -> Self {
         self.providers.register(provider);
+        self
+    }
+
+    /// Set the credential store that resolves provider credentials per request,
+    /// optionally per principal (BYOK, W6). Defaults to
+    /// [`EnvCredentials`](super::credentials::EnvCredentials) — `{PROVIDER}_API_KEY`
+    /// from the environment.
+    pub fn credentials(mut self, store: Arc<dyn super::credentials::ProviderCredentials>) -> Self {
+        self.credentials = Some(store);
         self
     }
 
@@ -497,6 +643,9 @@ impl AgenkitBuilder {
         Ok(Agenkit {
             inner: Arc::new(AgenkitInner {
                 providers: self.providers,
+                credentials: self
+                    .credentials
+                    .unwrap_or_else(|| Arc::new(super::credentials::EnvCredentials)),
                 default_model: self.default_model,
                 tools: self.tools,
                 retrievers: self.retrievers,
@@ -505,7 +654,7 @@ impl AgenkitBuilder {
                 state: Arc::new(self.state),
                 thread_store: self
                     .thread_store
-                    .unwrap_or_else(|| Arc::new(InMemoryThreadStore::new())),
+                    .unwrap_or_else(|| Arc::new(SessionThreadStore::in_memory())),
                 model_allowlist: (!self.model_allowlist.is_empty()).then_some(self.model_allowlist),
                 run_seq: AtomicU64::new(0),
             }),

@@ -31,7 +31,7 @@ fn flow_streams_incremental_output_deltas() {
         let value = agenkit
             .flow("chat")
             .input(serde_json::Value::Null)
-            .stream(tx)
+            .stream_into(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()
@@ -91,7 +91,7 @@ fn structured_flow_streams_partial_objects() {
         let value = agenkit
             .flow("summarize")
             .input(serde_json::Value::Null)
-            .stream(tx)
+            .stream_into(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()
@@ -162,7 +162,7 @@ fn non_streaming_flow_still_emits_the_result_once() {
         let value = agenkit
             .flow("computed")
             .input(serde_json::Value::Null)
-            .stream(tx)
+            .stream_into(tx)
             .await
             .unwrap();
         serde_json::from_value(value).unwrap()

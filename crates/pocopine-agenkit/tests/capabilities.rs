@@ -9,7 +9,8 @@ mod common;
 use common::block_on;
 use pocopine_agenkit::server::{
     Agenkit, AiAgent, AiAgentBuilder, AiFlowContext, AiTool, AiToolContext, BoxFuture, BoxStream,
-    Flow, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities, StreamChunk,
+    Flow, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities, ProviderContext,
+    StreamChunk,
 };
 use pocopine_agenkit_core::{AgenkitResult, ModelRef, ToolDescriptor};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ impl Provider for NoToolsProvider {
     fn generate<'a>(
         &'a self,
         _request: GenerateRequest,
+        _cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
         Box::pin(async move { Ok(GenerateResponse::text("unused")) })
     }
@@ -40,6 +42,7 @@ impl Provider for NoToolsProvider {
     fn generate_stream<'a>(
         &'a self,
         _request: GenerateRequest,
+        _cx: &'a ProviderContext,
     ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
         Box::pin(futures::stream::empty())
     }

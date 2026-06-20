@@ -20,6 +20,7 @@ use tracing_subscriber::prelude::*;
 #[derive(Clone, Default)]
 pub struct TraceCapture {
     events: Arc<Mutex<Vec<String>>>,
+    costs: Arc<Mutex<Vec<f64>>>,
 }
 
 impl TraceCapture {
@@ -42,30 +43,52 @@ impl TraceCapture {
             .filter(|n| n.as_str() == name)
             .count()
     }
+
+    /// Every `cost_amount` field value emitted, in order.
+    pub fn costs(&self) -> Vec<f64> {
+        self.costs.lock().unwrap().clone()
+    }
 }
 
-struct EventNameVisitor<'a>(&'a mut Option<String>);
+#[derive(Default)]
+struct EventVisitor {
+    name: Option<String>,
+    cost: Option<f64>,
+}
 
-impl Visit for EventNameVisitor<'_> {
+impl Visit for EventVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "event_name" {
-            *self.0 = Some(value.to_string());
+            self.name = Some(value.to_string());
+        }
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        // `emit_tracing` flattens ObservedEvent fields into positional slots
+        // (`observed_field_<n>_value_f64`), so there is no field literally named
+        // `cost_amount`. The only non-zero f64 emitted for an `ai_model_response`
+        // is the cost amount (token counts are integers).
+        if value != 0.0 && field.name().ends_with("_value_f64") {
+            self.cost = Some(value);
         }
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
-        if field.name() == "event_name" && self.0.is_none() {
-            *self.0 = Some(format!("{value:?}").trim_matches('"').to_string());
+        if field.name() == "event_name" && self.name.is_none() {
+            self.name = Some(format!("{value:?}").trim_matches('"').to_string());
         }
     }
 }
 
 impl<S: Subscriber> Layer<S> for TraceCapture {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        let mut name = None;
-        event.record(&mut EventNameVisitor(&mut name));
-        if let Some(name) = name {
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
+        if let Some(name) = visitor.name {
             self.events.lock().unwrap().push(name);
+        }
+        if let Some(cost) = visitor.cost {
+            self.costs.lock().unwrap().push(cost);
         }
     }
 }

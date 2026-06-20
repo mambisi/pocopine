@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Content, FlowStreamEvent, Message, ModelRef, Role, StepId,
-    StepKind, StepStatus, Usage, events,
+    AgenkitError, AgenkitResult, Content, ContentPart, FlowStreamEvent, Message, ModelRef, Role,
+    StepId, StepKind, StepStatus, ThinkingLevel, TraceEvent, Usage, events,
 };
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -29,6 +29,7 @@ pub struct Ai {
     system: Option<String>,
     messages: Vec<Message>,
     max_tokens: Option<u32>,
+    thinking: ThinkingLevel,
     tracer: Option<Arc<RunState>>,
     parent_step: Option<StepId>,
 }
@@ -41,6 +42,7 @@ impl Ai {
             system: None,
             messages: Vec::new(),
             max_tokens: None,
+            thinking: ThinkingLevel::Off,
             tracer: None,
             parent_step: None,
         }
@@ -83,6 +85,19 @@ impl Ai {
         self
     }
 
+    /// Request model reasoning ("thinking") at the given level (roadmap W4).
+    ///
+    /// Providers map the level to their own knob — Anthropic's `budget_tokens`,
+    /// OpenAI's `reasoning_effort` — and only honour it for reasoning-capable
+    /// models (per the catalog); others ignore it. The default is
+    /// [`ThinkingLevel::Off`]. Any reasoning the model emits rides the response's
+    /// content server-side for replay/observability but is never streamed to the
+    /// client (§D10).
+    pub fn thinking(mut self, level: ThinkingLevel) -> Self {
+        self.thinking = level;
+        self
+    }
+
     /// Switch to typed structured output for `T`.
     ///
     /// `T` must derive `schemars::JsonSchema` so the runtime can constrain the
@@ -117,7 +132,30 @@ impl Ai {
             tools: Vec::new(),
             json_schema,
             max_tokens: self.max_tokens,
+            thinking: self.thinking,
         })
+    }
+
+    /// The caller principal used for per-request credential resolution: the run's
+    /// principal inside a flow, else the ambient task-local (anonymous outside a
+    /// request).
+    fn principal(&self) -> pocopine_auth::Principal {
+        self.tracer
+            .as_ref()
+            .map(|run| run.principal.clone())
+            .unwrap_or_else(super::agenkit::current_principal)
+    }
+
+    /// Resolve the provider credential for this request (W6). The store may
+    /// return a per-principal override (BYOK); `None` lets the provider fall back
+    /// to its built-in credential.
+    async fn provider_context(
+        &self,
+        alias: &str,
+    ) -> AgenkitResult<super::provider::ProviderContext> {
+        let principal = self.principal();
+        let credential = self.inner.credentials.resolve(alias, &principal).await?;
+        Ok(super::provider::ProviderContext::for_request(credential))
     }
 
     async fn run(&self, json_schema: Option<serde_json::Value>) -> AgenkitResult<GenerateResponse> {
@@ -125,10 +163,15 @@ impl Ai {
         self.inner.check_model_allowed(&request.model)?;
         let provider = self.inner.providers.resolve(&request.model)?;
         apply_structured_fallback(&mut request, provider.as_ref());
+        let cx = self.provider_context(provider.id()).await?;
         let model = request.model.clone();
+        let model_meta = super::catalog::lookup(&model);
 
         let Some(run) = &self.tracer else {
-            return provider.generate(request).await;
+            return provider
+                .generate(request, &cx)
+                .await
+                .map_err(reclassify_overflow);
         };
 
         let step_id = run.next_step_id();
@@ -143,9 +186,15 @@ impl Ai {
         if let Some(parent) = &self.parent_step {
             started = started.with_parent(parent.clone());
         }
+        if let Some(meta) = model_meta {
+            started = annotate_headroom(started, meta, &request.messages, request.max_tokens);
+        }
         run.emit(started);
 
-        let result = provider.generate(request).await;
+        let result = provider
+            .generate(request, &cx)
+            .await
+            .map_err(reclassify_overflow);
         match &result {
             Ok(response) => {
                 let mut completed = run
@@ -158,6 +207,9 @@ impl Ai {
                     .with_model(model);
                 if let Some(usage) = response.usage {
                     completed = completed.with_usage(usage);
+                    if let Some(meta) = model_meta {
+                        completed = completed.with_cost(meta.estimate_cost(&usage));
+                    }
                 }
                 run.emit(completed);
             }
@@ -209,7 +261,9 @@ impl Ai {
         self.inner.check_model_allowed(&request.model)?;
         let provider = self.inner.providers.resolve(&request.model)?;
         apply_structured_fallback(&mut request, provider.as_ref());
+        let cx = self.provider_context(provider.id()).await?;
         let model = request.model.clone();
+        let model_meta = super::catalog::lookup(&model);
 
         let model_step = self.tracer.as_ref().map(|run| {
             let step_id = run.next_step_id();
@@ -225,6 +279,9 @@ impl Ai {
             if let Some(parent) = &self.parent_step {
                 started = started.with_parent(parent.clone());
             }
+            if let Some(meta) = model_meta {
+                started = annotate_headroom(started, meta, &request.messages, request.max_tokens);
+            }
             run.emit(started);
             step_id
         });
@@ -233,17 +290,32 @@ impl Ai {
         // when supported, else fall back to a one-shot generation adapted to the
         // streaming contract (§D13).
         let mut stream = if provider.capabilities().streaming {
-            provider.generate_stream(request)
+            provider.generate_stream(request, &cx)
         } else {
-            super::provider::fallback_stream(provider.as_ref(), request)
+            super::provider::fallback_stream(provider.as_ref(), request, &cx)
         };
         let mut text = String::new();
+        let mut thinking_parts: Vec<ContentPart> = Vec::new();
         let mut tool_calls = Vec::new();
         let mut usage = None;
         let mut failure = None;
         let mut last_partial: Option<serde_json::Value> = None;
         while let Some(chunk) = stream.next().await {
             match chunk {
+                // Reasoning rides the assembled response server-side (replay +
+                // observability). The client event carries the text too, but the
+                // wire boundary (`redact_reasoning`) strips it unless the flow
+                // opted in — so the redacted default is a count-only signal, and
+                // an opted-in flow gets the full reasoning text (§D10).
+                Ok(StreamChunk::Thinking { text, signature }) => {
+                    if let Some(run) = &self.tracer {
+                        run.stream(FlowStreamEvent::ThinkingDelta {
+                            chars: text.chars().count() as u32,
+                            text: Some(text.clone()),
+                        });
+                    }
+                    thinking_parts.push(ContentPart::thinking(text, signature));
+                }
                 Ok(StreamChunk::Text(delta)) => {
                     text.push_str(&delta);
                     if let Some(run) = &self.tracer {
@@ -279,7 +351,17 @@ impl Ai {
                     }
                 }
                 Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
-                Ok(StreamChunk::Usage(reported)) => usage = Some(reported),
+                Ok(StreamChunk::Usage(reported)) => {
+                    usage = Some(reported);
+                    if let Some(run) = &self.tracer {
+                        run.stream(FlowStreamEvent::UsageUpdate {
+                            input_tokens: reported.input_tokens,
+                            output_tokens: reported.output_tokens,
+                            cache_read_tokens: reported.cache_read_tokens,
+                            cache_creation_tokens: reported.cache_creation_tokens,
+                        });
+                    }
+                }
                 Err(error) => {
                     failure = Some(error);
                     break;
@@ -289,15 +371,24 @@ impl Ai {
         drop(stream);
 
         let result = match failure {
-            Some(error) => Err(error),
+            Some(error) => Err(reclassify_overflow(error)),
             None => {
                 let finish_reason = if tool_calls.is_empty() {
                     FinishReason::Stop
                 } else {
                     FinishReason::ToolCalls
                 };
+                // Reasoning parts (if any) precede the answer text — they ride
+                // the content server-side for replay; `as_text()` skips them so
+                // the user-visible output stays text-only.
+                let content = if thinking_parts.is_empty() {
+                    Content::text(text)
+                } else {
+                    thinking_parts.push(ContentPart::text(text));
+                    Content::from_parts(thinking_parts)
+                };
                 Ok(GenerateResponse {
-                    content: Content::text(text),
+                    content,
                     tool_calls,
                     usage,
                     finish_reason,
@@ -318,6 +409,9 @@ impl Ai {
                         .with_model(model);
                     if let Some(usage) = response.usage {
                         completed = completed.with_usage(usage);
+                        if let Some(meta) = model_meta {
+                            completed = completed.with_cost(meta.estimate_cost(&usage));
+                        }
                     }
                     run.emit(completed);
                 }
@@ -362,6 +456,40 @@ fn apply_structured_fallback(request: &mut GenerateRequest, provider: &dyn Provi
     });
 }
 
+/// Reclassify a provider error as [`AgenkitError::ContextOverflow`] when its
+/// message matches a known "input too long" shape (W3), so callers and W7
+/// compaction can branch on the kind instead of an opaque provider error.
+pub(crate) fn reclassify_overflow(err: AgenkitError) -> AgenkitError {
+    if let AgenkitError::Provider { message } = &err
+        && super::overflow::is_context_overflow(message)
+    {
+        return AgenkitError::context_overflow(message.clone());
+    }
+    err
+}
+
+/// Annotate a model-request trace event with a proactive context-overflow
+/// prediction (counts only — redaction-safe) when the estimated input plus the
+/// reserved output budget would exceed the model's window. Advisory: it never
+/// errors or truncates; W7 owns the compaction decision.
+fn annotate_headroom(
+    event: TraceEvent,
+    model: &super::catalog::Model,
+    messages: &[Message],
+    max_tokens: Option<u32>,
+) -> TraceEvent {
+    let max_output = max_tokens.unwrap_or(model.max_output);
+    let headroom = super::overflow::context_headroom(model, messages, max_output);
+    if headroom.over {
+        event
+            .with_field("context_overflow_predicted", true)
+            .with_field("estimated_input_tokens", headroom.estimated_input_tokens)
+            .with_field("context_window", headroom.context_window)
+    } else {
+        event
+    }
+}
+
 /// An [`Ai`] request bound to a structured output type `T`.
 pub struct AiStructured<T> {
     ai: Ai,
@@ -384,6 +512,12 @@ impl<T: DeserializeOwned + JsonSchema> AiStructured<T> {
     /// Append a user prompt message.
     pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
         self.ai = self.ai.prompt(prompt);
+        self
+    }
+
+    /// Request model reasoning ("thinking") at the given level (roadmap W4).
+    pub fn thinking(mut self, level: ThinkingLevel) -> Self {
+        self.ai = self.ai.thinking(level);
         self
     }
 
@@ -440,7 +574,7 @@ mod tests {
     use super::super::agenkit::Agenkit;
     use super::super::provider::{
         BoxFuture, BoxStream, GenerateRequest, GenerateResponse, MockProvider, Provider,
-        ProviderCapabilities, StreamChunk,
+        ProviderCapabilities, ProviderContext, StreamChunk,
     };
     use pocopine_agenkit_core::{AgenkitResult, ModelRef};
     use serde::Deserialize;
@@ -484,6 +618,7 @@ mod tests {
         fn generate<'a>(
             &'a self,
             request: GenerateRequest,
+            _cx: &'a ProviderContext,
         ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
             *self.last_system.lock().unwrap() = request.system.clone();
             let structured = request.json_schema.is_some();
@@ -499,12 +634,13 @@ mod tests {
         fn generate_stream<'a>(
             &'a self,
             request: GenerateRequest,
+            _cx: &'a ProviderContext,
         ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
             assert!(
                 !self.panic_on_stream,
                 "runtime must not call generate_stream when streaming is unsupported"
             );
-            super::super::provider::fallback_stream(self, request)
+            super::super::provider::fallback_stream(self, request, _cx)
         }
     }
 
@@ -646,5 +782,47 @@ mod tests {
         let schema = super::json_schema_for::<Summary>();
         assert_eq!(schema["properties"]["title"]["type"], "string");
         assert!(schema["properties"].get("words").is_some());
+    }
+
+    /// A provider that always rejects with a context-overflow-shaped message.
+    struct OverflowProvider;
+
+    impl Provider for OverflowProvider {
+        fn id(&self) -> &str {
+            "overflow"
+        }
+
+        fn generate<'a>(
+            &'a self,
+            _request: GenerateRequest,
+            _cx: &'a ProviderContext,
+        ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
+            Box::pin(async {
+                Err(pocopine_agenkit_core::AgenkitError::provider(
+                    "This model's maximum context length is 8192 tokens, however you requested 9000",
+                ))
+            })
+        }
+
+        fn generate_stream<'a>(
+            &'a self,
+            request: GenerateRequest,
+            _cx: &'a ProviderContext,
+        ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
+            super::super::provider::fallback_stream(self, request, _cx)
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_overflow_is_reclassified_unary_and_streamed() {
+        let agenkit = Agenkit::builder()
+            .provider(OverflowProvider)
+            .default_model(ModelRef::new("overflow/x"))
+            .build()
+            .unwrap();
+        let unary = agenkit.ai().prompt("x").generate_text().await.unwrap_err();
+        assert_eq!(unary.kind(), "context_overflow");
+        let streamed = agenkit.ai().prompt("x").stream_text().await.unwrap_err();
+        assert_eq!(streamed.kind(), "context_overflow");
     }
 }
