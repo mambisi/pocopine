@@ -35,7 +35,7 @@ pub use caret::StickyPoint;
 #[cfg(any(target_arch = "wasm32", test))]
 mod client;
 #[cfg(target_arch = "wasm32")]
-pub use client::{CollabConnection, CollabSyncClient, SyncOutcome};
+pub use client::{CollabConnection, CollabSyncClient, SyncOutcome, random_client_id};
 
 use std::collections::HashMap;
 use std::sync::Arc;

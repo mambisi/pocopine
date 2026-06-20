@@ -86,9 +86,15 @@ pub struct CollabEditor {
 }
 
 impl CollabEditor {
-    /// A new, empty editor with a framework-assigned, globally-unique
-    /// `client_id` (e.g. the realtime `ws-N` session number) — RNG-free, so it
-    /// works on wasm without `getrandom`.
+    /// A new, empty editor with a caller-supplied `client_id`.
+    ///
+    /// `client_id` MUST be unique across **every concurrent writer of this
+    /// document**, including writers on *other* server processes. A per-process
+    /// counter such as the realtime `ws-N` session number is NOT safe: two web
+    /// replicas both start numbering at `ws-1`, so two distinct writers would
+    /// share one yrs client id and silently corrupt the CRDT. Use a random
+    /// 53-bit integer instead (on wasm the `random_client_id` helper mints one
+    /// RNG-free, no `getrandom`).
     pub fn new(client_id: u64, schema: Schema) -> Self {
         let doc = Doc::with_client_id(client_id);
         let root = doc.get_or_insert_xml_fragment("doc");

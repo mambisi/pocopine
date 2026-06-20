@@ -6800,6 +6800,7 @@ name = "pine-richtext-collab"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "js-sys",
  "pine-richtext",
  "pocopine-collab",
  "pocopine-realtime",

@@ -12,4 +12,4 @@ pub use sync::{CollabSyncClient, SyncOutcome};
 #[cfg(target_arch = "wasm32")]
 mod connection;
 #[cfg(target_arch = "wasm32")]
-pub use connection::CollabConnection;
+pub use connection::{CollabConnection, random_client_id};
