@@ -485,12 +485,13 @@ impl AgentThreadStore for SessionThreadStore {
             {
                 return Ok(Vec::new()); // missing/foreign reads as empty
             }
-            // The materialized log (a fork includes its inherited prefix), keeping
-            // only the `StateChange` payloads.
-            let records = session::Session::open(sessions.clone(), tid)
-                .history()
-                .await
-                .map_err(session_err)?;
+            // This thread's OWN records, NOT the materialized parent chain. Each
+            // turn's provenance is recorded on exactly one thread, so a fork reports
+            // only its own usage — summing across the tree never double-counts the
+            // shared prefix (a fork inherits the parent's *messages* for replay, but
+            // not its already-counted usage). It also avoids materializing the full
+            // ancestor log just to keep a handful of provenance rows.
+            let records = sessions.records(&tid).await.map_err(session_err)?;
             Ok(records
                 .into_iter()
                 .filter(|r| r.kind == RecordKind::StateChange)
