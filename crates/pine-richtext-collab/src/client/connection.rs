@@ -126,14 +126,45 @@ impl CollabConnection {
         *self.on_change.borrow_mut() = Some(Rc::new(callback));
     }
 
-    /// Commit a local edit (the coarse v1 write) and broadcast it to peers.
-    /// Returns `Err` if the document can't be encoded; the broadcast itself is
-    /// queued by the transport until the socket is OPEN and the topic is bound.
+    /// Commit a local edit coarsely (a whole-document rebuild) and broadcast it.
+    /// Prefer [`push_local_steps`](Self::push_local_steps) when the editor's
+    /// transaction steps are available — it converges concurrent in-block edits
+    /// and keeps peers' cursors alive.
     pub fn push_local(&self, doc: &Node) -> Result<(), BindError> {
-        let update = self.driver.borrow_mut().push_local(doc)?;
+        self.push_local_steps(doc, &[])
+    }
+
+    /// Commit a local edit as a fine-grained incremental update from the editor's
+    /// transaction `steps` (`new_doc` is the document after them) and broadcast it.
+    /// Structural steps fall back to a coarse rebuild. The broadcast is queued by
+    /// the transport until the socket is OPEN and the topic is bound.
+    pub fn push_local_steps(
+        &self,
+        new_doc: &Node,
+        steps: &[pine_richtext::transform::Step],
+    ) -> Result<(), BindError> {
+        let update = self.driver.borrow_mut().push_local_steps(new_doc, steps)?;
         self.client
             .send_data(&self.topic, COLLAB_SUBPROTOCOL, update.encode());
         Ok(())
+    }
+
+    /// Anchor a model caret/selection endpoint to a [`StickyPoint`](crate::StickyPoint)
+    /// before applying a remote change, then [`resolve_point`](Self::resolve_point)
+    /// it after to restore the caret where it moved to.
+    pub fn point_at(&self, model_pos: usize) -> Result<Option<crate::StickyPoint>, BindError> {
+        self.driver
+            .borrow()
+            .point_at(model_pos)
+            .map_err(BindError::from)
+    }
+
+    /// Resolve a [`StickyPoint`](crate::StickyPoint) to its current model position.
+    pub fn resolve_point(&self, point: &crate::StickyPoint) -> Result<Option<usize>, BindError> {
+        self.driver
+            .borrow()
+            .resolve_point(point)
+            .map_err(BindError::from)
     }
 
     /// The current document.

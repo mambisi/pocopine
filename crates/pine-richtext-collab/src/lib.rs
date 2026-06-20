@@ -24,8 +24,10 @@
 //! live editor binding are follow-ups.
 
 mod binder;
+mod caret;
 mod step_writer;
 pub use binder::{BindError, CollabEditor};
+pub use caret::StickyPoint;
 
 // The browser collab client. Compiled on wasm32 (the real target) and under
 // `test` (so the sync driver is host-tested) — but NOT in a plain host build,
