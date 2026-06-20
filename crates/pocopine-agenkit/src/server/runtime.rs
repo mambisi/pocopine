@@ -206,6 +206,10 @@ impl AgentConfig {
 /// tool payloads from disk. Large payloads are already kept out-of-line by the
 /// `ExternalizingSessionStore`; this is the orthogonal "don't store the bytes at
 /// all" knob.
+///
+/// Scope: this governs the conversational [`AgentSession`] runtime only. The
+/// single-shot typed loop (`ctx.agent::<A>()`) has no session-level policy and
+/// persists its tool turns verbatim.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CapturePolicy {
@@ -227,8 +231,15 @@ fn redact_tool_payloads(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|mut m| {
-            for call in &mut m.tool_calls {
-                call.args = serde_json::json!({ "redacted": true });
+            if !m.tool_calls.is_empty() {
+                // Redact the call arguments AND the assistant turn's own content:
+                // the narration that rides a tool call can echo the same secret,
+                // and a reasoning part carries the provider thinking signature —
+                // both would otherwise persist in the clear.
+                for call in &mut m.tool_calls {
+                    call.args = serde_json::json!({ "redacted": true });
+                }
+                m.content = Content::text("[redacted]");
             }
             if m.tool_call_id.is_some() {
                 m.content = Content::text("[redacted]");
@@ -1431,6 +1442,45 @@ mod tests {
         // The question and the answer are untouched (not tool payloads).
         assert_eq!(history[0].content.as_text(), "weather?");
         assert_eq!(history[3].content.as_text(), "it's sunny");
+    }
+
+    #[test]
+    fn redact_tool_payloads_strips_narration_and_signature_too() {
+        use pocopine_agenkit_core::{Content, ContentPart, ToolCall};
+        // An assistant tool-call turn whose narration AND reasoning signature echo
+        // the secret — both must be scrubbed, not just the args (review #4).
+        let messages = vec![
+            Message::assistant_tool_calls(
+                Content::from_parts(vec![
+                    ContentPart::text("calling echo with key-123"),
+                    ContentPart::thinking("the key is key-123", Some("sig-123".to_string())),
+                ]),
+                vec![ToolCall::new(
+                    "c1",
+                    "echo",
+                    serde_json::json!({ "text": "key-123" }),
+                )],
+            ),
+            Message::tool_result("c1", "{\"echoed\":\"key-123\"}"),
+        ];
+        let redacted = redact_tool_payloads(messages);
+
+        // The tool-call turn: args redacted AND the content (narration + signature)
+        // gone — but the call structure stays for replay coherence.
+        assert_eq!(redacted[0].tool_calls.len(), 1);
+        assert!(
+            redacted[0].tool_calls[0]
+                .args
+                .to_string()
+                .contains("redacted")
+        );
+        let turn0 = format!("{:?}", redacted[0].content);
+        assert!(!turn0.contains("key-123"), "narration leaked: {turn0}");
+        assert!(!turn0.contains("sig-123"), "signature leaked: {turn0}");
+
+        // The tool result: payload gone, linkage kept.
+        assert_eq!(redacted[1].tool_call_id.as_deref(), Some("c1"));
+        assert!(!redacted[1].content.as_text().contains("key-123"));
     }
 
     #[test]
