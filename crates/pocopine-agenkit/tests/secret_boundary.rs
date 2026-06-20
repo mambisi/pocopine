@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use common::block_on;
 use pocopine_agenkit::server::{
     Agenkit, AiFlowContext, BoxFuture, Flow, GenerateRequest, GenerateResponse, Provider,
-    to_server_error,
+    ProviderContext, to_server_error,
 };
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult, FlowStreamEvent, ModelRef};
 
@@ -30,6 +30,7 @@ impl Provider for SecretLeakProvider {
     fn generate<'a>(
         &'a self,
         _request: GenerateRequest,
+        _cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
         Box::pin(async {
             Err(AgenkitError::provider(format!(
@@ -52,6 +53,7 @@ impl Provider for RecordingProvider {
     fn generate<'a>(
         &'a self,
         _request: GenerateRequest,
+        _cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
         self.called.store(true, Ordering::SeqCst);
         Box::pin(async { Ok(GenerateResponse::text("ok")) })
@@ -112,7 +114,7 @@ fn provider_error_does_not_leak_through_the_stream() {
         agenkit
             .flow("ask")
             .input(serde_json::Value::Null)
-            .stream(tx),
+            .stream_into(tx),
     );
 
     let mut joined = String::new();
