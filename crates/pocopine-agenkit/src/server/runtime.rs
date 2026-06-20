@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, Role, RunId, StepId, StepKind,
+    AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, RunId, StepId, StepKind,
     StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
 };
 use pocopine_auth::Principal;
@@ -369,13 +369,15 @@ impl AgentLoop {
 
                 let text = response.text_output();
                 if !text.is_empty() {
-                    let _ = events.send(AgentEvent::AssistantText { text: text.clone() });
+                    let _ = events.send(AgentEvent::AssistantText { text });
                 }
 
                 if response.tool_calls.is_empty() {
-                    // The model answered. Persist the assistant text so the
-                    // conversation replays on resume.
-                    messages.push(Message::new(Role::Assistant, text));
+                    // The model answered. Push the assistant's FULL content (text
+                    // plus any reasoning + provider signature), not just the
+                    // flattened text, so an extended-thinking turn replays
+                    // losslessly on resume (the signature must be replayed verbatim).
+                    messages.push(Message::assistant(response.content.clone()));
                     // Steering: a queued follow-up message continues the turn
                     // ("talk to it mid-run"); otherwise the turn ends.
                     match controls.next_steer() {
@@ -617,7 +619,7 @@ impl AgentSession {
     }
 
     /// One prompt's work: load history → persist the prompt → run the turn →
-    /// persist the answer → compact.
+    /// persist the full turn transcript → compact.
     async fn run_one_prompt(
         &self,
         text: String,
@@ -653,21 +655,20 @@ impl AgentSession {
             .run_turn(&mut messages, events, &self.controls)
             .await?;
 
-        // Persist what the turn produced (everything after the already-stored
-        // prompt): any steered follow-up prompts + the assistant **answers** —
-        // assistant messages with NO tool calls. Narration that rides a tool call,
-        // and tool results, are NOT stored, so resume replays a clean alternating
-        // Q&A rather than a transcript referencing tool calls that are gone.
-        let to_persist: Vec<Message> = messages[persist_from + 1..]
-            .iter()
-            .filter_map(|m| match m.role {
-                Role::User => Some(Message::user(m.content.as_text())),
-                Role::Assistant if m.tool_calls.is_empty() && !m.content.as_text().is_empty() => {
-                    Some(Message::assistant(m.content.as_text()))
-                }
-                _ => None,
-            })
-            .collect();
+        // Persist the FULL turn transcript — everything the turn produced after
+        // the already-stored prompt: the assistant tool-call turns, the tool
+        // results (with their `tool_call_id` linkage), any steered follow-up
+        // prompts, and the final answer (reasoning + signature intact). So resume
+        // replays the exact `Vec<Message>` the model saw, not a lossy Q&A.
+        //
+        // All-or-nothing per turn: this runs only on `run_turn` success, and
+        // `run_turn` only returns `Ok` with a well-formed transcript (every
+        // assistant tool-call is followed by its results). On a turn error nothing
+        // here runs (the pre-stored prompt still survives), so resume never sees a
+        // half-open tool call. (Per-step streaming durability — surviving a crash
+        // *mid-turn* — would need a transactional batch append; tracked as a
+        // follow-up.)
+        let to_persist = messages[persist_from + 1..].to_vec();
         if !to_persist.is_empty() {
             self.thread
                 .store
@@ -784,7 +785,7 @@ mod tests {
     use super::*;
     use crate::server::{Agenkit, AiTool, AiToolContext, BoxFuture, MockProvider};
     use futures::StreamExt;
-    use pocopine_agenkit_core::{ModelRef, ToolDescriptor as Td};
+    use pocopine_agenkit_core::{ModelRef, Role, ToolDescriptor as Td};
     use serde::{Deserialize, Serialize};
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1140,7 +1141,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_tool_using_turn_persists_only_the_question_and_final_answer() {
+    async fn a_tool_using_turn_persists_the_full_transcript() {
         let agenkit = Agenkit::builder()
             .provider(
                 MockProvider::new("local")
@@ -1157,12 +1158,26 @@ mod tests {
             .await
             .unwrap();
         let _ = session.prompt("weather?").collect::<Vec<_>>().await;
-        // The assistant tool-call turn and the tool result are NOT persisted —
-        // only the user question and the final answer (a clean alternating Q&A).
+        // Full fidelity (P2): the user question, the assistant tool-call turn, the
+        // tool result (with its linkage), and the final answer all persist — so
+        // resume replays the exact transcript the model saw, not a lossy Q&A.
         let history = session.history().await.unwrap();
-        assert_eq!(history.len(), 2, "{history:?}");
+        assert_eq!(history.len(), 4, "{history:?}");
+        assert_eq!(history[0].role, Role::User);
         assert_eq!(history[0].content.as_text(), "weather?");
-        assert_eq!(history[1].content.as_text(), "it's sunny");
+        // The assistant's tool-call turn, with the call recorded (linkage intact).
+        assert_eq!(history[1].role, Role::Assistant);
+        assert_eq!(history[1].tool_calls.len(), 1);
+        assert_eq!(history[1].tool_calls[0].tool_id, "echo");
+        // The tool result, answering that call by id.
+        assert_eq!(history[2].role, Role::Tool);
+        assert_eq!(
+            history[2].tool_call_id.as_deref(),
+            Some(history[1].tool_calls[0].id.as_str())
+        );
+        // The final answer.
+        assert_eq!(history[3].role, Role::Assistant);
+        assert_eq!(history[3].content.as_text(), "it's sunny");
     }
 
     #[test]
