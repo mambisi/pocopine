@@ -8,6 +8,9 @@ description = "Server-side CRDT collaboration (yrs) for pocopine apps (RFC 073 P
 
 [features]
 default = []
+# A reference durable `CollabStore` backed by SQLite (native only). Opt-in: it
+# bundles + compiles SQLite. Apps with their own DB implement `CollabStore` instead.
+sqlite = ["dep:rusqlite"]
 
 # The sync core (protocol/sync/doc/error) is target-agnostic: the browser runs
 # yrs in Rust under Option A, so the same handshake code compiles to wasm32.
@@ -28,6 +31,7 @@ tracing = { workspace = true }
 pocopine-observe = { workspace = true }
 pocopine-realtime = { workspace = true }
 pocopine-events = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
