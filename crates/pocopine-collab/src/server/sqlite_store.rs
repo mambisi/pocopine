@@ -8,6 +8,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -27,6 +28,12 @@ impl SqliteCollabStore {
     /// Open (creating if absent) a store at `path`.
     pub fn open(path: impl AsRef<Path>) -> CollabResult<Self> {
         let conn = Connection::open(path).map_err(|err| CollabError::store(err.to_string()))?;
+        // WAL gives atomic, crash-safe commits (a checkpoint either lands whole
+        // or not at all) and lets a reader load while a writer checkpoints — the
+        // standard durable config in this workspace. Irrelevant for `:memory:`,
+        // so only file-backed connections enable it.
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|err| CollabError::store(err.to_string()))?;
         Self::from_connection(conn)
     }
 
@@ -38,6 +45,11 @@ impl SqliteCollabStore {
     }
 
     fn from_connection(conn: Connection) -> CollabResult<Self> {
+        // Retry briefly instead of failing immediately when another connection
+        // holds the write lock (e.g. two processes sharing one file, or WAL
+        // checkpointing) — `SQLITE_BUSY` should not surface as a lost checkpoint.
+        conn.busy_timeout(Duration::from_millis(5_000))
+            .map_err(|err| CollabError::store(err.to_string()))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS collab_snapshots (
                  doc_key      TEXT PRIMARY KEY,
@@ -52,17 +64,21 @@ impl SqliteCollabStore {
         })
     }
 
-    fn lock(&self) -> CollabResult<std::sync::MutexGuard<'_, Connection>> {
+    /// Lock the connection, recovering a poisoned mutex rather than wedging the
+    /// store forever: each method runs one self-contained statement, so a panic
+    /// elsewhere leaves no half-applied transaction to fear, and SQLite's own
+    /// atomicity guards the write.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn
             .lock()
-            .map_err(|_| CollabError::store("sqlite connection mutex poisoned"))
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
 #[async_trait]
 impl CollabStore for SqliteCollabStore {
     async fn load_snapshot(&self, doc_key: &str) -> CollabResult<Option<CollabSnapshot>> {
-        let conn = self.lock()?;
+        let conn = self.lock();
         let row = conn.query_row(
             "SELECT blob, state_vector, last_seq FROM collab_snapshots WHERE doc_key = ?1",
             [doc_key],
@@ -85,7 +101,16 @@ impl CollabStore for SqliteCollabStore {
     }
 
     async fn save_snapshot(&self, doc_key: &str, snapshot: CollabSnapshot) -> CollabResult<()> {
-        let conn = self.lock()?;
+        let conn = self.lock();
+        // SQLite stores INTEGER as i64; the fan-out cursor is u64. A real cursor
+        // (a monotonic publish counter) never approaches i64::MAX. Refuse the
+        // impossible overflow rather than clamp it: clamping would store a cursor
+        // BELOW the one the handler trims the fan-out to (the handler trims at the
+        // true u64 seq), so a restart would resume into an evicted gap. Returning
+        // an error also skips the trim — `checkpoint_and_trim` only trims on a
+        // successful save — keeping the store and the fan-out consistent.
+        let last_seq = i64::try_from(snapshot.last_seq)
+            .map_err(|_| CollabError::store("snapshot cursor exceeds i64::MAX"))?;
         // Monotonic upsert: only overwrite when the new cursor strictly advances,
         // so a lagging replica cannot roll `last_seq` backward into an evicted gap.
         conn.execute(
@@ -100,7 +125,7 @@ impl CollabStore for SqliteCollabStore {
                 doc_key,
                 snapshot.blob.as_ref(),
                 snapshot.state_vector.as_ref(),
-                snapshot.last_seq as i64,
+                last_seq,
             ],
         )
         .map_err(|err| CollabError::store(err.to_string()))?;
