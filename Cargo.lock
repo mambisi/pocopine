@@ -7434,6 +7434,7 @@ dependencies = [
  "axum 0.7.9",
  "bytes",
  "futures-util",
+ "js-sys",
  "pocopine-auth",
  "pocopine-crypto",
  "pocopine-events",
@@ -7444,6 +7445,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

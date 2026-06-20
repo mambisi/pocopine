@@ -4,12 +4,12 @@
 //! value as their payload. JSON (rather than a bespoke binary encoding) keeps
 //! the lifecycle protocol debuggable and forward-compatible; the surrounding
 //! frame envelope is still the binary varUint header from
-//! [`crate::server::frame`].
+//! [`super::frame`].
 //! Data frames never use this module — their payloads are opaque bytes.
 
 use serde::{Deserialize, Serialize};
 
-use super::error::WsError;
+use super::error::ProtocolError;
 use super::frame::Frame;
 
 /// A `(topic, last_seq)` pair used by Heartbeat and Resume. On Resume the
@@ -64,18 +64,19 @@ pub enum Control {
 
 impl Control {
     /// JSON-encode the control body.
-    pub fn encode(&self) -> Result<Vec<u8>, WsError> {
-        serde_json::to_vec(self).map_err(|err| WsError::frame(format!("control encode: {err}")))
+    pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
+        serde_json::to_vec(self)
+            .map_err(|err| ProtocolError::frame(format!("control encode: {err}")))
     }
 
     /// Decode a control body from a control frame payload.
-    pub fn decode(bytes: &[u8]) -> Result<Self, WsError> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolError> {
         serde_json::from_slice(bytes)
-            .map_err(|err| WsError::frame(format!("control decode: {err}")))
+            .map_err(|err| ProtocolError::frame(format!("control decode: {err}")))
     }
 
     /// Wrap this control body in a `FrameKind::Control` frame.
-    pub fn into_frame(&self) -> Result<Frame, WsError> {
+    pub fn into_frame(&self) -> Result<Frame, ProtocolError> {
         Ok(Frame::control(self.encode()?))
     }
 
@@ -99,7 +100,7 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::frame::FrameKind;
+    use crate::protocol::frame::FrameKind;
 
     fn roundtrip(control: Control) {
         let bytes = control.encode().expect("encode");

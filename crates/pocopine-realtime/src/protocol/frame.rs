@@ -17,7 +17,7 @@
 
 use bytes::Bytes;
 
-use super::error::WsError;
+use super::error::ProtocolError;
 use super::varint::{read_var_uint, write_var_uint};
 
 /// Top-level frame discriminant.
@@ -44,13 +44,13 @@ impl FrameKind {
         }
     }
 
-    fn from_u64(value: u64) -> Result<Self, WsError> {
+    fn from_u64(value: u64) -> Result<Self, ProtocolError> {
         match value {
             0 => Ok(Self::Control),
             1 => Ok(Self::Subscribe),
             2 => Ok(Self::Unsubscribe),
             3 => Ok(Self::Data),
-            other => Err(WsError::frame(format!("unknown frame_kind {other}"))),
+            other => Err(ProtocolError::frame(format!("unknown frame_kind {other}"))),
         }
     }
 }
@@ -122,7 +122,7 @@ impl Frame {
     }
 
     /// Decode a frame from a complete WebSocket binary message.
-    pub fn decode(bytes: &[u8]) -> Result<Self, WsError> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolError> {
         let mut pos = 0usize;
         let kind = FrameKind::from_u64(read_var_uint(bytes, &mut pos)?)?;
         let subprotocol_id = read_var_uint(bytes, &mut pos)?;
@@ -139,9 +139,9 @@ impl Frame {
     }
 
     /// Interpret the payload as a UTF-8 string (used for Subscribe frames).
-    pub fn payload_str(&self) -> Result<&str, WsError> {
+    pub fn payload_str(&self) -> Result<&str, ProtocolError> {
         std::str::from_utf8(&self.payload)
-            .map_err(|_| WsError::frame("frame payload is not valid UTF-8"))
+            .map_err(|_| ProtocolError::frame("frame payload is not valid UTF-8"))
     }
 }
 

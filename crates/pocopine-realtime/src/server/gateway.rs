@@ -12,10 +12,6 @@ use super::error::WsError;
 use super::fanout::{Fanout, LocalFanout};
 use super::handler::SubprotocolHandler;
 
-/// WebSocket sub-protocol identifier advertised in `Sec-WebSocket-Protocol`
-/// and the [`crate::Control::Hello`] frame.
-pub const WS_PROTOCOL_V1: &str = "pocopine.ws.v1";
-
 /// Default heartbeat interval the server asks clients to use.
 const DEFAULT_HEARTBEAT_MS: u32 = 15_000;
 /// Default number of missed heartbeat intervals before a connection is a
