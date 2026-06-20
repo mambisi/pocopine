@@ -6,17 +6,19 @@
 //! pointing [`OpenAiProvider::with_base_url`] at the target.
 //!
 //! ```no_run
-//! use pocopine_agenkit::server::Agenkit;
+//! use pocopine_agenkit::server::{Agenkit, models};
 //! use pocopine_agenkit_oai::OpenAiProvider;
 //! use pocopine_agenkit_core::ModelRef;
 //!
 //! let agenkit = Agenkit::builder()
 //!     // Credentials are read from OPENAI_API_KEY — server-only (§D10).
 //!     .provider(OpenAiProvider::from_env("openai").expect("OPENAI_API_KEY"))
-//!     .default_model(ModelRef::new("openai/gpt-4o-mini"))
+//!     .default_model(models::openai::GPT_4O_MINI)              // a typed handle for a known model
+//!     // ...or any open-weight model behind a gateway the catalog doesn't index:
+//!     //   .default_model(ModelRef::new("openrouter/qwen/qwen3"))
 //!     .build()
 //!     .unwrap();
-//! # let _ = agenkit;
+//! # let _ = (agenkit, ModelRef::new("x/y"));
 //! ```
 //!
 //! Supports the full Agenkit contract: text + native **SSE streaming**,
@@ -34,7 +36,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use pocopine_agenkit::server::{
     BoxFuture, BoxStream, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities,
-    StreamChunk,
+    ProviderContext, ProviderCredential, StreamChunk,
 };
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult, SseFraming, ToolCall, ToolNameMap};
 use serde::Deserialize;
@@ -71,7 +73,7 @@ pub enum MaxTokensParam {
 #[derive(Clone)]
 pub struct OpenAiProvider {
     alias: String,
-    api_key: String,
+    credential: ProviderCredential,
     base_url: String,
     organization: Option<String>,
     /// Use native strict `json_schema` structured output (vs `json_object`).
@@ -85,13 +87,27 @@ pub struct OpenAiProvider {
     http: reqwest::Client,
 }
 
+// Hand-rolled so the credential never lands in logs or panic messages (§D10).
+// `ProviderCredential` redacts itself; this also keeps the `reqwest::Client`
+// noise out. (Previously `Debug` was omitted entirely to avoid key leaks.)
+impl std::fmt::Debug for OpenAiProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiProvider")
+            .field("alias", &self.alias)
+            .field("base_url", &self.base_url)
+            .field("organization", &self.organization)
+            .field("credential", &self.credential)
+            .finish()
+    }
+}
+
 impl OpenAiProvider {
     /// A provider serving `alias`, authenticating with `api_key`, against the
     /// default OpenAI base URL.
     pub fn new(alias: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             alias: alias.into(),
-            api_key: api_key.into(),
+            credential: ProviderCredential::api_key(api_key),
             base_url: DEFAULT_BASE_URL.to_string(),
             organization: None,
             strict_schema: true,
@@ -182,12 +198,31 @@ impl OpenAiProvider {
         })
     }
 
+    /// This provider with the per-request credential applied — a cheap clone
+    /// (the `reqwest::Client` is `Arc`-backed). `cx.credential == None` keeps the
+    /// built-in credential, so the rest of the request path is credential-agnostic.
+    fn effective(&self, cx: &ProviderContext) -> Self {
+        match &cx.credential {
+            Some(credential) => Self {
+                credential: credential.clone(),
+                ..self.clone()
+            },
+            None => self.clone(),
+        }
+    }
+
     fn post(&self, wire: &ChatRequest, timeout: Option<Duration>) -> reqwest::RequestBuilder {
-        let mut builder = self
-            .http
-            .post(self.endpoint())
-            .bearer_auth(&self.api_key)
-            .json(wire);
+        let mut builder = self.http.post(self.endpoint()).json(wire);
+        // OpenAI-compatible endpoints authenticate via `Authorization: Bearer` —
+        // both a static key and an OAuth access token (W6.3) use it.
+        builder = match &self.credential {
+            ProviderCredential::ApiKey(s) | ProviderCredential::Bearer(s) => {
+                builder.bearer_auth(s.expose())
+            }
+            // `ProviderCredential` is non_exhaustive: an unmappable scheme is sent
+            // unauthenticated and fails server-side (401), redacted like any error.
+            _ => builder,
+        };
         if let Some(organization) = &self.organization {
             builder = builder.header("OpenAI-Organization", organization);
         }
@@ -263,17 +298,20 @@ impl OpenAiProvider {
         let response = self.send_with_retry(&wire, None).await?;
 
         // `SseFraming` buffers raw bytes and yields whole events; tool-call
-        // fragments accumulate across events until `[DONE]` / EOF.
+        // fragments (and any reasoning text) accumulate across events until
+        // `[DONE]` / EOF.
         let mut bytes = response.bytes_stream();
         let mut framing = SseFraming::new();
         let mut tools: BTreeMap<u32, ToolAccumulator> = BTreeMap::new();
+        let mut thinking = String::new();
 
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk
                 .map_err(|err| AgenkitError::provider(format!("stream read failed: {err}")))?;
             for data in framing.push(&chunk) {
-                if handle_event(&data, &mut tools, &tx) {
-                    // Terminal `[DONE]`: emit the accumulated tool calls and stop.
+                if handle_event(&data, &mut tools, &mut thinking, &tx) {
+                    // Terminal `[DONE]`: emit the accumulated reasoning + tool calls.
+                    emit_thinking(thinking, &tx);
                     emit_tool_calls(tools, &tx, &names);
                     return Ok(());
                 }
@@ -282,8 +320,9 @@ impl OpenAiProvider {
         // A gateway that closes the body right after the last `data:` (no
         // terminating blank line and no `[DONE]`): flush the buffered event.
         if let Some(data) = framing.flush() {
-            handle_event(&data, &mut tools, &tx);
+            handle_event(&data, &mut tools, &mut thinking, &tx);
         }
+        emit_thinking(thinking, &tx);
         emit_tool_calls(tools, &tx, &names);
         Ok(())
     }
@@ -296,6 +335,7 @@ impl OpenAiProvider {
 fn handle_event(
     data: &str,
     tools: &mut BTreeMap<u32, ToolAccumulator>,
+    thinking: &mut String,
     tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
 ) -> bool {
     let data = data.trim();
@@ -304,16 +344,17 @@ fn handle_event(
     }
     // Ignore unparseable keep-alive / comment payloads.
     if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-        apply_event(event, tools, tx);
+        apply_event(event, tools, thinking, tx);
     }
     false
 }
 
-/// Apply one decoded stream event: forward text deltas, accumulate tool-call
-/// fragments by index, and forward usage.
+/// Apply one decoded stream event: forward text deltas, accumulate reasoning and
+/// tool-call fragments, and forward usage.
 fn apply_event(
     event: StreamEvent,
     tools: &mut BTreeMap<u32, ToolAccumulator>,
+    thinking: &mut String,
     tx: &UnboundedSender<AgenkitResult<StreamChunk>>,
 ) {
     // Single completion only: the runtime never requests `n > 1`, and the neutral
@@ -326,6 +367,11 @@ fn apply_event(
             && !content.is_empty()
         {
             let _ = tx.send(Ok(StreamChunk::Text(content)));
+        }
+        // Reasoning deltas (W4) accumulate; the whole block is emitted once at
+        // the terminal (server-side only, never forwarded to the client stream).
+        if let Some(reasoning) = choice.delta.reasoning_content {
+            thinking.push_str(&reasoning);
         }
         for delta in choice.delta.tool_calls {
             let acc = tools.entry(delta.index).or_default();
@@ -377,16 +423,19 @@ impl Provider for OpenAiProvider {
     fn generate<'a>(
         &'a self,
         request: GenerateRequest,
+        cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
-        Box::pin(self.chat(request))
+        let provider = self.effective(cx);
+        Box::pin(async move { provider.chat(request).await })
     }
 
     fn generate_stream<'a>(
         &'a self,
         request: GenerateRequest,
+        cx: &'a ProviderContext,
     ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let provider = self.clone();
+        let provider = self.effective(cx);
         let forward = tx.clone();
         tokio::spawn(async move {
             if let Err(error) = provider.stream_into(request, forward.clone()).await {
@@ -402,6 +451,18 @@ struct ToolAccumulator {
     id: String,
     name: String,
     arguments: String,
+}
+
+/// Emit the accumulated reasoning (W4) as an internal `Thinking` chunk; the
+/// runtime folds it into the assembled response server-side but never streams it
+/// to the client (§D10). OpenAI exposes no replay signature → `None`.
+fn emit_thinking(thinking: String, tx: &UnboundedSender<AgenkitResult<StreamChunk>>) {
+    if !thinking.is_empty() {
+        let _ = tx.send(Ok(StreamChunk::Thinking {
+            text: thinking,
+            signature: None,
+        }));
+    }
 }
 
 fn emit_tool_calls(
@@ -484,13 +545,14 @@ mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = BTreeMap::new();
+        let mut thinking = String::new();
         let mut framing = SseFraming::new();
         // Drive the buffering loop from `stream_into`, chunking every 3 bytes so
         // multi-byte sequences straddle chunk boundaries.
         let mut done = false;
         for chunk in sse.chunks(3) {
             for data in framing.push(chunk) {
-                if handle_event(&data, &mut tools, &tx) {
+                if handle_event(&data, &mut tools, &mut thinking, &tx) {
                     done = true;
                 }
             }
@@ -505,11 +567,12 @@ mod tests {
         // lines; they must join with `\n` and parse as a single event.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = BTreeMap::new();
+        let mut thinking = String::new();
         let mut framing = SseFraming::new();
         for data in
             framing.push(b"data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"joined\"}}]}\n\n")
         {
-            handle_event(&data, &mut tools, &tx);
+            handle_event(&data, &mut tools, &mut thinking, &tx);
         }
         assert_eq!(drain_text(&mut rx), "joined");
     }
@@ -519,12 +582,13 @@ mod tests {
         // A final `data:` event with no terminating blank line and no `[DONE]`.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = BTreeMap::new();
+        let mut thinking = String::new();
         let mut framing = SseFraming::new();
         for data in framing.push(br#"data: {"choices":[{"delta":{"content":"last"}}]}"#) {
-            handle_event(&data, &mut tools, &tx);
+            handle_event(&data, &mut tools, &mut thinking, &tx);
         }
         if let Some(data) = framing.flush() {
-            handle_event(&data, &mut tools, &tx);
+            handle_event(&data, &mut tools, &mut thinking, &tx);
         }
         assert_eq!(drain_text(&mut rx), "last");
     }

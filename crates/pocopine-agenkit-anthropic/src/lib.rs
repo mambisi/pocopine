@@ -6,14 +6,13 @@
 //! apps on Pocopine (default to the latest Claude models).
 //!
 //! ```no_run
-//! use pocopine_agenkit::server::Agenkit;
+//! use pocopine_agenkit::server::{Agenkit, models};
 //! use pocopine_agenkit_anthropic::AnthropicProvider;
-//! use pocopine_agenkit_core::ModelRef;
 //!
 //! let agenkit = Agenkit::builder()
 //!     // Credentials are read from ANTHROPIC_API_KEY — server-only (§D10).
 //!     .provider(AnthropicProvider::from_env("anthropic").expect("ANTHROPIC_API_KEY"))
-//!     .default_model(ModelRef::new("anthropic/claude-opus-4-8"))
+//!     .default_model(models::anthropic::CLAUDE_OPUS_4_8)   // typed handle
 //!     .build()
 //!     .unwrap();
 //! # let _ = agenkit;
@@ -35,7 +34,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use pocopine_agenkit::server::{
     BoxFuture, BoxStream, GenerateRequest, GenerateResponse, Provider, ProviderCapabilities,
-    StreamChunk,
+    ProviderContext, ProviderCredential, StreamChunk,
 };
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, SseFraming, ToolCall, ToolNameMap, Usage,
@@ -69,7 +68,7 @@ const DEFAULT_MAX_RETRIES: u32 = 2;
 #[derive(Clone)]
 pub struct AnthropicProvider {
     alias: String,
-    api_key: String,
+    credential: ProviderCredential,
     base_url: String,
     version: String,
     default_max_tokens: u32,
@@ -78,7 +77,8 @@ pub struct AnthropicProvider {
     http: reqwest::Client,
 }
 
-// Hand-rolled so the API key never lands in logs or panic messages (§D10).
+// Hand-rolled so the credential never lands in logs or panic messages (§D10).
+// `ProviderCredential`/`SecretString` redact themselves, but spell out the rest.
 impl std::fmt::Debug for AnthropicProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnthropicProvider")
@@ -86,7 +86,7 @@ impl std::fmt::Debug for AnthropicProvider {
             .field("base_url", &self.base_url)
             .field("version", &self.version)
             .field("default_max_tokens", &self.default_max_tokens)
-            .field("api_key", &"<redacted>")
+            .field("credential", &self.credential)
             .finish()
     }
 }
@@ -97,7 +97,7 @@ impl AnthropicProvider {
     pub fn new(alias: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             alias: alias.into(),
-            api_key: api_key.into(),
+            credential: ProviderCredential::api_key(api_key),
             base_url: DEFAULT_BASE_URL.to_string(),
             version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             default_max_tokens: DEFAULT_MAX_TOKENS,
@@ -161,6 +161,19 @@ impl AnthropicProvider {
         self
     }
 
+    /// This provider with the per-request credential applied — a cheap clone
+    /// (the `reqwest::Client` is `Arc`-backed). `cx.credential == None` keeps the
+    /// built-in credential, so the rest of the request path is credential-agnostic.
+    fn effective(&self, cx: &ProviderContext) -> Self {
+        match &cx.credential {
+            Some(credential) => Self {
+                credential: credential.clone(),
+                ..self.clone()
+            },
+            None => self.clone(),
+        }
+    }
+
     fn endpoint(&self) -> String {
         format!("{}/messages", self.base_url.trim_end_matches('/'))
     }
@@ -169,9 +182,17 @@ impl AnthropicProvider {
         let mut builder = self
             .http
             .post(self.endpoint())
-            .header("x-api-key", &self.api_key)
             .header("anthropic-version", &self.version)
             .json(wire);
+        // A static key authenticates via `x-api-key`; an OAuth access token
+        // (W6.3) via `Authorization: Bearer` — the Messages API accepts either.
+        builder = match &self.credential {
+            ProviderCredential::ApiKey(key) => builder.header("x-api-key", key.expose()),
+            ProviderCredential::Bearer(token) => builder.bearer_auth(token.expose()),
+            // `ProviderCredential` is non_exhaustive: an unmappable scheme is sent
+            // unauthenticated and fails server-side (401), redacted like any error.
+            _ => builder,
+        };
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
@@ -296,16 +317,19 @@ impl Provider for AnthropicProvider {
     fn generate<'a>(
         &'a self,
         request: GenerateRequest,
+        cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
-        Box::pin(self.message(request))
+        let provider = self.effective(cx);
+        Box::pin(async move { provider.message(request).await })
     }
 
     fn generate_stream<'a>(
         &'a self,
         request: GenerateRequest,
+        cx: &'a ProviderContext,
     ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let provider = self.clone();
+        let provider = self.effective(cx);
         let forward = tx.clone();
         tokio::spawn(async move {
             if let Err(error) = provider.stream_into(request, forward.clone()).await {
@@ -327,14 +351,25 @@ struct ToolAccumulator {
     structured: bool,
 }
 
+/// An accumulating reasoning ("thinking") content block (W4): the text arrives
+/// as `thinking_delta`s and the opaque `signature` once near the end.
+#[derive(Default)]
+struct ThinkingAccumulator {
+    text: String,
+    signature: Option<String>,
+}
+
 /// Applies decoded Anthropic SSE events to the chunk stream, holding the
 /// cross-event tool/usage state. Transport framing (byte buffering, line
 /// splitting, `data:` joining) is handled by
 /// [`pocopine_agenkit_core::SseFraming`].
 struct SseDecoder<'a> {
     tools: BTreeMap<u32, ToolAccumulator>,
+    thinking: BTreeMap<u32, ThinkingAccumulator>,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
     name_map: &'a ToolNameMap,
 }
 
@@ -342,8 +377,11 @@ impl<'a> SseDecoder<'a> {
     fn new(name_map: &'a ToolNameMap) -> Self {
         Self {
             tools: BTreeMap::new(),
+            thinking: BTreeMap::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             name_map,
         }
     }
@@ -367,6 +405,8 @@ impl<'a> SseDecoder<'a> {
             StreamEvent::MessageStart { message } => {
                 if let Some(usage) = message.usage {
                     self.input_tokens = usage.input_tokens;
+                    self.cache_read_tokens = usage.cache_read_input_tokens;
+                    self.cache_creation_tokens = usage.cache_creation_input_tokens;
                 }
             }
             StreamEvent::ContentBlockStart {
@@ -386,6 +426,8 @@ impl<'a> SseDecoder<'a> {
                             structured,
                         },
                     );
+                } else if kind == "thinking" {
+                    self.thinking.insert(index, ThinkingAccumulator::default());
                 }
             }
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
@@ -407,10 +449,23 @@ impl<'a> SseDecoder<'a> {
                         }
                     }
                 }
+                // Reasoning deltas (W4) accumulate per block; the completed block
+                // is emitted on `content_block_stop` (server-side only).
+                StreamDelta::ThinkingDelta { thinking } => {
+                    if let Some(acc) = self.thinking.get_mut(&index) {
+                        acc.text.push_str(&thinking);
+                    }
+                }
+                StreamDelta::SignatureDelta { signature } => {
+                    if let Some(acc) = self.thinking.get_mut(&index) {
+                        acc.signature = Some(signature);
+                    }
+                }
                 StreamDelta::Other => {}
             },
             StreamEvent::ContentBlockStop { index } => {
                 self.emit_tool(index, tx);
+                self.emit_thinking(index, tx);
             }
             StreamEvent::MessageDelta { usage } => {
                 if let Some(usage) = usage {
@@ -420,6 +475,12 @@ impl<'a> SseDecoder<'a> {
                     self.output_tokens = usage.output_tokens;
                     if usage.input_tokens > 0 {
                         self.input_tokens = usage.input_tokens;
+                    }
+                    if usage.cache_read_input_tokens > 0 {
+                        self.cache_read_tokens = usage.cache_read_input_tokens;
+                    }
+                    if usage.cache_creation_input_tokens > 0 {
+                        self.cache_creation_tokens = usage.cache_creation_input_tokens;
                     }
                 }
             }
@@ -443,11 +504,19 @@ impl<'a> SseDecoder<'a> {
         for index in indices {
             self.emit_tool(index, tx);
         }
-        if self.input_tokens > 0 || self.output_tokens > 0 {
-            let _ = tx.send(Ok(StreamChunk::Usage(Usage::new(
-                self.input_tokens,
-                self.output_tokens,
-            ))));
+        let thinking_indices: Vec<u32> = self.thinking.keys().copied().collect();
+        for index in thinking_indices {
+            self.emit_thinking(index, tx);
+        }
+        if self.input_tokens > 0
+            || self.output_tokens > 0
+            || self.cache_read_tokens > 0
+            || self.cache_creation_tokens > 0
+        {
+            let _ = tx.send(Ok(StreamChunk::Usage(
+                Usage::new(self.input_tokens, self.output_tokens)
+                    .with_cache(self.cache_read_tokens, self.cache_creation_tokens),
+            )));
         }
     }
 
@@ -467,6 +536,22 @@ impl<'a> SseDecoder<'a> {
         };
         let name = self.name_map.resolve(&acc.name);
         let _ = tx.send(Ok(StreamChunk::ToolCall(ToolCall::new(acc.id, name, args))));
+    }
+
+    /// Emit a finished reasoning block (W4) as an internal `Thinking` chunk; the
+    /// runtime folds it into the assembled response server-side but never streams
+    /// it to the client (§D10).
+    fn emit_thinking(&mut self, index: u32, tx: &UnboundedSender<AgenkitResult<StreamChunk>>) {
+        let Some(acc) = self.thinking.remove(&index) else {
+            return;
+        };
+        if acc.text.is_empty() && acc.signature.is_none() {
+            return;
+        }
+        let _ = tx.send(Ok(StreamChunk::Thinking {
+            text: acc.text,
+            signature: acc.signature,
+        }));
     }
 }
 

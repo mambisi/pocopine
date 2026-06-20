@@ -6,8 +6,8 @@
 //! network call. Refresh these fixtures if the upstream schema changes.
 
 use futures::StreamExt;
-use pocopine_agenkit::server::{GenerateRequest, Provider, StreamChunk};
-use pocopine_agenkit_core::{Message, ModelRef};
+use pocopine_agenkit::server::{GenerateRequest, Provider, ProviderContext, StreamChunk, models};
+use pocopine_agenkit_core::Message;
 use pocopine_agenkit_oai::OpenAiProvider;
 use serde_json::json;
 use wiremock::matchers::{method, path};
@@ -19,7 +19,7 @@ fn provider(server: &MockServer) -> OpenAiProvider {
 
 fn text_request() -> GenerateRequest {
     GenerateRequest {
-        model: ModelRef::new("openai/gpt-4o-mini"),
+        model: models::openai::GPT_4O_MINI,
         messages: vec![Message::user("hi")],
         ..GenerateRequest::default()
     }
@@ -40,13 +40,15 @@ async fn mount_sse(server: &MockServer, body: &'static str) {
 async fn drain(
     provider: &OpenAiProvider,
 ) -> (String, Vec<pocopine_agenkit_core::ToolCall>, Option<u64>) {
-    let mut stream = provider.generate_stream(text_request());
+    let cx = ProviderContext::default();
+    let mut stream = provider.generate_stream(text_request(), &cx);
     let (mut text, mut tools, mut usage) = (String::new(), Vec::new(), None);
     while let Some(chunk) = stream.next().await {
         match chunk.unwrap() {
             StreamChunk::Text(t) => text.push_str(&t),
             StreamChunk::ToolCall(c) => tools.push(c),
             StreamChunk::Usage(u) => usage = Some(u.total()),
+            StreamChunk::Thinking { .. } => {}
         }
     }
     (text, tools, usage)
@@ -133,7 +135,10 @@ async fn decodes_a_spec_shaped_tool_call_response() {
         .mount(&server)
         .await;
 
-    let response = provider(&server).generate(text_request()).await.unwrap();
+    let response = provider(&server)
+        .generate(text_request(), &ProviderContext::default())
+        .await
+        .unwrap();
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].tool_id, "get_weather");
     assert_eq!(response.tool_calls[0].args, json!({"location": "SF"}));
