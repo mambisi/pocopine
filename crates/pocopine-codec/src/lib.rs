@@ -53,7 +53,7 @@ pub use percent_encoding;
 pub use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 
 /// Encode bytes as a standard (padded) base64 string.
@@ -64,6 +64,20 @@ pub fn base64_encode(bytes: &[u8]) -> String {
 /// Decode a standard (padded) base64 string.
 pub fn base64_decode(encoded: &str) -> Result<Vec<u8>, base64::DecodeError> {
     STANDARD.decode(encoded)
+}
+
+/// Encode bytes as **URL-safe, unpadded** base64 (`-`/`_` alphabet, no `=`).
+///
+/// The base64url variant RFC 7636 (OAuth PKCE `S256`), JWT segments, and URL
+/// query values use — safe to drop into a URL without percent-encoding.
+pub fn base64url_encode(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Decode a **URL-safe, unpadded** base64 string (the counterpart to
+/// [`base64url_encode`]).
+pub fn base64url_decode(encoded: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    URL_SAFE_NO_PAD.decode(encoded)
 }
 
 /// RFC 3986 "component" encode set: everything **except** the unreserved
@@ -160,6 +174,19 @@ mod tests {
     #[test]
     fn invalid_base64_is_rejected() {
         assert!(base64_decode("not valid base64!!!").is_err());
+    }
+
+    #[test]
+    fn base64url_is_url_safe_and_unpadded() {
+        // Bytes that produce `+`, `/`, and padding under standard base64 use the
+        // `-`/`_` alphabet with no `=` under base64url.
+        let bytes = [0xfb_u8, 0xff, 0xbf];
+        assert_eq!(base64_encode(&bytes), "+/+/");
+        assert_eq!(base64url_encode(&bytes), "-_-_");
+        // A length that would pad ("aGk=" standard) is unpadded here.
+        assert_eq!(base64url_encode(b"hi"), "aGk");
+        assert_eq!(base64url_decode("aGk").unwrap(), b"hi");
+        assert_eq!(base64url_decode(&base64url_encode(&bytes)).unwrap(), bytes);
     }
 
     #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
