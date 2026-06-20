@@ -9,18 +9,21 @@ description = "Server-side CRDT collaboration (yrs) for pocopine apps (RFC 073 P
 [features]
 default = []
 
-# Host-only: the yrs engine + sync handshake run server-side (browsers use Yjs
-# JS, not this crate). All deps live under cfg(not(target_arch = "wasm32")) so
-# the crate compiles to an empty lib on wasm32 (client-server-modules skill).
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The sync core (protocol/sync/doc/error) is target-agnostic: the browser runs
+# yrs in Rust under Option A, so the same handshake code compiles to wasm32.
+[dependencies]
 # yrs 0.27 uses `if let` match guards, stabilized in Rust 1.95 (Feb 2026); the
 # workspace nightly (rust-toolchain.toml) is pinned past that, so it builds.
 yrs = "0.27"
 bytes = "1"
+pocopine-crypto = { workspace = true }
+
+# The host-only `server` half (realtime handler + persistence). One cfg gate,
+# the client-server-modules convention.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt"] }
 tracing = { workspace = true }
-pocopine-crypto = { workspace = true }
 pocopine-observe = { workspace = true }
 pocopine-realtime = { workspace = true }
 pocopine-events = { workspace = true }

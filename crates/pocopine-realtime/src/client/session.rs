@@ -115,11 +115,17 @@ impl ClientSession {
                 self.topic_name.insert(topic_ref, topic.clone());
                 SessionEvent::Subscribed { topic, topic_ref }
             }
-            Control::Resumed { topic } => {
+            Control::Resumed { topic } => match self.topic_ref.get(&topic).copied() {
                 // A resumed topic keeps its prior ref; surface it as subscribed.
-                let topic_ref = self.topic_ref.get(&topic).copied().unwrap_or(0);
-                SessionEvent::Subscribed { topic, topic_ref }
-            }
+                Some(topic_ref) => SessionEvent::Subscribed { topic, topic_ref },
+                // A resume for a topic this session never bound (lost ref state /
+                // desync): force a fresh subscribe via Gap rather than fabricate
+                // ref 0, which would mis-route every later frame on the topic.
+                None => SessionEvent::Gap {
+                    topic,
+                    reason: "resume_without_binding".into(),
+                },
+            },
             Control::Unsubscribed { topic } => {
                 if let Some(topic_ref) = self.topic_ref.remove(&topic) {
                     self.topic_name.remove(&topic_ref);
@@ -233,6 +239,22 @@ mod tests {
         // ref is gone; inbound data on the old ref no longer routes.
         let inbound = Frame::data(1, 3, 0, Bytes::from_static(b"x"));
         assert_eq!(s.on_frame(&inbound).unwrap(), None);
+    }
+
+    #[test]
+    fn resume_without_a_bound_ref_surfaces_a_gap() {
+        let mut s = ClientSession::new();
+        // Resumed for a topic this session never acked: must NOT fabricate ref 0.
+        let resumed = Control::Resumed { topic: "t".into() }.into_frame().unwrap();
+        assert_eq!(
+            s.on_frame(&resumed).unwrap(),
+            Some(SessionEvent::Gap {
+                topic: "t".into(),
+                reason: "resume_without_binding".into(),
+            })
+        );
+        // No bogus ref leaked into the maps.
+        assert!(s.data("t", 1, Bytes::from_static(b"x")).is_none());
     }
 
     #[test]

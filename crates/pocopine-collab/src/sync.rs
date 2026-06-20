@@ -15,7 +15,7 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
 
-use super::error::{CollabError, CollabResult};
+use crate::error::{CollabError, CollabResult};
 
 /// A collaborative document: a thin wrapper over `yrs::Doc` exposing the sync
 /// handshake primitives.

@@ -1,6 +1,9 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end collab over the realtime gateway: boot the axum router with a
 //! [`CollabSync`] handler registered, connect real WebSocket clients, and prove
 //! the Yjs sync handshake catches a fresh peer up and live edits converge.
+//! Host-only (axum / tokio): guarded so the wasm `--all-targets` CI gate stays
+//! green without the host-only dev-deps.
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -9,8 +9,8 @@
 //! `docs/internal/collab-persistence.md`.
 //!
 //! The key is the document's **topic string** (`collab:{doc_hash}`, via
-//! [`CollabDoc::topic`](super::doc::CollabDoc::topic)). The topic — not the full
-//! [`CollabDoc`](super::doc::CollabDoc) — is what both the convergence apply
+//! [`CollabDoc::topic`](crate::doc::CollabDoc::topic)). The topic — not the full
+//! [`CollabDoc`](crate::doc::CollabDoc) — is what both the convergence apply
 //! loop and the compaction path actually hold (the hash is one-way), so the
 //! store keys by it directly.
 
@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use super::error::{CollabError, CollabResult};
+use crate::error::{CollabError, CollabResult};
 
 /// The persisted state of a document.
 #[derive(Clone, Debug, PartialEq, Eq)]

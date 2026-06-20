@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for the Redis-backed Fanout (RFC 073 Phase C).
 //!
 //! Gated on `REDIS_TEST_URL` (the `pocopine-events` idiom): when it is unset

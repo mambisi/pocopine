@@ -127,6 +127,7 @@ pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.1.0" }
 pocopine-auth-oauth = { path = "crates/pocopine-auth-oauth", version = "0.1.0" }
 pocopine-client-codegen = { path = "crates/pocopine-client-codegen", version = "0.1.0" }
 pocopine-codec = { path = "crates/pocopine-codec", version = "0.1.0" }
+pocopine-collab = { path = "crates/pocopine-collab", version = "0.1.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.2.0", default-features = false }
 pocopine-crypto = { path = "crates/pocopine-crypto", version = "0.1.0" }
 pocopine-deploy = { path = "crates/pocopine-deploy", version = "0.1.0" }
