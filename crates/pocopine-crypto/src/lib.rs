@@ -45,6 +45,9 @@ pub use hmac;
 pub use md5;
 pub use sha2;
 
+mod secret;
+pub use secret::SecretString;
+
 use hmac::{Hmac, Mac};
 use md5::Md5;
 use sha2::{Digest, Sha256};
