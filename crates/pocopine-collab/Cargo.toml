@@ -16,6 +16,7 @@ default = []
 # workspace nightly (rust-toolchain.toml) is pinned past that, so it builds.
 yrs = "0.27"
 bytes = "1"
+serde = { workspace = true }
 pocopine-crypto = { workspace = true }
 
 # The host-only `server` half (realtime handler + persistence). One cfg gate,

@@ -24,6 +24,7 @@ pocopine-realtime = { workspace = true }
 pocopine-collab = { workspace = true }
 yrs = "0.27"
 bytes = "1"
+serde = { workspace = true }
 
 # The browser client: an imperative canvas (web_sys) + the collab wiring.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
