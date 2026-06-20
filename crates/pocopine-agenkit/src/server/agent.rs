@@ -9,8 +9,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Message, ModelRef, StepId, StepKind, StepStatus, ToolDescriptor,
-    events,
+    AgenkitError, AgenkitResult, Message, ModelRef, Role, StepId, StepKind, StepStatus,
+    ToolDescriptor, events,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -405,13 +405,27 @@ pub(crate) async fn compact_thread(
     }
 
     // Keep the recent tail verbatim (token-bounded — see `recent_keep_count`),
-    // fold the older prefix into the summary.
+    // fold the older prefix into the summary, snapping the boundary so the tail
+    // stays protocol-valid (no orphan tool result).
     let keep = recent_keep_count(&history, KEEP_RECENT_VERBATIM_TOKENS);
-    let (older, recent) = history.split_at(history.len() - keep);
+    let (older, recent) = history.split_at(compaction_split(&history, keep));
 
+    // Render the folded prefix for summarization. A tool-call turn carries its
+    // signal in `tool_calls` (not text), so spell the calls out — otherwise the
+    // summary silently forgets which tools were used (and `as_text()` of such a
+    // turn is empty).
     let transcript = older
         .iter()
-        .map(|m| format!("[{:?}] {}", m.role, m.content.as_text()))
+        .map(|m| {
+            let mut line = format!("[{:?}] {}", m.role, m.content.as_text());
+            for call in &m.tool_calls {
+                line.push_str(&format!(
+                    "\n  ↳ tool call `{}`({})",
+                    call.tool_id, call.args
+                ));
+            }
+            line
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let summary = summarize(transcript, model, provider, cx).await?;
@@ -452,6 +466,20 @@ fn recent_keep_count(messages: &[Message], budget: u64) -> usize {
     keep
 }
 
+/// Where the kept-verbatim tail begins, given `keep` recent messages. Starts at
+/// `len - keep`, then advances past any leading tool-result messages so the tail
+/// never begins with an orphan `Role::Tool` whose assistant tool-call turn was
+/// folded into the summary — which a model API would reject (a tool result with
+/// no matching tool call) on the next request after a resume/compaction. Those
+/// orphaned results fold into the summary instead.
+fn compaction_split(history: &[Message], keep: usize) -> usize {
+    let mut split = history.len() - keep;
+    while split < history.len() && history[split].role == Role::Tool {
+        split += 1;
+    }
+    split
+}
+
 /// Summarize a conversation transcript into a single compaction summary via a
 /// plain-text model call (no tools, no schema).
 async fn summarize(
@@ -484,10 +512,33 @@ async fn summarize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pocopine_agenkit_core::Role;
+    use pocopine_agenkit_core::{Content, Role, ToolCall};
 
     fn msg(text: &str) -> Message {
         Message::new(Role::User, text)
+    }
+
+    #[test]
+    fn compaction_split_never_orphans_a_tool_result() {
+        // A full-fidelity tool turn: user, assistant tool-call, tool result, answer.
+        let history = vec![
+            Message::user("q"),
+            Message::assistant_tool_calls(
+                Content::default(),
+                vec![ToolCall::new("c1", "echo", serde_json::json!({}))],
+            ),
+            Message::tool_result("c1", "out"),
+            Message::assistant("a"),
+        ];
+        // Naively keeping the last 2 would start the tail at the tool result (index
+        // 2) — an orphan once its assistant tool-call turn is summarized. The split
+        // must advance past it so the kept tail begins at the answer (index 3).
+        assert_eq!(compaction_split(&history, 2), 3);
+        assert_ne!(history[compaction_split(&history, 2)].role, Role::Tool);
+
+        // A boundary that already lands on a non-tool message is unchanged.
+        assert_eq!(compaction_split(&history, 1), 3); // tail = [answer]
+        assert_eq!(compaction_split(&history, 4), 0); // keep all → start at 0
     }
 
     #[test]

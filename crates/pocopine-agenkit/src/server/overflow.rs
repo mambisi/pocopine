@@ -78,6 +78,18 @@ pub fn estimate_input_tokens(messages: &[Message]) -> u64 {
                     ContentPart::Media(_) => PER_MEDIA,
                 });
             }
+            // A tool-call turn carries its payload in `tool_calls` (the serialized
+            // args), and a tool result links by `tool_call_id` — neither rides in
+            // `content.parts`. With full-fidelity transcripts these are now in the
+            // history, so count them or a tool-heavy thread under-counts and never
+            // trips proactive compaction (overflowing at generate instead).
+            for call in &m.tool_calls {
+                let args_len = serde_json::to_string(&call.args).map_or(0, |s| s.len());
+                tokens = tokens.saturating_add((call.tool_id.len() + args_len) as u64 / 4);
+            }
+            if let Some(id) = &m.tool_call_id {
+                tokens = tokens.saturating_add(id.len() as u64 / 4);
+            }
             tokens
         })
         .sum()
@@ -175,6 +187,21 @@ mod tests {
             (990..=1010).contains(&est),
             "reasoning under-counted: {est}"
         );
+    }
+
+    #[test]
+    fn estimate_counts_tool_call_args_not_just_content() {
+        use pocopine_agenkit_core::{Content, ToolCall};
+        // A tool-call turn with empty text content but a large args payload must
+        // count toward the input — otherwise a tool-heavy history under-counts and
+        // never trips proactive compaction.
+        let big_args = serde_json::json!({ "blob": "z".repeat(4000) });
+        let call = Message::assistant_tool_calls(
+            Content::default(),
+            vec![ToolCall::new("c1", "echo", big_args)],
+        );
+        let est = estimate_input_tokens(&[call]);
+        assert!(est >= 1000, "tool-call args under-counted: {est}");
     }
 
     #[test]
