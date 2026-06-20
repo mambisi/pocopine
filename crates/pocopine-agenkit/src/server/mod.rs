@@ -64,7 +64,7 @@ pub use provider::{
 pub use reduce::ReduceBuilder;
 pub use retrieval::{AiRetriever, DynRetriever, RetrieverRegistry, retriever_as_tool};
 pub use runtime::{
-    AbortHandle, AgentConfig, AgentEvent, AgentLoop, AgentSession, AgentSessionBuilder, StopReason,
+    AbortHandle, AgentConfig, AgentEvent, AgentSession, AgentSessionBuilder, StopReason,
     ToolDecision,
 };
 pub use thread::{
