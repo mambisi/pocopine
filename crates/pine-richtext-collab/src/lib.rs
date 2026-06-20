@@ -169,10 +169,16 @@ fn write_inline(txn: &mut TransactionMut, xtext: &XmlTextRef, content: &Fragment
     insert_inline(txn, xtext, 0, content);
 }
 
-/// Insert a fragment of inline content into `xtext` starting at character index
-/// `at`. Inserts all text/embeds first, then applies marks (the two-phase write
-/// that keeps a mark from bleeding past its run when the next insert lands on its
-/// boundary). Shared by the whole-doc codec and the incremental [`step_writer`].
+/// Insert a fragment of inline content into `xtext` starting at **UTF-8 byte**
+/// index `at`. Inserts all text/embeds first, then applies marks (the two-phase
+/// write that keeps a mark from bleeding past its run when the next insert lands
+/// on its boundary). Shared by the whole-doc codec and the incremental
+/// [`step_writer`].
+///
+/// yrs `Text`/`XmlText` index everything in UTF-8 bytes (the default
+/// `OffsetKind::Bytes`), so every index here is a byte offset — never a char
+/// count, which would mis-place edits in text containing multi-byte characters.
+/// Callers convert pine's char-based model positions with [`char_to_byte`].
 pub(crate) fn insert_inline(
     txn: &mut TransactionMut,
     xtext: &XmlTextRef,
@@ -184,13 +190,13 @@ pub(crate) fn insert_inline(
     for node in content.iter() {
         if let Some(text) = node.text() {
             xtext.insert(txn, index, text);
-            let len = text.chars().count() as u32;
+            let len = text.len() as u32; // UTF-8 byte length
             if !node.marks().is_empty() {
                 runs.push((index, len, node.marks()));
             }
             index += len;
         } else {
-            // Inline atom (image / hard_break) → an embed inside this text.
+            // Inline atom (image / hard_break) → an embed, one yrs position wide.
             xtext.insert_embed(txn, index, atom_to_any(node));
             index += 1;
         }
@@ -198,6 +204,69 @@ pub(crate) fn insert_inline(
     for (start, len, marks) in runs {
         xtext.format(txn, start, len, marks_to_yattrs(marks));
     }
+}
+
+/// Convert a char offset into a fragment of inline content to the matching
+/// UTF-8 **byte** offset (the unit yrs `XmlText` indexes by). Text contributes
+/// its bytes; an inline atom is one unit (char and byte alike). Used to map a
+/// pine model position into a block's `XmlText`.
+pub(crate) fn char_to_byte(content: &Fragment, char_off: usize) -> u32 {
+    let mut chars_seen = 0usize;
+    let mut bytes = 0u32;
+    for node in content.iter() {
+        if let Some(text) = node.text() {
+            let n = text.chars().count();
+            if char_off <= chars_seen + n {
+                let within = char_off - chars_seen;
+                bytes += text
+                    .chars()
+                    .take(within)
+                    .map(|c| c.len_utf8() as u32)
+                    .sum::<u32>();
+                return bytes;
+            }
+            chars_seen += n;
+            bytes += text.len() as u32;
+        } else {
+            if char_off <= chars_seen {
+                return bytes;
+            }
+            chars_seen += 1;
+            bytes += 1;
+        }
+    }
+    bytes
+}
+
+/// Inverse of [`char_to_byte`]: a UTF-8 byte offset back to a char offset.
+pub(crate) fn byte_to_char(content: &Fragment, byte_off: u32) -> usize {
+    let mut bytes_seen = 0u32;
+    let mut chars = 0usize;
+    for node in content.iter() {
+        if let Some(text) = node.text() {
+            let nbytes = text.len() as u32;
+            if byte_off <= bytes_seen + nbytes {
+                let within = byte_off - bytes_seen;
+                let mut acc = 0u32;
+                for (ci, c) in text.chars().enumerate() {
+                    if acc >= within {
+                        return chars + ci;
+                    }
+                    acc += c.len_utf8() as u32;
+                }
+                return chars + text.chars().count();
+            }
+            bytes_seen += nbytes;
+            chars += text.chars().count();
+        } else {
+            if byte_off <= bytes_seen {
+                return chars;
+            }
+            bytes_seen += 1;
+            chars += 1;
+        }
+    }
+    chars
 }
 
 pub(crate) fn marks_to_yattrs(marks: &[Mark]) -> YAttrs {
