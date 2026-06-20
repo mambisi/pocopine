@@ -26,8 +26,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, CostEstimate, Message, ModelRef, RunId, StepId,
-    StepKind, StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
+    AgenkitError, AgenkitResult, AgentThreadId, Content, CostEstimate, Message, ModelRef, RunId,
+    StepId, StepKind, StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage,
+    events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -193,6 +194,48 @@ impl AgentConfig {
         self.max_steps_per_turn = steps.max(1);
         self
     }
+}
+
+/// What of a turn's tool activity is written to the durable session log (§D10).
+///
+/// The session log is the agent's **owner-scoped, host-side** working memory, so
+/// the default is full fidelity — tool arguments and results are stored verbatim,
+/// which a faithful resume requires. Switch to
+/// [`RedactToolPayloads`](CapturePolicy::RedactToolPayloads) to keep the transcript
+/// *structure* (so resume stays coherent) while dropping the potentially-sensitive
+/// tool payloads from disk. Large payloads are already kept out-of-line by the
+/// `ExternalizingSessionStore`; this is the orthogonal "don't store the bytes at
+/// all" knob.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CapturePolicy {
+    /// Persist tool-call arguments and tool results verbatim (default).
+    #[default]
+    Full,
+    /// Persist the tool-call turns and results — keeping the call↔result linkage
+    /// so resume never sees a half-open call — but replace the call arguments and
+    /// the result payload with a redaction marker. Resume stays structurally
+    /// coherent; the model just no longer re-reads the (possibly sensitive) tool
+    /// data on a later turn.
+    RedactToolPayloads,
+}
+
+/// Apply [`CapturePolicy::RedactToolPayloads`]: strip tool-call arguments and tool
+/// result payloads from `messages`, keeping roles and the `tool_call_id` linkage
+/// so the persisted transcript stays replay-coherent (no half-open calls).
+fn redact_tool_payloads(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|mut m| {
+            for call in &mut m.tool_calls {
+                call.args = serde_json::json!({ "redacted": true });
+            }
+            if m.tool_call_id.is_some() {
+                m.content = Content::text("[redacted]");
+            }
+            m
+        })
+        .collect()
 }
 
 /// Typed steering hooks (L3) — host-side closures that *steer* the loop. The
@@ -516,6 +559,8 @@ pub struct AgentSession {
     /// its duration so a concurrent `prompt` is rejected rather than corrupting
     /// the shared thread/queue/abort.
     busy: Arc<AtomicBool>,
+    /// What of each turn's tool activity is written to the durable log (§D10).
+    capture: CapturePolicy,
 }
 
 impl AgentSession {
@@ -527,6 +572,7 @@ impl AgentSession {
             config: AgentConfig::new(),
             agent_id: "kitty".to_string(),
             hooks: Hooks::default(),
+            capture: CapturePolicy::default(),
         }
     }
 
@@ -663,6 +709,7 @@ impl AgentSession {
                 ..TurnControls::default()
             },
             busy: Arc::new(AtomicBool::new(false)),
+            capture: self.capture,
         }))
     }
 
@@ -717,6 +764,12 @@ impl AgentSession {
         // *mid-turn* — would need a transactional batch append; tracked as a
         // follow-up.)
         let to_persist = messages[persist_from + 1..].to_vec();
+        // §D10 capture policy: optionally redact tool payloads before they hit disk
+        // (the linkage is kept, so resume stays coherent — see `CapturePolicy`).
+        let to_persist = match self.capture {
+            CapturePolicy::Full => to_persist,
+            CapturePolicy::RedactToolPayloads => redact_tool_payloads(to_persist),
+        };
         if !to_persist.is_empty() {
             self.thread
                 .store
@@ -769,6 +822,7 @@ pub struct AgentSessionBuilder {
     config: AgentConfig,
     agent_id: String,
     hooks: Hooks,
+    capture: CapturePolicy,
 }
 
 impl AgentSessionBuilder {
@@ -801,6 +855,13 @@ impl AgentSessionBuilder {
     /// Set the agent id stored on the thread (default `"kitty"`).
     pub fn agent_id(mut self, agent_id: impl Into<String>) -> Self {
         self.agent_id = agent_id.into();
+        self
+    }
+
+    /// Set the §D10 [`CapturePolicy`] — what of each turn's tool activity reaches
+    /// the durable log (default [`CapturePolicy::Full`]).
+    pub fn capture_policy(mut self, capture: CapturePolicy) -> Self {
+        self.capture = capture;
         self
     }
 
@@ -842,6 +903,7 @@ impl AgentSessionBuilder {
                 ..TurnControls::default()
             },
             busy: Arc::new(AtomicBool::new(false)),
+            capture: self.capture,
         })
     }
 }
@@ -1318,6 +1380,57 @@ mod tests {
             "expected ~{}, got {cost:?}",
             per_turn * 2.0
         );
+    }
+
+    #[tokio::test]
+    async fn redact_tool_payloads_policy_keeps_structure_but_drops_payloads() {
+        // P5b §D10 knob: a tool's args + result carry a secret. Under
+        // `RedactToolPayloads` the transcript STRUCTURE persists (so resume stays
+        // coherent) but the secret never reaches disk.
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("weather", "echo", serde_json::json!({ "text": "key-123" }))
+                    .default_text("it's sunny"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Echo)
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit)
+            .config(AgentConfig::new().tools(["echo"]))
+            .capture_policy(CapturePolicy::RedactToolPayloads)
+            .open(None)
+            .await
+            .unwrap();
+        let _ = session.prompt("weather?").collect::<Vec<_>>().await;
+
+        let history = session.history().await.unwrap();
+        // Structure + linkage preserved (4 records, call ↔ result still keyed).
+        assert_eq!(history.len(), 4, "{history:?}");
+        assert_eq!(history[1].tool_calls[0].tool_id, "echo");
+        assert_eq!(history[2].role, Role::Tool);
+        assert_eq!(
+            history[2].tool_call_id.as_deref(),
+            Some(history[1].tool_calls[0].id.as_str())
+        );
+        // ...but the secret is gone from both the call args and the result payload.
+        assert!(
+            !history[1].tool_calls[0]
+                .args
+                .to_string()
+                .contains("key-123"),
+            "tool args should be redacted: {:?}",
+            history[1].tool_calls[0].args
+        );
+        assert!(
+            !history[2].content.as_text().contains("key-123"),
+            "tool result should be redacted: {:?}",
+            history[2].content.as_text()
+        );
+        // The question and the answer are untouched (not tool payloads).
+        assert_eq!(history[0].content.as_text(), "weather?");
+        assert_eq!(history[3].content.as_text(), "it's sunny");
     }
 
     #[test]
