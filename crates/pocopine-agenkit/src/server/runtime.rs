@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, Role, RunId, StepId, StepKind,
-    StepStatus, ThreadMessage, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
+    StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -538,7 +538,7 @@ impl AgentSession {
     }
 
     /// The full stored conversation (every turn, pre-compaction view).
-    pub async fn history(&self) -> AgenkitResult<Vec<ThreadMessage>> {
+    pub async fn history(&self) -> AgenkitResult<Vec<Message>> {
         self.thread.history().await
     }
 
@@ -623,14 +623,10 @@ impl AgentSession {
         text: String,
         events: &UnboundedSender<AgentEvent>,
     ) -> AgenkitResult<StopReason> {
-        // Seed the model context from the compacted history (W7), then the prompt.
-        let mut messages: Vec<Message> = self
-            .thread
-            .active_history()
-            .await?
-            .into_iter()
-            .map(|m| Message::new(m.role, m.content))
-            .collect();
+        // Seed the model context from the compacted history (W7) — already
+        // `Vec<Message>` (full fidelity), so any persisted tool turns replay
+        // verbatim — then append the new prompt.
+        let mut messages: Vec<Message> = self.thread.active_history().await?;
         let persist_from = messages.len();
         messages.push(Message::user(text.clone()));
 
@@ -642,7 +638,7 @@ impl AgentSession {
             .append(
                 &self.thread.id,
                 self.thread.owner(),
-                vec![ThreadMessage::new(Role::User, text)],
+                vec![Message::user(text)],
             )
             .await?;
 
@@ -662,12 +658,12 @@ impl AgentSession {
         // assistant messages with NO tool calls. Narration that rides a tool call,
         // and tool results, are NOT stored, so resume replays a clean alternating
         // Q&A rather than a transcript referencing tool calls that are gone.
-        let to_persist: Vec<ThreadMessage> = messages[persist_from + 1..]
+        let to_persist: Vec<Message> = messages[persist_from + 1..]
             .iter()
             .filter_map(|m| match m.role {
-                Role::User => Some(ThreadMessage::new(Role::User, m.content.as_text())),
+                Role::User => Some(Message::user(m.content.as_text())),
                 Role::Assistant if m.tool_calls.is_empty() && !m.content.as_text().is_empty() => {
-                    Some(ThreadMessage::new(Role::Assistant, m.content.as_text()))
+                    Some(Message::assistant(m.content.as_text()))
                 }
                 _ => None,
             })

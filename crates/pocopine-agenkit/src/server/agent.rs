@@ -9,8 +9,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Message, ModelRef, Role, StepId, StepKind, StepStatus,
-    ThreadMessage, ToolDescriptor, events,
+    AgenkitError, AgenkitResult, Message, ModelRef, StepId, StepKind, StepStatus, ToolDescriptor,
+    events,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -240,10 +240,9 @@ async fn run_loop<A: AiAgent>(
     let mut messages = Vec::new();
     if let Some(thread) = thread {
         // The compacted view (from the last checkpoint) — keeps a long-running
-        // thread inside the model's context window (W7 compaction).
-        for message in thread.active_history().await? {
-            messages.push(Message::new(message.role, message.content));
-        }
+        // thread inside the model's context window (W7 compaction). Already
+        // `Vec<Message>`, so it carries any persisted tool-call linkage verbatim.
+        messages.extend(thread.active_history().await?);
     }
     // Serialize the input once (reused when persisting the turn). A failure is a
     // real error, not an empty prompt sent to the model.
@@ -310,8 +309,8 @@ async fn run_loop<A: AiAgent>(
                         &thread.id,
                         thread.owner(),
                         vec![
-                            ThreadMessage::new(Role::User, input_json.clone()),
-                            ThreadMessage::new(Role::Assistant, output_json),
+                            Message::user(input_json.clone()),
+                            Message::assistant(output_json),
                         ],
                     )
                     .await?;
@@ -397,17 +396,16 @@ pub(crate) async fn compact_thread(
     if history.len() < 4 {
         return Ok(None); // nothing meaningful to summarize yet
     }
-    let messages: Vec<Message> = history
-        .iter()
-        .map(|m| Message::new(m.role, m.content.clone()))
-        .collect();
-    if !context_headroom(catalog_model, &messages, max_output).over {
+    // `active_history` is already `Vec<Message>` (full fidelity), so size and
+    // split it directly — no lossy reconstruction, and the kept tail retains any
+    // tool-call linkage verbatim.
+    if !context_headroom(catalog_model, &history, max_output).over {
         return Ok(None); // still fits — no compaction
     }
 
     // Keep the recent tail verbatim (token-bounded — see `recent_keep_count`),
     // fold the older prefix into the summary.
-    let keep = recent_keep_count(&messages, KEEP_RECENT_VERBATIM_TOKENS);
+    let keep = recent_keep_count(&history, KEEP_RECENT_VERBATIM_TOKENS);
     let (older, recent) = history.split_at(history.len() - keep);
 
     let transcript = older
@@ -418,7 +416,7 @@ pub(crate) async fn compact_thread(
     let summary = summarize(transcript, model, provider, cx).await?;
     let (folded, kept) = (older.len() as u64, recent.len() as u64);
     thread
-        .checkpoint(ThreadMessage::new(Role::System, summary), recent.to_vec())
+        .checkpoint(Message::system(summary), recent.to_vec())
         .await?;
     Ok(Some((folded, kept)))
 }
