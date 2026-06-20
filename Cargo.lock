@@ -3048,6 +3048,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-model-catalog"
+version = "0.1.1"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6904,6 +6911,7 @@ dependencies = [
 name = "pocopine"
 version = "0.1.1"
 dependencies = [
+ "futures",
  "js-sys",
  "phf 0.13.1",
  "pocopine-analytics",
@@ -6938,21 +6946,28 @@ version = "0.1.1"
 dependencies = [
  "axum 0.7.9",
  "futures",
+ "getrandom 0.2.17",
  "http-body-util",
  "pocopine-agenkit-core",
  "pocopine-agenkit-macros",
  "pocopine-auth",
+ "pocopine-auth-oauth",
+ "pocopine-codec",
  "pocopine-core",
+ "pocopine-crypto",
  "pocopine-observe",
  "pocopine-server",
+ "rusqlite",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
@@ -7099,6 +7114,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-auth-oauth"
+version = "0.1.1"
+dependencies = [
+ "getrandom 0.2.17",
+ "pocopine-codec",
+ "pocopine-crypto",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "pocopine-cli"
 version = "0.1.1"
 dependencies = [
@@ -7178,6 +7207,7 @@ name = "pocopine-core"
 version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
+ "futures-core",
  "indexmap 2.14.0",
  "js-sys",
  "once_cell",
@@ -7205,6 +7235,7 @@ dependencies = [
  "hmac 0.12.1",
  "md-5 0.10.6",
  "sha2 0.10.9",
+ "zeroize",
 ]
 
 [[package]]
@@ -7411,9 +7442,11 @@ name = "pocopine-server"
 version = "0.1.1"
 dependencies = [
  "axum 0.7.9",
+ "futures",
  "inventory",
  "pocopine-assets",
  "pocopine-auth",
+ "pocopine-core",
  "serde",
  "serde_json",
  "tempfile",

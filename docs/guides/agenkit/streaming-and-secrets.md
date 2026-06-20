@@ -21,8 +21,51 @@ reasoning, or a provider payload:
 | run/trace ids, step & group ids | the prompt or system text |
 | step/tool/parallel/reducer **kinds** and lifecycle | tool-call arguments |
 | counts (branches, hits, tokens) | retrieved document contents |
+| reasoning **activity** (`ThinkingDelta`, a char *count*) | reasoning text — *unless author allows **and** caller requests* |
 | `error_kind` (`"provider"`, `"config"`, …) | provider request/response bodies |
 | user-visible output (`OutputDelta`, `ObjectDelta`) | API keys / credentials |
+
+Reasoning ("thinking") content is the one redaction that can be lifted, behind a
+**two-part gate**. By default the model's chain of thought rides the assistant
+message **server-side** (for replay and observability) and never reaches the
+client — only a `ThinkingDelta { chars }` count crosses (under `Progress`+
+visibility), enough for a "thinking…" indicator without exposing the text.
+
+Reasoning text crosses the wire only when **both** hold:
+
+1. **The author permits it** (the ceiling) — `#[ai_flow(reasoning)]` or
+   `Flow::expose_reasoning`. A flow that never opts in can't have its reasoning
+   extracted by any caller.
+2. **The caller requests it** (per call) — `.request_reasoning(true)` on the flow
+   call. A `#[server]` fn wires this from the client's request (a query flag), so
+   a "thinking panel" is shown when the client asks for it and the author allowed
+   it.
+
+The effective exposure is the **AND** of the two; either off → `ThinkingDelta`
+carries only its char count. Everything else in the right-hand column (prompts,
+tool args, retrieved content, credentials) stays redacted regardless.
+
+```rust
+// Author opens the ceiling on the flow:
+#[ai_flow(public, reasoning, stream = "output_deltas")]
+async fn answer(input: Question, ctx: AiFlowContext) -> AgenkitResult<String> { … }
+
+// The streaming #[server] fn relays the client's choice:
+#[server(public)]
+async fn answer_stream(input: Question, show_thinking: bool)
+    -> StreamServerResult<FlowStreamEvent>
+{
+    active_plugin::<Agenkit>().unwrap()
+        .flow(Answer).input(input)
+        .request_reasoning(show_thinking) // caller half of the gate
+        .stream()
+}
+```
+
+> The in-process **`stream_into(sink)`** sink is different: it is a *trusted,
+> full-fidelity* server-side consumer (for a dev building/observing an agent) and
+> applies **no** redaction — it always carries reasoning. Don't forward its
+> events to an untrusted client as-is; use `.stream()` for the wire.
 
 Because the contract is structural, you can't accidentally leak by adding a
 field to your own type — the stream only ever speaks `FlowStreamEvent`.
@@ -55,32 +98,45 @@ Declare the cap in the attribute (or `Flow::stream_mode`):
 async fn summarize(input: SummarizeInput, ctx: AiFlowContext) -> AgenkitResult<Summary> { … }
 ```
 
-## The streaming route
+## Streaming a flow
 
-Mount the framework's SSE route alongside your app and `Server::with_auth(...)`
-so the caller principal is populated:
+A flow streams to the browser through a normal **streaming `#[server]` fn**
+(RFC-107) that returns `StreamServerResult<FlowStreamEvent>`. The macro emits the
+SSE handler and the typed client stub, so there is no route to mount:
 
 ```rust
-use pocopine_agenkit::server::{ai_flow_stream_router, AI_FLOW_STREAM_PATH};
-router = router.merge(ai_flow_stream_router(agenkit));   // POST {AI_FLOW_STREAM_PATH}
+#[server(public)]
+pub async fn summarize_stream(input: SummarizeInput) -> StreamServerResult<FlowStreamEvent> {
+    active_plugin::<Agenkit>().unwrap().flow(Summarize).input(input).stream()
+}
 ```
 
-The route enforces the same boundary as a `#[server]` call and one extra gate:
+`.stream()` enforces the same boundary as a unary flow call, plus one extra gate:
 
 - **Only `public` flows are reachable.** A flow not marked `.public()` is
-  indistinguishable from an unknown one (404) — internal flows are never exposed
+  indistinguishable from an unknown one — internal flows are never exposed
   by id (§D9).
 - **One redaction chokepoint.** Every event passes through `stream_filter` as
   the last transform before the wire; it enforces the `StreamMode` clamp and is
   the single place that decides what crosses. A new `FlowStreamEvent` variant
   won't compile until its visibility is classified there.
 
-From inside the flow, stream by passing a sink to the call builder:
+The client consumes it through the macro-generated stub:
+
+```rust
+let mut events = summarize_stream(input).await?;     // ServerStream<FlowStreamEvent>
+while let Some(event) = events.next().await { /* event: ServerResult<FlowStreamEvent> */ }
+```
+
+A **trusted, in-process** consumer that wants the typed result *and* the events on
+its own channel can use the lower-level sink form instead. Unlike `.stream()`,
+this is **full fidelity** — no redaction or `StreamMode` cap, so the sink sees
+raw `ThinkingDelta` text. Use it for a server-side dev tool, not to feed an
+untrusted client:
 
 ```rust
 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-let _final = agenkit.flow(Summarize).input(input).stream(tx).await?;
-// `rx` yields FlowStreamEvents; the route forwards them through stream_filter.
+let _final = agenkit.flow(Summarize).input(input).stream_into(tx).await?; // rx yields raw FlowStreamEvents
 ```
 
 ## Errors never leak internals
