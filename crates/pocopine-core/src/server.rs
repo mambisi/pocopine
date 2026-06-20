@@ -75,6 +75,29 @@ impl From<&str> for ServerError {
 /// Canonical `Result` alias for `#[server]` functions.
 pub type Result<T> = core::result::Result<T, ServerError>;
 
+/// A boxed result stream — the items a streaming `#[server]` function produces.
+///
+/// `Send` on the host (the body runs on a multi-threaded runtime); not `Send`
+/// on wasm, where the client stream is driven by `!Send` browser futures.
+#[cfg(not(target_arch = "wasm32"))]
+pub type ServerStream<T> =
+    core::pin::Pin<Box<dyn futures_core::Stream<Item = Result<T>> + Send + 'static>>;
+/// A boxed result stream — the items a streaming `#[server]` function produces.
+#[cfg(target_arch = "wasm32")]
+pub type ServerStream<T> =
+    core::pin::Pin<Box<dyn futures_core::Stream<Item = Result<T>> + 'static>>;
+
+/// The streaming counterpart of [`Result`] (`ServerResult`) — RFC-107.
+///
+/// The outer `Result` is the HTTP handshake: it fails only when the call never
+/// produced a stream (a transport failure, or a guard/auth/bad-request
+/// rejection that returns a non-2xx status before the body runs). Everything
+/// the handler body produces — a setup error *and* each streamed value — is an
+/// in-band [`Result<T>`] item; a mid-stream `Err` is terminal. A streaming
+/// `#[server]` fn is recognised by this return type alone, with no attribute
+/// flag.
+pub type StreamServerResult<T> = Result<ServerStream<T>>;
+
 const SERVER_FUNCTION_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const SERVER_FUNCTION_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
