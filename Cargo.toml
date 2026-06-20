@@ -8,6 +8,7 @@ members = [
     "crates/pine-layout",
     "crates/pine-motion",
     "crates/pine-richtext",
+    "crates/pine-richtext-collab",
     "crates/pocopine",
     "crates/pocopine-agenkit",
     "crates/pocopine-agenkit-anthropic",
@@ -149,6 +150,7 @@ pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.1.0"
 pocopine-template-parser = { path = "crates/pocopine-template-parser", version = "0.1.0" }
 pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.1.0" }
 pine-richtext = { path = "crates/pine-richtext", version = "0.1.0" }
+pine-richtext-collab = { path = "crates/pine-richtext-collab", version = "0.1.0" }
 # RFC-098 — insertion-ordered subscriber/queue sets (H4 determinism)
 # and the generational effect slab (H2). indexmap keeps its `std`
 # default (the `RandomState` hasher + `IndexSet::new()`); iteration is
