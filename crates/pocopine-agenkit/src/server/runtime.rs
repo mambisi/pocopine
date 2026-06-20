@@ -14,21 +14,20 @@
 //! shaped to **pre-image the WASM/WIT extension world** (parked) so extensions
 //! later plug into a contract that already exists here.
 //!
-//! Known follow-up (deferred — a focused refactor, not a quick fix): this loop
-//! ([`AgentLoop::run_turn`]) and the single-shot [`run_loop`](super::agent) share
-//! only `compact_thread` — the model↔tool core is duplicated, and this runtime
-//! emits the [`AgentEvent`] firehose but **not** the `pocopine.trace` events /
-//! usage that `run_loop` feeds (no cost metering for conversational turns yet).
-//! The fix is to unify them behind one observer (RunState-emit vs AgentEvent
-//! sink), which also brings trace + usage here — done carefully so the merged
-//! single-shot path isn't regressed.
+//! The model↔tool engine is **not** duplicated: both this loop
+//! ([`AgentLoop::run_turn`]) and the single-shot [`run_loop`](super::agent) drive
+//! the shared [`loop_core`](super::loop_core) (model call + tool dispatch),
+//! differing only in lifecycle and termination. A conversational turn opens its
+//! own trace run and emits the same `pocopine.trace` events + token usage as the
+//! typed run (its observer wraps the shared `TraceObserver`), so conversational
+//! turns are metered too — alongside the [`AgentEvent`] firehose.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, Role, ThreadMessage,
-    ThreadRetention, ToolDescriptor,
+    AgenkitError, AgenkitResult, AgentThreadId, Message, ModelRef, Role, RunId, StepId, StepKind,
+    StepStatus, ThreadMessage, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -36,7 +35,12 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::agenkit::{Agenkit, AgenkitInner};
 use super::context::AiContext;
+pub use super::loop_core::ToolDecision;
+use super::loop_core::{
+    LoopObserver, ToolErrorMode, TraceObserver, dispatch_tool_calls, run_model_step,
+};
 use super::provider::{GenerateRequest, ProviderContext};
+use super::run::RunState;
 use super::thread::{AgentThreadHandle, ThreadOwner};
 
 /// How a [`prompt`](AgentSession::prompt) turn ended.
@@ -191,27 +195,6 @@ impl AgentConfig {
     }
 }
 
-/// A `before_tool_call` hook's decision for one tool call (L3). Mirrors the
-/// (parked) WIT `hook-decision` so the extension world projects onto it.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum ToolDecision {
-    /// Run the tool with its requested arguments.
-    Proceed,
-    /// Don't run the tool; feed `reason` back to the model (an approval/trust
-    /// gate, or a policy block).
-    Block {
-        /// Why the call is blocked.
-        reason: String,
-    },
-    /// Run the tool, but with these arguments instead (e.g. inject a sandbox
-    /// path, redact a field).
-    ReplaceArgs {
-        /// The arguments to use.
-        args: serde_json::Value,
-    },
-}
-
 /// Typed steering hooks (L3) — host-side closures that *steer* the loop. The
 /// shapes pre-image the WIT extension world so extensions later supply the same
 /// decisions across the component boundary.
@@ -329,128 +312,173 @@ impl AgentLoop {
             ProviderContext::for_request(credential)
         };
 
-        for _ in 0..self.config.max_steps_per_turn.max(1) {
-            // Abort is checked between steps (cancels after the current call).
-            // A dropped event receiver is treated the same: the consumer left, so
-            // stop rather than keep making paid model/tool calls nobody reads.
-            if controls.aborted() || events.is_closed() {
-                return Ok((StopReason::Aborted, cx.clone()));
-            }
+        // Open a trace run for this turn: mint correlation ids and an agent step
+        // that parents the model/tool spans, so a conversational turn emits the
+        // same `pocopine.trace` events + token usage the single-shot loop does.
+        let seq = self.inner.run_seq.fetch_add(1, Ordering::Relaxed);
+        let run = RunState::new(
+            self.inner.clone(),
+            RunId::new(format!("run-{seq}")),
+            TraceId::new(format!("trace-{seq}")),
+            self.principal.clone(),
+            None,
+        );
+        let agent_step = run.next_step_id();
+        run.emit(
+            run.event(
+                events::AI_STEP_STARTED,
+                StepKind::Agent,
+                StepStatus::Started,
+            )
+            .with_step(agent_step.clone())
+            .with_model(model.clone()),
+        );
+        // The runtime's observer: the `AgentEvent` firehose *and* (via the wrapped
+        // `TraceObserver`) the trace spans.
+        let observer = RuntimeObserver {
+            trace: TraceObserver {
+                run: &run,
+                agent_step: agent_step.clone(),
+            },
+            events,
+        };
+        // Adapt the `Arc` hook into a borrowable `&dyn Fn` for the shared dispatcher.
+        let before = controls.hooks.before_tool_call.as_deref();
 
-            let request = GenerateRequest {
-                model: model.clone(),
-                system: self.config.system.clone(),
-                messages: messages.clone(),
-                tools: tools.clone(),
-                json_schema: None, // conversational: free text, not structured output
-                max_tokens: self.config.max_tokens,
-                thinking: Default::default(),
-            };
-            let response = provider
-                .generate(request, &cx)
-                .await
-                .map_err(super::generate::reclassify_overflow)?;
-
-            let text = response.text_output();
-            if !text.is_empty() {
-                let _ = events.send(AgentEvent::AssistantText { text: text.clone() });
-            }
-
-            if response.tool_calls.is_empty() {
-                // The model answered. Persist the assistant text so the
-                // conversation replays on resume.
-                messages.push(Message::new(Role::Assistant, text));
-                // Steering: a queued follow-up message continues the turn instead
-                // of going idle ("talk to it mid-run"); otherwise the turn ends.
-                match controls.next_steer() {
-                    Some(steer) => {
-                        messages.push(Message::user(steer));
-                        continue;
-                    }
-                    None => return Ok((StopReason::Idle, cx.clone())),
+        // The model↔tool steps, with the agent step closed afterwards so the trace
+        // run is balanced on every exit (idle / steered / max-steps / error).
+        let outcome: AgenkitResult<StopReason> = async {
+            for _ in 0..self.config.max_steps_per_turn.max(1) {
+                // Abort is checked between steps (cancels after the current call).
+                // A dropped event receiver is treated the same: the consumer left,
+                // so stop rather than make paid model/tool calls nobody reads.
+                if controls.aborted() || events.is_closed() {
+                    return Ok(StopReason::Aborted);
                 }
-            }
 
-            // Record the assistant's tool-request turn (keeps the provider's
-            // protocol linkage that real providers require on the next request).
-            messages.push(Message::assistant_tool_calls(
-                response.content.clone(),
-                response.tool_calls.clone(),
-            ));
-
-            for call in &response.tool_calls {
-                if !self.config.tool_ids.iter().any(|id| id == &call.tool_id) {
-                    return Err(AgenkitError::tool_policy(format!(
-                        "agent called non-allowlisted tool `{}`",
-                        call.tool_id
-                    )));
-                }
-                let tool = self.inner.tools.get(&call.tool_id).ok_or_else(|| {
-                    AgenkitError::tool_policy(format!("tool `{}` is not registered", call.tool_id))
-                })?;
-                let _ = events.send(AgentEvent::ToolStarted {
-                    id: call.id.clone(),
-                    tool: call.tool_id.clone(),
-                    args: call.args.clone(),
-                });
-
-                // `before_tool_call` hook (L3): block (approval/trust gate) or
-                // replace the arguments before running.
-                let decision = controls
-                    .hooks
-                    .before_tool_call
-                    .as_ref()
-                    .map(|hook| hook(&call.tool_id, &call.args))
-                    .unwrap_or(ToolDecision::Proceed);
-
-                let result_text = match decision {
-                    ToolDecision::Block { reason } => {
-                        let _ = events.send(AgentEvent::ToolBlocked {
-                            id: call.id.clone(),
-                            tool: call.tool_id.clone(),
-                            reason: reason.clone(),
-                        });
-                        serde_json::json!({ "blocked": reason }).to_string()
-                    }
-                    decision => {
-                        let args = match decision {
-                            ToolDecision::ReplaceArgs { args } => args,
-                            _ => call.args.clone(),
-                        };
-                        // A tool failure is fed back to the model (so it can
-                        // recover), not propagated — a long conversation shouldn't
-                        // die on one bad tool call (bounded by max_steps_per_turn).
-                        match tool.call_json(args, ctx.clone()).await {
-                            Ok(output) => {
-                                let _ = events.send(AgentEvent::ToolCompleted {
-                                    id: call.id.clone(),
-                                    tool: call.tool_id.clone(),
-                                    output: output.clone(),
-                                });
-                                serde_json::to_string(&output).map_err(|e| {
-                                    AgenkitError::internal(format!(
-                                        "tool `{}` output encode: {e}",
-                                        call.tool_id
-                                    ))
-                                })?
-                            }
-                            Err(error) => {
-                                let kind = error.to_string();
-                                let _ = events.send(AgentEvent::ToolFailed {
-                                    id: call.id.clone(),
-                                    tool: call.tool_id.clone(),
-                                    error: kind.clone(),
-                                });
-                                serde_json::json!({ "error": kind }).to_string()
-                            }
-                        }
-                    }
+                let request = GenerateRequest {
+                    model: model.clone(),
+                    system: self.config.system.clone(),
+                    messages: messages.clone(),
+                    tools: tools.clone(),
+                    json_schema: None, // conversational: free text, not structured output
+                    max_tokens: self.config.max_tokens,
+                    thinking: Default::default(),
                 };
-                messages.push(Message::tool_result(call.id.clone(), result_text));
+                let response = run_model_step(&provider, request, &cx, &model, &observer).await?;
+
+                let text = response.text_output();
+                if !text.is_empty() {
+                    let _ = events.send(AgentEvent::AssistantText { text: text.clone() });
+                }
+
+                if response.tool_calls.is_empty() {
+                    // The model answered. Persist the assistant text so the
+                    // conversation replays on resume.
+                    messages.push(Message::new(Role::Assistant, text));
+                    // Steering: a queued follow-up message continues the turn
+                    // ("talk to it mid-run"); otherwise the turn ends.
+                    match controls.next_steer() {
+                        Some(steer) => {
+                            messages.push(Message::user(steer));
+                            continue;
+                        }
+                        None => return Ok(StopReason::Idle),
+                    }
+                }
+
+                // Run the tool batch via the shared dispatcher; a tool failure is
+                // fed back to the model (a long conversation shouldn't die on one
+                // bad call — bounded by `max_steps_per_turn`), and the
+                // `before_tool_call` hook can block / replace each call.
+                messages.extend(
+                    dispatch_tool_calls(
+                        &self.inner,
+                        &self.config.tool_ids,
+                        &ctx,
+                        &response,
+                        "agent",
+                        before,
+                        ToolErrorMode::FeedBack,
+                        &observer,
+                    )
+                    .await?,
+                );
             }
+            Ok(StopReason::MaxSteps)
+        }
+        .await;
+
+        match &outcome {
+            Ok(_) => run.emit(
+                run.event(
+                    events::AI_STEP_COMPLETED,
+                    StepKind::Agent,
+                    StepStatus::Completed,
+                )
+                .with_step(agent_step.clone()),
+            ),
+            Err(error) => run.emit(
+                run.event(events::AI_STEP_FAILED, StepKind::Agent, StepStatus::Failed)
+                    .with_step(agent_step.clone())
+                    .with_error(error.clone()),
+            ),
         }
 
-        Ok((StopReason::MaxSteps, cx))
+        outcome.map(|reason| (reason, cx))
+    }
+}
+
+/// The runtime's [`LoopObserver`]: emits the [`AgentEvent`] firehose for a turn
+/// **and** the `pocopine.trace` spans (by delegating to the wrapped
+/// [`TraceObserver`]), so a conversational turn is both observable live and
+/// metered like the typed run.
+struct RuntimeObserver<'a> {
+    trace: TraceObserver<'a>,
+    events: &'a UnboundedSender<AgentEvent>,
+}
+
+impl LoopObserver for RuntimeObserver<'_> {
+    fn model_request(&self, model: &ModelRef) -> Option<StepId> {
+        self.trace.model_request(model)
+    }
+
+    fn model_response(&self, step: Option<StepId>, model: &ModelRef, usage: Option<Usage>) {
+        self.trace.model_response(step, model, usage);
+    }
+
+    fn tool_started(&self, call: &ToolCall) -> Option<StepId> {
+        let _ = self.events.send(AgentEvent::ToolStarted {
+            id: call.id.clone(),
+            tool: call.tool_id.clone(),
+            args: call.args.clone(),
+        });
+        self.trace.tool_started(call)
+    }
+
+    fn tool_completed(&self, step: Option<StepId>, call: &ToolCall, output: &serde_json::Value) {
+        let _ = self.events.send(AgentEvent::ToolCompleted {
+            id: call.id.clone(),
+            tool: call.tool_id.clone(),
+            output: output.clone(),
+        });
+        self.trace.tool_completed(step, call, output);
+    }
+
+    fn tool_failed(&self, call: &ToolCall, error: &str) {
+        let _ = self.events.send(AgentEvent::ToolFailed {
+            id: call.id.clone(),
+            tool: call.tool_id.clone(),
+            error: error.to_string(),
+        });
+    }
+
+    fn tool_blocked(&self, call: &ToolCall, reason: &str) {
+        let _ = self.events.send(AgentEvent::ToolBlocked {
+            id: call.id.clone(),
+            tool: call.tool_id.clone(),
+            reason: reason.to_string(),
+        });
     }
 }
 
