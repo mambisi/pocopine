@@ -7,7 +7,11 @@
 //! error) lives at the crate root so the wasm client speaks the same handshake.
 
 mod handler;
+#[cfg(feature = "sqlite")]
+mod sqlite_store;
 mod store;
 
 pub use handler::CollabSync;
+#[cfg(feature = "sqlite")]
+pub use sqlite_store::SqliteCollabStore;
 pub use store::{CollabSnapshot, CollabStore, MemoryCollabStore};
