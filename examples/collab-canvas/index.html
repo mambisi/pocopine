@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>collab-canvas</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      /* The board is the imperative surface — the wasm app creates and
+         positions the rect <div>s inside it directly. */
+      #board {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        user-select: none;
+        background:
+          linear-gradient(#241a0e 1px, transparent 1px) 0 0 / 24px 24px,
+          linear-gradient(90deg, #241a0e 1px, transparent 1px) 0 0 / 24px 24px,
+          #1a130c;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="board"></div>
+    <script type="module">
+      import init from "/pkg/collab_canvas.js";
+      init();
+    </script>
+  </body>
+</html>

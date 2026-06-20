@@ -1,0 +1,49 @@
+[package]
+name = "collab-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+bin = "server"
+port = 3030
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+required-features = []
+
+# Shared: the realtime transport + the collab sync protocol + the CRDT. The
+# browser speaks the same wire format as the host gateway — one codec, two ends.
+[dependencies]
+pocopine-realtime = { workspace = true }
+pocopine-collab = { workspace = true }
+yrs = "0.27"
+bytes = "1"
+
+# The browser client: an imperative canvas (web_sys) + the collab wiring.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Node",
+    "CssStyleDeclaration",
+    "DomRect",
+    "PointerEvent",
+    "Event",
+    "EventTarget",
+    "Location",
+] }
+
+# The dev server: the gateway + the CollabSync handler + static files.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-server = { path = "../../crates/pocopine-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

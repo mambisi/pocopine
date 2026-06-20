@@ -66,6 +66,7 @@ members = [
     "tools/gen-model-catalog",
     "examples/blog",
     "examples/charts",
+    "examples/collab-canvas",
     "examples/counter",
     "examples/file-browser",
     "examples/hn",
