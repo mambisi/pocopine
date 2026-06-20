@@ -42,6 +42,23 @@ pub trait Fanout: Send + Sync + 'static {
     /// The returned [`TopicStream`] yields replayed messages first, then live
     /// ones, with no gap or duplication across the boundary.
     async fn subscribe(&self, topic: &Topic, after: Option<u64>) -> Result<TopicStream, WsError>;
+
+    /// Drop retained messages with seq `<= durable_seq` from `topic`'s log,
+    /// trusting the caller that everything up to `durable_seq` is durable
+    /// elsewhere (RFC 073 §10: "trim Redis streams only after durable save").
+    ///
+    /// A consumer that resumes at `durable_seq` (e.g. by reloading a durable
+    /// snapshot current to that cursor) is then always gap-free, since the log
+    /// retains every seq strictly greater. Implementations MUST never trim
+    /// beyond `durable_seq`; trimming *less* (keeping extra) is always safe.
+    ///
+    /// The default is a no-op: an in-process [`LocalFanout`] is already bounded
+    /// by its ring capacity and has no durability to coordinate with. Only a
+    /// persistent backend (Redis Streams) overrides this.
+    async fn trim_after(&self, topic: &Topic, durable_seq: u64) -> Result<(), WsError> {
+        let _ = (topic, durable_seq);
+        Ok(())
+    }
 }
 
 /// Backend-polymorphic source behind a [`TopicStream`]: replayed messages
