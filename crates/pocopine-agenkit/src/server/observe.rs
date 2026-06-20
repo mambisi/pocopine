@@ -80,6 +80,16 @@ pub fn to_observed_event(event: &TraceEvent) -> ObservedEvent {
         observed = observed
             .field("input_tokens", usage.input_tokens, FieldPrivacy::Public)
             .field("output_tokens", usage.output_tokens, FieldPrivacy::Public)
+            .field(
+                "cache_read_tokens",
+                usage.cache_read_tokens,
+                FieldPrivacy::Public,
+            )
+            .field(
+                "cache_creation_tokens",
+                usage.cache_creation_tokens,
+                FieldPrivacy::Public,
+            )
             .field("total_tokens", usage.total(), FieldPrivacy::Public);
     }
     if let Some(cost) = &event.cost {

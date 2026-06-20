@@ -106,6 +106,24 @@ where
         self
     }
 
+    /// **Permit** this flow's reasoning ("thinking") text to reach the client —
+    /// the author-set *ceiling* of the reasoning gate (§D10). Off by default:
+    /// reasoning stays server-side and only a redacted activity count crosses.
+    ///
+    /// This is necessary but not sufficient: text crosses the [`stream`] wire
+    /// only when the author permits it here **and** the caller asks via
+    /// [`FlowCall::request_reasoning`](crate::server::FlowCall::request_reasoning).
+    /// So enabling this lets a "thinking panel" be requested per call; it does
+    /// not force reasoning onto every client. (The full-fidelity
+    /// [`stream_into`](crate::server::FlowCall::stream_into) server-side sink is
+    /// unaffected — it always carries reasoning.)
+    ///
+    /// [`stream`]: crate::server::FlowCall::stream
+    pub fn expose_reasoning(mut self) -> Self {
+        self.descriptor = self.descriptor.expose_reasoning();
+        self
+    }
+
     /// Declare a tool dependency.
     pub fn uses_tool(mut self, id: impl Into<String>) -> Self {
         self.descriptor = self.descriptor.uses_tool(id);

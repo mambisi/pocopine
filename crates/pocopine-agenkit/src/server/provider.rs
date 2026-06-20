@@ -15,9 +15,38 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt};
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, ToolCall, ToolDescriptor,
-    Usage,
+    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, ThinkingLevel, ToolCall,
+    ToolDescriptor, Usage,
 };
+
+use super::credentials::ProviderCredential;
+
+/// Per-request context handed to a [`Provider`] alongside the [`GenerateRequest`]
+/// (roadmap W6). Carries the credential the runtime resolved for this call — from
+/// a [`ProviderCredentials`](super::credentials::ProviderCredentials) store,
+/// possibly per-[`Principal`](pocopine_auth::Principal) (BYOK).
+///
+/// `credential` is `None` when the store had nothing for this provider/principal;
+/// the provider then falls back to the credential it was built with. The struct
+/// is `#[non_exhaustive]` so future per-call inputs (deadline, request id) can be
+/// added without breaking the trait again.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct ProviderContext {
+    /// A credential resolved for this request, overriding the provider's baked
+    /// default. `None` ⇒ use the provider's built-in credential.
+    pub credential: Option<ProviderCredential>,
+}
+
+impl ProviderContext {
+    /// The per-request context for a resolved credential (`None` ⇒ the provider's
+    /// built-in credential). The single construction point, so a future per-call
+    /// field is added here, not at each resolve site. (Direct callers/tests use
+    /// [`ProviderContext::default`].)
+    pub(crate) fn for_request(credential: Option<ProviderCredential>) -> Self {
+        Self { credential }
+    }
+}
 
 /// A boxed, `Send` future — the object-safe return shape for async trait
 /// methods across the runtime (§D15 DC-4).
@@ -58,6 +87,17 @@ pub enum StreamChunk {
     Text(String),
     /// A fully-assembled tool call (the provider accumulates any partials).
     ToolCall(ToolCall),
+    /// A completed reasoning ("thinking") block (roadmap W4). This is the
+    /// **internal** provider→runtime channel only: the runtime folds it into the
+    /// assembled response's content (server-side, for replay + observability) but
+    /// never forwards it to the client `FlowStreamEvent` stream (§D10). The
+    /// client-facing `ThinkingDelta` is W5.
+    Thinking {
+        /// The reasoning text.
+        text: String,
+        /// The provider's opaque signature, replayed verbatim next turn.
+        signature: Option<String>,
+    },
     /// Token usage, typically delivered once near the end.
     Usage(Usage),
 }
@@ -91,6 +131,10 @@ pub struct GenerateRequest {
     pub json_schema: Option<serde_json::Value>,
     /// Optional output token cap.
     pub max_tokens: Option<u32>,
+    /// How much reasoning ("thinking") budget to request (roadmap W4). Defaults
+    /// to [`ThinkingLevel::Off`]; providers only honour it for reasoning-capable
+    /// models and ignore it otherwise.
+    pub thinking: ThinkingLevel,
 }
 
 impl GenerateRequest {
@@ -199,10 +243,12 @@ pub trait Provider: Send + Sync + 'static {
         ProviderCapabilities::all()
     }
 
-    /// Generate a response for `request`.
+    /// Generate a response for `request`, authenticating with `cx.credential`
+    /// when present (else the provider's built-in credential).
     fn generate<'a>(
         &'a self,
         request: GenerateRequest,
+        cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>>;
 
     /// Stream a generation as incremental [`StreamChunk`]s.
@@ -214,8 +260,9 @@ pub trait Provider: Send + Sync + 'static {
     fn generate_stream<'a>(
         &'a self,
         request: GenerateRequest,
+        cx: &'a ProviderContext,
     ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
-        default_stream(self.generate(request))
+        default_stream(self.generate(request, cx))
     }
 }
 
@@ -225,11 +272,12 @@ pub trait Provider: Send + Sync + 'static {
 /// degrade path — distinct from the [`Provider::generate_stream`] trait default,
 /// because here the runtime decides based on the declared capability rather than
 /// on whether the method was overridden.
-pub(crate) fn fallback_stream(
-    provider: &dyn Provider,
+pub(crate) fn fallback_stream<'a>(
+    provider: &'a dyn Provider,
     request: GenerateRequest,
-) -> BoxStream<'_, AgenkitResult<StreamChunk>> {
-    default_stream(provider.generate(request))
+    cx: &'a ProviderContext,
+) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
+    default_stream(provider.generate(request, cx))
 }
 
 /// Turn a one-shot generation future into a [`StreamChunk`] stream.
@@ -248,6 +296,15 @@ fn default_stream<'a>(
 /// Decompose a finished response into the chunks a streaming consumer expects.
 pub(crate) fn response_to_chunks(response: GenerateResponse) -> Vec<AgenkitResult<StreamChunk>> {
     let mut chunks = Vec::new();
+    // Reasoning blocks precede the answer, so emit them first (server-side only).
+    for part in &response.content.parts {
+        if let Some((text, signature)) = part.as_thinking() {
+            chunks.push(Ok(StreamChunk::Thinking {
+                text: text.to_string(),
+                signature: signature.map(str::to_string),
+            }));
+        }
+    }
     let text = response.display_text();
     if !text.is_empty() {
         chunks.push(Ok(StreamChunk::Text(text)));
@@ -313,6 +370,9 @@ pub struct MockProvider {
     default_text: Option<String>,
     default_structured: Option<serde_json::Value>,
     delay_ms: u64,
+    usage_override: Option<Usage>,
+    /// Reasoning text prepended to every response (for W4/W5 thinking tests).
+    thinking: Option<String>,
 }
 
 #[derive(Clone)]
@@ -397,10 +457,40 @@ impl MockProvider {
         self
     }
 
+    /// Emit `text` as a reasoning ("thinking") block on every response (W4/W5):
+    /// it rides the assembled content server-side and streams as a
+    /// `StreamChunk::Thinking`, so the wire reasoning gate can be exercised.
+    pub fn thinking(mut self, text: impl Into<String>) -> Self {
+        self.thinking = Some(text.into());
+        self
+    }
+
+    /// Override the usage every response reports (for cost/cache metering tests);
+    /// by default usage is derived from the prompt length.
+    pub fn with_usage(mut self, usage: Usage) -> Self {
+        self.usage_override = Some(usage);
+        self
+    }
+
     fn respond(&self, request: &GenerateRequest) -> AgenkitResult<GenerateResponse> {
+        let mut response = self.respond_inner(request)?;
+        // Reasoning precedes the answer (server-side content + a leading
+        // `StreamChunk::Thinking` when streamed).
+        if let Some(text) = &self.thinking {
+            response
+                .content
+                .parts
+                .insert(0, ContentPart::thinking(text.clone(), None));
+        }
+        Ok(response)
+    }
+
+    fn respond_inner(&self, request: &GenerateRequest) -> AgenkitResult<GenerateResponse> {
         let prompt = request.prompt_text();
         let latest = request.last_message_text();
-        let usage = Usage::new((prompt.len() / 4) as u64, 8);
+        let usage = self
+            .usage_override
+            .unwrap_or_else(|| Usage::new((prompt.len() / 4) as u64, 8));
 
         if let Some(rule) = self.rules.iter().find(|r| latest.contains(&r.needle)) {
             return Ok(match &rule.response {
@@ -455,6 +545,7 @@ impl Provider for MockProvider {
     fn generate<'a>(
         &'a self,
         request: GenerateRequest,
+        _cx: &'a ProviderContext,
     ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
         Box::pin(async move {
             if self.delay_ms > 0 {
@@ -467,6 +558,7 @@ impl Provider for MockProvider {
     fn generate_stream<'a>(
         &'a self,
         request: GenerateRequest,
+        _cx: &'a ProviderContext,
     ) -> BoxStream<'a, AgenkitResult<StreamChunk>> {
         // Simulate incremental streaming by splitting the displayable response
         // (text, or the serialized JSON of a structured value) into word-sized
@@ -479,10 +571,22 @@ impl Provider for MockProvider {
                 if text.is_empty() {
                     response_to_chunks(response)
                 } else {
-                    let mut chunks: Vec<AgenkitResult<StreamChunk>> = text
-                        .split_inclusive(' ')
-                        .map(|word| Ok(StreamChunk::Text(word.to_string())))
-                        .collect();
+                    // Reasoning blocks first (server-side only), then word-sized
+                    // text deltas, then tool calls + usage — parity with
+                    // `response_to_chunks`.
+                    let mut chunks: Vec<AgenkitResult<StreamChunk>> = Vec::new();
+                    for part in &response.content.parts {
+                        if let Some((thinking, signature)) = part.as_thinking() {
+                            chunks.push(Ok(StreamChunk::Thinking {
+                                text: thinking.to_string(),
+                                signature: signature.map(str::to_string),
+                            }));
+                        }
+                    }
+                    chunks.extend(
+                        text.split_inclusive(' ')
+                            .map(|word| Ok(StreamChunk::Text(word.to_string()))),
+                    );
                     for call in response.tool_calls {
                         chunks.push(Ok(StreamChunk::ToolCall(call)));
                     }
@@ -518,13 +622,19 @@ mod tests {
             .on_prompt_text("uploads", "uploads use presigned URLs")
             .default_text("idk");
         let response = provider
-            .generate(request("how do uploads work?", false))
+            .generate(
+                request("how do uploads work?", false),
+                &ProviderContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(response.text_output(), "uploads use presigned URLs");
 
         let response = provider
-            .generate(request("something else", false))
+            .generate(
+                request("something else", false),
+                &ProviderContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(response.text_output(), "idk");
@@ -534,7 +644,10 @@ mod tests {
     async fn mock_returns_structured_value() {
         let provider =
             MockProvider::new("local").default_structured(serde_json::json!({"answer": "42"}));
-        let response = provider.generate(request("q", true)).await.unwrap();
+        let response = provider
+            .generate(request("q", true), &ProviderContext::default())
+            .await
+            .unwrap();
         assert_eq!(
             response.structured_value().unwrap(),
             &serde_json::json!({"answer": "42"})
@@ -551,7 +664,8 @@ mod tests {
             "search_docs",
             serde_json::json!({"q": "uploads"}),
         );
-        let mut stream = provider.generate_stream(request("please search docs", false));
+        let cx = ProviderContext::default();
+        let mut stream = provider.generate_stream(request("please search docs", false), &cx);
         let mut tool_ids = Vec::new();
         while let Some(chunk) = stream.next().await {
             if let Ok(StreamChunk::ToolCall(call)) = chunk {
@@ -584,6 +698,7 @@ mod tests {
             fn generate<'a>(
                 &'a self,
                 _request: GenerateRequest,
+                _cx: &'a ProviderContext,
             ) -> BoxFuture<'a, AgenkitResult<GenerateResponse>> {
                 Box::pin(async { Ok(GenerateResponse::text("ok")) })
             }

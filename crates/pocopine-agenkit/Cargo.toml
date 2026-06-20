@@ -34,8 +34,9 @@ pocopine-agenkit-macros = { workspace = true }
 pocopine-observe = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Provider runtime + bounded parallel branches (JoinSet/abort) + timeouts.
-tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+# Provider runtime + bounded parallel branches (JoinSet/abort) + timeouts;
+# `fs`/`io-util` back the durable JSONL session store (W7).
+tokio = { version = "1", features = ["macros", "rt", "time", "sync", "fs", "io-util"] }
 # Type-driven JSON Schemas for robust structured output (§D10).
 schemars = "0.8"
 # The public AI-flow streaming route (SSE) + Provider::generate_stream, matching
@@ -43,6 +44,18 @@ schemars = "0.8"
 axum = "0.7"
 futures = "0.3"
 tokio-stream = "0.1"
+# The `SecretString` credential primitive (re-exported as
+# `pocopine_agenkit::server::SecretString`).
+pocopine-crypto = { workspace = true }
+# Durable session store (W7): base64url thread ids + a CSPRNG to mint them.
+pocopine-codec = { workspace = true }
+getrandom = "0.2"
+# The indexed SQLite session store (W7). `bundled` ships SQLite (no system lib);
+# already a workspace dep via pocopine-sync-sqlite, so no new linkage.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# OAuth provider credentials (W6.3): the flow + token-store contract live in this
+# shared crate; agenkit only adapts a stored token to a `ProviderCredential`.
+pocopine-auth-oauth = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # `multi_thread` so parallel-branch cancellation tests actually race.
@@ -55,3 +68,7 @@ tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 # Drive the SSE route in-process (oneshot) and collect its body.
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# Mock the OAuth token endpoint for the W6.3 flow tests (no network).
+wiremock = "0.6"
+# Temp dirs for the durable JSONL session-store tests (W7).
+tempfile = "3"
