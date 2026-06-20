@@ -2034,7 +2034,12 @@ impl App {
     /// RFC 056 §6.2: before any mount work the registry is verified;
     /// when collisions exist the boot error surface is rendered and
     /// no further mount work runs.
-    pub fn run(self) {
+    /// Boot the app: validate plugins/registry, run `before_mount`, then
+    /// either MOUNT the `[pp-app]` root fresh (`hydrate = false`,
+    /// [`App::run`]) or CLAIM a server-rendered `[pp-app]` tree
+    /// (`hydrate = true`, [`App::hydrate`]). Everything except the
+    /// mount-vs-claim step is shared.
+    fn boot(self, hydrate: bool) {
         // Install the panic-to-`console.error` hook before anything
         // else. The framework authors directive `.expect(...)`
         // messages throughout (`#[store]` "not registered — call
@@ -2140,7 +2145,13 @@ impl App {
         };
         let pp_app = document.query_selector("[pp-app]").ok().flatten();
         if let Some(host) = pp_app {
-            mount_pp_app_subtree(&host);
+            if hydrate {
+                // RFC-099 — claim the server-rendered tree under
+                // [pp-app] instead of mounting fresh.
+                hydrate_pp_app_subtree(&host);
+            } else {
+                mount_pp_app_subtree(&host);
+            }
         } else {
             crate::plugin::emit(crate::plugin::AppBootFailed {
                 reason: "missing_pp_app_root",
@@ -2174,6 +2185,23 @@ impl App {
                 0.0
             },
         });
+    }
+
+    /// Boot the app and MOUNT the `[pp-app]` root fresh — the default,
+    /// client-rendered shape.
+    pub fn run(self) {
+        self.boot(false);
+    }
+
+    /// RFC-099 — boot the app and CLAIM a server-rendered `[pp-app]`
+    /// tree (hydration) instead of mounting fresh. The document must
+    /// already contain the SSR output (component roots stamped with
+    /// `data-pp-scope-id` + their `data-pp-state` islands, the route
+    /// rendered into `<pp-outlet>`); the same registration /
+    /// plugin / store / route builder as [`App::run`] is required so
+    /// the claim resolves every component, store, and route.
+    pub fn hydrate(self) {
+        self.boot(true);
     }
 
     /// Snapshot of the registered component names. Debug utility only —
@@ -2458,6 +2486,56 @@ fn mount_pp_app_subtree(host: &Element) {
                 router::set_outlet(el);
             }
         }
+    }
+}
+
+/// RFC-099 Phase 4 — claim the server-rendered component tree under
+/// `[pp-app]` (hydration counterpart of [`mount_pp_app_subtree`]). The
+/// server rendered each root component's template INTO its
+/// custom-element host (`<website-app><div data-pp-scope-id="…">…`), so
+/// for every DIRECT custom-element child of `[pp-app]` we claim its
+/// inner root via [`crate::hydrate::hydrate_root`] (which reads the
+/// component tag + its `data-pp-state` island). Recursive child + route
+/// claim is wired through `hydrate_root` → the plan walk.
+fn hydrate_pp_app_subtree(host: &Element) {
+    let mut child = host.first_element_child();
+    while let Some(el) = child {
+        let next = el.next_element_sibling();
+        // The custom-element host's first element child is the
+        // server-rendered component root (carries data-pp-scope-id).
+        if crate::templates::template_for(&el.local_name()).is_some()
+            && let Some(inner) = el.first_element_child()
+        {
+            let _ = crate::hydrate::hydrate_root(&inner);
+        }
+        child = next;
+    }
+    // Register each <pp-outlet> and CLAIM the route component the server
+    // rendered into it (`render_app_to_string` placed it as the outlet's
+    // `<route-tag>` child). Claiming it means the router must NOT repaint
+    // on init — it only seeds `$route` + the popstate listener.
+    let mut claimed_route = false;
+    if let Ok(outlets) = host.query_selector_all("pp-outlet") {
+        for i in 0..outlets.length() {
+            if let Some(node) = outlets.item(i)
+                && let Ok(outlet) = node.dyn_into::<Element>()
+            {
+                if let Some(route_root) = outlet
+                    .first_element_child()
+                    .and_then(|route_tag| route_tag.first_element_child())
+                    && crate::hydrate::hydrate_root(&route_root).is_some()
+                {
+                    claimed_route = true;
+                }
+                router::set_outlet(outlet);
+            }
+        }
+    }
+    if claimed_route {
+        router::init_hydrated();
+    } else {
+        // No server-rendered route — mount the current URL's route fresh.
+        router::init();
     }
 }
 

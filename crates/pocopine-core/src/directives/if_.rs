@@ -113,15 +113,100 @@ pub fn install_cond(
         (anchor_node, parent_el.clone())
     };
 
-    let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
-    let prev_active: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+    drive_cond(
+        anchor_node,
+        stash_el,
+        Some(template),
+        member_templates,
+        scope_id,
+        proxy,
+        ctx_parent_id,
+        branches,
+        has_else,
+        else_body,
+        teleport_target,
+        None, // mount: no seed — the first effect run mounts the branch
+    );
+}
+
+/// RFC-099 Phase 3 — the hydrate (claim) entry. The server already
+/// rendered the active branch's clone followed by the
+/// `<!--pp:cond:idx-->` comment anchor (member `<template>`s
+/// dropped). Reuse the SAME effect, pre-seeded with the adopted
+/// clone + active index so the first run short-circuits (no DOM
+/// write); later condition changes drive normal swaps. Future flips
+/// always have a macro body fn because the SSR stamper only expands
+/// a chain when every branch is liftable.
+#[allow(clippy::too_many_arguments)]
+pub fn hydrate_cond(
+    anchor_node: web_sys::Node,
+    active: Option<usize>,
+    adopted: Option<Element>,
+    scope_id: ScopeId,
+    proxy: JsValue,
+    branches: Vec<(BranchEval, Option<IfBodyFn>)>,
+    has_else: bool,
+    else_body: Option<IfBodyFn>,
+    teleport_selector: Option<&str>,
+) {
+    // The effect rides the anchor's parent element (a comment can't
+    // carry the effects table).
+    let Some(parent_el) = anchor_node
+        .parent_node()
+        .and_then(|n| n.dyn_into::<Element>().ok())
+    else {
+        return;
+    };
+    let teleport_target: Option<Element> = teleport_selector.and_then(teleport::resolve_target);
+    let ctx_parent_id = mount::inherited_ctx_parent_of(&parent_el).unwrap_or(scope_id);
+    if let Some(el) = adopted.as_ref() {
+        bind_borrowed_scope_to(el, scope_id, &proxy);
+    }
+    drive_cond(
+        anchor_node,
+        parent_el,
+        None, // server dropped the member <template>s
+        Vec::new(),
+        scope_id,
+        proxy,
+        ctx_parent_id,
+        branches,
+        has_else,
+        else_body,
+        teleport_target,
+        Some((active, adopted)),
+    );
+}
+
+/// Shared effect driver for [`install_cond`] (mount) and
+/// [`hydrate_cond`] (claim). `seed` pre-seeds `(prev_active,
+/// current)`; `None` is the mount path (first run mounts the active
+/// branch), `Some` is the hydrate path (first run short-circuits
+/// when the server branch matches the client evaluation).
+#[allow(clippy::too_many_arguments)]
+fn drive_cond(
+    anchor_node: web_sys::Node,
+    stash_el: Element,
+    head_template: Option<HtmlTemplateElement>,
+    member_templates: Vec<Option<HtmlTemplateElement>>,
+    scope_id: ScopeId,
+    proxy: JsValue,
+    ctx_parent_id: ScopeId,
+    branches: Vec<(BranchEval, Option<IfBodyFn>)>,
+    has_else: bool,
+    else_body: Option<IfBodyFn>,
+    teleport_target: Option<Element>,
+    seed: Option<(Option<usize>, Option<Element>)>,
+) {
+    let (seed_active, seed_clone) = seed.unwrap_or((None, None));
+    let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(seed_clone));
+    let prev_active: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(seed_active));
     // (branch index, clone) of an outgoing clone whose leave
     // transition is still playing — a re-flip back to that branch
     // cancels the leave and resumes the SAME clone in place (the
     // pre-RFC-094 pp-if contract: no flicker, state preserved).
     #[allow(clippy::type_complexity)]
     let leaving: Rc<RefCell<Option<(Option<usize>, Element)>>> = Rc::new(RefCell::new(None));
-    let head_template = template;
     // Effect lifetime: on the kept root template when the
     // template IS the scope root, else on the anchor's parent
     // (a comment can't carry the effects table).
@@ -211,7 +296,7 @@ pub fn install_cond(
         let (body, fallback_template): (Option<IfBodyFn>, Option<&HtmlTemplateElement>) =
             match active {
                 None => return,
-                Some(0) => (branches[0].1, Some(&head_template)),
+                Some(0) => (branches[0].1, head_template.as_ref()),
                 Some(i) if i < branches.len() => (
                     branches[i].1,
                     member_templates.get(i - 1).and_then(|t| t.as_ref()),
@@ -307,7 +392,7 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
 /// encoding: a string IS its tag (covers plain `String` fields
 /// too); an object with exactly one own key is `(key, value)`;
 /// anything else has no tag and only `_` matches.
-fn extract_tag(v: &JsValue) -> (Option<String>, JsValue) {
+pub(crate) fn extract_tag(v: &JsValue) -> (Option<String>, JsValue) {
     if let Some(s) = v.as_string() {
         return (Some(s), JsValue::UNDEFINED);
     }
@@ -378,9 +463,91 @@ pub fn install_match(
         (anchor_node, parent_el.clone())
     };
 
-    let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
-    let prev_active: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
-    let payload_scope: Rc<RefCell<Option<crate::scope::Scope>>> = Rc::new(RefCell::new(None));
+    drive_match(
+        anchor_node,
+        stash_el,
+        scope_id,
+        proxy,
+        ctx_parent_id,
+        evaluator,
+        arms,
+        teleport_target,
+        None, // mount: no seed — first effect run mounts the active arm
+    );
+}
+
+/// RFC-099 Phase 3 — hydrate (claim) path for `pp-match`. The server
+/// rendered the active case's clone + `<!--pp:match:idx-->` anchor (and,
+/// for a `pp-let` arm, stamped the body against the payload). The caller
+/// ([`crate::templates_plan::hydrate_static_match_plan`]) has already
+/// created the per-mount `PayloadScope` (so the body bindings resolve
+/// the `pp-let` name) and hydrated the body onto the adopted clone;
+/// here we bind the clone's scope, then seed the controller so its first
+/// run is a no-op and later tag changes drive normal swaps.
+#[allow(clippy::too_many_arguments)]
+pub fn hydrate_match(
+    anchor_node: web_sys::Node,
+    active: Option<usize>,
+    adopted: Option<Element>,
+    payload: Option<crate::scope::Scope>,
+    scope_id: ScopeId,
+    proxy: JsValue,
+    evaluator: BranchEval,
+    arms: Vec<MatchArm>,
+    teleport_selector: Option<&str>,
+) {
+    let Some(parent_el) = anchor_node
+        .parent_node()
+        .and_then(|n| n.dyn_into::<Element>().ok())
+    else {
+        return;
+    };
+    let teleport_target: Option<Element> = teleport_selector.and_then(teleport::resolve_target);
+    let ctx_parent_id = mount::inherited_ctx_parent_of(&parent_el).unwrap_or(scope_id);
+    if let Some(el) = adopted.as_ref() {
+        match payload.as_ref() {
+            // pp-let arm: the clone owns the payload scope (released
+            // with the clone), mirroring the mount path.
+            Some(scope) => {
+                mount::bind_scope_id_only(el, scope.id);
+                mount::mark_scope_owned(el);
+            }
+            None => bind_borrowed_scope_to(el, scope_id, &proxy),
+        }
+    }
+    drive_match(
+        anchor_node,
+        parent_el,
+        scope_id,
+        proxy,
+        ctx_parent_id,
+        evaluator,
+        arms,
+        teleport_target,
+        Some((active, adopted, payload)),
+    );
+}
+
+/// Shared effect driver for [`install_match`] (mount) and
+/// [`hydrate_match`] (claim). `seed` pre-seeds `(prev_active, current,
+/// payload_scope)`.
+#[allow(clippy::too_many_arguments)]
+fn drive_match(
+    anchor_node: web_sys::Node,
+    stash_el: Element,
+    scope_id: ScopeId,
+    proxy: JsValue,
+    ctx_parent_id: ScopeId,
+    evaluator: BranchEval,
+    arms: Vec<MatchArm>,
+    teleport_target: Option<Element>,
+    seed: Option<(Option<usize>, Option<Element>, Option<crate::scope::Scope>)>,
+) {
+    let (seed_active, seed_clone, seed_payload) = seed.unwrap_or((None, None, None));
+    let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(seed_clone));
+    let prev_active: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(seed_active));
+    let payload_scope: Rc<RefCell<Option<crate::scope::Scope>>> =
+        Rc::new(RefCell::new(seed_payload));
     // Mid-leave cancel record — see install_cond. Carries the
     // arm's PayloadScope so a resumed pp-let arm keeps receiving
     // same-tag payload updates.

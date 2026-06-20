@@ -274,6 +274,500 @@ pub fn install_static_ref(
 /// bodies. Parsing and fail-fast behaviour intentionally match
 /// the generic applier.
 #[doc(hidden)]
+/// RFC-099 Phase 2c — resolve a `node_path` against an **existing** DOM
+/// root, walking **element children only** (text/comment nodes don't
+/// shift the index) — the same convention the macro's
+/// `emit_specialized_resolve` and the row-plan resolver use, and which
+/// matches the element-only `node_path` the plan records. An empty path
+/// is the root itself. Used by the hydration claim walk to attach
+/// bindings to server-rendered nodes without re-creating them.
+///
+/// `Element::children()` is the live HTMLCollection of element children
+/// (the browser excludes text/comment nodes), so `.item(idx)` indexes
+/// exactly as the client's `first_element_child`/`next_element_sibling`
+/// walk does.
+pub fn resolve_node_path(root: &Element, path: &[u16]) -> Option<Element> {
+    let mut cur = root.clone();
+    for &idx in path {
+        cur = cur.children().item(idx as u32)?;
+    }
+    Some(cur)
+}
+
+/// RFC-099 Phase 2c — attach reactivity to a **server-rendered** subtree
+/// under `root` without creating any DOM (the "claim" walk). For each
+/// binding / interpolation / listener / ref the plan records, it
+/// resolves the existing node by `node_path` and installs the directive
+/// on it. Structural controllers (`pp-if` / `pp-for` / `pp-match`),
+/// child-component mounts, and slots resolve **client-side** in Phase 2
+/// and are skipped here.
+///
+/// Correctness: the installed binding effects re-evaluate the same state
+/// the server rendered from, so their first run writes identical values
+/// — the DOM stays byte-equal to the server output (verified by the
+/// differential harness). The zero-initial-DOM-write refinement (via
+/// [`crate::reactive::effect_hydrating`]) layers on top later.
+pub fn hydrate_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    plan: &'static StaticTemplatePlan,
+    template_name: &str,
+) {
+    for r in plan.refs {
+        if let Some(el) = resolve_node_path(root, r.node_path) {
+            crate::refs::register(scope_id, r.name, &el);
+        }
+    }
+    for b in plan.bindings {
+        if let Some(el) = resolve_node_path(root, b.node_path) {
+            install_static_binding(&el, scope_id, proxy, b, template_name);
+        }
+    }
+    for it in plan.interps {
+        if let Some(parent) = resolve_node_path(root, it.node_path)
+            && let Some(target) =
+                directives::interp::resolve_text_target(&parent, it.text_index as usize)
+        {
+            // Resolve through the scope's proxy-free reader — same as
+            // the binding evaluators and the client mount path. (A
+            // `None` root + an elided `UNDEFINED` proxy would leave
+            // dynamic segments unresolvable.)
+            directives::interp::install_planned_target(
+                &parent,
+                proxy,
+                crate::scope::scoped_root_reader(scope_id),
+                &target,
+                it.segments,
+            );
+        }
+    }
+    for l in plan.listeners {
+        if let Some(el) = resolve_node_path(root, l.node_path) {
+            install_static_listener(&el, scope_id, proxy, l, template_name);
+        }
+    }
+    // RFC-099 — claim opaque directives (pp-intersect scroll-spy,
+    // pp-resize, pp-anchor, pp-roving, pp-flip). They attach observers /
+    // listeners to the element; the server rendered no behavior, so they
+    // install exactly as on mount.
+    for d in plan.opaque_directives {
+        if let Some(el) = resolve_node_path(root, d.node_path) {
+            install_static_opaque_directive(&el, scope_id, proxy, d, template_name);
+        }
+    }
+    // RFC-099 — claim native two-way models (pp-model on <input> /
+    // <select> / <textarea>): wires the input→state listener and the
+    // initial state→element sync the server couldn't run.
+    for m in plan.native_models {
+        if let Some(el) = resolve_node_path(root, m.node_path) {
+            install_static_native_model(&el, scope_id, proxy, m);
+        }
+    }
+    // RFC-099 Phase 3 — claim the structural controllers the server
+    // stamped (pp-if chains so far). Each finds its decision anchor by
+    // label, adopts the server-rendered clone, installs its body
+    // effects, and seeds the controller so its first run is a no-op.
+    for (idx, cp) in plan.if_plans.iter().enumerate() {
+        hydrate_static_if_plan(root, scope_id, proxy, idx, cp, template_name);
+    }
+    for (idx, mp) in plan.match_plans.iter().enumerate() {
+        hydrate_static_match_plan(root, scope_id, proxy, idx, mp, template_name);
+    }
+    for (idx, fp) in plan.for_plans.iter().enumerate() {
+        hydrate_static_for_plan(root, scope_id, proxy, idx, fp, template_name);
+    }
+    // RFC-099 Phase 4 — claim each server-rendered child component
+    // recursively (the stamper rendered it INTO the host tag + emitted
+    // its state island). Slotted children weren't server-rendered yet,
+    // so they mount fresh client-side.
+    for cm in plan.child_mounts {
+        hydrate_static_child_mount(root, scope_id, proxy, cm, template_name);
+    }
+}
+
+/// RFC-099 Phase 4 — claim a server-rendered child-component mount.
+/// Non-slotted: the child's root + `data-pp-state` island live INSIDE
+/// the host tag, so claim it via [`crate::hydrate::hydrate_root`]
+/// (which recurses into the child's own children). Slotted children
+/// weren't server-rendered (slot SSR pending) → mount fresh. Either
+/// way the parent-scope host directives (`:prop` / `@event` / pp-model)
+/// are wired afterward; `child_component_scope_id` finds the claimed
+/// child via the inner root's `SCOPE_ID_KEY`.
+fn hydrate_static_child_mount(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticChildMount,
+    template_name: &str,
+) {
+    let Some(host) = resolve_node_path(root, entry.node_path) else {
+        return;
+    };
+    if !entry.slots.is_empty() {
+        // Slotted child: server left the host's parent-authored content
+        // in place — mount fresh so slots materialize (also wires the
+        // host directives via install_static_child_mount).
+        install_static_child_mount(&host, scope_id, proxy, entry, template_name);
+        return;
+    }
+    // The claim: adopt the server-rendered subtree (or mount fresh if the
+    // child wasn't server-rendered) and wire the parent's host directives.
+    let claim: Box<dyn FnOnce()> = {
+        let host = host.clone();
+        let proxy = proxy.clone();
+        let template_name = template_name.to_string();
+        Box::new(move || {
+            match host.first_element_child() {
+                Some(inner) => {
+                    crate::hydrate::hydrate_root(&inner);
+                }
+                None => crate::mount::mount_child_component(&host, entry.tag),
+            }
+            install_child_host_directives(&host, scope_id, &proxy, entry, &template_name);
+        })
+    };
+
+    // RFC-099 — lazy hydration. A host marked `pp-hydrate="visible"` keeps
+    // its already-painted SSR markup but DEFERS the claim (bindings /
+    // listeners / effects / on_mount) until it scrolls into view, so
+    // below-the-fold content stops competing for the main thread at load.
+    // No flicker — the markup never changes, only behaviour arrives later.
+    // Degrades to an immediate claim if the attribute was stripped or
+    // IntersectionObserver is unavailable.
+    if host.get_attribute("pp-hydrate").as_deref() == Some("visible") {
+        defer_hydration_until_visible(&host, claim);
+    } else {
+        claim();
+    }
+}
+
+/// RFC-099 — run `claim` once when `host` first intersects the viewport,
+/// then disconnect. Claims immediately if `IntersectionObserver` can't be
+/// constructed. The one-shot callback is intentionally leaked (`forget`):
+/// it fires at most once per lazily-hydrated host and the observer is
+/// disconnected right after, so there's no ongoing cost.
+fn defer_hydration_until_visible(host: &Element, claim: Box<dyn FnOnce()>) {
+    use std::cell::Cell;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    // Shared single-shot slots, swapped out when the host first intersects.
+    type ClaimSlot = Rc<Cell<Option<Box<dyn FnOnce()>>>>;
+    type ObserverSlot = Rc<Cell<Option<web_sys::IntersectionObserver>>>;
+
+    let observer: ObserverSlot = Rc::new(Cell::new(None));
+    let pending: ClaimSlot = Rc::new(Cell::new(Some(claim)));
+
+    let observer_cb = observer.clone();
+    let pending_cb = pending.clone();
+    let cb = Closure::<dyn FnMut(js_sys::Array)>::new(move |entries: js_sys::Array| {
+        let visible = entries.iter().any(|e| {
+            e.dyn_into::<web_sys::IntersectionObserverEntry>()
+                .map(|entry| entry.is_intersecting())
+                .unwrap_or(false)
+        });
+        if visible {
+            if let Some(claim) = pending_cb.take() {
+                claim();
+            }
+            if let Some(obs) = observer_cb.take() {
+                obs.disconnect();
+            }
+        }
+    });
+
+    match web_sys::IntersectionObserver::new(cb.as_ref().unchecked_ref()) {
+        Ok(obs) => {
+            obs.observe(host);
+            observer.set(Some(obs));
+            cb.forget();
+        }
+        // No observer support — claim now rather than never.
+        Err(_) => {
+            if let Some(claim) = pending.take() {
+                claim();
+            }
+        }
+    }
+}
+
+/// Find the `<!--label-->` comment among `parent`'s child nodes (the
+/// decision anchor the SSR stamper emitted, e.g. `pp:cond:0`).
+fn find_comment_anchor(parent: &Element, label: &str) -> Option<web_sys::Node> {
+    let kids = parent.child_nodes();
+    for i in 0..kids.length() {
+        let node = kids.item(i)?;
+        if node.node_type() == web_sys::Node::COMMENT_NODE
+            && node.node_value().as_deref() == Some(label)
+        {
+            return Some(node);
+        }
+    }
+    None
+}
+
+/// RFC-099 Phase 3 — claim a server-stamped `pp-if` chain. The server
+/// rendered `[active-branch-clone]<!--pp:cond:idx-->` (member
+/// `<template>`s dropped). Find the anchor, adopt the clone, install
+/// the active branch body's effects on it, and hand the seeded chain
+/// to [`directives::if_::hydrate_cond`]. If the anchor is absent the
+/// server left the chain unexpanded (an unliftable branch) — fall back
+/// to a normal client mount on the surviving `<template>`.
+fn hydrate_static_if_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    idx: usize,
+    entry: &'static StaticCondPlan,
+    template_name: &str,
+) {
+    let path = entry.template_node_path;
+    if path.is_empty() {
+        return; // scope-root template: SSR left it bare for client mount
+    }
+    let Some(parent) = resolve_node_path(root, &path[..path.len() - 1]) else {
+        return;
+    };
+    let label = format!("pp:cond:{idx}");
+    let Some(anchor) = find_comment_anchor(&parent, &label) else {
+        // Unexpanded chain — the surviving <template> is at `path`.
+        if let Some(tpl_el) = resolve_node_path(root, path) {
+            install_static_if_plan(&tpl_el, scope_id, proxy, entry, template_name);
+        }
+        return;
+    };
+
+    // Branch evaluators (mirrors install_static_if_plan).
+    let Some(head) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
+        fail(
+            "hydrate-if-parse",
+            template_name,
+            path,
+            Some(entry.expr_src),
+        );
+        return;
+    };
+    let mut branches: Vec<(
+        directives::if_::BranchEval,
+        Option<crate::directives::for_plan::IfBodyFn>,
+    )> = Vec::with_capacity(1 + entry.else_if.len());
+    branches.push((head, entry.body));
+    for b in entry.else_if {
+        let Some(eval) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
+            fail(
+                "hydrate-else-if-parse",
+                template_name,
+                path,
+                Some(b.expr_src),
+            );
+            return;
+        };
+        branches.push((eval, b.body));
+    }
+
+    // Active branch — client eval against the same state the server
+    // rendered from, so it matches the adopted clone.
+    let active = branches
+        .iter()
+        .position(|(e, _)| !e(proxy).is_falsy())
+        .or_else(|| entry.has_else.then_some(branches.len()));
+    let adopted = anchor
+        .previous_sibling()
+        .and_then(|n| n.dyn_into::<Element>().ok());
+    let active_body_plan = match active {
+        Some(0) => entry.body_plan,
+        Some(i) if i <= entry.else_if.len() => entry.else_if[i - 1].body_plan,
+        Some(_) => entry.else_body_plan,
+        None => None,
+    };
+    if let (Some(el), Some(bp)) = (adopted.as_ref(), active_body_plan) {
+        // The adopted clone IS the body root; install its bindings /
+        // interps / nested controllers (recursive claim).
+        hydrate_plan(el, scope_id, proxy, bp, template_name);
+    }
+
+    directives::if_::hydrate_cond(
+        anchor,
+        active,
+        adopted,
+        scope_id,
+        proxy.clone(),
+        branches,
+        entry.has_else,
+        entry.else_body,
+        entry.teleport_selector,
+    );
+}
+
+/// RFC-099 Phase 3 — claim a server-stamped `pp-match`. Find the
+/// labelled anchor, adopt the rendered case clone, build the per-mount
+/// `PayloadScope` for a `pp-let` arm (so the body's `pp-let` name
+/// resolves), hydrate the body onto the clone against that scope, and
+/// hand the seeded controller to [`directives::if_::hydrate_match`].
+/// Anchor absent → fall back to a normal client mount.
+fn hydrate_static_match_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    idx: usize,
+    entry: &'static StaticMatchPlan,
+    template_name: &str,
+) {
+    let path = entry.template_node_path;
+    if path.is_empty() {
+        return;
+    }
+    let Some(parent) = resolve_node_path(root, &path[..path.len() - 1]) else {
+        return;
+    };
+    let label = format!("pp:match:{idx}");
+    let Some(anchor) = find_comment_anchor(&parent, &label) else {
+        if let Some(tpl_el) = resolve_node_path(root, path) {
+            install_static_match_plan(&tpl_el, scope_id, proxy, entry, template_name);
+        }
+        return;
+    };
+    let Some(evaluator) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
+        fail(
+            "hydrate-match-parse",
+            template_name,
+            path,
+            Some(entry.expr_src),
+        );
+        return;
+    };
+
+    // Active arm + payload — client eval against the same state the
+    // server rendered from, mirroring `install_match`/`extract_tag`.
+    let value = evaluator(proxy);
+    let (tag, payload_val) = directives::if_::extract_tag(&value);
+    let active = entry.cases.iter().position(|c| {
+        c.tags.is_empty() || tag.as_deref().map(|t| c.tags.contains(&t)).unwrap_or(false)
+    });
+    let adopted = anchor
+        .previous_sibling()
+        .and_then(|n| n.dyn_into::<Element>().ok());
+
+    // pp-let arm → a per-mount PayloadScope (same as install_match); the
+    // body's bindings install against it so `bind_name` resolves.
+    let ctx_parent_id = crate::mount::inherited_ctx_parent_of(&parent).unwrap_or(scope_id);
+    let (body_scope_id, payload_scope) = match active.map(|i| &entry.cases[i]) {
+        Some(case) => match case.bind_name {
+            Some(name) => {
+                let bound = if case.tags.is_empty() {
+                    value.clone()
+                } else {
+                    payload_val.clone()
+                };
+                let scope = crate::scope::Scope::new(Rc::new(RefCell::new(
+                    crate::payload_scope::PayloadScope {
+                        ident: name.to_string(),
+                        value: bound,
+                        parent_scope_id: scope_id,
+                    },
+                )));
+                crate::context::set_parent(scope.id, ctx_parent_id);
+                let id = scope.id;
+                (id, Some(scope))
+            }
+            None => (scope_id, None),
+        },
+        None => (scope_id, None),
+    };
+
+    if let (Some(el), Some(bp)) = (
+        adopted.as_ref(),
+        active.and_then(|i| entry.cases[i].body_plan),
+    ) {
+        hydrate_plan(el, body_scope_id, proxy, bp, template_name);
+    }
+
+    let arms: Vec<directives::if_::MatchArm> = entry
+        .cases
+        .iter()
+        .map(|c| directives::if_::MatchArm {
+            tags: c.tags,
+            bind_name: c.bind_name,
+            body: c.body,
+        })
+        .collect();
+    directives::if_::hydrate_match(
+        anchor,
+        active,
+        adopted,
+        payload_scope,
+        scope_id,
+        proxy.clone(),
+        evaluator,
+        arms,
+        entry.teleport_selector,
+    );
+}
+
+/// RFC-099 Phase 3 — claim a server-stamped UNKEYED `pp-for`. Find the
+/// labelled `<!--pp:for:idx-->` anchor and hand it to
+/// [`directives::for_::hydrate_naive`], which adopts the rendered rows
+/// and seeds the controller. Anchor absent (keyed lists — not
+/// server-expanded yet — or an unliftable row body) → fall back to a
+/// normal client mount on the surviving `<template>`.
+fn hydrate_static_for_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    idx: usize,
+    entry: &'static StaticForPlan,
+    template_name: &str,
+) {
+    let path = entry.template_node_path;
+    if path.is_empty() {
+        return;
+    }
+    let Some(parent) = resolve_node_path(root, &path[..path.len() - 1]) else {
+        return;
+    };
+    let label = format!("pp:for:{idx}");
+    let Some(anchor) = find_comment_anchor(&parent, &label) else {
+        if let Some(tpl_el) = resolve_node_path(root, path) {
+            install_static_for_plan(&tpl_el, scope_id, proxy, entry, template_name);
+        }
+        return;
+    };
+    match entry.key_expr {
+        // Keyed: claim into run_keyed's pool so reconciliation preserves
+        // row identity. Resolve the RFC-054 row plan by id (the
+        // <template> that carried data-pp-row-plan is gone).
+        Some(key) if !key.trim().is_empty() => {
+            let row_plan = entry
+                .row_plan_id
+                .and_then(|id| directives::for_plan::lookup_row_plan_by_id(template_name, id));
+            directives::for_::hydrate_keyed(
+                anchor,
+                entry.item_name,
+                entry.items_expr,
+                key,
+                proxy.clone(),
+                scope_id,
+                entry.stagger_ms,
+                entry.body,
+                entry.body_plan,
+                entry.body_html.unwrap_or(""),
+                row_plan,
+            );
+        }
+        _ => directives::for_::hydrate_naive(
+            anchor,
+            entry.item_name,
+            entry.items_expr,
+            proxy.clone(),
+            scope_id,
+            entry.stagger_ms,
+            entry.body,
+            entry.body_plan,
+        ),
+    }
+}
+
 pub fn install_static_binding(
     el: &Element,
     scope_id: ScopeId,

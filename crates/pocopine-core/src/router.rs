@@ -886,9 +886,40 @@ pub fn init() {
     if INITIALISED.with(|b| b.replace(true)) {
         return; // idempotent
     }
-
     ensure_route_scope();
+    install_router_listeners();
+    let _ = mount_current();
+}
 
+/// RFC-099 Phase 4 — initialise the router for a HYDRATED app: seed the
+/// `$route` scope from the current URL and attach the listeners, but DO
+/// NOT paint — the server already rendered the matched route into the
+/// `<pp-outlet>` and `App::hydrate` claimed it. The first navigation /
+/// popstate re-mounts normally via [`mount_current`].
+pub fn init_hydrated() {
+    if INITIALISED.with(|b| b.replace(true)) {
+        return; // idempotent
+    }
+    ensure_route_scope();
+    // Seed `$route` from the current URL so bindings on the claimed route
+    // see the right path/params/query — without mounting.
+    if let Some(win) = web_sys::window() {
+        let loc = win.location();
+        let path = loc.pathname().unwrap_or_else(|_| "/".into());
+        let search = loc.search().unwrap_or_default();
+        let params = match_route(&path, false)
+            .map(|m| m.params)
+            .unwrap_or_default();
+        update_route_state(&path, &params, parse_query(&search));
+    }
+    install_router_listeners();
+}
+
+/// Attach the router's DOM listeners — `popstate` re-mount + the delegated
+/// `<a pp-route>` click interception that keeps internal navigation
+/// client-side (no full reload / wasm re-download). Shared by [`init`] and
+/// [`init_hydrated`] so a hydrated app intercepts links too.
+fn install_router_listeners() {
     // popstate → re-mount.
     let cb = Closure::wrap(Box::new(move |_: Event| {
         let _ = mount_current();
@@ -946,8 +977,14 @@ pub fn init() {
         let _ = doc.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref());
     }
     on_click.forget();
+}
 
-    let _ = mount_current();
+/// RFC-099 Phase 4 — host-callable route match: resolve `path` to its
+/// route component name + captured params, without mounting (the SSR
+/// renderer renders that component into the `<pp-outlet>`; guards/loaders
+/// run only on the client per the divergence policy).
+pub fn resolve_route(path: &str) -> Option<(&'static str, HashMap<String, String>)> {
+    match_route(path, false).map(|m| (m.component_name, m.params))
 }
 
 fn ensure_route_scope() {

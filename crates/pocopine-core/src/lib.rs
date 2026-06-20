@@ -32,6 +32,16 @@ pub mod fingerprint;
 pub mod focus;
 pub mod handle;
 pub mod handler;
+/// RFC-099 Phase 1b — host-side expression evaluator over
+/// `serde_json::Value` (the SSR render backend), parity-gated against
+/// the wasm `JsValue` evaluator.
+pub mod host_eval;
+/// RFC-099 Phase 2c — client-side hydration: attach reactivity to a
+/// server-rendered subtree (the "claim" walk).
+pub mod hydrate;
+/// RFC-099 Phase 1 — JS-identical number formatting, shared by the
+/// wasm client and the SSR host renderer.
+pub mod js_number;
 pub mod lifecycle;
 pub mod loop_scope;
 pub mod magics;
@@ -109,8 +119,9 @@ pub use profiler::mount::{
 };
 pub use props::{PropValue, Props};
 pub use reactive::{
-    EffectId, EffectOptions, ScopeId, SignalId, batch, current_effect, effect, effect_scoped,
-    effect_with, flush_sync, on_cleanup, release, run_now, set_auto_flush, track, trigger_scope,
+    EffectId, EffectOptions, ScopeId, SignalId, batch, current_effect, effect, effect_hydrating,
+    effect_scoped, effect_with, flush_sync, on_cleanup, release, run_now, set_auto_flush, track,
+    trigger_scope,
 };
 pub use registry::{
     COMPONENT_ENTRIES, ComponentCtor, ComponentEntry, ComponentMountFn, ComponentVTable,

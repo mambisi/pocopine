@@ -267,6 +267,66 @@ pub fn effect_with(f: impl Fn() + 'static, opts: EffectOptions) -> EffectId {
     effect_with_dyn(Rc::new(f), opts)
 }
 
+/// RFC-099 Phase 2c — an effect whose **first run is suppressed**.
+///
+/// The body still runs immediately (so its dependency reads `track` and
+/// the effect subscribes), but it receives `suppressed = true` on that
+/// first invocation and `false` on every subsequent re-run. Hydration
+/// uses this to attach a binding to server-rendered DOM: the first run
+/// establishes the subscription without re-writing the node the server
+/// already filled (zero DOM writes during hydrate); later changes apply
+/// normally.
+///
+/// ```ignore
+/// effect_hydrating(move |suppressed| {
+///     let v = read_field();           // always — establishes the dep
+///     if !suppressed { write_dom(v); } // skip on the hydration pass
+/// });
+/// ```
+pub fn effect_hydrating(f: impl Fn(bool) + 'static) -> EffectId {
+    let first = std::cell::Cell::new(true);
+    effect(move || {
+        let suppressed = first.replace(false);
+        f(suppressed);
+    })
+}
+
+thread_local! {
+    /// RFC-099 Phase 2 — set while a hydration claim walk installs
+    /// effects (see [`set_hydrating`]). Read by [`effect_install`] so a
+    /// binding installed during the claim suppresses its FIRST DOM
+    /// write: the server already rendered that value, so the write is
+    /// redundant (the zero-initial-write invariant). Cleared outside
+    /// the claim, so mount installs — and every effect re-run after
+    /// hydration — behave normally.
+    static HYDRATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// True while a hydration claim is installing effects.
+pub fn is_hydrating() -> bool {
+    HYDRATING.with(|h| h.get())
+}
+
+/// Set the hydrating flag, returning the previous value (restore it
+/// when the claim finishes). Internal to the hydrate path.
+pub(crate) fn set_hydrating(v: bool) -> bool {
+    HYDRATING.with(|h| h.replace(v))
+}
+
+/// Install a binding effect that honours the hydration claim: when
+/// installed during a claim ([`is_hydrating`]), the effect's FIRST run
+/// receives `suppressed = true` so the directive reads (to subscribe)
+/// but skips the redundant DOM write — the server already rendered it.
+/// Outside a claim it is a plain [`effect`] with `suppressed = false`,
+/// so the mount path is byte-for-byte unchanged.
+pub fn effect_install(f: impl Fn(bool) + 'static) -> EffectId {
+    if is_hydrating() {
+        effect_hydrating(f)
+    } else {
+        effect(move || f(false))
+    }
+}
+
 // RFC-058 Phase 6.5 — type-erased body. The generic shim above
 // performs the `Rc::new(f)` coercion to `EffectFn` (one
 // monomorphization per call site, but each is just the
@@ -772,11 +832,33 @@ pub fn run_now(id: EffectId) {
     }
 }
 
-/// Drain the queue right now. Exposed so tests can drive the effect loop
-/// without spinning the JS event loop; production code should rely on
-/// [`trigger`]'s automatic microtask flush.
+/// Drain the queue right now, to **quiescence**. Exposed so tests can
+/// drive the effect loop without spinning the JS event loop; production
+/// code should rely on [`trigger`]'s automatic microtask flush.
+///
+/// Effects re-triggered *during* a batch land in the queue for the NEXT
+/// batch (glitch avoidance — see [`flush`]), so a single pass
+/// under-drains multi-level effect chains (e.g. a structural controller
+/// whose run triggers a body binding's effect, as `pp-match`'s `pp-let`
+/// same-tag update does). Loop until the queue empties — the synchronous
+/// equivalent of the microtask scheduler draining successive batches.
+/// Bounded so a pathological re-trigger cycle fails loudly (debug) or
+/// bails (release) instead of hanging.
 pub fn flush_sync() {
-    flush();
+    let mut batches = 0usize;
+    loop {
+        flush();
+        if QUEUE.with(|q| q.borrow().is_empty()) {
+            break;
+        }
+        batches += 1;
+        if batches > 100_000 {
+            #[cfg(debug_assertions)]
+            panic!("flush_sync: effect queue never reached quiescence (re-trigger cycle?)");
+            #[cfg(not(debug_assertions))]
+            break;
+        }
+    }
 }
 
 /// `(effect_count, dep_count)` — cheap health counters consumed by

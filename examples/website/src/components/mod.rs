@@ -61,6 +61,24 @@ pub async fn fetch_text(url: &str) -> Option<String> {
     text.as_string()
 }
 
+/// RFC-099 — read a pre-rendered static fragment off disk during SSR so
+/// its content lands in the first paint (byte-equal on a route refresh,
+/// no fetch flicker). `rel` is the path under the served static root —
+/// e.g. `static-docs/<slug>.html` — the exact file the client fetches and
+/// the server serves; the root matches the server bin's resolution
+/// (`POCOPINE_DIST`, else the crate dir). Returns `None` on a path-
+/// traversal attempt or a missing/empty file (caller renders not-found).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_static_fragment(rel: &str) -> Option<String> {
+    if rel.contains("..") {
+        return None;
+    }
+    let root =
+        std::env::var("POCOPINE_DIST").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
+    let html = std::fs::read_to_string(std::path::Path::new(&root).join(rel)).ok()?;
+    (!html.trim().is_empty()).then_some(html)
+}
+
 /// Shared SPA-navigation click delegate.
 ///
 /// `pp-route` cannot be used inside a `<template pp-for>` clone — it
@@ -76,10 +94,23 @@ pub fn delegate_nav(ev: &web_sys::MouseEvent) {
     else {
         return;
     };
-    let Ok(Some(anchor)) = el.closest("a[href]") else {
-        return;
-    };
-    if let Some(href) = anchor.get_attribute("href")
+    // Prefer an enclosing real link's `href`; fall back to a `[data-href]`
+    // card. Cards that wrap a live interactive preview can't be an `<a>`
+    // (a nested `<a>` inside the preview is invalid HTML and the browser
+    // splits it when the SSR'd page is parsed) — they're a `<div
+    // data-href>` instead, navigated by this same delegated click.
+    let href = el
+        .closest("a[href]")
+        .ok()
+        .flatten()
+        .and_then(|a| a.get_attribute("href"))
+        .or_else(|| {
+            el.closest("[data-href]")
+                .ok()
+                .flatten()
+                .and_then(|d| d.get_attribute("data-href"))
+        });
+    if let Some(href) = href
         && href.starts_with('/')
     {
         ev.prevent_default();

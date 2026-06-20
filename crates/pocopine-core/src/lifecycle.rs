@@ -55,7 +55,13 @@ pub struct LifecycleContext<'a> {
     /// is pinned on. Template root on the normal mount path; the
     /// hoisted user element under `pp-as`. At [`LifecyclePhase::Setup`]
     /// this is the custom-element host (template hasn't been walked).
-    pub el: &'a Element,
+    ///
+    /// `None` only on the RFC-099 host (SSR) setup pass, where there is
+    /// no DOM. That's sound because every el-dependent extractor
+    /// (`El`/`TagName`/`TypedEl`/`HostEl`/`IsTeleported`/`TeleportHost`)
+    /// rejects [`LifecyclePhase::Setup`] via `check_phase` before it ever
+    /// reads `el`, so a Setup-phase context never observes the `None`.
+    pub el: Option<&'a Element>,
     /// This component's scope id.
     pub scope_id: ScopeId,
     /// Which lifecycle slot the mount fired this hook from.
@@ -70,9 +76,23 @@ impl<'a> LifecycleContext<'a> {
     #[doc(hidden)]
     pub fn __new(el: &'a Element, scope_id: ScopeId, phase: LifecyclePhase) -> Self {
         Self {
-            el,
+            el: Some(el),
             scope_id,
             phase,
+        }
+    }
+
+    /// RFC-099 — el-free Setup context for running `on_setup` host-side
+    /// during SSR (no DOM exists). Only el-free extractors
+    /// (`Handle`/`Inject`/`ScopeId`/…) resolve; el-dependent ones reject
+    /// Setup via `check_phase`, and DOM/`web_sys` ones panic (the SSR
+    /// caller runs setup inside `catch_unwind`).
+    #[doc(hidden)]
+    pub fn __new_detached_setup(scope_id: ScopeId) -> Self {
+        Self {
+            el: None,
+            scope_id,
+            phase: LifecyclePhase::Setup,
         }
     }
 }
@@ -97,6 +117,15 @@ fn check_phase(ctx_phase: LifecyclePhase, allowed: &[LifecyclePhase], extractor:
 
 const ELEMENT_PHASES: &[LifecyclePhase] = &[LifecyclePhase::Mount, LifecyclePhase::Ready];
 
+/// `ctx.el` for the el-dependent extractors. They all `check_phase` to
+/// the element phases first, and `el` is only `None` on the host SSR
+/// Setup pass — so by the time this is reached the element is present.
+#[track_caller]
+fn require_el<'a>(ctx: &LifecycleContext<'a>) -> &'a Element {
+    ctx.el
+        .expect("el-dependent extractor with no element (host SSR setup pass?)")
+}
+
 // ── Tier 1 — rendered root, scope id, carrier itself ───────────────
 
 /// Rendered root as a thin newtype over `&'a Element`. Newtype
@@ -118,7 +147,7 @@ impl<'a> From<LifecycleContext<'a>> for El<'a> {
     #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "El");
-        El(ctx.el)
+        El(require_el(&ctx))
     }
 }
 
@@ -224,11 +253,11 @@ impl<'a> From<LifecycleContext<'a>> for TagName {
         // normally the custom-element tag. Leak the string to get
         // a `'static str` — one per tag-name string, tiny cost,
         // matches `type_name()`'s existing lifetime story.
-        let name = ctx
-            .el
+        let el = require_el(&ctx);
+        let name = el
             .parent_element()
             .map(|p| p.tag_name().to_lowercase())
-            .unwrap_or_else(|| ctx.el.tag_name().to_lowercase());
+            .unwrap_or_else(|| el.tag_name().to_lowercase());
         TagName(Box::leak(name.into_boxed_str()))
     }
 }
@@ -303,7 +332,7 @@ impl<'a, T: JsCast + 'static> From<LifecycleContext<'a>> for TypedEl<T> {
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "TypedEl");
         TypedEl(
-            ctx.el
+            require_el(&ctx)
                 .clone()
                 .dyn_into::<T>()
                 .expect("TypedEl<T>: rendered root doesn't cast to T"),
@@ -315,7 +344,7 @@ impl<'a, T: JsCast + 'static> From<LifecycleContext<'a>> for Option<TypedEl<T>> 
     #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "Option<TypedEl>");
-        ctx.el.clone().dyn_into::<T>().ok().map(TypedEl)
+        require_el(&ctx).clone().dyn_into::<T>().ok().map(TypedEl)
     }
 }
 
@@ -331,7 +360,8 @@ impl<'a> From<LifecycleContext<'a>> for HostEl {
     #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "HostEl");
-        HostEl(ctx.el.parent_element().unwrap_or_else(|| ctx.el.clone()))
+        let el = require_el(&ctx);
+        HostEl(el.parent_element().unwrap_or_else(|| el.clone()))
     }
 }
 
@@ -345,7 +375,7 @@ impl<'a> From<LifecycleContext<'a>> for IsTeleported {
     #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "IsTeleported");
-        IsTeleported(crate::directives::teleport::host_of(ctx.el).is_some())
+        IsTeleported(crate::directives::teleport::host_of(require_el(&ctx)).is_some())
     }
 }
 
@@ -379,7 +409,7 @@ impl<'a> From<LifecycleContext<'a>> for TeleportHost {
     #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "TeleportHost");
-        TeleportHost(crate::directives::teleport::host_of(ctx.el))
+        TeleportHost(crate::directives::teleport::host_of(require_el(&ctx)))
     }
 }
 

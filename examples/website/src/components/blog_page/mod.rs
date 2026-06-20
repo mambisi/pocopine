@@ -7,8 +7,9 @@
 //! title itself is the markdown `h1` inside the fragment).
 
 use pocopine::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use pocopine::spawn_local;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen_futures::spawn_local;
 
 use crate::docs_data;
 
@@ -38,39 +39,67 @@ impl BlogPage {
             .unwrap_or_default();
         self.has_date = !self.date.is_empty();
 
-        // Fetch the pre-rendered body fragment (served static file).
-        self.loading = true;
-        self.html.clear();
+        // The pre-rendered body fragment is served as
+        // /static-docs/blogs/<slug>.html and kept OUT of the wasm bundle.
         self.not_found = false;
-        let handle = this::<Self>();
-        let url = format!("/static-docs/blogs/{slug}.html");
-        spawn_local(async move {
-            let fetched = crate::components::fetch_text(&url).await;
-            let injected = handle.update(move |s: &mut BlogPage| {
-                s.loading = false;
-                match fetched {
-                    Some(ref h) if !h.trim().is_empty() => {
-                        s.html = h.clone();
-                        s.not_found = false;
-                        true
-                    }
-                    _ => {
-                        s.not_found = true;
-                        false
-                    }
+        let rel = format!("static-docs/blogs/{slug}.html");
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // SSR: read it off disk so the post body is in the first paint
+            // — byte-equal on a refresh, no fetch flicker. (Video hydration
+            // is a client concern, handled below on the hydration pass.)
+            match crate::components::read_static_fragment(&rel) {
+                Some(html) => {
+                    self.html = html;
+                    self.loading = false;
                 }
-            });
-            if injected {
-                // The `pp-html` effect runs in the reactive flush, which
-                // is itself a queued microtask chain — a plain
-                // `tick::next` here would fire *before* the innerHTML
-                // write. `after_flush` (macrotask) is strictly later
-                // than the whole flush. Plain document queries only —
-                // no refs/scope lookups (scope context dies across
-                // tick).
+                None => {
+                    self.loading = false;
+                    self.not_found = true;
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.html.trim().is_empty() {
+                // No SSR body (client navigation) — fetch the fragment.
+                self.loading = true;
+                let handle = this::<Self>();
+                let url = format!("/{rel}");
+                spawn_local(async move {
+                    let fetched = crate::components::fetch_text(&url).await;
+                    let injected = handle.update(move |s: &mut BlogPage| {
+                        s.loading = false;
+                        match fetched {
+                            Some(ref h) if !h.trim().is_empty() => {
+                                s.html = h.clone();
+                                s.not_found = false;
+                                true
+                            }
+                            _ => {
+                                s.not_found = true;
+                                false
+                            }
+                        }
+                    });
+                    if injected {
+                        // The `pp-html` effect runs in the reactive flush
+                        // (a queued microtask chain); `after_flush` (a
+                        // macrotask) is strictly later than the whole
+                        // flush, so the innerHTML is written by then.
+                        pocopine::tick::after_flush(hydrate_videos);
+                    }
+                });
+            } else {
+                // Hydrated from the SSR island — body already present; the
+                // claim self-heals it byte-equal (no fetch, no flash), but
+                // its videos still need wiring up on the client.
+                self.loading = false;
                 pocopine::tick::after_flush(hydrate_videos);
             }
-        });
+        }
     }
 
     /// Delegate clicks on internal links inside the injected markdown
@@ -88,6 +117,7 @@ impl BlogPage {
 /// Re-assert the properties imperatively and call `play()`; any
 /// rejection of the returned promise is swallowed with a no-op
 /// `catch` — the tags carry `controls` as the user-visible fallback.
+#[cfg(target_arch = "wasm32")]
 fn hydrate_videos() {
     use wasm_bindgen::{JsCast, JsValue};
 

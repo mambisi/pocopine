@@ -369,11 +369,7 @@ fn mount_component(
     // `CTX_PARENT_KEY` over its `SCOPE_ID_KEY` — required for tags
     // nested *inside* a slot wrapper (e.g. `<pine-dialog-close>`
     // inside a `<div class="row">` inside Content's slot).
-    let ctx_parent = get_private(el, CTX_PARENT_KEY)
-        .and_then(|v| v.as_f64())
-        .map(|n| ScopeId(n as u64))
-        .or_else(|| enclosing_inject_parent(el));
-    if let Some(parent_id) = ctx_parent {
+    if let Some(parent_id) = resolve_ctx_parent(el) {
         crate::context::set_parent(scope.id, parent_id);
     }
     // Apply static props BEFORE building the proxy so trigger doesn't fire
@@ -573,11 +569,7 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     let Some(scope) = instantiate(tag) else {
         return false;
     };
-    let ctx_parent = get_private(el, CTX_PARENT_KEY)
-        .and_then(|v| v.as_f64())
-        .map(|n| ScopeId(n as u64))
-        .or_else(|| enclosing_inject_parent(el));
-    if let Some(parent_id) = ctx_parent {
+    if let Some(parent_id) = resolve_ctx_parent(el) {
         crate::context::set_parent(scope.id, parent_id);
     }
     apply_static_props(el, &scope);
@@ -1340,6 +1332,19 @@ pub fn inherited_ctx_parent_of(el: &Element) -> Option<ScopeId> {
         cur = e.parent_element();
     }
     None
+}
+
+/// Resolve a freshly-bound component's RFC-027 `inject`-chain parent:
+/// prefer an explicit `CTX_PARENT_KEY` stamp on `el` (set by slot
+/// projection / teleport so children chain to the slot *owner*), else
+/// the nearest enclosing scope via DOM ancestry. Shared by the mount
+/// walk and the RFC-099 hydration claim so `inject` resolves identically
+/// whether a subtree was created or claimed.
+pub(crate) fn resolve_ctx_parent(el: &Element) -> Option<ScopeId> {
+    get_private(el, CTX_PARENT_KEY)
+        .and_then(|v| v.as_f64())
+        .map(|n| ScopeId(n as u64))
+        .or_else(|| enclosing_inject_parent(el))
 }
 
 fn enclosing_inject_parent(el: &Element) -> Option<ScopeId> {

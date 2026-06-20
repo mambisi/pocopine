@@ -342,6 +342,39 @@ pub fn instantiate(name: &str) -> Option<Scope> {
     })
 }
 
+/// RFC-099 — run a component's `on_setup` host-side to derive the full
+/// state the server should render (e.g. pine-icon's looked-up SVG +
+/// pixel size), so the SSR'd HTML is byte-equal to what the client
+/// hydrates and the page doesn't tear as the client fills it in.
+///
+/// `props` are the statically-known props (host attributes + parent
+/// bindings). The returned value is the post-`on_setup` state; if the
+/// component isn't registered, or `on_setup` produced nothing
+/// serializable, the props are returned unchanged.
+///
+/// `on_setup` may reach for the DOM / `web_sys` / runtime extractors that
+/// don't exist on the host — those panic, and are swallowed so the
+/// component degrades to its props-only state rather than aborting the
+/// whole render. Host-only; the transient scope is removed before return.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ssr_derive_state(tag: &str, props: &serde_json::Value) -> serde_json::Value {
+    let Some(scope) = instantiate(tag) else {
+        return props.clone();
+    };
+    scope.state.borrow_mut().host_apply_props(props);
+    if scope.state.borrow().has_setup() {
+        let ctx = crate::lifecycle::LifecycleContext::__new_detached_setup(scope.id);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::scope::with_current_scope_id(scope.id, || {
+                scope.state.borrow_mut().setup(ctx);
+            });
+        }));
+    }
+    let out = scope.state.borrow().host_serialize();
+    crate::scope::Scope::remove(scope.id);
+    if out.is_null() { props.clone() } else { out }
+}
+
 pub fn mount_template_for(name: &str) -> Option<ComponentMountFn> {
     REGISTRY.with(|r| {
         let reg = r.borrow();

@@ -7,19 +7,25 @@
   <meta name="description" content="pocopine is a full-stack Rust application framework: reactive Rust/WASM UI, type-safe server functions, a local-first data layer, auth, storage, and one-command deploy. One language, end to end." />
   <link rel="icon" type="image/svg+xml" href="/mascot.svg" />
   <link rel="stylesheet" href="/styles.css" />
-  <!-- Apply the saved theme before first paint (no flash, survives
-       reloads). Mirrors WebsiteApp's `pocopine-theme` localStorage key,
-       which is JSON-encoded by pocopine's LocalStorage<String>. -->
+  <!-- Apply the theme before first paint (no flash, survives reloads).
+       Saved choice wins; otherwise honour the OS preference so a
+       first-time visitor's first paint already matches. Mirrors
+       WebsiteApp::on_setup exactly (`pocopine-theme` localStorage key,
+       JSON-encoded by pocopine's LocalStorage<String>) — if the two ever
+       disagreed, on_setup's apply_theme would overwrite this on hydrate
+       and re-introduce the flash this script exists to prevent. -->
   <script>
     (function () {
       try {
         var raw = localStorage.getItem("pocopine-theme");
-        if (!raw) return;
-        var t;
-        try { t = JSON.parse(raw); } catch (_) { t = raw; }
-        if (t === "dark" || t === "light") {
-          document.documentElement.dataset.theme = t;
+        var t = null;
+        if (raw) { try { t = JSON.parse(raw); } catch (_) { t = raw; } }
+        if (t !== "dark" && t !== "light") {
+          t = (window.matchMedia &&
+               window.matchMedia("(prefers-color-scheme: dark)").matches)
+            ? "dark" : "light";
         }
+        document.documentElement.dataset.theme = t;
       } catch (e) {}
     })();
   </script>

@@ -8,8 +8,9 @@
 //! everything from the `slug` and kicks off the fetch.
 
 use pocopine::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use pocopine::spawn_local;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen_futures::spawn_local;
 
 use crate::docs_data;
 
@@ -97,25 +98,53 @@ impl DocPage {
         }
         self.nav = rows;
 
-        // Fetch the pre-rendered body fragment (served static file).
-        self.loading = true;
-        self.html.clear();
+        // The pre-rendered body fragment (rendered markdown) is served as
+        // /static-docs/<slug>.html and kept OUT of the wasm bundle.
         self.not_found = false;
-        let handle = this::<Self>();
-        let url = format!("/static-docs/{slug}.html");
-        spawn_local(async move {
-            let fetched = crate::components::fetch_text(&url).await;
-            handle.update(move |s: &mut DocPage| {
-                s.loading = false;
-                match fetched {
-                    Some(ref h) if !h.trim().is_empty() => {
-                        s.html = h.clone();
-                        s.not_found = false;
-                    }
-                    _ => s.not_found = true,
+        let rel = format!("static-docs/{slug}.html");
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // SSR: read it off disk so the body is in the first paint —
+            // byte-equal on a route refresh, no fetch flicker.
+            match crate::components::read_static_fragment(&rel) {
+                Some(html) => {
+                    self.html = html;
+                    self.loading = false;
                 }
-            });
-        });
+                None => {
+                    self.loading = false;
+                    self.not_found = true;
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.html.trim().is_empty() {
+                // No SSR body (client navigation) — fetch the fragment.
+                self.loading = true;
+                let handle = this::<Self>();
+                let url = format!("/{rel}");
+                spawn_local(async move {
+                    let fetched = crate::components::fetch_text(&url).await;
+                    handle.update(move |s: &mut DocPage| {
+                        s.loading = false;
+                        match fetched {
+                            Some(ref h) if !h.trim().is_empty() => {
+                                s.html = h.clone();
+                                s.not_found = false;
+                            }
+                            _ => s.not_found = true,
+                        }
+                    });
+                });
+            } else {
+                // Hydrated from the SSR island — body already present; the
+                // claim self-heals it byte-equal, so no fetch, no flash.
+                self.loading = false;
+            }
+        }
     }
 
     /// Delegate clicks on internal links — both the sidebar and the

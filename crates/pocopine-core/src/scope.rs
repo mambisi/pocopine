@@ -211,6 +211,23 @@ pub trait ComponentState: 'static {
         false
     }
 
+    /// RFC-099 — host (SSR) serde bridge: merge JSON `props` into this
+    /// state (over its current/`Default` values). `#[component]` overrides
+    /// this with a serde round-trip; the default is a no-op so non-macro
+    /// `ComponentState` impls still compile. Host-only — the wasm client
+    /// loads state through `set`/the proxy, not serde JSON.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn host_apply_props(&mut self, _props: &serde_json::Value) {}
+
+    /// RFC-099 — host (SSR) serde bridge: serialize this state to JSON for
+    /// the state island after `on_setup` has run server-side, so the
+    /// stamped HTML is byte-equal to the hydrated DOM. `#[component]`
+    /// overrides this; the default returns `Null`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn host_serialize(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     /// True iff the component actually has a user-defined `on_mount`.
     /// Lets the mount skip the post-mount `trigger_scope` sweep for
     /// components that don't need it — critical for recursive
@@ -1323,10 +1340,18 @@ pub fn current_scope_id() -> Option<ScopeId> {
 /// closure still sees its own scope. Also used internally by
 /// [`Scope::invoke`].
 pub fn with_current_scope_id<R>(id: ScopeId, f: impl FnOnce() -> R) -> R {
-    let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(id)));
-    let out = f();
-    CURRENT_SCOPE_ID.with(|c| c.set(prev));
-    out
+    // Restore via a drop guard so the thread-local is reset even if `f`
+    // unwinds — the RFC-099 host SSR setup runs `on_setup` inside
+    // `catch_unwind`, and a leaked CURRENT_SCOPE_ID would poison the next
+    // render on the same thread.
+    struct Restore(Option<ScopeId>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT_SCOPE_ID.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(CURRENT_SCOPE_ID.with(|c| c.replace(Some(id))));
+    f()
 }
 
 /// Set the current element for the duration of a directive call. The caller

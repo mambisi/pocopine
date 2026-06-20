@@ -41,6 +41,13 @@ name = "server"
 path = "src/bin/server.rs"
 required-features = []
 
+# RFC-099 Phase 4 — host SSR renderer. Registers the app + renders a URL
+# to the [pp-app] document for `App::hydrate`. Host-only (pocopine-ssr is
+# never linked into wasm). Run: `cargo run -p website --bin website-ssr -- /`.
+[[bin]]
+name = "website-ssr"
+path = "src/bin/ssr.rs"
+
 [dependencies]
 pine = { package = "pine-ui", path = "../../crates/pine" }
 pine-charts = { path = "../../crates/pine-charts" }
@@ -62,6 +69,7 @@ web-sys = { version = "0.3", features = [
     "CustomEvent",
     "Element",
     "HtmlInputElement",
+    "MediaQueryList",
     "Navigator",
     "Clipboard",
 ] }
@@ -69,7 +77,8 @@ web-sys = { version = "0.3", features = [
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-logging = { workspace = true }
 pocopine-server = { path = "../../crates/pocopine-server" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+pocopine-ssr = { path = "../../crates/pocopine-ssr" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
 
 # Host-only: render docs/ markdown to static HTML at build time.
 # pulldown-cmark does not target wasm, so this runs on the build host

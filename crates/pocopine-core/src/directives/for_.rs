@@ -412,6 +412,7 @@ pub fn install(
             stagger_ms,
             body,
             row_plan,
+            Vec::new(),
         ),
         _ => run_naive(
             item_name,
@@ -419,14 +420,248 @@ pub fn install(
             parent_proxy,
             parent_scope_id,
             inject_parent_id,
-            template,
+            Some(template),
             anchor,
             stagger_ms,
             body,
+            Vec::new(),
         ),
     };
 
     track_effect_on(&track_el, effect_id);
+}
+
+/// RFC-099 Phase 3 — hydrate (claim) path for an UNKEYED `pp-for`. The
+/// server rendered `[row0]…[rowN]<!--pp:for:idx-->`; this adopts those
+/// N row elements (the element siblings before the anchor), wraps each
+/// in a fresh `LoopScope` + hydrates its `body_plan` onto it, then
+/// seeds [`run_naive`] so its first run is a no-op and later `items`
+/// changes reconcile normally. Keyed `pp-for` is not server-expanded
+/// yet, so it never reaches here (it falls back to a client mount).
+#[allow(clippy::too_many_arguments)]
+pub fn hydrate_naive(
+    anchor: Node,
+    item_name: &'static str,
+    items_expr: &'static str,
+    parent_proxy: JsValue,
+    parent_scope_id: ScopeId,
+    stagger_ms: u32,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
+    body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+) {
+    let Some(parent_el) = anchor
+        .parent_node()
+        .and_then(|n| n.dyn_into::<Element>().ok())
+    else {
+        return;
+    };
+    let inject_parent_id =
+        crate::mount::inherited_ctx_parent_of(&parent_el).unwrap_or(parent_scope_id);
+
+    // Resolve items so each adopted row gets the right `LoopScope`.
+    let items_reader = crate::scope::scoped_root_reader(parent_scope_id);
+    let items_js = crate::path::resolve_path_with(&parent_proxy, items_reader.as_ref(), items_expr);
+    let arr: Array = items_js
+        .dyn_into::<Array>()
+        .unwrap_or_else(|_| Array::new());
+    let total = arr.length() as usize;
+    let item_name_rc: Rc<str> = item_name.into();
+
+    // Adopt the `total` element siblings immediately before the anchor
+    // (the rows, in document order).
+    let mut rows: Vec<Element> = Vec::with_capacity(total);
+    let mut node = anchor.previous_sibling();
+    while rows.len() < total {
+        let Some(n) = node else { break };
+        let prev = n.previous_sibling();
+        if n.node_type() == Node::ELEMENT_NODE
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            rows.push(el);
+        }
+        node = prev;
+    }
+    rows.reverse();
+
+    // Wrap each adopted row in a LoopScope and hydrate its body.
+    let mut prior: Vec<Element> = Vec::with_capacity(rows.len());
+    for (i, row) in rows.into_iter().enumerate() {
+        let item = arr.get(i as u32);
+        let loop_state = LoopScope {
+            item_name: Rc::clone(&item_name_rc),
+            item,
+            index: i,
+            total,
+            parent_scope_id,
+        };
+        let scope = Scope::new(Rc::new(RefCell::new(loop_state)));
+        crate::context::set_parent(scope.id, inject_parent_id);
+        let proxy = scope.into_proxy();
+        bind_scope_to(&row, scope.id, &proxy);
+        if let Some(bp) = body_plan {
+            crate::templates_plan::hydrate_plan(&row, scope.id, &proxy, bp, "<pp-for row>");
+        }
+        prior.push(row);
+    }
+
+    let effect_id = run_naive(
+        item_name,
+        items_expr,
+        parent_proxy,
+        parent_scope_id,
+        inject_parent_id,
+        None,
+        anchor,
+        stagger_ms,
+        body,
+        prior,
+    );
+    track_effect_on(&parent_el, effect_id);
+}
+
+/// RFC-099 Phase 3 — hydrate (claim) path for a KEYED `pp-for`. The
+/// server rendered one row clone per item + `<!--pp:for:idx-->`. This
+/// adopts the rows, wraps each in a `LoopScope`, applies the row plan
+/// (re-stamp identical = byte-equal; registers the `RowInstance` for
+/// delegated listeners) or the body plan, then seeds [`run_keyed`] with
+/// the pool so its first run is a no-op and later changes reconcile by
+/// KEY (preserving DOM/state across reorders). A synthetic detached
+/// `<template>` (built from `body_html`) supplies `clone_body` for rows
+/// added after hydration, since the server dropped the real one.
+#[allow(clippy::too_many_arguments)]
+pub fn hydrate_keyed(
+    anchor: Node,
+    item_name: &'static str,
+    items_expr: &'static str,
+    key_expr: &'static str,
+    parent_proxy: JsValue,
+    parent_scope_id: ScopeId,
+    stagger_ms: u32,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
+    body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+    body_html: &str,
+    row_plan: Option<Rc<crate::directives::for_plan::CompiledRowPlan>>,
+) {
+    let Some(parent_el) = anchor
+        .parent_node()
+        .and_then(|n| n.dyn_into::<Element>().ok())
+    else {
+        return;
+    };
+    let inject_parent_id =
+        crate::mount::inherited_ctx_parent_of(&parent_el).unwrap_or(parent_scope_id);
+    let Some(doc) = parent_el.owner_document() else {
+        return;
+    };
+
+    // Synthetic detached <template> (content = body_html) for
+    // clone_body of post-hydration rows + the delegated-listener marker.
+    let Ok(tpl_el) = doc.create_element("template") else {
+        return;
+    };
+    tpl_el.set_inner_html(body_html);
+    let Some(template) = ForTemplate::from_element(tpl_el) else {
+        return;
+    };
+
+    let key_resolver = KeyResolver::parse(item_name, key_expr);
+    let elide_proxy = row_plan
+        .as_ref()
+        .map(|p| p.is_proxy_elision_eligible())
+        .unwrap_or(false);
+
+    let items_reader = crate::scope::scoped_root_reader(parent_scope_id);
+    let items_js = crate::path::resolve_path_with(&parent_proxy, items_reader.as_ref(), items_expr);
+    let arr: Array = items_js
+        .dyn_into::<Array>()
+        .unwrap_or_else(|_| Array::new());
+    let total = arr.length() as usize;
+    let item_name_rc: Rc<str> = item_name.into();
+
+    // Adopt the `total` element rows immediately before the anchor.
+    let mut rows: Vec<Element> = Vec::with_capacity(total);
+    let mut node = anchor.previous_sibling();
+    while rows.len() < total {
+        let Some(n) = node else { break };
+        let prev = n.previous_sibling();
+        if n.node_type() == Node::ELEMENT_NODE
+            && let Ok(el) = n.dyn_into::<Element>()
+        {
+            rows.push(el);
+        }
+        node = prev;
+    }
+    rows.reverse();
+
+    // Build the seeded pool: one PrevItem per adopted row.
+    let mut seen: HashSet<RowKey> = HashSet::new();
+    let mut prior: Vec<PrevItem> = Vec::with_capacity(rows.len());
+    for (i, row) in rows.into_iter().enumerate() {
+        let item = arr.get(i as u32);
+        let key_val = key_resolver.resolve(&item, i, &parent_proxy);
+        let key = dedup_row_key(&key_val, &mut seen, i);
+        let item_sig = item_signature(&item);
+        let loop_rc = Rc::new(RefCell::new(LoopScope {
+            item_name: Rc::clone(&item_name_rc),
+            item: item.clone(),
+            index: i,
+            total,
+            parent_scope_id,
+        }));
+        let scope = Scope::new(loop_rc.clone());
+        crate::context::set_parent(scope.id, inject_parent_id);
+
+        if let Some(plan) = row_plan.as_ref() {
+            // Row-plan keyed (the common case): bind the scope, then
+            // apply the plan to the EXISTING row — re-evaluates bindings
+            // (identical values ⇒ byte-equal) and registers the
+            // RowInstance so delegated listeners route here.
+            let proxy = if elide_proxy {
+                mount::bind_scope_id_only(&row, scope.id);
+                None
+            } else {
+                let p = scope.into_proxy();
+                bind_scope_to(&row, scope.id, &p);
+                Some(p)
+            };
+            crate::directives::for_plan::mount_row_compiled(plan, &row, scope.id, proxy.as_ref());
+        } else if let Some(bp) = body_plan {
+            // Keyed without a row plan (body_fn path): direct install,
+            // mirroring the body_fn create path's direct listeners.
+            let proxy = scope.into_proxy();
+            bind_scope_to(&row, scope.id, &proxy);
+            crate::templates_plan::hydrate_plan(&row, scope.id, &proxy, bp, "<pp-for row>");
+        } else {
+            let proxy = scope.into_proxy();
+            bind_scope_to(&row, scope.id, &proxy);
+        }
+
+        prior.push(PrevItem {
+            element: row,
+            scope_id: scope.id,
+            loop_state: loop_rc,
+            key,
+            item_value: item,
+            item_sig,
+            leaving: false,
+        });
+    }
+
+    let effect_id = run_keyed(
+        item_name,
+        items_expr,
+        key_expr,
+        parent_proxy,
+        parent_scope_id,
+        inject_parent_id,
+        template,
+        anchor,
+        stagger_ms,
+        body,
+        row_plan,
+        prior,
+    );
+    track_effect_on(&parent_el, effect_id);
 }
 
 /// Whole-rebuild iteration (no `pp-key`). Keeps the original
@@ -438,13 +673,20 @@ fn run_naive(
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: ForTemplate,
+    template: Option<ForTemplate>,
     anchor: Node,
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
+    // RFC-099 Phase 3 — hydrate (claim) seed: the server-rendered rows
+    // already adopted + body-hydrated by `hydrate_naive`. When
+    // non-empty, the first effect run skips the rebuild (the rows are
+    // already in the DOM and reactive) and only subscribes to `items`;
+    // later runs reconcile normally.
+    seed_prior: Vec<Element>,
 ) -> crate::reactive::EffectId {
     let item_name: Rc<str> = item_name.into();
-    let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(Vec::new()));
+    let claim_first = std::cell::Cell::new(!seed_prior.is_empty());
+    let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(seed_prior));
     // RFC-095 W1 — items reads resolve Rust-side (track + cache)
     // unless the path roots at a `$`-name (e.g. `$store.items`),
     // which falls back to the proxy.
@@ -457,6 +699,13 @@ fn run_naive(
             .dyn_into::<Array>()
             .unwrap_or_else(|_| Array::new());
         let total = arr.length() as usize;
+
+        // Claim first run: rows are already adopted into `prior` and
+        // reactive — subscribe to `items` (done above) but don't touch
+        // the DOM. Clears the flag so the next change reconciles.
+        if claim_first.replace(false) {
+            return;
+        }
 
         {
             let mut prior = prior.borrow_mut();
@@ -503,7 +752,7 @@ fn run_naive(
                         break;
                     }
                 },
-                None => match template.clone_body() {
+                None => match template.as_ref().and_then(|t| t.clone_body()) {
                     Some(root) => (root, false),
                     None => {
                         console::error_1(&JsValue::from_str(
@@ -1282,6 +1531,13 @@ fn run_keyed(
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
     row_plan: Option<Rc<crate::directives::for_plan::CompiledRowPlan>>,
+    // RFC-099 Phase 3 — hydrate (claim) seed: the server-rendered rows
+    // adopted + bound + row-plan-applied by `hydrate_keyed`, as pool
+    // entries. Non-empty ⇒ the first effect run subscribes to items +
+    // ensures delegated listeners, then skips reconcile (the rows are
+    // already correct). Later changes reconcile against this pool, so
+    // keyed identity (DOM/state reuse across reorders) is preserved.
+    seed_prior: Vec<PrevItem>,
 ) -> crate::reactive::EffectId {
     let key_resolver = KeyResolver::parse(item_name, key_expr);
     // RFC 054 — opportunistic compiled-row-plan fast path. Looked
@@ -1310,7 +1566,8 @@ fn run_keyed(
         .map(|p| p.depends_on_loop_position())
         .unwrap_or(true);
     let item_name: Rc<str> = item_name.into();
-    let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(Vec::new()));
+    let claim_first = std::cell::Cell::new(!seed_prior.is_empty());
+    let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(seed_prior));
     // Pool + seen-keys set carry allocated capacity across effect
     // re-runs. Both are fully drained at the end of each run so
     // reusing them keeps rehash / grow costs out of the hot path
@@ -1343,6 +1600,15 @@ fn run_keyed(
                 &template.anchor(),
                 parent_node_ref,
             );
+        }
+
+        // Claim first run: the seeded `prior` already holds the
+        // server-rendered rows (adopted + bound + row-plan-applied).
+        // Subscribe to items (done above) + ensure delegated listeners
+        // (above) but skip the reconcile — no DOM mutation.
+        if claim_first.replace(false) {
+            crate::profiler::reconcile::record_total(reconcile_total_start);
+            return;
         }
 
         let old_prior: Vec<PrevItem> = {

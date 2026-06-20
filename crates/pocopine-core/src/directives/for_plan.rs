@@ -307,6 +307,16 @@ pub struct StaticCondPlan {
     pub compiled: Option<&'static expr::StaticExpr>,
     /// Head branch body fragment.
     pub body: Option<IfBodyFn>,
+    /// RFC-099 Phase 3 — head branch body as DATA: the same
+    /// cleaned HTML + nested `StaticTemplatePlan` the `body`
+    /// closure stamps, exposed so the host SSR stamper can render
+    /// the branch and the client claimer can bind effects onto the
+    /// already-rendered clone. `None` mirrors `body: None` (body
+    /// outside the lift envelope — SSR leaves the chain unexpanded
+    /// and the client mounts it). Points at consts the body fn
+    /// already needs, so ~zero added bundle weight.
+    pub body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+    pub body_html: Option<&'static str>,
     /// `pp-else-if` branches, in authored order.
     pub else_if: &'static [CondBranch],
     /// Whether the chain has a `pp-else` (tracked separately
@@ -316,6 +326,9 @@ pub struct StaticCondPlan {
     /// `pp-else` body fragment (`None` with `has_else` = legacy
     /// clone fallback from the consumed member template).
     pub else_body: Option<IfBodyFn>,
+    /// RFC-099 Phase 3 — `pp-else` body as DATA (see `body_plan`).
+    pub else_body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+    pub else_body_html: Option<&'static str>,
     /// How many consumed chain-member `<template>`s follow the
     /// head as element siblings in the cleaned HTML. The
     /// controller detaches them at install (keeping them alive
@@ -345,6 +358,12 @@ pub struct MatchCase {
     /// `pp-let` payload binding name.
     pub bind_name: Option<&'static str>,
     pub body: Option<IfBodyFn>,
+    /// RFC-099 Phase 3 — case body as DATA (see
+    /// [`StaticCondPlan::body_plan`]). When this case carries a
+    /// `bind_name`, the SSR stamper renders `body_plan` against the
+    /// state augmented with `{ bind_name: payload }`.
+    pub body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+    pub body_html: Option<&'static str>,
 }
 
 /// One `pp-else-if` branch of a [`StaticCondPlan`].
@@ -352,6 +371,10 @@ pub struct CondBranch {
     pub expr_src: &'static str,
     pub compiled: Option<&'static expr::StaticExpr>,
     pub body: Option<IfBodyFn>,
+    /// RFC-099 Phase 3 — branch body as DATA (see
+    /// [`StaticCondPlan::body_plan`]).
+    pub body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+    pub body_html: Option<&'static str>,
 }
 
 /// Macro-emitted constructor for a `pp-if` body. Returns the
@@ -433,6 +456,22 @@ pub struct StaticForPlan {
     pub key_expr: Option<&'static str>,
     pub stagger_ms: u32,
     pub body: Option<ForBodyFn>,
+    /// RFC-099 Phase 3 — row body as DATA (see
+    /// [`StaticCondPlan::body_plan`]). The SSR stamper renders one
+    /// clone of `body_plan` per item, against the state augmented
+    /// with `{ item_name: item, $index, $first, $last }`. Emitted for
+    /// KEYED rows too (where `body` is `None` because the RFC-054
+    /// row-plan owns the client create path) so keyed lists still
+    /// server-render.
+    pub body_plan: Option<&'static crate::templates_plan::StaticTemplatePlan>,
+    pub body_html: Option<&'static str>,
+    /// RFC-099 Phase 3 — the RFC-054 row-plan id for this `pp-for`
+    /// site (the `data-pp-row-plan="<id>"` the macro stamped on the
+    /// `<template>`), when one was assigned. The hydrate (claim) path
+    /// needs it to resolve the `CompiledRowPlan` from the registry by
+    /// `(component, id)` — the `<template>` it would otherwise read
+    /// the attribute from is gone from the server output.
+    pub row_plan_id: Option<u32>,
 }
 
 /// Macro-emitted constructor for a `pp-for` row body. Called
@@ -745,14 +784,22 @@ fn compile_fast_path(item_name: &str, segments: &[String]) -> Option<FastPath> {
         "$last" => (FastPathRoot::LoopLast, &segments[1..]),
         _ => (FastPathRoot::Parent, segments),
     };
-    Some(FastPath {
-        root,
-        keys: rest
-            .iter()
-            .map(|segment| JsValue::from_str(segment))
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    })
+    // RFC-099 — `JsValue::from_str` is a wasm-bindgen extern that panics
+    // off-wasm. The compiled row plan is a CLIENT-only reconciliation
+    // optimization; the host (SSR) registers it harmlessly but never
+    // consults the keys, so build them empty there.
+    #[cfg(target_arch = "wasm32")]
+    let keys = rest
+        .iter()
+        .map(|segment| JsValue::from_str(segment))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    #[cfg(not(target_arch = "wasm32"))]
+    let keys = {
+        let _ = rest;
+        Vec::new().into_boxed_slice()
+    };
+    Some(FastPath { root, keys })
 }
 
 fn literal_fast_value(expr: &Spanned<Expr>) -> Option<JsValue> {
@@ -967,6 +1014,18 @@ pub fn lookup_for_template(template_el: &Element) -> Option<Rc<CompiledRowPlan>>
         .and_then(|s| s.parse::<u32>().ok())?;
     let component_name = nearest_component_name(template_el)?;
     ROW_PLANS.with(|r| r.borrow().get(&(component_name, plan_id)).cloned())
+}
+
+/// RFC-099 Phase 3 — resolve a row plan by `(component, plan_id)`
+/// directly, without a `<template>` to read `data-pp-row-plan` from.
+/// The hydrate (claim) path uses this because the server replaced the
+/// `<template>` with the rendered rows + a comment anchor.
+pub fn lookup_row_plan_by_id(component_name: &str, plan_id: u32) -> Option<Rc<CompiledRowPlan>> {
+    ROW_PLANS.with(|r| {
+        r.borrow()
+            .get(&(component_name.to_string(), plan_id))
+            .cloned()
+    })
 }
 
 /// Fetch (or lazy-mint) the row's `js_sys::Proxy`. Compiled-row

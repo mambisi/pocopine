@@ -6,7 +6,7 @@
 //! The pre-abstraction shape every primitive used to write —
 //!
 //! ```ignore
-//! let id = web_sys::window()
+//! let id = host_window()
 //!     .and_then(|w| {
 //!         let cb = Closure::once_into_js(move || { /* … */ });
 //!         w.set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -43,6 +43,19 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::events::on_scope_unmount;
 
+/// Host-safe `window()`. On the host (SSR) `web_sys::window()` aborts
+/// (the wasm-bindgen import stub is `extern "C"`/nounwind), so return
+/// `None` — every timer becomes a no-op server-side and the real timers
+/// run on the client after hydration. RFC-099.
+#[cfg(target_arch = "wasm32")]
+fn host_window() -> Option<web_sys::Window> {
+    web_sys::window()
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn host_window() -> Option<web_sys::Window> {
+    None
+}
+
 /// RAII handle for a single `setTimeout`. Drop the value or call
 /// [`TimeoutHandle::cancel`] to abort; otherwise the timer fires
 /// after its delay.
@@ -51,7 +64,9 @@ pub struct TimeoutHandle {
     // Keeps the JS-side `Closure` alive across the timer wait. The
     // closure clears `id` on fire so [`is_pending`] reports
     // truthfully, but the closure itself lives at least until the
-    // handle drops.
+    // handle drops. Absent on the host (SSR): there is no timer, and a
+    // `wasm_bindgen::Closure` can't be constructed off-wasm. RFC-099.
+    #[cfg(target_arch = "wasm32")]
     _closure: Closure<dyn FnMut()>,
 }
 
@@ -60,7 +75,7 @@ impl TimeoutHandle {
     /// previously cancelled.
     pub fn cancel(&self) {
         if let Some(id) = self.id.take()
-            && let Some(w) = web_sys::window()
+            && let Some(w) = host_window()
         {
             w.clear_timeout_with_handle(id);
         }
@@ -87,27 +102,38 @@ where
     F: FnOnce() + 'static,
 {
     let id_cell: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
-    let id_for_cb = id_cell.clone();
-    let mut user_fn = Some(f);
-    // setTimeout's callback fires once but `Closure::wrap` requires
-    // FnMut — pull the user fn out of the Option on first fire.
-    let closure = Closure::wrap(Box::new(move || {
-        id_for_cb.set(None);
-        if let Some(f) = user_fn.take() {
-            f();
-        }
-    }) as Box<dyn FnMut()>);
-    if let Some(w) = web_sys::window()
-        && let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-            closure.as_ref().unchecked_ref(),
-            delay_ms as i32,
-        )
+    // RFC-099 — on the host (SSR) there is no timer; skip building the
+    // `Closure` (which aborts off-wasm) and return an inert handle. The
+    // real timer runs on the client after hydration re-runs setup/mount.
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        id_cell.set(Some(id));
+        let _ = (delay_ms, f);
+        TimeoutHandle { id: id_cell }
     }
-    TimeoutHandle {
-        id: id_cell,
-        _closure: closure,
+    #[cfg(target_arch = "wasm32")]
+    {
+        let id_for_cb = id_cell.clone();
+        let mut user_fn = Some(f);
+        // setTimeout's callback fires once but `Closure::wrap` requires
+        // FnMut — pull the user fn out of the Option on first fire.
+        let closure = Closure::wrap(Box::new(move || {
+            id_for_cb.set(None);
+            if let Some(f) = user_fn.take() {
+                f();
+            }
+        }) as Box<dyn FnMut()>);
+        if let Some(w) = host_window()
+            && let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                closure.as_ref().unchecked_ref(),
+                delay_ms as i32,
+            )
+        {
+            id_cell.set(Some(id));
+        }
+        TimeoutHandle {
+            id: id_cell,
+            _closure: closure,
+        }
     }
 }
 
@@ -129,13 +155,16 @@ where
 /// [`cancel`]: IntervalHandle::cancel
 pub struct IntervalHandle {
     id: Cell<Option<i32>>,
+    // Absent on the host (SSR): no interval, and a `Closure` can't be
+    // constructed off-wasm. RFC-099.
+    #[cfg(target_arch = "wasm32")]
     _closure: Closure<dyn FnMut()>,
 }
 
 impl IntervalHandle {
     pub fn cancel(&self) {
         if let Some(id) = self.id.take()
-            && let Some(w) = web_sys::window()
+            && let Some(w) = host_window()
         {
             w.clear_interval_with_handle(id);
         }
@@ -159,17 +188,29 @@ pub fn every<F>(period_ms: u32, f: F) -> IntervalHandle
 where
     F: FnMut() + 'static,
 {
-    let closure = Closure::wrap(Box::new(f) as Box<dyn FnMut()>);
-    let id = web_sys::window().and_then(|w| {
-        w.set_interval_with_callback_and_timeout_and_arguments_0(
-            closure.as_ref().unchecked_ref(),
-            period_ms as i32,
-        )
-        .ok()
-    });
-    IntervalHandle {
-        id: Cell::new(id),
-        _closure: closure,
+    // RFC-099 — host (SSR): no interval; skip the `Closure` (aborts
+    // off-wasm) and return an inert handle. Runs on the client post-hydrate.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (period_ms, f);
+        IntervalHandle {
+            id: Cell::new(None),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let closure = Closure::wrap(Box::new(f) as Box<dyn FnMut()>);
+        let id = host_window().and_then(|w| {
+            w.set_interval_with_callback_and_timeout_and_arguments_0(
+                closure.as_ref().unchecked_ref(),
+                period_ms as i32,
+            )
+            .ok()
+        });
+        IntervalHandle {
+            id: Cell::new(id),
+            _closure: closure,
+        }
     }
 }
 
@@ -236,7 +277,7 @@ impl Debounced {
         F: FnOnce() + 'static,
     {
         self.cancel();
-        let Some(w) = web_sys::window() else { return };
+        let Some(w) = host_window() else { return };
         let me = self.clone();
         let mut user_fn = Some(f);
         let closure = Closure::wrap(Box::new(move || {
@@ -260,7 +301,7 @@ impl Debounced {
     /// Cancel any pending fire. No-op if nothing is scheduled.
     pub fn cancel(&self) {
         if let Some(id) = self.id.take()
-            && let Some(w) = web_sys::window()
+            && let Some(w) = host_window()
         {
             w.clear_timeout_with_handle(id);
         }
@@ -286,7 +327,7 @@ impl Debounced {
 /// is driving it in that environment.
 pub async fn sleep(delay_ms: u32) {
     let p = js_sys::Promise::new(&mut |resolve, _reject| {
-        if let Some(w) = web_sys::window() {
+        if let Some(w) = host_window() {
             let _ =
                 w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, delay_ms as i32);
         }
@@ -299,7 +340,7 @@ pub async fn sleep(delay_ms: u32) {
 /// "measure after layout" patterns inside async flows.
 pub async fn next_frame() -> f64 {
     let p = js_sys::Promise::new(&mut |resolve, _reject| {
-        if let Some(w) = web_sys::window() {
+        if let Some(w) = host_window() {
             let _ = w.request_animation_frame(&resolve);
         }
     });
