@@ -404,21 +404,51 @@ async fn maybe_compact<A: AiAgent>(
     cx: &ProviderContext,
     thread: &AgentThreadHandle,
 ) -> AgenkitResult<()> {
+    let max_output = config.max_tokens.unwrap_or(1024);
+    if let Some((folded, kept)) = compact_thread(thread, model, provider, cx, max_output).await? {
+        run.emit(
+            run.event(
+                events::AI_THREAD_CHECKPOINTED,
+                StepKind::Custom,
+                StepStatus::Completed,
+            )
+            .with_field("thread_id", thread.id().as_str())
+            .with_field("agent_id", A::ID)
+            .with_field("compacted_messages", folded)
+            .with_field("kept_verbatim", kept),
+        );
+    }
+    Ok(())
+}
+
+/// Compact a thread if its active history would overflow the model's window
+/// (consumes the W3 headroom signal → writes a W7 checkpoint). Keeps the recent
+/// tail verbatim (token-bounded) and folds the older prefix into one summary.
+/// Returns `Some((folded, kept))` when it summarized, `None` otherwise.
+///
+/// Shared by the single-shot agent loop ([`maybe_compact`]) and the long-lived
+/// runtime ([`super::runtime`]); the caller emits its own checkpoint event.
+pub(crate) async fn compact_thread(
+    thread: &AgentThreadHandle,
+    model: &ModelRef,
+    provider: &Arc<dyn Provider>,
+    cx: &ProviderContext,
+    max_output: u32,
+) -> AgenkitResult<Option<(u64, u64)>> {
     // Without catalog metadata we can't size the window — skip (degrade, no error).
     let Some(catalog_model) = super::catalog::lookup(model) else {
-        return Ok(());
+        return Ok(None);
     };
     let history = thread.active_history().await?;
     if history.len() < 4 {
-        return Ok(()); // nothing meaningful to summarize yet
+        return Ok(None); // nothing meaningful to summarize yet
     }
     let messages: Vec<Message> = history
         .iter()
         .map(|m| Message::new(m.role, m.content.clone()))
         .collect();
-    let max_output = config.max_tokens.unwrap_or(1024);
     if !context_headroom(catalog_model, &messages, max_output).over {
-        return Ok(()); // still fits — no compaction
+        return Ok(None); // still fits — no compaction
     }
 
     // Keep the recent tail verbatim (token-bounded — see `recent_keep_count`),
@@ -432,21 +462,11 @@ async fn maybe_compact<A: AiAgent>(
         .collect::<Vec<_>>()
         .join("\n");
     let summary = summarize(transcript, model, provider, cx).await?;
+    let (folded, kept) = (older.len() as u64, recent.len() as u64);
     thread
         .checkpoint(ThreadMessage::new(Role::System, summary), recent.to_vec())
         .await?;
-    run.emit(
-        run.event(
-            events::AI_THREAD_CHECKPOINTED,
-            StepKind::Custom,
-            StepStatus::Completed,
-        )
-        .with_field("thread_id", thread.id().as_str())
-        .with_field("agent_id", A::ID)
-        .with_field("compacted_messages", older.len() as u64)
-        .with_field("kept_verbatim", recent.len() as u64),
-    );
-    Ok(())
+    Ok(Some((folded, kept)))
 }
 
 /// The token budget for the recent tail [`maybe_compact`] keeps verbatim. Older

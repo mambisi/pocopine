@@ -25,6 +25,10 @@ pub mod provider;
 pub mod reduce;
 pub mod retrieval;
 pub mod run;
+/// The long-lived, multi-turn agent runtime (Layer 2): a conversational
+/// `AgentSession` over the W7 session layer, with a typed event firehose and
+/// (L3) steering hooks.
+pub mod runtime;
 mod schema;
 /// Durable, branchable conversation sessions (roadmap W7) — a single-writer
 /// append-only event log with parent-pointer forks and compaction checkpoints.
@@ -59,6 +63,9 @@ pub use provider::{
 };
 pub use reduce::ReduceBuilder;
 pub use retrieval::{AiRetriever, DynRetriever, RetrieverRegistry, retriever_as_tool};
+pub use runtime::{
+    AgentConfig, AgentEvent, AgentLoop, AgentSession, AgentSessionBuilder, StopReason,
+};
 pub use thread::{
     AgentThreadHandle, AgentThreadStore, SessionThreadStore, ThreadBuilder, ThreadOwner,
 };
