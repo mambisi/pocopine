@@ -144,6 +144,15 @@ impl ClientSession {
                 self.topic_name.insert(topic_ref, topic.clone());
                 SessionEvent::Subscribed { topic, topic_ref }
             }
+            // NOTE: Resume/Resumed is currently DORMANT for the wasm client. The
+            // `RealtimeClient` recovers a dropped socket by re-subscribing fresh
+            // (a new session + a fresh SubscribeAck per topic), never by sending
+            // `Control::Resume`, so this arm isn't exercised in practice. It is
+            // kept correct for a future backlog-replay relay topic — at which point
+            // the server's `Resumed` must echo the new `topic_ref` (today it does
+            // not; it reassigns a ref per connection), or this `keeps its prior
+            // ref` assumption breaks for multi-topic resumes. Until then the Gap
+            // fallback below keeps an unbound resume from mis-routing.
             Control::Resumed { topic } => match self.topic_ref.get(&topic).copied() {
                 // A resumed topic keeps its prior ref; surface it as subscribed.
                 Some(topic_ref) => SessionEvent::Subscribed { topic, topic_ref },

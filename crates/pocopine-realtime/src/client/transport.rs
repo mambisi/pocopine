@@ -59,6 +59,17 @@ type EventHandler = Rc<dyn Fn(&SessionEvent)>;
 /// Optional observer of the connection's transport-level liveness.
 type StatusHandler = Rc<dyn Fn(ConnectionStatus)>;
 
+/// Cap on queued `Data` frames during an outage; past this the oldest is dropped
+/// to bound memory. Safe for CRDT topics — the reconnect SyncStep1/2 handshake
+/// re-reconciles full state — so a dropped delta is recovered. Relay topics that
+/// need durable offline delivery must bound at the app layer.
+const MAX_QUEUED_DATA: usize = 1024;
+
+/// WebSocket close code for a policy violation (RFC 6455 §7.4.1) — treated as a
+/// fatal, non-retryable close (auth / forbidden topic): the client stops
+/// reconnecting and transitions to `Closed` rather than looping forever.
+const CLOSE_CODE_POLICY_VIOLATION: u16 = 1008;
+
 /// An outbound frame not yet sendable.
 enum Outbound {
     /// A pre-encoded frame that only needs the socket OPEN (subscribe, heartbeat).
@@ -104,8 +115,12 @@ struct Inner {
     reconnect_attempts: u32,
     /// The socket-event closures, re-attached to each new socket on reconnect.
     handlers: Option<SocketHandlers>,
-    /// Set on `Drop` so a late close event or timer cannot resurrect the socket.
+    /// Set on `Drop`/`close()` so a late close event or timer cannot resurrect
+    /// the socket.
     closed: bool,
+    /// True once an outbox overflow has been logged this outage, so a long
+    /// disconnected drag doesn't spam the log on every dropped frame.
+    outbox_overflow_warned: bool,
 }
 
 impl Inner {
@@ -122,6 +137,9 @@ impl Inner {
         if !self.is_sendable() {
             return;
         }
+        // The queue is draining — re-arm the one-shot overflow warning for the
+        // next outage.
+        self.outbox_overflow_warned = false;
         for item in std::mem::take(&mut self.outbox) {
             match item {
                 Outbound::Frame(bytes) => {
@@ -145,6 +163,34 @@ impl Inner {
         }
     }
 
+    /// Queue a Data payload, bounding the backlog at [`MAX_QUEUED_DATA`] so a long
+    /// outage can't grow it without limit. Past the cap the oldest queued Data is
+    /// dropped (Subscribe frames are kept — they must replay); a CRDT topic still
+    /// recovers via the reconnect SyncStep1/2 handshake.
+    fn queue_data(&mut self, topic: String, subprotocol_id: u64, payload: Bytes) {
+        self.outbox.push(Outbound::Data {
+            topic,
+            subprotocol_id,
+            payload,
+        });
+        if self.outbox.len() > MAX_QUEUED_DATA
+            && let Some(oldest) = self
+                .outbox
+                .iter()
+                .position(|item| matches!(item, Outbound::Data { .. }))
+        {
+            self.outbox.remove(oldest);
+            if !self.outbox_overflow_warned {
+                self.outbox_overflow_warned = true;
+                tracing::warn!(
+                    target: "pocopine.log",
+                    cap = MAX_QUEUED_DATA,
+                    "realtime: outbox overflow during outage; dropping oldest queued data (state recovers on reconnect resync)"
+                );
+            }
+        }
+    }
+
     /// Clear the heartbeat interval (and drop its closure) if running.
     fn stop_heartbeat(&mut self) {
         if let Some((_closure, handle)) = self.heartbeat.take()
@@ -152,6 +198,25 @@ impl Inner {
         {
             window.clear_interval_with_handle(handle);
         }
+    }
+
+    /// Permanently tear the connection down: mark closed (so a late close event or
+    /// timer is a no-op), clear both timers, detach the socket handlers, and close
+    /// the socket. Idempotent. Shared by `Drop` and [`RealtimeClient::close`].
+    fn teardown(&mut self) {
+        self.closed = true;
+        self.open = false;
+        self.stop_heartbeat();
+        if let Some((_closure, handle)) = self.reconnect.take()
+            && let Some(window) = web_sys::window()
+        {
+            window.clear_timeout_with_handle(handle);
+        }
+        self.ws.set_onopen(None);
+        self.ws.set_onmessage(None);
+        self.ws.set_onclose(None);
+        self.ws.set_onerror(None);
+        let _ = self.ws.close();
     }
 }
 
@@ -187,6 +252,7 @@ impl RealtimeClient {
             reconnect_attempts: 0,
             handlers: None,
             closed: false,
+            outbox_overflow_warned: false,
         }));
 
         let handlers = Self::build_handlers(&inner);
@@ -216,9 +282,9 @@ impl RealtimeClient {
         };
         let on_close = {
             let weak = Rc::downgrade(inner);
-            Closure::<dyn FnMut(CloseEvent)>::new(move |_event: CloseEvent| {
+            Closure::<dyn FnMut(CloseEvent)>::new(move |event: CloseEvent| {
                 if let Some(inner) = weak.upgrade() {
-                    Self::handle_close(&inner);
+                    Self::handle_close(&inner, event.code());
                 }
             })
         };
@@ -310,8 +376,12 @@ impl RealtimeClient {
     }
 
     /// `onclose`: stop the heartbeat (so it can't keep firing at a dead socket)
-    /// and schedule a reconnect. Idempotent and a no-op once dropped.
-    fn handle_close(inner: &Rc<RefCell<Inner>>) {
+    /// and either reconnect (transient close) or give up (fatal close). Idempotent
+    /// and a no-op once dropped.
+    fn handle_close(inner: &Rc<RefCell<Inner>>, code: u16) {
+        // A policy-violation close (auth / forbidden topic) is not retryable —
+        // reconnecting would just be rejected again. Tear down and go Closed.
+        let fatal = code == CLOSE_CODE_POLICY_VIOLATION;
         {
             let mut guard = inner.borrow_mut();
             if guard.closed {
@@ -319,6 +389,14 @@ impl RealtimeClient {
             }
             guard.open = false;
             guard.stop_heartbeat();
+            if fatal {
+                guard.teardown();
+            }
+        }
+        if fatal {
+            tracing::warn!(target: "pocopine.log", code, "realtime: fatal close; not reconnecting");
+            Self::emit_status(inner, ConnectionStatus::Closed);
+            return;
         }
         Self::emit_status(inner, ConnectionStatus::Reconnecting);
         Self::schedule_reconnect(inner);
@@ -331,7 +409,7 @@ impl RealtimeClient {
         let Some(window) = web_sys::window() else {
             return;
         };
-        let delay = {
+        let base = {
             let mut guard = inner.borrow_mut();
             if guard.closed {
                 return;
@@ -343,10 +421,15 @@ impl RealtimeClient {
             if let Some((_closure, handle)) = guard.reconnect.take() {
                 window.clear_timeout_with_handle(handle);
             }
-            let delay = reconnect_delay_ms(guard.reconnect_attempts);
+            let base = reconnect_delay_ms(guard.reconnect_attempts);
             guard.reconnect_attempts = guard.reconnect_attempts.saturating_add(1);
-            delay
+            base
         };
+        // ±20% jitter so a fleet of clients reconnecting after a server blip don't
+        // synchronize into a thundering herd. The pure `reconnect_delay_ms` stays
+        // deterministic (host-tested); randomness lives only here, on wasm.
+        let factor = 0.8 + 0.4 * js_sys::Math::random();
+        let delay = (f64::from(base) * factor) as i32;
 
         let weak = Rc::downgrade(inner);
         let timer = Closure::<dyn FnMut()>::new(move || {
@@ -356,7 +439,7 @@ impl RealtimeClient {
         });
         if let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
             timer.as_ref().unchecked_ref(),
-            delay as i32,
+            delay,
         ) {
             inner.borrow_mut().reconnect = Some((timer, handle));
         }
@@ -495,11 +578,7 @@ impl RealtimeClient {
     /// queued during a reconnect is sent once the topic re-binds.
     pub fn send_data(&self, topic: &str, subprotocol_id: u64, payload: Bytes) {
         let mut guard = self.inner.borrow_mut();
-        guard.outbox.push(Outbound::Data {
-            topic: topic.to_string(),
-            subprotocol_id,
-            payload,
-        });
+        guard.queue_data(topic.to_string(), subprotocol_id, payload);
         guard.flush();
     }
 
@@ -508,24 +587,28 @@ impl RealtimeClient {
     pub fn heartbeat_interval_ms(&self) -> u32 {
         self.inner.borrow().session.heartbeat_interval_ms()
     }
+
+    /// Deliberately close the connection and stop reconnecting, emitting a final
+    /// [`ConnectionStatus::Closed`]. Idempotent. (Dropping the client tears down
+    /// the same way but stays silent — see `Drop`.)
+    pub fn close(&self) {
+        {
+            let mut guard = self.inner.borrow_mut();
+            if guard.closed {
+                return;
+            }
+            guard.teardown();
+        }
+        Self::emit_status(&self.inner, ConnectionStatus::Closed);
+    }
 }
 
 impl Drop for RealtimeClient {
     fn drop(&mut self) {
-        // Mark closed so any in-flight close event / timer is a no-op, clear both
-        // timers, detach the socket handlers, and close.
-        let mut guard = self.inner.borrow_mut();
-        guard.closed = true;
-        guard.stop_heartbeat();
-        if let Some((_closure, handle)) = guard.reconnect.take()
-            && let Some(window) = web_sys::window()
-        {
-            window.clear_timeout_with_handle(handle);
-        }
-        guard.ws.set_onopen(None);
-        guard.ws.set_onmessage(None);
-        guard.ws.set_onclose(None);
-        guard.ws.set_onerror(None);
-        let _ = guard.ws.close();
+        // Silent teardown — the consumer is discarding the client, so there is no
+        // one left to observe a `Closed` status (and emitting it while holding the
+        // borrow would risk a re-entrant borrow). Use `close()` for an observable
+        // shutdown.
+        self.inner.borrow_mut().teardown();
     }
 }
