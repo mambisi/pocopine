@@ -26,7 +26,7 @@ are **declared**. Full guide: `docs/guides/agenkit/`.
 | Call a flow | `agenkit.flow(Marker).input(x).run()` (typed); `flow("id")` only for dynamic/runner use | a stringly-typed call when the flow is statically known |
 | Expose a flow to clients | a `#[server]` fn that runs `active_plugin::<Agenkit>()…flow(M).input(i).run()` and maps errors with `to_server_error` | giving the flow its own endpoint, or returning the raw `AgenkitError` |
 | Thread the caller identity | install `agenkit_server_plugin(agenkit)` (provides the handle + principal layer) | reading `Principal` in the handler and passing it down |
-| Stream progress | declare `stream = "progress"` (cap), stream via `.stream(tx)`, mount `ai_flow_stream_router` | inventing a stream type, or raising visibility past the declared `StreamMode` |
+| Stream progress | declare `stream = "progress"` (cap), expose a `#[server] -> StreamServerResult<FlowStreamEvent>` returning `flow(M).input(i).stream()` | inventing a stream type, or raising visibility past the declared `StreamMode` |
 | Combine parallel results | `ctx.reduce(name, c).fold(…)` (deterministic) or `.schema::<O>()` (model judge) | a hand-rolled join that drops failures or leaves branches uncancelled |
 
 ## Non-negotiables
@@ -39,15 +39,29 @@ are **declared**. Full guide: `docs/guides/agenkit/`.
   the SSE streaming route; never auto-generate flow endpoints.
 - **`FlowStreamEvent` is client-safe by construction** — ids/kinds/counts/output
   only. Never put a prompt, tool args, retrieved content, or a credential in a
-  trace `with_field` or anywhere client-facing (§D8/§D10).
+  trace `with_field` or anywhere client-facing (§D8/§D10). The one redaction that
+  can be lifted is reasoning text, behind a **two-part gate**: the author permits
+  it (`#[ai_flow(reasoning)]` / `expose_reasoning`) **and** the caller requests it
+  (`.request_reasoning(true)`). Effective exposure = the AND; either off →
+  `ThinkingDelta` carries a count only. (`stream_into` is a trusted full-fidelity
+  server-side sink — no redaction; never feed it to an untrusted client.)
 - **Errors:** map at the boundary with `to_server_error` — provider/config/etc.
   collapse to a stable kind; internals never cross.
 - **Bound cost:** agents `.max_steps(n)`; parallel `.max_concurrency(n)` +
   `.min_success(m)` + `.timeout(..)`; `builder.allow_models([..])`.
 - **Threads are owner-scoped** (one principal can't touch another's) and ids are
-  opaque; `InMemoryThreadStore` is dev-only — use a real `AgentThreadStore`.
-- **Providers:** default to `AnthropicProvider` (recommended). Credentials are
-  read from env, server-only. Use `MockProvider` in tests.
+  opaque. Threads run on the session layer: the default
+  `SessionThreadStore::in_memory()` is dev-only — for durability back it with
+  `JsonlSessionStore` (or your own `SessionStore`/`AgentThreadStore`).
+- **Providers:** default to `AnthropicProvider` (recommended). Use `MockProvider`
+  in tests.
+- **Credentials** are server-only and resolved per request. Default = env
+  (`{PROVIDER}_API_KEY`). For per-user keys (BYOK) implement `ProviderCredentials`
+  keyed on the `Principal`; for OAuth use `OAuthCredentials` + an `OAuthTokenStore`
+  (pocopine refreshes, the app stores). Wire either via
+  `Agenkit::builder().credentials(..)`. Never store a secret in pocopine, log a
+  `SecretString`, or let a credential cross to the client (§D10). Guide:
+  `docs/guides/agenkit/credentials.md`.
 - **`#[ai_flow]` marker = PascalCase of the fn name** — it must not collide with
   the flow's input/output type names (rename the fn or set `id = "…"`).
 

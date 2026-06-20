@@ -76,17 +76,73 @@ no raw prompts, tool arguments, or provider payloads (§D8/§D10). Don't stash
 secrets or user content in a checkpoint expecting it to be private; treat it as
 potentially observable.
 
+## Compaction
+
+When a turn's history would overflow the model's context window (the W3 overflow
+signal), the agent loop **compacts automatically**: it folds the older prefix
+into one summary checkpoint and **keeps the most recent turns verbatim**, so the
+model still sees its live, un-paraphrased context. The active context becomes
+`[summary, …recent]`; the **full log is untouched** — the kept tail lives only
+inside the checkpoint payload, so compaction never duplicates the history it
+folds (the failure mode that ballooned other agents' session files). Forks and
+audit always replay the complete original history.
+
+The kept tail is bounded by a **token budget**, not a message count: the most
+recent turns are kept up to that budget, and a single turn larger than it is
+summarized rather than retained — so the kept tail can never itself re-overflow
+the window, and an oversized (externalized) turn isn't re-inlined into the
+checkpoint.
+
 ## Custom stores
 
-The default `InMemoryThreadStore` is dev-only (state is lost on restart and not
-shared across processes). For anything real, implement `AgentThreadStore`
-against your backing store and register it:
+Threads run on the durable **session layer** (`server::session`). The default —
+`SessionThreadStore::in_memory()` — is dev-only (state is lost on restart). For
+durability, back the same `SessionThreadStore` with a durable `SessionStore`:
 
 ```rust
+use std::sync::Arc;
+use pocopine_agenkit::server::{SessionThreadStore, session::SqliteSessionStore};
+
 Agenkit::builder()
     .provider(provider)
-    .thread_store(MyDurableStore::new(pool))   // implements AgentThreadStore
+    .thread_store(SessionThreadStore::new(Arc::new(
+        SqliteSessionStore::open("/var/lib/myapp/threads.db")?,
+    )))
     .build()?;
+```
+
+The three session stores:
+
+| store | use | `children`/`last_seq` |
+| ----- | --- | --------------------- |
+| `MemorySessionStore` | tests / dev (lost on restart) | in-memory |
+| `JsonlSessionStore` | a cat-able append-only log per thread | scans files (O(n)) |
+| `SqliteSessionStore` | **production** (one `.db`, transactional) | indexed |
+
+Threads stay **owner-scoped** across any backend (the owning principal is
+persisted on the thread, so the cross-user guard survives a restart). To swap
+the persistence wholesale, implement `AgentThreadStore` directly instead.
+
+### Large tool outputs (out-of-line blobs)
+
+A tool that returns a big payload (a fetched document, a base64 blob) would
+otherwise inline those bytes into every record — the failure mode that ballooned
+other agents' session files. Wrap any store in `ExternalizingSessionStore` to
+push payloads over a threshold into a content-addressed `BlobStore`, keeping only
+a small ref in the log (rehydrated transparently on read; identical payloads
+share one blob):
+
+```rust
+use std::sync::Arc;
+use pocopine_agenkit::server::session::{
+    ExternalizingSessionStore, FsBlobStore, SqliteSessionStore,
+};
+
+let store = Arc::new(ExternalizingSessionStore::new(
+    Arc::new(SqliteSessionStore::open("/var/lib/app/threads.db")?),
+    Arc::new(FsBlobStore::new("/var/lib/app/blobs")),
+));
+SessionThreadStore::new(store)
 ```
 
 A custom store must preserve owner-scoping (reject cross-owner access) and the
