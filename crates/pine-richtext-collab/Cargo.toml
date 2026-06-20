@@ -25,6 +25,9 @@ bytes = "1"
 tracing = { workspace = true }
 pocopine-collab = { workspace = true }
 pocopine-realtime = { workspace = true }
+# The browser editor surface (`Editor`, `on_update_steps`) for `CollabConnection::bind`.
+# Only on wasm — the `view` feature pulls in wasm-bindgen/web-sys/pocopine.
+pine-richtext = { workspace = true, features = ["view"] }
 
 [dev-dependencies]
 bytes = "1"

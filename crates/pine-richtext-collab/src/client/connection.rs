@@ -29,13 +29,14 @@ type ChangeHandler = Rc<RefCell<Option<Rc<dyn Fn(&Node)>>>>;
 
 /// A live collaborative rich-text session over the realtime gateway.
 ///
-/// # Warning — v1 is single-writer
+/// # Multi-writer
 ///
-/// [`push_local`](Self::push_local) re-encodes the whole document (the coarse v1
-/// write). Two clients editing the same doc concurrently **silently lose** each
-/// other's edits — the re-encode tombstones the shared subtree. v1 is safe only
-/// with one writer at a time; nothing here enforces that yet, so a multi-writer
-/// deployment needs an external lease until the Phase-5 incremental write lands.
+/// [`push_local_steps`](Self::push_local_steps) (and [`bind`](Self::bind), which
+/// wires it to an editor) maps the editor's transaction steps to a *fine-grained*
+/// CRDT write, so concurrent in-block edits converge without loss. The legacy
+/// [`push_local`](Self::push_local) re-encodes the whole document (coarse) and is
+/// kept only for callers without step information — two coarse writers still
+/// clobber each other.
 pub struct CollabConnection {
     client: Rc<RealtimeClient>,
     driver: Rc<RefCell<CollabSyncClient>>,
@@ -170,6 +171,45 @@ impl CollabConnection {
     /// The current document.
     pub fn document(&self) -> Result<Node, BindError> {
         self.driver.borrow().document().map_err(BindError::from)
+    }
+
+    /// Wire a mounted rich-text [`Editor`](pine_richtext::view::Editor) to this
+    /// connection end to end: local edits become *fine-grained* incremental CRDT
+    /// writes (so concurrent in-block edits converge), and remote edits load the
+    /// converged document back into the editor. Returns the editor-update
+    /// subscription — **keep it alive** for the session (dropping it unsubscribes).
+    ///
+    /// Loop-safe: the remote load goes through `ReplaceState`, which does not
+    /// re-fire the editor's update event, so it never echoes back as a local edit;
+    /// and the driver suppresses a no-op apply of our own echoed update.
+    ///
+    /// Caret preservation across a remote edit (A2) needs editor selection get/set
+    /// APIs that don't exist yet, so a remote edit currently reloads the doc; the
+    /// [`point_at`](Self::point_at) / [`resolve_point`](Self::resolve_point)
+    /// primitives are exposed for callers wiring it by hand in the meantime.
+    #[cfg(target_arch = "wasm32")]
+    pub fn bind(
+        self: &Rc<Self>,
+        editor: &pine_richtext::view::Editor,
+    ) -> pine_richtext::view::DocChangeSubscription {
+        use pine_richtext::view::DocNode;
+
+        // Local edits → a fine-grained incremental write.
+        let weak = Rc::downgrade(self);
+        let sub = editor.on_update_steps::<DocNode, _>(move |node, steps| {
+            if let Some(conn) = weak.upgrade()
+                && let Err(err) = conn.push_local_steps(&node, &steps)
+            {
+                tracing::warn!(target: "pocopine.log", error = %err, "collab: local push failed");
+            }
+        });
+
+        // Remote edits → load the converged doc back into the editor.
+        let editor = editor.clone();
+        self.on_change(move |node| {
+            let _ = editor.set::<DocNode>(node);
+        });
+        sub
     }
 }
 
