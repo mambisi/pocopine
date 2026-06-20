@@ -563,7 +563,7 @@ impl ThreadBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pocopine_agenkit_core::Role;
+    use pocopine_agenkit_core::{Content, ContentPart, Role, ToolCall};
     use pocopine_auth::AuthUser;
 
     fn alice() -> Principal {
@@ -595,6 +595,79 @@ mod tests {
         assert_eq!(history[0].role, Role::User);
         store.delete(&id, owner).await.unwrap();
         assert!(store.load(&id, owner).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn full_fidelity_messages_round_trip_through_the_store() {
+        // The P4 resume-fidelity guard: a complete tool turn survives a store
+        // round trip byte-for-byte — tool_calls, the tool_call_id linkage, AND a
+        // reasoning signature (all of which the old lossy `ThreadMessage` dropped).
+        let store = SessionThreadStore::in_memory();
+        let owner = ThreadOwner::anonymous();
+        let id = store
+            .create("a", owner, ThreadRetention::Session)
+            .await
+            .unwrap();
+
+        let original = vec![
+            Message::user("weather?"),
+            // An assistant tool-call turn carrying reasoning + a provider signature.
+            Message::assistant_tool_calls(
+                Content::from_parts(vec![
+                    ContentPart::thinking("let me check the tool", Some("sig-xyz".to_string())),
+                    ContentPart::text("calling echo"),
+                ]),
+                vec![ToolCall::new(
+                    "call-1",
+                    "echo",
+                    serde_json::json!({ "text": "x" }),
+                )],
+            ),
+            // A tool result, linked to the call by id.
+            Message::tool_result("call-1", "{\"echoed\":\"x\"}"),
+            Message::assistant("it's sunny"),
+        ];
+        store.append(&id, owner, original.clone()).await.unwrap();
+
+        // Reload via the resume path → byte-equal to what was stored.
+        let reloaded = store.load(&id, owner).await.unwrap().unwrap();
+        assert_eq!(reloaded, original);
+    }
+
+    #[tokio::test]
+    async fn legacy_thread_message_records_decode_into_message() {
+        // Forward-compat: records written before this work (old `ThreadMessage`
+        // shape — role + content + ts_ms, no tool fields) still decode into
+        // `Message`, with the new fields defaulting. No data migration needed.
+        let sessions: Arc<dyn SessionStore> = Arc::new(session::MemorySessionStore::new());
+        let store = SessionThreadStore::new(sessions.clone());
+        let owner = ThreadOwner::anonymous();
+        let id = store
+            .create("a", owner, ThreadRetention::Session)
+            .await
+            .unwrap();
+
+        // Append a raw legacy-shaped record straight to the underlying log.
+        let tid = session::ThreadId::new(id.as_str());
+        sessions
+            .append(
+                &tid,
+                RecordKind::Message,
+                serde_json::json!({
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "legacy hi" }],
+                    "ts_ms": 1_700_000_000_000u64,
+                }),
+            )
+            .await
+            .unwrap();
+
+        let history = store.load(&id, owner).await.unwrap().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].role, Role::User);
+        assert_eq!(history[0].content.as_text(), "legacy hi");
+        assert!(history[0].tool_calls.is_empty());
+        assert!(history[0].tool_call_id.is_none());
     }
 
     #[tokio::test]

@@ -1180,6 +1180,48 @@ mod tests {
         assert_eq!(history[3].content.as_text(), "it's sunny");
     }
 
+    #[tokio::test]
+    async fn a_resumed_session_replays_the_tool_transcript() {
+        // P4 end-to-end: persist a tool turn, reopen the session by id over the
+        // same store, and confirm the resumed history replays the tool call +
+        // result linkage — the agent remembers it used a tool.
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("weather", "echo", serde_json::json!({ "text": "x" }))
+                    .default_text("it's sunny"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Echo)
+            .build()
+            .unwrap();
+        let id = {
+            let s = AgentSession::builder(&agenkit)
+                .config(AgentConfig::new().tools(["echo"]))
+                .open(None)
+                .await
+                .unwrap();
+            let _ = s.prompt("weather?").collect::<Vec<_>>().await;
+            s.id().clone()
+        };
+
+        // Reopen by id over the same (shared) store → the tool transcript replays.
+        let resumed = AgentSession::builder(&agenkit)
+            .config(AgentConfig::new().tools(["echo"]))
+            .open(Some(id))
+            .await
+            .unwrap();
+        let history = resumed.history().await.unwrap();
+        assert_eq!(history.len(), 4, "{history:?}");
+        assert_eq!(history[1].tool_calls[0].tool_id, "echo");
+        assert_eq!(history[2].role, Role::Tool);
+        assert_eq!(
+            history[2].tool_call_id.as_deref(),
+            Some(history[1].tool_calls[0].id.as_str())
+        );
+        assert_eq!(history[3].content.as_text(), "it's sunny");
+    }
+
     #[test]
     fn agent_config_default_has_a_nonzero_step_budget() {
         // Regression: the derived Default gave max_steps_per_turn = 0 (a no-op turn).
