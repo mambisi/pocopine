@@ -22,11 +22,13 @@
 //! The host-only half lives behind a single `cfg` gate in [`server`]: the
 //! realtime [`CollabSync`] handler and the [`CollabStore`] persistence.
 
+pub mod awareness;
 pub mod doc;
 pub mod error;
 pub mod protocol;
 pub mod sync;
 
+pub use awareness::Presence;
 pub use doc::{CollabAccess, CollabDoc};
 pub use error::{CollabError, CollabResult};
 pub use protocol::{COLLAB_SUBPROTOCOL, CollabMessage};
