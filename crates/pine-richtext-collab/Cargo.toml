@@ -1,0 +1,15 @@
+[package]
+name = "pine-richtext-collab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Codec + binding between the pine-richtext ProseMirror model and a yrs CRDT (live blocks)."
+
+# Target-agnostic by design: the codec is one Rust crate compiled twice — host
+# (SSR / persistence / server-authored docs) and wasm32 (the browser editor).
+# Both pine-richtext (model) and yrs build for wasm, so no cfg gate here.
+[dependencies]
+pine-richtext = { workspace = true }
+yrs = "0.27"
+serde_json = "1"
