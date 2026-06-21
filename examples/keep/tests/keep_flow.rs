@@ -1,7 +1,9 @@
 #![cfg(pocopine_host)]
 
 use http_body_util::BodyExt;
-use keep_example::{KEEP_STREAM, KEEP_TAGS_STREAM, KeepNote, KeepTag, live_backend, sync_server};
+use keep_example::{
+    KEEP_STREAM, KEEP_TAGS_STREAM, KeepNote, KeepTag, KeepTagDraft, live_backend, sync_server,
+};
 use pocopine_live::{LIVE_STREAM_PATH, LiveHub, build_live_stream_url, routes};
 use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
@@ -11,6 +13,7 @@ use pocopine_sync::{
     SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncStreamName,
     sync_server_plugin, sync_stream_tag,
 };
+use pocopine_sync_query::write::MutationPayload;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -102,15 +105,16 @@ async fn keep_push_and_live_wakeup_share_the_stream_topic() {
     assert!(invalidation.contains("event: query.invalidated"));
     assert!(invalidation.contains("sync:stream:keep_notes_for_user"));
 
-    let second = pull_notes(&app, first.cursor).await;
-    assert_eq!(second.mode, SyncPullMode::Incremental);
-    assert!(second.changes.iter().any(|change| {
-        change
-            .row
-            .as_ref()
-            .map(|row| row.value.title == "CI note")
-            .unwrap_or(false)
-    }));
+    // The Query-native `Source` pull is snapshot-only (no cursor /
+    // incremental changes): every pull re-lists the current rows. The
+    // live-wakeup tells the client *when* to re-snapshot.
+    let _ = first.cursor;
+    let second = pull_notes(&app, None).await;
+    assert_eq!(second.mode, SyncPullMode::Snapshot);
+    assert!(
+        second.rows.iter().any(|row| row.value.title == "CI note"),
+        "snapshot pull after push should contain the new note"
+    );
 
     let pushed_tag = push_tag(
         &app,
@@ -125,15 +129,13 @@ async fn keep_push_and_live_wakeup_share_the_stream_topic() {
     assert!(pushed_tag.rejected.is_empty());
     assert!(pushed_tag.conflicts.is_empty());
 
-    let second_tags = pull_tags(&app, first_tags.cursor).await;
-    assert_eq!(second_tags.mode, SyncPullMode::Incremental);
-    assert!(second_tags.changes.iter().any(|change| {
-        change
-            .row
-            .as_ref()
-            .map(|row| row.value.name == "ci")
-            .unwrap_or(false)
-    }));
+    let _ = first_tags.cursor;
+    let second_tags = pull_tags(&app, None).await;
+    assert_eq!(second_tags.mode, SyncPullMode::Snapshot);
+    assert!(
+        second_tags.rows.iter().any(|row| row.value.name == "ci"),
+        "snapshot pull after tag push should contain the new tag"
+    );
 
     let _ = std::fs::remove_file(&test_path);
     let _ = std::fs::remove_file(&test_tags_path);
@@ -143,14 +145,20 @@ async fn push_note(
     app: &pocopine_server::axum::Router,
     note: KeepNote,
 ) -> SyncPushResponse<KeepNote> {
+    // New wire contract: the SourceResource decodes a flat
+    // `MutationPayload {op, id, draft}`, not a raw row. The wire `op`
+    // (Upsert) and `key` must agree with the payload's `sync_op()` /
+    // `id`.
+    let id = note.id.clone();
+    let payload = MutationPayload::create(id.clone(), note.to_draft());
     let request = SyncPushRequest::new(
         SyncStreamName::new(KEEP_STREAM).unwrap(),
         [ClientMutation {
-            id: MutationId::new(format!("ci:{}", note.id)).unwrap(),
-            key: Some(RowKey::new(note.id.clone()).unwrap()),
+            id: MutationId::new(format!("ci:{id}")).unwrap(),
+            key: Some(RowKey::new(id).unwrap()),
             op: SyncOp::Upsert,
             base_version: None,
-            payload: note,
+            payload,
 
             migration_outcome: None,
         }],
@@ -176,14 +184,22 @@ async fn push_note(
 }
 
 async fn push_tag(app: &pocopine_server::axum::Router, tag: KeepTag) -> SyncPushResponse<KeepTag> {
+    let id = tag.id.clone();
+    let payload = MutationPayload::create(
+        id.clone(),
+        KeepTagDraft {
+            name: tag.name.clone(),
+            updated_at_ms: tag.updated_at_ms,
+        },
+    );
     let request = SyncPushRequest::new(
         SyncStreamName::new(KEEP_TAGS_STREAM).unwrap(),
         [ClientMutation {
-            id: MutationId::new(format!("ci:tag:{}", tag.id)).unwrap(),
-            key: Some(RowKey::new(tag.id.clone()).unwrap()),
+            id: MutationId::new(format!("ci:tag:{id}")).unwrap(),
+            key: Some(RowKey::new(id).unwrap()),
             op: SyncOp::Upsert,
             base_version: None,
-            payload: tag,
+            payload,
 
             migration_outcome: None,
         }],
