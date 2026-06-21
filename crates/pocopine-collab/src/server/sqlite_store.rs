@@ -34,6 +34,15 @@ impl SqliteCollabStore {
         // so only file-backed connections enable it.
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|err| CollabError::store(err.to_string()))?;
+        // synchronous = FULL fsyncs every commit, NOT just at WAL-checkpoint
+        // boundaries (NORMAL's default). This matters because the apply loop
+        // trims the fan-out to a cursor as soon as `save_snapshot` returns Ok:
+        // under NORMAL a power loss could revert that not-yet-fsynced snapshot
+        // while the fan-out stayed trimmed past it, opening an evicted gap. FULL
+        // makes the save durable BEFORE the trim. The cost — one fsync per
+        // checkpoint — is negligible at the checkpoint cadence (every N updates).
+        conn.pragma_update(None, "synchronous", "FULL")
+            .map_err(|err| CollabError::store(err.to_string()))?;
         Self::from_connection(conn)
     }
 
