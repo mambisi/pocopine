@@ -3,9 +3,11 @@ use pocopine::prelude::*;
 #[cfg(pocopine_host)]
 use {
     crate::{
-        KEEP_COLLECTION, KEEP_STREAM, KEEP_TAGS_COLLECTION, KEEP_TAGS_STREAM,
+        KeepNote, KeepTag,
+        model::{keep_notes_for_user, keep_tags_for_user},
         sqlite_stream::{
-            SqliteKeepStream, SqliteKeepTagStream, default_keep_notes_path, default_keep_tags_path,
+            KeepNoteSource, KeepTagSource, default_keep_notes_path, default_keep_tags_path,
+            keep_row_version,
         },
     },
     pocopine_events::MemoryEventBackend,
@@ -14,37 +16,30 @@ use {
 };
 
 #[cfg(pocopine_host)]
-static KEEP_SYNC: OnceLock<SqliteKeepStream> = OnceLock::new();
+static KEEP_SYNC: OnceLock<KeepNoteSource> = OnceLock::new();
 #[cfg(pocopine_host)]
-static KEEP_TAGS_SYNC: OnceLock<SqliteKeepTagStream> = OnceLock::new();
+static KEEP_TAGS_SYNC: OnceLock<KeepTagSource> = OnceLock::new();
 #[cfg(pocopine_host)]
 static LIVE_BACKEND: OnceLock<MemoryEventBackend> = OnceLock::new();
 #[cfg(pocopine_host)]
 static SYNC_SERVER: OnceLock<SyncServer> = OnceLock::new();
 
 #[cfg(pocopine_host)]
-pub fn keep_stream() -> SqliteKeepStream {
+pub fn keep_notes_source() -> KeepNoteSource {
     KEEP_SYNC
         .get_or_init(|| {
-            let stream =
-                SqliteKeepStream::open(KEEP_STREAM, KEEP_COLLECTION, default_keep_notes_path())
-                    .expect("keep example stream names must be valid");
-            seed_keep_notes(&stream).expect("seed keep notes should sync");
-            stream
+            KeepNoteSource::open(default_keep_notes_path())
+                .expect("keep example notes store must open")
         })
         .clone()
 }
 
 #[cfg(pocopine_host)]
-pub fn keep_tags_stream() -> SqliteKeepTagStream {
+pub fn keep_tags_source() -> KeepTagSource {
     KEEP_TAGS_SYNC
         .get_or_init(|| {
-            SqliteKeepTagStream::open(
-                KEEP_TAGS_STREAM,
-                KEEP_TAGS_COLLECTION,
-                default_keep_tags_path(),
-            )
-            .expect("keep example tag stream names must be valid")
+            KeepTagSource::open(default_keep_tags_path())
+                .expect("keep example tags store must open")
         })
         .clone()
 }
@@ -58,9 +53,18 @@ pub fn live_backend() -> MemoryEventBackend {
 pub fn sync_server() -> SyncServer {
     SYNC_SERVER
         .get_or_init(|| {
+            // `<resource>::resource(source)` (macro-emitted) pre-wires
+            // the row id + RFC 088 §C partition projector and picks up
+            // the SQLite-backed `MutationLog` via `Source::mutation_log()`.
+            // We add the optimistic-concurrency version extractor
+            // (`updated_at_ms`).
+            let notes = keep_notes_for_user::resource(keep_notes_source())
+                .version_field(keep_row_version::<KeepNote>);
+            let tags = keep_tags_for_user::resource(keep_tags_source())
+                .version_field(keep_row_version::<KeepTag>);
             SyncServer::builder()
-                .public_stream(keep_stream())
-                .public_stream(keep_tags_stream())
+                .public_stream(notes)
+                .public_stream(tags)
                 .events(Arc::new(live_backend()))
                 .build()
         })
@@ -68,21 +72,13 @@ pub fn sync_server() -> SyncServer {
 }
 
 #[cfg(pocopine_host)]
-fn seed_keep_notes(_stream: &SqliteKeepStream) -> pocopine_sync::SyncResult<()> {
-    // Intentionally empty: the keep example starts with a blank
-    // workspace so the user immediately sees the optimistic-insert +
-    // live-wakeup loop instead of a pre-baked demo.
-    Ok(())
-}
-
-#[cfg(pocopine_host)]
 async fn invalidate_keep_notes() {
-    invalidate_keep_stream(KEEP_STREAM).await;
+    invalidate_keep_stream(crate::KEEP_STREAM).await;
 }
 
 #[cfg(pocopine_host)]
 async fn invalidate_keep_tags() {
-    invalidate_keep_stream(KEEP_TAGS_STREAM).await;
+    invalidate_keep_stream(crate::KEEP_TAGS_STREAM).await;
 }
 
 #[cfg(pocopine_host)]
@@ -99,14 +95,12 @@ async fn invalidate_keep_stream(stream: &str) {
 
 #[pocopine::server(public)]
 pub async fn reset_keep_notes() -> ServerResult<()> {
-    let stream = keep_stream();
-    stream
+    keep_notes_source()
         .reset()
         .map_err(|err| ServerError::App(err.to_string()))?;
-    let tags = keep_tags_stream();
-    tags.reset()
+    keep_tags_source()
+        .reset()
         .map_err(|err| ServerError::App(err.to_string()))?;
-    seed_keep_notes(&stream).map_err(|err| ServerError::App(err.to_string()))?;
     invalidate_keep_notes().await;
     invalidate_keep_tags().await;
     Ok(())
