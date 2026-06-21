@@ -1,5 +1,6 @@
 <root class="pine-rich-text"
       contenteditable="true"
+      style="white-space: pre-wrap;"
       pp-ref="surface"
       :data-empty="state == null">
   <!-- TODO: doc renderer goes here. Today the surface is empty and
