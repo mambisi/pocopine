@@ -23,10 +23,23 @@
 //!
 //! Every process **self-subscribes** to each topic's fan-out and folds peer
 //! updates into its local document, so replicas behind a multi-process fan-out
-//! (Redis) converge — not just the clients of one process. This closes the gap
-//! where the document was only ever mutated by inbound frames on the local
-//! connection. Durable load/compaction through
-//! [`CollabStore`](super::store::CollabStore) is the next step.
+//! (Redis) converge — not just the clients of one process. Durable load and
+//! checkpointing run through [`CollabStore`](super::store::CollabStore).
+//!
+//! ## Durability window (at-least-once *through the client*)
+//!
+//! [`on_data`](CollabSync::on_data) applies an inbound edit to the in-memory
+//! document and RETURNS a broadcast; the gateway then publishes that broadcast
+//! to the fan-out (and so, durably, toward the store). If the process crashes in
+//! that window — after the optimistic apply, before the gateway publishes — the
+//! edit reached neither the fan-out nor the store. It is not lost outright: the
+//! originating client re-runs the sync handshake on reconnect (its SyncStep1
+//! re-uploads exactly what the server lacks), so the edit returns as long as
+//! that client reconnects. The server is thus at-least-once *through the client*,
+//! not server-durable the instant it acks; the gap is only real if the client
+//! also disappears in that window. Closing it fully would have the handler
+//! publish to the fan-out itself before acking (a realtime↔collab contract
+//! change deferred as its own piece).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -350,7 +363,10 @@ async fn run_apply_loop(
     // durable cursor only ever moves forward.
     let mut highest_seq = after.unwrap_or(0);
     last_folded.store(highest_seq, Ordering::Relaxed);
+    // The cursor a checkpoint was last INITIATED for. Checkpoints are detached
+    // (below) so a slow store never blocks folding; at most one runs at a time.
     let mut last_checkpointed = after.unwrap_or(0);
+    let mut checkpoint: Option<JoinHandle<()>> = None;
     let mut folded = 0u64;
     loop {
         match stream.next().await {
@@ -365,15 +381,30 @@ async fn run_apply_loop(
                 highest_seq = highest_seq.max(seq);
                 last_folded.store(highest_seq, Ordering::Relaxed);
                 folded += 1;
+                // Spawn a checkpoint without awaiting it, so the loop keeps
+                // folding while the store writes. Only one at a time (skip if the
+                // previous is still running) and only when there is new state to
+                // save; the store's monotonic guard + CRDT idempotency make an
+                // out-of-order or redundant detached save harmless. The save is
+                // still bounded by CHECKPOINT_TIMEOUT inside `checkpoint_and_trim`,
+                // so a wedged store frees the slot rather than blocking forever.
                 if let Some(store) = &store
                     && folded >= checkpoint_every
                 {
                     folded = 0;
-                    if highest_seq > last_checkpointed
-                        && checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, highest_seq)
-                            .await
-                    {
+                    let idle = checkpoint.as_ref().is_none_or(|h| h.is_finished());
+                    if idle && highest_seq > last_checkpointed {
                         last_checkpointed = highest_seq;
+                        let (store, fanout, topic, doc, seq) = (
+                            store.clone(),
+                            fanout.clone(),
+                            topic.clone(),
+                            doc.clone(),
+                            highest_seq,
+                        );
+                        checkpoint = Some(tokio::spawn(async move {
+                            checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, seq).await;
+                        }));
                     }
                 }
             }
