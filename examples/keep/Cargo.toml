@@ -37,6 +37,8 @@ pine-richtext = { workspace = true, features = ["view"] }
 pocopine = { path = "../../crates/pocopine" }
 pocopine-auth-client = { workspace = true }
 pocopine-sync = { workspace = true }
+pocopine-sync-query = { workspace = true }
+pocopine-sync-query-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
