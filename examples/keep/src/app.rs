@@ -8,18 +8,19 @@ use crate::{
     keep_firebase_auth_plugin,
 };
 
-fn sync_client_plugin() -> pocopine_sync::SyncClientPlugin {
-    let plugin = pocopine_sync::sync_plugin().with_live_wakeup(true);
-
-    if browser_cross_origin_isolated() {
-        plugin.local_store(pocopine_sync_sqlite::SqliteLocalStore::new())
+fn sync_client_plugin() -> pocopine_sync_query::QueryClientPlugin {
+    let store: std::rc::Rc<dyn pocopine_sync::SyncLocalStore> = if browser_cross_origin_isolated() {
+        std::rc::Rc::new(pocopine_sync_sqlite::SqliteLocalStore::new())
     } else {
         tracing::info!(
             target: "pocopine.log",
             "using IndexedDB sync cache because OPFS SQLite requires cross-origin isolation"
         );
-        plugin.local_store(pocopine_sync_indexdb::IndexedDbLocalStore::new())
-    }
+        std::rc::Rc::new(pocopine_sync_indexdb::IndexedDbLocalStore::new())
+    };
+
+    pocopine_sync_query::query_client_plugin()
+        .config(pocopine_sync_query::QueryClientConfig::default().with_local_store(store))
 }
 
 fn browser_cross_origin_isolated() -> bool {

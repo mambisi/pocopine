@@ -15,7 +15,7 @@ use crate::components::{
     auth_gate::KeepAuthGate, grid_layout::KeepGridLayout, list_detail::KeepListDetail,
     login::KeepLogin,
 };
-use crate::{KEEP_STREAM, KEEP_TAGS_STREAM, KeepStore, focus_after_flush};
+use crate::{KeepStore, focus_after_flush};
 
 /// Top-level component. Owns nothing except the sync wiring; every
 /// piece of durable UI state lives in [`KeepStore`].
@@ -172,38 +172,10 @@ impl KeepBoard {
         }
         self.sync_opened = true;
 
-        // Hook sync to the store: notes lives on KeepStore, so the sync
-        // collection's selector mutably borrows the store, not the board.
-        let plugins = Plugins;
-        let Some(client) = plugins.get::<pocopine_sync::SyncClient>() else {
-            pocopine::store::<KeepStore>().update(|s| {
-                s.notes.set_error("sync plugin not installed");
-            });
-            return;
-        };
-        let notes_result = client
-            .collection(pocopine::store::<KeepStore>(), |s: &mut KeepStore| {
-                &mut s.notes
-            })
-            .stream(KEEP_STREAM)
-            .and_then(|c| c.open());
-        let tags_result = client
-            .collection(pocopine::store::<KeepStore>(), |s: &mut KeepStore| {
-                &mut s.tags
-            })
-            .stream(KEEP_TAGS_STREAM)
-            .and_then(|c| c.open());
-        if let Err(err) = notes_result {
-            pocopine::store::<KeepStore>().update(|s| {
-                s.status = "sync failed".into();
-                s.notes.set_error(err.to_string());
-            });
-        } else if let Err(err) = tags_result {
-            pocopine::store::<KeepStore>().update(|s| {
-                s.status = "sync failed".into();
-                s.notes.set_error(err.to_string());
-            });
-        }
+        // Observe the resource queries and mirror their rows into
+        // KeepStore. The query views own the durable cache + optimistic
+        // overlay; the store just holds the rendered `notes` / `tags`.
+        crate::sync::open_keep_sync();
     }
 
     pub fn toggle_sidebar(&mut self) {

@@ -7,21 +7,13 @@ use super::{
 };
 
 impl KeepStore {
-    pub fn note_view_signature(
-        &self,
-    ) -> (
-        String,
-        String,
-        String,
-        Vec<String>,
-        Vec<pocopine_sync::SyncRow<KeepNote>>,
-    ) {
+    pub fn note_view_signature(&self) -> (String, String, String, Vec<String>, Vec<KeepNote>) {
         (
             self.section_kind.clone(),
             self.section_label.clone(),
             self.search_query.clone(),
             self.selected_note_ids.clone(),
-            self.notes.rows.clone(),
+            self.notes.clone(),
         )
     }
 
@@ -29,24 +21,19 @@ impl KeepStore {
         self.pinned_notes.clear();
         self.other_notes.clear();
         self.command_notes.clear();
-        let existing_ids: Vec<String> = self
-            .notes
-            .rows
-            .iter()
-            .map(|row| row.value.id.clone())
-            .collect();
+        let existing_ids: Vec<String> = self.notes.iter().map(|n| n.id.clone()).collect();
         self.selected_note_ids
             .retain(|id| existing_ids.iter().any(|existing| existing == id));
         self.update_selection_label();
         let selection_active = !self.selected_note_ids.is_empty();
 
-        for row in &self.notes.rows {
-            self.command_notes.push(command_note_for(&row.value));
-            if !self.note_is_visible(&row.value) {
+        for note in &self.notes {
+            self.command_notes.push(command_note_for(note));
+            if !self.note_is_visible(note) {
                 continue;
             }
-            let view = card_row_for(row, &self.selected_note_ids, selection_active);
-            if row.value.pinned {
+            let view = card_row_for(note, &self.selected_note_ids, selection_active);
+            if note.pinned {
                 self.pinned_notes.push(view);
             } else {
                 self.other_notes.push(view);
@@ -93,37 +80,36 @@ impl KeepStore {
         if !self.labels.iter().any(|existing| existing == &label) {
             self.labels.push(label.clone());
         }
-        if !self.tags.rows.iter().any(|row| row.value.name == label) {
+        if !self.tags.iter().any(|t| t.name == label) {
             self.next_local_id = self.next_local_id.saturating_add(1);
             let tag = KeepTag {
                 id: label.clone(),
                 name: label.clone(),
                 updated_at_ms: crate::now_ms(),
             };
-            if let Err(err) = self.push_tag_upsert(tag, "label") {
-                self.status = "label save failed".into();
-                self.notes.set_error(err.to_string());
-            }
+            let mutation = crate::KeepTag::create(
+                tag.id.clone(),
+                crate::KeepTagDraft {
+                    name: tag.name.clone(),
+                    updated_at_ms: tag.updated_at_ms,
+                },
+            );
+            crate::sync::write_tag(mutation, "label");
         }
         Some(label)
     }
 
     pub fn tag_label_registry(&self) -> Vec<String> {
         let mut labels = Vec::new();
-        labels.extend(self.tags.rows.iter().map(|row| row.value.name.clone()));
-        labels.extend(
-            self.notes
-                .rows
-                .iter()
-                .flat_map(|row| row.value.labels.iter().cloned()),
-        );
+        labels.extend(self.tags.iter().map(|t| t.name.clone()));
+        labels.extend(self.notes.iter().flat_map(|n| n.labels.iter().cloned()));
         normalize_labels(labels)
     }
 
     fn sync_missing_tag_rows(&mut self) {
         let labels = self.labels.clone();
         for label in labels {
-            if self.tags.rows.iter().any(|row| row.value.name == label) {
+            if self.tags.iter().any(|t| t.name == label) {
                 continue;
             }
             self.next_local_id = self.next_local_id.saturating_add(1);
@@ -132,10 +118,14 @@ impl KeepStore {
                 name: label,
                 updated_at_ms: crate::now_ms(),
             };
-            if let Err(err) = self.push_tag_upsert(tag, "backfill") {
-                self.status = "label save failed".into();
-                self.notes.set_error(err.to_string());
-            }
+            let mutation = crate::KeepTag::create(
+                tag.id.clone(),
+                crate::KeepTagDraft {
+                    name: tag.name.clone(),
+                    updated_at_ms: tag.updated_at_ms,
+                },
+            );
+            crate::sync::write_tag(mutation, "backfill");
         }
     }
 }

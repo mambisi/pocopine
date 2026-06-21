@@ -34,8 +34,8 @@ struct CachedAuth {
 #[derive(Serialize, Deserialize)]
 #[store(name = "keep")]
 pub struct KeepStore {
-    pub notes: pocopine_sync::CollectionState<KeepNote>,
-    pub tags: pocopine_sync::CollectionState<KeepTag>,
+    pub notes: Vec<KeepNote>,
+    pub tags: Vec<KeepTag>,
     pub pinned_notes: Vec<KeepNoteCardRow>,
     pub other_notes: Vec<KeepNoteCardRow>,
     pub command_notes: Vec<KeepCommandNote>,
@@ -97,8 +97,8 @@ impl Default for KeepStore {
         let auth_initial = actions::auth_initial(&auth_display_name, &auth_email);
 
         Self {
-            notes: pocopine_sync::CollectionState::default(),
-            tags: pocopine_sync::CollectionState::default(),
+            notes: Vec::new(),
+            tags: Vec::new(),
             pinned_notes: Vec::new(),
             other_notes: Vec::new(),
             command_notes: Vec::new(),
@@ -176,10 +176,7 @@ mod tests {
     }
 
     fn push_row(store: &mut KeepStore, note: KeepNote) {
-        store
-            .notes
-            .rows
-            .push(pocopine_sync::SyncRow::new(note.id.clone(), note).unwrap());
+        store.notes.push(note);
     }
 
     fn row_ids(rows: &[KeepNoteCardRow]) -> Vec<String> {
@@ -282,17 +279,11 @@ mod tests {
             &mut store,
             note("labeled", false, false, &["Work", "Ideas"]),
         );
-        store.tags.rows.push(
-            pocopine_sync::SyncRow::new(
-                "Travel",
-                KeepTag {
-                    id: "Travel".to_string(),
-                    name: "Travel".to_string(),
-                    updated_at_ms: 0,
-                },
-            )
-            .unwrap(),
-        );
+        store.tags.push(KeepTag {
+            id: "Travel".to_string(),
+            name: "Travel".to_string(),
+            updated_at_ms: 0,
+        });
 
         assert_eq!(store.tag_label_registry(), vec!["Travel", "Work", "Ideas"]);
     }
@@ -430,7 +421,7 @@ mod tests {
 
         store.toggle_note_selection("kept".to_string());
         store.toggle_note_selection("deleted".to_string());
-        store.notes.rows.retain(|row| row.value.id != "deleted");
+        store.notes.retain(|n| n.id != "deleted");
 
         store.rebuild_visible_notes();
 

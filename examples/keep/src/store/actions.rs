@@ -143,71 +143,36 @@ impl KeepStore {
     }
 
     pub fn refresh(&mut self) {
-        // If the local cache had a cursor but no rows (e.g. the
-        // server bin lost its in-memory state and the OPFS-cached
-        // cursor is now ahead of the server's), an incremental
-        // pull comes back empty and the masonry stays empty too.
-        // Drop the cursor in that case so the next request asks
-        // for a Snapshot and recovers all rows.
-        if self.notes.rows.is_empty() && self.notes.cursor.is_some() {
-            self.notes.cursor = None;
-        }
-        if self.tags.rows.is_empty() && self.tags.cursor.is_some() {
-            self.tags.cursor = None;
-        }
-        let plugins = Plugins;
-        let Some(client) = plugins.get::<pocopine_sync::SyncClient>() else {
-            self.notes.set_error("sync plugin not installed");
-            return;
-        };
-        let notes_result = client
-            .collection(pocopine::store::<Self>(), |s: &mut Self| &mut s.notes)
-            .stream(crate::KEEP_STREAM)
-            .and_then(|c| c.pull());
-        let tags_result = client
-            .collection(pocopine::store::<Self>(), |s: &mut Self| &mut s.tags)
-            .stream(crate::KEEP_TAGS_STREAM)
-            .and_then(|c| c.pull());
-        if let Err(err) = notes_result {
-            self.status = "refresh failed".into();
-            self.notes.set_error(err.to_string());
-        } else if let Err(err) = tags_result {
-            self.status = "refresh failed".into();
-            self.notes.set_error(err.to_string());
-        }
+        // The sync-query driver owns the cursor and auto-pulls; live
+        // wakeups keep the local rows fresh on their own. There's no
+        // client-side cursor to recover, so refresh is just a status
+        // reset — the visible data is already current.
+        self.status.clear();
     }
 
-    /// Force a Snapshot pull regardless of local state — wipes the
-    /// in-memory cursor so the next request hits the server with
-    /// `cursor: null`. Recovery action when the durable client
-    /// cache and the transient server cursor have drifted (rows
-    /// gone but a stale cursor still cached).
+    /// Historically forced a Snapshot pull by wiping the in-memory
+    /// cursor. The driver now owns the cursor and recovers
+    /// automatically, so resync is a lightweight status reset.
     pub fn resync(&mut self) {
-        self.notes.cursor = None;
-        self.tags.cursor = None;
         self.refresh();
     }
 
     pub fn reset(&mut self) {
         self.resetting = true;
-        self.notes.clear_error();
-        self.tags.clear_error();
+        self.status.clear();
         dispatch!(crate::reset_keep_notes().await, |s, result| {
             s.resetting = false;
             match result {
                 Ok(()) => {
                     s.status.clear();
-                    s.notes.rows.clear();
-                    s.notes.cursor = None;
-                    s.tags.rows.clear();
-                    s.tags.cursor = None;
+                    s.notes.clear();
+                    s.tags.clear();
                     s.labels.clear();
                     s.clear_selection();
                     s.rebuild_visible_notes();
                 }
-                Err(err) => {
+                Err(_) => {
                     s.status = "reset failed".into();
-                    s.notes.set_error(err.to_string());
                 }
             }
         });
@@ -260,21 +225,16 @@ impl KeepStore {
 
     pub fn delete_note(&mut self, note_id: String) {
         let Some((_, base_version)) = self.find_note(&note_id) else {
-            self.notes.set_error("note is not loaded yet");
+            self.status = "note is not loaded yet".to_string();
             return;
         };
-        match self.push_delete(&note_id, base_version, "delete") {
-            Ok(()) => self.status.clear(),
-            Err(err) => {
-                self.status = "delete failed".into();
-                self.notes.set_error(err.to_string());
-            }
-        }
+        crate::sync::delete_note_remote(note_id.clone(), base_version, "delete");
+        self.status.clear();
     }
 
     pub fn copy_note(&mut self, note_id: String) {
         let Some((mut note, _)) = self.find_note(&note_id) else {
-            self.notes.set_error("note is not loaded yet");
+            self.status = "note is not loaded yet".to_string();
             return;
         };
         self.next_local_id = self.next_local_id.saturating_add(1);
@@ -283,13 +243,11 @@ impl KeepStore {
         note.archived = false;
         note.updated_at_ms = crate::now_ms();
 
-        match self.push_upsert(note, None, "copy") {
-            Ok(()) => self.status.clear(),
-            Err(err) => {
-                self.status = "copy failed".into();
-                self.notes.set_error(err.to_string());
-            }
-        }
+        crate::sync::write_note(
+            crate::KeepNote::create(note.id.clone(), note.to_draft()),
+            "copy",
+        );
+        self.status.clear();
     }
 
     pub fn toggle_note_label(&mut self, note_id: String, label: String) {
@@ -449,17 +407,16 @@ impl KeepStore {
             labels: Vec::new(),
             updated_at_ms: crate::now_ms(),
         };
-        // `push_upsert` lands its optimistic row asynchronously
-        // (it runs inside `spawn_for_scope`), so calling
-        // `open_editor(id)` right after would hit `notes.rows`
-        // before the row arrives and silently no-op — the new
-        // note would never become the selected detail. Set
-        // `editor_data` directly from the local `note` value
-        // instead, then push. The form's `editor_data` watcher
-        // fires on the id change and loads immediately; the
-        // optimistic row joins `pinned_notes`/`other_notes`
-        // moments later via the usual rebuild and the list-row
-        // `:data-on=` finds its match.
+        // The write helper lands its optimistic row asynchronously
+        // (it spawns the push), so calling `open_editor(id)` right
+        // after would hit `self.notes` before the row arrives and
+        // silently no-op — the new note would never become the
+        // selected detail. Set `editor_data` directly from the
+        // local `note` value instead, then push. The form's
+        // `editor_data` watcher fires on the id change and loads
+        // immediately; the optimistic row joins
+        // `pinned_notes`/`other_notes` moments later via the usual
+        // rebuild and the list-row `:data-on=` finds its match.
         self.editor_data = KeepEditorData::from_note(note.clone());
         if kind == "checklist" {
             // KeepEditorData::from_note derives kind from
@@ -469,18 +426,14 @@ impl KeepStore {
         }
         self.editor_open = true;
 
-        match self.push_upsert(note, None, "create") {
-            Ok(()) => {
-                self.status.clear();
-                self.notes.clear_error();
-            }
-            Err(err) => {
-                self.status = "save failed".into();
-                self.notes.set_error(err.to_string());
-                self.editor_open = false;
-                self.clear_editor_fields();
-            }
-        }
+        // Fire-and-forget create — optimistic success keeps the
+        // editor open; a push failure surfaces via `self.status`
+        // from the spawned task.
+        crate::sync::write_note(
+            crate::KeepNote::create(note.id.clone(), note.to_draft()),
+            "create",
+        );
+        self.status.clear();
     }
 
     pub fn set_search_query(&mut self, query: String) {
@@ -493,10 +446,10 @@ impl KeepStore {
     pub fn open_editor(&mut self, note_id: String) {
         self.clear_selection();
         self.cancel_composer();
-        let Some(row) = self.notes.rows.iter().find(|r| r.value.id == note_id) else {
+        let Some(note) = self.notes.iter().find(|n| n.id == note_id) else {
             return;
         };
-        self.editor_data = KeepEditorData::from_note(row.value.clone());
+        self.editor_data = KeepEditorData::from_note(note.clone());
         self.editor_open = true;
     }
 
