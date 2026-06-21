@@ -141,20 +141,17 @@ impl CollabConnection {
     /// is merged — wire it to load the document into the view editor. A no-op
     /// apply (the gateway echoing your own edit, or a duplicate) does NOT fire it.
     ///
-    /// A connection drives ONE editor: this REPLACES any previously registered
-    /// handler (so a second [`bind`](Self::bind) silently detaches the first
-    /// editor). The replacement is logged so the footgun is not silent; open a
-    /// separate [`CollabConnection`] per editor instead.
-    pub fn on_change(&self, callback: impl Fn(&Node) + 'static) {
+    /// A connection drives exactly ONE editor, so registering a second handler
+    /// (e.g. a second [`bind`](Self::bind)) is a [`BindError::AlreadyBound`]
+    /// error rather than a silent detach of the first — open a separate
+    /// [`CollabConnection`] per editor.
+    pub fn on_change(&self, callback: impl Fn(&Node) + 'static) -> Result<(), BindError> {
         let mut slot = self.on_change.borrow_mut();
         if slot.is_some() {
-            tracing::warn!(
-                target: "pocopine.log",
-                "collab: on_change handler replaced — a CollabConnection drives one editor; \
-                 a second bind()/on_change detaches the previous one"
-            );
+            return Err(BindError::AlreadyBound);
         }
         *slot = Some(Rc::new(callback));
+        Ok(())
     }
 
     /// Commit a local edit coarsely (a whole-document rebuild) and broadcast it.
@@ -217,12 +214,23 @@ impl CollabConnection {
     /// APIs that don't exist yet, so a remote edit currently reloads the doc; the
     /// [`point_at`](Self::point_at) / [`resolve_point`](Self::resolve_point)
     /// primitives are exposed for callers wiring it by hand in the meantime.
+    ///
+    /// Errors with [`BindError::AlreadyBound`] if this connection already drives
+    /// an editor (one connection ↔ one editor).
     #[cfg(target_arch = "wasm32")]
     pub fn bind(
         self: &Rc<Self>,
         editor: &pine_richtext::view::Editor,
-    ) -> pine_richtext::view::DocChangeSubscription {
+    ) -> Result<pine_richtext::view::DocChangeSubscription, BindError> {
         use pine_richtext::view::DocNode;
+
+        // Remote edits → load the converged doc back into the editor. Registered
+        // FIRST so a double-bind errors out *before* we attach the editor's
+        // update subscription (nothing to unwind on the error path).
+        let editor_remote = editor.clone();
+        self.on_change(move |node| {
+            let _ = editor_remote.set::<DocNode>(node);
+        })?;
 
         // Local edits → a fine-grained incremental write.
         let weak = Rc::downgrade(self);
@@ -233,13 +241,7 @@ impl CollabConnection {
                 tracing::warn!(target: "pocopine.log", error = %err, "collab: local push failed");
             }
         });
-
-        // Remote edits → load the converged doc back into the editor.
-        let editor = editor.clone();
-        self.on_change(move |node| {
-            let _ = editor.set::<DocNode>(node);
-        });
-        sub
+        Ok(sub)
     }
 }
 
@@ -272,8 +274,13 @@ mod tests {
         conn.push_local(&schema_basic::doc(vec![para("hi")]).unwrap())
             .expect("push_local queues without error");
 
-        // Registering a change handler must not panic.
-        conn.on_change(|_| {});
+        // The first change handler registers; a second is refused (one editor
+        // per connection).
+        conn.on_change(|_| {}).expect("first on_change registers");
+        assert!(
+            matches!(conn.on_change(|_| {}), Err(BindError::AlreadyBound)),
+            "a second on_change must be AlreadyBound, not a silent replace"
+        );
 
         // Drop clears the (absent in node) heartbeat + detaches handlers.
         drop(conn);

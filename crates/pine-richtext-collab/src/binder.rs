@@ -55,6 +55,10 @@ pub enum BindError {
     Protocol(String),
     /// The realtime transport failed to connect (bad URL / WebSocket error).
     Connect(String),
+    /// A second editor was bound to a connection that already drives one. A
+    /// `CollabConnection` drives exactly one editor; open a separate connection
+    /// per editor.
+    AlreadyBound,
 }
 
 impl From<RichTextError> for BindError {
@@ -70,6 +74,10 @@ impl fmt::Display for BindError {
             Self::Model(err) => write!(f, "collab model error: {err}"),
             Self::Protocol(msg) => write!(f, "collab protocol error: {msg}"),
             Self::Connect(msg) => write!(f, "collab connect error: {msg}"),
+            Self::AlreadyBound => write!(
+                f,
+                "collab connection already drives an editor; open a separate connection per editor"
+            ),
         }
     }
 }
