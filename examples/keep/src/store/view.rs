@@ -102,16 +102,16 @@ pub(crate) fn command_note_for(note: &KeepNote) -> KeepCommandNote {
 }
 
 pub(crate) fn card_row_for(
-    row: &pocopine_sync::SyncRow<KeepNote>,
+    note: &KeepNote,
     selected_note_ids: &[String],
     selection_active: bool,
 ) -> KeepNoteCardRow {
     KeepNoteCardRow {
-        key: row.key.to_string(),
-        value: row.value.clone(),
-        pending: row.pending,
-        conflict: row.conflict,
-        selected: selected_note_ids.iter().any(|id| id == &row.value.id),
+        key: note.id.clone(),
+        value: note.clone(),
+        pending: false,
+        conflict: false,
+        selected: selected_note_ids.iter().any(|id| id == &note.id),
         selection_active,
     }
 }

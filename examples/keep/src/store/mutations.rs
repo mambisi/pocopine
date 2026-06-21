@@ -1,6 +1,4 @@
-use pocopine::prelude::*;
-
-use crate::{KeepNote, KeepTag};
+use crate::KeepNote;
 
 use super::{KeepStore, KeepViewMode, labels::normalize_labels, view::KeepFormNote};
 
@@ -27,7 +25,7 @@ impl KeepStore {
                 return;
             }
 
-            self.notes.clear_error();
+            self.status.clear();
             self.next_local_id = self.next_local_id.saturating_add(1);
             let id = format!("note_{}_{}", crate::now_ms(), self.next_local_id);
             let note = KeepNote {
@@ -43,16 +41,12 @@ impl KeepStore {
                 updated_at_ms: crate::now_ms(),
             };
 
-            match self.push_upsert(note, None, "create") {
-                Ok(()) => {
-                    self.composer_open = false;
-                    self.status.clear();
-                }
-                Err(err) => {
-                    self.status = "save failed".into();
-                    self.notes.set_error(err.to_string());
-                }
-            }
+            // Fire-and-forget create: the write helper spawns the
+            // push and surfaces any failure via `self.status` from
+            // the spawned task. Optimistic success closes the
+            // composer immediately.
+            crate::sync::write_note(KeepNote::create(note.id.clone(), note.to_draft()), "create");
+            self.composer_open = false;
             return;
         }
 
@@ -113,18 +107,24 @@ impl KeepStore {
         f: impl FnOnce(&mut KeepNote),
     ) {
         let Some((mut note, base_version)) = self.find_note(note_id) else {
-            self.notes.set_error("note is not loaded yet");
+            self.status = "note is not loaded yet".to_string();
             return;
         };
         f(&mut note);
         note.updated_at_ms = crate::now_ms();
+        self.status.clear();
 
-        match self.push_upsert(note, base_version, action) {
-            Ok(()) => self.status.clear(),
-            Err(err) => {
-                self.status = "save failed".into();
-                self.notes.set_error(err.to_string());
-            }
+        // A note's optimistic-concurrency version is its
+        // `updated_at_ms`. With a base version this is an `update`
+        // (conditional on the last-seen version); without one it's
+        // a fresh `create`.
+        if base_version.is_some() {
+            crate::sync::write_note(
+                KeepNote::update(note.id.clone(), note.to_draft(), base_version),
+                action,
+            );
+        } else {
+            crate::sync::write_note(KeepNote::create(note.id.clone(), note.to_draft()), action);
         }
     }
 
@@ -132,11 +132,10 @@ impl KeepStore {
         &self,
         note_id: &str,
     ) -> Option<(KeepNote, Option<pocopine_sync::RowVersion>)> {
-        self.notes
-            .rows
-            .iter()
-            .find(|row| row.value.id == note_id)
-            .map(|row| (row.value.clone(), row.version.clone()))
+        self.notes.iter().find(|n| n.id == note_id).map(|n| {
+            let v = pocopine_sync::RowVersion::new(n.updated_at_ms.to_string()).ok();
+            (n.clone(), v)
+        })
     }
 
     pub(super) fn update_selection_label(&mut self) {
@@ -146,107 +145,5 @@ impl KeepStore {
             1 => "1 selected".to_string(),
             _ => format!("{count} selected"),
         };
-    }
-
-    pub(super) fn push_upsert(
-        &mut self,
-        note: KeepNote,
-        base_version: Option<pocopine_sync::RowVersion>,
-        action: &str,
-    ) -> pocopine_sync::SyncResult<()> {
-        let plugins = Plugins;
-        let Some(client) = plugins.get::<pocopine_sync::SyncClient>() else {
-            return Err(pocopine_sync::SyncError::client(
-                "sync plugin not installed",
-            ));
-        };
-        let key = pocopine_sync::RowKey::new(note.id.clone())?;
-        let mutation = pocopine_sync::ClientMutation {
-            id: pocopine_sync::MutationId::new(format!(
-                "keep:{action}:{}:{}:{}",
-                note.id,
-                crate::now_ms(),
-                self.next_local_id
-            ))?,
-            key: Some(key),
-            op: pocopine_sync::SyncOp::Upsert,
-            base_version,
-            payload: note.clone(),
-
-            migration_outcome: None,
-        };
-        let optimistic = pocopine_sync::SyncRow::new(note.id.clone(), note)?;
-
-        client
-            .collection(pocopine::store::<Self>(), |s: &mut Self| &mut s.notes)
-            .stream(crate::KEEP_STREAM)
-            .and_then(|c| c.push(mutation, Some(optimistic)))
-    }
-
-    pub(super) fn push_delete(
-        &mut self,
-        note_id: &str,
-        base_version: Option<pocopine_sync::RowVersion>,
-        action: &str,
-    ) -> pocopine_sync::SyncResult<()> {
-        let plugins = Plugins;
-        let Some(client) = plugins.get::<pocopine_sync::SyncClient>() else {
-            return Err(pocopine_sync::SyncError::client(
-                "sync plugin not installed",
-            ));
-        };
-        let key = pocopine_sync::RowKey::new(note_id.to_string())?;
-        let mutation = pocopine_sync::ClientMutation {
-            id: pocopine_sync::MutationId::new(format!(
-                "keep:{action}:{note_id}:{}:{}",
-                crate::now_ms(),
-                self.next_local_id
-            ))?,
-            key: Some(key),
-            op: pocopine_sync::SyncOp::Delete,
-            base_version,
-            payload: (),
-
-            migration_outcome: None,
-        };
-
-        client
-            .collection(pocopine::store::<Self>(), |s: &mut Self| &mut s.notes)
-            .stream(crate::KEEP_STREAM)
-            .and_then(|c| c.push(mutation, None))
-    }
-
-    pub(super) fn push_tag_upsert(
-        &mut self,
-        tag: KeepTag,
-        action: &str,
-    ) -> pocopine_sync::SyncResult<()> {
-        let plugins = Plugins;
-        let Some(client) = plugins.get::<pocopine_sync::SyncClient>() else {
-            return Err(pocopine_sync::SyncError::client(
-                "sync plugin not installed",
-            ));
-        };
-        let key = pocopine_sync::RowKey::new(tag.id.clone())?;
-        let mutation = pocopine_sync::ClientMutation {
-            id: pocopine_sync::MutationId::new(format!(
-                "keep:tag:{action}:{}:{}:{}",
-                tag.id,
-                crate::now_ms(),
-                self.next_local_id
-            ))?,
-            key: Some(key),
-            op: pocopine_sync::SyncOp::Upsert,
-            base_version: None,
-            payload: tag.clone(),
-
-            migration_outcome: None,
-        };
-        let optimistic = pocopine_sync::SyncRow::new(tag.id.clone(), tag)?;
-
-        client
-            .collection(pocopine::store::<Self>(), |s: &mut Self| &mut s.tags)
-            .stream(crate::KEEP_TAGS_STREAM)
-            .and_then(|c| c.push(mutation, Some(optimistic)))
     }
 }
