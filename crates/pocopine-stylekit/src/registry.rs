@@ -1385,6 +1385,59 @@ fn radius_value(scale: &str) -> Result<String, Diagnostic> {
     })
 }
 
+/// Side/corner token → the `border-*-radius` properties it sets.
+/// Longest tokens first so `tl`/`ss` win over `t`/`s`. Shared by the
+/// named-scale path ([`try_rounded`], e.g. `rounded-t-lg`) and the
+/// arbitrary-value path ([`rounded_side_props`], e.g. `rounded-t-[16px]`)
+/// so both map a side/corner to the same properties.
+const ROUNDED_SIDES: &[(&str, &[&str])] = &[
+    ("tl", &["border-top-left-radius"]),
+    ("tr", &["border-top-right-radius"]),
+    ("bl", &["border-bottom-left-radius"]),
+    ("br", &["border-bottom-right-radius"]),
+    // logical (writing-mode aware) corners + sides
+    ("ss", &["border-start-start-radius"]),
+    ("se", &["border-start-end-radius"]),
+    ("es", &["border-end-start-radius"]),
+    ("ee", &["border-end-end-radius"]),
+    (
+        "s",
+        &["border-start-start-radius", "border-end-start-radius"],
+    ),
+    ("e", &["border-start-end-radius", "border-end-end-radius"]),
+    ("t", &["border-top-left-radius", "border-top-right-radius"]),
+    (
+        "b",
+        &["border-bottom-left-radius", "border-bottom-right-radius"],
+    ),
+    (
+        "l",
+        &["border-top-left-radius", "border-bottom-left-radius"],
+    ),
+    (
+        "r",
+        &["border-top-right-radius", "border-bottom-right-radius"],
+    ),
+];
+
+/// The `border-*-radius` properties a fully-resolved `rounded` base
+/// targets — `"rounded"` (all corners), `"rounded-t"`, `"rounded-tl"`,
+/// `"rounded-ee"`, … — or `None` when `base` isn't a bare side/corner
+/// radius (e.g. a named scale like `"rounded-lg"`, which carries no
+/// `[…]` value). Lets the arbitrary-value resolver reuse the same
+/// side/corner table as [`try_rounded`] so `rounded-t-[16px]` works
+/// everywhere `rounded-t-lg` does (issue #238 / Tailwind parity).
+fn rounded_side_props(base: &str) -> Option<&'static [&'static str]> {
+    let rest = base.strip_prefix("rounded")?;
+    let rest = match rest {
+        "" => return Some(&["border-radius"]),
+        r => r.strip_prefix('-')?,
+    };
+    ROUNDED_SIDES
+        .iter()
+        .find_map(|(tok, props)| (rest == *tok).then_some(*props))
+}
+
 /// `rounded` + optional side/corner (`-t`/`-tl`/…) + optional scale.
 fn try_rounded(base: &str, _t: &ThemeTokens) -> Resolved {
     let rest = base.strip_prefix("rounded")?;
@@ -1392,37 +1445,7 @@ fn try_rounded(base: &str, _t: &ThemeTokens) -> Resolved {
         "" => "",
         r => r.strip_prefix('-')?,
     };
-    // Longest side/corner tokens first so `tl`/`ss` win over `t`/`s`.
-    let sides: &[(&str, &[&str])] = &[
-        ("tl", &["border-top-left-radius"]),
-        ("tr", &["border-top-right-radius"]),
-        ("bl", &["border-bottom-left-radius"]),
-        ("br", &["border-bottom-right-radius"]),
-        // logical (writing-mode aware) corners + sides
-        ("ss", &["border-start-start-radius"]),
-        ("se", &["border-start-end-radius"]),
-        ("es", &["border-end-start-radius"]),
-        ("ee", &["border-end-end-radius"]),
-        (
-            "s",
-            &["border-start-start-radius", "border-end-start-radius"],
-        ),
-        ("e", &["border-start-end-radius", "border-end-end-radius"]),
-        ("t", &["border-top-left-radius", "border-top-right-radius"]),
-        (
-            "b",
-            &["border-bottom-left-radius", "border-bottom-right-radius"],
-        ),
-        (
-            "l",
-            &["border-top-left-radius", "border-bottom-left-radius"],
-        ),
-        (
-            "r",
-            &["border-top-right-radius", "border-bottom-right-radius"],
-        ),
-    ];
-    let (props, scale): (&[&str], &str) = sides
+    let (props, scale): (&[&str], &str) = ROUNDED_SIDES
         .iter()
         .find_map(|(tok, props)| {
             if rest == *tok {
@@ -2911,6 +2934,13 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
                 .collect());
         }
     }
+    // `rounded[-{side|corner}]-[v]` → the matching `border-*-radius`
+    // properties, routed through the same side/corner table as the
+    // named-scale path so arbitrary radii work on every side/corner,
+    // not just all-corners `rounded-[…]` (issue #238).
+    if let Some(props) = rounded_side_props(base) {
+        return spread(props);
+    }
     // `divide-x-[2px]` / `divide-y-[3px]` widths and `divide-[#abc]` colour —
     // applied *between* children by the `emit_into` child-combinator tail
     // (keyed on the `divide-*` base), exactly like the scale-value forms.
@@ -3015,7 +3045,8 @@ fn resolve_arbitrary(base: &str, value: &str) -> Result<Decls, Diagnostic> {
         "text" => Ok(decl("font-size", &v)),
         "tracking" => Ok(decl("letter-spacing", &v)),
         "leading" => Ok(decl("line-height", &v)),
-        "rounded" => Ok(decl("border-radius", &v)),
+        // `rounded` and every side/corner variant are handled earlier via
+        // `rounded_side_props` (issue #238); nothing reaches here.
         "shadow" => Ok(decl("box-shadow", &v)),
         "underline-offset" => Ok(decl("text-underline-offset", &v)),
         "grid-cols" => Ok(decl("grid-template-columns", &v)),
@@ -4081,6 +4112,32 @@ mod tests {
                 .contains("--pp-ring-shadow: 0 0 0 2px var(--pp-ring-color, currentcolor);")
         );
         assert!(css("ring-accent").contains("--pp-ring-color: var(--color-accent);"));
+    }
+
+    #[test]
+    fn arbitrary_rounded_side_and_corner() {
+        // issue #238 — arbitrary radii must work on every side/corner
+        // variant, not just the all-corners `rounded-[…]`.
+        assert!(css("rounded-[16px]").contains("border-radius: 16px;"));
+        // per-side: two corners each
+        assert!(css("rounded-t-[16px]").contains("border-top-left-radius: 16px;"));
+        assert!(css("rounded-t-[16px]").contains("border-top-right-radius: 16px;"));
+        assert!(css("rounded-l-[16px]").contains("border-top-left-radius: 16px;"));
+        assert!(css("rounded-l-[16px]").contains("border-bottom-left-radius: 16px;"));
+        assert!(css("rounded-b-[8px]").contains("border-bottom-left-radius: 8px;"));
+        assert!(css("rounded-b-[8px]").contains("border-bottom-right-radius: 8px;"));
+        // per-corner: exactly one
+        assert!(css("rounded-tl-[12px]").contains("border-top-left-radius: 12px;"));
+        assert!(css("rounded-br-[4px]").contains("border-bottom-right-radius: 4px;"));
+        // logical (writing-mode aware) corners + sides
+        assert!(css("rounded-ee-[4px]").contains("border-end-end-radius: 4px;"));
+        assert!(css("rounded-s-[10px]").contains("border-start-start-radius: 10px;"));
+        assert!(css("rounded-s-[10px]").contains("border-end-start-radius: 10px;"));
+        // the (--var) shorthand routes through the same side/corner table
+        assert!(css("rounded-t-(--r)").contains("border-top-left-radius: var(--r);"));
+        // named scales on the same variants still resolve (refactor guard)
+        assert!(css("rounded-t-lg").contains("border-top-left-radius: var(--radius-lg,"));
+        assert!(css("rounded-t-lg").contains("border-top-right-radius: var(--radius-lg,"));
     }
 
     #[test]
