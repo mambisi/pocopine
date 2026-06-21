@@ -1389,6 +1389,13 @@ fn generate_resource_fn(
         ///         Ok(ctx.tenant_id()?.to_string())
         ///     }));
         /// ```
+        ///
+        /// Server-only: `pocopine_sync_query::source` (the `Source`
+        /// trait + `SourceResource`) is `#[cfg(not(wasm32))]`, so the
+        /// constructor is gated to host builds. The row type, query
+        /// DSL, and typed write builders the macro also emits remain
+        /// available on every target.
+        #[cfg(not(target_arch = "wasm32"))]
         pub fn resource<S>(
             impl_: S,
         ) -> ::pocopine_sync_query::source::SourceResource<
