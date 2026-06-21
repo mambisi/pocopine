@@ -49,6 +49,21 @@ pub trait ComponentState: 'static {
         true
     }
 
+    /// Whether `key` names a `#[computed]` synthetic field. Computed
+    /// fields carry their own memoization (a `Computed<JsValue>` with
+    /// a dirty bit) and re-run reactively through their own signal, so
+    /// they must NOT also be held in the per-signal projection cache:
+    /// that cache is keyed on — and only invalidated by — a write to
+    /// the field itself, but a computed is never written directly. A
+    /// cached projection of a computed would therefore go stale the
+    /// moment an upstream dependency changed, masking the recompute
+    /// (see `read_field_tracked`). Defaults to `false`; the
+    /// `#[component]` macro overrides it to consult `computed_keys()`.
+    fn is_computed_field(&self, key: &str) -> bool {
+        let _ = key;
+        false
+    }
+
     /// Write a declared field from a JsValue (for proxy `set`).
     fn set(&mut self, key: &str, value: JsValue);
 
@@ -535,6 +550,17 @@ fn read_field_tracked(
     // `state.get`.
     let cacheable = state.borrow().cacheable_fields();
     if !cacheable {
+        return state.borrow().get(key);
+    }
+    // A `#[computed]` field is memoized by its own `Computed<JsValue>`
+    // (dirty bit + cached value) and re-runs through its own signal,
+    // which the `get` below subscribes the current effect to. Layering
+    // the projection cache on top would freeze it at its first value:
+    // the projection is only invalidated by a write to `key`, but a
+    // computed is never written — so an upstream change would recompute
+    // the `Computed` yet keep serving the stale projection. Read
+    // straight through; the computed's own cache is the memoization.
+    if state.borrow().is_computed_field(key) {
         return state.borrow().get(key);
     }
     // RFC 054 phase A — field cache short-circuit. The first `get`

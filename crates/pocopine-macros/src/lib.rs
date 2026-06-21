@@ -3366,6 +3366,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
+            fn is_computed_field(&self, key: &str) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::computed_keys()
+                    .contains(&key)
+            }
             fn keys(&self) -> &'static [&'static str] {
                 static __POCOPINE_KEYS: ::std::sync::OnceLock<&'static [&'static str]> =
                     ::std::sync::OnceLock::new();
