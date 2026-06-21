@@ -275,7 +275,6 @@ Drop into any one with `pocopine dev --path examples/<name>`:
 | [`blog`](./examples/blog) | `App` + `#[server]` + axum server bin |
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
 | [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, `pp-for` |
-| [`sync`](./examples/sync) | Query data layer + `pocopine-live` wake-ups |
 | [`live`](./examples/live) | SSE live invalidation + collection/query refresh |
 | [`charts`](./examples/charts) | `pine-charts` primitives |
 | [`richtext`](./examples/richtext) | `pine-richtext` editor |

@@ -83,7 +83,6 @@ members = [
     "examples/richtext",
     "examples/site",
     "examples/spa",
-    "examples/sync",
     "examples/tailwind",
     "examples/todo",
     "examples/workspace",
