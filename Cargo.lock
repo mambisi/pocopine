@@ -5056,6 +5056,8 @@ dependencies = [
 name = "keep-example"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
+ "futures",
  "http-body-util",
  "js-sys",
  "pine-icons",
@@ -5070,6 +5072,8 @@ dependencies = [
  "pocopine-server",
  "pocopine-sync",
  "pocopine-sync-indexdb",
+ "pocopine-sync-query",
+ "pocopine-sync-query-macros",
  "pocopine-sync-sqlite",
  "pocopine-ts-rs",
  "rusqlite",
@@ -9785,25 +9789,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "sync-example"
-version = "0.1.1"
-dependencies = [
- "http-body-util",
- "pocopine",
- "pocopine-events",
- "pocopine-live",
- "pocopine-logging",
- "pocopine-server",
- "pocopine-sync",
- "serde",
- "serde_json",
- "tokio",
- "tower 0.5.3",
- "tracing",
- "wasm-bindgen",
 ]
 
 [[package]]
