@@ -9,10 +9,8 @@ mod error;
 mod local_memory;
 mod local_store;
 mod protocol;
-mod sign_out;
 mod state;
 
-mod client;
 #[cfg(not(target_arch = "wasm32"))]
 mod memory;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,14 +33,7 @@ pub use protocol::{
     SyncStreamSubscription, default_schema_version_one, local_stream_key, stream_params_hash,
     sync_stream_params_tag, sync_stream_tag,
 };
-pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};
-
-pub use client::{
-    CollectionSelector, SyncClient, SyncClientPlugin, SyncCollection, SyncLocalStoreHandle,
-    sync_plugin,
-};
-pub use pocopine_core::Handle;
-pub use sign_out::SignOutSubscription;
+pub use state::SyncReason;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use memory::{MemorySyncState, MemorySyncStream};
