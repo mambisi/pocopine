@@ -634,6 +634,70 @@ fn commands_select_node_forward_selects_following_atom() {
     }
 }
 
+// ─── #243 — inline-atom delete keeps the parent paragraph ──────────
+//
+// `image` is `inline().atom()` in the basic schema, the same shape as
+// the `mention` node from the issue. Backspacing one that is a
+// paragraph's sole content must leave an empty paragraph, never an
+// empty, block-less doc.
+
+#[test]
+fn commands_delete_node_backward_removes_inline_atom_keeps_paragraph() {
+    // doc(p(image)) with the caret right AFTER the inline atom (pos 2).
+    let state = state_with_doc(doc(vec![paragraph(vec![image("x.png")])]));
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(2)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(&*commands::delete_node_backward(), state);
+    assert_eq!(state.doc(), &doc(vec![empty_paragraph()]));
+}
+
+#[test]
+fn commands_delete_node_forward_removes_inline_atom_keeps_paragraph() {
+    // doc(p(image)) with the caret right BEFORE the inline atom (pos 1).
+    let state = state_with_doc(doc(vec![paragraph(vec![image("x.png")])]));
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(1)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(&*commands::delete_node_forward(), state);
+    assert_eq!(state.doc(), &doc(vec![empty_paragraph()]));
+}
+
+#[test]
+fn commands_delete_node_backward_ignores_text_caret() {
+    // A caret after plain text is NOT this command's job (text deletion
+    // is the browser / beforeinput path) — it bows out so the chain
+    // falls through.
+    let state = state_with_doc(doc(vec![paragraph_text("ab")]));
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(3)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    assert!(commands::delete_node_backward().apply(&state).is_none());
+}
+
+#[test]
+fn commands_backspace_chain_deletes_inline_atom_not_paragraph() {
+    // End-to-end: the Backspace chain (sans undo_input_rule, which is
+    // a no-op with no fired rule) on a sole inline atom leaves an empty
+    // paragraph — the regression #243 guards against.
+    let chain = chain_commands(vec![
+        delete_selection(),
+        join_backward(),
+        commands::delete_node_backward(),
+        select_node_backward(),
+    ]);
+    let state = state_with_doc(doc(vec![paragraph(vec![image("x.png")])]));
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(2)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(&*chain, state);
+    assert_eq!(state.doc(), &doc(vec![empty_paragraph()]));
+}
+
 // Silence the `use commands::self` warning if it ever shows up — keeps the
 // import block tidy for the next wave.
 #[allow(unused_imports)]

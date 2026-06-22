@@ -114,6 +114,10 @@ fn base_keymap() -> KeyMap {
                 inputrules_plugin::undo_input_rule(),
                 commands::delete_selection(),
                 commands::join_backward(),
+                // Inline-atom-after-caret: delete it at the model level
+                // so the native backspace can't collapse the paragraph
+                // into an invalid block-less doc (#243).
+                commands::delete_node_backward(),
                 commands::select_node_backward(),
             ]),
         )
@@ -122,6 +126,7 @@ fn base_keymap() -> KeyMap {
             commands::chain_commands(vec![
                 commands::delete_selection(),
                 commands::join_forward(),
+                commands::delete_node_forward(),
                 commands::select_node_forward(),
             ]),
         )
