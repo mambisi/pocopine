@@ -747,6 +747,73 @@ pub fn select_node_forward() -> BoxedCommand {
     })
 }
 
+/// Backspace with a collapsed caret sitting immediately **after** an
+/// inline atom (a mention, emoji, pill — `inline().atom()`) in the same
+/// textblock: delete that atom at the model level, leaving the parent
+/// paragraph intact.
+///
+/// ProseMirror lets the browser delete inline atoms and reconciles via
+/// its DOM mutation observer; pine has no such observer, so without a
+/// model command the native backspace deletes the atom **and** collapses
+/// the now-empty paragraph into a block-less, invalid doc (#243). The
+/// block-boundary cases (caret at block start, a selectable atom in the
+/// *previous* block) stay with `join_backward` / `select_node_backward`
+/// — this only covers the within-textblock inline-atom case those miss
+/// because the caret is at block *end*, not block start.
+pub fn delete_node_backward() -> BoxedCommand {
+    boxed(|state| {
+        let cursor = collapsed_cursor(state)?;
+        // Block-start cases belong to join/select_node_backward.
+        if cursor.parent_offset() == 0 {
+            return None;
+        }
+        let before = cursor.node_before()?;
+        let before_type = state.schema().node_type(before.type_name()).ok()?;
+        if !before_type.is_inline() || !before_type.is_atom() {
+            return None;
+        }
+        let pos = cursor.pos();
+        let mut tr = state.tr();
+        tr.delete(pos.saturating_sub(before.node_size()), pos)
+            .ok()?;
+        Some(tr)
+    })
+}
+
+/// Forward-delete counterpart of [`delete_node_backward`]: a collapsed
+/// caret immediately **before** an inline atom deletes that atom,
+/// preserving the parent paragraph.
+pub fn delete_node_forward() -> BoxedCommand {
+    boxed(|state| {
+        let cursor = collapsed_cursor(state)?;
+        // Block-end cases belong to join/select_node_forward.
+        if cursor.parent_offset() == cursor.parent().content_size() {
+            return None;
+        }
+        let after = cursor.node_after()?;
+        let after_type = state.schema().node_type(after.type_name()).ok()?;
+        if !after_type.is_inline() || !after_type.is_atom() {
+            return None;
+        }
+        let pos = cursor.pos();
+        let mut tr = state.tr();
+        tr.delete(pos, pos + after.node_size()).ok()?;
+        Some(tr)
+    })
+}
+
+/// The resolved position of a collapsed caret, or `None` when the
+/// selection is a range. Shared by the inline-atom delete commands.
+fn collapsed_cursor(state: &EditorState) -> Option<ResolvedPos> {
+    if !state.selection().is_empty(state.doc()) {
+        return None;
+    }
+    state
+        .doc()
+        .resolve(state.selection().from(state.doc()))
+        .ok()
+}
+
 // ====================================================================
 // Wrap / setBlockType / toggleMark
 // ====================================================================
