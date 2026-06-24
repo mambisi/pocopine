@@ -573,11 +573,13 @@ mod tests {
         can_write: bool,
     ) -> Result<Reaction, WsError> {
         let payload = message.encode();
+        let principal = pocopine_realtime::Principal::anonymous();
         server
             .on_data(InboundData {
                 topic,
                 payload: &payload,
                 can_write,
+                principal: &principal,
             })
             .await
     }
@@ -811,11 +813,13 @@ mod tests {
         let server = sync();
         let topic = Topic::new("collab:doc").unwrap();
         let empty = Bytes::new();
+        let principal = pocopine_realtime::Principal::anonymous();
         let err = server
             .on_data(InboundData {
                 topic: &topic,
                 payload: &empty,
                 can_write: true,
+                principal: &principal,
             })
             .await
             .unwrap_err();
