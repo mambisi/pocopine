@@ -18,7 +18,9 @@ pub use error::WsError;
 pub use fanout::{
     DEFAULT_TOPIC_CAPACITY, Fanout, LocalFanout, TopicMessage, TopicSource, TopicStream,
 };
-pub use gateway::{GatewayConfig, TopicPolicy, TopicResolver, WsGateway};
+pub use gateway::{
+    GatewayConfig, TopicAccess, TopicAuthorizer, TopicPolicy, TopicResolver, WsGateway,
+};
 pub use handler::{InboundData, Reaction, SubprotocolHandler};
 #[cfg(feature = "redis")]
 pub use redis_fanout::{DEFAULT_REDIS_MAX_LEN, RedisFanout};

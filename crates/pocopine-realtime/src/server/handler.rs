@@ -16,6 +16,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use pocopine_auth::Principal;
 use pocopine_events::Topic;
 
 use super::error::WsError;
@@ -35,6 +36,10 @@ pub struct InboundData<'a> {
     /// distinguishes read-only from read-write access (e.g. collab) gates
     /// its mutating messages on this; pure relays ignore it.
     pub can_write: bool,
+    /// The server-trusted principal for this connection, from the upgrade
+    /// request's `RequestContext`. Lets a stateful handler (e.g. chat) stamp the
+    /// authenticated identity onto committed state instead of trusting the wire.
+    pub principal: &'a Principal,
 }
 
 /// What the gateway should emit after a [`SubprotocolHandler`] processes a

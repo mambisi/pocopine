@@ -1,7 +1,9 @@
-//! The gateway hub: configuration, topic policy/resolver, and shared state
-//! (RFC 073 §10–§11).
+//! The gateway hub: configuration, topic authorization/resolver, and shared
+//! state (RFC 073 §10–§11).
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -26,15 +28,122 @@ const DEFAULT_MAX_SUBSCRIPTIONS: usize = 256;
 /// Default cap on a topic-name string (bytes).
 const DEFAULT_MAX_TOPIC_BYTES: usize = 512;
 
-/// Per-topic authorization policy: may this `RequestContext` join this `Topic`?
+/// What a connection may do on a topic — the whole authorization outcome of one
+/// [`TopicAuthorizer`] decision.
 ///
-/// Mirrors `LiveHub::with_topic_policy`'s synchronous bool shape (RFC 073
-/// §10.1). Capability-bearing consumers (e.g. collab read-only vs read-write)
-/// layer a richer async authorizer on top in their own crates.
+/// `ReadWrite` permits join + publish; `ReadOnly` permits join only; `Denied`
+/// permits neither. Write-without-join is unrepresentable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TopicAccess {
+    /// May neither subscribe nor publish.
+    #[default]
+    Denied,
+    /// May subscribe (read) but not publish.
+    ReadOnly,
+    /// May subscribe and publish.
+    ReadWrite,
+}
+
+impl TopicAccess {
+    /// Whether the connection may subscribe to the topic.
+    pub fn can_join(self) -> bool {
+        !matches!(self, Self::Denied)
+    }
+
+    /// Whether the connection may publish to the topic.
+    pub fn can_write(self) -> bool {
+        matches!(self, Self::ReadWrite)
+    }
+
+    /// Downgrade `ReadWrite` to `ReadOnly` when `writable` is false; otherwise
+    /// unchanged. Used by the [`WsGateway::with_write_policy`] clamp.
+    fn clamp_write(self, writable: bool) -> Self {
+        match self {
+            Self::ReadWrite if !writable => Self::ReadOnly,
+            other => other,
+        }
+    }
+}
+
+/// Decides what a connection may do on a topic — join (read) AND publish (write)
+/// in one **async** decision, so the check can hit a store (e.g. a
+/// channel-membership lookup). The single authorization seam on the
+/// [`WsGateway`]: it is awaited at subscribe time and re-checked on every inbound
+/// frame (RFC 073 §10.1).
+///
+/// Most apps don't implement this directly — the closure builders
+/// ([`WsGateway::with_access`], [`WsGateway::with_async_access`]) and the
+/// back-compat [`WsGateway::with_topic_policy`] cover the common cases. Implement
+/// it for a stateful, testable authorizer (one that carries a DB pool, a cache,
+/// or capability tokens).
+pub trait TopicAuthorizer: Send + Sync + 'static {
+    fn authorize<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        topic: &'a Topic,
+    ) -> Pin<Box<dyn Future<Output = TopicAccess> + Send + 'a>>;
+}
+
+/// Back-compat alias for the synchronous bool join-policy closure shape.
 pub type TopicPolicy = Arc<dyn Fn(&RequestContext, &Topic) -> bool + Send + Sync>;
 
 /// Resolves a client-supplied topic string to a canonical `Topic`.
 pub type TopicResolver = Arc<dyn Fn(&str) -> Result<Topic, WsError> + Send + Sync>;
+
+/// Adapts a synchronous capability closure into a [`TopicAuthorizer`].
+struct FnAuthorizer<F>(F);
+
+impl<F> TopicAuthorizer for FnAuthorizer<F>
+where
+    F: Fn(&RequestContext, &Topic) -> TopicAccess + Send + Sync + 'static,
+{
+    fn authorize<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        topic: &'a Topic,
+    ) -> Pin<Box<dyn Future<Output = TopicAccess> + Send + 'a>> {
+        let access = (self.0)(ctx, topic);
+        Box::pin(std::future::ready(access))
+    }
+}
+
+/// Adapts an async capability closure into a [`TopicAuthorizer`].
+struct AsyncFnAuthorizer<F>(F);
+
+impl<F, Fut> TopicAuthorizer for AsyncFnAuthorizer<F>
+where
+    F: Fn(RequestContext, Topic) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = TopicAccess> + Send + 'static,
+{
+    fn authorize<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        topic: &'a Topic,
+    ) -> Pin<Box<dyn Future<Output = TopicAccess> + Send + 'a>> {
+        Box::pin((self.0)(ctx.clone(), topic.clone()))
+    }
+}
+
+/// Wraps an authorizer with a synchronous **write clamp**: a `ReadWrite` decision
+/// is downgraded to `ReadOnly` when `write` returns false. Back-compat seam for
+/// [`WsGateway::with_write_policy`].
+struct WriteClamp {
+    inner: Arc<dyn TopicAuthorizer>,
+    write: Arc<dyn Fn(&RequestContext, &Topic) -> bool + Send + Sync>,
+}
+
+impl TopicAuthorizer for WriteClamp {
+    fn authorize<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        topic: &'a Topic,
+    ) -> Pin<Box<dyn Future<Output = TopicAccess> + Send + 'a>> {
+        Box::pin(async move {
+            let access = self.inner.authorize(ctx, topic).await;
+            access.clamp_write((self.write)(ctx, topic))
+        })
+    }
+}
 
 /// Tunable connection limits and liveness timings.
 #[derive(Clone, Copy, Debug)]
@@ -71,11 +180,8 @@ impl Default for GatewayConfig {
 #[derive(Clone)]
 pub struct WsGateway {
     fanout: Arc<dyn Fanout>,
-    policy: TopicPolicy,
-    /// Per-topic *publish* authorization, layered on top of the join `policy`.
-    /// Defaults to allow, so any connection that may join may also publish
-    /// (the relay's historical behavior); set it to express read-only access.
-    write_policy: TopicPolicy,
+    /// The single join + publish authorization seam. Defaults to deny-all.
+    authorizer: Arc<dyn TopicAuthorizer>,
     resolver: TopicResolver,
     config: GatewayConfig,
     sessions: Arc<AtomicU64>,
@@ -91,15 +197,18 @@ pub struct WsGateway {
 impl WsGateway {
     /// Build a gateway over an explicit [`Fanout`].
     ///
-    /// The default topic policy denies every topic (matching `LiveHub`'s safe
+    /// The default authorizer denies every topic (matching `LiveHub`'s safe
     /// default); open it with [`WsGateway::allow_all_topics`],
-    /// [`WsGateway::allow_topics`], or [`WsGateway::with_topic_policy`]. The
-    /// default resolver maps a topic string straight to a `Topic`.
+    /// [`WsGateway::allow_topics`], [`WsGateway::with_access`],
+    /// [`WsGateway::with_async_access`], [`WsGateway::with_authorizer`], or the
+    /// back-compat [`WsGateway::with_topic_policy`]. The default resolver maps a
+    /// topic string straight to a `Topic`.
     pub fn new(fanout: Arc<dyn Fanout>) -> Self {
         Self {
             fanout,
-            policy: Arc::new(|_, _| false),
-            write_policy: Arc::new(|_, _| true),
+            authorizer: Arc::new(FnAuthorizer(
+                |_: &RequestContext, _: &Topic| TopicAccess::Denied,
+            )),
             resolver: Arc::new(|topic| Topic::new(topic).map_err(WsError::from)),
             config: GatewayConfig::default(),
             sessions: Arc::new(AtomicU64::new(0)),
@@ -132,38 +241,83 @@ impl WsGateway {
         )))
     }
 
-    /// Replace the per-topic join authorization policy.
-    pub fn with_topic_policy(
-        mut self,
-        policy: impl Fn(&RequestContext, &Topic) -> bool + Send + Sync + 'static,
-    ) -> Self {
-        self.policy = Arc::new(policy);
+    /// Set the [`TopicAuthorizer`] — the join + publish decision for every topic.
+    /// Replaces any previously-set authorizer / policy.
+    pub fn with_authorizer(mut self, authorizer: impl TopicAuthorizer) -> Self {
+        self.authorizer = Arc::new(authorizer);
         self
     }
 
-    /// Replace the per-topic *publish* policy (layered on top of the join
-    /// policy). Returning `false` makes the connection read-only for that
-    /// topic: inbound Data frames are refused by the relay, and handlers see
-    /// [`InboundData::can_write`](super::handler::InboundData) `= false`. The
-    /// default allows any joiner to publish.
+    /// Set a **synchronous** capability policy: one closure returns the full
+    /// [`TopicAccess`] (join + write) for a connection/topic.
+    pub fn with_access(
+        self,
+        policy: impl Fn(&RequestContext, &Topic) -> TopicAccess + Send + Sync + 'static,
+    ) -> Self {
+        self.with_authorizer(FnAuthorizer(policy))
+    }
+
+    /// Set an **async** capability policy — the closure awaits (e.g. a DB
+    /// membership lookup) and returns the full [`TopicAccess`]. The closure
+    /// receives an owned [`RequestContext`] (it carries the principal) + the
+    /// resolved [`Topic`].
+    pub fn with_async_access<F, Fut>(self, policy: F) -> Self
+    where
+        F: Fn(RequestContext, Topic) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TopicAccess> + Send + 'static,
+    {
+        self.with_authorizer(AsyncFnAuthorizer(policy))
+    }
+
+    /// Replace the per-topic join policy (back-compat bool shape): `true` →
+    /// [`TopicAccess::ReadWrite`], `false` → [`TopicAccess::Denied`]. Prefer
+    /// [`with_access`](Self::with_access) / [`with_async_access`](Self::with_async_access)
+    /// to express read-only access or an async lookup directly.
+    pub fn with_topic_policy(
+        self,
+        policy: impl Fn(&RequestContext, &Topic) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.with_access(move |ctx, topic| {
+            if policy(ctx, topic) {
+                TopicAccess::ReadWrite
+            } else {
+                TopicAccess::Denied
+            }
+        })
+    }
+
+    /// Layer a **publish** restriction on top of the current authorizer: when
+    /// `policy` returns false a `ReadWrite` decision is clamped to `ReadOnly` (the
+    /// connection may join but not publish), and handlers see
+    /// [`InboundData::can_write`](super::handler::InboundData) `= false`. Prefer
+    /// returning [`TopicAccess::ReadOnly`] from [`with_access`](Self::with_access).
     pub fn with_write_policy(
         mut self,
         policy: impl Fn(&RequestContext, &Topic) -> bool + Send + Sync + 'static,
     ) -> Self {
-        self.write_policy = Arc::new(policy);
+        self.authorizer = Arc::new(WriteClamp {
+            inner: self.authorizer.clone(),
+            write: Arc::new(policy),
+        });
         self
     }
 
-    /// Allow any connection to join any topic. Use only when topic access is
-    /// enforced elsewhere or is genuinely public.
+    /// Allow any connection to join and publish on any topic. Use only when topic
+    /// access is enforced elsewhere or is genuinely public.
     pub fn allow_all_topics(self) -> Self {
-        self.with_topic_policy(|_, _| true)
+        self.with_access(|_, _| TopicAccess::ReadWrite)
     }
 
-    /// Allow only the given set of `Topic`s.
+    /// Allow only the given set of `Topic`s (join + publish); deny the rest.
     pub fn allow_topics(self, topics: impl IntoIterator<Item = Topic>) -> Self {
         let allowed: Arc<Vec<Topic>> = Arc::new(topics.into_iter().collect());
-        self.with_topic_policy(move |_, topic| allowed.iter().any(|t| t == topic))
+        self.with_access(move |_, topic| {
+            if allowed.iter().any(|t| t == topic) {
+                TopicAccess::ReadWrite
+            } else {
+                TopicAccess::Denied
+            }
+        })
     }
 
     /// Replace the topic-string → `Topic` resolver.
@@ -214,12 +368,11 @@ impl WsGateway {
         (self.resolver)(topic)
     }
 
-    pub(crate) fn authorize(&self, ctx: &RequestContext, topic: &Topic) -> bool {
-        (self.policy)(ctx, topic)
-    }
-
-    pub(crate) fn authorize_write(&self, ctx: &RequestContext, topic: &Topic) -> bool {
-        (self.write_policy)(ctx, topic)
+    /// Authorize a connection against a topic — the single join + publish
+    /// decision, awaiting the [`TopicAuthorizer`]. Checked at subscribe time and
+    /// re-checked on every inbound frame.
+    pub(crate) async fn authorize(&self, ctx: &RequestContext, topic: &Topic) -> TopicAccess {
+        self.authorizer.authorize(ctx, topic).await
     }
 
     pub(crate) fn handler(&self, subprotocol_id: u64) -> Option<&Arc<dyn SubprotocolHandler>> {
@@ -288,20 +441,72 @@ mod tests {
         )
     }
 
-    #[test]
-    fn default_policy_denies_all_topics() {
+    #[tokio::test]
+    async fn default_authorizer_denies_all_topics() {
         let gateway = WsGateway::local();
         let topic = Topic::new("collab:abc").unwrap();
-        assert!(!gateway.authorize(&anon_ctx(), &topic));
+        assert_eq!(
+            gateway.authorize(&anon_ctx(), &topic).await,
+            TopicAccess::Denied
+        );
     }
 
-    #[test]
-    fn allow_topics_permits_only_listed() {
+    #[tokio::test]
+    async fn allow_topics_permits_only_listed_read_write() {
         let allowed = Topic::new("collab:abc").unwrap();
         let other = Topic::new("collab:xyz").unwrap();
         let gateway = WsGateway::local().allow_topics([allowed.clone()]);
-        assert!(gateway.authorize(&anon_ctx(), &allowed));
-        assert!(!gateway.authorize(&anon_ctx(), &other));
+        assert_eq!(
+            gateway.authorize(&anon_ctx(), &allowed).await,
+            TopicAccess::ReadWrite
+        );
+        assert_eq!(
+            gateway.authorize(&anon_ctx(), &other).await,
+            TopicAccess::Denied
+        );
+    }
+
+    #[tokio::test]
+    async fn write_policy_clamps_read_write_to_read_only() {
+        let topic = Topic::new("collab:abc").unwrap();
+        let gateway = WsGateway::local()
+            .allow_all_topics()
+            .with_write_policy(|_, _| false);
+        let access = gateway.authorize(&anon_ctx(), &topic).await;
+        assert!(access.can_join());
+        assert!(!access.can_write());
+        assert_eq!(access, TopicAccess::ReadOnly);
+    }
+
+    #[tokio::test]
+    async fn async_authorizer_decides_per_topic() {
+        let allowed = Topic::new("chat:abc").unwrap();
+        let denied = Topic::new("chat:xyz").unwrap();
+        // The authorizer can await (here a trivial future) and decide per topic.
+        let gateway = WsGateway::local().with_async_access(|_ctx, topic: Topic| async move {
+            if topic.as_str() == "chat:abc" {
+                TopicAccess::ReadWrite
+            } else {
+                TopicAccess::Denied
+            }
+        });
+        assert_eq!(
+            gateway.authorize(&anon_ctx(), &allowed).await,
+            TopicAccess::ReadWrite
+        );
+        assert_eq!(
+            gateway.authorize(&anon_ctx(), &denied).await,
+            TopicAccess::Denied
+        );
+    }
+
+    #[tokio::test]
+    async fn with_access_expresses_read_only() {
+        let topic = Topic::new("chat:abc").unwrap();
+        let gateway = WsGateway::local().with_access(|_, _| TopicAccess::ReadOnly);
+        let access = gateway.authorize(&anon_ctx(), &topic).await;
+        assert!(access.can_join());
+        assert!(!access.can_write());
     }
 
     #[test]

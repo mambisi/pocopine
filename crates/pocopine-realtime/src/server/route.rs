@@ -288,13 +288,14 @@ impl Session {
                 )));
             }
         };
-        // Re-check join authorization on every inbound frame (RFC 073 §10.1).
-        if !self.gateway.authorize(&self.ctx, &topic) {
+        // Re-authorize on every inbound frame (RFC 073 §10.1): one decision
+        // covers both join (read) and publish (write); read-only connections may
+        // join but not write (handlers receive `can_write`, the relay enforces it).
+        let access = self.gateway.authorize(&self.ctx, &topic).await;
+        if !access.can_join() {
             return Err(WsError::forbidden(name));
         }
-        // Publish authorization is a second, finer gate (read-only connections
-        // may join but not write); handlers receive it, the relay enforces it.
-        let can_write = self.gateway.authorize_write(&self.ctx, &topic);
+        let can_write = access.can_write();
 
         // A registered sub-protocol handler (e.g. collab) intercepts the frame
         // and runs stateful server logic; every other sub-protocol is a pure
@@ -305,6 +306,7 @@ impl Session {
                     topic: &topic,
                     payload: &frame.payload,
                     can_write,
+                    principal: &self.ctx.user,
                 })
                 .await?;
             for payload in reaction.replies {
@@ -359,7 +361,7 @@ impl Session {
                 return;
             }
         };
-        if !self.gateway.authorize(&self.ctx, &topic) {
+        if !self.gateway.authorize(&self.ctx, &topic).await.can_join() {
             self.send(&Control::error(
                 "forbidden_topic",
                 format!("topic '{topic_name}' denied"),

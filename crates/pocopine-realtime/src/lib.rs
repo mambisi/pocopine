@@ -64,3 +64,10 @@ pub mod client;
 pub mod server;
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::*;
+
+// Re-export the auth types that appear in the gateway's public API —
+// `InboundData::principal` and the topic-policy signatures — so consumers (and
+// the crates that construct `InboundData` in tests) can name them without taking
+// a direct `pocopine-auth` dependency.
+#[cfg(not(target_arch = "wasm32"))]
+pub use pocopine_auth::{Principal, RequestContext};
