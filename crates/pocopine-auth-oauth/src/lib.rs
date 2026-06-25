@@ -228,8 +228,13 @@ pub async fn refresh(
 /// collapsed to a stable error — the body (which can echo a code/secret) is never
 /// surfaced (§D10).
 async fn post_token(config: &OAuthConfig, form: &[(&str, String)]) -> OAuthResult<OAuthToken> {
+    // Negotiate a JSON token response. Spec-compliant providers already return
+    // JSON, but GitHub's token endpoint defaults to `application/x-www-form-
+    // urlencoded` and only returns JSON when `Accept: application/json` is sent —
+    // without this, `.json()` below fails with "error decoding response body".
     let response = reqwest::Client::new()
         .post(&config.token_url)
+        .header(reqwest::header::ACCEPT, "application/json")
         .form(form)
         .send()
         .await
