@@ -988,6 +988,91 @@ impl QueryClient {
         Ok(crate::MutationOutcome::Accepted(canonical_changes))
     }
 
+    /// Apply externally-sourced **canonical** row changes (e.g. a realtime /
+    /// WebSocket delta) into the sync client, WITHOUT a server pull or a client
+    /// mutation.
+    ///
+    /// Each change is routed into every matching live subscription on `stream`
+    /// (predicate-evaluated, with exactly the semantics of a `/pull` result — see
+    /// [`route_canonical_pull`](Self::route_canonical_pull)) **and** persisted to
+    /// the durable local store, so the delta survives an offline reload. The row
+    /// must already carry its **canonical** id: this is not an optimistic overlay,
+    /// so no [`MutationId`] is involved and pending optimistic overlays are left
+    /// untouched (a delivered row reconciles against canonical; a still-pending
+    /// local mutation keeps winning until its own `mutate()` confirms).
+    ///
+    /// This is the bridge that lets a realtime transport — which delivers rows out
+    /// of band from the sync `/pull` cycle — feed the offline-first cache as the
+    /// single source of truth, instead of maintaining a parallel in-memory store.
+    /// Best-effort persistence: a local-store write failure is logged, not
+    /// returned (the in-memory routing already succeeded and stays authoritative).
+    pub async fn apply_external_changes<Row>(
+        &self,
+        stream: &SyncStreamName,
+        changes: Vec<RowChange<Row>>,
+    ) where
+        Row: Clone + serde::Serialize + 'static,
+    {
+        // 1. Route into matching subscriptions — canonical semantics, no mutation
+        //    overlay to dequeue (the row is already final).
+        Self::route_canonical_pull::<Row>(&self.inner, stream, &changes);
+
+        // 2. Persist each affected subscription's canonical snapshot to the durable
+        //    store, keyed by its params-scoped compartment — the same key the
+        //    subscription hydrates from on reload (mirrors driver `persist_snapshot`).
+        let Some(config) = self.inner.config.as_ref() else {
+            return;
+        };
+        let Some(store) = config.local_store.clone() else {
+            return;
+        };
+        for sub in self.collect_subscriptions_on_stream::<Row>(stream) {
+            let (compartment, canonical, cursor, app_version) = {
+                let state = sub.state().borrow();
+                let sub_stream = sub.query().stream().clone();
+                let canonical: Vec<SyncRow<Value>> = state
+                    .canonical_rows()
+                    .filter_map(|row| {
+                        Some(SyncRow {
+                            key: row.key.clone(),
+                            version: row.version.clone(),
+                            value: serde_json::to_value(&row.value).ok()?,
+                            pending: false,
+                            conflict: false,
+                        })
+                    })
+                    .collect();
+                (
+                    pocopine_sync::local_stream_key(&sub_stream, sub.query().params()),
+                    canonical,
+                    state.cursor.clone(),
+                    state.application_schema_version,
+                )
+            };
+            // sync-query has no separate "collection" surface; reuse the
+            // compartment as the collection token (informational on the store).
+            let Ok(collection) = pocopine_sync::SyncCollectionName::new(compartment.as_str())
+            else {
+                continue;
+            };
+            let batch = pocopine_sync::LocalSnapshotBatch::new(
+                compartment.clone(),
+                collection,
+                canonical,
+                cursor,
+            )
+            .with_application_schema_version(app_version);
+            if let Err(err) = store.save_snapshot(batch).await {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    error = %err,
+                    "sync-query: apply_external_changes persist failed; in-memory state still authoritative",
+                );
+            }
+        }
+    }
+
     /// Clear a durable pending mutation across every compartment
     /// of `stream` after the canonical reconcile confirmed it.
     /// Uses `mark_push_result` (which the store contract guarantees

@@ -669,3 +669,160 @@ async fn no_local_store_keeps_in_memory_only_behavior() {
         })
         .await;
 }
+
+// ─── Test: external (e.g. WebSocket-delivered) changes route + persist ──
+
+#[tokio::test]
+async fn apply_external_changes_routes_into_view_and_persists() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            // Empty /open + /pull: the subscription opens with no rows, so the only
+            // row that can appear is the externally-applied one.
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    SYNC_PULL_PATH => Ok(json_response(&snapshot_response(vec![]))),
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            // Long poll so a periodic /pull snapshot can't wipe the external row
+            // before we assert (snapshot pulls are authoritative).
+            let config = QueryClientConfig {
+                poll_interval: Some(Duration::from_secs(3600)),
+                disable_live: true,
+                ..QueryClientConfig::default()
+            }
+            .with_local_store(store_handle);
+            let client = query_client_plugin().config(config).into_client();
+
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            settle(3).await; // initial /open + empty /pull
+            assert_eq!(view.rows().len(), 0, "no rows before the external change");
+
+            // Inject a WS-style external delta (row already carries its canonical id).
+            let stream = SyncStreamName::new(STREAM).unwrap();
+            let row = Issue {
+                id: "issue_ws".into(),
+                workspace_id: "W1".into(),
+                title: "delivered over WS".into(),
+            };
+            client
+                .apply_external_changes(&stream, vec![RowChange::Upsert(row.clone())])
+                .await;
+
+            // 1. Routed into the live observing view.
+            let rows = view.rows();
+            assert_eq!(
+                rows.len(),
+                1,
+                "external change routed into the observing view"
+            );
+            assert_eq!(rows[0].id, "issue_ws");
+
+            // 2. Persisted to the durable store under the query's params-scoped
+            //    compartment — so it survives an offline reload (the realtime path
+            //    is otherwise in-memory only).
+            let params = {
+                let mut p = StreamParams::new();
+                p.insert("workspace_id".into(), serde_json::json!("W1"));
+                p
+            };
+            let compartment = local_stream_key(&stream, &params);
+            let persisted = store.hydrate_stream(&compartment).await.unwrap();
+            assert_eq!(
+                persisted.rows.len(),
+                1,
+                "external change persisted to the local store"
+            );
+            assert_eq!(persisted.rows[0].key.as_str(), "issue_ws");
+
+            // 3. A non-matching predicate departure is a no-op for this view.
+            let other = Issue {
+                id: "issue_other_ws".into(),
+                workspace_id: "W2".into(),
+                title: "different workspace".into(),
+            };
+            client
+                .apply_external_changes(&stream, vec![RowChange::Upsert(other)])
+                .await;
+            assert_eq!(
+                view.rows().len(),
+                1,
+                "a change for a non-matching param doesn't enter the view"
+            );
+        })
+        .await;
+}
+
+// ─── Test: an external (WS) change survives an OFFLINE reload ────────
+
+#[tokio::test]
+async fn external_change_survives_offline_reload() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            let store = Rc::new(MemoryLocalStore::new());
+            let stream = SyncStreamName::new(STREAM).unwrap();
+            let row = Issue {
+                id: "issue_ws".into(),
+                workspace_id: "W1".into(),
+                title: "delivered over WS".into(),
+            };
+            let query = || Issue::query().eq(issues::field::workspace_id, "W1").build();
+            let config = || QueryClientConfig {
+                poll_interval: Some(Duration::from_secs(3600)),
+                disable_live: true,
+                ..QueryClientConfig::default()
+            };
+
+            // Session 1 (online): a WS delta arrives → routed + persisted to the store.
+            {
+                reset_middleware();
+                install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                    match req.url.as_str() {
+                        SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                        SYNC_PULL_PATH => Ok(json_response(&snapshot_response(vec![]))),
+                        other => Err(ServerError::Network(format!("unexpected {other}"))),
+                    }
+                });
+                let s: Rc<dyn SyncLocalStore> = store.clone();
+                let c1 = query_client_plugin()
+                    .config(config().with_local_store(s))
+                    .into_client();
+                let _v1 = c1.observe(query());
+                settle(3).await;
+                c1.apply_external_changes(&stream, vec![RowChange::Upsert(row.clone())])
+                    .await;
+                settle(1).await;
+            }
+
+            // Session 2 (reload while OFFLINE): every sync call fails, so the durable
+            // cache is the only source — the WS delta must still be visible.
+            {
+                reset_middleware();
+                install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                    Err(ServerError::Network(format!("offline: {}", req.url)))
+                });
+                let s: Rc<dyn SyncLocalStore> = store.clone();
+                let c2 = query_client_plugin()
+                    .config(config().with_local_store(s))
+                    .into_client();
+                let v2 = c2.observe(query());
+                settle(4).await; // hydrate from cache; /open + /pull fail (offline)
+                let rows = v2.rows();
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "the WS-delivered change survived an offline reload (served from cache)"
+                );
+                assert_eq!(rows[0].id, "issue_ws");
+                assert_eq!(rows[0].title, "delivered over WS");
+            }
+        })
+        .await;
+}
