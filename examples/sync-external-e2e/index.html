@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sync-external e2e</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div id="app">loading…</div>
+    <script type="module">
+      import init, { inject, view_rows } from './pkg/sync_external_e2e.js';
+      await init();
+      // Expose the wasm hooks so the Playwright spec can drive them.
+      window.inject = inject;
+      window.view_rows = view_rows;
+      document.getElementById('app').textContent = 'ready';
+    </script>
+  </body>
+</html>

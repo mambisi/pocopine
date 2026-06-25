@@ -9792,6 +9792,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync-external-e2e"
+version = "0.1.1"
+dependencies = [
+ "pocopine-sync",
+ "pocopine-sync-indexdb",
+ "pocopine-sync-query",
+ "pocopine-sync-query-macros",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
