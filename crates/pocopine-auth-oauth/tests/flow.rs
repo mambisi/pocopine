@@ -5,7 +5,7 @@
 use pocopine_auth_oauth::{OAuthConfig, complete_authorization, refresh};
 use pocopine_crypto::SecretString;
 use serde_json::json;
-use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn config(server: &MockServer) -> OAuthConfig {
@@ -22,6 +22,9 @@ async fn complete_authorization_exchanges_the_code_with_pkce() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
+        // Require JSON negotiation — GitHub's token endpoint defaults to
+        // form-urlencoded and only returns JSON when this header is sent.
+        .and(header("accept", "application/json"))
         .and(body_string_contains("grant_type=authorization_code"))
         .and(body_string_contains("code=auth-code-xyz"))
         .and(body_string_contains("code_verifier=the-verifier"))
@@ -54,6 +57,7 @@ async fn refresh_exchanges_the_refresh_token_and_retains_an_omitted_one() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
+        .and(header("accept", "application/json"))
         .and(body_string_contains("grant_type=refresh_token"))
         .and(body_string_contains("refresh_token=refresh-1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
