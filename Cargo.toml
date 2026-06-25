@@ -83,6 +83,7 @@ members = [
     "examples/richtext",
     "examples/site",
     "examples/spa",
+    "examples/sync-external-e2e",
     "examples/tailwind",
     "examples/todo",
     "examples/workspace",
