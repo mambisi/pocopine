@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use pocopine_server::auth::RequestContext;
+use pocopine_server::RequestContext;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;

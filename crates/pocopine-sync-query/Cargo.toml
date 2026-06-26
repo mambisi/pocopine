@@ -27,7 +27,6 @@ wasm-bindgen = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-trait = "0.1"
-pocopine-auth = { workspace = true }
 # RFC 087 driver — `tokio::task::spawn_local` requires the host
 # caller to have a `LocalSet` active (documented on `QueryClient`).
 # `sync` brings `Mutex`/`Notify`; `time` brings `sleep`. `rt` is

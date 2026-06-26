@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use pocopine_server::auth::RequestContext;
+use pocopine_server::RequestContext;
 use pocopine_sync::{MutationId, RowKey, RowVersion, SyncError, SyncOp, SyncResult};
 use pocopine_sync_query::source::{Source, SourceFuture, SourceStream};
 use pocopine_sync_query::write::{

@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use pocopine_core::ServerResult;
-use pocopine_server::auth::RequestContext;
+use pocopine_server::RequestContext;
 use serde_json::Value;
 
 use crate::{

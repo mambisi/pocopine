@@ -359,7 +359,7 @@ pub enum MutationReservation {
 }
 
 // ---- Host-only items below ---------------------------------------
-// The MutationLog trait threads `pocopine_auth::RequestContext`,
+// The MutationLog trait threads `pocopine_core::server::RequestContext`,
 // which is itself cfg-gated to non-wasm. Everything above this
 // fence is pure data + serde and compiles on every target.
 //
@@ -376,7 +376,7 @@ pub use host::*;
 mod host {
     use super::{AcceptedMutation, MutationReservation};
     use crate::write::{Arc, BTreeMap, Mutex};
-    use pocopine_auth::RequestContext;
+    use pocopine_core::server::RequestContext;
     use pocopine_sync::{MutationId, SyncError, SyncResult};
 
     /// Idempotency log for sync-query mutations. Production
@@ -670,7 +670,7 @@ impl<Row, Id, Draft> TypedMutation<Row, Id, Draft> {
 mod tests {
     use super::*;
     use http::{HeaderMap, Method};
-    use pocopine_auth::RequestContext;
+    use pocopine_core::server::RequestContext;
 
     fn ctx() -> RequestContext {
         RequestContext::new(Method::POST, "/test".parse().unwrap(), HeaderMap::new())

@@ -19,9 +19,8 @@
 use std::sync::Arc;
 
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
-use pocopine_auth::{
-    AuthError, AuthFuture, AuthProvider, AuthUser, Permission, RequestContext, Role,
-};
+use pocopine_auth::{AuthError, AuthFuture, AuthProvider, AuthUser, Permission, Role};
+use pocopine_core::server::RequestContext;
 use pocopine_observe::{LOG_TARGET, METRIC_TARGET};
 use serde_json::Value;
 

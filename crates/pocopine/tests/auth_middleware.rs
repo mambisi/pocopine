@@ -8,8 +8,9 @@
 
 use std::sync::Arc;
 
-use pocopine::{AuthUser, ServerResult};
-use pocopine_auth::{AuthFuture, AuthProvider, RequestContext};
+use pocopine::{AuthUser, Principal, ServerResult};
+use pocopine_auth::{AuthFuture, AuthProvider};
+use pocopine_server::RequestContext;
 use pocopine_server::RouterAuthExt;
 use pocopine_server::axum::{
     Router,
@@ -44,6 +45,27 @@ async fn whoami(echo: String) -> ServerResult<String> {
     Ok(format!("hello, {echo}"))
 }
 
+#[pocopine::server(guard = pocopine::auth::require_login)]
+async fn whoami_with_request_context(
+    ctx: pocopine::server::RequestContext,
+    echo: String,
+) -> ServerResult<String> {
+    let principal = ctx
+        .extension::<Principal>()
+        .ok_or_else(|| pocopine::ServerError::unauthorized("missing principal extension"))?;
+    let user = principal.require_user()?;
+    Ok(format!("{}:{echo}", user.id))
+}
+
+#[pocopine::server(guard = pocopine::auth::require_login)]
+async fn whoami_with_extension(
+    principal: pocopine::server::Extension<Principal>,
+    echo: String,
+) -> ServerResult<String> {
+    let user = principal.require_user()?;
+    Ok(format!("{}:{echo}", user.id))
+}
+
 fn build_router() -> Router {
     // axum's `Router::layer` only wraps routes that exist at the
     // call site, so `with_auth` must run AFTER the server-function
@@ -52,6 +74,8 @@ fn build_router() -> Router {
     // routes.
     let router = pocopine_server::axum::Router::new();
     let router = __whoami_route(router);
+    let router = __whoami_with_request_context_route(router);
+    let router = __whoami_with_extension_route(router);
     router.with_auth(StubProvider)
 }
 
@@ -81,6 +105,48 @@ async fn good_token_reaches_guarded_handler() {
     // Macro wraps the result in Json(Result<R, ServerError>) — happy
     // path is the `Ok` variant.
     assert!(body.contains(r#""Ok":"hello, world""#), "got: {body}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn good_token_reaches_server_supplied_request_context() {
+    let router = build_router();
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(__whoami_with_request_context_path())
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer good-token")
+                .body(Body::from(r#"["world"]"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+    let body = body_text(response).await;
+    assert!(body.contains(r#""Ok":"user-1:world""#), "got: {body}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn good_token_reaches_extension_extractor() {
+    let router = build_router();
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(__whoami_with_extension_path())
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer good-token")
+                .body(Body::from(r#"["world"]"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+    let body = body_text(response).await;
+    assert!(body.contains(r#""Ok":"user-1:world""#), "got: {body}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

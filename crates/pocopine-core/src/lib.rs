@@ -129,6 +129,8 @@ pub use scope::{
     invalidate_field_cache, js_bridge, patch_list_at_inline, patch_list_indices_inline,
     prepend_list_inline, remove_list_at_inline, replace_field_inline, swap_list_indices_inline,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use server::{Extension, FromRequestContext, RequestContext};
 pub use server::{Result as ServerResult, ServerError, ServerStream, StreamServerResult};
 pub use signal::{RwSignal, Setter, Signal, rw_signal, signal};
 pub use storage::{LocalStorage, StorageError};

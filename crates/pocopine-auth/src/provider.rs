@@ -12,11 +12,11 @@ use std::pin::Pin;
 use pocopine_core::ServerError;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::context::RequestContext;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::principal::Session;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::user::AuthUser;
+#[cfg(not(target_arch = "wasm32"))]
+use pocopine_core::server::RequestContext;
 
 /// Auth provider failure.
 #[derive(Clone, Debug, Eq, PartialEq)]

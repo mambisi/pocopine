@@ -603,7 +603,7 @@ async fn source_provided_mutation_log_skips_auto_default() {
     // construction without `.mutation_log(...)` on the builder.
     // We verify reservations land in the *Source-provided* log,
     // not a fresh `MemoryMutationLog`.
-    use pocopine_auth::RequestContext;
+    use pocopine_core::server::RequestContext;
     use pocopine_sync::{MutationId, SyncOp};
     use pocopine_sync_query::Query;
     use pocopine_sync_query::source::{
@@ -751,7 +751,7 @@ fn tasks_resource_convenience_compiles_with_stub_source() {
     // (from the row's `id` field) and `.partition_by` (from
     // `row_to_params_typed`). This stub Source carries no `version`
     // field on the row, so `version_field` is not pre-wired.
-    use pocopine_auth::RequestContext;
+    use pocopine_core::server::RequestContext;
     use pocopine_sync_query::Query;
     use pocopine_sync_query::source::{
         DeleteResult, Source, SourceFuture, SourceStream, WriteResult,

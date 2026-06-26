@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex};
 use http_body_util::BodyExt;
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_events::SharedEventBackend;
+use pocopine_server::RequestContext;
 use pocopine_server::auth::{
-    AuthUser, Predicate, Principal, RequestContext, Role, require_auth, require_role,
+    AuthUser, Predicate, Principal, RequestAuthExt, Role, require_auth, require_role,
 };
 use pocopine_server::axum::Router;
 use pocopine_server::axum::body::Body;
@@ -468,7 +469,7 @@ impl SyncStreamSource for ContextCaptureStream {
     ) -> SyncBoxFuture<'a, SyncPullResponse<Value>> {
         let _ = request;
         let user_id = ctx
-            .user
+            .principal()
             .user()
             .map(|user| user.id.clone())
             .unwrap_or_else(|| "anonymous".to_string());

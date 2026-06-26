@@ -183,7 +183,7 @@ pub trait Source: Send + Sync + 'static {
     /// without invoking the storage methods.
     fn extract_context<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: pocopine_core::server::RequestContext,
     ) -> SourceFuture<'a, SyncResult<Self::Context>>;
 
     /// Snapshot pull as a row stream. The query is server-
@@ -574,7 +574,7 @@ where
 
     fn pull<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: pocopine_core::server::RequestContext,
         request: pocopine_sync::SyncPullRequest,
     ) -> pocopine_sync::SyncBoxFuture<'a, pocopine_sync::SyncPullResponse<Value>> {
         let source = self.source.clone();
@@ -717,7 +717,7 @@ where
     /// rationale.
     fn push<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: pocopine_core::server::RequestContext,
         request: pocopine_sync::SyncPushRequest<Value>,
     ) -> pocopine_sync::SyncBoxFuture<'a, pocopine_sync::SyncPushResponse<Value>> {
         let source = self.source.clone();
@@ -1058,8 +1058,8 @@ mod tests {
     use super::*;
     use pocopine_sync::SyncResult;
 
-    fn test_ctx() -> pocopine_auth::RequestContext {
-        pocopine_auth::RequestContext::new(
+    fn test_ctx() -> pocopine_core::server::RequestContext {
+        pocopine_core::server::RequestContext::new(
             http::Method::POST,
             "/__pocopine/sync/v1/pull".parse().unwrap(),
             http::HeaderMap::new(),
@@ -1090,7 +1090,7 @@ mod tests {
 
         fn extract_context<'a>(
             &'a self,
-            _ctx: pocopine_auth::RequestContext,
+            _ctx: pocopine_core::server::RequestContext,
         ) -> SourceFuture<'a, SyncResult<Self::Context>> {
             Box::pin(async { Ok(()) })
         }

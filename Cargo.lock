@@ -7084,7 +7084,6 @@ dependencies = [
 name = "pocopine-auth"
 version = "0.1.1"
 dependencies = [
- "http 1.4.0",
  "pocopine-core",
  "serde",
  "serde_json",
@@ -7246,6 +7245,7 @@ version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "futures-core",
+ "http 1.4.0",
  "indexmap 2.14.0",
  "js-sys",
  "once_cell",
@@ -7465,6 +7465,7 @@ dependencies = [
  "futures-util",
  "js-sys",
  "pocopine-auth",
+ "pocopine-core",
  "pocopine-crypto",
  "pocopine-events",
  "pocopine-observe",
@@ -7652,7 +7653,6 @@ dependencies = [
  "http 1.4.0",
  "http-body-util",
  "js-sys",
- "pocopine-auth",
  "pocopine-core",
  "pocopine-live",
  "pocopine-server",
@@ -7675,7 +7675,6 @@ dependencies = [
  "async-trait",
  "futures",
  "http 1.4.0",
- "pocopine-auth",
  "pocopine-core",
  "pocopine-sync",
  "pocopine-sync-query",

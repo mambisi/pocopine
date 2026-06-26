@@ -1,13 +1,12 @@
 // `#[pocopine::server(guard = ...)]` and the `protected!` macro only
 // emit the route helper, guard function, and `RequestContext` plumbing
-// on the host target; the umbrella `pocopine` crate also gates the
-// `RequestContext` re-export to non-wasm. Skip the whole file under
-// wasm.
+// on the host target. Skip the whole file under wasm.
 #![cfg(not(target_arch = "wasm32"))]
 
 mod support;
 
 use pocopine::{AuthUser, Role, ServerError, ServerResult};
+use pocopine_auth::RequestAuthExt;
 use pocopine_server::axum::{
     body::{Body, to_bytes},
     http::{Extensions, HeaderMap, Method, Request, Uri},
@@ -15,7 +14,7 @@ use pocopine_server::axum::{
 use pocopine_server::tower::ServiceExt;
 use support::TraceCapture;
 
-async fn require_token(ctx: pocopine_server::auth::RequestContext) -> ServerResult<()> {
+async fn require_token(ctx: pocopine_server::RequestContext) -> ServerResult<()> {
     match ctx.bearer_token() {
         Some("test-token") => Ok(()),
         Some(_) => Err(ServerError::forbidden("invalid bearer token")),
@@ -40,7 +39,7 @@ async fn failing_echo(value: String) -> ServerResult<String> {
 }
 
 pocopine::protected! {
-    require |ctx| ctx.user.has_role(&Role::admin());
+    require |ctx| ctx.principal().has_role(&Role::admin());
 
     async fn admin_echo(value: String) -> ServerResult<String> {
         Ok(value)
@@ -61,15 +60,15 @@ fn request_context_extracts_user_from_extensions() {
     let mut extensions = Extensions::new();
     extensions.insert(AuthUser::new("user-1").with_role(Role::admin()));
 
-    let ctx = pocopine::auth::RequestContext::from_parts(
+    let ctx = pocopine::server::RequestContext::from_parts(
         Method::GET,
         Uri::from_static(__admin_echo_path()),
         HeaderMap::new(),
         extensions,
     );
 
-    assert!(ctx.user.is_authenticated());
-    assert!(ctx.user.has_role(&Role::admin()));
+    assert!(ctx.principal().is_authenticated());
+    assert!(ctx.principal().has_role(&Role::admin()));
 }
 
 #[test]
@@ -79,7 +78,7 @@ fn protected_macro_guard_checks_inline_policy() {
         .build()
         .unwrap();
 
-    let allowed = pocopine::auth::RequestContext::new(
+    let allowed = pocopine::server::RequestContext::new(
         Method::POST,
         Uri::from_static(__admin_echo_path()),
         HeaderMap::new(),
@@ -87,7 +86,7 @@ fn protected_macro_guard_checks_inline_policy() {
     .with_user(AuthUser::new("admin").with_role(Role::admin()));
     rt.block_on(__pocopine_guard_admin_echo(allowed)).unwrap();
 
-    let denied = pocopine::auth::RequestContext::new(
+    let denied = pocopine::server::RequestContext::new(
         Method::POST,
         Uri::from_static(__admin_echo_path()),
         HeaderMap::new(),

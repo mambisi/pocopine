@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use pocopine_core::ServerResult;
 use pocopine_events::SharedEventBackend;
-use pocopine_server::auth::{Predicate, RequestContext};
+use pocopine_server::RequestContext;
+use pocopine_server::auth::Predicate;
 
 use super::*;
 use crate::{SyncError, SyncResult, sync_stream_tag};

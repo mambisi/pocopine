@@ -12,6 +12,7 @@ redis = ["pocopine-events/redis"]
 
 [dependencies]
 pocopine-auth = { workspace = true }
+pocopine-core = { workspace = true }
 pocopine-events = { workspace = true }
 pocopine-observe = { workspace = true }
 serde = { workspace = true }
@@ -19,7 +20,6 @@ serde_json = "1"
 tracing = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-pocopine-core = { workspace = true }
 wasm-bindgen = { workspace = true }
 web-sys = { version = "0.3", features = [
     "ErrorEvent",

@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use pocopine_auth::RequestContext;
+use pocopine_core::server::RequestContext;
 use pocopine_events::Topic;
 
 use super::error::WsError;
@@ -206,9 +206,9 @@ impl WsGateway {
     pub fn new(fanout: Arc<dyn Fanout>) -> Self {
         Self {
             fanout,
-            authorizer: Arc::new(FnAuthorizer(
-                |_: &RequestContext, _: &Topic| TopicAccess::Denied,
-            )),
+            authorizer: Arc::new(FnAuthorizer(|_: &RequestContext, _: &Topic| {
+                TopicAccess::Denied
+            })),
             resolver: Arc::new(|topic| Topic::new(topic).map_err(WsError::from)),
             config: GatewayConfig::default(),
             sessions: Arc::new(AtomicU64::new(0)),
@@ -431,7 +431,7 @@ impl WsGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pocopine_auth::RequestContext;
+    use pocopine_core::server::RequestContext;
 
     fn anon_ctx() -> RequestContext {
         RequestContext::new(

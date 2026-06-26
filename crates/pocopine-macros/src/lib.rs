@@ -4530,7 +4530,7 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// * `#[server(public)]` explicitly declares an open endpoint.
 /// * `#[server(guard = require_user)]` protects the endpoint. The guard
 ///   must be an async function that accepts
-///   `pocopine_server::auth::RequestContext` and returns a `Result`.
+///   `pocopine_server::RequestContext` and returns a `Result`.
 /// * `#[server(idempotent)]` marks the generated client request as
 ///   replay-safe for middleware. Auth middleware may retry these at
 ///   most once after a successful refresh; unmarked calls remain
@@ -4544,6 +4544,9 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// The signature shape this milestone supports:
 ///
 /// * `async fn name(arg1: T1, ..., argN: TN) -> Result<R, ServerError>`
+/// * `RequestContext`, `Extension<T>`, and `Option<Extension<T>>` parameters
+///   are server-supplied and omitted from the
+///   generated client stub / JSON payload.
 /// * Every arg must be owned (`T`, not `&T` / `&mut T`). Args must
 ///   `Serialize + Deserialize`.
 /// * Return type must round-trip through `serde_json`; guarded routes
@@ -4675,6 +4678,50 @@ fn returns_stream(sig: &syn::Signature) -> bool {
     false
 }
 
+fn is_request_context_type(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    type_path
+        .path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "RequestContext")
+}
+
+fn type_path_last_ident(ty: &Type) -> Option<&syn::Ident> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    type_path.path.segments.last().map(|seg| &seg.ident)
+}
+
+fn is_extension_type(ty: &Type) -> bool {
+    type_path_last_ident(ty).is_some_and(|ident| ident == "Extension")
+}
+
+fn is_option_extension_type(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    let Some(last) = type_path.path.segments.last() else {
+        return false;
+    };
+    if last.ident != "Option" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return false;
+    };
+    args.args
+        .iter()
+        .any(|arg| matches!(arg, syn::GenericArgument::Type(inner) if is_extension_type(inner)))
+}
+
+fn is_server_extractor_type(ty: &Type) -> bool {
+    is_request_context_type(ty) || is_extension_type(ty) || is_option_extension_type(ty)
+}
+
 #[proc_macro_attribute]
 pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let policy = match parse_server_policy(attr) {
@@ -4720,9 +4767,15 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // Collect (pat_ident, type) pairs, rejecting self / ref args.
+    // Collect wire (pat_ident, type) pairs, rejecting self / ref args.
+    // Server extractors are supplied from request parts/extensions on the host,
+    // while the wasm client stub omits them.
     let mut arg_idents = Vec::new();
     let mut arg_types = Vec::new();
+    let mut has_request_context_arg = false;
+    let mut server_extractor_params = Vec::new();
+    let mut server_call_args = Vec::new();
+    let mut client_inputs = Punctuated::<FnArg, Token![,]>::new();
     for input_arg in &sig.inputs {
         match input_arg {
             FnArg::Receiver(r) => {
@@ -4752,11 +4805,33 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .to_compile_error()
                     .into();
                 };
+                if is_server_extractor_type(ty) {
+                    if is_request_context_type(ty) && has_request_context_arg {
+                        return syn::Error::new_spanned(
+                            ty,
+                            "`#[server]` functions may accept at most one `RequestContext` parameter",
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+                    if is_request_context_type(ty) {
+                        has_request_context_arg = true;
+                    }
+                    let ident = &pat_ident.ident;
+                    server_extractor_params.push((pat_ident.ident.clone(), (**ty).clone()));
+                    server_call_args.push(quote! { #ident });
+                    continue;
+                }
                 arg_idents.push(pat_ident.ident.clone());
                 arg_types.push((**ty).clone());
+                let ident = &pat_ident.ident;
+                server_call_args.push(quote! { #ident });
+                client_inputs.push(input_arg.clone());
             }
         }
     }
+    let mut client_sig = sig.clone();
+    client_sig.inputs = client_inputs;
 
     // `(arg1, arg2, ...)` — tuple of idents, with trailing comma for
     // single-element tuples so the macro output is grammatical.
@@ -4790,7 +4865,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { ( #(#arg_idents),* ) }
     };
 
-    let sig_without_body = quote! { #vis #sig };
+    let client_sig_without_body = quote! { #vis #client_sig };
 
     let client_body = if streaming {
         quote! {
@@ -4817,7 +4892,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let client = quote! {
         #[cfg(target_arch = "wasm32")]
-        #sig_without_body {
+        #client_sig_without_body {
             #client_body
         }
     };
@@ -4845,20 +4920,82 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! { ::pocopine_server::axum::Json(result) }
     };
+    let server_extractor_bindings: Vec<_> = server_extractor_params
+        .iter()
+        .map(|(ident, ty)| {
+            quote! {
+                let #ident: #ty =
+                    match <#ty as ::pocopine_server::FromRequestContext>
+                        ::from_request_context(&__pocopine_request_context)
+                    {
+                        ::core::result::Result::Ok(value) => value,
+                        ::core::result::Result::Err(err) => {
+                            let __pocopine_error: ::pocopine::ServerError =
+                                ::core::convert::Into::into(err);
+                            let __pocopine_duration_ms =
+                                __pocopine_started.elapsed().as_millis() as u64;
+                            let __pocopine_error_kind = match &__pocopine_error {
+                                ::pocopine::ServerError::App(_) => "app",
+                                ::pocopine::ServerError::Unauthorized(_) => "unauthorized",
+                                ::pocopine::ServerError::Forbidden(_) => "forbidden",
+                                ::pocopine::ServerError::BadRequest(_) => "bad_request",
+                                ::pocopine::ServerError::Network(_) => "network",
+                            };
+                            let __pocopine_status = match &__pocopine_error {
+                                ::pocopine::ServerError::Unauthorized(_) => 401,
+                                ::pocopine::ServerError::Forbidden(_) => 403,
+                                ::pocopine::ServerError::BadRequest(_) => 400,
+                                _ => 500,
+                            };
+                            ::pocopine_server::tracing::warn!(
+                                target: "pocopine.log",
+                                function = #fn_name_str,
+                                function_path = #function_path_ident(),
+                                route = #path_ident(),
+                                duration_ms = __pocopine_duration_ms,
+                                error_kind = __pocopine_error_kind,
+                                error = %__pocopine_error,
+                                "server function request context extraction failed"
+                            );
+                            if ::pocopine_server::has_server_function_rejected_hooks() {
+                                ::pocopine_server::emit(
+                                    ::pocopine_server::ServerFunctionRejected {
+                                        function: #fn_name_str,
+                                        function_path: #function_path_ident(),
+                                        request_id: __pocopine_request_id,
+                                        status: __pocopine_status,
+                                        reason: __pocopine_error_kind,
+                                    },
+                                );
+                            }
+                            #error_return
+                        }
+                    };
+            }
+        })
+        .collect();
 
     // Always destructure the request into parts so the
     // server-function plugin event can read the framework-stamped
     // RequestId (set by `request_event_layer`).
     let parts_binding = quote! { let (parts, body) = request.into_parts(); };
+    let needs_request_context = policy.guard.is_some() || !server_extractor_params.is_empty();
+    let request_context_setup = if needs_request_context {
+        quote! {
+            let __pocopine_request_context =
+                ::pocopine_server::RequestContext::from_parts(
+                    parts.method.clone(),
+                    parts.uri.clone(),
+                    parts.headers.clone(),
+                    parts.extensions.clone(),
+                );
+        }
+    } else {
+        proc_macro2::TokenStream::new()
+    };
     let guard_prologue = match policy.guard.as_ref() {
         Some(guard_path) => quote! {
-            let ctx = ::pocopine_server::auth::RequestContext::from_parts(
-                parts.method,
-                parts.uri,
-                parts.headers,
-                parts.extensions,
-            );
-            if let Err(err) = #guard_path(ctx).await {
+            if let Err(err) = #guard_path(__pocopine_request_context.clone()).await {
                 let __pocopine_error: ::pocopine::ServerError =
                     ::core::convert::Into::into(err);
                 let __pocopine_duration_ms =
@@ -4928,6 +5065,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             },
                         );
                     }
+                    #request_context_setup
                     #guard_prologue
                     let body_limit = ::pocopine_server::server_function_body_limit();
                     let body_bytes = match ::pocopine_server::axum::body::to_bytes(
@@ -5000,7 +5138,8 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 #error_return
                             }
                         };
-                    let result = #fn_ident( #(#arg_idents),* ).await;
+                    #(#server_extractor_bindings)*
+                    let result = #fn_ident( #(#server_call_args),* ).await;
                     let __pocopine_duration_ms =
                         __pocopine_started.elapsed().as_millis() as u64;
                     let __pocopine_duration_ms_f64 =
@@ -5137,7 +5276,7 @@ impl Parse for ProtectedInput {
 ///
 /// ```ignore
 /// pocopine::protected! {
-///     require |ctx| ctx.user.has_role(Role::Admin);
+///     require |ctx| ctx.principal().has_role(&Role::admin());
 ///
 ///     pub async fn create_post(title: String) -> ServerResult<Post> {
 ///         /* protected body */
@@ -5178,8 +5317,9 @@ pub fn protected(input: TokenStream) -> TokenStream {
     quote! {
         #[cfg(not(target_arch = "wasm32"))]
         async fn #guard_ident(
-            ctx: ::pocopine::auth::RequestContext,
+            ctx: ::pocopine::server::RequestContext,
         ) -> ::pocopine::ServerResult<()> {
+            use ::pocopine::auth::RequestAuthExt as _;
             let __pocopine_guard_allows: bool = {
                 let #ctx_pat = ctx;
                 #check_body

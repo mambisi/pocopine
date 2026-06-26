@@ -1,5 +1,5 @@
 use pocopine_core::{ServerError, ServerResult};
-use pocopine_server::auth::RequestContext;
+use pocopine_server::RequestContext;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::extract::{FromRequest, State};
 use pocopine_server::axum::http::Request;

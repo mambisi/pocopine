@@ -31,6 +31,7 @@ redis = { version = "0.27", features = [
     "connection-manager",
 ], optional = true }
 pocopine-auth = { workspace = true }
+pocopine-core = { workspace = true }
 pocopine-events = { workspace = true }
 pocopine-observe = { workspace = true }
 pocopine-crypto = { workspace = true }
