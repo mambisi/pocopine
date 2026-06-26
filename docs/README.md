@@ -35,6 +35,7 @@ New here? Start with **[Getting Started](./getting-started/introduction.md)**.
 
 **Server**
 
+- [Server functions](./guides/server/server-functions.md) — `#[server]` policies, guards, request context, and middleware extractors.
 - [Server plugins](./guides/server/server-plugins.md) — host-side plugin lifecycle, tower middleware, and the `Server` builder.
 - [Client modules](./guides/server/client-modules.md) — optional typed `.client.ts` modules and npm package imports.
 

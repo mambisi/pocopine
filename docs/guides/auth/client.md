@@ -493,20 +493,22 @@ server's `to_auth_user()` projection includes app-specific roles
 (via custom Firebase claims, Clerk org metadata, etc.) you don't
 want to re-derive on the client.
 
-The guard confirms authentication; the body fetches the full user
-record from your auth layer. Server function bodies do not receive
-the `RequestContext` directly — the guard function consumes it.
+The guard confirms authentication. If the body only needs a full
+user record from your auth layer, fetch it there. If it needs the
+request principal or other middleware context, accept the general
+`pocopine::server::RequestContext` as a server-supplied parameter and
+read auth values through `RequestAuthExt`.
 
 ```rust
-use pocopine_auth::{require_login, AuthUser};
+use pocopine_auth::{AuthUser, RequestAuthExt, require_login};
 use pocopine_core::ServerResult;
+use pocopine_core::server::RequestContext;
 
 #[pocopine::server(guard = require_login)]
-pub async fn me() -> ServerResult<AuthUser> {
+pub async fn me(ctx: RequestContext) -> ServerResult<AuthUser> {
     // The guard confirmed the caller is authenticated.
-    // Fetch the full user record from your auth layer —
-    // e.g. from a session store or via a second JWT decode.
-    let user = my_auth::current_user().await?;
+    // RequestAuthExt reads the auth principal/user from request extensions.
+    let user = ctx.require_user()?.clone();
     Ok(user)
 }
 ```
@@ -539,9 +541,10 @@ that touches sensitive data **must** carry its own
 `#[server(guard = …)]` policy:
 
 ```rust
-use pocopine_auth::{require_admin, require_role, RequestContext};
+use pocopine_auth::{require_admin, require_role};
 use pocopine_auth_client::predicate_guard;
 use pocopine_core::{RouteComponent, RouteConfig, ServerResult};
+use pocopine_core::server::RequestContext;
 
 // Client-side: predicate_guard wraps the predicate into a RouteGuard.
 impl RouteComponent for AdminPanel {
@@ -562,11 +565,12 @@ pub async fn admin_audit() -> ServerResult<Vec<Event>> {
 The `#[server(guard = …)]` attribute takes a path to an `async fn(RequestContext) -> ServerResult<()>`. `pocopine_auth` ships built-in guards for the common cases: `require_login` (any authenticated user), `require_admin` (admin role), and `require_staff` (staff role). For custom role/permission checks, write a small async wrapper:
 
 ```rust
-use pocopine_auth::{require_role, RequestContext};
+use pocopine_auth::{Predicate, RequestAuthExt, require_role};
+use pocopine_core::server::RequestContext;
 use pocopine_core::ServerResult;
 
 async fn require_auditor(ctx: RequestContext) -> ServerResult<()> {
-    require_role("auditor").check(&ctx.user).into()
+    require_role("auditor").check(&ctx.principal()).into()
 }
 
 #[pocopine::server(guard = require_auditor)]
@@ -574,6 +578,15 @@ pub async fn audit_log() -> ServerResult<Vec<AuditEntry>> {
     // ...
 }
 ```
+
+Server function bodies can also accept
+`pocopine_core::server::RequestContext`,
+`pocopine_core::server::Extension<T>`, or
+`Option<pocopine_core::server::Extension<T>>` parameters. Those
+parameters are filled from host request metadata and extensions, and
+are omitted from the generated client stub. See
+[`Server functions`](../server/server-functions.md) for the full
+extractor shape.
 
 ## Step 5 — keep users signed in across reloads (`TokenStorage`)
 

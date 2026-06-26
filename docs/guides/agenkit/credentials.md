@@ -112,7 +112,7 @@ redirect(&auth.authorize_url);
 code, and save the token in your store:
 
 ```rust
-#[server]
+#[server(guard = pocopine::auth::require_login)]
 pub async fn oauth_callback(code: String, state: String) -> ServerResult<()> {
     let (verifier, expected_state) = load_session()?;       // your store
     if state != expected_state { return Err(ServerError::bad_request("bad state")); }

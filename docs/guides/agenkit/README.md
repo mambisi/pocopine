@@ -7,7 +7,7 @@ description: "Author traceable, principal-scoped generative-AI flows in Pocopine
 
 Agenkit is Pocopine's generative-AI runtime. You configure it **once**, author
 **flows** (typed input → typed output, with a declared context manifest and one
-correlated trace tree), and call them from plain [`#[server]`](../server/server-plugins.md)
+correlated trace tree), and call them from plain [`#[server]`](../server/server-functions.md)
 functions. The runtime owns the parts that are easy to get wrong: provider
 fan-out, structured-output coaxing, redacted progress streams, and
 principal-scoped tools.
@@ -168,8 +168,10 @@ pub async fn summarize(input: SummarizeInput) -> ServerResult<Summary> {
 ```
 
 The plugin installs a tower layer that scopes the request `Principal` for the
-whole request, so the flow's tools, retrieval, and threads run under the caller
-without the handler body ever touching the principal (§D5/§D15 DC-5).
+whole request, so the flow's tools, retrieval, and threads run under the caller.
+Handlers that need the identity directly can also accept a server-supplied
+`RequestContext` or `Extension<Principal>` parameter; see
+[`Server functions`](../server/server-functions.md).
 [`to_server_error`](./streaming-and-secrets.md#errors-never-leak-internals) maps
 an `AgenkitError` to a client-safe `ServerError`, dropping provider internals.
 

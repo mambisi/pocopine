@@ -41,7 +41,8 @@ request uses to resume — treat it like a session reference.
 A thread is bound to the principal that created it. The store enforces this:
 reads and appends require the **same owner**, so one caller can never read or
 inject into another caller's thread (§D5/§D10). Because flows run under the
-caller principal (scoped by the [server plugin](../server/server-plugins.md)),
+caller principal (scoped by the [server plugin](../server/server-plugins.md), or
+read directly from a server-supplied [`RequestContext`](../server/server-functions.md)),
 this happens automatically — you don't pass identity around.
 
 ```mermaid

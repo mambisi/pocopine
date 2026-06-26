@@ -249,6 +249,7 @@ Full guides and tutorials live under [`docs/`](./docs). Start here:
 - [Pine Stylekit](./docs/guides/styling/stylekit.md) — the utility-CSS compiler and `@theme` tokens.
 - [Animation](./docs/guides/styling/animation.md) — presets, FLIP, and the WAAPI escape hatch.
 - [Routing](./docs/guides/routing/route-guards-and-loaders.md) — route guards, async loaders, and fetch middleware.
+- [Server functions](./docs/guides/server/server-functions.md) — `#[server]` policies, guards, request context, and middleware extractors.
 - [App plugins](./docs/guides/plugins/app-plugins.md) / [Server plugins](./docs/guides/server/server-plugins.md) — install-time setup and lifecycle ordering.
 - [Sync (client)](./docs/guides/data/sync-client.md) / [Sync (server)](./docs/guides/data/sync-server.md) — the query data layer, end to end.
 - [Object-storage uploads](./docs/guides/data/storage-uploads.md) — the server-mediated upload path.
@@ -296,8 +297,10 @@ modules layered on top:
    template metadata, and specializes eligible binding/listener
    installs at compile time.
 3. **Server functions** — `#[server] async fn` on the backend; the
-   client gets a typed stub that POSTs to `/_pocopine/<fn_name>` and
-   deserializes the response. Works with any serde-compatible type.
+   client gets a typed stub that POSTs to a generated `/_pocopine/...`
+   route and deserializes the response. Bodies can accept host-only
+   `RequestContext` / `Extension<T>` parameters for middleware context,
+   while normal owned parameters remain JSON payload fields.
 
 On top of those sit the opt-in application modules — data/sync, auth,
 storage, live, jobs, observability — most of which install as **app

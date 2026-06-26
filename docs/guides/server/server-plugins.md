@@ -212,8 +212,10 @@ the per-request cost:
 - **Read from a request-scoped extension.** A plugin can install a
   short layer that calls `active_plugin::<T>()` once per request,
   inserts the handle into request extensions, and downstream
-  handlers extract via `Extension<ServerPluginHandle<T>>`. Same
-  cost as today's auth middleware.
+  generated server functions extract via
+  `pocopine::server::Extension<ServerPluginHandle<T>>`. Raw axum
+  handlers use `axum::Extension<ServerPluginHandle<T>>`. Same cost
+  as today's auth middleware.
 
 Typed hook closures registered via `hook_plugin` capture the type
 parameter `T` but **still resolve the concrete service through the

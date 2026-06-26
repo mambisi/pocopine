@@ -111,7 +111,7 @@ impl Preferences { /* empty or with actions */ }
 ### 5.3 `#[server]`
 
 ```rust
-#[pocopine::server]
+#[pocopine::server(public)]
 pub async fn get_post(post_id: u32) -> ServerResult<Post> { /* body */ }
 ```
 
