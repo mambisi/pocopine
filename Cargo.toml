@@ -53,7 +53,7 @@ members = [
     # pocopine-sync-sqlx (CRUD-specific) deleted. The Source/MutationLog
     # types in pocopine_sync_query::write supersede them; the macro-
     # emitted typed write API replaces hand-built CrudMutationPayload.
-    # See docs/sync-crud-to-query-migration.md (Phase 5) for the
+    # See docs/legacy-sync-to-query-migration.md (Phase 5) for the
     # migration path.
     "crates/pocopine-sync-indexdb",
     "crates/pocopine-sync-query",

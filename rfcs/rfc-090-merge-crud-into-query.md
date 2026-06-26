@@ -3,9 +3,8 @@
 * **Status:** Implemented
 * **Author:** sync framework working group
 * **Tracking branch:** `feat/rfc-090-merge-crud-into-query`
-* **Supersedes:** the dual-crate boundary documented in
-  [`sync-crud.md`](../docs/sync-crud.md) and
-  [`sync-crud-query-composition.md`](../docs/sync-crud-query-composition.md)
+* **Supersedes:** the dual-crate boundary documented in the
+  (now-removed) `sync-crud.md` and `sync-crud-query-composition.md`
 * **Related:** [RFC 086 (pocopine-sync-query)](./rfc-086-sync-query.md),
   [RFC 087 (driver lifecycle)](./rfc-087-sync-query-driver.md),
   [RFC 088 (production parity)](./rfc-088-sync-query-production-parity.md)
