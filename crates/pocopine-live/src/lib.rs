@@ -1620,7 +1620,7 @@ mod host {
     use axum::response::{IntoResponse, Response};
     use axum::routing::get;
     use futures_util::stream::{self, StreamExt};
-    use pocopine_auth::RequestContext;
+    use pocopine_core::server::RequestContext;
     use pocopine_events::{
         EventBackendConfig, EventCursor, EventEnvelope, EventError, EventResult, LiveEventBackend,
         LiveEventSubscription, MemoryEventBackend, MemoryEventConfig, SharedEventBackend,

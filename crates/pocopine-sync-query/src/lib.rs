@@ -49,7 +49,7 @@ pub mod plugin;
 pub mod predicate;
 pub mod query;
 pub mod selector;
-// `source` is host-only — the trait threads `pocopine_auth::RequestContext`
+// `source` is host-only — the trait threads `pocopine_core::server::RequestContext`
 // through every method, and `pocopine-auth` is cfg-gated to non-wasm.
 // Browser code doesn't need a Source trait; it only needs the typed
 // query DSL + QueryClient runtime, which live in the modules above.
@@ -60,7 +60,7 @@ pub mod wire;
 // RFC 090 Phase 2a — mutation-lifecycle types. Pure-data items
 // (MutationPayload, TypedMutation, WriteResult, etc.) compile on
 // every target. Only the MutationLog trait + MemoryMutationLog
-// impl carry `pocopine_auth::RequestContext` and are inner-gated
+// impl carry `pocopine_core::server::RequestContext` and are inner-gated
 // to host. The macro-emitted typed write API on wasm reaches
 // MutationPayload/TypedMutation through this module.
 pub mod write;
@@ -106,7 +106,7 @@ pub use write::{
     MutationReservation, OptimisticRowFn, TypedMutation, UpdatePayload, WriteResult,
 };
 
-// Host-only: the trait + impl depend on `pocopine_auth::RequestContext`.
+// Host-only: the trait + impl depend on `pocopine_core::server::RequestContext`.
 #[cfg(not(target_arch = "wasm32"))]
 pub use write::{MemoryMutationLog, MemoryScopeFn, MutationLog};
 

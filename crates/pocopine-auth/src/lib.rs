@@ -11,7 +11,7 @@
 //! - [`role`] — [`Role`] and [`Permission`] (stringly-typed grant tokens)
 //! - [`user`] — [`AuthUser`] (the canonical user payload + claim bag)
 //! - [`principal`] — [`Principal`] (request identity) and [`Session`]
-//! - [`context`] — [`RequestContext`] and `ensure_*`/`require_*` guards
+//! - [`context`] — auth helpers over the framework `RequestContext`
 //!   (host-only)
 //! - [`provider`] — [`AuthProvider`], [`SessionStore`], [`AuthError`]
 //! - [`predicate`] — [`Predicate`] trait, [`Decision`] outcome, and
@@ -36,7 +36,7 @@ pub use user::AuthUser;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use context::{
-    RequestContext, SESSION_COOKIE, ensure_login, ensure_permission, ensure_role, require_admin,
+    RequestAuthExt, SESSION_COOKIE, ensure_login, ensure_permission, ensure_role, require_admin,
     require_login, require_staff,
 };
 pub use provider::{AuthError, AuthResult};

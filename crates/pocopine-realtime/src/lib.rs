@@ -14,7 +14,7 @@
 //! - Discord-style connection liveness ([`Control::Hello`] /
 //!   [`Control::Heartbeat`] / heartbeat-ack / zombie detection),
 //!   per-subscription sequence numbers and [`Control::Resume`] replay,
-//! - per-topic authorization through the app's [`pocopine_auth::RequestContext`],
+//! - per-topic authorization through the app's [`pocopine_core::server::RequestContext`],
 //! - fan-out behind the [`Fanout`] trait.
 //!
 //! Application semantics (CRDT merge, chat ordering/receipts) live in
@@ -70,4 +70,6 @@ pub use server::*;
 // the crates that construct `InboundData` in tests) can name them without taking
 // a direct `pocopine-auth` dependency.
 #[cfg(not(target_arch = "wasm32"))]
-pub use pocopine_auth::{Principal, RequestContext};
+pub use pocopine_auth::Principal;
+#[cfg(not(target_arch = "wasm32"))]
+pub use pocopine_core::server::RequestContext;

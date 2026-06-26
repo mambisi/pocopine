@@ -4,8 +4,6 @@
 //! `#[handlers]` attribute macros from `pocopine-macros`. App code should
 //! depend on `pocopine` and pull everything from `pocopine::prelude::*`.
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use pocopine_auth::RequestContext;
 pub use pocopine_auth::{AuthUser, Permission, Principal, Role, Session};
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
@@ -63,6 +61,11 @@ pub use pocopine_macros::{
 
 pub mod auth {
     pub use pocopine_auth::*;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server {
+    pub use pocopine_core::server::{Extension, FromRequestContext, RequestContext};
 }
 
 #[cfg(feature = "analytics")]

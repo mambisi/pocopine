@@ -24,10 +24,8 @@ tokio = { version = "1", features = ["macros", "rt"] }
 trybuild = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Required by host-only tests that build a stub `Source` impl —
-# `Source::extract_context` takes a `RequestContext` and the macro-
-# emitted `tasks::resource(...)` convenience compiles only on host.
-pocopine-auth = { workspace = true }
+# Required by host-only tests that build a stub `Source` impl and compile the
+# macro-emitted `tasks::resource(...)` convenience on host.
 futures = "0.3"
 # Required by the `Source::mutation_log` integration test that
 # impls MutationLog directly on a store.

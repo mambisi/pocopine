@@ -26,7 +26,8 @@ use axum::http::Request;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
-use pocopine_auth::RequestContext;
+use pocopine_auth::RequestAuthExt;
+use pocopine_core::server::RequestContext;
 use pocopine_events::Topic;
 use pocopine_observe::LOG_TARGET;
 use tokio::sync::mpsc;
@@ -301,12 +302,13 @@ impl Session {
         // and runs stateful server logic; every other sub-protocol is a pure
         // publish-to-fan-out relay.
         if let Some(handler) = self.gateway.handler(frame.subprotocol_id) {
+            let principal = self.ctx.principal();
             let reaction = handler
                 .on_data(InboundData {
                     topic: &topic,
                     payload: &frame.payload,
                     can_write,
-                    principal: &self.ctx.user,
+                    principal: &principal,
                 })
                 .await?;
             for payload in reaction.replies {

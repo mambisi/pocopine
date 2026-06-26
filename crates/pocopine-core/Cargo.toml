@@ -72,6 +72,9 @@ slab = { workspace = true }
 # listener_routes) so a small row mounts with zero heap blocks.
 smallvec = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+http = { workspace = true }
+
 [dependencies.web-sys]
 version = "0.3"
 features = [

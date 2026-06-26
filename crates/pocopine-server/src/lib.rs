@@ -56,6 +56,7 @@ pub use plugin::{
     has_server_function_rejected_hooks, has_server_function_started_hooks,
     has_server_listening_hooks, next_request_id,
 };
+pub use pocopine_core::server::{Extension, FromRequestContext, RequestContext};
 pub use server::{Server, ServerPlugin};
 pub use server_functions::{
     ServerFunctionRoute, ServerFunctionRouteConflict, install_server_functions,
@@ -73,7 +74,7 @@ use axum::Router;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use pocopine_auth::{AuthProvider, Principal, RequestContext};
+use pocopine_auth::{AuthProvider, Principal};
 
 /// Default maximum JSON request body accepted by generated
 /// server-function routes.
@@ -229,7 +230,8 @@ async fn auth_middleware(
 ///
 /// ```no_run
 /// # use pocopine_server::{axum::Router, RouterAuthExt};
-/// # use pocopine_auth::{AuthProvider, AuthFuture, AuthUser, RequestContext};
+/// # use pocopine_auth::{AuthProvider, AuthFuture, AuthUser};
+/// # use pocopine_server::RequestContext;
 /// # struct StubProvider;
 /// # impl AuthProvider for StubProvider {
 /// #     fn authenticate<'a>(&'a self, _: &'a RequestContext)
@@ -243,7 +245,8 @@ async fn auth_middleware(
 ///
 /// The middleware runs once per request, before any
 /// `#[server(guard = ...)]` route handler. Identity flows from
-/// middleware → request `Extensions` → `RequestContext` → guard.
+/// middleware → request `Extensions` → `RequestContext` → guard and
+/// server-supplied handler extractors.
 pub trait RouterAuthExt {
     /// Install an `AuthProvider` as request middleware.
     fn with_auth<P: AuthProvider + 'static>(self, provider: P) -> Self;

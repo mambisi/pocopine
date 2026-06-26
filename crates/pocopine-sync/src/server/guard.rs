@@ -1,7 +1,8 @@
 use std::future::Future;
 
 use pocopine_core::ServerResult;
-use pocopine_server::auth::{Predicate, RequestContext};
+use pocopine_server::RequestContext;
+use pocopine_server::auth::{Predicate, RequestAuthExt};
 
 use super::*;
 
@@ -28,7 +29,7 @@ where
     P: Predicate,
 {
     fn check(&self, ctx: RequestContext) -> SyncGuardFuture<'_> {
-        let result: ServerResult<()> = self.0.check(&ctx.user).into();
+        let result: ServerResult<()> = self.0.check(&ctx.principal()).into();
         Box::pin(async move { result })
     }
 }

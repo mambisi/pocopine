@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use http_body_util::BodyExt;
-use pocopine_auth::RequestContext;
+use pocopine_core::server::RequestContext;
 use pocopine_server::Server;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};

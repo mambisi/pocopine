@@ -13,7 +13,8 @@
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use pocopine::ServerResult;
-use pocopine_auth::{AuthFuture, AuthProvider, AuthUser, RequestContext};
+use pocopine_auth::{AuthFuture, AuthProvider, AuthUser};
+use pocopine_server::RequestContext;
 use pocopine_server::axum::Router;
 use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::http::{Method, Request};

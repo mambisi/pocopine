@@ -13,11 +13,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use http::{HeaderMap, HeaderValue, Method, Uri};
 use jsonwebtoken::{Algorithm as JwtAlg, EncodingKey, Header, encode};
-use pocopine_auth::{AuthProvider, RequestContext, Role};
+use pocopine_auth::{AuthProvider, Role};
 use pocopine_auth_jwt::{
     Algorithm, ClaimMap, ClaimPath, JwtAuthError, JwtConfig, JwtIssuer, JwtVerifier, KeySource,
     RevocationCheck, SecretBytes, TokenSource,
 };
+use pocopine_core::server::RequestContext;
 use serde_json::{Value, json};
 
 const SECRET: &[u8] = b"this-is-a-32-byte-long-test-secret-please";

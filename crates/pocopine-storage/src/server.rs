@@ -8,7 +8,8 @@ use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::TryStreamExt;
 use pocopine_core::{ServerError, ServerResult};
-use pocopine_server::auth::{Decision, DenyReason, Predicate, RequestContext};
+use pocopine_server::RequestContext;
+use pocopine_server::auth::{Decision, DenyReason, Predicate, RequestAuthExt};
 use pocopine_server::axum::body::{Body, to_bytes};
 use pocopine_server::axum::extract::{Path, State};
 use pocopine_server::axum::http::{
@@ -95,8 +96,8 @@ impl StorageContext {
         request: RequestContext,
         anonymous_binding: Option<String>,
     ) -> Self {
-        let actor = request
-            .user
+        let principal = request.principal();
+        let actor = principal
             .user()
             .map(|user| {
                 StorageActor::Principal(PrincipalRef {
@@ -168,7 +169,7 @@ where
 {
     fn check(&self, ctx: StorageContext) -> StorageGuardFuture<'_> {
         let result: ServerResult<()> = match &ctx.request {
-            Some(request) => self.0.check(&request.user).into(),
+            Some(request) => self.0.check(&request.principal()).into(),
             None => Decision::Deny(DenyReason::Unauthorized).into(),
         };
         Box::pin(async move { result })
@@ -1546,7 +1547,7 @@ fn context_from_parts(
     storage: &StorageServer,
 ) -> StorageRequest {
     let request = RequestContext::from_parts(method, uri, headers, extensions);
-    let anonymous_binding = if request.user.user().is_none()
+    let anonymous_binding = if request.principal().user().is_none()
         && request.session_id().is_none()
         && request.cookie(STORAGE_ANON_COOKIE).is_none()
     {
