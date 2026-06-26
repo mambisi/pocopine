@@ -35,7 +35,7 @@ pub(crate) async fn ensure_bucket(
 ) -> ServerResult<()> {
     match client.head_bucket().bucket(bucket).send().await {
         Ok(_) => Ok(()),
-        Err(head_err) if create_if_missing => client
+        Err(_) if create_if_missing => client
             .create_bucket()
             .bucket(bucket)
             .send()
