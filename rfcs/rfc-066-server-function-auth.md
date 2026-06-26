@@ -155,8 +155,11 @@ independent typed values into the same extension map.
 Generated server routes also support server-supplied handler parameters:
 `RequestContext`, `Extension<T>`, and `Option<Extension<T>>` are omitted
 from the generated client stub and resolved from request metadata before
-the user body runs. Missing required extensions reject with
-`ServerError::BadRequest`.
+the user body runs. A missing required extension means the host middleware
+that populates it is not wired up — a server misconfiguration, not bad
+client input — so it rejects with `ServerError::App` (HTTP 500), naming the
+missing type so the operator can find the unwired middleware. Use
+`Option<Extension<T>>` for genuinely optional context.
 
 The context does not own the request body. This keeps auth guards from
 accidentally consuming the JSON payload before the server-function
