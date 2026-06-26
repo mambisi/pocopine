@@ -41,7 +41,7 @@ pub trait Source: Send + Sync + 'static {
 
     fn extract_context<'a>(
         &'a self,
-        ctx: pocopine_auth::RequestContext,
+        ctx: pocopine_core::server::RequestContext,
     ) -> SourceFuture<'a, SyncResult<Self::Context>>;
 
     fn list_stream<'a>(
@@ -108,6 +108,8 @@ fn extract_context<'a>(&'a self, _ctx: RequestContext)
 **Typed extractor with auth gating:**
 
 ```rust
+use pocopine_auth::RequestAuthExt;
+
 #[derive(Clone)]
 pub struct WorkspaceCtx { pub workspace_id: String, pub user_id: String }
 
@@ -119,7 +121,7 @@ impl Source for IssueStore {
     {
         let db = self.db.clone();
         Box::pin(async move {
-            let user_id = ctx.user.require_user()
+            let user_id = ctx.require_user()
                 .map_err(|_| SyncError::unauthorized("unauthenticated"))?
                 .id.clone();
             let workspace_id = ctx.header("x-workspace-id")
@@ -485,6 +487,8 @@ async DB lookup.
 ### 3. Async-context guard
 
 ```rust
+use pocopine_auth::RequestAuthExt;
+
 struct WorkspaceMembershipGuard { db: Db }
 
 impl SyncStreamGuard for WorkspaceMembershipGuard {
@@ -494,7 +498,7 @@ impl SyncStreamGuard for WorkspaceMembershipGuard {
             let workspace_id = ctx.header("x-workspace-id")
                 .ok_or_else(|| ServerError::bad_request("missing x-workspace-id"))?
                 .to_string();
-            let user_id = ctx.user.require_user()?.id.clone();
+            let user_id = ctx.require_user()?.id.clone();
             db.assert_member(&user_id, &workspace_id).await
                 .map_err(ServerError::from)?;
             Ok(())

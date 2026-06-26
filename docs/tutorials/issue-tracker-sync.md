@@ -142,6 +142,8 @@ inside every storage method. Skip `RequestContext` plumbing entirely.
 
 ```rust
 // crates/myapp-server/src/issues.rs
+use pocopine_auth::RequestAuthExt;
+
 #[derive(Clone)]
 pub struct WorkspaceCtx {
     pub workspace_id: String,
@@ -150,9 +152,9 @@ pub struct WorkspaceCtx {
 
 impl WorkspaceCtx {
     fn extract(ctx: &RequestContext, db: &Db) -> SyncResult<Self> {
-        let user_id = ctx.user.user()
-            .map(|u| u.id.clone())
-            .ok_or_else(|| SyncError::unauthorized("unauthenticated"))?;
+        let user_id = ctx.require_user()
+            .map_err(|_| SyncError::unauthorized("unauthenticated"))?
+            .id.clone();
         let workspace_id = ctx.header("x-workspace-id")
             .ok_or_else(|| SyncError::client("missing x-workspace-id"))?
             .to_string();

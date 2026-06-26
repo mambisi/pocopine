@@ -24,7 +24,7 @@ pub async fn save_profile(input: ProfileInput) -> ServerResult<Profile> {
 }
 
 pub async fn require_user(
-    ctx: pocopine::auth::RequestContext,
+    ctx: pocopine::server::RequestContext,
 ) -> ServerResult<()> {
     let Some(token) = ctx.bearer_token() else {
         return Err(ServerError::unauthorized("missing bearer token"));
@@ -99,7 +99,7 @@ before the user body runs.
 missing-policy warning but does not install a guard.
 
 `guard = path` means the route is protected. The generated Axum route
-constructs a `pocopine_server::auth::RequestContext`, awaits the guard,
+constructs a `pocopine_server::RequestContext`, awaits the guard,
 and only calls the original function body if the guard returns `Ok(())`.
 
 `#[server]` with no policy still compiles in this phase, but emits:
@@ -118,7 +118,7 @@ The initial guard contract is intentionally narrow:
 
 ```rust
 pub async fn require_user(
-    ctx: pocopine::auth::RequestContext,
+    ctx: pocopine::server::RequestContext,
 ) -> ServerResult<()> {
     /* inspect ctx, return Ok or ServerError */
 }
@@ -130,26 +130,33 @@ the server function's error type. In normal pocopine code, guards return
 
 ### 5.3 Request context
 
-`pocopine::auth::RequestContext` and the re-exported
-`pocopine_server::auth::RequestContext` contain:
+`pocopine::server::RequestContext` and the re-exported
+`pocopine_server::RequestContext` contain:
 
 - `method()`
 - `uri()`
 - `headers()`
+- `extensions()`
+- `extension::<T>()`
 - `header(name)`
 - `bearer_token()`
 - `cookie(name)`
-- `session_id()`
-- `user: Principal`
 
 `RequestContext` and the HTTP-backed guard helpers are host-only. The
 cross-target auth value types remain available to client code:
 `AuthUser`, `Principal`, `Role`, `Permission`, and `Session`.
 
-`Principal` is anonymous by default. Host middleware may validate a
-session/JWT/provider token and insert either `AuthUser` or `Principal`
-into Axum request extensions. The generated server route copies that
-identity into `RequestContext` before running the guard.
+`RequestContext` is framework-level, not auth-level. Host middleware
+may validate a session/JWT/provider token and insert an `AuthUser` or
+`Principal` into Axum request extensions; auth helpers read those values
+through `pocopine_auth::RequestAuthExt`. Other middleware can insert
+independent typed values into the same extension map.
+
+Generated server routes also support server-supplied handler parameters:
+`RequestContext`, `Extension<T>`, and `Option<Extension<T>>` are omitted
+from the generated client stub and resolved from request metadata before
+the user body runs. Missing required extensions reject with
+`ServerError::BadRequest`.
 
 The context does not own the request body. This keeps auth guards from
 accidentally consuming the JSON payload before the server-function
@@ -190,7 +197,7 @@ pub async fn admin_stats() -> ServerResult<Stats> { /* ... */ }
 And reusable checks for custom guards:
 
 ```rust
-pub async fn require_editor(ctx: pocopine::auth::RequestContext) -> ServerResult<()> {
+pub async fn require_editor(ctx: pocopine::server::RequestContext) -> ServerResult<()> {
     pocopine::auth::ensure_role(&ctx, Role::named("editor"))
 }
 ```
@@ -205,7 +212,7 @@ then expands to `#[server(guard = generated_guard)]`:
 
 ```rust
 pocopine::protected! {
-    require |ctx| ctx.user.has_role(Role::Admin);
+    require |ctx| ctx.principal().has_role(&Role::admin());
 
     pub async fn create_post(
         title: String,

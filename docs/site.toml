@@ -103,6 +103,15 @@ pages = [
 
 [[group]]
 section = "Docs"
+title = "Server"
+pages = [
+  { title = "Server functions", path = "guides/server/server-functions.md" },
+  { title = "Server plugins",   path = "guides/server/server-plugins.md" },
+  { title = "Client modules",   path = "guides/server/client-modules.md" },
+]
+
+[[group]]
+section = "Docs"
 title = "Data & Sync"
 pages = [
   { title = "Sync (client)",          path = "guides/data/sync-client.md" },
@@ -151,10 +160,8 @@ section = "Docs"
 title = "Plugins & extensions"
 pages = [
   { title = "Overview",              path = "guides/plugins/README.md" },
-  { title = "Client modules",        path = "guides/server/client-modules.md" },
   { title = "App plugins",           path = "guides/plugins/app-plugins.md" },
   { title = "Consuming plugins",     path = "guides/plugins/consuming.md" },
-  { title = "Server plugins",        path = "guides/server/server-plugins.md" },
   { title = "Example: Firebase auth", path = "guides/plugins/example.md" },
 ]
 

@@ -1028,12 +1028,10 @@ current framework (cited crates are the integration surfaces Agenkit reuses).
   in-facade adapter.** Exposing a public flow as a `#[server]` function gives
   the typed wasm client for free (the macro emits
   `pocopine::fetch::call::<Args, R>`); no separate Rust client codegen is
-  added. Because `#[server]` hands `RequestContext`/`Principal` only to guards,
-  not handler bodies, tools/retrieval obtain the caller principal through a
-  thin adapter in `pocopine-agenkit` that reads `Principal` from request
-  extensions and threads it through `AiFlowContext`. The shared
-  `pocopine-macros` `#[server]` macro is **not** modified (macro work is
-  deferred, §Deferred Follow-Ups).
+  added. `#[server]` functions can now accept the general
+  `RequestContext` or typed `Extension<T>` extractor parameters in handler
+  bodies, so tools/retrieval can obtain the caller principal from request
+  extensions and thread it through `AiFlowContext`.
 * **DC-6 - Streaming ships in v1.** `StreamMode::{FinalOnly, OutputDeltas,
   Progress, DebugSafe}` are all honored. There is no server-function
   streaming today (only `pocopine-live`'s SSE), so the streaming route is
@@ -1235,8 +1233,9 @@ Wire public flows into Pocopine's existing server stack.
   runs multiple internal steps. No new infra.
 * **Checkpoint 3.2 - principal injection adapter** (in-facade, §D15 DC-5): a
   thin adapter in `pocopine-agenkit` reads `Principal` from request extensions
+  or from a server-supplied `RequestContext`/`Extension<Principal>` parameter
   and threads it through `AiFlowContext`, so tools/retrieval run under the
-  caller principal. The shared `#[server]` macro is not modified.
+  caller principal.
 * **Checkpoint 3.3 - streaming route** (§D15 DC-6): a dedicated AI-flow SSE
   route reusing `pocopine-live` primitives (replay cursor, keep-alive,
   structured event enum) with AI-flow semantics, consuming the 2.6b
