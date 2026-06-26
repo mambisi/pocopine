@@ -14,11 +14,11 @@
 //!
 //! Controls, in increasing nesting, each typing into a `pp-model`
 //! input and asserting the derived count re-runs:
-//!   * `without_teleport` — child component, no teleport (the control)
-//!   * `bare_teleport`    — child is a DIRECT child of a
-//!                          `pp-if + pp-teleport` body
-//!   * `popover_slot`     — child is SLOT content of a Pine popover
-//!                          (the exact shape reported in the issue)
+//! * `without_teleport` — child component, no teleport (the control)
+//! * `bare_teleport` — child is a DIRECT child of a
+//!   `pp-if + pp-teleport` body
+//! * `popover_slot` — child is SLOT content of a Pine popover
+//!   (the exact shape reported in the issue)
 //!
 //! `#[watch]` variants are included too: the watch source read bypasses
 //! the projection cache, so watch was never actually broken — these
@@ -128,13 +128,11 @@ impl MemberPicker {
 // ── control: no teleport ───────────────────────────────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(
-    template_inline = r#"
+#[component(template_inline = r#"
 <div class="plain-host">
   <member-picker></member-picker>
 </div>
-"#
-)]
+"#)]
 struct PlainHost {}
 
 #[handlers]
@@ -170,8 +168,7 @@ async fn computed_reruns_without_teleport() {
 // ── bare teleport: member-picker is a direct child of the body ─────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(
-    template_inline = r#"
+#[component(template_inline = r#"
 <div>
   <button class="toggle" @click="toggle">t</button>
   <template pp-if="open" pp-teleport="body">
@@ -180,8 +177,7 @@ async fn computed_reruns_without_teleport() {
     </div>
   </template>
 </div>
-"#
-)]
+"#)]
 struct BareTeleportHost {
     open: bool,
 }
@@ -233,8 +229,7 @@ async fn computed_reruns_in_bare_teleport() {
 // ── popover-slotted: the exact shape from the issue ────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(
-    template_inline = r#"
+#[component(template_inline = r#"
 <div>
   <pine-popover-root>
     <pine-popover-trigger class="pop-trig">open</pine-popover-trigger>
@@ -245,8 +240,7 @@ async fn computed_reruns_in_bare_teleport() {
     </pine-popover-portal>
   </pine-popover-root>
 </div>
-"#
-)]
+"#)]
 struct PopoverSlottedHost {}
 
 #[handlers]
@@ -341,13 +335,11 @@ impl MemberPickerWatch {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(
-    template_inline = r#"
+#[component(template_inline = r#"
 <div class="plain-watch-host">
   <member-picker-watch></member-picker-watch>
 </div>
-"#
-)]
+"#)]
 struct PlainWatchHost {}
 
 #[handlers]
@@ -380,8 +372,7 @@ async fn watch_fires_without_teleport() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(
-    template_inline = r#"
+#[component(template_inline = r#"
 <div>
   <button class="toggle-w" @click="toggle">t</button>
   <template pp-if="open" pp-teleport="body">
@@ -390,8 +381,7 @@ async fn watch_fires_without_teleport() {
     </div>
   </template>
 </div>
-"#
-)]
+"#)]
 struct BareTeleportWatchHost {
     open: bool,
 }

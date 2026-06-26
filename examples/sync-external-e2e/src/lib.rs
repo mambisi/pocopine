@@ -46,7 +46,11 @@ pub fn start() {
         ..Default::default()
     }
     .with_local_store(store);
-    let client = Rc::new(pocopine_sync_query::query_client_plugin().config(config).into_client());
+    let client = Rc::new(
+        pocopine_sync_query::query_client_plugin()
+            .config(config)
+            .into_client(),
+    );
     let view = client.observe(Note::query().eq(notes::field::board, BOARD).build());
     CLIENT.with(|c| *c.borrow_mut() = Some(client));
     VIEW.with(|v| *v.borrow_mut() = Some(view));
