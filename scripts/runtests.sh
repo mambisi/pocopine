@@ -23,6 +23,19 @@ run() {
   "$@"
 }
 
+run_test_packages() {
+  local label="$1"
+  shift
+  local package
+
+  echo
+  echo "== $label =="
+
+  for package in "$@"; do
+    run cargo test -p "$package" --tests
+  done
+}
+
 contains_test() {
   local needle="$1"
   shift
@@ -132,28 +145,81 @@ run env CARGO_TARGET_DIR=target/sync-query-macros-host \
 # they are covered by wasm/browser jobs and fail on host for legitimate cfg
 # reasons. Packages with local service dependencies are run below so those
 # individual tests can be opt-in without skipping the rest of the package.
-run cargo test --workspace \
-  --exclude pine-ui \
-  --exclude observability-smoke \
-  --exclude pocopine-agenkit \
-  --exclude pocopine-agenkit-anthropic \
-  --exclude pocopine-agenkit-oai \
-  --exclude pocopine-assets \
-  --exclude pocopine-auth-jwt \
-  --exclude pocopine-auth-oauth \
-  --exclude pocopine-cli \
-  --exclude pocopine-collab \
-  --exclude pocopine-deploy-railway \
-  --exclude pocopine \
-  --exclude pocopine-realtime \
-  --exclude pocopine-server \
-  --exclude pocopine-storage \
-  --exclude pocopine-storage-azure \
-  --exclude pocopine-storage-gcs \
-  --exclude pocopine-storage-s3 \
-  --exclude pocopine-sync-query-macros \
-  --exclude sync-external-e2e \
-  --tests
+#
+# Do not collapse these back to one `cargo test --workspace --tests` command:
+# that shape builds too much of the workspace graph in one Cargo invocation and
+# has a much higher peak memory footprint on local machines.
+run_test_packages "core and auth crates" \
+  pocopine-analytics \
+  pocopine-auth \
+  pocopine-auth-client \
+  pocopine-auth-credentials \
+  pocopine-codec \
+  pocopine-core \
+  pocopine-crypto \
+  pocopine-events \
+  pocopine-expr \
+  pocopine-jobs \
+  pocopine-live \
+  pocopine-logging \
+  pocopine-observe
+
+run_test_packages "macro and codegen crates" \
+  pocopine-agenkit-core \
+  pocopine-agenkit-macros \
+  pocopine-client-codegen \
+  pocopine-directives \
+  pocopine-macros \
+  pocopine-template-parser \
+  pocopine-ts-rs \
+  pocopine-ts-rs-macros
+
+run_test_packages "pine UI support crates" \
+  pine-charts \
+  pine-icons \
+  pine-icons-macros \
+  pine-layout \
+  pine-motion \
+  pine-richtext \
+  pine-richtext-collab
+
+run_test_packages "sync crates" \
+  pocopine-sync \
+  pocopine-sync-indexdb \
+  pocopine-sync-query \
+  pocopine-sync-sqlite
+
+run_test_packages "tooling crates" \
+  gen-model-catalog \
+  pocopine-deploy \
+  pocopine-deploy-render \
+  pocopine-launcher \
+  pocopine-native \
+  pocopine-native-tauri \
+  pocopine-stylekit
+
+run_test_packages "examples" \
+  blog \
+  charts \
+  collab-canvas \
+  counter \
+  file-browser-example \
+  hn \
+  jsbench \
+  jsbench-leptos \
+  jsbench-yew \
+  keep-example \
+  layout-demo \
+  live-example \
+  observability-frontend \
+  richtext \
+  site \
+  spa \
+  tags_input_repro \
+  tailwind-demo \
+  todo \
+  website \
+  workspace-demo
 
 run_lib_package pocopine-agenkit crates/pocopine-agenkit/tests
 run_lib_package pocopine-agenkit-anthropic crates/pocopine-agenkit-anthropic/tests
