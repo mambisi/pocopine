@@ -1,20 +1,14 @@
 # `pocopine-sync-query`
 
-**Status: 🚧 Work in progress (Phase 3 scaffold).** API surface is being built out; the runtime is not yet wired up. Use [`pocopine-sync-crud`](../pocopine-sync-crud/) for production today.
+Query-centric, local-first data layer for Pocopine. Filtered subscriptions, predicate-routed optimistic mutations, reactive selectors, and typed writes — built on the `pocopine-sync` wire protocol, durable local store, and live-wakeup channel.
 
-Query-centric local-first data layer for Pocopine sync. Parallel to `pocopine-sync-crud`; recommended for filtered multi-tenant apps once it ships.
+This is the framework's data-layer crate. One `Query` API spans the full range: simple single-shape entities (TodoMVC, settings, blog comments) **and** filtered multi-tenant shapes, where the same `Issues` table is observed under many filters at once (a workspace switcher, a status filter, an assignee filter). The `Source` trait plus the macro-emitted typed write builders cover every create/update/delete.
 
-## Why a second crate?
+## When to reach for it
 
-`pocopine-sync-crud` is designed to be **safe and rigid**:
-
-* One Resource = one logical entity type, one logical view.
-* No subscription parameters; one stream serves one shape.
-* Optimistic writes go to "the" Resource state.
-
-That design wins for TodoMVC, blog comments, settings pages. It does **not** win for multi-tenant SaaS apps where the same `Issues` table is observed under many filtered shapes (workspace switcher, status filter, assignee filter).
-
-Retrofitting shape subscriptions into CRUD violates its invariants. See [RFC 086](../../rfcs/rfc-086-sync-query.md) for the full reasoning. The short version: **CRUD stays simple; this crate is the home for shape-aware data flow.**
+* You want server data mirrored into reactive local state with optimistic writes.
+* You observe one entity type under more than one filtered shape and need each view to update independently.
+* You want derived values (counts, projections, dashboards) that recompute only when their inputs change.
 
 ## Design
 
@@ -24,31 +18,10 @@ Three primitives, drawn from the consensus across Replicache/Zero, ElectricSQL, 
 2. **`Mutator`** — a transactional function that produces row changes; the engine evaluates each change against every active query's predicate and routes it to the views that match.
 3. **`QueryClient`** — a refcounted registry that owns one `QuerySubscription` per distinct `Query`, with its own state, queue, and lifecycle.
 
-See RFC 086 (`rfcs/rfc-086-sync-query.md`) for the design rationale and
-RFC 090 (`rfcs/rfc-090-merge-crud-into-query.md`) for the merge that
-folded `pocopine-sync-crud` into this crate.
-
-## What ships in this branch
-
-| File                              | Status  | Notes                                                  |
-| --------------------------------- | ------- | ------------------------------------------------------ |
-| `src/lib.rs`                      | ✅      | Module declarations + re-exports                       |
-| `src/query.rs`                    | ✅      | `Query<Row>`, `QueryKey`, `OrderBy`, `Order` + builder, `MatchFn<Row>` |
-| `src/params.rs`                   | ✅      | Comparator wrappers (`InSet`, `Range`, `Contains`)     |
-| `src/predicate.rs`                | ✅      | Sealed comparator-trait gate + `range_contains` / `contains_matches` runtime helpers |
-| `src/mutator.rs`                  | ✅      | `Mutator` trait + `RowChange` + `MutationOutcome`      |
-| `src/state.rs`                    | ✅      | `QueryState<Row>` (per-query reactive state)           |
-| `src/client.rs`                   | ✅      | `QueryClient` + refcounted `QuerySubscription` registry + routing engine |
-| `src/wire.rs`                     | ✅      | Build `SyncOpenRequest` / `SyncPullRequest` / `SyncPushRequest` from typed queries |
-| `pocopine-sync-query-macros`      | ✅      | `#[query_resource]` + `#[query]` macros: query DSL builders, comparator-trait impls, predicate evaluator, selector memoization |
-| `src/selector.rs`                 | ✅      | `#[query]` runtime: tracking stack, `SelectorEntry`, `SelectorView`, `AnyTrackable`, `PartialEq` diff-suppression |
-| Background-task drivers (wasm)    | ⏳ next | spawn-aware `/open` + `/pull` flow; live wakeup; offline replay |
-| `examples/issue-tracker`          | ⏳ later| Linear-clone demo                                      |
-| `docs/sync-query-cookbook.md`     | ⏳ later| User-facing cookbook                                   |
-
-## Reference implementation
-
-The branch `wip/sync-shape-subs-batch-4` is a **reference implementation** of shape subscriptions integrated into `pocopine-sync-crud`. It demonstrates what NOT to do — see the design doc's architectural-tension analysis. The wire protocol and macro DSL from that branch carry over to this crate; the client-side machinery does not.
+See [RFC 086](../../rfcs/rfc-086-sync-query.md) for the design rationale,
+[RFC 087](../../rfcs/rfc-087-sync-query-driver.md) for the per-subscription
+driver lifecycle, and [RFC 088](../../rfcs/rfc-088-sync-query-production-parity.md)
+for the production-parity surface (typed writes, offline replay, live invalidation).
 
 ## Quickstart
 
@@ -209,8 +182,7 @@ Full picture, broker comparison, and topic-cardinality scaling notes in [`docs/t
 - [`docs/guides/data/sync-client.md`](../../docs/guides/data/sync-client.md) — `QueryClient` /
   `Query<Row>` DSL / typed writes reference.
 
-RFC 090 (merged) folded `pocopine-sync-crud` into this crate. The
-`Source` trait + `SourceResource` adapter cover both former CRUD and
-former Query use cases, with typed writes via the
+The `Source` trait + `SourceResource` adapter cover every server-side
+read/write shape, with typed writes via the
 `#[query_resource(draft = ...)]`-emitted
 `Issue::create/update/delete(...).optimistic(...).push_typed(...)` API.

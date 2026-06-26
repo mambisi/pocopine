@@ -273,7 +273,7 @@ A separate PR on a new branch (`wip/revert-crud-shape-integration`) reverts the 
 * `pocopine-sync`: keeps the wire envelope changes (`SyncStreamSubscription`, `validate_params` / `validate_push_params` on `SyncStreamSource`, `local_stream_key`). These are wire-level and useful to Query.
 * `pocopine-sync`'s client-side: removes the bare-vs-composite split, `active_local_key`, `is_active_local_key`, `reconcile_local_key`. Restores the simple selector-keyed state model that CRUD's invariants need.
 
-After this revert, `pocopine-sync-crud` is back to its pre-RFC-085 simplicity. The wire protocol's shape envelope stays. Apps that depended on the interim shape DSL on CRUD switch to `pocopine-sync-query` once Phase 3 lands.
+After this revert, `pocopine-sync-crud` is back to its pre-RFC-085 simplicity. The wire protocol's shape envelope stays. Apps that depended on the interim shape DSL on CRUD switched to `pocopine-sync-query` when Phase 3 shipped.
 
 ### Phase 3 — Implement `pocopine-sync-query`
 
@@ -314,4 +314,4 @@ Draft. Awaiting design-doc-level detail in `docs/sync-query-design.md` and a tra
 
 * RFC 085 — Shape subscriptions. This RFC inherits its wire protocol and macro vocabulary, and supersedes its client-side model for shape-aware apps.
 * `docs/sync-design.md` — full sync framework design, including the architectural-tension analysis that motivated this RFC.
-* `docs/sync-shape-subscriptions.md` — the cookbook for the Batch 4 reference implementation. Will be superseded by `docs/sync-query-cookbook.md` once Phase 3 lands.
+* `docs/sync-shape-subscriptions.md` — the cookbook for the Batch 4 reference implementation; superseded by the `docs/guides/data/` sync guides when Phase 3 shipped.

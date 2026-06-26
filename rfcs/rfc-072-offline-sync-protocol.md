@@ -58,8 +58,8 @@ The local-store implementation plan is documented in
 [`docs/sync-local-store-plan.md`](../docs/sync-local-store-plan.md):
 SQLite-first local storage, with SQLx kept as a later host/server
 adapter.
-The CRUD helper plan is documented in
-[`docs/sync-crud.md`](../docs/sync-crud.md).
+The data-layer client is documented in the sync guides
+([`docs/guides/data/sync-client.md`](../docs/guides/data/sync-client.md)).
 
 ## 1. Summary
 

@@ -6,11 +6,10 @@ This guide walks the migration of an app off the legacy
 `QueryView` + the `Source` trait). The `examples/keep` app is the
 worked reference — every pattern below ships there.
 
-> **Context.** RFC-090 folded the old `pocopine-sync-crud` crate into
-> `pocopine-sync-query`; the legacy *collection* client in
-> `pocopine-sync` is the last thing apps still depend on. `pocopine-sync`
-> remains the shared protocol/foundation (wire types, `SyncServer`,
-> `SyncLocalStore`).
+> **Context.** `pocopine-sync-query` is the current data-layer crate; the
+> legacy *collection* client in `pocopine-sync` is the last thing apps
+> still depend on. `pocopine-sync` remains the shared protocol/foundation
+> (wire types, `SyncServer`, `SyncLocalStore`).
 
 ---
 
