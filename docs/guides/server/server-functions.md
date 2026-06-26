@@ -156,9 +156,12 @@ struct TenantId(String);
 struct WorkspaceId(String);
 ```
 
-Missing required extensions reject the request with `ServerError::BadRequest`
-before the handler body runs. Use `Option<Extension<T>>` for feature
-flags or context that is genuinely optional.
+A missing required extension means its middleware is not wired up — a
+server misconfiguration, not bad client input — so the request rejects with
+`ServerError::App` (HTTP 500) before the handler body runs, naming the
+missing type so you can find the unwired middleware. Use
+`Option<Extension<T>>` for feature flags or context that is genuinely
+optional.
 
 ## Auth values
 

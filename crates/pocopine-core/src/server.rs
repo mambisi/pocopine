@@ -259,8 +259,14 @@ where
 {
     fn from_request_context(ctx: &RequestContext) -> Result<Self> {
         ctx.extension::<T>().cloned().map(Self).ok_or_else(|| {
-            ServerError::bad_request(format!(
-                "missing request extension `{}`",
+            // A missing required extension means the host middleware that
+            // populates it is not wired up (never installed, or layered
+            // after the server-function routes) — a server misconfiguration,
+            // not a malformed client request. Classify it as `App` (HTTP 500),
+            // not `BadRequest` (400). The message names the missing type so
+            // the operator can find the unwired middleware fast.
+            ServerError::App(format!(
+                "required request extension `{}` is not configured",
                 core::any::type_name::<T>()
             ))
         })
@@ -323,6 +329,34 @@ mod tests {
         assert_eq!(
             server_function_default_path("app::filters", "get_filter"),
             "/_pocopine/get_filter_b0e2ae5de9927498"
+        );
+    }
+
+    // A missing required extension is a host-wiring bug (the middleware that
+    // populates it was never installed), not malformed client input — so it
+    // must surface as a 500-class `App` error, never `BadRequest` (400). The
+    // message names the missing type so the operator can locate the unwired
+    // middleware.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn missing_required_extension_is_server_error_not_bad_request() {
+        use super::{Extension, FromRequestContext, RequestContext, ServerError};
+        use http::{HeaderMap, Method, Uri};
+
+        #[derive(Clone, Debug)]
+        struct TenantContext;
+
+        let ctx = RequestContext::new(Method::GET, Uri::from_static("/"), HeaderMap::new());
+        let err = Extension::<TenantContext>::from_request_context(&ctx)
+            .expect_err("a missing required extension must reject");
+
+        assert!(
+            matches!(err, ServerError::App(_)),
+            "expected ServerError::App (HTTP 500), got: {err}"
+        );
+        assert!(
+            err.to_string().contains("TenantContext"),
+            "diagnostic should name the missing extension type: {err}"
         );
     }
 }
