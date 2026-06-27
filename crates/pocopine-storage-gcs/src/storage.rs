@@ -11,9 +11,9 @@ use pocopine_storage::checksum::{
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
-    ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey, StorageActor,
-    StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan,
-    UploadBody, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    ObjectBody, ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey,
+    StorageActor, StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageResult,
+    TransferPlan, UploadBody, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -1621,34 +1621,57 @@ impl StorageBackend for GcsStorageBackend {
     ) -> StorageBoxFuture<'a, ObjectRead> {
         Box::pin(async move {
             let object_key = self.layout.object_key(key.as_str());
-            let read = self
-                .get_object_bytes_with_limit(&object_key, max_bytes)
+            let response = self
+                .storage
+                .read_object(self.layout.bucket_resource(), &object_key)
+                .send()
                 .await
                 .map_err(|err| match err {
-                    StorageError::UnknownUploadSession { .. } => {
-                        StorageError::unknown_object(key.to_string())
-                    }
-                    err => err,
+                    err if is_gcs_not_found(&err) => StorageError::unknown_object(key.to_string()),
+                    err => gcs_error("read completed object", err),
                 })?;
-            if read.truncated {
+            let object = response.object();
+            if object.size < 0 {
+                return Err(StorageError::backend("GCS object size is unavailable"));
+            }
+            let size = object.size as u64;
+            if size > max_bytes {
                 return Err(StorageError::payload_too_large(max_bytes));
             }
-            let size = read.bytes.len() as u64;
+            let generation = if object.generation > 0 {
+                Some(object.generation.to_string())
+            } else {
+                None
+            };
+            let etag = non_empty(object.etag.clone());
+            let content_type = non_empty(object.content_type.clone());
+            let stream = futures_util::stream::unfold(Some(response), |state| async move {
+                let mut response = state?;
+                match response.next().await.transpose() {
+                    Ok(Some(chunk)) => Some((Ok(chunk), Some(response))),
+                    Ok(None) => None,
+                    Err(err) => Some((
+                        Err(std::io::Error::other(format!(
+                            "GCS read object body: {err}"
+                        ))),
+                        None,
+                    )),
+                }
+            });
             Ok(ObjectRead {
                 object: ObjectRef {
                     backend: self.name.to_string(),
                     scope: scope.to_string(),
                     key: key.to_string(),
-                    version: read.generation,
-                    etag: read.etag,
+                    version: generation,
+                    etag,
                     checksum: None,
-                    content_type: None,
+                    content_type,
                     size,
                     visibility: ObjectVisibility::Private,
                     metadata: Default::default(),
                 },
-                bytes: read.bytes,
-                truncated: false,
+                body: ObjectBody::from_stream_with_limit(stream, max_bytes),
             })
         })
     }

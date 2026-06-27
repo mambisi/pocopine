@@ -92,6 +92,7 @@ pub(crate) struct AzureObjectBytes {
 pub(crate) struct AzureObjectMetadata {
     pub(crate) size: Option<u64>,
     pub(crate) etag: Option<String>,
+    pub(crate) content_type: Option<String>,
 }
 
 pub(crate) struct AzureObjectWrite {

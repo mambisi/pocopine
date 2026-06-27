@@ -134,6 +134,12 @@ server. `signed_read()` returns the full `SignedRead` response when callers
 need the expiry or future provider-specific headers, and `delete()` removes
 the completed object through the same scope authorization.
 
+Object reads are streamed. `StorageBackend::read_object` returns object
+metadata plus an `ObjectBody` byte stream, and the HTTP route forwards that
+stream with backpressure instead of collecting the full object into memory.
+The scope's `max_bytes` is still enforced before streaming when provider
+metadata exposes the object size, with a streaming cap as a final guard.
+
 ## Two transports
 
 A scope's backend advertises which transports it can serve, and the

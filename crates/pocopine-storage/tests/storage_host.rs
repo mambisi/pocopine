@@ -15,12 +15,12 @@ use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use pocopine_storage::{
     ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, InitiateUploadRequest,
-    LocalFsStorageBackend, MemoryStorageBackend, ObjectChecksum, ObjectMetadata, ObjectOwnerRef,
-    ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH, SafeObjectKey, SignedRead,
-    StorageBackend, StorageContext, StorageError, StorageKey, StorageKeyFuture, StorageKeyResolver,
-    StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent, UploadPolicy,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, storage_server_plugin,
-    storage_tus_server_plugin,
+    LocalFsStorageBackend, MemoryStorageBackend, ObjectBody, ObjectChecksum, ObjectMetadata,
+    ObjectOwnerRef, ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH, SafeObjectKey,
+    SignedRead, StorageBackend, StorageContext, StorageError, StorageKey, StorageKeyFuture,
+    StorageKeyResolver, StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent,
+    UploadPolicy, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    storage_server_plugin, storage_tus_server_plugin,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -90,6 +90,19 @@ async fn route_mints_anonymous_binding_cookie_for_public_uploads() -> StorageRes
     let session = outer.into_result()?;
     assert_eq!(session.status, UploadSessionStatus::Open);
     Ok(())
+}
+
+#[tokio::test]
+async fn object_body_stream_limit_fails_when_stream_exceeds_policy() {
+    let chunks = futures_util::stream::iter([
+        Ok(Bytes::from_static(b"abc")),
+        Ok(Bytes::from_static(b"def")),
+    ]);
+    let body = ObjectBody::from_stream_with_limit(chunks, 5);
+
+    let result = Body::from_stream(body).collect().await;
+
+    assert!(result.is_err());
 }
 
 #[tokio::test]

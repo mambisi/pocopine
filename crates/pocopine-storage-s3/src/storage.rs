@@ -17,10 +17,10 @@ use pocopine_storage::checksum::{
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
-    ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey, StorageBackend,
-    StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan, UploadBody,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, UploadedPartStatus,
-    UploadedPartView,
+    ObjectBody, ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey,
+    StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan,
+    UploadBody, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    UploadedPartStatus, UploadedPartView,
 };
 use time::OffsetDateTime;
 use tokio::io::AsyncReadExt as _;
@@ -312,34 +312,20 @@ impl S3StorageBackend {
         }
         let etag = output.e_tag.map(normalize_etag);
         let content_type = output.content_type;
-        let max_len: usize = max_bytes.try_into().map_err(|_| {
-            StorageError::policy_rejected("S3 object read limit exceeds platform capacity")
-        })?;
-        let mut reader = output.body.into_async_read();
-        let mut buf = [0_u8; 64 * 1024];
-        let mut bytes = Vec::new();
-        loop {
-            let read = reader
-                .read(&mut buf)
-                .await
-                .map_err(|err| s3_error("read completed object body", err))?;
-            if read == 0 {
-                break;
-            }
-            if bytes
-                .len()
-                .checked_add(read)
-                .is_none_or(|len| len > max_len)
-            {
-                return Err(StorageError::payload_too_large(max_bytes));
-            }
-            bytes.extend_from_slice(&buf[..read]);
-        }
-        let size = if declared_size == 0 {
-            bytes.len() as u64
-        } else {
-            declared_size
-        };
+        let size = declared_size;
+        let stream =
+            futures_util::stream::unfold(Some(output.body.into_async_read()), |state| async move {
+                let mut reader = state?;
+                let mut buf = vec![0_u8; 64 * 1024];
+                match reader.read(&mut buf).await {
+                    Ok(0) => None,
+                    Ok(read) => {
+                        buf.truncate(read);
+                        Some((Ok(Bytes::from(buf)), Some(reader)))
+                    }
+                    Err(err) => Some((Err(std::io::Error::other(err)), None)),
+                }
+            });
         Ok(ObjectRead {
             object: ObjectRef {
                 backend: self.name.to_string(),
@@ -353,8 +339,7 @@ impl S3StorageBackend {
                 visibility: ObjectVisibility::Private,
                 metadata: Default::default(),
             },
-            bytes,
-            truncated: false,
+            body: ObjectBody::from_stream_with_limit(stream, max_bytes),
         })
     }
 
