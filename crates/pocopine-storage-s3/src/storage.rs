@@ -17,11 +17,13 @@ use pocopine_storage::checksum::{
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
-    ObjectChecksum, ObjectRef, StorageBackend, StorageBoxFuture, StorageContext, StorageError,
-    StorageResult, TransferPlan, UploadBody, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy, UploadedPartStatus, UploadedPartView,
+    ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey, StorageBackend,
+    StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan, UploadBody,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, UploadedPartStatus,
+    UploadedPartView,
 };
 use time::OffsetDateTime;
+use tokio::io::AsyncReadExt as _;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
@@ -281,6 +283,79 @@ impl S3StorageBackend {
             .map_err(|err| s3_error("read object body", err))?
             .into_bytes();
         Ok((bytes.to_vec(), output.e_tag.map(normalize_etag)))
+    }
+
+    async fn get_completed_object(
+        &self,
+        scope: &str,
+        key: SafeObjectKey,
+        max_bytes: u64,
+    ) -> StorageResult<ObjectRead> {
+        let object_key = self.layout.object_key(key.as_str());
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.layout.bucket)
+            .key(&object_key)
+            .send()
+            .await
+            .map_err(|err| {
+                if is_get_object_not_found(&err) {
+                    StorageError::unknown_object(key.to_string())
+                } else {
+                    s3_error("get completed object", err)
+                }
+            })?;
+        let declared_size = output.content_length.unwrap_or_default().max(0) as u64;
+        if declared_size > max_bytes {
+            return Err(StorageError::payload_too_large(max_bytes));
+        }
+        let etag = output.e_tag.map(normalize_etag);
+        let content_type = output.content_type;
+        let max_len: usize = max_bytes.try_into().map_err(|_| {
+            StorageError::policy_rejected("S3 object read limit exceeds platform capacity")
+        })?;
+        let mut reader = output.body.into_async_read();
+        let mut buf = [0_u8; 64 * 1024];
+        let mut bytes = Vec::new();
+        loop {
+            let read = reader
+                .read(&mut buf)
+                .await
+                .map_err(|err| s3_error("read completed object body", err))?;
+            if read == 0 {
+                break;
+            }
+            if bytes
+                .len()
+                .checked_add(read)
+                .is_none_or(|len| len > max_len)
+            {
+                return Err(StorageError::payload_too_large(max_bytes));
+            }
+            bytes.extend_from_slice(&buf[..read]);
+        }
+        let size = if declared_size == 0 {
+            bytes.len() as u64
+        } else {
+            declared_size
+        };
+        Ok(ObjectRead {
+            object: ObjectRef {
+                backend: self.name.to_string(),
+                scope: scope.to_string(),
+                key: key.to_string(),
+                version: None,
+                etag,
+                checksum: None,
+                content_type,
+                size,
+                visibility: ObjectVisibility::Private,
+                metadata: Default::default(),
+            },
+            bytes,
+            truncated: false,
+        })
     }
 
     async fn put_object_bytes(
@@ -1607,6 +1682,27 @@ impl StorageBackend for S3StorageBackend {
                 self.part_concurrency.forget(&session);
             }
             result
+        })
+    }
+
+    fn read_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        scope: &'a str,
+        key: SafeObjectKey,
+        max_bytes: u64,
+    ) -> StorageBoxFuture<'a, ObjectRead> {
+        Box::pin(async move { self.get_completed_object(scope, key, max_bytes).await })
+    }
+
+    fn delete_completed_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        key: SafeObjectKey,
+    ) -> StorageBoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.delete_object(&self.layout.object_key(key.as_str()))
+                .await
         })
     }
 

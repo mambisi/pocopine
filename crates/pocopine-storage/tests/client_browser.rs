@@ -14,9 +14,9 @@ use js_sys::{Array, Promise};
 use pocopine::prelude::*;
 use pocopine_storage::{
     BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, ObjectRef,
-    ObjectVisibility, StorageClient, StorageError, StorageResponse, StorageResult, TransferPlan,
-    UploadClient, UploadPhase, UploadProgress, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy, storage_plugin, upload_plugin,
+    ObjectVisibility, SignedRead, StorageClient, StorageError, StorageObjectScope, StorageResponse,
+    StorageResult, TransferPlan, UploadClient, UploadPhase, UploadProgress, UploadSession,
+    UploadSessionId, UploadSessionStatus, UploadStrategy, storage_plugin, upload_plugin,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -30,6 +30,12 @@ wasm_bindgen_test_configure!(run_in_browser);
 thread_local! {
     static PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
     static UPLOAD_PLUGIN_RESOLVED: RefCell<bool> = const { RefCell::new(false) };
+}
+
+struct AvatarObjects;
+
+impl StorageObjectScope for AvatarObjects {
+    const NAME: &'static str = "avatars";
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -141,6 +147,49 @@ async fn upload_blob_sends_initiate_chunks_and_complete_with_progress() {
     assert_eq!(
         progress.borrow().last().unwrap().phase,
         UploadPhase::Complete
+    );
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn object_chain_requests_download_url_and_delete() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let object = StorageClient::new()
+        .object_scope::<AvatarObjects>()
+        .object("avatars/user-1/photo.txt");
+    let url = object.download_url().await.unwrap();
+    object.delete().await.unwrap();
+
+    assert_eq!(
+        url,
+        "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?token=read-token"
+    );
+    let state = state.borrow();
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST", "DELETE"]
+    );
+    assert_eq!(
+        state.requests[0].url,
+        "/__pocopine/storage/v1/scopes/avatars/objects/read-url/avatars/user-1/photo.txt"
+    );
+    assert!(
+        state.requests[0]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "content-type" && value == "application/json")
+    );
+    assert_eq!(
+        state.requests[1].url,
+        "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt"
     );
     pocopine_storage::__reset_browser_transport_for_test();
 }
@@ -668,6 +717,23 @@ impl BrowserStorageTransport for FakeStorageTransport {
                 ("POST", "/__pocopine/storage/v1/uploads/session-1/complete") => {
                     Ok(json_response(Ok(object_ref(state.offset))))
                 }
+                (
+                    "POST",
+                    "/__pocopine/storage/v1/scopes/avatars/objects/read-url/avatars/user-1/photo.txt",
+                ) => Ok(json_response(Ok(SignedRead {
+                    url: "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?token=read-token"
+                        .to_string(),
+                    headers: Vec::new(),
+                    expires_at: OffsetDateTime::UNIX_EPOCH + time::Duration::days(1),
+                }))),
+                (
+                    "DELETE",
+                    "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt",
+                ) => Ok(BrowserStorageResponse {
+                    status: 204,
+                    headers: Vec::new(),
+                    body: String::new(),
+                }),
                 ("POST", "/__pocopine/storage/tus/v1/avatars/uploads") => {
                     state.tus_offset = 0;
                     Ok(tus_response(
@@ -805,7 +871,7 @@ fn json_response<T: Serialize>(result: StorageResult<T>) -> BrowserStorageRespon
         Err(StorageError::OffsetMismatch { .. } | StorageError::Conflict { .. }) => 409,
         Err(StorageError::Unauthorized { .. }) => 401,
         Err(StorageError::Forbidden { .. }) => 403,
-        Err(StorageError::UnknownUploadSession { .. }) => 404,
+        Err(StorageError::UnknownUploadSession { .. } | StorageError::UnknownObject { .. }) => 404,
         Err(StorageError::PayloadTooLarge { .. }) => 413,
         Err(StorageError::PolicyRejected { .. }) => 422,
         Err(_) => 500,

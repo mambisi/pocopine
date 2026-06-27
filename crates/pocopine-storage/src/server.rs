@@ -1,36 +1,47 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::TryStreamExt;
+use pocopine_codec::{base64_decode, base64_encode, percent_encode};
 use pocopine_core::{ServerError, ServerResult};
+use pocopine_crypto::{SecretString, hmac_sha256};
 use pocopine_server::RequestContext;
 use pocopine_server::auth::{Decision, DenyReason, Predicate, RequestAuthExt};
 use pocopine_server::axum::body::{Body, to_bytes};
-use pocopine_server::axum::extract::{Path, State};
+use pocopine_server::axum::extract::{Path, Query, State};
 use pocopine_server::axum::http::{
-    HeaderMap, HeaderValue, Request, StatusCode,
-    header::{CACHE_CONTROL, CONTENT_LENGTH, SET_COOKIE, VARY},
+    HeaderMap, HeaderName, HeaderValue, Request, StatusCode,
+    header::{
+        CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, ETAG, SET_COOKIE, VARY,
+    },
 };
 use pocopine_server::axum::response::{IntoResponse, Json, Response};
 use pocopine_server::axum::routing::{get, head, options, post};
 use pocopine_server::{Server, ServerPlugin};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::backend_common::expires_at;
 use crate::{
     AnonymousUploadBinding, CompleteUpload, CompleteUploadRequest, InitiateUpload,
-    InitiateUploadRequest, ObjectMetadata, PrincipalRef, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1,
-    STORAGE_UPLOADS_PATH, SafeObjectKey, StorageBackendName, StorageError, StorageKey,
-    StorageResponse, StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor,
-    UploadSession, UploadSessionId, UploadStrategy,
+    InitiateUploadRequest, ObjectMetadata, ObjectRead, PrincipalRef, ReadDisposition,
+    ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1, STORAGE_UPLOADS_PATH, SafeObjectKey,
+    SignedRead, StorageBackendName, StorageError, StorageKey, StorageObjectScope, StorageResponse,
+    StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor, UploadSession,
+    UploadSessionId, UploadStrategy,
 };
 
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JSON_CONTROL_BYTES: usize = 64 * 1024;
+const DEFAULT_READ_URL_EXPIRES: Duration = Duration::from_secs(5 * 60);
+const MAX_READ_URL_EXPIRES: Duration = Duration::from_secs(60 * 60);
 /// Request header carrying the 1-based multipart part number on a part `PUT`,
 /// the multipart twin of the sequential path's `Upload-Offset`.
 const UPLOAD_PART_HEADER: &str = "Upload-Part";
@@ -384,6 +395,55 @@ pub trait StorageBackend: Send + Sync + 'static {
         ctx: &'a StorageContext,
         session: UploadSessionId,
     ) -> StorageBoxFuture<'a, ()>;
+
+    /// Read a completed object, capped by the caller's scope policy.
+    fn read_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        _scope: &'a str,
+        _key: SafeObjectKey,
+        _max_bytes: u64,
+    ) -> StorageBoxFuture<'a, ObjectRead> {
+        Box::pin(async move {
+            Err(StorageError::unsupported(
+                "storage backend does not support object reads",
+            ))
+        })
+    }
+
+    /// Delete a completed object.
+    fn delete_completed_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        _key: SafeObjectKey,
+    ) -> StorageBoxFuture<'a, ()> {
+        Box::pin(async move {
+            Err(StorageError::unsupported(
+                "storage backend does not support object deletes",
+            ))
+        })
+    }
+}
+
+struct StorageObjectScopeKeyResolver<S>(PhantomData<S>);
+
+impl<S> Default for StorageObjectScopeKeyResolver<S> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<S> StorageKeyResolver for StorageObjectScopeKeyResolver<S>
+where
+    S: StorageObjectScope,
+{
+    fn resolve_key<'a>(
+        &'a self,
+        ctx: &'a StorageContext,
+        intent: &'a UploadIntent,
+    ) -> StorageKeyFuture<'a> {
+        S::resolve_key(ctx, intent)
+    }
 }
 
 #[derive(Clone)]
@@ -436,6 +496,15 @@ impl StorageScope {
             delete_guard: None,
             key_resolver: Arc::new(GeneratedStorageKeyResolver),
         }
+    }
+
+    pub fn object_scope<S>() -> StorageResult<Self>
+    where
+        S: StorageObjectScope,
+    {
+        Ok(Self::builder(S::policy()?)
+            .key_resolver(StorageObjectScopeKeyResolver::<S>::default())
+            .build())
     }
 }
 
@@ -500,6 +569,7 @@ struct StorageServerInner {
     scopes: Arc<HashMap<String, Arc<RegisteredStorageScope>>>,
     trusted_origins: Arc<Vec<TrustedOrigin>>,
     secure_anonymous_cookies: bool,
+    read_token_secret: Arc<SecretString>,
 }
 
 /// Host-side storage server service.
@@ -684,6 +754,83 @@ impl StorageServer {
         backend.abort_upload(&ctx, session).await
     }
 
+    pub async fn signed_read(
+        &self,
+        ctx: StorageContext,
+        scope_name: String,
+        key: SafeObjectKey,
+        request: ReadUrlRequest,
+    ) -> StorageResult<SignedRead> {
+        let scope = self.scope(&scope_name)?;
+        scope
+            .authorize_read(ctx)
+            .await
+            .map_err(storage_auth_error)?;
+        let expires_after = request
+            .expires_seconds
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_READ_URL_EXPIRES)
+            .min(MAX_READ_URL_EXPIRES);
+        let expires_at = expires_at(expires_after);
+        let claims = ReadTokenClaims {
+            scope: scope_name.clone(),
+            key: key.to_string(),
+            disposition: request.disposition,
+            expires_at,
+        };
+        let token = self.sign_read_token(&claims)?;
+        Ok(SignedRead {
+            url: object_read_url(&scope_name, key.as_str(), Some(&token)),
+            headers: Vec::new(),
+            expires_at,
+        })
+    }
+
+    pub async fn read_object(
+        &self,
+        ctx: StorageContext,
+        scope_name: String,
+        key: SafeObjectKey,
+        token: Option<String>,
+    ) -> StorageResult<(ObjectRead, ReadDisposition)> {
+        let scope = self.scope(&scope_name)?;
+        let disposition = if let Some(token) = token {
+            let claims = self.verify_read_token(&token)?;
+            if claims.scope != scope_name || claims.key != key.as_str() {
+                return Err(StorageError::forbidden(
+                    "storage read token does not match object",
+                ));
+            }
+            claims.disposition
+        } else {
+            scope
+                .authorize_read(ctx.clone())
+                .await
+                .map_err(storage_auth_error)?;
+            ReadDisposition::Inline
+        };
+        let backend = self.backend(scope.policy.backend.as_str())?;
+        let object = backend
+            .read_object(&ctx, &scope_name, key, scope.policy.max_bytes)
+            .await?;
+        Ok((object, disposition))
+    }
+
+    pub async fn delete_object(
+        &self,
+        ctx: StorageContext,
+        scope_name: String,
+        key: SafeObjectKey,
+    ) -> StorageResult<()> {
+        let scope = self.scope(&scope_name)?;
+        scope
+            .authorize_delete(ctx.clone())
+            .await
+            .map_err(storage_auth_error)?;
+        let backend = self.backend(scope.policy.backend.as_str())?;
+        backend.delete_completed_object(&ctx, key).await
+    }
+
     fn scope(&self, scope: &str) -> StorageResult<Arc<RegisteredStorageScope>> {
         self.inner
             .scopes
@@ -729,6 +876,49 @@ impl StorageServer {
     fn secure_anonymous_cookies(&self) -> bool {
         self.inner.secure_anonymous_cookies
     }
+
+    fn sign_read_token(&self, claims: &ReadTokenClaims) -> StorageResult<String> {
+        let payload = serde_json::to_vec(claims)
+            .map_err(|err| StorageError::backend(format!("encode storage read token: {err}")))?;
+        let payload = base64_encode(&payload);
+        let signature = hmac_sha256(
+            self.inner.read_token_secret.expose().as_bytes(),
+            payload.as_bytes(),
+        );
+        Ok(format!("{}.{}", payload, base64_encode(&signature)))
+    }
+
+    fn verify_read_token(&self, token: &str) -> StorageResult<ReadTokenClaims> {
+        let (payload, signature) = token
+            .split_once('.')
+            .ok_or_else(|| StorageError::invalid_value("read token", "<malformed>"))?;
+        let provided = base64_decode(signature)
+            .map_err(|_| StorageError::invalid_value("read token", "<signature>"))?;
+        let expected = hmac_sha256(
+            self.inner.read_token_secret.expose().as_bytes(),
+            payload.as_bytes(),
+        );
+        if provided.as_slice() != expected.as_slice() {
+            return Err(StorageError::forbidden("invalid storage read token"));
+        }
+        let payload = base64_decode(payload)
+            .map_err(|_| StorageError::invalid_value("read token", "<payload>"))?;
+        let claims: ReadTokenClaims = serde_json::from_slice(&payload)
+            .map_err(|_| StorageError::invalid_value("read token", "<payload>"))?;
+        if OffsetDateTime::now_utc() >= claims.expires_at {
+            return Err(StorageError::forbidden("storage read token expired"));
+        }
+        SafeObjectKey::parse(&claims.key)?;
+        Ok(claims)
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct ReadTokenClaims {
+    scope: String,
+    key: String,
+    disposition: ReadDisposition,
+    expires_at: OffsetDateTime,
 }
 
 /// Builder for [`StorageServer`].
@@ -737,6 +927,7 @@ pub struct StorageServerBuilder {
     scopes: HashMap<String, Arc<RegisteredStorageScope>>,
     trusted_origins: Vec<TrustedOrigin>,
     secure_anonymous_cookies: bool,
+    read_token_secret: Option<SecretString>,
 }
 
 impl Default for StorageServerBuilder {
@@ -746,6 +937,7 @@ impl Default for StorageServerBuilder {
             scopes: HashMap::new(),
             trusted_origins: Vec::new(),
             secure_anonymous_cookies: true,
+            read_token_secret: None,
         }
     }
 }
@@ -791,6 +983,17 @@ impl StorageServerBuilder {
     /// local HTTP development where browsers cannot persist `Secure` cookies.
     pub fn secure_anonymous_cookies(mut self, secure: bool) -> Self {
         self.secure_anonymous_cookies = secure;
+        self
+    }
+
+    /// Override the HMAC secret used for short-lived object read URLs.
+    ///
+    /// If omitted, the server generates an in-memory secret on startup. That is
+    /// convenient for local development, but invalidates read URLs on restart;
+    /// production apps should set a stable secret when read URLs need to survive
+    /// rolling restarts.
+    pub fn read_token_secret(mut self, secret: SecretString) -> Self {
+        self.read_token_secret = Some(secret);
         self
     }
 
@@ -842,6 +1045,14 @@ impl StorageServerBuilder {
         Ok(self)
     }
 
+    pub fn object_scope<S>(mut self) -> StorageResult<Self>
+    where
+        S: StorageObjectScope,
+    {
+        self.insert_scope(S::NAME.to_string(), StorageScope::object_scope::<S>()?)?;
+        Ok(self)
+    }
+
     pub fn build(self) -> StorageServer {
         StorageServer {
             inner: Arc::new(StorageServerInner {
@@ -849,6 +1060,13 @@ impl StorageServerBuilder {
                 scopes: Arc::new(self.scopes),
                 trusted_origins: Arc::new(self.trusted_origins),
                 secure_anonymous_cookies: self.secure_anonymous_cookies,
+                read_token_secret: Arc::new(self.read_token_secret.unwrap_or_else(|| {
+                    SecretString::new(format!(
+                        "{}{}",
+                        Uuid::new_v4().simple(),
+                        Uuid::new_v4().simple()
+                    ))
+                })),
             }),
         }
     }
@@ -900,6 +1118,17 @@ impl ServerPlugin for StorageServerPlugin {
             .route(
                 "/__pocopine/storage/v1/scopes/:scope",
                 get(scope_handler).with_state(storage.clone()),
+            )
+            .route(
+                "/__pocopine/storage/v1/scopes/:scope/objects/read-url/*key",
+                post(object_read_url_handler).with_state(storage.clone()),
+            )
+            .route(
+                "/__pocopine/storage/v1/scopes/:scope/objects/*key",
+                get(object_read_handler)
+                    .head(object_head_handler)
+                    .delete(object_delete_handler)
+                    .with_state(storage.clone()),
             )
             .route(
                 STORAGE_UPLOADS_PATH,
@@ -962,6 +1191,95 @@ async fn scope_handler(
         storage.descriptor(request.ctx, &scope).await,
         request.set_cookie,
     )
+}
+
+#[derive(serde::Deserialize)]
+struct ObjectReadQuery {
+    token: Option<String>,
+}
+
+async fn object_read_url_handler(
+    State(storage): State<StorageServer>,
+    Path((scope, key)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    match parse_optional_json_request::<ReadUrlRequest>(request, &storage).await {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            storage_response(
+                async {
+                    let key = SafeObjectKey::parse(key)?;
+                    storage
+                        .signed_read(request.ctx, scope, key, request.payload)
+                        .await
+                }
+                .await,
+                set_cookie,
+            )
+        }
+        Err(err) => storage_response::<SignedRead>(Err(err), None),
+    }
+}
+
+async fn object_read_handler(
+    State(storage): State<StorageServer>,
+    Path((scope, key)): Path<(String, String)>,
+    Query(query): Query<ObjectReadQuery>,
+    request: Request<Body>,
+) -> Response {
+    let request = context_from_request(request, &storage);
+    object_read_response(
+        async {
+            let key = SafeObjectKey::parse(key)?;
+            storage
+                .read_object(request.ctx, scope, key, query.token)
+                .await
+        }
+        .await,
+        false,
+        request.set_cookie,
+    )
+}
+
+async fn object_head_handler(
+    State(storage): State<StorageServer>,
+    Path((scope, key)): Path<(String, String)>,
+    Query(query): Query<ObjectReadQuery>,
+    request: Request<Body>,
+) -> Response {
+    let request = context_from_request(request, &storage);
+    object_read_response(
+        async {
+            let key = SafeObjectKey::parse(key)?;
+            storage
+                .read_object(request.ctx, scope, key, query.token)
+                .await
+        }
+        .await,
+        true,
+        request.set_cookie,
+    )
+}
+
+async fn object_delete_handler(
+    State(storage): State<StorageServer>,
+    Path((scope, key)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response {
+    match mutation_context_from_request(request, &storage) {
+        Ok(request) => {
+            let set_cookie = request.set_cookie;
+            storage_response(
+                async {
+                    let key = SafeObjectKey::parse(key)?;
+                    storage.delete_object(request.ctx, scope, key).await
+                }
+                .await,
+                set_cookie,
+            )
+        }
+        Err(err) => storage_response::<()>(Err(err), None),
+    }
 }
 
 async fn initiate_handler(
@@ -2072,6 +2390,124 @@ where
     response
 }
 
+fn object_read_response(
+    result: StorageResult<(ObjectRead, ReadDisposition)>,
+    head_only: bool,
+    set_cookie: Option<String>,
+) -> Response {
+    match result {
+        Ok((read, disposition)) => {
+            let mut response = if head_only {
+                Body::empty().into_response()
+            } else {
+                Body::from(read.bytes).into_response()
+            };
+            if let Some(content_type) = &read.object.content_type
+                && let Ok(value) = HeaderValue::from_str(content_type)
+            {
+                response.headers_mut().insert(CONTENT_TYPE, value);
+            } else {
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                );
+            }
+            if let Ok(value) = HeaderValue::from_str(&read.object.size.to_string()) {
+                response.headers_mut().insert(CONTENT_LENGTH, value);
+            }
+            if let Some(etag) = &read.object.etag
+                && let Ok(value) = HeaderValue::from_str(etag)
+            {
+                response.headers_mut().insert(ETAG, value);
+            }
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=60"),
+            );
+            response
+                .headers_mut()
+                .insert(VARY, HeaderValue::from_static("Cookie"));
+            response.headers_mut().insert(
+                HeaderName::from_static("x-content-type-options"),
+                HeaderValue::from_static("nosniff"),
+            );
+            if let Ok(value) = HeaderValue::from_str(&content_disposition(&disposition)) {
+                response.headers_mut().insert(CONTENT_DISPOSITION, value);
+            }
+            if let Some(set_cookie) = set_cookie
+                && let Ok(value) = HeaderValue::from_str(&set_cookie)
+            {
+                response.headers_mut().insert(SET_COOKIE, value);
+            }
+            response
+        }
+        Err(err) => {
+            let status = storage_error_status(&err);
+            let mut response = (status, Json(StorageResponse::<()>::err(err))).into_response();
+            response = no_store_response(response);
+            if let Some(set_cookie) = set_cookie
+                && let Ok(value) = HeaderValue::from_str(&set_cookie)
+            {
+                response.headers_mut().insert(SET_COOKIE, value);
+            }
+            response
+        }
+    }
+}
+
+fn content_disposition(disposition: &ReadDisposition) -> String {
+    match disposition {
+        ReadDisposition::Inline => "inline".to_string(),
+        ReadDisposition::Attachment { filename } => {
+            format!(
+                "attachment; filename=\"{}\"",
+                sanitize_header_filename(filename)
+            )
+        }
+    }
+}
+
+fn sanitize_header_filename(filename: &str) -> String {
+    let sanitized: String = filename
+        .chars()
+        .map(|ch| match ch {
+            '"' | '\\' | '\r' | '\n' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .take(255)
+        .collect();
+    if sanitized.trim().is_empty() {
+        "download".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn object_read_url(scope: &str, key: &str, token: Option<&str>) -> String {
+    let mut url = format!(
+        "/__pocopine/storage/v1/scopes/{}/objects/{}",
+        percent_encode(scope),
+        encode_object_key_path(key)
+    );
+    if let Some(token) = token {
+        url.push_str("?token=");
+        url.push_str(&percent_encode(token));
+    }
+    url
+}
+
+fn encode_object_key_path(key: &str) -> String {
+    let mut encoded = String::new();
+    for (index, segment) in key.split('/').enumerate() {
+        if index > 0 {
+            encoded.push('/');
+        }
+        encoded.push_str(&percent_encode(segment));
+    }
+    encoded
+}
+
 fn no_store_response(mut response: Response) -> Response {
     response
         .headers_mut()
@@ -2087,7 +2523,8 @@ fn storage_error_status(error: &StorageError) -> StatusCode {
         StorageError::InvalidValue { .. } => StatusCode::BAD_REQUEST,
         StorageError::UnknownScope { .. }
         | StorageError::UnknownBackend { .. }
-        | StorageError::UnknownUploadSession { .. } => StatusCode::NOT_FOUND,
+        | StorageError::UnknownUploadSession { .. }
+        | StorageError::UnknownObject { .. } => StatusCode::NOT_FOUND,
         StorageError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
         StorageError::Forbidden { .. } => StatusCode::FORBIDDEN,
         StorageError::PayloadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,

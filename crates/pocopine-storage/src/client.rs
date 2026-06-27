@@ -1,8 +1,8 @@
 use pocopine_core::{App, AppPlugin};
 
 use crate::{
-    STORAGE_ENDPOINT_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX, StorageError, StorageResult,
-    UploadPolicyDescriptor, UploadSession, UploadSessionId,
+    STORAGE_ENDPOINT_PREFIX, STORAGE_TUS_ENDPOINT_PREFIX, SignedRead, StorageError,
+    StorageObjectScope, StorageResult, UploadPolicyDescriptor, UploadSession, UploadSessionId,
 };
 
 /// App plugin that provides [`StorageClient`] to components.
@@ -150,6 +150,14 @@ impl StorageClient {
             scope: scope.into(),
         }
     }
+
+    /// Bind this client to a typed storage object scope.
+    pub fn object_scope<S>(&self) -> StorageScopeClient
+    where
+        S: StorageObjectScope,
+    {
+        self.scope(S::NAME)
+    }
 }
 
 /// Runtime browser upload client service installed by [`upload_plugin`].
@@ -191,6 +199,14 @@ impl UploadClient {
             scope: scope.into(),
         }
     }
+
+    /// Bind this upload client to a typed storage object scope.
+    pub fn object_scope<S>(&self) -> UploadScopeClient
+    where
+        S: StorageObjectScope,
+    {
+        self.scope(S::NAME)
+    }
 }
 
 /// Scope-bound browser upload client.
@@ -217,6 +233,27 @@ pub struct StorageScopeClient {
     scope: String,
 }
 
+impl StorageScopeClient {
+    /// Bind this scope client to a completed object key.
+    pub fn object(&self, key: impl Into<String>) -> StorageObjectClient {
+        StorageObjectClient {
+            endpoint: self.endpoint.clone(),
+            with_credentials: self.with_credentials,
+            scope: self.scope.clone(),
+            key: key.into(),
+        }
+    }
+}
+
+/// Client for a completed object inside a storage scope.
+#[derive(Clone, Debug)]
+pub struct StorageObjectClient {
+    endpoint: String,
+    with_credentials: bool,
+    scope: String,
+    key: String,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl StorageScopeClient {
     /// Host compile stub. Browser fetch support is only available on wasm32.
@@ -230,6 +267,40 @@ impl StorageScopeClient {
     /// Host compile stub. Browser fetch support is only available on wasm32.
     pub async fn session(&self, id: UploadSessionId) -> StorageResult<UploadSession> {
         let _ = (&self.endpoint, self.with_credentials, &self.scope, id);
+        Err(StorageError::unsupported(
+            "storage client HTTP calls are only available in the browser runtime",
+        ))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StorageObjectClient {
+    /// Host compile stub. Browser fetch support is only available on wasm32.
+    pub async fn signed_read(&self) -> StorageResult<SignedRead> {
+        let _ = (
+            &self.endpoint,
+            self.with_credentials,
+            &self.scope,
+            &self.key,
+        );
+        Err(StorageError::unsupported(
+            "storage client HTTP calls are only available in the browser runtime",
+        ))
+    }
+
+    /// Host compile stub. Browser fetch support is only available on wasm32.
+    pub async fn download_url(&self) -> StorageResult<String> {
+        Ok(self.signed_read().await?.url)
+    }
+
+    /// Host compile stub. Browser fetch support is only available on wasm32.
+    pub async fn delete(&self) -> StorageResult<()> {
+        let _ = (
+            &self.endpoint,
+            self.with_credentials,
+            &self.scope,
+            &self.key,
+        );
         Err(StorageError::unsupported(
             "storage client HTTP calls are only available in the browser runtime",
         ))
@@ -266,8 +337,9 @@ mod wasm {
 
     use super::*;
     use crate::{
-        CompleteUploadRequest, InitiateUploadRequest, ObjectRef, PartSpec, STORAGE_PROTOCOL_V1,
-        StorageResponse, UploadPhase, UploadProgress, UploadStrategy, plan_parts,
+        CompleteUploadRequest, InitiateUploadRequest, ObjectRef, PartSpec, ReadUrlRequest,
+        STORAGE_PROTOCOL_V1, StorageResponse, UploadPhase, UploadProgress, UploadStrategy,
+        plan_parts,
     };
 
     const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
@@ -422,6 +494,40 @@ mod wasm {
                 resume_session: None,
                 auto_resume: false,
             }
+        }
+    }
+
+    impl super::StorageObjectClient {
+        /// Ask the server for a short-lived URL that reads this object.
+        pub async fn signed_read(&self) -> StorageResult<SignedRead> {
+            fetch_json(
+                BrowserStorageRequest::post_json(
+                    object_read_url(&self.endpoint, &self.scope, &self.key),
+                    &ReadUrlRequest::default(),
+                    self.with_credentials,
+                    None,
+                )?,
+                "object read url",
+            )
+            .await
+        }
+
+        /// Return the URL portion of [`Self::signed_read`].
+        pub async fn download_url(&self) -> StorageResult<String> {
+            Ok(self.signed_read().await?.url)
+        }
+
+        /// Delete this completed object.
+        pub async fn delete(&self) -> StorageResult<()> {
+            fetch_no_content(
+                BrowserStorageRequest::delete(
+                    object_url(&self.endpoint, &self.scope, &self.key),
+                    self.with_credentials,
+                    None,
+                ),
+                "delete object",
+            )
+            .await
         }
     }
 
@@ -1775,6 +1881,35 @@ mod wasm {
             endpoint.trim_end_matches('/'),
             pocopine_codec::percent_encode(scope)
         )
+    }
+
+    fn object_url(endpoint: &str, scope: &str, key: &str) -> String {
+        format!(
+            "{}/scopes/{}/objects/{}",
+            endpoint.trim_end_matches('/'),
+            pocopine_codec::percent_encode(scope),
+            encode_object_key_path(key)
+        )
+    }
+
+    fn object_read_url(endpoint: &str, scope: &str, key: &str) -> String {
+        format!(
+            "{}/scopes/{}/objects/read-url/{}",
+            endpoint.trim_end_matches('/'),
+            pocopine_codec::percent_encode(scope),
+            encode_object_key_path(key)
+        )
+    }
+
+    fn encode_object_key_path(key: &str) -> String {
+        let mut encoded = String::new();
+        for (index, segment) in key.split('/').enumerate() {
+            if index > 0 {
+                encoded.push('/');
+            }
+            encoded.push_str(&pocopine_codec::percent_encode(segment));
+        }
+        encoded
     }
 
     fn upload_url(endpoint: &str, session: &str) -> String {

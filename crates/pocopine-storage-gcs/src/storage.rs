@@ -11,9 +11,9 @@ use pocopine_storage::checksum::{
 };
 use pocopine_storage::{
     BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload,
-    ObjectChecksum, ObjectRef, StorageActor, StorageBackend, StorageBoxFuture, StorageContext,
-    StorageError, StorageResult, TransferPlan, UploadBody, UploadSession, UploadSessionId,
-    UploadSessionStatus, UploadStrategy,
+    ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey, StorageActor,
+    StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan,
+    UploadBody, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -1609,6 +1609,58 @@ impl StorageBackend for GcsStorageBackend {
                 self.part_concurrency.forget(&session);
             }
             result
+        })
+    }
+
+    fn read_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        scope: &'a str,
+        key: SafeObjectKey,
+        max_bytes: u64,
+    ) -> StorageBoxFuture<'a, ObjectRead> {
+        Box::pin(async move {
+            let object_key = self.layout.object_key(key.as_str());
+            let read = self
+                .get_object_bytes_with_limit(&object_key, max_bytes)
+                .await
+                .map_err(|err| match err {
+                    StorageError::UnknownUploadSession { .. } => {
+                        StorageError::unknown_object(key.to_string())
+                    }
+                    err => err,
+                })?;
+            if read.truncated {
+                return Err(StorageError::payload_too_large(max_bytes));
+            }
+            let size = read.bytes.len() as u64;
+            Ok(ObjectRead {
+                object: ObjectRef {
+                    backend: self.name.to_string(),
+                    scope: scope.to_string(),
+                    key: key.to_string(),
+                    version: read.generation,
+                    etag: read.etag,
+                    checksum: None,
+                    content_type: None,
+                    size,
+                    visibility: ObjectVisibility::Private,
+                    metadata: Default::default(),
+                },
+                bytes: read.bytes,
+                truncated: false,
+            })
+        })
+    }
+
+    fn delete_completed_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        key: SafeObjectKey,
+    ) -> StorageBoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.delete_object_if_exists(&self.layout.object_key(key.as_str()))
+                .await
         })
     }
 

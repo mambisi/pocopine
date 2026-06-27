@@ -26,6 +26,8 @@ pub const STORAGE_SCOPES_PREFIX: &str = storage_path!("/scopes");
 pub const STORAGE_UPLOADS_PREFIX: &str = storage_path!("/uploads");
 /// Upload creation route.
 pub const STORAGE_UPLOADS_PATH: &str = storage_path!("/uploads");
+/// Object read/delete route prefix.
+pub const STORAGE_OBJECTS_PREFIX: &str = storage_path!("/scopes");
 /// Default tus 1.0 endpoint prefix mounted by the tus server plugin.
 pub const STORAGE_TUS_ENDPOINT_PREFIX: &str = "/__pocopine/storage/tus/v1";
 /// Anonymous upload binding cookie read by the storage server.
@@ -933,6 +935,45 @@ pub struct SignedRead {
     pub expires_at: OffsetDateTime,
 }
 
+/// How a browser should present a generated read URL.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ReadDisposition {
+    #[default]
+    Inline,
+    Attachment {
+        filename: String,
+    },
+}
+
+/// Request body for creating a short-lived object read URL.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReadUrlRequest {
+    #[serde(default)]
+    pub disposition: ReadDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_seconds: Option<u64>,
+}
+
+impl Default for ReadUrlRequest {
+    fn default() -> Self {
+        Self {
+            disposition: ReadDisposition::Inline,
+            expires_seconds: None,
+        }
+    }
+}
+
+/// Completed object bytes returned by a backend read.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ObjectRead {
+    pub object: ObjectRef,
+    #[serde(with = "pocopine_codec::base64_bytes")]
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+}
+
 /// Browser upload creation request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InitiateUploadRequest {
@@ -1011,6 +1052,28 @@ pub struct CompleteUploadRequest {
 pub struct CompleteUpload {
     pub session: UploadSessionId,
     pub checksum: Option<ObjectChecksum>,
+}
+
+/// App-defined object scope contract.
+///
+/// `StorageObjectScope` describes a typed storage scope such as avatars,
+/// message attachments, exports, or documents. The trait is target-neutral so
+/// wasm clients can use its `NAME`; host-only policy and key resolution methods
+/// wire the same type into [`StorageServer`](crate::StorageServer).
+pub trait StorageObjectScope: Send + Sync + 'static {
+    /// Runtime storage scope name.
+    const NAME: &'static str;
+
+    /// Upload/read policy for this object scope.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn policy() -> StorageResult<UploadPolicy>;
+
+    /// Resolve an upload intent to a durable object key.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_key<'a>(
+        ctx: &'a crate::server::StorageContext,
+        intent: &'a UploadIntent,
+    ) -> crate::server::StorageKeyFuture<'a>;
 }
 
 /// Direct and multipart target modes are protocol variants in PR 1, but the

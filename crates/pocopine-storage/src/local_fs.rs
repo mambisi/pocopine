@@ -15,9 +15,9 @@ use crate::backend_common::{
 use crate::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
-    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRef, SafeObjectKey, StorageError,
-    StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy,
+    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRead, ObjectRef, SafeObjectKey,
+    StorageError, StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId,
+    UploadSessionStatus, UploadStrategy,
 };
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -298,6 +298,29 @@ impl StorageBackend for LocalFsStorageBackend {
             outcome
         })
     }
+
+    fn read_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        scope: &'a str,
+        key: SafeObjectKey,
+        max_bytes: u64,
+    ) -> StorageBoxFuture<'a, ObjectRead> {
+        let backend = self.clone();
+        let scope = scope.to_string();
+        Box::pin(async move {
+            run_blocking(move || backend.read_object_blocking(&scope, key, max_bytes)).await
+        })
+    }
+
+    fn delete_completed_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        key: SafeObjectKey,
+    ) -> StorageBoxFuture<'a, ()> {
+        let backend = self.clone();
+        Box::pin(async move { run_blocking(move || backend.delete_object_blocking(key)).await })
+    }
 }
 
 impl LocalFsStorageBackend {
@@ -479,6 +502,43 @@ impl LocalFsStorageBackend {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(err) => Err(local_io_error("remove upload session", err)),
         }
+    }
+
+    fn read_object_blocking(
+        &self,
+        scope: &str,
+        key: SafeObjectKey,
+        max_bytes: u64,
+    ) -> StorageResult<ObjectRead> {
+        let path = self.object_path(&key);
+        let metadata = fs::metadata(&path)
+            .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))?;
+        if metadata.len() > max_bytes {
+            return Err(StorageError::payload_too_large(max_bytes));
+        }
+        let bytes = fs::read(&path)
+            .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))?;
+        Ok(ObjectRead {
+            object: ObjectRef {
+                backend: self.name.to_string(),
+                scope: scope.to_string(),
+                key: key.to_string(),
+                version: None,
+                etag: None,
+                checksum: None,
+                content_type: None,
+                size: metadata.len(),
+                visibility: crate::ObjectVisibility::Private,
+                metadata: Default::default(),
+            },
+            bytes,
+            truncated: false,
+        })
+    }
+
+    fn delete_object_blocking(&self, key: SafeObjectKey) -> StorageResult<()> {
+        fs::remove_file(self.object_path(&key))
+            .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))
     }
 }
 

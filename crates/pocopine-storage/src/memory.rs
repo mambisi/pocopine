@@ -11,9 +11,9 @@ use crate::backend_common::{
 use crate::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
 use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
-    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRef, StorageError, StorageKey,
-    StorageResult, TransferPlan, UploadSession, UploadSessionId, UploadSessionStatus,
-    UploadStrategy,
+    ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRead, ObjectRef, SafeObjectKey,
+    StorageError, StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId,
+    UploadSessionStatus, UploadStrategy,
 };
 
 #[derive(Clone, Debug)]
@@ -29,10 +29,16 @@ struct StoredUpload {
     object: Option<ObjectRef>,
 }
 
+#[derive(Clone, Debug)]
+struct StoredObject {
+    bytes: Vec<u8>,
+    object: ObjectRef,
+}
+
 #[derive(Default, Debug)]
 struct Inner {
     sessions: HashMap<String, StoredUpload>,
-    objects: HashMap<String, Vec<u8>>,
+    objects: HashMap<String, StoredObject>,
 }
 
 /// In-memory storage backend for tests, demos, and single-process examples.
@@ -72,7 +78,11 @@ impl MemoryStorageBackend {
     }
 
     pub fn object_bytes(&self, key: &str) -> StorageResult<Option<Vec<u8>>> {
-        Ok(self.lock()?.objects.get(key).cloned())
+        Ok(self
+            .lock()?
+            .objects
+            .get(key)
+            .map(|object| object.bytes.clone()))
     }
 
     /// Remove expired in-memory upload sessions.
@@ -287,7 +297,13 @@ impl StorageBackend for MemoryStorageBackend {
                 stored.object = Some(object.clone());
                 (key, stored.bytes.clone(), object)
             };
-            inner.objects.insert(key, bytes);
+            inner.objects.insert(
+                key,
+                StoredObject {
+                    bytes,
+                    object: object.clone(),
+                },
+            );
             Ok(object)
         })
     }
@@ -307,6 +323,45 @@ impl StorageBackend for MemoryStorageBackend {
             Ok(())
         })
     }
+
+    fn read_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        _scope: &'a str,
+        key: SafeObjectKey,
+        max_bytes: u64,
+    ) -> StorageBoxFuture<'a, ObjectRead> {
+        Box::pin(async move {
+            let key_string = key.to_string();
+            let inner = self.lock()?;
+            let stored = inner
+                .objects
+                .get(key.as_str())
+                .ok_or_else(|| StorageError::unknown_object(key_string))?;
+            if stored.bytes.len() as u64 > max_bytes {
+                return Err(StorageError::payload_too_large(max_bytes));
+            }
+            Ok(ObjectRead {
+                object: stored.object.clone(),
+                bytes: stored.bytes.clone(),
+                truncated: false,
+            })
+        })
+    }
+
+    fn delete_completed_object<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        key: SafeObjectKey,
+    ) -> StorageBoxFuture<'a, ()> {
+        Box::pin(async move {
+            let removed = self.lock()?.objects.remove(key.as_str());
+            if removed.is_none() {
+                return Err(StorageError::unknown_object(key.to_string()));
+            }
+            Ok(())
+        })
+    }
 }
 
 fn refresh_expired_public(stored: &mut StoredUpload) {
@@ -322,12 +377,24 @@ mod tests {
     #[test]
     fn debug_does_not_dump_in_memory_objects() {
         let backend = MemoryStorageBackend::new();
-        backend
-            .inner
-            .lock()
-            .unwrap()
-            .objects
-            .insert("secret-key".to_string(), b"secret-bytes".to_vec());
+        backend.inner.lock().unwrap().objects.insert(
+            "secret-key".to_string(),
+            StoredObject {
+                bytes: b"secret-bytes".to_vec(),
+                object: ObjectRef {
+                    backend: "memory".to_string(),
+                    scope: "test".to_string(),
+                    key: "secret-key".to_string(),
+                    version: None,
+                    etag: None,
+                    checksum: None,
+                    content_type: None,
+                    size: 12,
+                    visibility: crate::ObjectVisibility::Private,
+                    metadata: Default::default(),
+                },
+            },
+        );
 
         let debug = format!("{backend:?}");
 

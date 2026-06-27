@@ -16,6 +16,8 @@ pub enum StorageError {
     UnknownBackend { backend: String },
     /// A requested upload session is unknown or no longer retained.
     UnknownUploadSession { session: String },
+    /// A requested completed object is unknown or no longer retained.
+    UnknownObject { key: String },
     /// Authentication is required for this storage operation.
     Unauthorized { message: String },
     /// Authentication succeeded, but this actor cannot perform the operation.
@@ -64,6 +66,10 @@ impl StorageError {
         Self::UnknownUploadSession {
             session: session.into(),
         }
+    }
+
+    pub fn unknown_object(key: impl Into<String>) -> Self {
+        Self::UnknownObject { key: key.into() }
     }
 
     pub fn unauthorized(message: impl Into<String>) -> Self {
@@ -132,6 +138,7 @@ impl fmt::Display for StorageError {
             Self::UnknownUploadSession { session } => {
                 write!(f, "unknown upload session: {session}")
             }
+            Self::UnknownObject { key } => write!(f, "unknown storage object: {key}"),
             Self::Unauthorized { message } => write!(f, "unauthorized storage request: {message}"),
             Self::Forbidden { message } => write!(f, "forbidden storage request: {message}"),
             Self::PolicyRejected { reason } => {

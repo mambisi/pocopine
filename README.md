@@ -252,7 +252,7 @@ Full guides and tutorials live under [`docs/`](./docs). Start here:
 - [Server functions](./docs/guides/server/server-functions.md) — `#[server]` policies, guards, request context, and middleware extractors.
 - [App plugins](./docs/guides/plugins/app-plugins.md) / [Server plugins](./docs/guides/server/server-plugins.md) — install-time setup and lifecycle ordering.
 - [Sync (client)](./docs/guides/data/sync-client.md) / [Sync (server)](./docs/guides/data/sync-server.md) — the query data layer, end to end.
-- [Object-storage uploads](./docs/guides/data/storage-uploads.md) — the server-mediated upload path.
+- [Object-storage uploads and reads](./docs/guides/data/storage-uploads.md) — server-mediated upload and short-lived read paths.
 - [Logging, tracing & observers](./docs/guides/observability/logging-tracing.md) — structured events, sinks, and privacy labels.
 - [Charts](./docs/guides/styling/charts/) · [Icons](./docs/guides/styling/icons.md) · [Client modules](./docs/guides/server/client-modules.md) · [Browser storage](./docs/guides/data/browser-storage.md)
 
