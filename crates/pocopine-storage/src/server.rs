@@ -28,6 +28,7 @@ use pocopine_server::{Server, ServerPlugin};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::ObjectVisibility;
 use crate::backend_common::expires_at;
 use crate::{
     AnonymousUploadBinding, CompleteUpload, CompleteUploadRequest, InitiateUpload,
@@ -35,7 +36,7 @@ use crate::{
     ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1, STORAGE_UPLOADS_PATH, SafeObjectKey,
     SignedRead, StorageBackendName, StorageError, StorageKey, StorageObjectScope, StorageResponse,
     StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor, UploadSession,
-    UploadSessionId, UploadStrategy,
+    UploadSessionId, UploadStrategy, image_variant_key,
 };
 
 const MAX_PROXY_PATCH_BYTES: u64 = 64 * 1024 * 1024;
@@ -184,6 +185,58 @@ where
             None => Decision::Deny(DenyReason::Unauthorized).into(),
         };
         Box::pin(async move { result })
+    }
+}
+
+/// Object-level operation passed to a key-aware storage guard.
+///
+/// Scope guards are intentionally coarse: they answer "may this actor use this
+/// scope?". Object guards answer "may this actor use this specific object key
+/// or upload intent?", which is required for private attachments and other
+/// per-object authorization rules.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageObjectAccess {
+    Write { scope: String, intent: UploadIntent },
+    Read { scope: String, key: SafeObjectKey },
+    Delete { scope: String, key: SafeObjectKey },
+}
+
+impl StorageObjectAccess {
+    pub fn scope(&self) -> &str {
+        match self {
+            Self::Write { scope, .. } | Self::Read { scope, .. } | Self::Delete { scope, .. } => {
+                scope
+            }
+        }
+    }
+
+    pub fn key(&self) -> Option<&SafeObjectKey> {
+        match self {
+            Self::Read { key, .. } | Self::Delete { key, .. } => Some(key),
+            Self::Write { .. } => None,
+        }
+    }
+
+    pub fn intent(&self) -> Option<&UploadIntent> {
+        match self {
+            Self::Write { intent, .. } => Some(intent),
+            Self::Read { .. } | Self::Delete { .. } => None,
+        }
+    }
+}
+
+/// Server-side access check for a concrete storage object operation.
+pub trait StorageObjectGuard: Send + Sync + 'static {
+    fn check(&self, ctx: StorageContext, access: StorageObjectAccess) -> StorageGuardFuture<'_>;
+}
+
+impl<F, Fut> StorageObjectGuard for F
+where
+    F: Fn(StorageContext, StorageObjectAccess) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ServerResult<()>> + Send + 'static,
+{
+    fn check(&self, ctx: StorageContext, access: StorageObjectAccess) -> StorageGuardFuture<'_> {
+        Box::pin((self)(ctx, access))
     }
 }
 
@@ -524,6 +577,7 @@ struct RegisteredStorageScope {
     write_guard: Option<Arc<dyn StorageScopeGuard>>,
     read_guard: Option<Arc<dyn StorageScopeGuard>>,
     delete_guard: Option<Arc<dyn StorageScopeGuard>>,
+    object_guard: Option<Arc<dyn StorageObjectGuard>>,
     key_resolver: Arc<dyn StorageKeyResolver>,
 }
 
@@ -551,6 +605,84 @@ impl RegisteredStorageScope {
             self.authorize_write(ctx).await
         }
     }
+
+    async fn authorize_object_write(
+        &self,
+        ctx: StorageContext,
+        scope: &str,
+        intent: &UploadIntent,
+    ) -> ServerResult<()> {
+        if let Some(guard) = &self.object_guard {
+            guard
+                .check(
+                    ctx,
+                    StorageObjectAccess::Write {
+                        scope: scope.to_string(),
+                        intent: intent.clone(),
+                    },
+                )
+                .await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn authorize_object_read(
+        &self,
+        ctx: StorageContext,
+        scope: &str,
+        key: &SafeObjectKey,
+    ) -> ServerResult<()> {
+        self.authorize_read(ctx.clone()).await?;
+        if let Some(guard) = &self.object_guard {
+            return guard
+                .check(
+                    ctx,
+                    StorageObjectAccess::Read {
+                        scope: scope.to_string(),
+                        key: key.clone(),
+                    },
+                )
+                .await;
+        }
+        self.allow_unguarded_object_access(&ctx, "read")
+    }
+
+    async fn authorize_object_delete(
+        &self,
+        ctx: StorageContext,
+        scope: &str,
+        key: &SafeObjectKey,
+    ) -> ServerResult<()> {
+        self.authorize_delete(ctx.clone()).await?;
+        if let Some(guard) = &self.object_guard {
+            return guard
+                .check(
+                    ctx,
+                    StorageObjectAccess::Delete {
+                        scope: scope.to_string(),
+                        key: key.clone(),
+                    },
+                )
+                .await;
+        }
+        self.allow_unguarded_object_access(&ctx, "delete")
+    }
+
+    fn allow_unguarded_object_access(
+        &self,
+        ctx: &StorageContext,
+        operation: &str,
+    ) -> ServerResult<()> {
+        if self.policy.visibility == ObjectVisibility::Public
+            || matches!(ctx.actor, StorageActor::System(_))
+        {
+            return Ok(());
+        }
+        Err(ServerError::forbidden(format!(
+            "private storage object {operation} requires a key-aware object guard or a signed read token"
+        )))
+    }
 }
 
 /// Server-registered storage scope.
@@ -566,6 +698,7 @@ impl StorageScope {
             write_guard: None,
             read_guard: None,
             delete_guard: None,
+            object_guard: None,
             key_resolver: Arc::new(GeneratedStorageKeyResolver),
         }
     }
@@ -586,6 +719,7 @@ pub struct StorageScopeBuilder {
     write_guard: Option<Arc<dyn StorageScopeGuard>>,
     read_guard: Option<Arc<dyn StorageScopeGuard>>,
     delete_guard: Option<Arc<dyn StorageScopeGuard>>,
+    object_guard: Option<Arc<dyn StorageObjectGuard>>,
     key_resolver: Arc<dyn StorageKeyResolver>,
 }
 
@@ -614,6 +748,14 @@ impl StorageScopeBuilder {
         self
     }
 
+    pub fn object_guard<G>(mut self, guard: G) -> Self
+    where
+        G: StorageObjectGuard,
+    {
+        self.object_guard = Some(Arc::new(guard));
+        self
+    }
+
     pub fn key_resolver<R>(mut self, resolver: R) -> Self
     where
         R: StorageKeyResolver,
@@ -629,6 +771,7 @@ impl StorageScopeBuilder {
                 write_guard: self.write_guard,
                 read_guard: self.read_guard,
                 delete_guard: self.delete_guard,
+                object_guard: self.object_guard,
                 key_resolver: self.key_resolver,
             },
         }
@@ -704,6 +847,10 @@ impl StorageServer {
             requested_strategy: request.requested_strategy,
             generated_object_id: Uuid::new_v4().to_string(),
         };
+        scope
+            .authorize_object_write(ctx.clone(), &request.scope, &intent)
+            .await
+            .map_err(storage_auth_error)?;
         let storage_key = scope.key_resolver.resolve_key(&ctx, &intent).await?;
         let backend = self.backend(scope.policy.backend.as_str())?;
         backend
@@ -834,8 +981,10 @@ impl StorageServer {
         request: ReadUrlRequest,
     ) -> StorageResult<SignedRead> {
         let scope = self.scope(&scope_name)?;
+        let variant = request.variant;
+        let effective_key = effective_read_key(&key, variant.as_deref())?;
         scope
-            .authorize_read(ctx)
+            .authorize_object_read(ctx, &scope_name, &effective_key)
             .await
             .map_err(storage_auth_error)?;
         let expires_after = request
@@ -847,12 +996,13 @@ impl StorageServer {
         let claims = ReadTokenClaims {
             scope: scope_name.clone(),
             key: key.to_string(),
+            variant: variant.clone(),
             disposition: request.disposition,
             expires_at,
         };
         let token = self.sign_read_token(&claims)?;
         Ok(SignedRead {
-            url: object_read_url(&scope_name, key.as_str(), Some(&token)),
+            url: object_read_url(&scope_name, key.as_str(), Some(&token), variant.as_deref()),
             headers: Vec::new(),
             expires_at,
         })
@@ -864,11 +1014,16 @@ impl StorageServer {
         scope_name: String,
         key: SafeObjectKey,
         token: Option<String>,
+        variant: Option<String>,
     ) -> StorageResult<(ObjectRead, ReadDisposition)> {
         let scope = self.scope(&scope_name)?;
+        let effective_key = effective_read_key(&key, variant.as_deref())?;
         let disposition = if let Some(token) = token {
             let claims = self.verify_read_token(&token)?;
-            if claims.scope != scope_name || claims.key != key.as_str() {
+            if claims.scope != scope_name
+                || claims.key != key.as_str()
+                || claims.variant.as_deref() != variant.as_deref()
+            {
                 return Err(StorageError::forbidden(
                     "storage read token does not match object",
                 ));
@@ -876,14 +1031,14 @@ impl StorageServer {
             claims.disposition
         } else {
             scope
-                .authorize_read(ctx.clone())
+                .authorize_object_read(ctx.clone(), &scope_name, &effective_key)
                 .await
                 .map_err(storage_auth_error)?;
             ReadDisposition::Inline
         };
         let backend = self.backend(scope.policy.backend.as_str())?;
         let object = backend
-            .read_object(&ctx, &scope_name, key, scope.policy.max_bytes)
+            .read_object(&ctx, &scope_name, effective_key, scope.policy.max_bytes)
             .await?;
         Ok((object, disposition))
     }
@@ -893,14 +1048,16 @@ impl StorageServer {
         ctx: StorageContext,
         scope_name: String,
         key: SafeObjectKey,
+        variant: Option<String>,
     ) -> StorageResult<()> {
         let scope = self.scope(&scope_name)?;
+        let effective_key = effective_read_key(&key, variant.as_deref())?;
         scope
-            .authorize_delete(ctx.clone())
+            .authorize_object_delete(ctx.clone(), &scope_name, &effective_key)
             .await
             .map_err(storage_auth_error)?;
         let backend = self.backend(scope.policy.backend.as_str())?;
-        backend.delete_completed_object(&ctx, key).await
+        backend.delete_completed_object(&ctx, effective_key).await
     }
 
     fn scope(&self, scope: &str) -> StorageResult<Arc<RegisteredStorageScope>> {
@@ -989,6 +1146,8 @@ impl StorageServer {
 struct ReadTokenClaims {
     scope: String,
     key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
     disposition: ReadDisposition,
     expires_at: OffsetDateTime,
 }
@@ -1072,8 +1231,9 @@ impl StorageServerBuilder {
     pub fn public_scope(
         mut self,
         name: impl Into<String>,
-        policy: UploadPolicy,
+        mut policy: UploadPolicy,
     ) -> StorageResult<Self> {
+        policy = policy.visibility(ObjectVisibility::Public);
         self.insert_scope(name.into(), StorageScope::builder(policy).build())?;
         Ok(self)
     }
@@ -1122,6 +1282,19 @@ impl StorageServerBuilder {
         S: StorageObjectScope,
     {
         self.insert_scope(S::NAME.to_string(), StorageScope::object_scope::<S>()?)?;
+        Ok(self)
+    }
+
+    pub fn guarded_object_scope<S, G>(mut self, guard: G) -> StorageResult<Self>
+    where
+        S: StorageObjectScope,
+        G: StorageObjectGuard,
+    {
+        let scope = StorageScope::builder(S::policy()?)
+            .key_resolver(StorageObjectScopeKeyResolver::<S>::default())
+            .object_guard(guard)
+            .build();
+        self.insert_scope(S::NAME.to_string(), scope)?;
         Ok(self)
     }
 
@@ -1268,6 +1441,7 @@ async fn scope_handler(
 #[derive(serde::Deserialize)]
 struct ObjectReadQuery {
     token: Option<String>,
+    variant: Option<String>,
 }
 
 async fn object_read_url_handler(
@@ -1304,7 +1478,7 @@ async fn object_read_handler(
         async {
             let key = SafeObjectKey::parse(key)?;
             storage
-                .read_object(request.ctx, scope, key, query.token)
+                .read_object(request.ctx, scope, key, query.token, query.variant)
                 .await
         }
         .await,
@@ -1324,7 +1498,7 @@ async fn object_head_handler(
         async {
             let key = SafeObjectKey::parse(key)?;
             storage
-                .read_object(request.ctx, scope, key, query.token)
+                .read_object(request.ctx, scope, key, query.token, query.variant)
                 .await
         }
         .await,
@@ -1336,6 +1510,7 @@ async fn object_head_handler(
 async fn object_delete_handler(
     State(storage): State<StorageServer>,
     Path((scope, key)): Path<(String, String)>,
+    Query(query): Query<ObjectReadQuery>,
     request: Request<Body>,
 ) -> Response {
     match mutation_context_from_request(request, &storage) {
@@ -1344,7 +1519,9 @@ async fn object_delete_handler(
             storage_response(
                 async {
                     let key = SafeObjectKey::parse(key)?;
-                    storage.delete_object(request.ctx, scope, key).await
+                    storage
+                        .delete_object(request.ctx, scope, key, query.variant)
+                        .await
                 }
                 .await,
                 set_cookie,
@@ -2563,15 +2740,33 @@ fn sanitize_header_filename(filename: &str) -> String {
     }
 }
 
-fn object_read_url(scope: &str, key: &str, token: Option<&str>) -> String {
+fn effective_read_key(
+    base_key: &SafeObjectKey,
+    variant: Option<&str>,
+) -> StorageResult<SafeObjectKey> {
+    match variant {
+        Some(variant) => image_variant_key(base_key.as_str(), variant),
+        None => Ok(base_key.clone()),
+    }
+}
+
+fn object_read_url(scope: &str, key: &str, token: Option<&str>, variant: Option<&str>) -> String {
     let mut url = format!(
         "/__pocopine/storage/v1/scopes/{}/objects/{}",
         percent_encode(scope),
         encode_object_key_path(key)
     );
+    let mut separator = '?';
     if let Some(token) = token {
-        url.push_str("?token=");
+        url.push(separator);
+        separator = '&';
+        url.push_str("token=");
         url.push_str(&percent_encode(token));
+    }
+    if let Some(variant) = variant {
+        url.push(separator);
+        url.push_str("variant=");
+        url.push_str(&percent_encode(variant));
     }
     url
 }

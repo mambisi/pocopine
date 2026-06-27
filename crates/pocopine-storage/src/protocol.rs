@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -32,6 +32,16 @@ pub const STORAGE_OBJECTS_PREFIX: &str = storage_path!("/scopes");
 pub const STORAGE_TUS_ENDPOINT_PREFIX: &str = "/__pocopine/storage/tus/v1";
 /// Anonymous upload binding cookie read by the storage server.
 pub const STORAGE_ANON_COOKIE: &str = "pocopine_storage_anon";
+/// Metadata key attached to image variant uploads.
+pub const IMAGE_VARIANT_METADATA_KEY: &str = "pocopine.image.variant";
+/// Metadata value used when the original image is uploaded as part of a manifest.
+pub const IMAGE_VARIANT_ORIGINAL: &str = "original";
+/// Metadata key that links an uploaded variant to its canonical image object.
+pub const IMAGE_VARIANT_BASE_KEY_METADATA_KEY: &str = "pocopine.image.base_key";
+/// Metadata key attached to image uploads with the encoded width.
+pub const IMAGE_VARIANT_WIDTH_METADATA_KEY: &str = "pocopine.image.width";
+/// Metadata key attached to image uploads with the encoded height.
+pub const IMAGE_VARIANT_HEIGHT_METADATA_KEY: &str = "pocopine.image.height";
 
 /// Stable JSON envelope used by storage HTTP routes.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -81,6 +91,240 @@ impl<T> StorageResponse<T> {
 
 fn none<T>() -> Option<T> {
     None
+}
+
+/// Build the deterministic sibling key for an image variant.
+///
+/// `avatars/u/photo.png` + `thumb64` becomes
+/// `avatars/u/photo.thumb64.jpg`. Variants are currently JPEG outputs, so the
+/// suffix always uses `.jpg`.
+pub fn image_variant_key(
+    base_key: impl AsRef<str>,
+    variant: impl AsRef<str>,
+) -> StorageResult<SafeObjectKey> {
+    let base_key = base_key.as_ref();
+    let variant = variant.as_ref();
+    if variant == IMAGE_VARIANT_ORIGINAL {
+        return SafeObjectKey::parse(base_key);
+    }
+    validate_image_variant_name(variant)?;
+
+    let (dir, file_name) = base_key
+        .rsplit_once('/')
+        .map_or(("", base_key), |(dir, file_name)| (dir, file_name));
+    let stem = file_name
+        .rsplit_once('.')
+        .filter(|(stem, _)| !stem.is_empty())
+        .map_or(file_name, |(stem, _)| stem);
+    let file_name = format!("{stem}.{variant}.jpg");
+    if dir.is_empty() {
+        SafeObjectKey::parse(file_name)
+    } else {
+        SafeObjectKey::parse(format!("{dir}/{file_name}"))
+    }
+}
+
+/// Browser-side output codec for generated image variants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ImageVariantFormat {
+    /// Lossy JPEG output. This is the first supported client-side compression
+    /// format because the Rust encoder path is `no_std + alloc` compatible.
+    Jpeg,
+}
+
+impl ImageVariantFormat {
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Jpeg => "image/jpeg",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpg",
+        }
+    }
+}
+
+/// Resize operation for a generated image variant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ImageVariantResize {
+    /// Preserve aspect ratio and fit inside the requested bounds. Smaller
+    /// source images are not upscaled.
+    Fit { max_width: u32, max_height: u32 },
+    /// Center-crop to match the requested aspect ratio, then resize exactly.
+    Cover { width: u32, height: u32 },
+}
+
+impl ImageVariantResize {
+    pub(crate) fn validate(&self) -> StorageResult<()> {
+        match self {
+            Self::Fit {
+                max_width,
+                max_height,
+            } => {
+                if *max_width == 0 || *max_height == 0 {
+                    return Err(StorageError::policy_rejected(
+                        "image fit variant dimensions must be greater than zero",
+                    ));
+                }
+            }
+            Self::Cover { width, height } => {
+                if *width == 0 || *height == 0 {
+                    return Err(StorageError::policy_rejected(
+                        "image cover variant dimensions must be greater than zero",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One app-defined image variant emitted before upload.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ImageVariantSpec {
+    pub name: String,
+    pub resize: ImageVariantResize,
+    pub format: ImageVariantFormat,
+    /// JPEG quality in the inclusive 1..=100 range.
+    pub quality: u8,
+}
+
+impl ImageVariantSpec {
+    pub fn fit(name: impl Into<String>, max_width: u32, max_height: u32) -> Self {
+        Self {
+            name: name.into(),
+            resize: ImageVariantResize::Fit {
+                max_width,
+                max_height,
+            },
+            format: ImageVariantFormat::Jpeg,
+            quality: 82,
+        }
+    }
+
+    pub fn cover(name: impl Into<String>, width: u32, height: u32) -> Self {
+        Self {
+            name: name.into(),
+            resize: ImageVariantResize::Cover { width, height },
+            format: ImageVariantFormat::Jpeg,
+            quality: 82,
+        }
+    }
+
+    pub fn format(mut self, format: ImageVariantFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    pub fn quality(mut self, quality: u8) -> Self {
+        self.quality = quality.clamp(1, 100);
+        self
+    }
+
+    pub fn output_file_name(&self, source_name: &str) -> String {
+        let file_name = source_name.rsplit('/').next().unwrap_or(source_name);
+        let stem = file_name
+            .rsplit_once('.')
+            .filter(|(stem, _)| !stem.is_empty())
+            .map_or(file_name, |(stem, _)| stem);
+        format!("{stem}-{}.{}", self.name, self.format.extension())
+    }
+
+    pub(crate) fn validate(&self) -> StorageResult<()> {
+        validate_image_variant_name(&self.name)?;
+        if self.name == IMAGE_VARIANT_ORIGINAL {
+            return Err(StorageError::policy_rejected(
+                "image variant name 'original' is reserved",
+            ));
+        }
+        self.resize.validate()?;
+        if !(1..=100).contains(&self.quality) {
+            return Err(StorageError::policy_rejected(
+                "image variant quality must be between 1 and 100",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Client-side image variant policy for a typed object scope.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ImageVariantPolicy {
+    pub keep_original: bool,
+    pub variants: Vec<ImageVariantSpec>,
+}
+
+impl Default for ImageVariantPolicy {
+    fn default() -> Self {
+        Self {
+            keep_original: true,
+            variants: Vec::new(),
+        }
+    }
+}
+
+impl ImageVariantPolicy {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Control whether the original object is uploaded.
+    ///
+    /// Linked variant uploads currently require this to remain `true` because
+    /// each variant key is derived from the resolved original object key.
+    pub fn keep_original(mut self, keep_original: bool) -> Self {
+        self.keep_original = keep_original;
+        self
+    }
+
+    pub fn variant(mut self, variant: ImageVariantSpec) -> Self {
+        self.variants.push(variant);
+        self
+    }
+
+    pub fn variants(mut self, variants: impl IntoIterator<Item = ImageVariantSpec>) -> Self {
+        self.variants.extend(variants);
+        self
+    }
+
+    pub fn validate(&self) -> StorageResult<()> {
+        if !self.keep_original {
+            return Err(StorageError::policy_rejected(
+                "linked image variants require keeping the original object",
+            ));
+        }
+        let mut names = BTreeSet::new();
+        for variant in &self.variants {
+            variant.validate()?;
+            if !names.insert(variant.name.as_str()) {
+                return Err(StorageError::policy_rejected(format!(
+                    "duplicate image variant name: {}",
+                    variant.name
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_image_variant_name(name: &str) -> StorageResult<()> {
+    let bytes = name.as_bytes();
+    let valid = !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !valid {
+        return Err(StorageError::invalid_value("image variant name", name));
+    }
+    Ok(())
 }
 
 fn validate_token(field: &'static str, value: String) -> StorageResult<String> {
@@ -538,6 +782,11 @@ impl UploadPolicy {
         self
     }
 
+    pub fn metadata_schema(mut self, metadata_schema: MetadataSchema) -> Self {
+        self.metadata_schema = metadata_schema;
+        self
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn validate_configuration(&self) -> StorageResult<()> {
         if self.max_bytes == 0 {
@@ -686,6 +935,25 @@ impl Default for MetadataSchema {
 }
 
 impl MetadataSchema {
+    pub fn allowed_keys<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_keys = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn max_key_bytes(mut self, max_key_bytes: usize) -> Self {
+        self.max_key_bytes = max_key_bytes;
+        self
+    }
+
+    pub fn max_value_bytes(mut self, max_value_bytes: usize) -> Self {
+        self.max_value_bytes = max_value_bytes;
+        self
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn validate(&self, metadata: &BTreeMap<String, String>) -> StorageResult<()> {
         for (key, value) in metadata {
@@ -796,6 +1064,63 @@ pub struct ObjectRef {
     pub size: u64,
     pub visibility: ObjectVisibility,
     pub metadata: BTreeMap<String, String>,
+}
+
+/// One uploaded object inside an image upload manifest.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ImageVariantObject {
+    pub name: String,
+    pub object: ObjectRef,
+    pub width: u32,
+    pub height: u32,
+    pub content_type: String,
+}
+
+impl ImageVariantObject {
+    pub fn key(&self) -> &str {
+        self.object.key.as_str()
+    }
+
+    pub fn object_ref(&self) -> &ObjectRef {
+        &self.object
+    }
+}
+
+/// Result returned by a client-side image variant upload.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ImageUploadManifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<ImageVariantObject>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<ImageVariantObject>,
+}
+
+impl ImageUploadManifest {
+    pub fn original(&self) -> Option<&ImageVariantObject> {
+        self.original.as_ref()
+    }
+
+    pub fn variant(&self, name: impl AsRef<str>) -> Option<&ImageVariantObject> {
+        let name = name.as_ref();
+        self.variants.iter().find(|variant| variant.name == name)
+    }
+
+    pub fn entry(&self, name: impl AsRef<str>) -> Option<&ImageVariantObject> {
+        let name = name.as_ref();
+        if name == IMAGE_VARIANT_ORIGINAL {
+            self.original()
+        } else {
+            self.variant(name)
+        }
+    }
+
+    pub fn object_ref(&self, name: impl AsRef<str>) -> Option<&ObjectRef> {
+        self.entry(name).map(ImageVariantObject::object_ref)
+    }
+
+    pub fn key(&self, name: impl AsRef<str>) -> Option<&str> {
+        self.entry(name).map(ImageVariantObject::key)
+    }
 }
 
 /// Public upload session view.
@@ -954,6 +1279,8 @@ pub struct ReadUrlRequest {
     pub disposition: ReadDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
 }
 
 impl Default for ReadUrlRequest {
@@ -961,7 +1288,25 @@ impl Default for ReadUrlRequest {
         Self {
             disposition: ReadDisposition::Inline,
             expires_seconds: None,
+            variant: None,
         }
+    }
+}
+
+impl ReadUrlRequest {
+    pub fn variant(mut self, variant: impl Into<String>) -> Self {
+        self.variant = Some(variant.into());
+        self
+    }
+
+    pub fn expires_seconds(mut self, expires_seconds: u64) -> Self {
+        self.expires_seconds = Some(expires_seconds);
+        self
+    }
+
+    pub fn disposition(mut self, disposition: ReadDisposition) -> Self {
+        self.disposition = disposition;
+        self
     }
 }
 
@@ -1016,6 +1361,31 @@ impl UploadIntent {
     pub fn extension(&self) -> Option<&str> {
         file_extension(&self.file_name)
     }
+
+    pub fn image_variant_name(&self) -> Option<&str> {
+        self.metadata
+            .get(IMAGE_VARIANT_METADATA_KEY)
+            .map(String::as_str)
+    }
+
+    pub fn image_base_key(&self) -> Option<&str> {
+        self.metadata
+            .get(IMAGE_VARIANT_BASE_KEY_METADATA_KEY)
+            .map(String::as_str)
+    }
+
+    pub fn image_variant_object_key(&self) -> StorageResult<Option<SafeObjectKey>> {
+        let Some(variant) = self.image_variant_name() else {
+            return Ok(None);
+        };
+        if variant == IMAGE_VARIANT_ORIGINAL {
+            return Ok(None);
+        }
+        let Some(base_key) = self.image_base_key() else {
+            return Ok(None);
+        };
+        Ok(Some(image_variant_key(base_key, variant)?))
+    }
 }
 
 /// Backend upload initiation request.
@@ -1054,6 +1424,11 @@ pub struct CompleteUpload {
 pub trait StorageObjectScope: Send + Sync + 'static {
     /// Runtime storage scope name.
     const NAME: &'static str;
+
+    /// Client-side image variant policy for this scope.
+    fn image_variants() -> ImageVariantPolicy {
+        ImageVariantPolicy::default()
+    }
 
     /// Upload/read policy for this object scope.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1210,5 +1585,141 @@ mod plan_parts_tests {
         // to allocate ~size parts; the absolute cap rejects it instead.
         let err = plan_parts(u64::MAX, &plan(1, 1, 1, None)).unwrap_err();
         assert!(matches!(err, StorageError::PolicyRejected { .. }));
+    }
+}
+
+#[cfg(test)]
+mod image_variant_policy_tests {
+    use super::*;
+
+    #[test]
+    fn validates_duplicate_variant_names() {
+        let policy = ImageVariantPolicy::new()
+            .variant(ImageVariantSpec::fit("avatar", 128, 128))
+            .variant(ImageVariantSpec::cover("avatar", 64, 64));
+
+        assert!(matches!(
+            policy.validate(),
+            Err(StorageError::PolicyRejected { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_reserved_original_variant_name() {
+        let policy = ImageVariantPolicy::new().variant(ImageVariantSpec::fit(
+            IMAGE_VARIANT_ORIGINAL,
+            128,
+            128,
+        ));
+
+        assert!(matches!(
+            policy.validate(),
+            Err(StorageError::PolicyRejected { .. })
+        ));
+    }
+
+    #[test]
+    fn linked_variants_must_keep_original() {
+        let policy = ImageVariantPolicy::new()
+            .keep_original(false)
+            .variant(ImageVariantSpec::fit("avatar", 128, 128));
+
+        assert!(matches!(
+            policy.validate(),
+            Err(StorageError::PolicyRejected { .. })
+        ));
+    }
+
+    #[test]
+    fn output_file_name_replaces_source_extension() {
+        let variant = ImageVariantSpec::fit("preview", 320, 320);
+
+        assert_eq!(
+            variant.output_file_name("avatars/profile.photo.png"),
+            "profile.photo-preview.jpg"
+        );
+    }
+
+    #[test]
+    fn variant_key_uses_suffix_before_jpeg_extension() {
+        assert_eq!(
+            image_variant_key("avatars/user-1/photo.png", "thumb64")
+                .unwrap()
+                .as_str(),
+            "avatars/user-1/photo.thumb64.jpg"
+        );
+    }
+
+    #[test]
+    fn upload_intent_derives_linked_variant_key() {
+        let intent = UploadIntent {
+            scope: "avatars".to_string(),
+            file_name: "photo.thumb64.jpg".to_string(),
+            size: Some(128),
+            content_type: Some("image/jpeg".to_string()),
+            metadata: [
+                (
+                    IMAGE_VARIANT_BASE_KEY_METADATA_KEY.to_string(),
+                    "avatars/user-1/photo.png".to_string(),
+                ),
+                (
+                    IMAGE_VARIANT_METADATA_KEY.to_string(),
+                    "thumb64".to_string(),
+                ),
+            ]
+            .into(),
+            requested_strategy: UploadStrategy::Auto,
+            generated_object_id: "generated".to_string(),
+        };
+
+        assert_eq!(
+            intent.image_variant_object_key().unwrap().unwrap().as_str(),
+            "avatars/user-1/photo.thumb64.jpg"
+        );
+    }
+
+    #[test]
+    fn manifest_looks_up_named_variants() {
+        let object = ObjectRef {
+            backend: "memory".to_string(),
+            scope: "avatars".to_string(),
+            key: "avatars/1/thumb64.jpg".to_string(),
+            version: None,
+            etag: None,
+            checksum: None,
+            content_type: Some("image/jpeg".to_string()),
+            size: 128,
+            visibility: ObjectVisibility::Private,
+            metadata: BTreeMap::new(),
+        };
+        let original = ImageVariantObject {
+            name: IMAGE_VARIANT_ORIGINAL.to_string(),
+            object: ObjectRef {
+                key: "avatars/1/original.jpg".to_string(),
+                ..object.clone()
+            },
+            width: 512,
+            height: 512,
+            content_type: "image/jpeg".to_string(),
+        };
+        let thumb = ImageVariantObject {
+            name: "thumb64".to_string(),
+            object,
+            width: 64,
+            height: 64,
+            content_type: "image/jpeg".to_string(),
+        };
+        let manifest = ImageUploadManifest {
+            original: Some(original),
+            variants: vec![thumb],
+        };
+
+        assert_eq!(manifest.variant("thumb64").unwrap().width, 64);
+        assert_eq!(manifest.key("thumb64"), Some("avatars/1/thumb64.jpg"));
+        assert_eq!(
+            manifest.key(IMAGE_VARIANT_ORIGINAL),
+            Some("avatars/1/original.jpg")
+        );
+        assert!(manifest.variant("missing").is_none());
     }
 }

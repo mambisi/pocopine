@@ -68,8 +68,8 @@ name and gives the server the policy plus key resolver.
 
 ```rust
 use pocopine_storage::{
-    SafeObjectKey, StorageContext, StorageKey, StorageKeyFuture, StorageObjectScope,
-    StorageResult, UploadIntent, UploadPolicy,
+    ObjectVisibility, SafeObjectKey, StorageContext, StorageKey, StorageKeyFuture,
+    StorageObjectScope, StorageResult, UploadIntent, UploadPolicy,
 };
 
 struct AvatarObjects;
@@ -82,7 +82,8 @@ impl StorageObjectScope for AvatarObjects {
         Ok(UploadPolicy::new("s3")?
             .max_bytes(2 * 1024 * 1024)
             .allowed_content_types(["image/png", "image/jpeg"])
-            .allowed_extensions(["png", "jpg", "jpeg"]))
+            .allowed_extensions(["png", "jpg", "jpeg"])
+            .visibility(ObjectVisibility::Public))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -110,7 +111,7 @@ let storage = pocopine_storage::StorageServer::builder()
     .build();
 ```
 
-The browser can use the same scope type for both upload and read chains:
+The browser can use the same scope type for uploads:
 
 ```rust
 let storage = pocopine_storage::StorageClient::new();
@@ -120,19 +121,13 @@ let object = storage
     .upload_blob(file, "avatar.png")
     .send()
     .await?;
-
-let url = storage
-    .object_scope::<AvatarObjects>()
-    .object(object.key)
-    .download_url()
-    .await?;
 ```
 
-`download_url()` currently returns a short-lived Pocopine URL. The browser
-fetches that URL from the app origin; provider credentials still stay on the
-server. `signed_read()` returns the full `SignedRead` response when callers
-need the expiry or future provider-specific headers, and `delete()` removes
-the completed object through the same scope authorization.
+Public objects can be read from the storage object route, or through an
+app-owned route such as `/avatar/<user_id>?v=<hash>&s=<px>` when the client can
+compute a stable, cacheable address. Private objects should use
+`download_url()` / `signed_read()` with a key-aware object guard; that path is
+covered below. Provider credentials never reach the browser.
 
 Object reads are streamed. `StorageBackend::read_object` returns object
 metadata plus an `ObjectBody` byte stream, and the HTTP route forwards that
@@ -144,6 +139,227 @@ provider does not expose a reliable size the route uses a streamed response
 without asserting a length. Once response headers have been sent, provider
 read errors surface as an interrupted download, so callers that manually fetch
 the URL should treat a short or failed body as a failed read.
+
+## Private object guards
+
+Scope guards are coarse: they answer "may this actor use this scope?". Private
+per-object storage also needs a key-aware guard so the framework can answer
+"may this actor read or delete this object key?" before it serves bytes or
+mints a `download_url()` token.
+
+Private browser object reads are denied unless the request carries a valid
+signed read token or the registered scope has an object guard. Private browser
+deletes require an object guard. Public scopes can still be read or deleted
+directly through the storage object route. Server-mediated routes that already
+checked domain permissions may call `StorageServer::read_object` with a system
+`StorageContext`.
+
+Migration note: if an existing private scope relied on only `read_guard` /
+`delete_guard` for browser object routes, add an `object_guard` or move reads
+behind a server-mediated `signed_read` flow. Private no-token object access is
+deny-by-default without a key-aware guard.
+
+```rust
+use pocopine_core::ServerError;
+use pocopine_storage::{
+    SafeObjectKey, StorageActor, StorageContext, StorageGuardFuture, StorageObjectAccess,
+    StorageObjectGuard, StorageObjectScope,
+};
+
+struct MessageAttachmentObjects;
+
+impl StorageObjectScope for MessageAttachmentObjects {
+    const NAME: &'static str = "message-attachments";
+
+    // policy() and resolve_key() omitted: use a key shape such as
+    // "<channel_id>/<uuid>_<filename>".
+}
+
+struct AttachmentGuard {
+    pool: sqlx::PgPool,
+}
+
+impl StorageObjectGuard for AttachmentGuard {
+    fn check(
+        &self,
+        ctx: StorageContext,
+        access: StorageObjectAccess,
+    ) -> StorageGuardFuture<'_> {
+        Box::pin(async move {
+            let user_id = match ctx.actor {
+                StorageActor::Principal(principal) => principal.subject,
+                _ => return Err(ServerError::unauthorized("login required")),
+            };
+
+            let Some(key) = access.key() else {
+                // Upload authorization can check request metadata in access.intent().
+                return Ok(());
+            };
+            let channel_id = key
+                .as_str()
+                .split_once('/')
+                .map(|(channel_id, _)| channel_id)
+                .ok_or_else(|| ServerError::forbidden("invalid attachment key"))?;
+
+            if is_channel_member(&self.pool, &user_id, channel_id).await? {
+                Ok(())
+            } else {
+                Err(ServerError::forbidden("attachment is not visible to this user"))
+            }
+        })
+    }
+}
+
+let storage = pocopine_storage::StorageServer::builder()
+    .backend("s3", s3_backend)?
+    .guarded_object_scope::<MessageAttachmentObjects, _>(AttachmentGuard { pool })?
+    .build();
+```
+
+With that guard installed, `StorageClient::object_scope::<MessageAttachmentObjects>()
+.object(key).download_url().await?` is the right read path for private
+attachments: the server checks the concrete key, then returns a short-lived,
+key-bound capability URL.
+
+When reading or deleting an image variant, the guard receives the effective
+suffix key, such as `avatars/u/original.avatar.jpg`, not the canonical base key.
+Prefix and ownership-segment guards naturally handle this; guards that do exact
+DB lookups should either record variant keys or normalize them back to the base
+key before checking.
+
+For private image-variant scopes, the client-provided
+`pocopine.image.base_key` metadata determines the generated suffix key. Validate
+that base key in `StorageObjectAccess::Write { intent, .. }` or inside
+`resolve_key` before returning `intent.image_variant_object_key()?`; otherwise a
+caller could try to place a variant beside an object they do not own.
+
+For public avatars, prefer an app-owned deterministic route instead of
+`download_url()`. If the client already has the user id, content version, and
+display size, it can build the image URL synchronously:
+
+```text
+/avatar/<user_id>?v=<content_hash>&s=<px>
+```
+
+That route can map `s` to the nearest stored variant and answer with
+`Cache-Control: public, max-age=31536000, immutable`. Because `v` changes when
+the avatar bytes change, the same URL string can be cached across sidebars,
+message rows, popovers, and reloads. `download_url()` is intentionally
+short-lived and async, so it is useful for private objects but a poor fit for
+public, content-versioned avatars.
+
+## Client-side image compression
+
+Enable the optional `image-compression` feature when a browser client should
+generate bounded image variants before upload:
+
+```toml
+pocopine-storage = { version = "0.1", features = ["image-compression"] }
+```
+
+The implementation uses Rust codecs and resizing, not canvas or a JavaScript
+image package: JPEG/PNG inputs are decoded with the Zune codec crates, resized
+with `fast_image_resize` in its `no_std` mode, and encoded as JPEG with
+`jpeg-encoder` with default `std` features disabled. Transparent PNG pixels are
+flattened over white because generated variants are JPEG. The browser bridge
+only reads the selected `File` into bytes when variants are requested, then
+wraps generated bytes back into a `Blob` for the normal storage upload path.
+
+Define variants on the typed object scope:
+
+```rust
+use pocopine_storage::{
+    ImageVariantPolicy, ImageVariantSpec, ObjectVisibility, SafeObjectKey, StorageContext,
+    StorageKey, StorageKeyFuture, StorageObjectScope, StorageResult, UploadIntent, UploadPolicy,
+};
+
+struct AvatarObjects;
+
+impl StorageObjectScope for AvatarObjects {
+    const NAME: &'static str = "avatars";
+
+    fn image_variants() -> ImageVariantPolicy {
+        ImageVariantPolicy::new()
+            .keep_original(true)
+            .variant(ImageVariantSpec::cover("avatar", 256, 256).quality(82))
+            .variant(ImageVariantSpec::fit("preview", 768, 768).quality(78))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn policy() -> StorageResult<UploadPolicy> {
+        Ok(UploadPolicy::new("s3")?
+            .max_bytes(2 * 1024 * 1024)
+            .allowed_content_types(["image/jpeg", "image/png"])
+            .allowed_extensions(["jpg", "jpeg", "png"])
+            .visibility(ObjectVisibility::Public)
+            .metadata_schema(
+                pocopine_storage::MetadataSchema::default().allowed_keys([
+                    "pocopine.image.variant",
+                    "pocopine.image.base_key",
+                    "pocopine.image.width",
+                    "pocopine.image.height",
+                    "usage",
+                ]),
+            ))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_key<'a>(
+        _ctx: &'a StorageContext,
+        intent: &'a UploadIntent,
+    ) -> StorageKeyFuture<'a> {
+        Box::pin(async move {
+            if let Some(key) = intent.image_variant_object_key()? {
+                return Ok(StorageKey::new(key));
+            }
+
+            Ok(StorageKey::new(SafeObjectKey::parse(format!(
+                "avatars/{}/original.{}",
+                intent.generated_object_id(),
+                intent.extension().unwrap_or("jpg"),
+            ))?))
+        })
+    }
+}
+```
+
+Upload with the typed policy. Variants are uploaded as deterministic suffix
+objects linked to the original key. Linked variants currently require
+`keep_original(true)` because the server derives each suffix key from the
+resolved original object key.
+
+```rust
+let manifest = pocopine_storage::StorageClient::new()
+    .upload_image_scope::<AvatarObjects>(file)
+    .metadata("usage", "profile")
+    .send()
+    .await?;
+
+let original = manifest.original().unwrap();
+let original_key = original.key();
+let avatar_version = compute_or_store_content_hash(original).await?;
+
+store_profile_avatar_key_and_version(user_id, original_key, &avatar_version).await?;
+
+let avatar_url = format!("/avatar/{user_id}?v={avatar_version}&s=256");
+```
+
+Each uploaded object receives image metadata:
+`pocopine.image.variant` (`original`, `avatar`, `preview`, ...),
+`pocopine.image.width`, and `pocopine.image.height`. Generated variants also
+receive `pocopine.image.base_key`, which lets `intent.image_variant_object_key()`
+place them beside the original by suffix, for example
+`avatars/u/original.avatar.jpg`. If a scope uses a non-empty
+`MetadataSchema::allowed_keys`, include those framework keys plus any app
+metadata keys you attach with `.metadata(...)`.
+
+Client-side compression reads the selected image into wasm memory because
+decoding and resizing need random access to pixels. Use it for bounded media
+scopes such as avatars, thumbnails, and post images. If the image policy keeps
+only the original and defines no variants, the client skips decoding and uploads
+the raw file through the normal path; width/height metadata is omitted. Large
+arbitrary files should keep using `upload(file).send().await`, which streams
+through the server and provider without buffering the complete object.
 
 ## Two transports
 

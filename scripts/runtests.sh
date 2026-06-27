@@ -232,6 +232,7 @@ run_lib_package pocopine-deploy-railway crates/pocopine-deploy-railway/tests
 run_lib_package pocopine-realtime crates/pocopine-realtime/tests
 run_lib_package pocopine-server crates/pocopine-server/tests
 run_lib_package pocopine-storage crates/pocopine-storage/tests
+run cargo test -p pocopine-storage --features image-compression --lib --test storage_host
 run_lib_package pocopine-storage-azure crates/pocopine-storage-azure/tests
 run_lib_package pocopine-storage-gcs crates/pocopine-storage-gcs/tests
 run_lib_package pocopine-storage-s3 crates/pocopine-storage-s3/tests
