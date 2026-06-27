@@ -15,12 +15,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pocopine-sync = { workspace = true }
+pocopine-sync-indexdb = { workspace = true }
 pocopine-sync-query = { workspace = true }
 pocopine-sync-query-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-pocopine-sync-indexdb = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
