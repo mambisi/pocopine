@@ -7553,6 +7553,7 @@ name = "pocopine-storage-gcs"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "futures-util",
  "google-cloud-auth",
  "google-cloud-gax",
  "google-cloud-storage",

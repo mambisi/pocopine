@@ -38,8 +38,8 @@ pub use error::{StorageError, StorageResult};
 pub use protocol::{
     AnonymousUploadBinding, BackendCapabilities, ChecksumAlgorithm, ChecksumPolicy, CompleteUpload,
     CompleteUploadRequest, InitiateUpload, InitiateUploadRequest, MAX_STORAGE_TOKEN_LEN,
-    MetadataSchema, ObjectChecksum, ObjectMetadata, ObjectOwnerRef, ObjectRead, ObjectRef,
-    ObjectVisibility, PartSpec, PrincipalRef, ReadDisposition, ReadUrlRequest, STORAGE_ANON_COOKIE,
+    MetadataSchema, ObjectChecksum, ObjectMetadata, ObjectOwnerRef, ObjectRef, ObjectVisibility,
+    PartSpec, PrincipalRef, ReadDisposition, ReadUrlRequest, STORAGE_ANON_COOKIE,
     STORAGE_ENDPOINT_PREFIX, STORAGE_OBJECTS_PREFIX, STORAGE_PROTOCOL_V1, STORAGE_SCOPES_PREFIX,
     STORAGE_TUS_ENDPOINT_PREFIX, STORAGE_UPLOADS_PATH, STORAGE_UPLOADS_PREFIX, SafeObjectKey,
     SignedRead, StorageBackendName, StorageKey, StorageObjectScope, StorageResponse, TransferPlan,
@@ -56,8 +56,9 @@ pub use memory::MemoryStorageBackend;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    StorageActor, StorageBackend, StorageBoxFuture, StorageContext, StorageGuardFuture,
-    StorageKeyFuture, StorageKeyResolver, StorageScope, StorageScopeBuilder, StorageScopeGuard,
-    StorageServer, StorageServerBuilder, StorageServerPlugin, StorageTusServerPlugin, UploadBody,
-    UploadByteStream, storage_server_plugin, storage_tus_server_plugin,
+    ObjectBody, ObjectRead, StorageActor, StorageBackend, StorageBoxFuture, StorageContext,
+    StorageGuardFuture, StorageKeyFuture, StorageKeyResolver, StorageScope, StorageScopeBuilder,
+    StorageScopeGuard, StorageServer, StorageServerBuilder, StorageServerPlugin,
+    StorageTusServerPlugin, UploadBody, UploadByteStream, storage_server_plugin,
+    storage_tus_server_plugin,
 };

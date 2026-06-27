@@ -9,7 +9,7 @@ use crate::backend_common::{
     ensure_upload_length_can_be_set, expires_at, object_ref, refresh_expired, select_upload_mode,
 };
 use crate::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
-use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
+use crate::server::{ObjectBody, StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
     ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRead, ObjectRef, SafeObjectKey,
     StorageError, StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId,
@@ -343,8 +343,7 @@ impl StorageBackend for MemoryStorageBackend {
             }
             Ok(ObjectRead {
                 object: stored.object.clone(),
-                bytes: stored.bytes.clone(),
-                truncated: false,
+                body: ObjectBody::from_bytes(Bytes::from(stored.bytes.clone())),
             })
         })
     }

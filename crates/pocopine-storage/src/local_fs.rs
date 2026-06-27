@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -13,7 +13,7 @@ use crate::backend_common::{
     ensure_upload_length_can_be_set, expires_at, object_ref, refresh_expired, select_upload_mode,
 };
 use crate::checksum::{ensure_supported_checksum_policy, validate_complete_checksum};
-use crate::server::{StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
+use crate::server::{ObjectBody, StorageActor, StorageBackend, StorageBoxFuture, StorageContext};
 use crate::{
     ChecksumPolicy, CompleteUpload, InitiateUpload, ObjectRead, ObjectRef, SafeObjectKey,
     StorageError, StorageKey, StorageResult, TransferPlan, UploadSession, UploadSessionId,
@@ -516,7 +516,7 @@ impl LocalFsStorageBackend {
         if metadata.len() > max_bytes {
             return Err(StorageError::payload_too_large(max_bytes));
         }
-        let bytes = fs::read(&path)
+        let file = File::open(&path)
             .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))?;
         Ok(ObjectRead {
             object: ObjectRef {
@@ -531,8 +531,7 @@ impl LocalFsStorageBackend {
                 visibility: crate::ObjectVisibility::Private,
                 metadata: Default::default(),
             },
-            bytes,
-            truncated: false,
+            body: file_body(file, max_bytes),
         })
     }
 
@@ -540,6 +539,34 @@ impl LocalFsStorageBackend {
         fs::remove_file(self.object_path(&key))
             .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))
     }
+}
+
+fn file_body(file: File, max_bytes: u64) -> ObjectBody {
+    let stream = futures_util::stream::unfold(Some(file), |state| async move {
+        let file = state?;
+        let result = tokio::task::spawn_blocking(move || {
+            let mut file = file;
+            let mut buf = vec![0_u8; 64 * 1024];
+            let result = file.read(&mut buf).map(|read| {
+                buf.truncate(read);
+                buf
+            });
+            (file, result)
+        })
+        .await;
+        match result {
+            Ok((_file, Ok(buf))) if buf.is_empty() => None,
+            Ok((file, Ok(buf))) => Some((Ok(Bytes::from(buf)), Some(file))),
+            Ok((_file, Err(err))) => Some((Err(err), None)),
+            Err(err) => Some((
+                Err(std::io::Error::other(format!(
+                    "blocking file read failed: {err}"
+                ))),
+                None,
+            )),
+        }
+    });
+    ObjectBody::from_stream_with_limit(stream, max_bytes)
 }
 
 async fn run_blocking<F, T>(f: F) -> StorageResult<T>

@@ -22,10 +22,10 @@ use pocopine_storage::checksum::{
     precheck_checksum, validate_complete_checksum_precomputed,
 };
 use pocopine_storage::{
-    BackendCapabilities, ChecksumAlgorithm, CompleteUpload, InitiateUpload, ObjectChecksum,
-    ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey, StorageActor, StorageBackend,
-    StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan, UploadBody,
-    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
+    BackendCapabilities, ChecksumAlgorithm, CompleteUpload, InitiateUpload, ObjectBody,
+    ObjectChecksum, ObjectRead, ObjectRef, ObjectVisibility, SafeObjectKey, StorageActor,
+    StorageBackend, StorageBoxFuture, StorageContext, StorageError, StorageResult, TransferPlan,
+    UploadBody, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -399,7 +399,14 @@ impl AzureBlobStorageBackend {
             .etag()
             .map_err(|err| azure_error("read blob etag", err))?
             .map(|etag| etag.to_string());
-        Ok(AzureObjectMetadata { size, etag })
+        let content_type = response
+            .content_type()
+            .map_err(|err| azure_error("read blob content type", err))?;
+        Ok(AzureObjectMetadata {
+            size,
+            etag,
+            content_type,
+        })
     }
 
     async fn put_object_bytes(
@@ -1478,36 +1485,53 @@ impl StorageBackend for AzureBlobStorageBackend {
                     })?;
             let declared_size = metadata.size;
             let metadata_etag = metadata.etag.clone();
-            if let Some(size) = declared_size
-                && size > max_bytes
-            {
+            let metadata_content_type = metadata.content_type.clone();
+            let size = declared_size
+                .ok_or_else(|| StorageError::backend("Azure blob size is unavailable"))?;
+            if size > max_bytes {
                 return Err(StorageError::payload_too_large(max_bytes));
             }
-            let read = self
-                .download_object_bytes_with_limit(&object_key, max_bytes, metadata)
+            let mut options = BlobClientDownloadOptions::default();
+            if let Some(etag) = &metadata.etag {
+                options.if_match = Some(Etag::from(etag.clone()));
+            }
+            let response = self
+                .container
+                .blob_client(&object_key)
+                .download(Some(options))
                 .await
-                .map_err(|err| match err {
-                    StorageError::UnknownUploadSession { .. } => {
+                .map_err(|err| {
+                    if is_azure_not_found(&err) {
                         StorageError::unknown_object(key.to_string())
+                    } else if is_azure_precondition_failed(&err) {
+                        StorageError::conflict("Azure blob changed while reading")
+                    } else {
+                        azure_error("download completed blob", err)
                     }
-                    err => err,
                 })?;
-            let size = declared_size.unwrap_or(read.bytes.len() as u64);
+            let etag = response
+                .properties
+                .etag
+                .map(|etag| etag.to_string())
+                .or(metadata_etag);
+            let content_type = response.properties.content_type.or(metadata_content_type);
+            let stream = response.body.map(|chunk| {
+                chunk.map_err(|err| std::io::Error::other(format!("Azure read blob body: {err}")))
+            });
             Ok(ObjectRead {
                 object: ObjectRef {
                     backend: self.name.to_string(),
                     scope: scope.to_string(),
                     key: key.to_string(),
                     version: None,
-                    etag: read.etag.or(metadata_etag),
+                    etag,
                     checksum: None,
-                    content_type: None,
+                    content_type,
                     size,
                     visibility: ObjectVisibility::Private,
                     metadata: Default::default(),
                 },
-                bytes: read.bytes,
-                truncated: false,
+                body: ObjectBody::from_stream_with_limit(stream, max_bytes),
             })
         })
     }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_core::Stream;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt as _, TryStreamExt};
 use pocopine_codec::{base64_decode, base64_encode, percent_encode};
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_crypto::{SecretString, hmac_sha256};
@@ -31,7 +31,7 @@ use uuid::Uuid;
 use crate::backend_common::expires_at;
 use crate::{
     AnonymousUploadBinding, CompleteUpload, CompleteUploadRequest, InitiateUpload,
-    InitiateUploadRequest, ObjectMetadata, ObjectRead, PrincipalRef, ReadDisposition,
+    InitiateUploadRequest, ObjectMetadata, ObjectRef, PrincipalRef, ReadDisposition,
     ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_PROTOCOL_V1, STORAGE_UPLOADS_PATH, SafeObjectKey,
     SignedRead, StorageBackendName, StorageError, StorageKey, StorageObjectScope, StorageResponse,
     StorageResult, UploadIntent, UploadPolicy, UploadPolicyDescriptor, UploadSession,
@@ -320,6 +320,75 @@ impl Stream for UploadByteStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
     }
+}
+
+/// A `Send` byte stream for completed object reads.
+///
+/// Backends return this instead of `Vec<u8>` so object downloads can move
+/// provider bytes through the HTTP response under backpressure.
+pub struct ObjectBody {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+}
+
+impl ObjectBody {
+    /// Wrap a stream of object bytes.
+    pub fn from_stream<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    {
+        Self {
+            inner: Box::pin(stream),
+        }
+    }
+
+    /// Wrap a stream of object bytes and fail the body if more than
+    /// `max_bytes` are yielded. Metadata checks should reject oversized objects
+    /// before headers are sent when possible; this is a final guard for stores
+    /// whose body exceeds metadata or lacks a trusted size.
+    pub fn from_stream_with_limit<S>(stream: S, max_bytes: u64) -> Self
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    {
+        let mut seen = 0_u64;
+        Self::from_stream(stream.map(move |chunk| {
+            let bytes = chunk?;
+            seen = seen
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| std::io::Error::other("storage object read size overflowed"))?;
+            if seen > max_bytes {
+                return Err(std::io::Error::other(format!(
+                    "storage object exceeded maximum read size of {max_bytes} bytes"
+                )));
+            }
+            Ok(bytes)
+        }))
+    }
+
+    /// Build a read body from bytes already held in memory.
+    pub fn from_bytes(bytes: Bytes) -> Self {
+        Self::from_stream(futures_util::stream::once(async move { Ok(bytes) }))
+    }
+}
+
+impl std::fmt::Debug for ObjectBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObjectBody").finish_non_exhaustive()
+    }
+}
+
+impl Stream for ObjectBody {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+/// Completed object metadata plus a streaming read body.
+#[derive(Debug)]
+pub struct ObjectRead {
+    pub object: ObjectRef,
+    pub body: ObjectBody,
 }
 
 /// Server-side backend contract for storage engines.
@@ -2397,12 +2466,13 @@ fn object_read_response(
 ) -> Response {
     match result {
         Ok((read, disposition)) => {
+            let ObjectRead { object, body } = read;
             let mut response = if head_only {
                 Body::empty().into_response()
             } else {
-                Body::from(read.bytes).into_response()
+                Body::from_stream(body).into_response()
             };
-            if let Some(content_type) = &read.object.content_type
+            if let Some(content_type) = &object.content_type
                 && let Ok(value) = HeaderValue::from_str(content_type)
             {
                 response.headers_mut().insert(CONTENT_TYPE, value);
@@ -2412,10 +2482,10 @@ fn object_read_response(
                     HeaderValue::from_static("application/octet-stream"),
                 );
             }
-            if let Ok(value) = HeaderValue::from_str(&read.object.size.to_string()) {
+            if let Ok(value) = HeaderValue::from_str(&object.size.to_string()) {
                 response.headers_mut().insert(CONTENT_LENGTH, value);
             }
-            if let Some(etag) = &read.object.etag
+            if let Some(etag) = &object.etag
                 && let Ok(value) = HeaderValue::from_str(etag)
             {
                 response.headers_mut().insert(ETAG, value);

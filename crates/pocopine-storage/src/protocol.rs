@@ -965,15 +965,6 @@ impl Default for ReadUrlRequest {
     }
 }
 
-/// Completed object bytes returned by a backend read.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ObjectRead {
-    pub object: ObjectRef,
-    #[serde(with = "pocopine_codec::base64_bytes")]
-    pub bytes: Vec<u8>,
-    pub truncated: bool,
-}
-
 /// Browser upload creation request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InitiateUploadRequest {
