@@ -343,6 +343,7 @@ impl StorageBackend for MemoryStorageBackend {
             }
             Ok(ObjectRead {
                 object: stored.object.clone(),
+                content_length: Some(stored.object.size),
                 body: ObjectBody::from_bytes(Bytes::from(stored.bytes.clone())),
             })
         })
