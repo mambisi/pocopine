@@ -23,3 +23,9 @@ pub const WS_PROTOCOL_V1: &str = "pocopine.ws.v1";
 
 /// Mount path for the gateway upgrade endpoint (the URL a client connects to).
 pub const WS_STREAM_PATH: &str = "/__pocopine/ws/v1";
+
+/// Query parameter used by browser clients to carry a bearer token on the
+/// WebSocket upgrade. Browsers cannot set arbitrary upgrade headers, so
+/// `routes_with_auth` accepts this parameter and authenticates it through the
+/// configured `AuthProvider`.
+pub const WS_ACCESS_TOKEN_QUERY_PARAM: &str = "access_token";

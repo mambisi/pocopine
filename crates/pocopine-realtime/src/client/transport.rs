@@ -262,6 +262,15 @@ impl RealtimeClient {
         Ok(Self { inner })
     }
 
+    /// Open a connection with a browser-safe bearer token query parameter.
+    ///
+    /// Browsers cannot set arbitrary WebSocket upgrade headers. This appends an
+    /// `access_token` query parameter and expects the server to mount
+    /// `routes_with_auth` with a compatible `AuthProvider`.
+    pub fn connect_with_token(url: &str, token: &str) -> Result<Self, JsValue> {
+        Self::connect(&super::url_with_access_token(url, token))
+    }
+
     /// Build the four reusable socket-event closures (each holding a `Weak`).
     fn build_handlers(inner: &Rc<RefCell<Inner>>) -> SocketHandlers {
         let on_open = {

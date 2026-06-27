@@ -8,24 +8,39 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, Stream, StreamExt};
+use pocopine_auth::{AuthFuture, AuthProvider, AuthUser, RequestAuthExt};
+use pocopine_core::server::RequestContext;
 use pocopine_events::Topic;
 use pocopine_realtime::client::{ClientSession, SessionEvent};
 use pocopine_realtime::{
     Control, Frame, FrameKind, GatewayConfig, InboundData, Reaction, SubprotocolHandler, TopicSeq,
-    WsGateway, routes,
+    WsGateway, routes, routes_with_auth,
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
 
 /// Boot `gateway` on a random local port; return the ws:// URL.
 async fn spawn(gateway: WsGateway) -> String {
-    let app = routes(gateway);
+    spawn_app(routes(gateway)).await
+}
+
+async fn spawn_app(app: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
     format!("ws://{addr}/__pocopine/ws/v1")
+}
+
+struct QueryTokenAuth;
+
+impl AuthProvider for QueryTokenAuth {
+    fn authenticate<'a>(&'a self, ctx: &'a RequestContext) -> AuthFuture<'a, Option<AuthUser>> {
+        Box::pin(async move {
+            Ok((ctx.bearer_token() == Some("ok token")).then(|| AuthUser::new("u1")))
+        })
+    }
 }
 
 /// Read the next binary frame, skipping ping/pong/text. Each read is bounded by
@@ -130,9 +145,65 @@ async fn default_deny_rejects_subscribe() {
         .await
         .unwrap();
     match next_control(&mut ws).await {
-        Control::Error { code, .. } => assert_eq!(code, "forbidden_topic"),
-        other => panic!("expected forbidden error, got {other:?}"),
+        Control::SubscribeDenied { topic, reason } => {
+            assert_eq!(topic, "topic:1");
+            assert_eq!(reason, "forbidden");
+        }
+        other => panic!("expected SubscribeDenied, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn routes_with_auth_accepts_browser_access_token_query() {
+    let gateway = WsGateway::local().with_access(|ctx, _topic| {
+        assert!(
+            !ctx.uri()
+                .query()
+                .unwrap_or_default()
+                .contains("access_token"),
+            "route helper must scrub the bearer token from downstream context"
+        );
+        if ctx.require_user().is_ok() {
+            pocopine_realtime::TopicAccess::ReadWrite
+        } else {
+            pocopine_realtime::TopicAccess::Denied
+        }
+    });
+    let url = spawn_app(routes_with_auth(gateway, QueryTokenAuth)).await;
+    let (mut ws, _resp) = connect_async(format!("{url}?room=1&access_token=ok%20token"))
+        .await
+        .unwrap();
+    assert!(matches!(next_control(&mut ws).await, Control::Hello { .. }));
+
+    ws.send(send_bytes(Frame::subscribe(1, "topic:1")))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_control(&mut ws).await,
+        Control::SubscribeAck { .. }
+    ));
+}
+
+#[tokio::test]
+async fn routes_with_auth_denies_when_browser_access_token_is_missing() {
+    let gateway = WsGateway::local().with_access(|ctx, _topic| {
+        if ctx.require_user().is_ok() {
+            pocopine_realtime::TopicAccess::ReadWrite
+        } else {
+            pocopine_realtime::TopicAccess::Denied
+        }
+    });
+    let url = spawn_app(routes_with_auth(gateway, QueryTokenAuth)).await;
+    let (mut ws, _resp) = connect_async(url).await.unwrap();
+    assert!(matches!(next_control(&mut ws).await, Control::Hello { .. }));
+
+    ws.send(send_bytes(Frame::subscribe(1, "topic:1")))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_control(&mut ws).await,
+        Control::SubscribeDenied { .. }
+    ));
 }
 
 #[tokio::test]

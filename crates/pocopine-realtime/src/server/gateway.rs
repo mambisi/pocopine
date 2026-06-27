@@ -129,7 +129,7 @@ where
 /// [`WsGateway::with_write_policy`].
 struct WriteClamp {
     inner: Arc<dyn TopicAuthorizer>,
-    write: Arc<dyn Fn(&RequestContext, &Topic) -> bool + Send + Sync>,
+    write: TopicPolicy,
 }
 
 impl TopicAuthorizer for WriteClamp {

@@ -24,4 +24,4 @@ pub use gateway::{
 pub use handler::{InboundData, Reaction, SubprotocolHandler};
 #[cfg(feature = "redis")]
 pub use redis_fanout::{DEFAULT_REDIS_MAX_LEN, RedisFanout};
-pub use route::routes;
+pub use route::{routes, routes_with_auth, routes_with_auth_arc};

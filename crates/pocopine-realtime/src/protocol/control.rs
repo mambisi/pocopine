@@ -58,6 +58,8 @@ pub enum Control {
     /// Server → client: a resume cursor is unreplayable or the subscription
     /// lagged; the client must re-subscribe fresh.
     Gap { topic: String, reason: String },
+    /// Server → client: a Subscribe was denied by the topic authorizer.
+    SubscribeDenied { topic: String, reason: String },
     /// Server → client: a typed error (forbidden topic, oversized frame, ...).
     Error { code: String, message: String },
 }
@@ -91,6 +93,14 @@ impl Control {
     /// Convenience constructor for an [`Control::Gap`].
     pub fn gap(topic: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::Gap {
+            topic: topic.into(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Convenience constructor for [`Control::SubscribeDenied`].
+    pub fn subscribe_denied(topic: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::SubscribeDenied {
             topic: topic.into(),
             reason: reason.into(),
         }
@@ -142,6 +152,7 @@ mod tests {
             topic: "collab:abc".into(),
         });
         roundtrip(Control::gap("collab:abc", "cursor_not_replayable"));
+        roundtrip(Control::subscribe_denied("collab:abc", "forbidden"));
         roundtrip(Control::error("forbidden_topic", "denied"));
     }
 
