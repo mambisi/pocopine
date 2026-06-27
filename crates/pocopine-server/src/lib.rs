@@ -218,10 +218,10 @@ async fn auth_middleware(
 /// [`Router`] in one line.
 ///
 /// Normal applications should prefer [`Server::with_auth`], because
-/// [`Server::new`] first installs all linked `#[server]` routes and
-/// then the builder method wraps them. This raw-router extension is
-/// still useful for tests and custom routers that manually install
-/// routes.
+/// the [`Server`] builder defers auth installation until finalization
+/// and therefore wraps routes added by later plugins. This raw-router
+/// extension is still useful for tests and custom routers that
+/// manually install routes.
 ///
 /// **Install after routes.** `Router::layer` (which this calls under
 /// the hood) only wraps the routes that exist at the call site —

@@ -188,7 +188,10 @@ Server::new(Router::new())
 Within a single plugin's `install` fn, the same rule applies: call
 `route` / `router_mut` first, then `layer`. The `RouterAuthExt::with_auth`
 extension on `axum::Router` has the identical caveat documented in
-its rustdoc — same axum constraint.
+its rustdoc — same axum constraint. `Server::with_auth` is intentionally
+different: the builder records auth providers and applies them during
+finalization, after plugins have registered routes, so auth behaves like a
+global server feature instead of a call-site-only route layer.
 
 ## active_plugin cost
 

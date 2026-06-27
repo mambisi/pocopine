@@ -85,6 +85,7 @@ pub struct Server {
     router: Router,
     plugins: PluginRegistry,
     installing_plugin: Option<&'static str>,
+    auth_providers: Vec<SharedAuthProvider>,
     server_function_conflicts: Vec<ServerFunctionRouteConflict>,
 }
 
@@ -107,6 +108,7 @@ impl Server {
             router,
             plugins: PluginRegistry::default(),
             installing_plugin: None,
+            auth_providers: Vec::new(),
             server_function_conflicts,
         }
     }
@@ -136,21 +138,19 @@ impl Server {
 
     /// Install an [`AuthProvider`] as request middleware.
     ///
-    /// This is the preferred auth entry point for normal apps because
-    /// [`Self::new`] has already installed all linked `#[server]`
-    /// routes. The middleware therefore wraps server-function routes
-    /// and lets guarded functions read authenticated principals from
-    /// `RequestContext`.
+    /// This is the preferred auth entry point for normal apps. The
+    /// provider is recorded on the builder and applied during
+    /// [`Self::try_finalize`], after plugins have had a chance to add
+    /// routes. That means routes installed by later plugins are still
+    /// wrapped, and guarded handlers can read authenticated principals
+    /// from `RequestContext` regardless of builder-call order.
     pub fn with_auth<P: AuthProvider + 'static>(self, provider: P) -> Self {
         self.with_auth_arc(Arc::new(provider))
     }
 
     /// Install a pre-`Arc`'d auth provider.
     pub fn with_auth_arc(mut self, provider: SharedAuthProvider) -> Self {
-        self.router = self.router.layer(axum::middleware::from_fn_with_state(
-            provider,
-            auth_middleware,
-        ));
+        self.auth_providers.push(provider);
         self
     }
 
@@ -188,7 +188,9 @@ impl Server {
     ///
     /// The same caveat applies to plugins that compose internally:
     /// install layers in their `install` fn after any `route`/
-    /// `router_mut` calls.
+    /// `router_mut` calls. [`Self::with_auth`] is the exception:
+    /// the builder records auth providers and applies them during
+    /// finalization so plugin routes added later are still wrapped.
     pub fn layer<L>(mut self, layer: L) -> Self
     where
         L: Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
@@ -272,8 +274,9 @@ impl Server {
     #[doc(hidden)]
     pub fn try_finalize(self) -> std::io::Result<Router> {
         let Self {
-            router,
+            mut router,
             plugins,
+            auth_providers,
             server_function_conflicts,
             ..
         } = self;
@@ -293,6 +296,12 @@ impl Server {
         }
 
         plugin::activate(plugins);
+        for provider in auth_providers {
+            router = router.layer(axum::middleware::from_fn_with_state(
+                provider,
+                auth_middleware,
+            ));
+        }
         Ok(router)
     }
 

@@ -35,8 +35,10 @@ use super::agenkit::{Agenkit, with_principal};
 
 /// A tower layer that scopes the Agenkit caller-principal task-local for each
 /// request, reading the [`Principal`] from request extensions (anonymous when
-/// absent). Install it *after* `Server::with_auth(..)` populates the principal —
-/// or get it for free from [`agenkit_server_plugin`].
+/// absent). `Server::with_auth(..)` is applied during server finalization, so it
+/// runs before this layer when both are installed on a [`Server`]. For raw axum
+/// routers, install the auth middleware so it runs before this layer — or get
+/// this layer for free from [`agenkit_server_plugin`].
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PrincipalLayer;
 
