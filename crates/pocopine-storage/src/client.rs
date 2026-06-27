@@ -241,6 +241,7 @@ impl StorageScopeClient {
             with_credentials: self.with_credentials,
             scope: self.scope.clone(),
             key: key.into(),
+            variant: None,
         }
     }
 }
@@ -252,6 +253,15 @@ pub struct StorageObjectClient {
     with_credentials: bool,
     scope: String,
     key: String,
+    variant: Option<String>,
+}
+
+impl StorageObjectClient {
+    /// Address a deterministic image variant sibling of this canonical object.
+    pub fn variant(mut self, variant: impl Into<String>) -> Self {
+        self.variant = Some(variant.into());
+        self
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -282,6 +292,7 @@ impl StorageObjectClient {
             self.with_credentials,
             &self.scope,
             &self.key,
+            &self.variant,
         );
         Err(StorageError::unsupported(
             "storage client HTTP calls are only available in the browser runtime",
@@ -300,6 +311,7 @@ impl StorageObjectClient {
             self.with_credentials,
             &self.scope,
             &self.key,
+            &self.variant,
         );
         Err(StorageError::unsupported(
             "storage client HTTP calls are only available in the browser runtime",
@@ -315,6 +327,10 @@ pub struct UploadBuilder;
 #[derive(Debug)]
 pub struct ResumableUploadBuilder;
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "image-compression"))]
+#[derive(Debug)]
+pub struct ImageUploadBuilder;
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::cell::Cell;
@@ -327,10 +343,14 @@ mod wasm {
 
     use futures_util::stream::{FuturesUnordered, StreamExt as _};
     use js_sys::Promise;
+    #[cfg(feature = "image-compression")]
+    use js_sys::{Array, ArrayBuffer, Uint8Array};
     use serde::de::DeserializeOwned;
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
+    #[cfg(feature = "image-compression")]
+    use web_sys::BlobPropertyBag;
     use web_sys::{
         AbortSignal, Blob, File, Headers, Request, RequestCredentials, RequestInit, Response,
     };
@@ -340,6 +360,12 @@ mod wasm {
         CompleteUploadRequest, InitiateUploadRequest, ObjectRef, PartSpec, ReadUrlRequest,
         STORAGE_PROTOCOL_V1, StorageResponse, UploadPhase, UploadProgress, UploadStrategy,
         plan_parts,
+    };
+    #[cfg(feature = "image-compression")]
+    use crate::{
+        IMAGE_VARIANT_BASE_KEY_METADATA_KEY, IMAGE_VARIANT_HEIGHT_METADATA_KEY,
+        IMAGE_VARIANT_METADATA_KEY, IMAGE_VARIANT_ORIGINAL, IMAGE_VARIANT_WIDTH_METADATA_KEY,
+        ImageUploadManifest, ImageVariantObject, ImageVariantPolicy, compress_image_variants,
     };
 
     const DEFAULT_CHUNK_SIZE: u64 = 1024 * 1024;
@@ -420,6 +446,18 @@ mod wasm {
         });
     }
 
+    #[cfg(feature = "image-compression")]
+    impl super::StorageClient {
+        /// Start a client-side compressed image upload for a typed object scope.
+        pub fn upload_image_scope<S>(&self, file: File) -> ImageUploadBuilder
+        where
+            S: StorageObjectScope,
+        {
+            self.object_scope::<S>()
+                .upload_image_with_policy(file, S::image_variants())
+        }
+    }
+
     impl super::StorageScopeClient {
         /// Fetch the safe upload policy descriptor for this scope.
         pub async fn descriptor(&self) -> StorageResult<UploadPolicyDescriptor> {
@@ -474,6 +512,36 @@ mod wasm {
             })
         }
 
+        /// Start a client-side compressed image upload from a browser [`File`].
+        #[cfg(feature = "image-compression")]
+        pub fn upload_image(&self, file: File) -> ImageUploadBuilder {
+            self.upload_image_with_policy(file, ImageVariantPolicy::default())
+        }
+
+        /// Start a client-side compressed image upload with an explicit variant policy.
+        #[cfg(feature = "image-compression")]
+        pub fn upload_image_with_policy(
+            &self,
+            file: File,
+            policy: ImageVariantPolicy,
+        ) -> ImageUploadBuilder {
+            let name = file.name();
+            let size = file.size() as u64;
+            let content_type = empty_to_none(file.type_());
+            let last_modified = Some(file.last_modified() as i64);
+            let blob: Blob = file.unchecked_into();
+            self.image_upload_source(
+                UploadSource {
+                    blob,
+                    name,
+                    size,
+                    content_type,
+                    last_modified,
+                },
+                policy,
+            )
+        }
+
         /// Resume an existing browser-safe upload session.
         pub fn resume(&self, file: File, session: UploadSession) -> UploadBuilder {
             self.upload(file).session(session)
@@ -495,15 +563,40 @@ mod wasm {
                 auto_resume: false,
             }
         }
+
+        #[cfg(feature = "image-compression")]
+        fn image_upload_source(
+            &self,
+            source: UploadSource,
+            policy: ImageVariantPolicy,
+        ) -> ImageUploadBuilder {
+            ImageUploadBuilder {
+                endpoint: self.endpoint.clone(),
+                with_credentials: self.with_credentials,
+                scope: self.scope.clone(),
+                source,
+                policy,
+                strategy: UploadStrategy::Auto,
+                metadata: BTreeMap::new(),
+                progress: None,
+                retry_limit: 2,
+                retry_base_delay_ms: 100,
+                abort_signal: None,
+            }
+        }
     }
 
     impl super::StorageObjectClient {
         /// Ask the server for a short-lived URL that reads this object.
         pub async fn signed_read(&self) -> StorageResult<SignedRead> {
+            let request = ReadUrlRequest {
+                variant: self.variant.clone(),
+                ..ReadUrlRequest::default()
+            };
             fetch_json(
                 BrowserStorageRequest::post_json(
                     object_read_url(&self.endpoint, &self.scope, &self.key),
-                    &ReadUrlRequest::default(),
+                    &request,
                     self.with_credentials,
                     None,
                 )?,
@@ -521,7 +614,12 @@ mod wasm {
         pub async fn delete(&self) -> StorageResult<()> {
             fetch_no_content(
                 BrowserStorageRequest::delete(
-                    object_url(&self.endpoint, &self.scope, &self.key),
+                    object_url(
+                        &self.endpoint,
+                        &self.scope,
+                        &self.key,
+                        self.variant.as_deref(),
+                    ),
                     self.with_credentials,
                     None,
                 ),
@@ -591,6 +689,233 @@ mod wasm {
         size: u64,
         content_type: Option<String>,
         last_modified: Option<i64>,
+    }
+
+    /// Browser image upload builder with client-side Rust compression.
+    #[cfg(feature = "image-compression")]
+    #[must_use]
+    pub struct ImageUploadBuilder {
+        endpoint: String,
+        with_credentials: bool,
+        scope: String,
+        source: UploadSource,
+        policy: ImageVariantPolicy,
+        strategy: UploadStrategy,
+        metadata: BTreeMap<String, String>,
+        progress: Option<Rc<dyn Fn(String, UploadProgress)>>,
+        retry_limit: u32,
+        retry_base_delay_ms: u32,
+        abort_signal: Option<AbortSignal>,
+    }
+
+    #[cfg(feature = "image-compression")]
+    impl ImageUploadBuilder {
+        /// Replace the image variant policy.
+        pub fn policy(mut self, policy: ImageVariantPolicy) -> Self {
+            self.policy = policy;
+            self
+        }
+
+        /// Add one generated image variant.
+        pub fn variant(mut self, variant: crate::ImageVariantSpec) -> Self {
+            self.policy.variants.push(variant);
+            self
+        }
+
+        /// Control whether the original file is uploaded alongside variants.
+        pub fn keep_original(mut self, keep_original: bool) -> Self {
+            self.policy.keep_original = keep_original;
+            self
+        }
+
+        /// Set the requested upload strategy for every object in the manifest.
+        pub fn strategy(mut self, strategy: UploadStrategy) -> Self {
+            self.strategy = strategy;
+            self
+        }
+
+        /// Add string metadata to every uploaded object in the image manifest.
+        pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+            self.metadata.insert(key.into(), value.into());
+            self
+        }
+
+        /// Observe upload progress per manifest entry.
+        pub fn on_progress<F>(mut self, callback: F) -> Self
+        where
+            F: Fn(String, UploadProgress) + 'static,
+        {
+            self.progress = Some(Rc::new(callback));
+            self
+        }
+
+        /// Set the number of retries for transient browser transport errors.
+        pub fn retry_limit(mut self, retry_limit: u32) -> Self {
+            self.retry_limit = retry_limit;
+            self
+        }
+
+        /// Set the base retry backoff in milliseconds.
+        pub fn retry_base_delay_ms(mut self, retry_base_delay_ms: u32) -> Self {
+            self.retry_base_delay_ms = retry_base_delay_ms;
+            self
+        }
+
+        /// Attach a browser abort signal to every request in this image upload.
+        pub fn abort_signal(mut self, signal: AbortSignal) -> Self {
+            self.abort_signal = Some(signal);
+            self
+        }
+
+        /// Compress the configured variants and upload the resulting manifest.
+        pub async fn send(self) -> StorageResult<ImageUploadManifest> {
+            self.policy.validate()?;
+
+            let (source_info, variants) = if self.policy.variants.is_empty() {
+                (None, Vec::new())
+            } else {
+                let source_bytes = read_blob_bytes(&self.source.blob).await?;
+                let (source_info, variants) = compress_image_variants(
+                    &self.source.name,
+                    &source_bytes,
+                    self.policy.variants.clone(),
+                )?;
+                (Some(source_info), variants)
+            };
+
+            let mut manifest = ImageUploadManifest::default();
+            let mut base_key = None;
+            if self.policy.keep_original {
+                let mut source = self.source.clone();
+                if source.content_type.is_none() {
+                    source.content_type = source_info
+                        .as_ref()
+                        .map(|source_info| source_info.content_type.clone());
+                }
+                let original_width = source_info
+                    .as_ref()
+                    .map(|source_info| source_info.width)
+                    .unwrap_or_default();
+                let original_height = source_info
+                    .as_ref()
+                    .map(|source_info| source_info.height)
+                    .unwrap_or_default();
+                let original_content_type = source_info
+                    .as_ref()
+                    .map(|source_info| source_info.content_type.clone())
+                    .or_else(|| source.content_type.clone())
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                let object = self
+                    .upload_one(
+                        source,
+                        IMAGE_VARIANT_ORIGINAL,
+                        source_info
+                            .as_ref()
+                            .map(|source_info| (source_info.width, source_info.height)),
+                        None,
+                    )
+                    .await?;
+                base_key = Some(object.key.clone());
+                manifest.original = Some(ImageVariantObject {
+                    name: IMAGE_VARIANT_ORIGINAL.to_string(),
+                    object,
+                    width: original_width,
+                    height: original_height,
+                    content_type: original_content_type,
+                });
+            }
+
+            for variant in variants {
+                let blob = blob_from_bytes(&variant.bytes, &variant.content_type)?;
+                let object = self
+                    .upload_one(
+                        UploadSource {
+                            blob,
+                            name: variant.file_name.clone(),
+                            size: variant.bytes.len() as u64,
+                            content_type: Some(variant.content_type.clone()),
+                            last_modified: self.source.last_modified,
+                        },
+                        &variant.name,
+                        Some((variant.width, variant.height)),
+                        base_key.as_deref(),
+                    )
+                    .await?;
+                manifest.variants.push(ImageVariantObject {
+                    name: variant.name,
+                    object,
+                    width: variant.width,
+                    height: variant.height,
+                    content_type: variant.content_type,
+                });
+            }
+
+            Ok(manifest)
+        }
+
+        async fn upload_one(
+            &self,
+            source: UploadSource,
+            variant_name: &str,
+            dimensions: Option<(u32, u32)>,
+            base_key: Option<&str>,
+        ) -> StorageResult<ObjectRef> {
+            UploadBuilder {
+                endpoint: self.endpoint.clone(),
+                with_credentials: self.with_credentials,
+                scope: self.scope.clone(),
+                source,
+                strategy: self.strategy,
+                metadata: self.variant_metadata(variant_name, dimensions, base_key),
+                progress: self.variant_progress(variant_name),
+                retry_limit: self.retry_limit,
+                retry_base_delay_ms: self.retry_base_delay_ms,
+                abort_signal: self.abort_signal.clone(),
+                resume_session: None,
+                auto_resume: false,
+            }
+            .send()
+            .await
+        }
+
+        fn variant_metadata(
+            &self,
+            variant_name: &str,
+            dimensions: Option<(u32, u32)>,
+            base_key: Option<&str>,
+        ) -> BTreeMap<String, String> {
+            let mut metadata = self.metadata.clone();
+            metadata.insert(
+                IMAGE_VARIANT_METADATA_KEY.to_string(),
+                variant_name.to_string(),
+            );
+            if let Some(base_key) = base_key {
+                metadata.insert(
+                    IMAGE_VARIANT_BASE_KEY_METADATA_KEY.to_string(),
+                    base_key.to_string(),
+                );
+            }
+            if let Some((width, height)) = dimensions {
+                metadata.insert(
+                    IMAGE_VARIANT_WIDTH_METADATA_KEY.to_string(),
+                    width.to_string(),
+                );
+                metadata.insert(
+                    IMAGE_VARIANT_HEIGHT_METADATA_KEY.to_string(),
+                    height.to_string(),
+                );
+            }
+            metadata
+        }
+
+        fn variant_progress(&self, variant_name: &str) -> Option<Rc<dyn Fn(UploadProgress)>> {
+            self.progress.as_ref().map(|callback| {
+                let callback = callback.clone();
+                let variant_name = variant_name.to_string();
+                Rc::new(move |progress| callback(variant_name.clone(), progress))
+                    as Rc<dyn Fn(UploadProgress)>
+            })
+        }
     }
 
     /// Browser upload builder.
@@ -1883,13 +2208,18 @@ mod wasm {
         )
     }
 
-    fn object_url(endpoint: &str, scope: &str, key: &str) -> String {
-        format!(
+    fn object_url(endpoint: &str, scope: &str, key: &str, variant: Option<&str>) -> String {
+        let mut url = format!(
             "{}/scopes/{}/objects/{}",
             endpoint.trim_end_matches('/'),
             pocopine_codec::percent_encode(scope),
             encode_object_key_path(key)
-        )
+        );
+        if let Some(variant) = variant {
+            url.push_str("?variant=");
+            url.push_str(&pocopine_codec::percent_encode(variant));
+        }
+        url
     }
 
     fn object_read_url(endpoint: &str, scope: &str, key: &str) -> String {
@@ -1924,6 +2254,28 @@ mod wasm {
         format!("{}/complete", upload_url(endpoint, session))
     }
 
+    #[cfg(feature = "image-compression")]
+    async fn read_blob_bytes(blob: &Blob) -> StorageResult<Vec<u8>> {
+        let value = JsFuture::from(blob.array_buffer())
+            .await
+            .map_err(|err| StorageError::client(format!("read image blob: {err:?}")))?;
+        let buffer: ArrayBuffer = value.dyn_into().map_err(|err| {
+            StorageError::client(format!("image blob was not ArrayBuffer: {err:?}"))
+        })?;
+        Ok(Uint8Array::new(&buffer).to_vec())
+    }
+
+    #[cfg(feature = "image-compression")]
+    fn blob_from_bytes(bytes: &[u8], content_type: &str) -> StorageResult<Blob> {
+        let array = Uint8Array::from(bytes);
+        let parts = Array::new();
+        parts.push(&array);
+        let options = BlobPropertyBag::new();
+        options.set_type(content_type);
+        Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+            .map_err(|err| StorageError::client(format!("create image variant blob: {err:?}")))
+    }
+
     fn empty_to_none(value: String) -> Option<String> {
         (!value.is_empty()).then_some(value)
     }
@@ -1934,6 +2286,9 @@ pub use wasm::{
     BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, ResumableUploadBuilder,
     UploadBuilder,
 };
+
+#[cfg(all(target_arch = "wasm32", feature = "image-compression"))]
+pub use wasm::ImageUploadBuilder;
 
 #[cfg(all(target_arch = "wasm32", any(test, feature = "test-utils")))]
 pub use wasm::{__reset_browser_transport_for_test, __set_browser_transport_for_test};

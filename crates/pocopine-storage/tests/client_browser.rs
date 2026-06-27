@@ -14,9 +14,10 @@ use js_sys::{Array, Promise};
 use pocopine::prelude::*;
 use pocopine_storage::{
     BrowserStorageRequest, BrowserStorageResponse, BrowserStorageTransport, ObjectRef,
-    ObjectVisibility, SignedRead, StorageClient, StorageError, StorageObjectScope, StorageResponse,
-    StorageResult, TransferPlan, UploadClient, UploadPhase, UploadProgress, UploadSession,
-    UploadSessionId, UploadSessionStatus, UploadStrategy, storage_plugin, upload_plugin,
+    ObjectVisibility, ReadUrlRequest, SignedRead, StorageClient, StorageError, StorageObjectScope,
+    StorageResponse, StorageResult, TransferPlan, UploadClient, UploadPhase, UploadProgress,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, storage_plugin,
+    upload_plugin,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -190,6 +191,60 @@ async fn object_chain_requests_download_url_and_delete() {
     assert_eq!(
         state.requests[1].url,
         "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt"
+    );
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn object_chain_requests_image_variant_download_url() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    let url = StorageClient::new()
+        .object_scope::<AvatarObjects>()
+        .object("avatars/user-1/photo.txt")
+        .variant("thumb64")
+        .download_url()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        url,
+        "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?token=read-token&variant=thumb64"
+    );
+    let state = state.borrow();
+    let request: ReadUrlRequest = serde_json::from_str(
+        state.requests[0]
+            .json_body
+            .as_deref()
+            .expect("read-url request should include JSON"),
+    )
+    .unwrap();
+    assert_eq!(request.variant.as_deref(), Some("thumb64"));
+    pocopine_storage::__reset_browser_transport_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn object_chain_deletes_image_variant_url() {
+    pocopine_storage::__reset_browser_transport_for_test();
+    let fake = FakeStorageTransport::default();
+    let state = fake.state.clone();
+    pocopine_storage::__set_browser_transport_for_test(fake);
+
+    StorageClient::new()
+        .object_scope::<AvatarObjects>()
+        .object("avatars/user-1/photo.txt")
+        .variant("thumb64")
+        .delete()
+        .await
+        .unwrap();
+
+    let state = state.borrow();
+    assert_eq!(
+        state.requests[0].url,
+        "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?variant=thumb64"
     );
     pocopine_storage::__reset_browser_transport_for_test();
 }
@@ -616,6 +671,7 @@ struct SeenRequest {
     method: String,
     url: String,
     headers: Vec<(String, String)>,
+    json_body: Option<String>,
 }
 
 impl BrowserStorageTransport for FakeStorageTransport {
@@ -638,6 +694,7 @@ impl BrowserStorageTransport for FakeStorageTransport {
                 method: request.method.clone(),
                 url: request.url.clone(),
                 headers: request.headers.clone(),
+                json_body: request.json_body.clone(),
             });
             match (request.method.as_str(), request.url.as_str()) {
                 ("POST", "/__pocopine/storage/v1/uploads") => {
@@ -720,15 +777,36 @@ impl BrowserStorageTransport for FakeStorageTransport {
                 (
                     "POST",
                     "/__pocopine/storage/v1/scopes/avatars/objects/read-url/avatars/user-1/photo.txt",
-                ) => Ok(json_response(Ok(SignedRead {
-                    url: "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?token=read-token"
-                        .to_string(),
-                    headers: Vec::new(),
-                    expires_at: OffsetDateTime::UNIX_EPOCH + time::Duration::days(1),
-                }))),
+                ) => {
+                    let variant = request
+                        .json_body
+                        .as_deref()
+                        .and_then(|body| serde_json::from_str::<ReadUrlRequest>(body).ok())
+                        .and_then(|body| body.variant);
+                    let mut url =
+                        "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?token=read-token"
+                            .to_string();
+                    if let Some(variant) = variant {
+                        url.push_str("&variant=");
+                        url.push_str(&variant);
+                    }
+                    Ok(json_response(Ok(SignedRead {
+                        url,
+                        headers: Vec::new(),
+                        expires_at: OffsetDateTime::UNIX_EPOCH + time::Duration::days(1),
+                    })))
+                }
                 (
                     "DELETE",
                     "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt",
+                ) => Ok(BrowserStorageResponse {
+                    status: 204,
+                    headers: Vec::new(),
+                    body: String::new(),
+                }),
+                (
+                    "DELETE",
+                    "/__pocopine/storage/v1/scopes/avatars/objects/avatars/user-1/photo.txt?variant=thumb64",
                 ) => Ok(BrowserStorageResponse {
                     status: 204,
                     headers: Vec::new(),

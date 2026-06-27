@@ -16,9 +16,10 @@ use pocopine_server::axum::http::{HeaderMap, HeaderValue, Method, Request, Statu
 use pocopine_storage::{
     ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, InitiateUploadRequest,
     LocalFsStorageBackend, MemoryStorageBackend, ObjectBody, ObjectChecksum, ObjectMetadata,
-    ObjectOwnerRef, ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH, SafeObjectKey,
-    SignedRead, StorageBackend, StorageContext, StorageError, StorageKey, StorageKeyFuture,
-    StorageKeyResolver, StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent,
+    ObjectOwnerRef, ObjectVisibility, ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH,
+    SafeObjectKey, SignedRead, StorageActor, StorageBackend, StorageContext, StorageError,
+    StorageGuardFuture, StorageKey, StorageKeyFuture, StorageKeyResolver, StorageObjectAccess,
+    StorageObjectGuard, StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent,
     UploadPolicy, UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy,
     storage_server_plugin, storage_tus_server_plugin,
 };
@@ -399,6 +400,419 @@ async fn object_read_url_serves_completed_object_and_delete_removes_it() -> Stor
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn object_read_url_variant_query_reads_suffix_object() -> StorageResult<()> {
+    let scope = StorageScope::builder(policy("memory")?.visibility(ObjectVisibility::Public))
+        .key_resolver(LinkedImageResolver)
+        .build();
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .scope("avatars", scope)?
+        .build();
+    let actor = anon_ctx();
+
+    let original_session = storage
+        .initiate_upload(
+            actor.clone(),
+            initiate_request("avatars", UploadStrategy::Auto),
+        )
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor.clone(),
+            original_session.id.clone(),
+            0,
+            Bytes::from_static(b"hello"),
+        )
+        .await?;
+    let original = storage
+        .complete_upload(
+            actor.clone(),
+            CompleteUpload {
+                session: original_session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+
+    let mut variant_request = initiate_request("avatars", UploadStrategy::Auto);
+    variant_request.file_name = "photo.thumb64.txt".to_string();
+    variant_request.metadata = [
+        (
+            pocopine_storage::IMAGE_VARIANT_BASE_KEY_METADATA_KEY.to_string(),
+            original.key.clone(),
+        ),
+        (
+            pocopine_storage::IMAGE_VARIANT_METADATA_KEY.to_string(),
+            "thumb64".to_string(),
+        ),
+    ]
+    .into();
+    let variant_session = storage
+        .initiate_upload(actor.clone(), variant_request)
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor,
+            variant_session.id.clone(),
+            0,
+            Bytes::from_static(b"small"),
+        )
+        .await?;
+    let variant = storage
+        .complete_upload(
+            anon_ctx(),
+            CompleteUpload {
+                session: variant_session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(variant.key, "avatars/user-1/photo.thumb64.jpg");
+
+    let router = finalize(storage);
+    let read_url = format!(
+        "/__pocopine/storage/v1/scopes/avatars/objects/read-url/{}",
+        original.key
+    );
+    let signed: SignedRead = post_json(
+        router.clone(),
+        &read_url,
+        &ReadUrlRequest::default().variant("thumb64"),
+    )
+    .await?;
+    assert!(signed.url.contains("variant=thumb64"));
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&signed.url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"small")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn object_delete_variant_query_removes_suffix_object_only() -> StorageResult<()> {
+    let scope = StorageScope::builder(policy("memory")?.visibility(ObjectVisibility::Public))
+        .key_resolver(LinkedImageResolver)
+        .build();
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .scope("avatars", scope)?
+        .build();
+    let actor = anon_ctx();
+
+    let original_session = storage
+        .initiate_upload(
+            actor.clone(),
+            initiate_request("avatars", UploadStrategy::Auto),
+        )
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor.clone(),
+            original_session.id.clone(),
+            0,
+            Bytes::from_static(b"hello"),
+        )
+        .await?;
+    let original = storage
+        .complete_upload(
+            actor.clone(),
+            CompleteUpload {
+                session: original_session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+
+    let mut variant_request = initiate_request("avatars", UploadStrategy::Auto);
+    variant_request.file_name = "photo.thumb64.txt".to_string();
+    variant_request.metadata = [
+        (
+            pocopine_storage::IMAGE_VARIANT_BASE_KEY_METADATA_KEY.to_string(),
+            original.key.clone(),
+        ),
+        (
+            pocopine_storage::IMAGE_VARIANT_METADATA_KEY.to_string(),
+            "thumb64".to_string(),
+        ),
+    ]
+    .into();
+    let variant_session = storage
+        .initiate_upload(actor.clone(), variant_request)
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor,
+            variant_session.id.clone(),
+            0,
+            Bytes::from_static(b"small"),
+        )
+        .await?;
+    storage
+        .complete_upload(
+            anon_ctx(),
+            CompleteUpload {
+                session: variant_session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+
+    let router = finalize(storage.clone());
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/__pocopine/storage/v1/scopes/avatars/objects/{}?variant=thumb64",
+                    original.key
+                ))
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (read, _) = storage
+        .read_object(
+            StorageContext::system("test"),
+            "avatars".to_string(),
+            SafeObjectKey::parse(&original.key)?,
+            None,
+            None,
+        )
+        .await?;
+    assert_eq!(
+        Body::from_stream(read.body)
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+        Bytes::from_static(b"hello")
+    );
+    let deleted_variant = storage
+        .read_object(
+            StorageContext::system("test"),
+            "avatars".to_string(),
+            SafeObjectKey::parse(&original.key)?,
+            None,
+            Some("thumb64".to_string()),
+        )
+        .await;
+    assert!(matches!(
+        deleted_variant,
+        Err(StorageError::UnknownObject { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn private_scope_rejects_browser_object_access_without_key_guard() -> StorageResult<()> {
+    let scope = StorageScope::builder(policy("memory")?)
+        .key_resolver(CountingResolver {
+            calls: Arc::new(AtomicUsize::new(0)),
+        })
+        .build();
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .scope("avatars", scope)?
+        .build();
+    let actor = ctx();
+    let session = storage
+        .initiate_upload(
+            actor.clone(),
+            initiate_request("avatars", UploadStrategy::Auto),
+        )
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor.clone(),
+            session.id.clone(),
+            0,
+            Bytes::from_static(b"hello"),
+        )
+        .await?;
+    let object = storage
+        .complete_upload(
+            actor,
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+
+    let router = finalize(storage.clone());
+    let object_uri = format!(
+        "/__pocopine/storage/v1/scopes/avatars/objects/{}",
+        object.key
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&object_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let read_url = format!(
+        "/__pocopine/storage/v1/scopes/avatars/objects/read-url/{}",
+        object.key
+    );
+    let (status, signed): (StatusCode, StorageResult<SignedRead>) =
+        post_json_status(router.clone(), &read_url, &ReadUrlRequest::default(), true).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(matches!(signed, Err(StorageError::Forbidden { .. })));
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&object_uri)
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let (read, _) = storage
+        .read_object(
+            StorageContext::system("checked-storage-read"),
+            "avatars".to_string(),
+            SafeObjectKey::parse(&object.key)?,
+            None,
+            None,
+        )
+        .await?;
+    assert_eq!(
+        Body::from_stream(read.body)
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+        Bytes::from_static(b"hello")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn object_guard_authorizes_read_url_direct_read_and_delete_by_key() -> StorageResult<()> {
+    let scope = StorageScope::builder(policy("memory")?)
+        .key_resolver(PrincipalKeyResolver)
+        .object_guard(OwnerPrefixGuard)
+        .build();
+    let storage = StorageServer::builder()
+        .backend("memory", MemoryStorageBackend::new())?
+        .scope("attachments", scope)?
+        .build();
+    let owner = principal_ctx("user-1", "owner");
+    let other = principal_ctx("user-2", "other");
+    let session = storage
+        .initiate_upload(
+            owner.clone(),
+            initiate_request("attachments", UploadStrategy::Auto),
+        )
+        .await?;
+    storage
+        .append_upload_bytes(
+            owner.clone(),
+            session.id.clone(),
+            0,
+            Bytes::from_static(b"hello"),
+        )
+        .await?;
+    let object = storage
+        .complete_upload(
+            owner.clone(),
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    assert_eq!(object.key, "user-1/photo.txt");
+    let key = SafeObjectKey::parse(&object.key)?;
+
+    let denied_read = storage
+        .read_object(
+            other.clone(),
+            "attachments".to_string(),
+            key.clone(),
+            None,
+            None,
+        )
+        .await;
+    assert!(matches!(denied_read, Err(StorageError::Forbidden { .. })));
+
+    let denied_signed = storage
+        .signed_read(
+            other.clone(),
+            "attachments".to_string(),
+            key.clone(),
+            ReadUrlRequest::default(),
+        )
+        .await;
+    assert!(matches!(denied_signed, Err(StorageError::Forbidden { .. })));
+
+    let denied_delete = storage
+        .delete_object(other, "attachments".to_string(), key.clone(), None)
+        .await;
+    assert!(matches!(denied_delete, Err(StorageError::Forbidden { .. })));
+
+    let signed = storage
+        .signed_read(
+            owner.clone(),
+            "attachments".to_string(),
+            key.clone(),
+            ReadUrlRequest::default(),
+        )
+        .await?;
+    let router = finalize(storage.clone());
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&signed.url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"hello")
+    );
+
+    storage
+        .delete_object(owner, "attachments".to_string(), key, None)
+        .await?;
     Ok(())
 }
 
@@ -1949,6 +2363,42 @@ struct CountingResolver {
     calls: Arc<AtomicUsize>,
 }
 
+struct LinkedImageResolver;
+struct PrincipalKeyResolver;
+struct OwnerPrefixGuard;
+
+impl StorageKeyResolver for LinkedImageResolver {
+    fn resolve_key<'a>(
+        &'a self,
+        _ctx: &'a StorageContext,
+        intent: &'a UploadIntent,
+    ) -> StorageKeyFuture<'a> {
+        Box::pin(async move {
+            if let Some(key) = intent.image_variant_object_key()? {
+                return Ok(StorageKey::new(key));
+            }
+            storage_key()
+        })
+    }
+}
+
+impl StorageKeyResolver for PrincipalKeyResolver {
+    fn resolve_key<'a>(
+        &'a self,
+        ctx: &'a StorageContext,
+        intent: &'a UploadIntent,
+    ) -> StorageKeyFuture<'a> {
+        Box::pin(async move {
+            let principal = ctx.require_principal()?;
+            Ok(StorageKey::new(SafeObjectKey::parse(format!(
+                "{}/{}",
+                principal.subject,
+                intent.file_name()
+            ))?))
+        })
+    }
+}
+
 impl StorageKeyResolver for CountingResolver {
     fn resolve_key<'a>(
         &'a self,
@@ -1957,5 +2407,29 @@ impl StorageKeyResolver for CountingResolver {
     ) -> StorageKeyFuture<'a> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { storage_key() })
+    }
+}
+
+impl StorageObjectGuard for OwnerPrefixGuard {
+    fn check(&self, ctx: StorageContext, access: StorageObjectAccess) -> StorageGuardFuture<'_> {
+        Box::pin(async move {
+            let subject = match ctx.actor {
+                StorageActor::Principal(principal) => principal.subject,
+                _ => return Err(ServerError::unauthorized("login required")),
+            };
+            let prefix = format!("{subject}/");
+            match access {
+                StorageObjectAccess::Write { .. } => Ok(()),
+                StorageObjectAccess::Read { key, .. } | StorageObjectAccess::Delete { key, .. } => {
+                    if key.as_str().starts_with(&prefix) {
+                        Ok(())
+                    } else {
+                        Err(ServerError::forbidden(
+                            "object belongs to another principal",
+                        ))
+                    }
+                }
+            }
+        })
     }
 }

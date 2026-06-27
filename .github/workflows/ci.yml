@@ -180,6 +180,13 @@ jobs:
           --target wasm32-unknown-unknown
           --all-targets
           -- -D warnings
+      - name: pocopine-storage image compression wasm clippy
+        run: >
+          cargo clippy -p pocopine-storage
+          --target wasm32-unknown-unknown
+          --features image-compression
+          --all-targets
+          -- -D warnings
 
   clippy-host:
     name: clippy (host — pocopine-cli)
@@ -288,6 +295,8 @@ jobs:
         run: cargo test -p pocopine-sync-query-macros --tests
         env:
           CARGO_TARGET_DIR: target/sync-query-macros-host
+      - name: pocopine-storage image compression tests
+        run: cargo test -p pocopine-storage --features image-compression
       - name: workspace host tests
         run: cargo test --workspace --exclude pine --exclude observability-smoke --exclude pocopine-sync-query-macros --tests
 
