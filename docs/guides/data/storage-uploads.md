@@ -139,6 +139,11 @@ metadata plus an `ObjectBody` byte stream, and the HTTP route forwards that
 stream with backpressure instead of collecting the full object into memory.
 The scope's `max_bytes` is still enforced before streaming when provider
 metadata exposes the object size, with a streaming cap as a final guard.
+Backends only send `Content-Length` when the provider length is trusted; if a
+provider does not expose a reliable size the route uses a streamed response
+without asserting a length. Once response headers have been sent, provider
+read errors surface as an interrupted download, so callers that manually fetch
+the URL should treat a short or failed body as a failed read.
 
 ## Two transports
 

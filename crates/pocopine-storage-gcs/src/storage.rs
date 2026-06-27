@@ -1671,6 +1671,7 @@ impl StorageBackend for GcsStorageBackend {
                     visibility: ObjectVisibility::Private,
                     metadata: Default::default(),
                 },
+                content_length: Some(size),
                 body: ObjectBody::from_stream_with_limit(stream, max_bytes),
             })
         })

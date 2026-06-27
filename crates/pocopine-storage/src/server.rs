@@ -388,6 +388,9 @@ impl Stream for ObjectBody {
 #[derive(Debug)]
 pub struct ObjectRead {
     pub object: ObjectRef,
+    /// HTTP `Content-Length` for the read body when the backend has a trusted
+    /// length. `None` lets the response stream use transfer encoding instead.
+    pub content_length: Option<u64>,
     pub body: ObjectBody,
 }
 
@@ -2466,7 +2469,11 @@ fn object_read_response(
 ) -> Response {
     match result {
         Ok((read, disposition)) => {
-            let ObjectRead { object, body } = read;
+            let ObjectRead {
+                object,
+                content_length,
+                body,
+            } = read;
             let mut response = if head_only {
                 Body::empty().into_response()
             } else {
@@ -2482,7 +2489,9 @@ fn object_read_response(
                     HeaderValue::from_static("application/octet-stream"),
                 );
             }
-            if let Ok(value) = HeaderValue::from_str(&object.size.to_string()) {
+            if let Some(content_length) = content_length
+                && let Ok(value) = HeaderValue::from_str(&content_length.to_string())
+            {
                 response.headers_mut().insert(CONTENT_LENGTH, value);
             }
             if let Some(etag) = &object.etag

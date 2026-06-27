@@ -403,6 +403,83 @@ async fn object_read_url_serves_completed_object_and_delete_removes_it() -> Stor
 }
 
 #[tokio::test]
+async fn local_fs_read_streams_multichunk_object_with_matching_content_length() -> StorageResult<()>
+{
+    let tmp = tempdir().unwrap();
+    let size = 70 * 1024 + 17;
+    let bytes: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
+    let policy = UploadPolicy::new("local")?
+        .max_bytes(bytes.len() as u64 + 1)
+        .allowed_content_types(["text/plain"])
+        .allowed_extensions(["txt"])
+        .preferred_chunk_size(32 * 1024);
+    let storage = StorageServer::builder()
+        .backend("local", LocalFsStorageBackend::new(tmp.path()))?
+        .public_scope("avatars", policy)?
+        .build();
+    let actor = anon_ctx();
+    let session = storage
+        .initiate_upload(
+            actor.clone(),
+            InitiateUploadRequest {
+                protocol: pocopine_storage::STORAGE_PROTOCOL_V1.to_string(),
+                scope: "avatars".to_string(),
+                file_name: "large.txt".to_string(),
+                size: Some(bytes.len() as u64),
+                content_type: Some("text/plain".to_string()),
+                metadata: Default::default(),
+                requested_strategy: UploadStrategy::Sequential,
+            },
+        )
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor.clone(),
+            session.id.clone(),
+            0,
+            Bytes::from(bytes.clone()),
+        )
+        .await?;
+    let object = storage
+        .complete_upload(
+            actor,
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    let router = finalize(storage);
+    let read_url = format!(
+        "/__pocopine/storage/v1/scopes/avatars/objects/read-url/{}",
+        object.key
+    );
+    let signed: SignedRead =
+        post_json(router.clone(), &read_url, &ReadUrlRequest::default()).await?;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&signed.url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-length").unwrap(),
+        &HeaderValue::from_str(&bytes.len().to_string()).unwrap()
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.len(), bytes.len());
+    assert_eq!(&body[..], bytes.as_slice());
+    Ok(())
+}
+
+#[tokio::test]
 async fn tus_options_advertises_creation_resume_and_termination() -> StorageResult<()> {
     let router = finalize_tus(memory_storage()?);
     let response = router

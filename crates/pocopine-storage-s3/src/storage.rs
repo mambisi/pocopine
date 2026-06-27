@@ -306,13 +306,15 @@ impl S3StorageBackend {
                     s3_error("get completed object", err)
                 }
             })?;
-        let declared_size = output.content_length.unwrap_or_default().max(0) as u64;
-        if declared_size > max_bytes {
+        let declared_size = output
+            .content_length
+            .and_then(|size| u64::try_from(size).ok());
+        if declared_size.is_some_and(|size| size > max_bytes) {
             return Err(StorageError::payload_too_large(max_bytes));
         }
         let etag = output.e_tag.map(normalize_etag);
         let content_type = output.content_type;
-        let size = declared_size;
+        let size = declared_size.unwrap_or_default();
         let stream =
             futures_util::stream::unfold(Some(output.body.into_async_read()), |state| async move {
                 let mut reader = state?;
@@ -339,6 +341,7 @@ impl S3StorageBackend {
                 visibility: ObjectVisibility::Private,
                 metadata: Default::default(),
             },
+            content_length: declared_size,
             body: ObjectBody::from_stream_with_limit(stream, max_bytes),
         })
     }

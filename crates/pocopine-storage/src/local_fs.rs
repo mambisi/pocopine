@@ -511,13 +511,15 @@ impl LocalFsStorageBackend {
         max_bytes: u64,
     ) -> StorageResult<ObjectRead> {
         let path = self.object_path(&key);
-        let metadata = fs::metadata(&path)
+        let file = File::open(&path)
+            .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))?;
+        let metadata = file
+            .metadata()
             .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))?;
         if metadata.len() > max_bytes {
             return Err(StorageError::payload_too_large(max_bytes));
         }
-        let file = File::open(&path)
-            .map_err(|err| map_not_found(err, || StorageError::unknown_object(key.to_string())))?;
+        let size = metadata.len();
         Ok(ObjectRead {
             object: ObjectRef {
                 backend: self.name.to_string(),
@@ -527,11 +529,12 @@ impl LocalFsStorageBackend {
                 etag: None,
                 checksum: None,
                 content_type: None,
-                size: metadata.len(),
+                size,
                 visibility: crate::ObjectVisibility::Private,
                 metadata: Default::default(),
             },
-            body: file_body(file, max_bytes),
+            content_length: Some(size),
+            body: file_body(file, size, max_bytes),
         })
     }
 
@@ -541,22 +544,29 @@ impl LocalFsStorageBackend {
     }
 }
 
-fn file_body(file: File, max_bytes: u64) -> ObjectBody {
-    let stream = futures_util::stream::unfold(Some(file), |state| async move {
-        let file = state?;
+fn file_body(file: File, content_length: u64, max_bytes: u64) -> ObjectBody {
+    let stream = futures_util::stream::unfold(Some((file, content_length)), |state| async move {
+        let (file, remaining) = state?;
+        if remaining == 0 {
+            return None;
+        }
+        let chunk_len = remaining.min(64 * 1024) as usize;
         let result = tokio::task::spawn_blocking(move || {
             let mut file = file;
-            let mut buf = vec![0_u8; 64 * 1024];
+            let mut buf = vec![0_u8; chunk_len];
             let result = file.read(&mut buf).map(|read| {
                 buf.truncate(read);
-                buf
+                (read, buf)
             });
             (file, result)
         })
         .await;
         match result {
-            Ok((_file, Ok(buf))) if buf.is_empty() => None,
-            Ok((file, Ok(buf))) => Some((Ok(Bytes::from(buf)), Some(file))),
+            Ok((_file, Ok((_read, buf)))) if buf.is_empty() => None,
+            Ok((file, Ok((read, buf)))) => Some((
+                Ok(Bytes::from(buf)),
+                Some((file, remaining.saturating_sub(read as u64))),
+            )),
             Ok((_file, Err(err))) => Some((Err(err), None)),
             Err(err) => Some((
                 Err(std::io::Error::other(format!(
