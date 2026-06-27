@@ -20,26 +20,7 @@ pub use transport::RealtimeClient;
 /// the upgrade. Pair this with `routes_with_auth` on the server, which verifies
 /// the query token through the configured `AuthProvider`.
 pub fn url_with_access_token(url: &str, token: &str) -> String {
-    append_query_param(url, WS_ACCESS_TOKEN_QUERY_PARAM, token)
-}
-
-fn append_query_param(url: &str, key: &str, value: &str) -> String {
-    let separator = if url.contains('?') {
-        if url.ends_with('?') || url.ends_with('&') {
-            ""
-        } else {
-            "&"
-        }
-    } else {
-        "?"
-    };
-    format!(
-        "{}{}{}={}",
-        url,
-        separator,
-        pocopine_codec::percent_encode(key),
-        pocopine_codec::percent_encode(value)
-    )
+    pocopine_codec::append_query_param(url, WS_ACCESS_TOKEN_QUERY_PARAM, token)
 }
 
 #[cfg(test)]
@@ -55,6 +36,10 @@ mod tests {
         assert_eq!(
             url_with_access_token("wss://example/ws?room=1", "tok+en"),
             "wss://example/ws?room=1&access_token=tok%2Ben"
+        );
+        assert_eq!(
+            url_with_access_token("wss://example/ws#frag", "tok"),
+            "wss://example/ws?access_token=tok#frag"
         );
     }
 }

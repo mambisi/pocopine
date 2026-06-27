@@ -23,6 +23,17 @@
 //! assert_eq!(percent_decode("a%20b+c", true), "a b c");
 //! ```
 //!
+//! Query strings use the same component encoder:
+//!
+//! ```
+//! use pocopine_codec::append_query_param;
+//!
+//! assert_eq!(
+//!     append_query_param("wss://example/ws?room=1#top", "access token", "a b"),
+//!     "wss://example/ws?room=1&access%20token=a%20b#top"
+//! );
+//! ```
+//!
 //! For a `Vec<u8>` struct field that should serialize as a base64 string, use the
 //! [`base64_bytes`] serde adapter:
 //!
@@ -131,6 +142,90 @@ pub fn percent_decode(s: &str, plus_as_space: bool) -> String {
     } else {
         percent_decode_str(s).decode_utf8_lossy().into_owned()
     }
+}
+
+/// Owned query pairs that can be appended to an existing URL or path.
+///
+/// This is intentionally not a URL parser. It only handles the common safe
+/// operation Pocopine crates need: append RFC 3986 component-encoded query
+/// pairs before any existing `#fragment`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueryParams {
+    pairs: Vec<(String, String)>,
+}
+
+impl QueryParams {
+    /// Create an empty query parameter builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one query key/value pair.
+    pub fn pair(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.pairs
+            .push((key.as_ref().to_string(), value.as_ref().to_string()));
+        self
+    }
+
+    /// Return whether this builder contains no pairs.
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// Append the query pairs to `url`, preserving any existing `#fragment`.
+    pub fn append_to(&self, url: &mut String) {
+        if self.pairs.is_empty() {
+            return;
+        }
+
+        let fragment = url.find('#').map(|idx| url.split_off(idx));
+        push_query_separator(url);
+        for (index, (key, value)) in self.pairs.iter().enumerate() {
+            if index > 0 {
+                url.push('&');
+            }
+            push_encoded_query_pair(url, key, value);
+        }
+        if let Some(fragment) = fragment {
+            url.push_str(&fragment);
+        }
+    }
+}
+
+/// Return `url` with one percent-encoded query pair appended.
+///
+/// Existing queries are preserved, trailing `?`/`&` separators are reused, and
+/// the new pair is inserted before any existing `#fragment`.
+pub fn append_query_param(url: &str, key: &str, value: &str) -> String {
+    let mut out = url.to_string();
+    append_query_param_into(&mut out, key, value);
+    out
+}
+
+/// Append one percent-encoded query pair to `url` in place.
+pub fn append_query_param_into(url: &mut String, key: &str, value: &str) {
+    let fragment = url.find('#').map(|idx| url.split_off(idx));
+    push_query_separator(url);
+    push_encoded_query_pair(url, key, value);
+    if let Some(fragment) = fragment {
+        url.push_str(&fragment);
+    }
+}
+
+fn push_query_separator(url: &mut String) {
+    if url.contains('?') {
+        if !url.ends_with('?') && !url.ends_with('&') {
+            url.push('&');
+        }
+    } else {
+        url.push('?');
+    }
+}
+
+fn push_encoded_query_pair(out: &mut String, key: &str, value: &str) {
+    percent_encode_into(out, key);
+    out.push('=');
+    percent_encode_into(out, value);
 }
 
 /// Serde adapter for a `Vec<u8>` field encoded as a base64 string.
@@ -242,6 +337,63 @@ mod tests {
         assert_eq!(percent_decode("%FF", false), "\u{FFFD}");
         // A `%` not followed by two hex digits is left verbatim.
         assert_eq!(percent_decode("100%zz", false), "100%zz");
+    }
+
+    #[test]
+    fn append_query_param_adds_and_encodes_pair() {
+        assert_eq!(
+            append_query_param("wss://example/ws", "access token", "a b/c"),
+            "wss://example/ws?access%20token=a%20b%2Fc"
+        );
+    }
+
+    #[test]
+    fn append_query_param_reuses_existing_query_separator() {
+        assert_eq!(
+            append_query_param("wss://example/ws?room=1", "token", "a+b"),
+            "wss://example/ws?room=1&token=a%2Bb"
+        );
+        assert_eq!(
+            append_query_param("wss://example/ws?", "token", "a"),
+            "wss://example/ws?token=a"
+        );
+        assert_eq!(
+            append_query_param("wss://example/ws?room=1&", "token", "a"),
+            "wss://example/ws?room=1&token=a"
+        );
+    }
+
+    #[test]
+    fn append_query_param_inserts_before_fragment() {
+        assert_eq!(
+            append_query_param("wss://example/ws#top", "token", "a"),
+            "wss://example/ws?token=a#top"
+        );
+        assert_eq!(
+            append_query_param("wss://example/ws?room=1#top", "token", "a"),
+            "wss://example/ws?room=1&token=a#top"
+        );
+    }
+
+    #[test]
+    fn query_params_appends_multiple_pairs() {
+        let mut url = String::from("/callback?existing=1#done");
+        QueryParams::new()
+            .pair("client_id", "client 1")
+            .pair("redirect_uri", "/auth/cb?x=1")
+            .append_to(&mut url);
+
+        assert_eq!(
+            url,
+            "/callback?existing=1&client_id=client%201&redirect_uri=%2Fauth%2Fcb%3Fx%3D1#done"
+        );
+    }
+
+    #[test]
+    fn empty_query_params_do_not_touch_url() {
+        let mut url = String::from("/callback#done");
+        QueryParams::new().append_to(&mut url);
+        assert_eq!(url, "/callback#done");
     }
 
     #[test]
