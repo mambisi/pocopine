@@ -473,10 +473,9 @@ async fn main() -> std::io::Result<()> {
     let verifier =
         JwtVerifier::custom(creds.verifier_config()).expect("verifier from credentials config");
 
-    // Important: install the verifier middleware on the router
-    // BEFORE installing the credentials plugin, otherwise the
-    // signup/login routes added by the plugin would be wrapped in
-    // the auth middleware and reject anonymous requests.
+    // Server::with_auth is builder-global: it is applied after plugins
+    // register routes, so protected app routes and plugin routes see
+    // the same Principal-populating middleware.
     Server::new(Router::new())
         .with_auth(verifier)
         .plugin(creds)

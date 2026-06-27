@@ -67,11 +67,11 @@ async fn whoami_with_extension(
 }
 
 fn build_router() -> Router {
-    // axum's `Router::layer` only wraps routes that exist at the
-    // call site, so `with_auth` must run AFTER the server-function
-    // route helpers have registered their routes. Get this order
-    // wrong and the middleware silently no-ops on the unwrapped
-    // routes.
+    // This uses the raw `RouterAuthExt::with_auth` extension. axum's
+    // `Router::layer` only wraps routes that exist at the call site,
+    // so the raw router extension must run AFTER the server-function
+    // route helpers have registered their routes. `Server::with_auth`
+    // is builder-global and does not have this ordering footgun.
     let router = pocopine_server::axum::Router::new();
     let router = __whoami_route(router);
     let router = __whoami_with_request_context_route(router);
