@@ -162,18 +162,18 @@ pub fn begin_authorization(config: &OAuthConfig) -> OAuthResult<Authorization> {
     let challenge = pocopine_codec::base64url_encode(&pocopine_crypto::sha256(verifier.as_bytes()));
     let state = random_url_token(16)?;
 
-    let mut url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}",
-        config.authorize_url,
-        pocopine_codec::percent_encode(&config.client_id),
-        pocopine_codec::percent_encode(&config.redirect_uri),
-        challenge,
-        state,
-    );
+    let mut params = pocopine_codec::QueryParams::new()
+        .pair("response_type", "code")
+        .pair("client_id", &config.client_id)
+        .pair("redirect_uri", &config.redirect_uri)
+        .pair("code_challenge", &challenge)
+        .pair("code_challenge_method", "S256")
+        .pair("state", &state);
     if !config.scopes.is_empty() {
-        url.push_str("&scope=");
-        url.push_str(&pocopine_codec::percent_encode(&config.scopes.join(" ")));
+        params = params.pair("scope", config.scopes.join(" "));
     }
+    let mut url = config.authorize_url.clone();
+    params.append_to(&mut url);
 
     Ok(Authorization {
         authorize_url: url,
@@ -334,6 +334,29 @@ mod tests {
         );
         assert!(!auth.pkce_verifier.expose().is_empty());
         assert!(!auth.state.is_empty());
+    }
+
+    #[test]
+    fn begin_authorization_appends_query_before_fragment() {
+        let cfg = OAuthConfig::public(
+            "https://auth.example.com/authorize?prompt=select#login",
+            "https://auth.example.com/token",
+            "client 123",
+            "https://app.example.com/callback?from=oauth",
+        );
+
+        let auth = begin_authorization(&cfg).unwrap();
+
+        assert!(
+            auth.authorize_url
+                .starts_with("https://auth.example.com/authorize?prompt=select&response_type=code")
+        );
+        assert!(auth.authorize_url.ends_with("#login"));
+        assert!(auth.authorize_url.contains("client_id=client%201"));
+        assert!(
+            auth.authorize_url
+                .contains("redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback%3Ffrom%3Doauth")
+        );
     }
 
     #[test]
