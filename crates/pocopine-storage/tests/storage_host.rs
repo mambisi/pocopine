@@ -16,10 +16,11 @@ use pocopine_server::axum::http::{HeaderMap, HeaderValue, Method, Request, Statu
 use pocopine_storage::{
     ChecksumAlgorithm, ChecksumPolicy, CompleteUpload, InitiateUpload, InitiateUploadRequest,
     LocalFsStorageBackend, MemoryStorageBackend, ObjectChecksum, ObjectMetadata, ObjectOwnerRef,
-    STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH, SafeObjectKey, StorageBackend, StorageContext,
-    StorageError, StorageKey, StorageKeyFuture, StorageKeyResolver, StorageResponse, StorageResult,
-    StorageScope, StorageServer, UploadIntent, UploadPolicy, UploadSession, UploadSessionId,
-    UploadSessionStatus, UploadStrategy, storage_server_plugin, storage_tus_server_plugin,
+    ReadUrlRequest, STORAGE_ANON_COOKIE, STORAGE_UPLOADS_PATH, SafeObjectKey, SignedRead,
+    StorageBackend, StorageContext, StorageError, StorageKey, StorageKeyFuture, StorageKeyResolver,
+    StorageResponse, StorageResult, StorageScope, StorageServer, UploadIntent, UploadPolicy,
+    UploadSession, UploadSessionId, UploadSessionStatus, UploadStrategy, storage_server_plugin,
+    storage_tus_server_plugin,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -260,6 +261,131 @@ async fn route_accepts_configured_trusted_origin() -> StorageResult<()> {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session?.status, UploadSessionStatus::Open);
+    Ok(())
+}
+
+#[tokio::test]
+async fn object_read_url_serves_completed_object_and_delete_removes_it() -> StorageResult<()> {
+    let storage = memory_storage()?;
+    let actor = anon_ctx();
+    let session = storage
+        .initiate_upload(
+            actor.clone(),
+            initiate_request("avatars", UploadStrategy::Auto),
+        )
+        .await?;
+    storage
+        .append_upload_bytes(
+            actor.clone(),
+            session.id.clone(),
+            0,
+            Bytes::from_static(b"hello"),
+        )
+        .await?;
+    let object = storage
+        .complete_upload(
+            actor,
+            CompleteUpload {
+                session: session.id,
+                checksum: None,
+            },
+        )
+        .await?;
+    let router = finalize(storage);
+    let read_url = format!(
+        "/__pocopine/storage/v1/scopes/avatars/objects/read-url/{}",
+        object.key
+    );
+    let signed: SignedRead =
+        post_json(router.clone(), &read_url, &ReadUrlRequest::default()).await?;
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&signed.url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/plain"
+    );
+    assert_eq!(response.headers().get("content-length").unwrap(), "5");
+    assert_eq!(
+        response.headers().get("content-disposition").unwrap(),
+        "inline"
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], b"hello");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(&signed.url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-length").unwrap(), "5");
+    assert!(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty()
+    );
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/__pocopine/storage/v1/scopes/avatars/objects/{}",
+                    object.key
+                ))
+                .header("cookie", anon_cookie())
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains(r#""ok":true"#));
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&signed.url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
 

@@ -1,9 +1,9 @@
 ---
-title: "Object storage uploads"
-description: "Server-mediated object-storage uploads into S3, GCS, and Azure native multipart."
+title: "Object storage uploads and reads"
+description: "Server-mediated object-storage uploads and short-lived object reads for S3, GCS, and Azure."
 ---
 
-# Object storage uploads
+# Object storage uploads and reads
 
 How `pocopine-storage` moves bytes from a browser into S3, GCS, or Azure
 Blob Storage: a **server-mediated, proxy-like** upload path that streams
@@ -40,13 +40,15 @@ falls over under load. The whole upload runtime is built to avoid that:
      PUT    /uploads/:s              multipart part     (Upload-Part header)
      POST   /uploads/:s/complete     assemble
      GET/DELETE /uploads/:s          inspect / abort
+     POST   /scopes/:x/objects/read-url/:key
+     GET/HEAD/DELETE /scopes/:x/objects/:key
         ▼
   StorageServer                                 ← auth, scope policy, ownership
-     require_bound_actor · authorize_write · scope policy
+     require_bound_actor · authorize_* · scope policy
         ▼
   StorageBackend trait                          ← one impl per provider
      capabilities() · initiate · append_upload_bytes(Bytes)
-     upload_part(UploadBody) · complete · abort
+     upload_part(UploadBody) · complete · abort · read_object · delete_completed_object
         ▼
   S3 / GCS / Azure                              ← native multipart assembly
      (memory + local-fs backends for tests/dev)
@@ -56,6 +58,81 @@ Everything above `StorageBackend` is provider-neutral. Each backend
 crate (`pocopine-storage-s3`, `-gcs`, `-azure`) maps the contract onto
 one provider; shared session bookkeeping lives in
 `pocopine-storage/src/backend_common.rs`.
+
+## Typed object scopes
+
+Use `StorageObjectScope` when a bucket area has a stable contract: maximum
+object size, accepted content types/extensions, key layout, and later
+scope-level encryption settings. The same type gives the browser the scope
+name and gives the server the policy plus key resolver.
+
+```rust
+use pocopine_storage::{
+    SafeObjectKey, StorageContext, StorageKey, StorageKeyFuture, StorageObjectScope,
+    StorageResult, UploadIntent, UploadPolicy,
+};
+
+struct AvatarObjects;
+
+impl StorageObjectScope for AvatarObjects {
+    const NAME: &'static str = "avatars";
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn policy() -> StorageResult<UploadPolicy> {
+        Ok(UploadPolicy::new("s3")?
+            .max_bytes(2 * 1024 * 1024)
+            .allowed_content_types(["image/png", "image/jpeg"])
+            .allowed_extensions(["png", "jpg", "jpeg"]))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_key<'a>(
+        _ctx: &'a StorageContext,
+        intent: &'a UploadIntent,
+    ) -> StorageKeyFuture<'a> {
+        Box::pin(async move {
+            let ext = intent.extension().unwrap_or("bin");
+            Ok(StorageKey::new(SafeObjectKey::parse(format!(
+                "avatars/{}/original.{ext}",
+                intent.generated_object_id()
+            ))?))
+        })
+    }
+}
+```
+
+Register the scope once on the server:
+
+```rust
+let storage = pocopine_storage::StorageServer::builder()
+    .backend("s3", s3_backend)?
+    .object_scope::<AvatarObjects>()?
+    .build();
+```
+
+The browser can use the same scope type for both upload and read chains:
+
+```rust
+let storage = pocopine_storage::StorageClient::new();
+
+let object = storage
+    .object_scope::<AvatarObjects>()
+    .upload_blob(file, "avatar.png")
+    .send()
+    .await?;
+
+let url = storage
+    .object_scope::<AvatarObjects>()
+    .object(object.key)
+    .download_url()
+    .await?;
+```
+
+`download_url()` currently returns a short-lived Pocopine URL. The browser
+fetches that URL from the app origin; provider credentials still stay on the
+server. `signed_read()` returns the full `SignedRead` response when callers
+need the expiry or future provider-specific headers, and `delete()` removes
+the completed object through the same scope authorization.
 
 ## Two transports
 
@@ -273,7 +350,8 @@ provider exactly once.
 ## Source map
 
 - `pocopine-storage/src/protocol.rs` — `UploadStrategy`,
-  `BackendCapabilities`, `TransferPlan`, `UploadSession`, `UploadPolicy`.
+  `BackendCapabilities`, `TransferPlan`, `UploadSession`, `UploadPolicy`,
+  `StorageObjectScope`, `ReadUrlRequest`, `SignedRead`.
 - `pocopine-storage/src/server.rs` — routes, `StorageServer`,
   `StorageBackend` trait, `UploadBody` / `UploadByteStream`.
 - `pocopine-storage/src/backend_common.rs` — `select_upload_mode`,
@@ -281,7 +359,8 @@ provider exactly once.
   size/owner/open guards.
 - `pocopine-storage-{s3,gcs,azure}/src/storage.rs` — per-provider
   `initiate` / `append_upload_bytes` / `upload_part` / `complete` /
-  `abort`, plus native helpers and emulator-backed integration tests.
+  `abort` / `read_object` / `delete_completed_object`, plus native helpers
+  and emulator-backed integration tests.
 
 ## Roadmap
 
