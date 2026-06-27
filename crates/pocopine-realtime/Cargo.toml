@@ -15,6 +15,7 @@ redis = ["dep:redis"]
 # is shared too — the wasm transport logs dropped frames per the logging rule.
 [dependencies]
 bytes = "1"
+pocopine-codec = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
 tracing = { workspace = true }

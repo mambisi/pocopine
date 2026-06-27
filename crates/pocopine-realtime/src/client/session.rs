@@ -56,6 +56,8 @@ pub enum SessionEvent {
     Data { topic: String, payload: Bytes },
     /// A subscription must be re-established fresh (unreplayable cursor / lag).
     Gap { topic: String, reason: String },
+    /// A subscribe was rejected by the gateway's topic authorizer.
+    SubscribeDenied { topic: String, reason: String },
     /// The server reported a typed error.
     Error { code: String, message: String },
     /// A heartbeat was acknowledged.
@@ -177,6 +179,12 @@ impl ClientSession {
                 }
                 SessionEvent::Gap { topic, reason }
             }
+            Control::SubscribeDenied { topic, reason } => {
+                if let Some(topic_ref) = self.topic_ref.remove(&topic) {
+                    self.topic_name.remove(&topic_ref);
+                }
+                SessionEvent::SubscribeDenied { topic, reason }
+            }
             Control::Error { code, message } => SessionEvent::Error { code, message },
             Control::HeartbeatAck {} => SessionEvent::HeartbeatAck,
             // Heartbeat / Resume are client→server; the client never receives them.
@@ -293,6 +301,31 @@ mod tests {
         );
         // No bogus ref leaked into the maps.
         assert!(s.data("t", 1, Bytes::from_static(b"x")).is_none());
+    }
+
+    #[test]
+    fn subscribe_denied_is_visible_and_drops_any_stale_ref() {
+        let mut s = ClientSession::new();
+        let ack = Control::SubscribeAck {
+            topic: "private".into(),
+            topic_ref: 8,
+        }
+        .into_frame()
+        .unwrap();
+        s.on_frame(&ack).unwrap();
+        assert!(s.data("private", 1, Bytes::from_static(b"x")).is_some());
+
+        let denied = Control::subscribe_denied("private", "forbidden")
+            .into_frame()
+            .unwrap();
+        assert_eq!(
+            s.on_frame(&denied).unwrap(),
+            Some(SessionEvent::SubscribeDenied {
+                topic: "private".into(),
+                reason: "forbidden".into(),
+            })
+        );
+        assert!(s.data("private", 1, Bytes::from_static(b"x")).is_none());
     }
 
     #[test]

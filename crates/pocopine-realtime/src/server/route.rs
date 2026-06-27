@@ -16,17 +16,20 @@
 //! reaped.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, State};
-use axum::http::Request;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderValue, Request, Uri};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
-use pocopine_auth::RequestAuthExt;
+use pocopine_auth::{AuthProvider, Principal, RequestAuthExt};
 use pocopine_core::server::RequestContext;
 use pocopine_events::Topic;
 use pocopine_observe::LOG_TARGET;
@@ -34,12 +37,16 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval};
 
-use crate::protocol::{Control, Frame, FrameKind, WS_PROTOCOL_V1, WS_STREAM_PATH};
+use crate::protocol::{
+    Control, Frame, FrameKind, WS_ACCESS_TOKEN_QUERY_PARAM, WS_PROTOCOL_V1, WS_STREAM_PATH,
+};
 
 use super::error::WsError;
 use super::fanout::TopicStream;
 use super::gateway::{GatewayConfig, WsGateway};
 use super::handler::InboundData;
+
+type SharedAuthProvider = Arc<dyn AuthProvider>;
 
 /// Build the axum router for the gateway. Mirrors `pocopine_live::routes`:
 /// the [`WsGateway`] is the router state, reachable in the handler via
@@ -48,6 +55,102 @@ pub fn routes(gateway: WsGateway) -> Router {
     Router::new()
         .route(WS_STREAM_PATH, get(upgrade_handler))
         .with_state(gateway)
+}
+
+/// Build the gateway router and authenticate browser-safe `access_token` query
+/// values through an [`AuthProvider`].
+///
+/// Browsers cannot set an `Authorization` header on a WebSocket upgrade.
+/// `RealtimeClient::connect_with_token` appends the token as a query parameter;
+/// this route helper converts it into the bearer shape existing providers
+/// understand, inserts the resulting [`Principal`] into request extensions, and
+/// scrubs the token from the URI before the gateway builds its
+/// [`RequestContext`].
+pub fn routes_with_auth<P: AuthProvider + 'static>(gateway: WsGateway, provider: P) -> Router {
+    routes_with_auth_arc(gateway, Arc::new(provider))
+}
+
+/// Pre-`Arc`'d variant of [`routes_with_auth`].
+pub fn routes_with_auth_arc(gateway: WsGateway, provider: Arc<dyn AuthProvider>) -> Router {
+    routes(gateway).layer(axum::middleware::from_fn_with_state(
+        provider,
+        websocket_auth_middleware,
+    ))
+}
+
+async fn websocket_auth_middleware(
+    State(provider): State<SharedAuthProvider>,
+    mut req: Request<Body>,
+    next: Next,
+) -> Response {
+    let token = access_token(req.uri());
+    let mut headers = req.headers().clone();
+    if headers.get(AUTHORIZATION).is_none()
+        && let Some(token) = &token
+        && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        headers.insert(AUTHORIZATION, value);
+    }
+    if token.is_some()
+        && let Some(uri) = uri_without_access_token(req.uri())
+    {
+        *req.uri_mut() = uri;
+    }
+
+    let ctx = RequestContext::from_parts(
+        req.method().clone(),
+        req.uri().clone(),
+        headers,
+        req.extensions().clone(),
+    );
+    match provider.authenticate(&ctx).await {
+        Ok(Some(user)) => {
+            req.extensions_mut().insert(Principal::from_user(user));
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                error = %err,
+                "realtime websocket auth provider failed; treating request as anonymous"
+            );
+        }
+    }
+
+    next.run(req).await
+}
+
+fn access_token(uri: &Uri) -> Option<String> {
+    query_value(uri.query()?, WS_ACCESS_TOKEN_QUERY_PARAM)
+}
+
+fn query_value(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|part| {
+        let (raw_key, raw_value) = part.split_once('=')?;
+        (pocopine_codec::percent_decode(raw_key, true) == key)
+            .then(|| pocopine_codec::percent_decode(raw_value, true))
+    })
+}
+
+fn uri_without_access_token(uri: &Uri) -> Option<Uri> {
+    let query = uri.query()?;
+    let mut parts = uri.clone().into_parts();
+    let mut filtered = query
+        .split('&')
+        .filter(|part| decoded_query_key(part) != WS_ACCESS_TOKEN_QUERY_PARAM)
+        .peekable();
+    let mut path_and_query = uri.path().to_string();
+    if filtered.peek().is_some() {
+        path_and_query.push('?');
+        path_and_query.push_str(&filtered.collect::<Vec<_>>().join("&"));
+    }
+    parts.path_and_query = Some(path_and_query.parse().ok()?);
+    Uri::from_parts(parts).ok()
+}
+
+fn decoded_query_key(part: &str) -> String {
+    let raw_key = part.split_once('=').map(|(key, _)| key).unwrap_or(part);
+    pocopine_codec::percent_decode(raw_key, true)
 }
 
 async fn upgrade_handler(State(gateway): State<WsGateway>, request: Request<Body>) -> Response {
@@ -364,10 +467,7 @@ impl Session {
             }
         };
         if !self.gateway.authorize(&self.ctx, &topic).await.can_join() {
-            self.send(&Control::error(
-                "forbidden_topic",
-                format!("topic '{topic_name}' denied"),
-            ));
+            self.send(&Control::subscribe_denied(topic_name, "forbidden"));
             return;
         }
 
@@ -505,5 +605,31 @@ async fn send_control(out: &mpsc::Sender<Message>, control: &Control) -> bool {
     match control.into_frame() {
         Ok(frame) => out.send(Message::Binary(frame.encode())).await.is_ok(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_without_access_token_scrubs_value_bare_and_encoded_keys() {
+        let uri: Uri =
+            "/__pocopine/ws/v1?room=1&access_token=secret&access_token&access%5Ftoken=secret2&flag"
+                .parse()
+                .unwrap();
+
+        let scrubbed = uri_without_access_token(&uri).unwrap();
+
+        assert_eq!(scrubbed.to_string(), "/__pocopine/ws/v1?room=1&flag");
+    }
+
+    #[test]
+    fn uri_without_access_token_removes_empty_query_when_only_token_was_present() {
+        let uri: Uri = "/__pocopine/ws/v1?access_token=secret".parse().unwrap();
+
+        let scrubbed = uri_without_access_token(&uri).unwrap();
+
+        assert_eq!(scrubbed.to_string(), "/__pocopine/ws/v1");
     }
 }

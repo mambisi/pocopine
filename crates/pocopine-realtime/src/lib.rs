@@ -32,6 +32,28 @@
 //! # }
 //! ```
 //!
+//! ## Browser WebSocket auth
+//!
+//! Browsers cannot attach arbitrary headers to a WebSocket upgrade, so bearer
+//! tokens that work for `fetch` do not automatically reach this transport. Use
+//! `RealtimeClient::connect_with_token` on wasm and [`routes_with_auth`] on the
+//! server to pass a bearer token through the
+//! `access_token` query parameter and verify it with the same `AuthProvider`
+//! used by HTTP routes:
+//!
+//! ```ignore
+//! // wasm
+//! let client = RealtimeClient::connect_with_token("/__pocopine/ws/v1", token)?;
+//!
+//! // host
+//! let router = pocopine_realtime::routes_with_auth(gateway, jwt_verifier);
+//! ```
+//!
+//! A denied subscribe is surfaced as
+//! [`client::SessionEvent::SubscribeDenied`] instead of looking like an idle
+//! topic. Consumers that need UI feedback should register
+//! `RealtimeClient::on_event` and handle that event.
+//!
 //! ## Module layout
 //!
 //! This crate is host-only. Following the `client-server-modules` convention,
@@ -51,7 +73,8 @@
 // The wire protocol is target-agnostic — shared by the server and the client.
 pub mod protocol;
 pub use protocol::{
-    Control, Frame, FrameKind, ProtocolError, TopicSeq, WS_PROTOCOL_V1, WS_STREAM_PATH,
+    Control, Frame, FrameKind, ProtocolError, TopicSeq, WS_ACCESS_TOKEN_QUERY_PARAM,
+    WS_PROTOCOL_V1, WS_STREAM_PATH,
 };
 
 // The browser client. Its session state machine is target-agnostic
