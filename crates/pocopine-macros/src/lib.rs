@@ -4435,17 +4435,44 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {
                 match key {
                     #(#get_arms)*
-                    _ => ::pocopine::__private::JsValue::UNDEFINED,
+                    // Not a real field — fall through to a `#[computed]`
+                    // synthetic field. Same resolution order as
+                    // `#[component]`: real fields first, then computed.
+                    _ => <Self as ::pocopine::__private::HandlerDispatch>::computed_get(self, key)
+                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
                 }
             }
             fn set(&mut self, key: &str, value: ::pocopine::__private::JsValue) {
                 match key {
                     #(#set_arms)*
-                    _ => {}
+                    // Computed keys never match a real field arm, so
+                    // they land here and stay read-only: a proxy write
+                    // to `$store.<name>.<computed>` is a silent no-op.
+                    _ => { let _ = value; }
                 }
             }
             fn keys(&self) -> &'static [&'static str] {
-                &[#(#keys_arr),*]
+                // Real field keys plus `#[computed]` synthetic keys.
+                // `computed_keys()` is empty for stores with no
+                // computed methods, so this degrades to the raw list.
+                static __POCOPINE_STORE_KEYS: ::std::sync::OnceLock<&'static [&'static str]> =
+                    ::std::sync::OnceLock::new();
+                *__POCOPINE_STORE_KEYS.get_or_init(|| {
+                    let mut __keys = ::std::vec![#(#keys_arr),*];
+                    __keys.extend_from_slice(
+                        <Self as ::pocopine::__private::HandlerDispatch>::computed_keys(),
+                    );
+                    let __boxed: ::std::boxed::Box<[&'static str]> = __keys.into_boxed_slice();
+                    ::std::boxed::Box::leak(__boxed)
+                })
+            }
+            fn is_computed_field(&self, key: &str) -> bool {
+                // Drives the projection-cache skip in `read_field_tracked`:
+                // a computed carries its own `Computed<JsValue>` memo, so
+                // it must not also be frozen in the per-field projection
+                // cache (which only invalidates on a direct write).
+                <Self as ::pocopine::__private::HandlerDispatch>::computed_keys()
+                    .contains(&key)
             }
             fn field_fingerprint(&self, key: &str) -> ::core::option::Option<u64> {
                 match key {
@@ -4489,7 +4516,27 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::std::rc::Rc::new(::std::cell::RefCell::new(
                         <#struct_ident as ::core::default::Default>::default()
                     ));
-                let scope = ::pocopine::__private::Scope::new(instance);
+                // Pointer used to key this store's `#[computed]` entries.
+                // It must equal the pointer `computed_get` derives on a
+                // read — both borrow the same `RefCell`, whose contents
+                // never move — so compute it here and drop the borrow
+                // before the `Rc` is shared. No-op for stores without
+                // computed methods.
+                let __state_ptr = ::pocopine::__private::component_computed::state_ptr(
+                    &*instance.borrow(),
+                );
+                let scope = ::pocopine::__private::Scope::new(instance.clone());
+                let __scope_id = scope.id;
+                // Stores have no DOM lifecycle, so `setup` never runs.
+                // Install computed entries here instead, before the scope
+                // is registered — so the first `$store.<name>.<computed>`
+                // read resolves. `Handle` keeps the singleton alive for
+                // the computed closures.
+                <#struct_ident>::__pocopine_computed_install(
+                    __scope_id,
+                    __state_ptr,
+                    ::pocopine::__private::Handle::new(instance, __scope_id),
+                );
                 ::pocopine::__private::register_store_scope(#name_str, scope);
             }
 
