@@ -23,7 +23,7 @@ graph LR
   CTX --> AG["ctx.agent::#lt;A#gt;() · tool loop"]
   CTX --> PAR["ctx.parallel() · fan-out"]
   CTX --> RED["ctx.reduce() · fold/judge"]
-  AK --> PV["Provider<br/>Anthropic · OpenAI"]
+  AK --> PV["Provider<br/>Anthropic · Qwen · OpenAI"]
   CTX -.->|one trace tree + redacted stream| app
 ```
 
@@ -44,6 +44,8 @@ re-exported through the `pocopine` umbrella while the surface settles).
 pocopine-agenkit = { path = "../../crates/pocopine-agenkit" }
 # Recommended provider — native Claude Messages API:
 pocopine-agenkit-anthropic = { path = "../../crates/pocopine-agenkit-anthropic" }
+# first-party Qwen / DashScope compatible-mode provider:
+# pocopine-agenkit-qwen = { path = "../../crates/pocopine-agenkit-qwen" }
 # or the OpenAI-compatible provider (OpenAI, OpenRouter, Together, vLLM, …):
 # pocopine-agenkit-oai = { path = "../../crates/pocopine-agenkit-oai" }
 ```
