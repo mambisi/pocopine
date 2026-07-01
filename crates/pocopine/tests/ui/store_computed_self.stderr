@@ -1,0 +1,5 @@
+error: #[computed] methods must not take self; declare dependencies as parameters
+  --> tests/ui/store_computed_self.rs:17:8
+   |
+17 |     fn bad(&self) -> usize {
+   |        ^^^

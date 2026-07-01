@@ -1,0 +1,5 @@
+error: #[computed] dependency graph contains a cycle
+  --> tests/ui/store_computed_cycle.rs:15:8
+   |
+15 |     fn a(b: usize) -> usize {
+   |        ^

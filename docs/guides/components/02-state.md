@@ -221,6 +221,60 @@ should stay local-state only. A store is for genuinely shared state.
 **Don't:** create "global singletons" by hand (`static CART:
 OnceCell<...>`). Use `#[store]` so reactivity just works.
 
+### Derived store fields — `#[computed]`
+
+Stores get the same `#[computed]` synthetic fields as components. Declare
+a readonly derivation in the store's `#[handlers]` impl; its dependencies
+are its parameters (no `self`, so there are no hidden reads), and the
+function name is the field key templates bind to:
+
+```rust
+#[derive(Default, Serialize, Deserialize)]
+#[store(name = "ws")]
+pub struct WorkspaceStore {
+    pub active_channel: String,
+    pub messages: Vec<Message>,
+    pub unread_by_channel: HashMap<String, usize>,
+}
+
+#[handlers]
+impl WorkspaceStore {
+    #[computed]
+    fn visible_messages(active_channel: &str, messages: &[Message]) -> Vec<MessageVm> {
+        build_visible_messages(active_channel, messages)
+    }
+
+    // A computed may depend on another computed by naming it.
+    #[computed]
+    fn visible_count(visible_messages: Vec<MessageVm>) -> usize {
+        visible_messages.len()
+    }
+
+    // Actions stay ordinary business logic — no rebuild, no invalidation.
+    pub fn select_channel(&mut self, id: String) {
+        self.active_channel = id;
+    }
+}
+```
+
+Bind them field-like through the `$store` path:
+
+```poco
+<tt-message-list pp-bind:items="$store.ws.visible_messages"></tt-message-list>
+<span pp-text="$store.ws.visible_count"></span>
+```
+
+The value is installed when the store is registered (`App::store::<T>()`),
+so the first `$store.ws.visible_messages` read already resolves. It is
+lazily memoized: it re-derives only when a *source* field it names
+changes through `store::<T>().update(...)`, a proxy write, or a field
+handle — an unrelated field write does not recompute it. It is a
+**readonly** synthetic field: writing `$store.ws.visible_count` through
+the proxy is a no-op, and a `&self` parameter or a dependency cycle is
+rejected at compile time. This is what lets you delete manually-rebuilt
+"label" fields from a store — see the
+[storage-browser refactor recipe](../recipes/storage-browser-state-refactor.md).
+
 ---
 
 ## Async data / server functions
@@ -356,8 +410,10 @@ need a long one:
 4. **Derived state stored as a field you manually keep in sync.**
    Don't write `progress_label` updates into every handler that
    touches `progress`. Use `#[computed]` for pure derivations and
-   `#[watch(field)]` for side-effecting reactions. The framework
+   `#[watch(field)]` for side-effecting reactions — this holds for
+   `#[store]` singletons too, not just components. The framework
    keeps the derived value up to date for you. Templates bind by
-   name (`pp-text="progress_label"`). See
+   name (`pp-text="progress_label"` or `$store.name.progress_label`).
+   See
    [`docs/guides/poco/04-expressions.md`](../poco/04-expressions.md) for
    the full pattern and the canonical examples.
