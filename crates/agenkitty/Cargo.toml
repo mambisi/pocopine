@@ -1,0 +1,88 @@
+[package]
+name = "agenkitty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agenkitty framework: reusable agent specs, policy, events, and local AgentSession wiring on top of Pocopine Agenkit."
+
+[[bin]]
+name = "agenkitty"
+path = "src/main.rs"
+
+# Test-only fixture: a minimal stdio JSON-RPC MCP server driven by the
+# `tests/mcp_tool.rs` integration tests (the MCP stdio transport needs a real
+# child to spawn under the sandbox). std + serde_json only; a no-op `main` on
+# non-unix so wasm/other builds stay clean.
+[[bin]]
+name = "mcp_fixture_server"
+path = "tests/fixtures/mcp_fixture_server.rs"
+
+[dependencies]
+agenkitty-core = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+# Network tool (net.fetch): in-process DNS for resolve-then-pin + HTML→markdown.
+hickory-resolver = "0.25"
+fast_html2md = "0.0"
+# Network tool (SSRF guard): CIDR deny-list matching + WHATWG URL parsing.
+ipnet = "2"
+# Unguessable process-handle ids (cross-session isolation).
+rand = "0.8"
+pocopine-agenkit = { workspace = true }
+pocopine-agenkit-core = { workspace = true }
+pocopine-agenkit-oai = { workspace = true }
+pocopine-crypto = { workspace = true }
+# MCP tool family: official Rust SDK. Pinned exact (breaking minors ~2-3 wks).
+# We inject OUR OWN transports (sandboxed stdio + SSRF/egress-guarded HTTP), so
+# default features (which pull rmcp's own child-process spawn + reqwest client)
+# stay off. `auth`/`schemars` get added when Phase 4 (HTTP/OAuth) lands.
+rmcp = { version = "=2.0.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+# net.fetch HTTP client: rustls + streaming (read the body under a byte cap) +
+# transparent gzip/deflate/brotli. The read-loop cap is applied to the
+# *decompressed* stream, so it doubles as the decompression-bomb ceiling.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "stream", "gzip", "deflate", "brotli"] }
+# MCP Streamable HTTP transport (Phase 4): the rmcp `StreamableHttpClient` trait
+# is expressed with `http`'s HeaderName/HeaderValue (reqwest re-exports the same
+# 1.x types), and SSE response bodies are parsed with `sse-stream` (the same
+# crate + version rmcp uses, so the `Sse` / `SseError` types unify).
+http = "1"
+sse-stream = "0.2"
+# Base64url decode for OAuth JWT access-token audience validation (RFC 8707 /
+# T7 — route base64 through the shared codec crate per the house rule).
+pocopine-codec = { workspace = true }
+schemars = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time", "process", "io-util", "net"] }
+tracing = { workspace = true }
+url = "2"
+
+# Unix-only process control: signals (group kill), resource limits, and
+# `waitpid` (the off-runtime reaper fallback for a dropped mcp stdio child).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "resource", "process"] }
+
+# Linux-only kernel sandboxing: Landlock filesystem confinement + seccomp
+# network denial, applied per-child in the process tool's pre_exec hook.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+seccompiler = "0.5"
+libc = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "3"
+pocopine-agenkit = { workspace = true }
+futures = "0.3"
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+# no-env-filter so the capture isn't limited to the crate's own target (our
+# events use the RFC-069 `pocopine.log` target).
+tracing-test = { version = "0.2", features = ["no-env-filter"] }
