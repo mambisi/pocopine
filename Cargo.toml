@@ -10,11 +10,14 @@ members = [
     "crates/pine-richtext",
     "crates/pine-richtext-collab",
     "crates/pocopine",
+    "crates/agenkitty",
+    "crates/agenkitty-core",
     "crates/pocopine-agenkit",
     "crates/pocopine-agenkit-anthropic",
     "crates/pocopine-agenkit-core",
     "crates/pocopine-agenkit-macros",
     "crates/pocopine-agenkit-oai",
+    "crates/pocopine-agenkit-qwen",
     "crates/pocopine-analytics",
     "crates/pocopine-assets",
     "crates/pocopine-auth",
@@ -101,7 +104,7 @@ exclude = [
 # CLI's own target dir from default wasm builds so `cargo build -p counter
 # --target wasm32-unknown-unknown` doesn't pull in host-only deps.
 [workspace.metadata.hosts]
-cli = ["pocopine-cli", "gen-model-catalog"]
+cli = ["pocopine-cli", "gen-model-catalog", "agenkitty"]
 
 [workspace.package]
 version = "0.1.1"
@@ -115,10 +118,12 @@ repository = "https://github.com/mambisi/pocopine"
 # of `pocopine` get devtools on by default via its own `default`
 # feature, which forwards `pocopine-core/devtools`.
 pocopine-agenkit = { path = "crates/pocopine-agenkit", version = "0.1.0" }
-pocopine-agenkit-anthropic = { path = "crates/pocopine-agenkit-anthropic", version = "0.1.0" }
 pocopine-agenkit-core = { path = "crates/pocopine-agenkit-core", version = "0.1.0" }
+agenkitty-core = { path = "crates/agenkitty-core", version = "0.1.1" }
+pocopine-agenkit-anthropic = { path = "crates/pocopine-agenkit-anthropic", version = "0.1.0" }
 pocopine-agenkit-macros = { path = "crates/pocopine-agenkit-macros", version = "0.1.0" }
 pocopine-agenkit-oai = { path = "crates/pocopine-agenkit-oai", version = "0.1.0" }
+pocopine-agenkit-qwen = { path = "crates/pocopine-agenkit-qwen", version = "0.1.0" }
 pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-assets = { path = "crates/pocopine-assets", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
