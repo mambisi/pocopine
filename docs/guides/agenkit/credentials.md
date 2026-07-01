@@ -37,7 +37,10 @@ graph LR
 ## 1. Env (the default)
 
 Do nothing and Agenkit reads `{PROVIDER}_API_KEY` from the environment
-(`EnvCredentials`). This is how `AnthropicProvider::from_env` already worked:
+(`EnvCredentials`). First-party provider constructors follow the provider's
+native env naming where needed: `AnthropicProvider::from_env` reads
+`ANTHROPIC_API_KEY`, and `QwenProvider::from_env` reads `DASHSCOPE_API_KEY`
+with `QWEN_API_KEY` as a local-development fallback.
 
 ```rust
 let agenkit = Agenkit::builder()

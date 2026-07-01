@@ -89,10 +89,10 @@ pub(super) fn generated() -> Vec<Model> {
         Model { id: models::openai::GPT_5_3_CHAT_LATEST, context_window: 128000, max_output: 16384, reasoning: true, vision: true, pricing: ModelPricing { input: 1.75, output: 14.0, cache_read: 0.175, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_5_4, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 2.5, output: 15.0, cache_read: 0.25, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_5_4_2026_03_05, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 2.5, output: 15.0, cache_read: 0.25, cache_creation: 0.0 } },
-        Model { id: models::openai::GPT_5_4_MINI, context_window: 272000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.75, output: 4.5, cache_read: 0.075, cache_creation: 0.0 } },
-        Model { id: models::openai::GPT_5_4_MINI_2026_03_17, context_window: 272000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.75, output: 4.5, cache_read: 0.075, cache_creation: 0.0 } },
-        Model { id: models::openai::GPT_5_4_NANO, context_window: 272000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.2, output: 1.25, cache_read: 0.02, cache_creation: 0.0 } },
-        Model { id: models::openai::GPT_5_4_NANO_2026_03_17, context_window: 272000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.2, output: 1.25, cache_read: 0.02, cache_creation: 0.0 } },
+        Model { id: models::openai::GPT_5_4_MINI, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.75, output: 4.5, cache_read: 0.075, cache_creation: 0.0 } },
+        Model { id: models::openai::GPT_5_4_MINI_2026_03_17, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.75, output: 4.5, cache_read: 0.075, cache_creation: 0.0 } },
+        Model { id: models::openai::GPT_5_4_NANO, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.2, output: 1.25, cache_read: 0.02, cache_creation: 0.0 } },
+        Model { id: models::openai::GPT_5_4_NANO_2026_03_17, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 0.2, output: 1.25, cache_read: 0.02, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_5_5, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 5.0, output: 30.0, cache_read: 0.5, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_5_5_2026_04_23, context_window: 1050000, max_output: 128000, reasoning: true, vision: true, pricing: ModelPricing { input: 5.0, output: 30.0, cache_read: 0.5, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_AUDIO, context_window: 128000, max_output: 16384, reasoning: false, vision: false, pricing: ModelPricing { input: 2.5, output: 10.0, cache_read: 0.0, cache_creation: 0.0 } },
@@ -116,6 +116,23 @@ pub(super) fn generated() -> Vec<Model> {
         Model { id: models::openai::O3_MINI_2025_01_31, context_window: 200000, max_output: 100000, reasoning: true, vision: false, pricing: ModelPricing { input: 1.1, output: 4.4, cache_read: 0.55, cache_creation: 0.0 } },
         Model { id: models::openai::O4_MINI, context_window: 200000, max_output: 100000, reasoning: true, vision: true, pricing: ModelPricing { input: 1.1, output: 4.4, cache_read: 0.275, cache_creation: 0.0 } },
         Model { id: models::openai::O4_MINI_2025_04_16, context_window: 200000, max_output: 100000, reasoning: true, vision: true, pricing: ModelPricing { input: 1.1, output: 4.4, cache_read: 0.275, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_CODER, context_window: 1000000, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.3, output: 1.5, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_MAX, context_window: 30720, max_output: 8192, reasoning: true, vision: false, pricing: ModelPricing { input: 1.6, output: 6.4, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS, context_window: 129024, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS_2025_01_25, context_window: 129024, max_output: 8192, reasoning: true, vision: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS_2025_04_28, context_window: 129024, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS_2025_07_14, context_window: 129024, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_TURBO, context_window: 129024, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_TURBO_2024_11_01, context_window: 1000000, max_output: 8192, reasoning: true, vision: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_TURBO_2025_04_28, context_window: 1000000, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_TURBO_LATEST, context_window: 1000000, max_output: 16384, reasoning: true, vision: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_NEXT_80B_A3B_INSTRUCT, context_window: 262144, max_output: 65536, reasoning: false, vision: false, pricing: ModelPricing { input: 0.15, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_NEXT_80B_A3B_THINKING, context_window: 262144, max_output: 65536, reasoning: true, vision: false, pricing: ModelPricing { input: 0.15, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_VL_235B_A22B_INSTRUCT, context_window: 131072, max_output: 32768, reasoning: false, vision: true, pricing: ModelPricing { input: 0.4, output: 1.6, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_VL_235B_A22B_THINKING, context_window: 131072, max_output: 32768, reasoning: true, vision: true, pricing: ModelPricing { input: 0.4, output: 4.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_VL_32B_INSTRUCT, context_window: 131072, max_output: 32768, reasoning: false, vision: true, pricing: ModelPricing { input: 0.16, output: 0.64, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_VL_32B_THINKING, context_window: 131072, max_output: 32768, reasoning: true, vision: true, pricing: ModelPricing { input: 0.16, output: 2.87, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWQ_PLUS, context_window: 98304, max_output: 8192, reasoning: true, vision: false, pricing: ModelPricing { input: 0.8, output: 2.4, cache_read: 0.0, cache_creation: 0.0 } },
     ]
 }
 
@@ -296,13 +313,13 @@ pub mod models {
         pub const GPT_5_4: ModelRef = ModelRef::from_static("openai/gpt-5.4");
         /// `openai/gpt-5.4-2026-03-05` · 1050K ctx · reasoning · vision
         pub const GPT_5_4_2026_03_05: ModelRef = ModelRef::from_static("openai/gpt-5.4-2026-03-05");
-        /// `openai/gpt-5.4-mini` · 272K ctx · reasoning · vision
+        /// `openai/gpt-5.4-mini` · 1050K ctx · reasoning · vision
         pub const GPT_5_4_MINI: ModelRef = ModelRef::from_static("openai/gpt-5.4-mini");
-        /// `openai/gpt-5.4-mini-2026-03-17` · 272K ctx · reasoning · vision
+        /// `openai/gpt-5.4-mini-2026-03-17` · 1050K ctx · reasoning · vision
         pub const GPT_5_4_MINI_2026_03_17: ModelRef = ModelRef::from_static("openai/gpt-5.4-mini-2026-03-17");
-        /// `openai/gpt-5.4-nano` · 272K ctx · reasoning · vision
+        /// `openai/gpt-5.4-nano` · 1050K ctx · reasoning · vision
         pub const GPT_5_4_NANO: ModelRef = ModelRef::from_static("openai/gpt-5.4-nano");
-        /// `openai/gpt-5.4-nano-2026-03-17` · 272K ctx · reasoning · vision
+        /// `openai/gpt-5.4-nano-2026-03-17` · 1050K ctx · reasoning · vision
         pub const GPT_5_4_NANO_2026_03_17: ModelRef = ModelRef::from_static("openai/gpt-5.4-nano-2026-03-17");
         /// `openai/gpt-5.5` · 1050K ctx · reasoning · vision
         pub const GPT_5_5: ModelRef = ModelRef::from_static("openai/gpt-5.5");
@@ -350,5 +367,44 @@ pub mod models {
         pub const O4_MINI: ModelRef = ModelRef::from_static("openai/o4-mini");
         /// `openai/o4-mini-2025-04-16` · 200K ctx · reasoning · vision
         pub const O4_MINI_2025_04_16: ModelRef = ModelRef::from_static("openai/o4-mini-2025-04-16");
+    }
+
+    /// qwen model handles.
+    pub mod qwen {
+        use super::ModelRef;
+        /// `qwen/qwen-coder` · 1M ctx · reasoning
+        pub const QWEN_CODER: ModelRef = ModelRef::from_static("qwen/qwen-coder");
+        /// `qwen/qwen-max` · 30720 ctx · reasoning
+        pub const QWEN_MAX: ModelRef = ModelRef::from_static("qwen/qwen-max");
+        /// `qwen/qwen-plus` · 129024 ctx · reasoning
+        pub const QWEN_PLUS: ModelRef = ModelRef::from_static("qwen/qwen-plus");
+        /// `qwen/qwen-plus-2025-01-25` · 129024 ctx · reasoning
+        pub const QWEN_PLUS_2025_01_25: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-01-25");
+        /// `qwen/qwen-plus-2025-04-28` · 129024 ctx · reasoning
+        pub const QWEN_PLUS_2025_04_28: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-04-28");
+        /// `qwen/qwen-plus-2025-07-14` · 129024 ctx · reasoning
+        pub const QWEN_PLUS_2025_07_14: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-07-14");
+        /// `qwen/qwen-turbo` · 129024 ctx · reasoning
+        pub const QWEN_TURBO: ModelRef = ModelRef::from_static("qwen/qwen-turbo");
+        /// `qwen/qwen-turbo-2024-11-01` · 1M ctx · reasoning
+        pub const QWEN_TURBO_2024_11_01: ModelRef = ModelRef::from_static("qwen/qwen-turbo-2024-11-01");
+        /// `qwen/qwen-turbo-2025-04-28` · 1M ctx · reasoning
+        pub const QWEN_TURBO_2025_04_28: ModelRef = ModelRef::from_static("qwen/qwen-turbo-2025-04-28");
+        /// `qwen/qwen-turbo-latest` · 1M ctx · reasoning
+        pub const QWEN_TURBO_LATEST: ModelRef = ModelRef::from_static("qwen/qwen-turbo-latest");
+        /// `qwen/qwen3-next-80b-a3b-instruct` · 262144 ctx
+        pub const QWEN3_NEXT_80B_A3B_INSTRUCT: ModelRef = ModelRef::from_static("qwen/qwen3-next-80b-a3b-instruct");
+        /// `qwen/qwen3-next-80b-a3b-thinking` · 262144 ctx · reasoning
+        pub const QWEN3_NEXT_80B_A3B_THINKING: ModelRef = ModelRef::from_static("qwen/qwen3-next-80b-a3b-thinking");
+        /// `qwen/qwen3-vl-235b-a22b-instruct` · 131072 ctx · vision
+        pub const QWEN3_VL_235B_A22B_INSTRUCT: ModelRef = ModelRef::from_static("qwen/qwen3-vl-235b-a22b-instruct");
+        /// `qwen/qwen3-vl-235b-a22b-thinking` · 131072 ctx · reasoning · vision
+        pub const QWEN3_VL_235B_A22B_THINKING: ModelRef = ModelRef::from_static("qwen/qwen3-vl-235b-a22b-thinking");
+        /// `qwen/qwen3-vl-32b-instruct` · 131072 ctx · vision
+        pub const QWEN3_VL_32B_INSTRUCT: ModelRef = ModelRef::from_static("qwen/qwen3-vl-32b-instruct");
+        /// `qwen/qwen3-vl-32b-thinking` · 131072 ctx · reasoning · vision
+        pub const QWEN3_VL_32B_THINKING: ModelRef = ModelRef::from_static("qwen/qwen3-vl-32b-thinking");
+        /// `qwen/qwq-plus` · 98304 ctx · reasoning
+        pub const QWQ_PLUS: ModelRef = ModelRef::from_static("qwen/qwq-plus");
     }
 }

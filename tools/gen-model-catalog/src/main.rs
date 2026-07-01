@@ -27,6 +27,7 @@ use serde_json::{Map, Value};
 const DEFAULT_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const DEFAULT_OUT_DIR: &str = "crates/pocopine-agenkit/src/server/catalog";
+const PROVIDERS: &[&str] = &["anthropic", "openai", "qwen"];
 
 /// One mapped catalog entry (provider/model with our normalized fields).
 struct Entry {
@@ -117,10 +118,8 @@ fn main() -> ExitCode {
 /// Map one LiteLLM entry to our normalized [`Entry`], or `None` to skip it.
 fn map_entry(key: &str, v: &Value) -> Option<Entry> {
     let m = v.as_object()?;
-    let provider = m.get("litellm_provider").and_then(Value::as_str)?;
-    if provider != "anthropic" && provider != "openai" {
-        return None;
-    }
+    let raw_provider = m.get("litellm_provider").and_then(Value::as_str)?;
+    let provider = normalized_provider(raw_provider)?;
     if m.get("mode").and_then(Value::as_str) != Some("chat") {
         return None;
     }
@@ -142,8 +141,12 @@ fn map_entry(key: &str, v: &Value) -> Option<Entry> {
     };
 
     // Normalize the id to `provider/model` (strip a redundant leading prefix).
-    let prefix = format!("{provider}/");
-    let model = key.strip_prefix(&prefix).unwrap_or(key);
+    let provider_prefix = format!("{provider}/");
+    let raw_provider_prefix = format!("{raw_provider}/");
+    let model = key
+        .strip_prefix(&provider_prefix)
+        .or_else(|| key.strip_prefix(&raw_provider_prefix))
+        .unwrap_or(key);
 
     Some(Entry {
         id: format!("{provider}/{model}"),
@@ -162,6 +165,17 @@ fn map_entry(key: &str, v: &Value) -> Option<Entry> {
         cache_read: per_mtok(num(m, "cache_read_input_token_cost").unwrap_or(0.0)),
         cache_creation: per_mtok(num(m, "cache_creation_input_token_cost").unwrap_or(0.0)),
     })
+}
+
+fn normalized_provider(provider: &str) -> Option<&'static str> {
+    match provider {
+        "anthropic" => Some("anthropic"),
+        "openai" => Some("openai"),
+        // LiteLLM catalogs Alibaba Cloud Model Studio / Qwen compatible-mode
+        // rows under the provider name used on the wire.
+        "dashscope" | "qwen" => Some("qwen"),
+        _ => None,
+    }
 }
 
 /// The `@generated` banner shared by both output files.
@@ -243,7 +257,7 @@ fn render_models(entries: &[Entry], consts: &[(String, String)], s: &mut String)
     s.push_str("    use pocopine_agenkit_core::ModelRef;\n");
 
     // Stable provider order; entries are already sorted by id.
-    for provider in ["anthropic", "openai"] {
+    for &provider in PROVIDERS {
         let group: Vec<(&Entry, &str)> = entries
             .iter()
             .zip(consts)
@@ -349,13 +363,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_anthropic_and_openai_with_mtok_conversion() {
+    fn maps_supported_chat_providers_with_mtok_conversion() {
         let json = serde_json::json!({
             "gpt-4o": {
                 "litellm_provider": "openai", "mode": "chat",
                 "max_input_tokens": 128000, "max_output_tokens": 16384,
                 "input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
                 "cache_read_input_token_cost": 1.25e-6, "supports_vision": true
+            },
+            "dashscope/qwen-plus": {
+                "litellm_provider": "dashscope", "mode": "chat",
+                "max_input_tokens": 131072, "max_output_tokens": 8192,
+                "input_cost_per_token": 4e-7, "output_cost_per_token": 1.2e-6
             },
             "claude-x": {
                 "litellm_provider": "anthropic", "mode": "chat",
@@ -370,7 +389,7 @@ mod tests {
         let mut got: Vec<Entry> = obj.iter().filter_map(|(k, v)| map_entry(k, v)).collect();
         got.sort_by(|a, b| a.id.cmp(&b.id));
 
-        assert_eq!(got.len(), 2, "embedding model is filtered out");
+        assert_eq!(got.len(), 3, "embedding model is filtered out");
 
         let claude = &got[0];
         assert_eq!(claude.id, "anthropic/claude-x");
@@ -384,6 +403,12 @@ mod tests {
         assert!((gpt.output - 10.0).abs() < 1e-9);
         assert!((gpt.cache_read - 1.25).abs() < 1e-9);
         assert!(gpt.vision && !gpt.reasoning);
+
+        let qwen = &got[2];
+        assert_eq!(qwen.id, "qwen/qwen-plus");
+        assert_eq!(qwen.context_window, 131_072);
+        assert!((qwen.input - 0.4).abs() < 1e-9);
+        assert!((qwen.output - 1.2).abs() < 1e-9);
     }
 
     #[test]
@@ -391,17 +416,23 @@ mod tests {
         let json = serde_json::json!({
             "openai/gpt-4o": { "litellm_provider": "openai", "mode": "chat",
                 "max_input_tokens": 128000, "max_output_tokens": 16384,
-                "input_cost_per_token": 2.5e-6 }
+                "input_cost_per_token": 2.5e-6 },
+            "dashscope/qwen-plus": { "litellm_provider": "dashscope", "mode": "chat",
+                "max_input_tokens": 129024, "max_output_tokens": 16384,
+                "input_cost_per_token": 4e-7 }
         });
         let obj = json.as_object().unwrap();
-        let got: Vec<Entry> = obj.iter().filter_map(|(k, v)| map_entry(k, v)).collect();
+        let mut got: Vec<Entry> = obj.iter().filter_map(|(k, v)| map_entry(k, v)).collect();
+        got.sort_by(|a, b| a.id.cmp(&b.id));
         assert_eq!(got[0].id, "openai/gpt-4o");
+        assert_eq!(got[1].id, "qwen/qwen-plus");
     }
 
     #[test]
     fn const_name_sanitizes_and_avoids_leading_digit() {
         assert_eq!(const_name("gpt-4o"), "GPT_4O");
         assert_eq!(const_name("claude-opus-4-8"), "CLAUDE_OPUS_4_8");
+        assert_eq!(const_name("qwen-plus"), "QWEN_PLUS");
         assert_eq!(const_name("o1-preview"), "O1_PREVIEW");
         assert_eq!(const_name("gpt-4.1"), "GPT_4_1");
         // A model id starting with a digit gets an `M_` prefix to stay a valid ident.
@@ -433,6 +464,17 @@ mod tests {
                 cache_read: 1.25,
                 cache_creation: 0.0,
             },
+            Entry {
+                id: "qwen/qwen-plus".to_string(),
+                context_window: 131_072,
+                max_output: 8192,
+                reasoning: false,
+                vision: false,
+                input: 0.4,
+                output: 1.2,
+                cache_read: 0.0,
+                cache_creation: 0.0,
+            },
         ];
         let consts = const_assignments(&entries);
         let file = render(&entries, &consts);
@@ -446,14 +488,20 @@ mod tests {
         assert!(
             file.contains("pub const GPT_4O: ModelRef = ModelRef::from_static(\"openai/gpt-4o\");")
         );
+        assert!(file.contains("pub mod qwen {"));
+        assert!(file.contains(
+            "pub const QWEN_PLUS: ModelRef = ModelRef::from_static(\"qwen/qwen-plus\");"
+        ));
         // Doc comment carries the human-readable spec.
         assert!(file.contains("`anthropic/claude-opus-4-8` · 200K ctx · reasoning · vision"));
 
         // The descriptors reference the const, not a repeated literal.
         assert!(file.contains("Model { id: models::openai::GPT_4O,"));
         assert!(file.contains("Model { id: models::anthropic::CLAUDE_OPUS_4_8,"));
+        assert!(file.contains("Model { id: models::qwen::QWEN_PLUS,"));
         // The id literal appears exactly once (in the const).
         assert_eq!(file.matches("\"openai/gpt-4o\"").count(), 1);
+        assert_eq!(file.matches("\"qwen/qwen-plus\"").count(), 1);
     }
 
     #[test]

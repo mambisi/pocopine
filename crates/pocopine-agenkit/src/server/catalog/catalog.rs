@@ -142,6 +142,7 @@ mod tests {
             "anthropic/claude-opus-4-8",
             "anthropic/claude-sonnet-4-6",
             "openai/gpt-4o",
+            "qwen/qwen-plus",
         ] {
             let m = lookup(&ModelRef::new(id)).unwrap_or_else(|| panic!("{id} should resolve"));
             assert!(m.context_window >= 100_000, "{id} ctx {}", m.context_window);
@@ -158,6 +159,10 @@ mod tests {
         assert_eq!(
             lookup(&models::openai::GPT_4O).map(|m| m.id.as_str()),
             Some("openai/gpt-4o")
+        );
+        assert_eq!(
+            lookup(&models::qwen::QWEN_PLUS).map(|m| m.id.as_str()),
+            Some("qwen/qwen-plus")
         );
     }
 
