@@ -72,6 +72,51 @@ RFC-113 its fingerprint reach.
   projections; leaf projections are RFC-113's v2).
 - Enums, tuple structs, generics beyond what `split_for_impl` gives.
 
+## Prior art & alternatives (deep-researched, 2026-07-03)
+
+Adversarially-verified survey of the 2024–2026 ecosystem; every claim
+below survived 3-vote verification against primary sources.
+
+- **bevy_reflect `GetPath`** — the reference string-path design (one
+  blanket impl over `#[derive(Reflect)]`), but: not dyn-compatible
+  (traversal must flow through `dyn PartialReflect`), derive metadata
+  costs **~1.7 KiB/type of wasm after `wasm-opt -Oz`** (bevy PR
+  #15030's own tables; engine-type registration = +11.46% wasm), and
+  bevy's own path author flags per-segment dyn dispatch as too slow
+  for hot access (discussion #10285), proposing offset-based
+  Swift-style keypaths (Oct 2023) — **never shipped**, in bevy or any
+  standalone crate.
+- **Leptos `reactive_stores`** — eliminates runtime strings via
+  `#[derive(Store)]` typed accessors + numeric `StorePath` into an
+  `Arc<RwLock>` trigger registry with a this/children split (their
+  answer to our trigger lattice). Rejected by construction: mandatory
+  `.write()`/`.set()` proxies + write-observation detection violate
+  the plain-Rust-handlers and diffing invariants. Cautionary data:
+  two correctness bugs in its first two months (#3338 re-entrant
+  RwLock wasm panic on nested keyed Vecs; #3523 missed descendant
+  notifications, fixed by making every leaf write O(path-depth)
+  trigger-map lookups).
+- **facet / facet-reflect** — the only candidate that could subsume
+  serde AND this derive under one `#[derive(Facet)]` (Peek/Poke +
+  FieldPath). Self-described experimental with acknowledged soundness
+  issues; the "const shapes avoid registry-style wasm weight" claim
+  was REFUTED 0-3 in verification. Re-evaluate if it stabilizes.
+- **`field_access` & keypath/lens crates** — single-level or
+  typed-only; none traverse dotted runtime paths across unnameable
+  intermediate types.
+
+Verdict: absent language-level field projections, every design
+converges on derive-generated per-type descent (match arms here,
+const metadata in bevy/facet, accessor codegen in Leptos); the
+differences are cost trades, not elegance wins. This design occupies
+the point the constraints define. The one evidenced refinement (an
+inference, not established art — no framework found doing it): let
+the component macro emit compile-time-resolved typed accessor
+closures for OWN-field paths (bevy's `animated_field!` retreat from
+dyn paths is the precedent), reserving the runtime string match for
+cross-type `$store` paths — worth considering only if a profile ever
+shows the per-hop match on the write path.
+
 ## Tests
 
 `pocopine-core/tests/nested_signals.rs` (hand-implemented trait —
