@@ -21,27 +21,29 @@
 //! spec-drift job sets `POCOPINE_REQUIRE_SPEC_DRIFT=1` to make an
 //! unreachable endpoint a hard failure instead.
 
-use sha2::{Digest, Sha256};
+use pocopine_crypto::sha256_hex;
 
 const RENDER_OPENAPI_URL: &str =
     "https://api-docs.render.com/v1.0/openapi/render-public-api-1.json";
 
-/// SHA-256 of the canonicalised live spec, last reconciled 2026-06-13.
+/// SHA-256 of the canonicalised live spec, last reconciled 2026-07-02.
 /// Update this when the drift test reports a new hash for a reviewed,
-/// deliberate upstream change. (2026-06-13: benign content churn —
-/// every `REQUIRED_PATHS` endpoint still present, so no client change.)
-const EXPECTED_SHA256: &str = "770ea59aaf7a2565fb5ba598e81917206d4b663e0cf331f14988aa5b5cd5a8c4";
+/// deliberate upstream change. (2026-07-02: benign content churn —
+/// every `REQUIRED_OPERATIONS` endpoint and method still present, so no
+/// client change.)
+const EXPECTED_SHA256: &str = "752caf6e5058594220ffd8e17f9964324e88396fd62a424a69c7d19284e4acc2";
 
-/// Paths `crate::client` calls. `/registrycredentials` is pinned ahead
-/// of the Phase 19 auto-registry work so the dependency is guarded now.
-const REQUIRED_PATHS: &[&str] = &[
-    "/services",
-    "/services/{serviceId}",
-    "/services/{serviceId}/deploys",
-    "/services/{serviceId}/deploys/{deployId}",
-    "/services/{serviceId}/env-vars",
-    "/services/{serviceId}/scale",
-    "/registrycredentials",
+/// Operations `crate::client` calls.
+const REQUIRED_OPERATIONS: &[(&str, &[&str])] = &[
+    ("/services", &["get", "post"]),
+    ("/services/{serviceId}", &["get", "patch"]),
+    ("/services/{serviceId}/deploys", &["get", "post"]),
+    ("/services/{serviceId}/deploys/{deployId}", &["get"]),
+    ("/services/{serviceId}/env-vars", &["put"]),
+    ("/services/{serviceId}/scale", &["post"]),
+    ("/registrycredentials", &["get", "post"]),
+    ("/registrycredentials/{registryCredentialId}", &["patch"]),
+    ("/logs", &["get"]),
 ];
 
 /// CI's spec-drift job sets this so an unreachable endpoint fails
@@ -116,21 +118,29 @@ fn render_openapi_matches_the_pinned_checksum() {
     let spec: serde_json::Value =
         serde_json::from_str(&live).expect("live Render spec is valid JSON");
 
-    // Structural — the endpoints the client depends on must still exist.
+    // Structural — the operations the client depends on must still exist.
     // This runs first so a breaking change is the failure you see.
     let paths = spec["paths"]
         .as_object()
         .expect("Render OpenAPI `paths` object");
-    for p in REQUIRED_PATHS {
-        assert!(
-            paths.contains_key(*p),
-            "Render OpenAPI no longer defines path `{p}` — reconcile crates/pocopine-deploy-render/src/client.rs",
-        );
+    for (path, methods) in REQUIRED_OPERATIONS {
+        let item = paths.get(*path).unwrap_or_else(|| {
+            panic!(
+                "Render OpenAPI no longer defines path `{path}` — reconcile crates/pocopine-deploy-render/src/client.rs",
+            )
+        });
+
+        for method in *methods {
+            assert!(
+                item.get(*method).is_some(),
+                "Render OpenAPI path `{path}` no longer defines method `{method}` — reconcile crates/pocopine-deploy-render/src/client.rs",
+            );
+        }
     }
 
     // Checksum — any content change trips this. On a deliberate change,
     // copy the printed hash into EXPECTED_SHA256.
-    let actual = format!("{:x}", Sha256::digest(canonical_json(&spec).as_bytes()));
+    let actual = sha256_hex(canonical_json(&spec).as_bytes());
     assert_eq!(
         actual, EXPECTED_SHA256,
         "\nRender's OpenAPI spec has drifted from the pinned checksum.\n\
