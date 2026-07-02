@@ -29,7 +29,7 @@ use pocopine_core::reactive::ScopeId;
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 
-create_context!(ROOT: ScopeId);
+create_context!(ROOT: Handle<PineRadioGroupRoot>);
 // Per-Item scope publication — a nested Indicator injects it to
 // mirror its owner's `checked`. Each compound that ships an
 // indicator pattern declares its own key so compounds stay
@@ -82,9 +82,7 @@ impl Default for PineRadioGroupRoot {
 #[handlers]
 impl PineRadioGroupRoot {
     fn on_setup(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            ROOT.provide(scope);
-        }
+        ROOT.provide(this::<Self>());
     }
 }
 
@@ -120,11 +118,8 @@ impl PineRadioGroupItem {
     fn on_setup(&mut self) {
         // Seed initial state from Root and publish this Item's
         // scope so a nested Indicator mirrors `checked`.
-        if let Some(root) = ROOT.inject()
-            && let Some(scope) = Scope::find(root)
-        {
-            let v = scope.state.borrow().get("value");
-            self.group_value = v.as_string().unwrap_or_default();
+        if let Some(root) = ROOT.inject() {
+            self.group_value = root.with(|g| g.value.clone());
             self.checked = self.group_value == self.value;
         }
         if let Some(scope) = current_scope_id() {
@@ -134,7 +129,7 @@ impl PineRadioGroupItem {
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else { return };
-        watch_scope_field_scoped::<String, _>(root, "value", move |new, _| {
+        watch_scope_field_scoped::<String, _>(root.scope_id(), "value", move |new, _| {
             let new_v = new.clone();
             handle.update(|s| {
                 s.group_value = new_v.clone();
@@ -149,25 +144,13 @@ impl PineRadioGroupItem {
             return;
         }
         let Some(root) = ROOT.inject() else { return };
-        let Some(scope) = Scope::find(root) else {
-            return;
-        };
-        if scope
-            .state
-            .borrow()
-            .get("disabled")
-            .as_bool()
-            .unwrap_or(false)
-        {
+        if root.with(|g| g.disabled) {
             return;
         }
         let new_value = self.value.clone();
-        if let Some(rc) = scope.typed::<PineRadioGroupRoot>() {
-            let handle = Handle::new(rc, root);
-            handle.update(|g: &mut PineRadioGroupRoot| {
-                g.value = new_value;
-            });
-        }
+        root.update(|g: &mut PineRadioGroupRoot| {
+            g.value = new_value;
+        });
     }
 }
 

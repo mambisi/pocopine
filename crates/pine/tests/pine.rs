@@ -581,6 +581,22 @@ struct CompoundMenuHost {}
 #[handlers]
 impl CompoundMenuHost {}
 
+compiled_fixture!(
+    DropdownModalFixture,
+    r#"
+<div>
+  <pine-dropdown-menu-root modal="true">
+    <pine-dropdown-menu-trigger class="dm-modal-trigger">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="dm-modal-item">Item</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#
+);
+
 // Opening a menu via the trigger teleports Content to body, sets
 // the first menuitem's tabindex=0, auto-focuses it, cycles on
 // arrow keys, and closes on Escape. Exercises the full compound
@@ -666,6 +682,64 @@ async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
         trigger.get_attribute("aria-expanded").as_deref(),
         Some("false"),
         "aria-expanded mirrors back to closed"
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_modal_locks_scroll_until_close() {
+    use pocopine::scroll_lock;
+
+    let host = mount_fixture::<DropdownModalFixture>();
+    tick().await;
+    let baseline_depth = scroll_lock::depth();
+
+    host.query_selector(".dm-modal-trigger")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
+        .unwrap()
+        .expect("modal dropdown menu opened");
+    assert!(
+        scroll_lock::depth() > baseline_depth,
+        "modal dropdown locks scroll while open",
+    );
+    assert!(
+        doc()
+            .active_element()
+            .unwrap()
+            .class_list()
+            .contains("dm-modal-item"),
+        "modal dropdown still auto-focuses the first item",
+    );
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    menu.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "modal dropdown gone after Escape"
+    );
+    assert_eq!(
+        scroll_lock::depth(),
+        baseline_depth,
+        "modal dropdown releases scroll lock on close",
     );
 
     host.remove();
@@ -2492,6 +2566,22 @@ compiled_fixture!(
 "#
 );
 
+compiled_fixture!(
+    PopoverModalFixture,
+    r#"
+<div>
+  <pine-popover-root modal="true">
+    <pine-popover-trigger class="pm-trigger">open</pine-popover-trigger>
+    <pine-popover-portal>
+      <pine-popover-content>
+        <button class="pm-inside">OK</button>
+      </pine-popover-content>
+    </pine-popover-portal>
+  </pine-popover-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn popover_opens_anchors_and_closes_on_escape() {
     let host = mount_fixture::<PopoverOpenFixture>();
@@ -2535,6 +2625,64 @@ async fn popover_opens_anchors_and_closes_on_escape() {
             .unwrap()
             .is_none(),
         "popover gone after Escape"
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn popover_modal_locks_scroll_until_close() {
+    use pocopine::scroll_lock;
+
+    let host = mount_fixture::<PopoverModalFixture>();
+    tick().await;
+    let baseline_depth = scroll_lock::depth();
+
+    host.query_selector(".pm-trigger")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let popover = doc()
+        .query_selector("[role=\"dialog\"].pine-popover-content")
+        .unwrap()
+        .expect("modal popover opened");
+    assert!(
+        scroll_lock::depth() > baseline_depth,
+        "modal popover locks scroll while open",
+    );
+    assert!(
+        doc()
+            .active_element()
+            .unwrap()
+            .class_list()
+            .contains("pm-inside"),
+        "modal popover still auto-focuses the first focusable child",
+    );
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    popover.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_none(),
+        "modal popover gone after Escape"
+    );
+    assert_eq!(
+        scroll_lock::depth(),
+        baseline_depth,
+        "modal popover releases scroll lock on close",
     );
 
     host.remove();
@@ -3221,6 +3369,155 @@ async fn dialog_pp_as_close_siblings_both_fire() {
             .unwrap()
             .is_none(),
         "Delete closed the dialog"
+    );
+
+    host.remove();
+}
+
+// Regression: a RadioGroup authored inside a DialogContent slot,
+// rendered through DialogPortal's `<template pp-if pp-teleport>`,
+// must still let each Item update the RadioGroup Root. The slot
+// author is the fixture, the intermediate slot owner is
+// DialogContent, and the RadioGroup owns a nested slot for its
+// Items. A broken item-to-root path makes Item.select() inert:
+// no Root value update, no `pp:update:value`, no aria mutation.
+compiled_fixture!(
+    DialogRadioGroupFixture,
+    r#"
+<div>
+  <pine-dialog-root pp-model:open="dialog_open">
+    <pine-dialog-trigger class="drg-open">Open preferences</pine-dialog-trigger>
+    <pine-dialog-portal>
+      <pine-dialog-content>
+        <pine-dialog-title>Preferences</pine-dialog-title>
+        <pine-radio-group-root pp-model:value="density" class="density-root">
+          <pine-radio-group-item value="comfortable" class="density-comfortable">Comfortable</pine-radio-group-item>
+          <pine-radio-group-item value="compact" class="density-compact">Compact</pine-radio-group-item>
+        </pine-radio-group-root>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+  <span class="density-state" pp-text="density"></span>
+</div>
+"#,
+    {
+        dialog_open: bool,
+        density: String
+    }
+);
+
+#[wasm_bindgen_test]
+async fn radio_group_item_in_portaled_dialog_selects_root() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+
+    let host = mount_fixture::<DialogRadioGroupFixture>();
+    tick().await;
+
+    host.query_selector(".drg-open")
+        .unwrap()
+        .expect("dialog trigger")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let root = doc()
+        .query_selector("pine-radio-group-root")
+        .unwrap()
+        .expect("teleported radio root");
+    let item = doc()
+        .query_selector(".density-compact")
+        .unwrap()
+        .expect("compact radio item");
+
+    let (item_scope, _) =
+        pocopine_core::mount::scope_of_element(&item).expect("radio item rendered scope");
+    let mut cur = Some(item_scope);
+    let mut chain: Vec<(u64, Option<String>)> = Vec::new();
+    let mut reached_radio_root = false;
+    while let Some(scope) = cur {
+        let tag = pocopine_core::mount::find_element_for_scope(scope)
+            .and_then(|el| el.parent_element().map(|p| p.tag_name().to_lowercase()));
+        chain.push((scope.0, tag.clone()));
+        if tag.as_deref() == Some("pine-radio-group-root") {
+            reached_radio_root = true;
+            break;
+        }
+        cur = pocopine_core::context::parent_of(scope);
+        if chain.len() > 12 {
+            break;
+        }
+    }
+    assert!(
+        reached_radio_root,
+        "radio item inject chain must reach pine-radio-group-root; got {chain:?}",
+    );
+
+    let emitted = Rc::new(RefCell::new(None::<String>));
+    let seen = emitted.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *seen.borrow_mut() = ce.detail().as_string();
+    });
+    root.add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+
+    item.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    assert_eq!(
+        emitted.borrow().as_deref(),
+        Some("compact"),
+        "Item.select() emits from the RadioGroup Root"
+    );
+    let compact = doc()
+        .query_selector(".density-compact")
+        .unwrap()
+        .expect("compact radio item after selection");
+    assert_eq!(
+        compact.get_attribute("aria-checked").as_deref(),
+        Some("true"),
+        "selected item reflects aria-checked"
+    );
+    assert_eq!(
+        compact.get_attribute("data-state").as_deref(),
+        Some("checked"),
+        "selected item reflects data-state"
+    );
+    assert_eq!(
+        host.query_selector(".density-state")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim(),
+        "compact",
+        "pp-model writes through to the fixture state",
+    );
+
+    let dialog = doc()
+        .query_selector("[role=\"dialog\"].pine-dialog-content")
+        .unwrap()
+        .expect("dialog still open for cleanup");
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    dialog.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "dialog cleaned up before the next browser test"
     );
 
     host.remove();

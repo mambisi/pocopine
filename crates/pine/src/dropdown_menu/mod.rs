@@ -23,7 +23,9 @@
 //! ```
 //!
 //! Content auto-anchors to its Trigger via RFC-027 inject + the
-//! `on_setup` lifecycle — no selector required.
+//! `on_setup` lifecycle — no selector required. Set
+//! `modal="true"` on Root to lock page scroll and trap focus while
+//! the menu is open.
 
 use crate::{compound, overlay};
 use pocopine::prelude::*;
@@ -71,6 +73,10 @@ pub struct PineDropdownMenuRoot {
     /// on the tag.
     #[model]
     pub open: bool,
+    /// Non-modal by default. Set `true` to lock page scroll and
+    /// trap focus while the menu is open.
+    #[prop]
+    pub modal: bool,
     pub closing: bool,
     pub open_submenus: u32,
 }
@@ -258,14 +264,23 @@ impl PineDropdownMenuContent {
         CONTENT_SIDE.provide(self.side.clone());
     }
 
-    fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
         // Auto-focus the first menuitem once the teleported clone
         // has committed. Items live in the slot which only
         // materialises after Portal flips `pp-if` on, so this is
         // the first point we can see them.
         let Some(menu) = refs.get("menu") else { return };
         init_roving_tabindex(&menu);
-        focus::auto_focus_first(&menu);
+
+        let modal = ROOT
+            .inject()
+            .map(|root| root.with(|root| root.modal))
+            .unwrap_or(false);
+        if modal {
+            overlay::activate(scope, &menu, true);
+        } else {
+            focus::auto_focus_first(&menu);
+        }
 
         // Exempt our own trigger from `@click.outside`, so clicking
         // the trigger while the menu is open closes cleanly instead
@@ -295,6 +310,21 @@ impl PineDropdownMenuContent {
                 self.side_offset,
                 true,
             );
+        }
+
+        if modal && let Some(root) = ROOT.inject() {
+            let root_scope = root.scope_id();
+            watch_scope_field_scoped::<bool, _>(root_scope, "open", move |&is_open, prev| {
+                if prev == Some(&true) && !is_open {
+                    overlay::deactivate(scope);
+                }
+            });
+        }
+    }
+
+    fn on_unmount(&mut self) {
+        if let Some(scope) = current_scope_id() {
+            overlay::deactivate(scope);
         }
     }
 
