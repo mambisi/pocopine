@@ -1,4 +1,5 @@
-error[E0080]: evaluation panicked: unknown template handler `rest`: no #[handlers] method named `rest` on `TpUnknownHandler` — from `pp-on:click="rest"` in the inline template
+error[E0080]: evaluation panicked: unknown template handler `rest`: no #[handlers] method of `TpUnknownHandler` has that name
+               --> from `pp-on:click="rest"` in the inline template
   --> tests/ui/tp_unknown_handler.rs:10:23
    |
 10 |     template_inline = r#"<button pp-on:click="rest">reset</button>"#
