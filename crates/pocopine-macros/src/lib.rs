@@ -2798,35 +2798,59 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => (proc_macro2::TokenStream::new(), Vec::new()),
     };
 
-    // Compile-time template-path validation — one marker
-    // reference per expression root the template can evaluate,
-    // resolved by rustc against the field markers emitted below
-    // and the computed/handler markers `#[handlers]` emits. A
-    // typo'd or renamed root becomes a missing-item error naming
-    // `__poc_bindable_<root>` / `__poc_handler_<name>`. Bare
-    // `#[prop(flatten)]` leaves resolve at runtime through the
-    // `Props` trait, so those components keep handler checks but
-    // skip bindable ones. `unchecked_paths = "true"` opts out.
-    let template_path_assertions_tokens = match &template_ast {
-        Some(ast) if !args.unchecked_paths => {
-            let skip_bindable = !bare_flatten_fields.is_empty();
-            template_paths::emit_path_assertions(ast, &struct_ident, skip_bindable)
-        }
-        _ => proc_macro2::TokenStream::new(),
-    };
-    let template_path_marker_tokens = if args.unchecked_paths {
-        proc_macro2::TokenStream::new()
-    } else {
-        let names = field_names.iter().cloned().chain(
+    // RFC-111 — compile-time template-path validation: one
+    // const-eval check per expression root the template can
+    // evaluate, joined by rustc's const machinery against the
+    // `__POC_TEMPLATE_FIELDS` const emitted below and the
+    // `__POC_COMPUTED_KEYS` / `__POC_HANDLER_KEYS` consts
+    // `#[handlers]` emits. A typo'd or renamed root becomes a
+    // const panic whose message (formatted here, at expansion
+    // time) names the root, the offending directive, the
+    // template, and the nearest field — anchored on the
+    // `template` argument's span. Bare `#[prop(flatten)]` leaves
+    // resolve at runtime through the `Props` trait, so those
+    // components keep handler checks but skip bindable ones.
+    // `unchecked_paths = "true"` opts out.
+    let own_bindable_names: Vec<String> = field_names
+        .iter()
+        .cloned()
+        .chain(
             flatten_fields
                 .iter()
                 .flat_map(|(_, leaves, _)| leaves.iter().cloned()),
-        );
-        let markers = template_paths::bindable_marker_items(names);
+        )
+        .collect();
+    let template_path_assertions_tokens = match &template_ast {
+        Some(ast) if !args.unchecked_paths => {
+            let skip_bindable = !bare_flatten_fields.is_empty();
+            let template_display = args
+                .template
+                .as_ref()
+                .map(|l| l.value())
+                .unwrap_or_else(|| "the inline template".to_string());
+            let span = args
+                .template
+                .as_ref()
+                .or(args.template_inline.as_ref())
+                .map(|l| l.span())
+                .unwrap_or_else(proc_macro2::Span::call_site);
+            template_paths::emit_path_assertions(
+                ast,
+                &struct_ident,
+                skip_bindable,
+                &template_display,
+                &own_bindable_names,
+                span,
+            )
+        }
+        _ => proc_macro2::TokenStream::new(),
+    };
+    let template_path_marker_tokens = {
+        let fields_const = template_paths::field_keys_const(own_bindable_names.iter().cloned());
         quote! {
             #[doc(hidden)]
             impl #struct_ident {
-                #markers
+                #fields_const
             }
         }
     };
@@ -4285,23 +4309,23 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // Template-path validation markers: handler names for the
-    // `__poc_handler_*` references, plus `__poc_bindable_*` for
-    // `#[computed]` fields — readable scope keys the
-    // `#[component]` macro cannot see from the struct alone.
+    // RFC-111 — template-path validation name lists: the two
+    // consts the `#[component]`-emitted const-eval checks read
+    // that this macro alone can see — `#[computed]` field names
+    // and dispatchable handler names.
     let template_path_markers = {
-        let handler_markers =
-            template_paths::handler_marker_items(handler_marker_names.into_iter());
         let computed_names: std::collections::BTreeSet<String> = computed_methods
             .iter()
             .map(|c| c.field_name.clone())
             .collect();
-        let computed_markers = template_paths::bindable_marker_items(computed_names.into_iter());
+        let consts = template_paths::handlers_keys_consts(
+            computed_names.into_iter(),
+            handler_marker_names.into_iter(),
+        );
         quote! {
             #[doc(hidden)]
             impl #ty {
-                #handler_markers
-                #computed_markers
+                #consts
             }
         }
     };

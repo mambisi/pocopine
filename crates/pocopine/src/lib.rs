@@ -187,7 +187,7 @@ pub mod __private {
         install_static_native_model, install_static_opaque_directive, install_static_ref,
         install_static_teleport_plan, materialize_static_slot_outlet, plan_failure_count,
         record_plan_failure, register_template_plan, reset_plan_failure_count, stamp_if_body_with,
-        template_plan_for,
+        template_key_listed, template_plan_for,
     };
     // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to

@@ -1,22 +1,33 @@
-//! Compile-time validation of template expression roots.
+//! Compile-time validation of template expression roots (RFC-111).
 //!
 //! Harvests every expression the template can evaluate — plan-
-//! eligible AND walker-fallback alike — and emits one anonymous
-//! marker reference per root identifier:
+//! eligible AND walker-fallback alike — and emits one const-eval
+//! check per root identifier:
 //!
 //! ```ignore
-//! const _: fn() = <Counter>::__poc_bindable_count;   // field / #[computed]
-//! const _: fn() = <Counter>::__poc_handler_reset;    // pp-on handler
+//! const _: () = {
+//!     if !(::pocopine::__private::template_key_listed(<Counter>::__POC_TEMPLATE_FIELDS, "countt")
+//!         || ::pocopine::__private::template_key_listed(<Counter>::__POC_COMPUTED_KEYS, "countt"))
+//!     {
+//!         ::core::panic!("unknown template path root `countt` … (from `pp-text=\"countt\"` …)");
+//!     }
+//! };
 //! ```
 //!
-//! The markers themselves are emitted by `#[component]` (struct
-//! fields + explicit-list flatten leaves) and `#[handlers]`
-//! (`#[computed]` fields + dispatchable methods), so rustc's
-//! ordinary item resolution performs the cross-macro join: a
-//! typo'd or renamed root becomes "no function or associated item
-//! named `__poc_bindable_countt`" — with the compiler's own
-//! did-you-mean pointing at the fix — instead of a silent
-//! runtime `undefined`.
+//! The name lists are consts: `__POC_TEMPLATE_FIELDS` from
+//! `#[component]` (struct fields + explicit-list flatten leaves),
+//! `__POC_COMPUTED_KEYS` / `__POC_HANDLER_KEYS` from `#[handlers]`.
+//! Rustc's const evaluation performs the cross-macro join — and
+//! because the panic message is a literal this macro formats at
+//! expansion time, the error carries the offending expression, the
+//! directive, the template name, and a nearest-field suggestion,
+//! anchored on the `template = "…"` argument's span:
+//!
+//! ```text
+//! error[E0080]: … 'unknown template path root `countt`: not a field or
+//! #[computed] value of `Counter` — from `pp-text="countt"` in
+//! Counter.poco; nearest field: `count`'
+//! ```
 //!
 //! What is deliberately NOT validated:
 //!
@@ -34,15 +45,15 @@
 //! * Anything under `unchecked_paths` (`#[component(...,
 //!   unchecked_paths = "true")]`), the escape hatch.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
-use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use proc_macro2::{Span, TokenStream};
+use quote::{quote, quote_spanned};
 
 use crate::template_parser::{Element, Node, TemplateAst};
 
-/// Which marker family a harvested root resolves against.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+/// Which name list a harvested root resolves against.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 enum RootKind {
     /// Readable/writable scope key: struct field, explicit
     /// flatten leaf, or `#[computed]` field.
@@ -51,63 +62,108 @@ enum RootKind {
     Handler,
 }
 
-/// Harvest the template and emit the marker-reference items.
+/// Harvested roots: `(kind, root) → first source context` (the
+/// attribute or interpolation the root came from, for the error
+/// message).
+type Roots = BTreeMap<(RootKind, String), String>;
+
+/// Harvest the template and emit the const-eval checks.
 /// `skip_bindable` disables field/computed checks (bare-flatten
-/// components) while keeping handler checks.
+/// components) while keeping handler checks; `own_fields` feeds
+/// the nearest-field suggestion; `span` anchors the errors
+/// (the `template` / `template_inline` argument's literal).
 pub fn emit_path_assertions(
     ast: &TemplateAst,
     struct_ident: &syn::Ident,
     skip_bindable: bool,
+    template_display: &str,
+    own_fields: &[String],
+    span: Span,
 ) -> TokenStream {
-    let mut roots: BTreeSet<(RootKind, String)> = BTreeSet::new();
+    let mut roots: Roots = BTreeMap::new();
     let mut scope: Vec<String> = Vec::new();
     for node in &ast.roots {
         harvest_node(node, &mut scope, &mut roots);
     }
 
-    let refs = roots.iter().filter_map(|(kind, root)| {
-        if *kind == RootKind::Bindable && skip_bindable {
-            return None;
+    let struct_name = struct_ident.to_string();
+    let checks = roots.iter().filter_map(|((kind, root), ctx)| match kind {
+        RootKind::Bindable => {
+            if skip_bindable {
+                return None;
+            }
+            let mut msg = format!(
+                "unknown template path root `{root}`: not a field or #[computed] value \
+                     of `{struct_name}` — from `{ctx}` in {template_display}"
+            );
+            if let Some(near) = nearest(own_fields, root) {
+                msg.push_str(&format!("; nearest field: `{near}`"));
+            }
+            Some(quote_spanned! {span=>
+                const _: () = {
+                    if !(::pocopine::__private::template_key_listed(
+                        <#struct_ident>::__POC_TEMPLATE_FIELDS,
+                        #root,
+                    ) || ::pocopine::__private::template_key_listed(
+                        <#struct_ident>::__POC_COMPUTED_KEYS,
+                        #root,
+                    )) {
+                        ::core::panic!(#msg);
+                    }
+                };
+            })
         }
-        let marker = match kind {
-            RootKind::Bindable => format_ident!("__poc_bindable_{root}"),
-            RootKind::Handler => format_ident!("__poc_handler_{root}"),
-        };
-        Some(quote! { const _: fn() = <#struct_ident>::#marker; })
+        RootKind::Handler => {
+            let msg = format!(
+                "unknown template handler `{root}`: no #[handlers] method named `{root}` \
+                     on `{struct_name}` — from `{ctx}` in {template_display}"
+            );
+            Some(quote_spanned! {span=>
+                const _: () = {
+                    if !::pocopine::__private::template_key_listed(
+                        <#struct_ident>::__POC_HANDLER_KEYS,
+                        #root,
+                    ) {
+                        ::core::panic!(#msg);
+                    }
+                };
+            })
+        }
     });
-    quote! { #(#refs)* }
+    quote! { #(#checks)* }
 }
 
-/// Marker items for the component macro: one hidden fn per
-/// bindable name the struct itself declares (fields + explicit
-/// flatten leaves). `#[handlers]` emits the computed/handler
-/// side via [`handler_marker_items`]-shaped tokens of its own.
-pub fn bindable_marker_items(names: impl Iterator<Item = String>) -> TokenStream {
-    let fns = names.filter(|n| is_ident_safe(n)).map(|n| {
-        let marker = format_ident!("__poc_bindable_{n}");
-        quote! {
-            #[doc(hidden)]
-            #[allow(non_snake_case, dead_code)]
-            pub fn #marker() {}
-        }
-    });
-    quote! { #(#fns)* }
+/// `__POC_TEMPLATE_FIELDS` const for the component macro: the
+/// bindable names the struct itself declares (fields + explicit
+/// flatten leaves).
+pub fn field_keys_const(names: impl Iterator<Item = String>) -> TokenStream {
+    let names: Vec<String> = names.collect();
+    quote! {
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        pub const __POC_TEMPLATE_FIELDS: &'static [&'static str] = &[#(#names),*];
+    }
 }
 
-/// Marker items for `#[handlers]`: dispatchable method names.
-pub fn handler_marker_items(names: impl Iterator<Item = String>) -> TokenStream {
-    let fns = names.filter(|n| is_ident_safe(n)).map(|n| {
-        let marker = format_ident!("__poc_handler_{n}");
-        quote! {
-            #[doc(hidden)]
-            #[allow(non_snake_case, dead_code)]
-            pub fn #marker() {}
-        }
-    });
-    quote! { #(#fns)* }
+/// `__POC_COMPUTED_KEYS` + `__POC_HANDLER_KEYS` consts for
+/// `#[handlers]` — the two lists the component macro cannot see.
+pub fn handlers_keys_consts(
+    computed: impl Iterator<Item = String>,
+    handlers: impl Iterator<Item = String>,
+) -> TokenStream {
+    let computed: Vec<String> = computed.collect();
+    let handlers: Vec<String> = handlers.collect();
+    quote! {
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        pub const __POC_COMPUTED_KEYS: &'static [&'static str] = &[#(#computed),*];
+        #[doc(hidden)]
+        #[allow(dead_code)]
+        pub const __POC_HANDLER_KEYS: &'static [&'static str] = &[#(#handlers),*];
+    }
 }
 
-fn harvest_node(node: &Node, scope: &mut Vec<String>, out: &mut BTreeSet<(RootKind, String)>) {
+fn harvest_node(node: &Node, scope: &mut Vec<String>, out: &mut Roots) {
     match node {
         Node::Element(el) => harvest_element(el, scope, out),
         Node::Text(text, _) => harvest_interps(text, scope, out),
@@ -115,7 +171,7 @@ fn harvest_node(node: &Node, scope: &mut Vec<String>, out: &mut BTreeSet<(RootKi
     }
 }
 
-fn harvest_element(el: &Element, scope: &mut Vec<String>, out: &mut BTreeSet<(RootKind, String)>) {
+fn harvest_element(el: &Element, scope: &mut Vec<String>, out: &mut Roots) {
     // Locals this element introduces for its subtree: the pp-for
     // item and any pp-let ident (slot content, pp-case binds).
     let mut introduced = 0usize;
@@ -124,7 +180,8 @@ fn harvest_element(el: &Element, scope: &mut Vec<String>, out: &mut BTreeSet<(Ro
             // `item in items` — items evaluates in the OUTER
             // scope; harvest it before the item name binds.
             if let Some((item, items_expr)) = parse_pp_for(value) {
-                harvest_expr_src(&items_expr, scope, out, false);
+                let ctx = format!("pp-for=\"{value}\"");
+                harvest_expr_src(&items_expr, &ctx, scope, out, false);
                 scope.push(item);
                 introduced += 1;
             }
@@ -139,7 +196,8 @@ fn harvest_element(el: &Element, scope: &mut Vec<String>, out: &mut BTreeSet<(Ro
 
     for (name, value) in &el.attrs {
         if let Some(kind) = attr_expr_kind(name) {
-            harvest_expr_src(value, scope, out, kind == AttrKind::Listener);
+            let ctx = format!("{name}=\"{value}\"");
+            harvest_expr_src(value, &ctx, scope, out, kind == AttrKind::Listener);
         }
     }
     for child in &el.children {
@@ -210,7 +268,7 @@ fn parse_pp_for(s: &str) -> Option<(String, String)> {
 /// Harvest `{{ expr }}` interpolation segments from a text node.
 /// Escapes (`\{{`, `\}}`) hide the braces from interp — mirror
 /// that by skipping the escaped pair.
-fn harvest_interps(text: &str, scope: &[String], out: &mut BTreeSet<(RootKind, String)>) {
+fn harvest_interps(text: &str, scope: &[String], out: &mut Roots) {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -226,7 +284,9 @@ fn harvest_interps(text: &str, scope: &[String], out: &mut BTreeSet<(RootKind, S
             let Some(rel) = text[start..].find("}}") else {
                 return; // unclosed — the strict validator owns the error
             };
-            harvest_expr_src(&text[start..start + rel], scope, out, false);
+            let src = &text[start..start + rel];
+            let ctx = format!("{{{{ {} }}}}", src.trim());
+            harvest_expr_src(src, &ctx, scope, out, false);
             i = start + rel + 2;
             continue;
         }
@@ -238,12 +298,7 @@ fn harvest_interps(text: &str, scope: &[String], out: &mut BTreeSet<(RootKind, S
 /// Unparseable sources are skipped — `emit_compiled_expr_option`
 /// already turns plan-eligible parse errors into `compile_error!`,
 /// and preserved attributes are the runtime's jurisdiction.
-fn harvest_expr_src(
-    src: &str,
-    scope: &[String],
-    out: &mut BTreeSet<(RootKind, String)>,
-    listener: bool,
-) {
+fn harvest_expr_src(src: &str, ctx: &str, scope: &[String], out: &mut Roots, listener: bool) {
     let Ok(ast) = pocopine_expr::parse(src) else {
         return;
     };
@@ -253,56 +308,52 @@ fn harvest_expr_src(
         && let pocopine_expr::Expr::Path(segs) = &ast.value
         && segs.len() == 1
     {
-        push_root(RootKind::Handler, &segs[0], scope, out);
+        push_root(RootKind::Handler, &segs[0], ctx, scope, out);
         return;
     }
-    harvest_expr(&ast.value, scope, out);
+    harvest_expr(&ast.value, ctx, scope, out);
 }
 
-fn harvest_expr(
-    expr: &pocopine_expr::Expr,
-    scope: &[String],
-    out: &mut BTreeSet<(RootKind, String)>,
-) {
+fn harvest_expr(expr: &pocopine_expr::Expr, ctx: &str, scope: &[String], out: &mut Roots) {
     use pocopine_expr::Expr;
     match expr {
         Expr::Literal(_) => {}
         Expr::Path(segs) => {
             if let Some(root) = segs.first() {
-                push_root(RootKind::Bindable, root, scope, out);
+                push_root(RootKind::Bindable, root, ctx, scope, out);
             }
         }
-        Expr::Not(inner) => harvest_expr(&inner.value, scope, out),
+        Expr::Not(inner) => harvest_expr(&inner.value, ctx, scope, out),
         Expr::BinOp(_, l, r) => {
-            harvest_expr(&l.value, scope, out);
-            harvest_expr(&r.value, scope, out);
+            harvest_expr(&l.value, ctx, scope, out);
+            harvest_expr(&r.value, ctx, scope, out);
         }
         Expr::Ternary(c, a, b) => {
-            harvest_expr(&c.value, scope, out);
-            harvest_expr(&a.value, scope, out);
-            harvest_expr(&b.value, scope, out);
+            harvest_expr(&c.value, ctx, scope, out);
+            harvest_expr(&a.value, ctx, scope, out);
+            harvest_expr(&b.value, ctx, scope, out);
         }
         Expr::Call(name, args) => {
-            push_root(RootKind::Handler, name, scope, out);
+            push_root(RootKind::Handler, name, ctx, scope, out);
             for arg in args {
-                harvest_expr(&arg.value, scope, out);
+                harvest_expr(&arg.value, ctx, scope, out);
             }
         }
         Expr::Assign(path, rhs) => {
             if let Some(root) = path.first() {
-                push_root(RootKind::Bindable, root, scope, out);
+                push_root(RootKind::Bindable, root, ctx, scope, out);
             }
-            harvest_expr(&rhs.value, scope, out);
+            harvest_expr(&rhs.value, ctx, scope, out);
         }
         Expr::Seq(stmts) => {
             for s in stmts {
-                harvest_expr(&s.value, scope, out);
+                harvest_expr(&s.value, ctx, scope, out);
             }
         }
     }
 }
 
-fn push_root(kind: RootKind, root: &str, scope: &[String], out: &mut BTreeSet<(RootKind, String)>) {
+fn push_root(kind: RootKind, root: &str, ctx: &str, scope: &[String], out: &mut Roots) {
     if root.contains('$') {
         return; // $store/$route/$event/$index/… — runtime territory
     }
@@ -312,16 +363,45 @@ fn push_root(kind: RootKind, root: &str, scope: &[String], out: &mut BTreeSet<(R
     if !is_ident_safe(root) {
         return;
     }
-    out.insert((kind, root.to_string()));
+    out.entry((kind, root.to_string()))
+        .or_insert_with(|| ctx.to_string());
 }
 
-/// Conservative "can become a Rust ident suffix" check.
+/// Conservative "plain identifier" check.
 fn is_ident_safe(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Nearest own-field name within edit distance 2 — the macro-time
+/// did-you-mean for the panic message.
+fn nearest<'a>(candidates: &'a [String], root: &str) -> Option<&'a str> {
+    candidates
+        .iter()
+        .filter_map(|c| {
+            let d = edit_distance(c, root);
+            (d > 0 && d <= 2).then_some((d, c.as_str()))
+        })
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let sub = prev[j] + usize::from(ca != cb);
+            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 #[cfg(test)]
@@ -332,7 +412,15 @@ mod tests {
     fn assertions(template: &str) -> String {
         let ast = pocopine_template_parser::parse_strict(template, "test.poco").expect("parses");
         let ident = format_ident!("Demo");
-        emit_path_assertions(&ast, &ident, false).to_string()
+        emit_path_assertions(
+            &ast,
+            &ident,
+            false,
+            "Demo.poco",
+            &["count".to_string(), "name".to_string()],
+            Span::call_site(),
+        )
+        .to_string()
     }
 
     #[test]
@@ -342,9 +430,19 @@ mod tests {
             <button pp-on:click="reset">x</button>
             <input pp-model="name" /></div>"#,
         );
-        assert!(out.contains("__poc_bindable_count"), "{out}");
-        assert!(out.contains("__poc_bindable_name"), "{out}");
-        assert!(out.contains("__poc_handler_reset"), "{out}");
+        assert!(out.contains("__POC_TEMPLATE_FIELDS , \"count\""), "{out}");
+        assert!(out.contains("__POC_TEMPLATE_FIELDS , \"name\""), "{out}");
+        assert!(out.contains("__POC_HANDLER_KEYS , \"reset\""), "{out}");
+        assert!(out.contains("unknown template handler `reset`"), "{out}");
+    }
+
+    #[test]
+    fn message_carries_context_and_suggestion() {
+        let out = assertions(r#"<span pp-text="countt"></span>"#);
+        assert!(out.contains("unknown template path root `countt`"), "{out}");
+        assert!(out.contains("pp-text=\\\"countt\\\""), "{out}");
+        assert!(out.contains("in Demo.poco"), "{out}");
+        assert!(out.contains("nearest field: `count`"), "{out}");
     }
 
     #[test]
@@ -358,9 +456,9 @@ mod tests {
             </template>
             <span pp-text="items"></span></div>"#,
         );
-        assert!(!out.contains("__poc_bindable_item ;"), "{out}");
+        assert!(!out.contains("\"item\""), "{out}");
         assert!(!out.contains("$"), "{out}");
-        assert!(out.contains("__poc_bindable_items"), "{out}");
+        assert!(out.contains("\"items\""), "{out}");
     }
 
     #[test]
@@ -370,8 +468,8 @@ mod tests {
             <i pp-text="row"></i></div>"#,
         );
         // `row` outside the loop body IS a component-scope read.
-        assert!(out.contains("__poc_bindable_row"), "{out}");
-        assert!(out.contains("__poc_bindable_rows"), "{out}");
+        assert!(out.contains("\"row\""), "{out}");
+        assert!(out.contains("\"rows\""), "{out}");
     }
 
     #[test]
@@ -381,23 +479,24 @@ mod tests {
                 <span pp-text="entry.title"></span>
             </template></pine-list>"#,
         );
-        assert!(!out.contains("__poc_bindable_entry"), "{out}");
+        assert!(!out.contains("\"entry\""), "{out}");
     }
 
     #[test]
     fn listener_bare_path_is_handler_and_compound_reads_are_fields() {
         let out = assertions(r#"<button pp-on:click="open = !open">t</button>"#);
-        assert!(out.contains("__poc_bindable_open"), "{out}");
+        assert!(out.contains("__POC_TEMPLATE_FIELDS , \"open\""), "{out}");
         let out = assertions(r#"<button @click="pick(item, count)">t</button>"#);
-        assert!(out.contains("__poc_handler_pick"), "{out}");
-        assert!(out.contains("__poc_bindable_count"), "{out}");
+        assert!(out.contains("__POC_HANDLER_KEYS , \"pick\""), "{out}");
+        assert!(out.contains("__POC_TEMPLATE_FIELDS , \"count\""), "{out}");
     }
 
     #[test]
     fn interps_and_bind_shorthand_harvest() {
         let out = assertions(r#"<div :class="theme"><p>hello {{ user.name }}!</p></div>"#);
-        assert!(out.contains("__poc_bindable_theme"), "{out}");
-        assert!(out.contains("__poc_bindable_user"), "{out}");
+        assert!(out.contains("\"theme\""), "{out}");
+        assert!(out.contains("\"user\""), "{out}");
+        assert!(out.contains("{{ user.name }}"), "{out}");
     }
 
     #[test]
@@ -408,8 +507,20 @@ mod tests {
         )
         .expect("parses");
         let ident = format_ident!("Demo");
-        let out = emit_path_assertions(&ast, &ident, true).to_string();
-        assert!(!out.contains("__poc_bindable_label"), "{out}");
-        assert!(out.contains("__poc_handler_save"), "{out}");
+        let out = emit_path_assertions(&ast, &ident, true, "Demo.poco", &[], Span::call_site())
+            .to_string();
+        assert!(!out.contains("\"label\""), "{out}");
+        assert!(out.contains("__POC_HANDLER_KEYS , \"save\""), "{out}");
+    }
+
+    #[test]
+    fn edit_distance_suggestion_bounds() {
+        assert_eq!(
+            nearest(&["count".into(), "label".into()], "countt"),
+            Some("count")
+        );
+        assert_eq!(nearest(&["count".into()], "zzz"), None);
+        // Exact match is not a "suggestion" (distance 0 filtered).
+        assert_eq!(nearest(&["count".into()], "count"), None);
     }
 }
