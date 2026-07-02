@@ -219,6 +219,13 @@ Consumers, each currently routing through the trap:
   `write_path_tracked` (read the penultimate projection, set the
   leaf, re-fingerprint the root field, bump + trigger — the
   RFC-024 §7 semantics preserved exactly).
+  *Update (2026-07-02):* as shipped, the dotted path only set the
+  leaf on the projection — no bump, no trigger, and (post-S3) no
+  way back into Rust state, so deep writes were silently lost.
+  `path::write_segments_with` now completes this bullet in the
+  stronger form the projection model requires: after the leaf
+  set it writes the whole root field back through the scoped
+  writer. See the RFC-024 §7 update note.
 - **`pp-bind` child-prop writes** and **`pp-model` mirror-in**
   call it with the child's `scope_id` (both already resolve the
   child scope; the `is_prop` gate and `WriteOrigin` plumbing move

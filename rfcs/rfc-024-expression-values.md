@@ -198,6 +198,19 @@ Three files:
   assigning deep state should either mutate through a handler or
   use a flat scope field. Follow-up RFC can deepen the write-path
   tracking.
+
+  *Update (2026-07-02):* the follow-up landed — under the RFC-096
+  projection model an in-place leaf set mutated a throwaway
+  snapshot and the write was silently lost, so
+  `path::write_segments_with` (shared by `pp-model` and assign
+  evaluation) now surfaces every dotted write itself: it sets the
+  leaf on the read snapshot, then writes the whole root field back
+  through the scoped writer (deserialize + invalidate + trigger,
+  same as a flat write). Nested `pp-model="$store.ws.settings.x"`
+  and `@click="user.name = 'x'"` are now reliable; a write through
+  a missing/non-object segment is dropped with a console warning.
+  `$`-roots without a scoped writer (`$event`) keep the in-place
+  semantics — they are live platform objects, not snapshots.
 - **Side-effects in arg evaluation order.** Left-to-right, same
   as JS. Authors writing `foo($event, self_mutator())` get
   predictable ordering.

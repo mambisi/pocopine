@@ -78,11 +78,14 @@ pub fn resolve_path_with(
 /// RFC-096 S1 — [`write_path`] with an optional
 /// [`crate::expr::RootAccess`]. Single-segment paths route
 /// through the scoped writer (full reactivity — the same body
-/// the set trap delegates to); dotted paths read the root via
-/// the access (the same cached object the proxy would return)
-/// and set the leaf in place, preserving the RFC-024 §7
-/// surface-the-write-yourself semantics. `$`-roots and
-/// access-less calls fall back to the proxy.
+/// the set trap delegates to). Dotted paths read the root field
+/// via the access (a projection snapshot of Rust state), set the
+/// leaf on that snapshot, then write the whole field back through
+/// the scoped writer — the RFC-024 §7 "surface the write" done by
+/// the framework instead of the author, so nested `pp-model`
+/// paths deserialize + trigger like flat ones. `$`-roots that
+/// don't resolve to a scoped writer (`$event` & co) are live JS
+/// objects: the in-place leaf set IS the write.
 pub fn write_path_with(
     root: &JsValue,
     access: Option<&crate::expr::RootAccess>,
@@ -90,6 +93,18 @@ pub fn write_path_with(
     value: &JsValue,
 ) -> bool {
     let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+    write_segments_with(root, access, &segments, value)
+}
+
+/// Segments-form core of [`write_path_with`], shared with the
+/// assignment evaluator (`expr::write_assign_path_with`) so
+/// `pp-model="a.b"` and `@click="a.b = x"` cannot diverge.
+pub(crate) fn write_segments_with(
+    root: &JsValue,
+    access: Option<&crate::expr::RootAccess>,
+    segments: &[&str],
+    value: &JsValue,
+) -> bool {
     // RFC-096 S2 — magic-rooted writes go through the backing
     // scope's writer (e.g. `pp-model="$store.user.name"`).
     if let Some(first) = segments.first()
@@ -97,25 +112,24 @@ pub fn write_path_with(
         && let Some((macc, consumed)) =
             crate::scope::magic_scope_access(first, segments.get(1).copied())
     {
-        match &segments[consumed..] {
-            [] => return false,
-            [field] => return macc.write(field, value),
-            [field, middle @ .., last] => {
-                let mut cur = macc.read(field).unwrap_or(JsValue::UNDEFINED);
-                for seg in middle {
-                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
-                    if !cur.is_object() {
-                        return false;
-                    }
-                }
-                if !cur.is_object() {
+        return match &segments[consumed..] {
+            [] => false,
+            [field] => macc.write(field, value),
+            [field, rest @ ..] => {
+                let container = macc.read(field).unwrap_or(JsValue::UNDEFINED);
+                if !set_leaf(&container, rest, value, segments) {
                     return false;
                 }
-                return Reflect::set(&cur, &JsValue::from_str(last), value).unwrap_or(false);
+                // The container is a projection snapshot, not Rust
+                // state — surface the deep write by writing the
+                // whole field back through the scoped writer:
+                // deserialize + invalidate + trigger, same as a
+                // flat write.
+                macc.write(field, &container)
             }
-        }
+        };
     }
-    match segments.as_slice() {
+    match segments {
         [] => false,
         [single] => {
             if let Some(a) = access
@@ -125,22 +139,61 @@ pub fn write_path_with(
             }
             Reflect::set(root, &JsValue::from_str(single), value).unwrap_or(false)
         }
-        [first, middle @ .., last] => {
-            let mut target = match access.and_then(|a| a.read(first)) {
+        [first, rest @ ..] => {
+            let container = match access.and_then(|a| a.read(first)) {
                 Some(v) => v,
                 None => Reflect::get(root, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),
             };
-            if !target.is_object() {
+            if !set_leaf(&container, rest, value, segments) {
                 return false;
             }
-            for seg in middle {
-                target =
-                    Reflect::get(&target, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
-                if !target.is_object() {
-                    return false;
-                }
+            if first.starts_with('$') {
+                // `$event` & co resolve to live platform objects —
+                // the in-place set IS the write; there is no Rust
+                // field to surface it to.
+                return true;
             }
-            Reflect::set(&target, &JsValue::from_str(last), value).unwrap_or(false)
+            // Surface the write (RFC-024 §7): scoped writer first,
+            // proxy set trap (which delegates to the same writer)
+            // as the fallback.
+            if let Some(a) = access
+                && a.write(first, &container)
+            {
+                return true;
+            }
+            Reflect::set(root, &JsValue::from_str(first), &container).unwrap_or(false)
         }
     }
+}
+
+/// Walk `rest[..len-1]` from `container` and set the final segment
+/// on the object it lands on. A non-object anywhere on the way
+/// drops the write with a console warning — a lost `pp-model`
+/// keystroke is otherwise invisible.
+fn set_leaf(container: &JsValue, rest: &[&str], value: &JsValue, segments: &[&str]) -> bool {
+    let Some((last, middle)) = rest.split_last() else {
+        return false;
+    };
+    // The container segment is the one right before `rest`.
+    let mut blame = segments[segments.len() - rest.len() - 1];
+    let mut cur = container.clone();
+    for seg in middle {
+        if !cur.is_object() {
+            return warn_dropped(segments, blame);
+        }
+        cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+        blame = seg;
+    }
+    if !cur.is_object() {
+        return warn_dropped(segments, blame);
+    }
+    Reflect::set(&cur, &JsValue::from_str(last), value).unwrap_or(false)
+}
+
+fn warn_dropped(segments: &[&str], blame: &str) -> bool {
+    web_sys::console::warn_1(&JsValue::from_str(&format!(
+        "pocopine: write to `{}` dropped — `{blame}` is not an object",
+        segments.join(".")
+    )));
+    false
 }

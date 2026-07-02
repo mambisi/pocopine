@@ -290,83 +290,20 @@ fn scope_id_for(_proxy: &JsValue) -> Option<crate::reactive::ScopeId> {
     crate::scope::current_scope_id()
 }
 
-/// Apply an assignment to a scope. Single-segment paths go through
-/// the scope's `set` trap (full reactivity). Multi-segment paths
-/// read the penultimate object (subscribing reads along the way)
-/// and set the final segment in place — reactivity fires on the
-/// outer object's `set` only if the author surfaces the write by
-/// rewriting the field, per RFC-024 §7.
+/// Apply an assignment to a scope — [`crate::path::write_segments_with`]
+/// over the parsed segments, the same core `pp-model` writes ride,
+/// so `@click="a.b = x"` and `pp-model="a.b"` cannot diverge.
+/// Single-segment paths go through the scoped writer; dotted paths
+/// mutate the read snapshot and the core surfaces the write by
+/// writing the field back (RFC-024 §7, deepened).
 fn write_assign_path_with(
     proxy: &JsValue,
     segments: &[String],
     value: &JsValue,
     root: Option<&RootAccess>,
 ) {
-    if segments.is_empty() {
-        return;
-    }
-    if segments.len() == 1 {
-        // Single-segment: full reactivity. Scoped writer first;
-        // proxy set trap as the `$`-name / no-access fallback.
-        if let Some(a) = root
-            && a.write(&segments[0], value)
-        {
-            return;
-        }
-        let _ = Reflect::set(proxy, &JsValue::from_str(&segments[0]), value);
-        return;
-    }
-    // RFC-096 S2 — magic-rooted assigns: the field under the
-    // store/route scope writes through that scope's writer (full
-    // reactivity); deeper paths read the field and set the leaf
-    // in place, mirroring the plain-field dotted rule below.
-    if segments[0].starts_with('$')
-        && let Some((access, consumed)) =
-            crate::scope::magic_scope_access(&segments[0], segments.get(1).map(|s| s.as_str()))
-    {
-        match &segments[consumed..] {
-            [] => {}
-            [field] => {
-                if access.write(field, value) {
-                    return;
-                }
-            }
-            [field, middle @ .., last] => {
-                let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
-                for seg in middle {
-                    cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
-                    if !cur.is_object() {
-                        return;
-                    }
-                }
-                if cur.is_object() {
-                    let _ = Reflect::set(&cur, &JsValue::from_str(last), value);
-                }
-                return;
-            }
-        }
-    }
-    // Multi-segment (RFC-024 §7): read the penultimate object
-    // (the root via the access — the same cached projection the
-    // proxy would return — subscribing along the way) and set the
-    // final segment in place. Reactivity fires on the outer field
-    // only if the author surfaces the write by rewriting it.
-    let first = &segments[0];
-    let mut cur = match root.and_then(|a| a.read(first)) {
-        Some(v) => v,
-        None => Reflect::get(proxy, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),
-    };
-    if !cur.is_object() {
-        return;
-    }
-    for seg in &segments[1..segments.len() - 1] {
-        cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
-        if !cur.is_object() {
-            return;
-        }
-    }
-    let last = &segments[segments.len() - 1];
-    let _ = Reflect::set(&cur, &JsValue::from_str(last), value);
+    let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let _ = crate::path::write_segments_with(proxy, root, &segments, value);
 }
 
 fn lit_to_js(l: &Literal) -> JsValue {
