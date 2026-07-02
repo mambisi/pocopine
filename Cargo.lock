@@ -7697,6 +7697,7 @@ dependencies = [
  "pocopine-template-parser",
  "proc-macro2",
  "quote",
+ "strsim",
  "syn 2.0.117",
 ]
 

@@ -25,6 +25,7 @@ pocopine-directives = { workspace = true }
 # RFC 049 / RFC 050 §4.6 — rustc-flavoured diagnostic renderer.
 # Host-only, same as the parser crates above.
 annotate-snippets = "0.11"
+strsim = { workspace = true }
 cron = { workspace = true }
 pocopine-client-codegen = { workspace = true }
 # RFC-100 — `asset!` hashes the referenced file at
