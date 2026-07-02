@@ -26,4 +26,11 @@ use serde::{Deserialize, Serialize};
 pub struct ContextMenuDemo {}
 
 #[handlers]
-impl ContextMenuDemo {}
+impl ContextMenuDemo {
+    /// Showcase no-op — the demo exercises the menu interaction
+    /// (open/dismiss/keyboard), not the action itself.
+    pub fn action_bump(&mut self) {}
+
+    /// Showcase no-op — see [`Self::action_bump`].
+    pub fn action_reset(&mut self) {}
+}

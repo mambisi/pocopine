@@ -1,0 +1,13 @@
+error[E0599]: no associated item named `__poc_handler_rest` found for struct `TpUnknownHandler` in the current scope
+  --> tests/ui/tp_unknown_handler.rs:8:1
+   |
+ 8 |   #[component(
+   |  _^
+ 9 | |     name = "tp-unknown-handler",
+10 | |     template_inline = r#"<button pp-on:click="rest">reset</button>"#
+11 | | )]
+   | |__^ associated item not found in `TpUnknownHandler`
+12 |   struct TpUnknownHandler {
+   |   ----------------------- associated item `__poc_handler_rest` not found for this struct
+   |
+   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

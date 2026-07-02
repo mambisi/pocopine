@@ -17,9 +17,14 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 macro_rules! compiled_fixture {
     ($name:ident, $template:literal) => {
+        compiled_fixture!($name, $template, {});
+    };
+    ($name:ident, $template:literal, { $($field:ident : $ty:ty),* $(,)? }) => {
         #[derive(Default, serde::Serialize, serde::Deserialize)]
         #[component(template_inline = $template)]
-        struct $name {}
+        struct $name {
+            $(pub $field: $ty,)*
+        }
 
         #[handlers]
         impl $name {}
@@ -3148,7 +3153,8 @@ compiled_fixture!(
     </pine-dialog-portal>
   </pine-dialog-root>
 </div>
-"#
+"#,
+    { dialog_open: bool }
 );
 
 #[wasm_bindgen_test]
@@ -6488,7 +6494,11 @@ struct AnimateFadeHost {
     dialog_open: bool,
 }
 #[handlers]
-impl AnimateFadeHost {}
+impl AnimateFadeHost {
+    pub fn open_it(&mut self) {
+        self.dialog_open = true;
+    }
+}
 
 // `#[component(transition = "fade")]` stamps the six pp-transition:*
 // class attrs on the INNER rendered root — not the outer custom
@@ -6540,7 +6550,11 @@ struct AnimateFlipHost {
     dialog_open: bool,
 }
 #[handlers]
-impl AnimateFlipHost {}
+impl AnimateFlipHost {
+    pub fn open_it(&mut self) {
+        self.dialog_open = true;
+    }
+}
 
 // `#[component(animate = "flip")]` stamps `data-pp-animate="flip"`
 // on the custom element tag so pp-for's keyed reconcile can

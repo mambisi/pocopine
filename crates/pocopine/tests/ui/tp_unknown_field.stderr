@@ -1,0 +1,13 @@
+error[E0599]: no associated item named `__poc_bindable_countt` found for struct `TpUnknownField` in the current scope
+  --> tests/ui/tp_unknown_field.rs:10:1
+   |
+10 |   #[component(
+   |  _^
+11 | |     name = "tp-unknown-field",
+12 | |     template_inline = r#"<div><span pp-text="countt"></span></div>"#
+13 | | )]
+   | |__^ associated item not found in `TpUnknownField`
+14 |   struct TpUnknownField {
+   |   --------------------- associated item `__poc_bindable_countt` not found for this struct
+   |
+   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)
