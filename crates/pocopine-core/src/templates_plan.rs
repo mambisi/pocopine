@@ -227,6 +227,39 @@ pub fn registered_template_tags() -> Vec<String> {
     tags
 }
 
+/// RFC-111 — const-evaluable membership check backing the
+/// compile-time template-path validation. The `#[component]`
+/// macro emits, per template expression root, a
+/// `const _: () = { if !template_key_listed(...) { panic!(<msg
+/// formatted at macro-expansion time>) } };` — evaluated by
+/// rustc's const machinery, which is what joins the
+/// `#[component]`-emitted field list with the
+/// `#[handlers]`-emitted computed/handler lists across the two
+/// macro invocations.
+pub const fn template_key_listed(keys: &[&str], key: &str) -> bool {
+    let kb = key.as_bytes();
+    let mut i = 0;
+    while i < keys.len() {
+        let cb = keys[i].as_bytes();
+        if cb.len() == kb.len() {
+            let mut j = 0;
+            let mut eq = true;
+            while j < cb.len() {
+                if cb[j] != kb[j] {
+                    eq = false;
+                    break;
+                }
+                j += 1;
+            }
+            if eq {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Cumulative count of plan-install failures observed since
 /// process start. Increments via [`record_plan_failure`] when a
 /// generated install entry's `node_path` doesn't resolve to a

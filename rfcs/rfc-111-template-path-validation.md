@@ -9,37 +9,50 @@
 Every expression root a `.poco` template can evaluate is now checked at
 `cargo check` time: a root must name a struct field, an explicit-list
 flatten leaf, a `#[computed]` field, or — for `pp-on` targets — a
-`#[handlers]` method. A typo'd or renamed root fails compilation:
+`#[handlers]` method. A typo'd or renamed root fails compilation with a
+fully-formatted message anchored on the `template` argument's literal:
 
 ```
-error[E0599]: no associated item named `__poc_bindable_countt` found for struct `Counter`
-  --> src/counter.rs:8:1
-   = rustc's did-you-mean usually suggests `__poc_bindable_count`
+error[E0080]: evaluation panicked: unknown template path root `countt`:
+not a field or #[computed] value of `Counter` — from `pp-text="countt"`
+in Counter.poco; nearest field: `count`
+  --> src/counter.rs:9:16
+   |
+ 9 |     template = "Counter.poco"
+   |                ^^^^^^^^^^^^^^ evaluation of `_` failed here
 ```
 
 This closes the main safety gap of the plans-as-data architecture
 relative to compiled-view frameworks (rename a field → compile error,
 not a silent runtime `undefined`) at **zero bundle cost** — the whole
-mechanism is `const _` items and hidden marker fns that exist only for
-rustc's item resolution and get stripped from codegen.
+mechanism is `const` name arrays and `const _` checks that exist only
+for rustc's const evaluation and get stripped from codegen.
 
 ## Design
 
-Cross-macro validation via **compiler-resolved markers** (the RFC-049
-`assert_child` idiom): the `#[component]` macro cannot see `#[computed]`
-fields or handler methods (they live in the separate `#[handlers]` impl),
-so instead of checking names directly it defers the join to rustc:
+Cross-macro validation via **const evaluation**: the `#[component]`
+macro cannot see `#[computed]` fields or handler methods (they live in
+the separate `#[handlers]` impl), so instead of checking names directly
+it defers the join to rustc's const machinery — which, unlike item
+resolution, lets the macro author the entire error message:
 
-1. `#[component]` emits one hidden marker per struct field and explicit
-   flatten leaf: `pub fn __poc_bindable_<name>() {}`.
-2. `#[handlers]` emits `__poc_bindable_<name>` per `#[computed]` field
-   and `__poc_handler_<name>` per dispatchable method (markers are
-   cfg-unconditional so references resolve on host AND wasm even when
-   the method is cfg-gated; a `BTreeSet` dedups cfg-split names).
+1. `#[component]` emits `__POC_TEMPLATE_FIELDS: &[&str]` (struct fields
+   + explicit flatten leaves) on the type.
+2. `#[handlers]` emits `__POC_COMPUTED_KEYS` and `__POC_HANDLER_KEYS`
+   (cfg-unconditional — checks must pass on host AND wasm even when a
+   method is cfg-gated; a `BTreeSet` dedups cfg-split names).
 3. `#[component]` harvests the template (a dedicated AST pass in
    `template_paths.rs` — independent of plan eligibility, so
-   walker-fallback expressions are covered too) and emits one anonymous
-   reference per distinct root: `const _: fn() = <T>::__poc_bindable_<root>;`.
+   walker-fallback expressions are covered too) and emits, per distinct
+   root, a `const _: () = { if !template_key_listed(…) { panic!(<msg>) } };`
+   where `template_key_listed` is a stable `const fn` membership check
+   in `pocopine-core::templates_plan` and `<msg>` is a **literal the
+   macro formats at expansion time** — carrying the root, the offending
+   directive/expression, the template name, and a nearest-field
+   suggestion (edit distance ≤ 2 against the macro-visible field list).
+   The check is `quote_spanned!` onto the `template` /
+   `template_inline` argument, so the error points at the template
+   reference, not the whole attribute.
 
 Root harvesting recurses the `pocopine-expr` AST: `Path[0]` and
 `Assign.path[0]` → bindable; `Call` names → handler; a bare single-ident
@@ -101,8 +114,9 @@ bindings and zero false positives**:
 - `crates/pocopine/tests/template_paths_ui.rs` (trybuild): compile-pass
   (fields + computed + handlers + magics + loop/let locals), the
   escape hatch, and compile-fail snapshots for a typo'd field and a
-  typo'd handler. Reject snapshots pin rustc E0599 framing —
-  regenerate with `TRYBUILD=overwrite` if the nightly drifts.
+  typo'd handler. Reject snapshots pin rustc's E0080 const-panic
+  framing around our message text — regenerate with
+  `TRYBUILD=overwrite` if the nightly drifts.
 - Whole-workspace build (host + the CI clippy-wasm gate with
   `--all-targets`) is the standing false-positive gate; pine's
   126-test wasm suite passes with the fixture fixes.
