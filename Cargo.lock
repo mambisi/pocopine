@@ -7594,12 +7594,12 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "indicatif",
+ "pocopine-crypto",
  "pocopine-deploy",
  "reqwest 0.12.28",
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tokio",
  "toml 0.8.23",
  "tracing",
