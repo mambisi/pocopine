@@ -1017,10 +1017,19 @@ pub(crate) fn kebab_case(ident: &str) -> String {
 /// snapshot round-trip). Serde-skipped fields are excluded — their
 /// projections never carry them, so nested template paths can't
 /// reach them anyway.
+///
+/// RFC-044 flatten routing: a path rooted at an EXPLICIT-LIST
+/// flatten leaf (`tab_config.max`) re-roots into the container
+/// with the FULL path — the container's `PathAccess` matches
+/// `[leaf, rest…]`. The RFC-044 collision rule guarantees leaf
+/// names never shadow real fields, so the arms share one match.
+/// Bare-flatten leaves need no routing: `PropValue` bounds them
+/// to scalars, which can never root a nested path.
 fn path_dispatch_methods(
     field_idents: &[syn::Ident],
     field_names: &[String],
     field_is_serde_skip: &[bool],
+    flatten_fields: &[(syn::Ident, Vec<String>, bool)],
 ) -> proc_macro2::TokenStream {
     let mut set_arms = Vec::new();
     let mut fp_arms = Vec::new();
@@ -1033,13 +1042,33 @@ fn path_dispatch_methods(
             continue;
         }
         set_arms.push(quote! {
-            #name => ::pocopine::__private::PathSetDispatch(&mut self.#ident)
-                .__poc_dispatch_set(rest, value),
+            #name => {
+                return ::pocopine::__private::PathSetDispatch(&mut self.#ident)
+                    .__poc_dispatch_set(rest, value);
+            }
         });
         fp_arms.push(quote! {
-            #name => ::pocopine::__private::PathFpDispatch(&self.#ident)
-                .__poc_dispatch_fp(rest),
+            #name => {
+                return ::pocopine::__private::PathFpDispatch(&self.#ident)
+                    .__poc_dispatch_fp(rest);
+            }
         });
+    }
+    for (container, leaves, _) in flatten_fields {
+        for leaf in leaves {
+            set_arms.push(quote! {
+                #leaf => {
+                    return ::pocopine::__private::PathSetDispatch(&mut self.#container)
+                        .__poc_dispatch_set(path, value);
+                }
+            });
+            fp_arms.push(quote! {
+                #leaf => {
+                    return ::pocopine::__private::PathFpDispatch(&self.#container)
+                        .__poc_dispatch_fp(path);
+                }
+            });
+        }
     }
     quote! {
         fn set_path(
@@ -1049,25 +1078,33 @@ fn path_dispatch_methods(
         ) -> bool {
             #[allow(unused_imports)]
             use ::pocopine::__private::{PathSetNoAccess as _, PathSetViaAccess as _};
-            match path {
-                [root, rest @ ..] if !rest.is_empty() => match *root {
-                    #(#set_arms)*
-                    _ => false,
-                },
-                _ => false,
+            let [root, rest @ ..] = path else {
+                return false;
+            };
+            if rest.is_empty() {
+                return false;
             }
+            match *root {
+                #(#set_arms)*
+                _ => {}
+            }
+            false
         }
 
         fn path_fingerprint(&self, path: &[&str]) -> ::core::option::Option<u64> {
             #[allow(unused_imports)]
             use ::pocopine::__private::{PathFpNoAccess as _, PathFpViaAccess as _};
-            match path {
-                [root, rest @ ..] if !rest.is_empty() => match *root {
-                    #(#fp_arms)*
-                    _ => ::core::option::Option::None,
-                },
-                _ => ::core::option::Option::None,
+            let [root, rest @ ..] = path else {
+                return ::core::option::Option::None;
+            };
+            if rest.is_empty() {
+                return ::core::option::Option::None;
             }
+            match *root {
+                #(#fp_arms)*
+                _ => {}
+            }
+            ::core::option::Option::None
         }
     }
 }
@@ -1749,6 +1786,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         });
         let out = quote! {
+
             #input
 
             impl #struct_ident {
@@ -2393,8 +2431,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { ::pocopine::__private::quick_len_value },
     );
     // RFC-112/113 — native nested-path dispatch overrides.
-    let path_dispatch_tokens =
-        path_dispatch_methods(&field_idents, &field_names, &field_is_serde_skip);
+    let path_dispatch_tokens = path_dispatch_methods(
+        &field_idents,
+        &field_names,
+        &field_is_serde_skip,
+        &flatten_fields,
+    );
 
     // RFC-096 S3 — typed text lane. Same Serialize bound as
     // get(); the projector itself decides scalar-vs-compound.
@@ -4552,9 +4594,10 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         &field_names,
         quote! { ::pocopine::__private::quick_len_value },
     );
-    // RFC-112/113 — native nested-path dispatch overrides.
+    // RFC-112/113 — native nested-path dispatch overrides (stores
+    // have no flatten props).
     let path_dispatch_tokens =
-        path_dispatch_methods(&field_idents, &field_names, &field_is_serde_skip);
+        path_dispatch_methods(&field_idents, &field_names, &field_is_serde_skip, &[]);
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {
@@ -6319,7 +6362,22 @@ pub fn derive_props(input: TokenStream) -> TokenStream {
         }
     });
 
+    // RFC-112 — prop groups are lenses too: a leaves-only
+    // `PathAccess` impl (no whole-self arm, so no new serde bounds
+    // land on the group struct itself) lets flatten-leaf-rooted
+    // template paths and nested prop structs ride the native lane.
+    let pa_pairs: Vec<(syn::Ident, String)> = leaves
+        .iter()
+        .map(|(i, _)| {
+            let name = i.to_string().trim_start_matches("r#").to_string();
+            (i.clone(), name)
+        })
+        .collect();
+    let path_access_impl = path_access_impl_tokens(struct_ident, &input.generics, &pa_pairs, false);
+
     let out = quote! {
+        #path_access_impl
+
         impl #impl_generics ::pocopine::__private::Props for #struct_ident #ty_generics
             #where_clause
         {
@@ -6745,6 +6803,78 @@ pub fn asset(input: TokenStream) -> TokenStream {
     assets::expand(input)
 }
 
+/// RFC-112 — build a `PathAccess` impl over `(ident, name)` field
+/// pairs. `whole_self_arm` adds `[] => replace self via serde`
+/// (requires `Self: Serialize + DeserializeOwned` — true for
+/// `#[derive(PathAccess)]` targets, deliberately NOT required of
+/// `#[derive(Props)]` groups, whose impl covers `#[prop]` leaves
+/// only so no new bounds land on existing prop structs).
+fn path_access_impl_tokens(
+    struct_ident: &syn::Ident,
+    generics: &syn::Generics,
+    fields: &[(syn::Ident, String)],
+    whole_self_arm: bool,
+) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let mut set_arms = Vec::new();
+    let mut fp_arms = Vec::new();
+    for (ident, name) in fields {
+        set_arms.push(quote! {
+            [#name] => ::pocopine::__private::path_set_leaf(&mut self.#ident, value),
+            [#name, rest @ ..] => {
+                ::pocopine::__private::PathSetDispatch(&mut self.#ident)
+                    .__poc_dispatch_set(rest, value)
+            }
+        });
+        fp_arms.push(quote! {
+            [#name] => ::pocopine::__private::fingerprint_value(&self.#ident),
+            [#name, rest @ ..] => {
+                ::pocopine::__private::PathFpDispatch(&self.#ident).__poc_dispatch_fp(rest)
+            }
+        });
+    }
+    let (self_set_arm, self_fp_arm) = if whole_self_arm {
+        (
+            quote! { [] => ::pocopine::__private::path_set_leaf(self, value), },
+            quote! { [] => ::pocopine::__private::fingerprint_value(self), },
+        )
+    } else {
+        (
+            quote! { [] => false, },
+            quote! { [] => ::core::option::Option::None, },
+        )
+    };
+    quote! {
+        impl #impl_generics ::pocopine::__private::PathAccess for #struct_ident #ty_generics
+        #where_clause
+        {
+            fn path_set(
+                &mut self,
+                path: &[&str],
+                value: &::pocopine::__private::JsValue,
+            ) -> bool {
+                #[allow(unused_imports)]
+                use ::pocopine::__private::{PathSetNoAccess as _, PathSetViaAccess as _};
+                match path {
+                    #self_set_arm
+                    #(#set_arms)*
+                    _ => false,
+                }
+            }
+
+            fn path_fingerprint(&self, path: &[&str]) -> ::core::option::Option<u64> {
+                #[allow(unused_imports)]
+                use ::pocopine::__private::{PathFpNoAccess as _, PathFpViaAccess as _};
+                match path {
+                    #self_fp_arm
+                    #(#fp_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+        }
+    }
+}
+
 /// RFC-112 — `#[derive(PathAccess)]`: recursive typed nested-path
 /// access. Each derive handles its OWN named fields and descends
 /// into children through the autoref dispatch — children that also
@@ -6754,11 +6884,13 @@ pub fn asset(input: TokenStream) -> TokenStream {
 /// `Vec` element hit with an exhausted path needs). Field leaves
 /// deserialize/fingerprint via serde, so the derive compiles
 /// wherever the struct's serde derives do.
+///
+/// `#[derive(Props)]` groups get a leaves-only impl automatically —
+/// deriving BOTH on one type is a (clear) conflicting-impl error.
 #[proc_macro_derive(PathAccess)]
 pub fn derive_path_access(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_ident = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     let Data::Struct(data) = &input.data else {
         return syn::Error::new_spanned(
@@ -6777,54 +6909,15 @@ pub fn derive_path_access(input: TokenStream) -> TokenStream {
         .into();
     };
 
-    let mut set_arms = Vec::new();
-    let mut fp_arms = Vec::new();
-    for field in &fields.named {
-        let Some(ident) = &field.ident else { continue };
-        let name = ident.to_string();
-        set_arms.push(quote! {
-            [#name] => ::pocopine::__private::path_set_leaf(&mut self.#ident, value),
-            [#name, rest @ ..] => {
-                ::pocopine::__private::PathSetDispatch(&mut self.#ident)
-                    .__poc_dispatch_set(rest, value)
-            }
-        });
-        fp_arms.push(quote! {
-            [#name] => ::pocopine::__private::fingerprint_value(&self.#ident),
-            [#name, rest @ ..] => {
-                ::pocopine::__private::PathFpDispatch(&self.#ident).__poc_dispatch_fp(rest)
-            }
-        });
-    }
-
-    let out = quote! {
-        impl #impl_generics ::pocopine::__private::PathAccess for #struct_ident #ty_generics
-        #where_clause
-        {
-            fn path_set(
-                &mut self,
-                path: &[&str],
-                value: &::pocopine::__private::JsValue,
-            ) -> bool {
-                #[allow(unused_imports)]
-                use ::pocopine::__private::{PathSetNoAccess as _, PathSetViaAccess as _};
-                match path {
-                    [] => ::pocopine::__private::path_set_leaf(self, value),
-                    #(#set_arms)*
-                    _ => false,
-                }
-            }
-
-            fn path_fingerprint(&self, path: &[&str]) -> ::core::option::Option<u64> {
-                #[allow(unused_imports)]
-                use ::pocopine::__private::{PathFpNoAccess as _, PathFpViaAccess as _};
-                match path {
-                    [] => ::pocopine::__private::fingerprint_value(self),
-                    #(#fp_arms)*
-                    _ => ::core::option::Option::None,
-                }
-            }
-        }
-    };
-    out.into()
+    let pairs: Vec<(syn::Ident, String)> = fields
+        .named
+        .iter()
+        .filter_map(|f| {
+            f.ident.clone().map(|i| {
+                let name = i.to_string().trim_start_matches("r#").to_string();
+                (i, name)
+            })
+        })
+        .collect();
+    path_access_impl_tokens(struct_ident, &input.generics, &pairs, true).into()
 }

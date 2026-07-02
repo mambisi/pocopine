@@ -63,6 +63,18 @@ RFC-113 its fingerprint reach.
   `set_leaf` mirrors the macro `set`'s empty-string→`null` retry.
 - **Exports.** Trait at `pocopine::PathAccess`, derive under the
   same name (the serde convention); both in the prelude.
+- **`#[derive(Props)]` implies `PathAccess`.** Prop groups get a
+  leaves-only impl for free (no whole-self arm, so no new serde
+  bounds land on the group struct): a Props struct used as a normal
+  nested field descends natively, and EXPLICIT-list flatten leaves
+  (`#[prop(flatten = ["panel_limits"])]` — the only flatten form
+  that can carry struct leaves) get compile-time re-rooting arms in
+  the component's `set_path`/`path_fingerprint`, routing
+  `panel_limits.max` into the container with the full path.
+  Bare-flatten leaves need no routing — `PropValue` bounds them to
+  scalars, which can never root a nested path. Deriving BOTH
+  `Props` and `PathAccess` on one type is a conflicting-impl error
+  (Props already provides it).
 
 ## Non-goals
 
