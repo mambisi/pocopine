@@ -1,8 +1,31 @@
 # RFC-109: pocopine-forms — typed forms with validation
 
-**Status:** Draft (exploration — options weighed, recommendation made, API not final)
-**Crates:** new `pocopine-forms`; touches nothing in core
+**Status:** RETIRED (2026-07-02) — not worth the wasm size overhead
+**Crates:** new `pocopine-forms` (never built); touches nothing in core
 **Relates to:** RFC-024 §7 update (deep write-back — the enabling change), RFC-044 (model fields), RFC-108 (scoped stores), RFC-031 (prop vs state)
+
+## Retirement
+
+Retired on size grounds after the spike below quantified the cost: the rules
+people actually reach for a forms library for (`email`, `url`, patterns) pull
+validator's regex engine at **~600 KB raw wasm**, and the regex-free floor
+still adds the validator + derive machinery to every app bundle for what a
+handler can do in a few lines. The enabling win stands on its own **without
+any crate**: since the RFC-024 §7 update, a plain typed struct binds directly
+(`pp-model="form.email"`, nested and Vec paths included), and validation
+stays where it always was — explicit checks in the submit handler on the
+client, `data.validate()` or hand checks in the `#[server]` fn as the gate.
+Apps that want Keats `validator` server-side can just use it there (host
+binaries don't care about wasm size); nothing in pocopine needs to exist for
+that.
+
+Do not re-propose a validation DSL, a `Form<T>` wrapper, or a forms crate
+unless the wasm size story changes materially (e.g. a regex-free validator
+ecosystem emerges) or a concrete app demonstrates the hand-rolled pattern
+failing at scale. The exploration below is kept as the record of what was
+considered and measured.
+
+---
 
 ## Summary
 
@@ -208,8 +231,4 @@ wizard. Nothing in either RFC special-cases the other.
 
 ## Next step
 
-Build the spike into `crates/pocopine-forms` behind the recommended shape:
-`Form<T>`, the error flattener (exists, tested in the spike), `rules::email`,
-`ServerError::validation` + `apply_server_errors`, and a `SignupForm` example
-under `examples/` driven by a Playwright check — then revisit the open
-questions with that consumer in hand.
+None — retired; see the Retirement section at the top.
