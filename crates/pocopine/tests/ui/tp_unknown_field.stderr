@@ -1,4 +1,6 @@
-error[E0080]: evaluation panicked: unknown template path root `countt`: not a field or #[computed] value of `TpUnknownField` — from `pp-text="countt"` in the inline template; nearest field: `count`
+error[E0080]: evaluation panicked: unknown template path root `countt`: `TpUnknownField` has no field or #[computed] value with that name
+               --> from `pp-text="countt"` in the inline template
+              help: a field with a similar name exists: `count`
   --> tests/ui/tp_unknown_field.rs:12:23
    |
 12 |     template_inline = r#"<div><span pp-text="countt"></span></div>"#

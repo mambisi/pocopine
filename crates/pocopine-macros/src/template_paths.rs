@@ -93,11 +93,19 @@ pub fn emit_path_assertions(
                 return None;
             }
             let mut msg = format!(
-                "unknown template path root `{root}`: not a field or #[computed] value \
-                     of `{struct_name}` — from `{ctx}` in {template_display}"
+                "unknown template path root `{root}`: `{struct_name}` has no field or \
+                 #[computed] value with that name\n \
+                 --> from `{ctx}` in {template_display}"
             );
             if let Some(near) = nearest(own_fields, root) {
-                msg.push_str(&format!("; nearest field: `{near}`"));
+                msg.push_str(&format!(
+                    "\nhelp: a field with a similar name exists: `{near}`"
+                ));
+            } else if !own_fields.is_empty() {
+                msg.push_str(&format!(
+                    "\nhelp: available fields are: {}",
+                    field_listing(own_fields)
+                ));
             }
             Some(quote_spanned! {span=>
                 const _: () = {
@@ -115,8 +123,9 @@ pub fn emit_path_assertions(
         }
         RootKind::Handler => {
             let msg = format!(
-                "unknown template handler `{root}`: no #[handlers] method named `{root}` \
-                     on `{struct_name}` — from `{ctx}` in {template_display}"
+                "unknown template handler `{root}`: no #[handlers] method of \
+                 `{struct_name}` has that name\n \
+                 --> from `{ctx}` in {template_display}"
             );
             Some(quote_spanned! {span=>
                 const _: () = {
@@ -376,6 +385,22 @@ fn is_ident_safe(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Rustc-style truncated name listing for the no-similar-name
+/// help line: `` `a`, `b`, `c` and 4 others ``.
+fn field_listing(names: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut out = names
+        .iter()
+        .take(SHOWN)
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > SHOWN {
+        out.push_str(&format!(" and {} others", names.len() - SHOWN));
+    }
+    out
+}
+
 /// Nearest own-field name within edit distance 2 — the macro-time
 /// did-you-mean for the panic message.
 fn nearest<'a>(candidates: &'a [String], root: &str) -> Option<&'a str> {
@@ -442,7 +467,29 @@ mod tests {
         assert!(out.contains("unknown template path root `countt`"), "{out}");
         assert!(out.contains("pp-text=\\\"countt\\\""), "{out}");
         assert!(out.contains("in Demo.poco"), "{out}");
-        assert!(out.contains("nearest field: `count`"), "{out}");
+        assert!(
+            out.contains("help: a field with a similar name exists: `count`"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn no_similar_name_lists_available_fields() {
+        let out = assertions(r#"<span pp-text="zzzzzz"></span>"#);
+        assert!(
+            out.contains("help: available fields are: `count`, `name`"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn field_listing_truncates() {
+        let names: Vec<String> = (0..8).map(|i| format!("f{i}")).collect();
+        assert_eq!(
+            field_listing(&names),
+            "`f0`, `f1`, `f2`, `f3`, `f4` and 3 others"
+        );
+        assert_eq!(field_listing(&names[..2]), "`f0`, `f1`");
     }
 
     #[test]
