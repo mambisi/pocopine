@@ -47,8 +47,20 @@ pub fn resolve_path_with(
                 segments.next()
             };
             if let Some(field) = field {
+                // RFC-113 — leaf-granular subscription when the
+                // field's type has PathAccess reach; root-tracked
+                // walk otherwise.
+                let rest: Vec<&str> = segments.collect();
+                if !rest.is_empty() {
+                    let mut full = Vec::with_capacity(rest.len() + 1);
+                    full.push(field);
+                    full.extend_from_slice(&rest);
+                    if let Some(v) = access.read_path(&full) {
+                        return v;
+                    }
+                }
                 let mut cur = access.read(field).unwrap_or(JsValue::UNDEFINED);
-                for seg in segments {
+                for seg in rest {
                     cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
                 }
                 return cur;
@@ -65,11 +77,24 @@ pub fn resolve_path_with(
         }
         return cur;
     }
+    let rest: Vec<&str> = segments.collect();
+    if !rest.is_empty()
+        && let Some(a) = reader
+    {
+        let mut full = Vec::with_capacity(rest.len() + 1);
+        full.push(first);
+        full.extend_from_slice(&rest);
+        // RFC-113 — leaf-granular subscription (see the magic
+        // branch above).
+        if let Some(v) = a.read_path(&full) {
+            return v;
+        }
+    }
     let mut cur = match reader.and_then(|a| a.read(first)) {
         Some(v) => v,
         None => Reflect::get(root, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),
     };
-    for segment in segments {
+    for segment in rest {
         cur = Reflect::get(&cur, &JsValue::from_str(segment)).unwrap_or(JsValue::UNDEFINED);
     }
     cur
@@ -116,6 +141,17 @@ pub(crate) fn write_segments_with(
             [] => false,
             [field] => macc.write(field, value),
             [field, rest @ ..] => {
+                // RFC-112 — native leaf write first: leaf-typed
+                // deserialize, no container round-trip, and the
+                // precise trigger lattice (sibling leaves stay
+                // quiet). Falls through when the path has no
+                // PathAccess reach.
+                let mut full = Vec::with_capacity(rest.len() + 1);
+                full.push(*field);
+                full.extend_from_slice(rest);
+                if macc.write_path(&full, value) {
+                    return true;
+                }
                 let container = macc.read(field).unwrap_or(JsValue::UNDEFINED);
                 if !set_leaf(&container, rest, value, segments) {
                     return false;
@@ -140,6 +176,14 @@ pub(crate) fn write_segments_with(
             Reflect::set(root, &JsValue::from_str(single), value).unwrap_or(false)
         }
         [first, rest @ ..] => {
+            // RFC-112 — native leaf write first (see the magic
+            // branch above). `$`-roots never resolve natively.
+            if !first.starts_with('$')
+                && let Some(a) = access
+                && a.write_path(segments, value)
+            {
+                return true;
+            }
             let container = match access.and_then(|a| a.read(first)) {
                 Some(v) => v,
                 None => Reflect::get(root, &JsValue::from_str(first)).unwrap_or(JsValue::UNDEFINED),

@@ -157,6 +157,26 @@ pub fn parse_cached(src: &str) -> Result<Spanned<Expr>, ParseError> {
 pub trait ScopeAccess {
     fn read(&self, key: &str) -> Option<JsValue>;
     fn write(&self, key: &str, value: &JsValue) -> bool;
+
+    /// RFC-113 — nested read with leaf-granular tracking:
+    /// subscribe the running effect to `path.join(".")` instead of
+    /// the root field, so sibling-leaf changes don't re-run it.
+    /// `None` = not eligible (derived scope, `$`-root, numeric
+    /// segment, or no `PathAccess` fingerprint reach) — the caller
+    /// keeps the root-tracked walk.
+    fn read_path(&self, path: &[&str]) -> Option<JsValue> {
+        let _ = path;
+        None
+    }
+
+    /// RFC-112 — native nested write (`path` = `[field, nested…]`)
+    /// through the state's `set_path`. `false` = not natively
+    /// reachable; the caller falls back to the RFC-024 §7
+    /// snapshot round-trip.
+    fn write_path(&self, path: &[&str], value: &JsValue) -> bool {
+        let _ = (path, value);
+        false
+    }
 }
 
 pub type RootAccess = std::rc::Rc<dyn ScopeAccess>;

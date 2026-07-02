@@ -98,6 +98,31 @@ pub trait ComponentState: 'static {
         None
     }
 
+    /// RFC-112 — native nested write: `path` is
+    /// `[field, nested…]`; the value deserializes at the leaf via
+    /// the field type's [`crate::path_access::PathAccess`] chain.
+    /// `false` = the path doesn't resolve natively (no derive on
+    /// the way, bad segment, failed deserialize) — callers fall
+    /// back to the RFC-024 §7 snapshot round-trip. The
+    /// `#[component]` / `#[store]` macros override this with
+    /// per-field dispatch arms.
+    fn set_path(&mut self, path: &[&str], value: &JsValue) -> bool {
+        let _ = (path, value);
+        false
+    }
+
+    /// RFC-113 — fingerprint of a nested location, `path` =
+    /// `[field, nested…]`. The dirty sweep uses this for dotted
+    /// tracked keys exactly as it uses [`Self::field_fingerprint`]
+    /// for roots. `None` = unknown; a dotted key is only minted as
+    /// a tracked key when this returns `Some` (see
+    /// `read_path`), so unlike roots the sweep never has to
+    /// treat `None` as changed.
+    fn path_fingerprint(&self, path: &[&str]) -> Option<u64> {
+        let _ = path;
+        None
+    }
+
     /// RFC-096 S3 — typed text projection of one declared field:
     /// `Some(string)` for serde-scalar fields (rendered exactly
     /// as `pp-text` would), `None` for compound fields and
@@ -542,6 +567,17 @@ fn read_field_tracked(
     key: &str,
 ) -> JsValue {
     track(scope_id, key);
+    read_field_untracked(scope_id, state, key)
+}
+
+/// [`read_field_tracked`] minus the subscription — RFC-113's
+/// leaf-granular reads resolve the container through here after
+/// tracking the full dotted path instead of the root.
+fn read_field_untracked(
+    scope_id: ScopeId,
+    state: &Rc<RefCell<dyn ComponentState>>,
+    key: &str,
+) -> JsValue {
     // Derived scopes (`SlotScope`, etc.) compose their return value
     // from a parent proxy on every read — caching would freeze the
     // value at the first call. Skip the cache lookup AND the cache
@@ -602,6 +638,42 @@ impl crate::expr::ScopeAccess for ScopedFieldAccess {
         }
         write_field_tracked(self.scope_id, &self.state, key, value.clone());
         true
+    }
+
+    fn read_path(&self, path: &[&str]) -> Option<JsValue> {
+        let [root, rest @ ..] = path else { return None };
+        if rest.is_empty() || root.starts_with('$') {
+            return None;
+        }
+        // Derived scopes (loop/slot) compose from their parent —
+        // the trigger topology lives there; keep root granularity.
+        if !self.state.borrow().cacheable_fields() {
+            return None;
+        }
+        // Numeric segments are positions, not identity — one
+        // reorder and a leaf key would lie. Keyed row plans own
+        // element identity; these stay root-tracked.
+        if rest
+            .iter()
+            .any(|s| s.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        {
+            return None;
+        }
+        // Leaf granularity is opt-in via `PathAccess`: without
+        // fingerprint reach the dirty sweep couldn't gate this key
+        // and every handler would re-run the subscriber. No reach →
+        // root-tracked fallback (today's behavior).
+        self.state.borrow().path_fingerprint(path)?;
+        track(self.scope_id, &path.join("."));
+        let mut cur = read_field_untracked(self.scope_id, &self.state, root);
+        for seg in rest {
+            cur = js_sys::Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+        }
+        Some(cur)
+    }
+
+    fn write_path(&self, path: &[&str], value: &JsValue) -> bool {
+        write_path_tracked(self.scope_id, &self.state, path, value)
     }
 }
 
@@ -812,6 +884,15 @@ pub fn write_field_tracked(
     if let Some(container) = flatten_container {
         trigger(scope_id, container);
     }
+    // RFC-113 — a whole-field write must reach the leaf-granular
+    // subscribers under it (they subscribed to dotted keys ONLY,
+    // to stay isolated from sibling leaves). v1 fans down
+    // unconditionally — same effective granularity today's root
+    // subscribers get.
+    trigger_nested_under(scope_id, key);
+    if let Some(container) = flatten_container {
+        trigger_nested_under(scope_id, container);
+    }
 }
 
 /// [`write_field_tracked`] with the state resolved from the scope
@@ -824,6 +905,80 @@ pub fn write_field(scope_id: ScopeId, key: &str, value: &JsValue) -> bool {
     };
     write_field_tracked(scope_id, &scope.state, key, value.clone());
     true
+}
+
+/// RFC-112/113 — the native nested write: `path` =
+/// `[field, nested…]` routes through `ComponentState::set_path`
+/// (leaf-typed deserialize, no container round-trip), then fires
+/// the trigger lattice. `false` = not natively reachable — the
+/// caller (`path::write_segments_with`) falls back to the
+/// snapshot round-trip.
+pub(crate) fn write_path_tracked(
+    scope_id: ScopeId,
+    state: &Rc<RefCell<dyn ComponentState>>,
+    path: &[&str],
+    value: &JsValue,
+) -> bool {
+    let [root, rest @ ..] = path else {
+        return false;
+    };
+    if rest.is_empty() || root.starts_with('$') {
+        return false;
+    }
+    let origin = crate::model_runtime::current_write_origin();
+    let ok = crate::model_runtime::with_scope_write(scope_id, origin, || {
+        state.borrow_mut().set_path(path, value)
+    });
+    if !ok {
+        return false;
+    }
+    // The container's cached projection is stale — the native
+    // write bypassed serde entirely.
+    let flatten_container = state.borrow().flatten_container_of(root);
+    projection_invalidate(crate::reactive::ensure_field_signal(scope_id, root));
+    if let Some(container) = flatten_container {
+        projection_invalidate(crate::reactive::ensure_field_signal(scope_id, container));
+    }
+    // Trigger lattice: the exact key, subscribed keys UNDER it,
+    // and subscribed ancestors (whole-container readers,
+    // `#[watch(container)]`). Sibling leaves are the whole point —
+    // they are NOT fired.
+    let written = path.join(".");
+    for key in crate::reactive::tracked_keys(scope_id) {
+        let k = key.as_ref();
+        if k != *root && (k == written || is_path_under(k, &written) || is_path_under(&written, k))
+        {
+            trigger(scope_id, k);
+        }
+    }
+    trigger(scope_id, root);
+    if let Some(container) = flatten_container {
+        trigger(scope_id, container);
+    }
+    true
+}
+
+/// True when `key` is strictly below `prefix` in path space
+/// (`"a.b.c"` is under `"a.b"`, not under `"a.bx"`).
+fn is_path_under(key: &str, prefix: &str) -> bool {
+    key.len() > prefix.len() && key.starts_with(prefix) && key.as_bytes()[prefix.len()] == b'.'
+}
+
+/// Fire every subscribed dotted key strictly under `root` — the
+/// down-fan for whole-field writes (RFC-113 v1: unconditional;
+/// fingerprint-filtered descent is the v2 refinement). The
+/// `has_nested_keys` gate keeps flat-only scopes at zero cost
+/// (one HashSet miss, no allocation) — the neutrality guarantee.
+fn trigger_nested_under(scope_id: ScopeId, root: &str) {
+    if !crate::reactive::has_nested_keys(scope_id) {
+        return;
+    }
+    for key in crate::reactive::tracked_keys(scope_id) {
+        let k = key.as_ref();
+        if is_path_under(k, root) {
+            trigger(scope_id, k);
+        }
+    }
 }
 
 thread_local! {
@@ -1045,7 +1200,7 @@ impl DirtySweep {
             .iter()
             .map(|k| {
                 count_fingerprint();
-                state.field_fingerprint(k.as_ref())
+                sweep_fingerprint(&*state, k.as_ref())
             })
             .collect();
         let lens_before = keys
@@ -1084,7 +1239,7 @@ impl DirtySweep {
                 continue;
             }
             count_fingerprint();
-            let after = state_ref.field_fingerprint(k.as_ref());
+            let after = sweep_fingerprint(&*state_ref, k.as_ref());
             let unchanged = matches!((before, &after), (Some(b), Some(a)) if b == a);
             if !unchanged {
                 changed.push(k.clone());
@@ -1105,10 +1260,33 @@ impl DirtySweep {
             } else {
                 projection_invalidate(sid);
             }
+            // RFC-113 — a changed dotted key means its ROOT
+            // container changed too; the container's cached
+            // projection (populated by leaf-granular reads) must
+            // not survive even when the root key itself isn't
+            // tracked and so never reaches the loop above.
+            if let Some(root) = k.as_ref().split_once('.').map(|(r, _)| r) {
+                projection_invalidate(crate::reactive::ensure_field_signal(self.scope_id, root));
+            }
         }
         for k in &changed {
             crate::reactive::trigger(self.scope_id, k.as_ref());
         }
+    }
+}
+
+/// Fingerprint one sweep key: dotted keys (RFC-113 leaf-granular
+/// subscriptions) route through `ComponentState::path_fingerprint`;
+/// roots keep `field_fingerprint`. Without this split a dotted key
+/// would hit the root matcher's `_ => None` arm and — since the
+/// sweep treats unknown as changed — re-run its subscriber on
+/// EVERY handler invoke.
+fn sweep_fingerprint(state: &dyn ComponentState, key: &str) -> Option<u64> {
+    if key.contains('.') {
+        let segs: Vec<&str> = key.split('.').collect();
+        state.path_fingerprint(&segs)
+    } else {
+        state.field_fingerprint(key)
     }
 }
 

@@ -1010,6 +1010,68 @@ pub(crate) fn kebab_case(ident: &str) -> String {
 /// projection lanes (fingerprint, quick-len, text) that each wrap a
 /// single `::pocopine::__private` call around the field reference, so
 /// the two macros can't drift on the arm shape.
+/// RFC-112/113 — `ComponentState::set_path` / `path_fingerprint`
+/// override bodies: one arm per direct field, descending through
+/// the autoref dispatch so field types without `PathAccess`
+/// terminate the native path (the runtime then falls back to the
+/// snapshot round-trip). Serde-skipped fields are excluded — their
+/// projections never carry them, so nested template paths can't
+/// reach them anyway.
+fn path_dispatch_methods(
+    field_idents: &[syn::Ident],
+    field_names: &[String],
+    field_is_serde_skip: &[bool],
+) -> proc_macro2::TokenStream {
+    let mut set_arms = Vec::new();
+    let mut fp_arms = Vec::new();
+    for ((ident, name), skip) in field_idents
+        .iter()
+        .zip(field_names.iter())
+        .zip(field_is_serde_skip.iter())
+    {
+        if *skip {
+            continue;
+        }
+        set_arms.push(quote! {
+            #name => ::pocopine::__private::PathSetDispatch(&mut self.#ident)
+                .__poc_dispatch_set(rest, value),
+        });
+        fp_arms.push(quote! {
+            #name => ::pocopine::__private::PathFpDispatch(&self.#ident)
+                .__poc_dispatch_fp(rest),
+        });
+    }
+    quote! {
+        fn set_path(
+            &mut self,
+            path: &[&str],
+            value: &::pocopine::__private::JsValue,
+        ) -> bool {
+            #[allow(unused_imports)]
+            use ::pocopine::__private::{PathSetNoAccess as _, PathSetViaAccess as _};
+            match path {
+                [root, rest @ ..] if !rest.is_empty() => match *root {
+                    #(#set_arms)*
+                    _ => false,
+                },
+                _ => false,
+            }
+        }
+
+        fn path_fingerprint(&self, path: &[&str]) -> ::core::option::Option<u64> {
+            #[allow(unused_imports)]
+            use ::pocopine::__private::{PathFpNoAccess as _, PathFpViaAccess as _};
+            match path {
+                [root, rest @ ..] if !rest.is_empty() => match *root {
+                    #(#fp_arms)*
+                    _ => ::core::option::Option::None,
+                },
+                _ => ::core::option::Option::None,
+            }
+        }
+    }
+}
+
 fn field_call_arms<'a>(
     field_idents: &'a [syn::Ident],
     field_names: &'a [String],
@@ -2330,6 +2392,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         &field_names,
         quote! { ::pocopine::__private::quick_len_value },
     );
+    // RFC-112/113 — native nested-path dispatch overrides.
+    let path_dispatch_tokens =
+        path_dispatch_methods(&field_idents, &field_names, &field_is_serde_skip);
 
     // RFC-096 S3 — typed text lane. Same Serialize bound as
     // get(); the projector itself decides scalar-vs-compound.
@@ -3469,6 +3534,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     _ => ::core::option::Option::None,
                 }
             }
+
+            #path_dispatch_tokens
             fn field_as_text(&self, key: &str) -> ::core::option::Option<::std::string::String> {
                 match key {
                     #(#text_arms)*
@@ -4485,6 +4552,9 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         &field_names,
         quote! { ::pocopine::__private::quick_len_value },
     );
+    // RFC-112/113 — native nested-path dispatch overrides.
+    let path_dispatch_tokens =
+        path_dispatch_methods(&field_idents, &field_names, &field_is_serde_skip);
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {
@@ -4590,6 +4660,8 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
                     _ => ::core::option::Option::None,
                 }
             }
+
+            #path_dispatch_tokens
             fn invoke(
                 &mut self,
                 key: &str,
@@ -6671,4 +6743,88 @@ pub fn app(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn asset(input: TokenStream) -> TokenStream {
     assets::expand(input)
+}
+
+/// RFC-112 — `#[derive(PathAccess)]`: recursive typed nested-path
+/// access. Each derive handles its OWN named fields and descends
+/// into children through the autoref dispatch — children that also
+/// derive keep descending; children that don't terminate the
+/// native path and the runtime falls back to the RFC-024 §7
+/// snapshot round-trip. Empty path = the value itself (what a
+/// `Vec` element hit with an exhausted path needs). Field leaves
+/// deserialize/fingerprint via serde, so the derive compiles
+/// wherever the struct's serde derives do.
+#[proc_macro_derive(PathAccess)]
+pub fn derive_path_access(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let Data::Struct(data) = &input.data else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(PathAccess)] supports structs only",
+        )
+        .to_compile_error()
+        .into();
+    };
+    let syn::Fields::Named(fields) = &data.fields else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(PathAccess)] requires named fields",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    let mut set_arms = Vec::new();
+    let mut fp_arms = Vec::new();
+    for field in &fields.named {
+        let Some(ident) = &field.ident else { continue };
+        let name = ident.to_string();
+        set_arms.push(quote! {
+            [#name] => ::pocopine::__private::path_set_leaf(&mut self.#ident, value),
+            [#name, rest @ ..] => {
+                ::pocopine::__private::PathSetDispatch(&mut self.#ident)
+                    .__poc_dispatch_set(rest, value)
+            }
+        });
+        fp_arms.push(quote! {
+            [#name] => ::pocopine::__private::fingerprint_value(&self.#ident),
+            [#name, rest @ ..] => {
+                ::pocopine::__private::PathFpDispatch(&self.#ident).__poc_dispatch_fp(rest)
+            }
+        });
+    }
+
+    let out = quote! {
+        impl #impl_generics ::pocopine::__private::PathAccess for #struct_ident #ty_generics
+        #where_clause
+        {
+            fn path_set(
+                &mut self,
+                path: &[&str],
+                value: &::pocopine::__private::JsValue,
+            ) -> bool {
+                #[allow(unused_imports)]
+                use ::pocopine::__private::{PathSetNoAccess as _, PathSetViaAccess as _};
+                match path {
+                    [] => ::pocopine::__private::path_set_leaf(self, value),
+                    #(#set_arms)*
+                    _ => false,
+                }
+            }
+
+            fn path_fingerprint(&self, path: &[&str]) -> ::core::option::Option<u64> {
+                #[allow(unused_imports)]
+                use ::pocopine::__private::{PathFpNoAccess as _, PathFpViaAccess as _};
+                match path {
+                    [] => ::pocopine::__private::fingerprint_value(self),
+                    #(#fp_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+        }
+    };
+    out.into()
 }
