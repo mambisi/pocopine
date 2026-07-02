@@ -19,14 +19,20 @@
 //! `__POC_COMPUTED_KEYS` / `__POC_HANDLER_KEYS` from `#[handlers]`.
 //! Rustc's const evaluation performs the cross-macro join — and
 //! because the panic message is a literal this macro formats at
-//! expansion time, the error carries the offending expression, the
-//! directive, the template name, and a nearest-field suggestion,
-//! anchored on the `template = "…"` argument's span:
+//! expansion time, it can be a full annotate-snippets render of
+//! the `.poco` source (the strict validator's house style, via
+//! `Renderer::plain()` so const-panic output stays ANSI-free),
+//! with an strsim-suggested similar name in the `help:` footer:
 //!
 //! ```text
-//! error[E0080]: … 'unknown template path root `countt`: not a field or
-//! #[computed] value of `Counter` — from `pp-text="countt"` in
-//! Counter.poco; nearest field: `count`'
+//! error[E0080]: evaluation panicked:
+//! error: unknown template path root `countt`
+//!  --> Counter.poco:5:22
+//!   |
+//! 5 |   <span pp-text="countt"></span>
+//!   |                  ^^^^^^ `Counter` has no field or #[computed] value with that name
+//!   |
+//!   = help: a field with a similar name exists: `count`
 //! ```
 //!
 //! What is deliberately NOT validated:
@@ -46,7 +52,9 @@
 //!   unchecked_paths = "true")]`), the escape hatch.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
+use annotate_snippets::{Level, Renderer, Snippet};
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 
@@ -62,21 +70,33 @@ enum RootKind {
     Handler,
 }
 
-/// Harvested roots: `(kind, root) → first source context` (the
-/// attribute or interpolation the root came from, for the error
-/// message).
-type Roots = BTreeMap<(RootKind, String), String>;
+/// The first source context a root was harvested from — carries
+/// both the display form for fallback messages and the raw text
+/// to locate the root in the template source for the snippet.
+struct RootCtx {
+    display: String,
+    needle: Needle,
+}
+
+enum Needle {
+    /// An attribute value — located as `"…value…"` in source.
+    Attr(String),
+    /// A raw `{{ … }}` interpolation body — located verbatim.
+    Interp(String),
+}
+
+/// Harvested roots: `(kind, root) → first source context`.
+type Roots = BTreeMap<(RootKind, String), RootCtx>;
 
 /// Harvest the template and emit the const-eval checks.
 /// `skip_bindable` disables field/computed checks (bare-flatten
 /// components) while keeping handler checks; `own_fields` feeds
-/// the nearest-field suggestion; `span` anchors the errors
+/// the similar-name suggestion; `span` anchors the errors
 /// (the `template` / `template_inline` argument's literal).
 pub fn emit_path_assertions(
     ast: &TemplateAst,
     struct_ident: &syn::Ident,
     skip_bindable: bool,
-    template_display: &str,
     own_fields: &[String],
     span: Span,
 ) -> TokenStream {
@@ -92,21 +112,19 @@ pub fn emit_path_assertions(
             if skip_bindable {
                 return None;
             }
-            let mut msg = format!(
-                "unknown template path root `{root}`: `{struct_name}` has no field or \
-                 #[computed] value with that name\n \
-                 --> from `{ctx}` in {template_display}"
-            );
-            if let Some(near) = nearest(own_fields, root) {
-                msg.push_str(&format!(
-                    "\nhelp: a field with a similar name exists: `{near}`"
-                ));
+            let title = format!("unknown template path root `{root}`");
+            let label = format!("`{struct_name}` has no field or #[computed] value with that name");
+            let help = if let Some(near) = nearest(own_fields, root) {
+                Some(format!("a field with a similar name exists: `{near}`"))
             } else if !own_fields.is_empty() {
-                msg.push_str(&format!(
-                    "\nhelp: available fields are: {}",
+                Some(format!(
+                    "available fields are: {}",
                     field_listing(own_fields)
-                ));
-            }
+                ))
+            } else {
+                None
+            };
+            let msg = render_check_message(ast, ctx, root, &title, &label, help.as_deref());
             Some(quote_spanned! {span=>
                 const _: () = {
                     if !(::pocopine::__private::template_key_listed(
@@ -116,30 +134,93 @@ pub fn emit_path_assertions(
                         <#struct_ident>::__POC_COMPUTED_KEYS,
                         #root,
                     )) {
-                        ::core::panic!(#msg);
+                        // `"{}"` form: the message embeds template
+                        // source, whose braces must not be read as
+                        // format args (const panic allows exactly
+                        // this one-`&str`-arg shape).
+                        ::core::panic!("{}", #msg);
                     }
                 };
             })
         }
         RootKind::Handler => {
-            let msg = format!(
-                "unknown template handler `{root}`: no #[handlers] method of \
-                 `{struct_name}` has that name\n \
-                 --> from `{ctx}` in {template_display}"
-            );
+            let title = format!("unknown template handler `{root}`");
+            let label = format!("no #[handlers] method of `{struct_name}` has that name");
+            let msg = render_check_message(ast, ctx, root, &title, &label, None);
             Some(quote_spanned! {span=>
                 const _: () = {
                     if !::pocopine::__private::template_key_listed(
                         <#struct_ident>::__POC_HANDLER_KEYS,
                         #root,
                     ) {
-                        ::core::panic!(#msg);
+                        // `"{}"` form: the message embeds template
+                        // source, whose braces must not be read as
+                        // format args (const panic allows exactly
+                        // this one-`&str`-arg shape).
+                        ::core::panic!("{}", #msg);
                     }
                 };
             })
         }
     });
     quote! { #(#checks)* }
+}
+
+/// Pre-render the panic message at expansion time. When the root
+/// can be located in the template source, render a full
+/// annotate-snippets block (source excerpt + caret + `help:`
+/// footer — the same shape the strict template validator emits,
+/// but through `Renderer::plain()` so const-panic output and
+/// trybuild snapshots stay ANSI-free). Falls back to a compact
+/// text form when the location search misses. The leading
+/// newline detaches the block from rustc's
+/// "evaluation panicked:" prefix.
+fn render_check_message(
+    ast: &TemplateAst,
+    ctx: &RootCtx,
+    root: &str,
+    title: &str,
+    label: &str,
+    help: Option<&str>,
+) -> String {
+    if let Some(range) = locate_root(&ast.source, ctx, root) {
+        let mut message = Level::Error.title(title).snippet(
+            Snippet::source(&ast.source)
+                .origin(&ast.file_path)
+                .fold(true)
+                .annotation(Level::Error.span(range).label(label)),
+        );
+        if let Some(h) = help {
+            message = message.footer(Level::Help.title(h));
+        }
+        return format!("\n{}", Renderer::plain().render(message));
+    }
+    let mut msg = format!(
+        "{title}: {label}\n --> from `{}` in {}",
+        ctx.display, ast.file_path
+    );
+    if let Some(h) = help {
+        msg.push_str(&format!("\nhelp: {h}"));
+    }
+    msg
+}
+
+/// Byte range of the root identifier inside the template source,
+/// via the first occurrence of its enclosing attribute value /
+/// interpolation body. Best-effort: duplicated values may point
+/// at an earlier identical occurrence, which still shows the
+/// right expression.
+fn locate_root(src: &str, ctx: &RootCtx, root: &str) -> Option<Range<usize>> {
+    let (hay_start, hay) = match &ctx.needle {
+        Needle::Attr(value) => {
+            let quoted = format!("\"{value}\"");
+            (src.find(&quoted)? + 1, value.as_str())
+        }
+        Needle::Interp(inner) => (src.find(inner.as_str())?, inner.as_str()),
+    };
+    let off = hay.find(root)?;
+    let start = hay_start + off;
+    Some(start..start + root.len())
 }
 
 /// `__POC_TEMPLATE_FIELDS` const for the component macro: the
@@ -189,7 +270,10 @@ fn harvest_element(el: &Element, scope: &mut Vec<String>, out: &mut Roots) {
             // `item in items` — items evaluates in the OUTER
             // scope; harvest it before the item name binds.
             if let Some((item, items_expr)) = parse_pp_for(value) {
-                let ctx = format!("pp-for=\"{value}\"");
+                let ctx = RootCtx {
+                    display: format!("pp-for=\"{value}\""),
+                    needle: Needle::Attr(value.clone()),
+                };
                 harvest_expr_src(&items_expr, &ctx, scope, out, false);
                 scope.push(item);
                 introduced += 1;
@@ -205,7 +289,10 @@ fn harvest_element(el: &Element, scope: &mut Vec<String>, out: &mut Roots) {
 
     for (name, value) in &el.attrs {
         if let Some(kind) = attr_expr_kind(name) {
-            let ctx = format!("{name}=\"{value}\"");
+            let ctx = RootCtx {
+                display: format!("{name}=\"{value}\""),
+                needle: Needle::Attr(value.clone()),
+            };
             harvest_expr_src(value, &ctx, scope, out, kind == AttrKind::Listener);
         }
     }
@@ -294,7 +381,10 @@ fn harvest_interps(text: &str, scope: &[String], out: &mut Roots) {
                 return; // unclosed — the strict validator owns the error
             };
             let src = &text[start..start + rel];
-            let ctx = format!("{{{{ {} }}}}", src.trim());
+            let ctx = RootCtx {
+                display: format!("{{{{ {} }}}}", src.trim()),
+                needle: Needle::Interp(src.to_string()),
+            };
             harvest_expr_src(src, &ctx, scope, out, false);
             i = start + rel + 2;
             continue;
@@ -307,7 +397,7 @@ fn harvest_interps(text: &str, scope: &[String], out: &mut Roots) {
 /// Unparseable sources are skipped — `emit_compiled_expr_option`
 /// already turns plan-eligible parse errors into `compile_error!`,
 /// and preserved attributes are the runtime's jurisdiction.
-fn harvest_expr_src(src: &str, ctx: &str, scope: &[String], out: &mut Roots, listener: bool) {
+fn harvest_expr_src(src: &str, ctx: &RootCtx, scope: &[String], out: &mut Roots, listener: bool) {
     let Ok(ast) = pocopine_expr::parse(src) else {
         return;
     };
@@ -323,7 +413,7 @@ fn harvest_expr_src(src: &str, ctx: &str, scope: &[String], out: &mut Roots, lis
     harvest_expr(&ast.value, ctx, scope, out);
 }
 
-fn harvest_expr(expr: &pocopine_expr::Expr, ctx: &str, scope: &[String], out: &mut Roots) {
+fn harvest_expr(expr: &pocopine_expr::Expr, ctx: &RootCtx, scope: &[String], out: &mut Roots) {
     use pocopine_expr::Expr;
     match expr {
         Expr::Literal(_) => {}
@@ -362,7 +452,7 @@ fn harvest_expr(expr: &pocopine_expr::Expr, ctx: &str, scope: &[String], out: &m
     }
 }
 
-fn push_root(kind: RootKind, root: &str, ctx: &str, scope: &[String], out: &mut Roots) {
+fn push_root(kind: RootKind, root: &str, ctx: &RootCtx, scope: &[String], out: &mut Roots) {
     if root.contains('$') {
         return; // $store/$route/$event/$index/… — runtime territory
     }
@@ -373,7 +463,13 @@ fn push_root(kind: RootKind, root: &str, ctx: &str, scope: &[String], out: &mut 
         return;
     }
     out.entry((kind, root.to_string()))
-        .or_insert_with(|| ctx.to_string());
+        .or_insert_with(|| RootCtx {
+            display: ctx.display.clone(),
+            needle: match &ctx.needle {
+                Needle::Attr(v) => Needle::Attr(v.clone()),
+                Needle::Interp(v) => Needle::Interp(v.clone()),
+            },
+        });
 }
 
 /// Conservative "plain identifier" check.
@@ -401,32 +497,16 @@ fn field_listing(names: &[String]) -> String {
     out
 }
 
-/// Nearest own-field name within edit distance 2 — the macro-time
-/// did-you-mean for the panic message.
+/// Similar own-field name for the help line — the house
+/// did-you-mean idiom (`strsim::jaro_winkler > 0.75`, same as
+/// pine-icons-macros / stylekit suggestions).
 fn nearest<'a>(candidates: &'a [String], root: &str) -> Option<&'a str> {
     candidates
         .iter()
-        .filter_map(|c| {
-            let d = edit_distance(c, root);
-            (d > 0 && d <= 2).then_some((d, c.as_str()))
-        })
-        .min_by_key(|(d, _)| *d)
+        .map(|c| (strsim::jaro_winkler(root, c), c.as_str()))
+        .filter(|(score, _)| *score > 0.75 && *score < 1.0)
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(_, c)| c)
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, &ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let sub = prev[j] + usize::from(ca != cb);
-            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
 }
 
 #[cfg(test)]
@@ -441,7 +521,6 @@ mod tests {
             &ast,
             &ident,
             false,
-            "Demo.poco",
             &["count".to_string(), "name".to_string()],
             Span::call_site(),
         )
@@ -462,11 +541,13 @@ mod tests {
     }
 
     #[test]
-    fn message_carries_context_and_suggestion() {
+    fn message_carries_snippet_and_suggestion() {
         let out = assertions(r#"<span pp-text="countt"></span>"#);
         assert!(out.contains("unknown template path root `countt`"), "{out}");
+        // The annotate-snippets block: origin + excerpt + caret.
+        assert!(out.contains("--> test.poco:1:16"), "{out}");
         assert!(out.contains("pp-text=\\\"countt\\\""), "{out}");
-        assert!(out.contains("in Demo.poco"), "{out}");
+        assert!(out.contains("^^^^^^"), "{out}");
         assert!(
             out.contains("help: a field with a similar name exists: `count`"),
             "{out}"
@@ -554,20 +635,19 @@ mod tests {
         )
         .expect("parses");
         let ident = format_ident!("Demo");
-        let out = emit_path_assertions(&ast, &ident, true, "Demo.poco", &[], Span::call_site())
-            .to_string();
+        let out = emit_path_assertions(&ast, &ident, true, &[], Span::call_site()).to_string();
         assert!(!out.contains("\"label\""), "{out}");
         assert!(out.contains("__POC_HANDLER_KEYS , \"save\""), "{out}");
     }
 
     #[test]
-    fn edit_distance_suggestion_bounds() {
+    fn similar_name_suggestion_bounds() {
         assert_eq!(
             nearest(&["count".into(), "label".into()], "countt"),
             Some("count")
         );
         assert_eq!(nearest(&["count".into()], "zzz"), None);
-        // Exact match is not a "suggestion" (distance 0 filtered).
+        // An exact match is not a "suggestion" (score 1.0 filtered).
         assert_eq!(nearest(&["count".into()], "count"), None);
     }
 }

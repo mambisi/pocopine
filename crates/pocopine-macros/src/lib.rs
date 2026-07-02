@@ -2823,11 +2823,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let template_path_assertions_tokens = match &template_ast {
         Some(ast) if !args.unchecked_paths => {
             let skip_bindable = !bare_flatten_fields.is_empty();
-            let template_display = args
-                .template
-                .as_ref()
-                .map(|l| l.value())
-                .unwrap_or_else(|| "the inline template".to_string());
             let span = args
                 .template
                 .as_ref()
@@ -2838,7 +2833,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 ast,
                 &struct_ident,
                 skip_bindable,
-                &template_display,
                 &own_bindable_names,
                 span,
             )

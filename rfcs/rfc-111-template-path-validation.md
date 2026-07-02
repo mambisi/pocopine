@@ -13,9 +13,14 @@ flatten leaf, a `#[computed]` field, or — for `pp-on` targets — a
 fully-formatted message anchored on the `template` argument's literal:
 
 ```
-error[E0080]: evaluation panicked: unknown template path root `countt`:
-not a field or #[computed] value of `Counter` — from `pp-text="countt"`
-in Counter.poco; nearest field: `count`
+error[E0080]: evaluation panicked:
+              error: unknown template path root `countt`
+               --> Counter.poco:5:22
+                |
+              5 |   <span pp-text="countt"></span>
+                |                  ^^^^^^ `Counter` has no field or #[computed] value with that name
+                |
+                = help: a field with a similar name exists: `count`
   --> src/counter.rs:9:16
    |
  9 |     template = "Counter.poco"
@@ -46,13 +51,21 @@ resolution, lets the macro author the entire error message:
    walker-fallback expressions are covered too) and emits, per distinct
    root, a `const _: () = { if !template_key_listed(…) { panic!(<msg>) } };`
    where `template_key_listed` is a stable `const fn` membership check
-   in `pocopine-core::templates_plan` and `<msg>` is a **literal the
-   macro formats at expansion time** — carrying the root, the offending
-   directive/expression, the template name, and a nearest-field
-   suggestion (edit distance ≤ 2 against the macro-visible field list).
-   The check is `quote_spanned!` onto the `template` /
-   `template_inline` argument, so the error points at the template
-   reference, not the whole attribute.
+   in `pocopine-core::templates_plan` and `<msg>` is a **string the
+   macro pre-renders at expansion time**: a full `annotate-snippets`
+   block (the strict validator's house renderer, `Renderer::plain()`
+   so const-panic output and trybuild snapshots stay ANSI-free)
+   showing the `.poco` source line with a caret under the root, plus a
+   rustc-style `help:` footer — a similar name via the house strsim
+   idiom (`jaro_winkler > 0.75`, as in pine-icons-macros), or the
+   truncated available-fields listing when nothing is close. The
+   root is located by searching the template source for its enclosing
+   attribute value / interpolation body (best-effort; a compact text
+   form is the fallback). The panic uses the const-legal
+   `panic!("{}", MSG)` shape so braces in template source are never
+   read as format arguments. The check is `quote_spanned!` onto the
+   `template` / `template_inline` argument, so the rust-side span
+   points at the template reference, not the whole attribute.
 
 Root harvesting recurses the `pocopine-expr` AST: `Path[0]` and
 `Assign.path[0]` → bindable; `Call` names → handler; a bare single-ident
@@ -104,8 +117,9 @@ bindings and zero false positives**:
   interpreter-vs-codegen analysis (it would trade the plans-as-data
   size/shipping model for marginal safety).
 - Validating `$store.<name>.<field>` roots across components/crates.
-- IDE-facing spans into `.poco` files (errors anchor on the
-  `#[component]` attribute; the marker name carries the typo).
+- Machine-readable (IDE-jump) spans into `.poco` files — the rendered
+  message shows the `.poco` file, line:col, and source excerpt, but
+  the rustc-level span still anchors on the `template` argument.
 
 ## Tests
 
