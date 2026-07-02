@@ -70,6 +70,11 @@ mod for_plan;
 mod forbidden_directives;
 mod pp_for_diagnostics;
 mod template_plan;
+// Compile-time validation of template expression roots — marker
+// references resolved by rustc against `#[component]`-emitted
+// field markers and `#[handlers]`-emitted computed/handler
+// markers.
+mod template_paths;
 // RFC-100 — `asset!` content-addressed asset references.
 mod assets;
 
@@ -714,6 +719,11 @@ struct ComponentArgs {
     /// via its own `register()`. Mutually exclusive with
     /// `template` / `template_inline`.
     extends: Option<Vec<syn::Path>>,
+    /// Escape hatch for compile-time template-path validation
+    /// (`unchecked_paths = "true"`). Skips the marker-reference
+    /// emission entirely; template root typos fall back to the
+    /// runtime warn path.
+    unchecked_paths: bool,
 }
 
 impl Parse for ComponentArgs {
@@ -763,12 +773,14 @@ impl Parse for ComponentArgs {
                 args.transition_out = Some(lit);
             } else if kv.path.is_ident("animate") {
                 args.animate = Some(lit);
+            } else if kv.path.is_ident("unchecked_paths") {
+                args.unchecked_paths = lit.value() == "true";
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
                     "unknown key — expected one of: name, template, template_inline, \
                      style, role, display, transition, transition_in, transition_out, \
-                     animate, uses, extends",
+                     animate, uses, extends, unchecked_paths",
                 ));
             }
         }
@@ -2786,6 +2798,39 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => (proc_macro2::TokenStream::new(), Vec::new()),
     };
 
+    // Compile-time template-path validation — one marker
+    // reference per expression root the template can evaluate,
+    // resolved by rustc against the field markers emitted below
+    // and the computed/handler markers `#[handlers]` emits. A
+    // typo'd or renamed root becomes a missing-item error naming
+    // `__poc_bindable_<root>` / `__poc_handler_<name>`. Bare
+    // `#[prop(flatten)]` leaves resolve at runtime through the
+    // `Props` trait, so those components keep handler checks but
+    // skip bindable ones. `unchecked_paths = "true"` opts out.
+    let template_path_assertions_tokens = match &template_ast {
+        Some(ast) if !args.unchecked_paths => {
+            let skip_bindable = !bare_flatten_fields.is_empty();
+            template_paths::emit_path_assertions(ast, &struct_ident, skip_bindable)
+        }
+        _ => proc_macro2::TokenStream::new(),
+    };
+    let template_path_marker_tokens = if args.unchecked_paths {
+        proc_macro2::TokenStream::new()
+    } else {
+        let names = field_names.iter().cloned().chain(
+            flatten_fields
+                .iter()
+                .flat_map(|(_, leaves, _)| leaves.iter().cloned()),
+        );
+        let markers = template_paths::bindable_marker_items(names);
+        quote! {
+            #[doc(hidden)]
+            impl #struct_ident {
+                #markers
+            }
+        }
+    };
+
     // RFC 054 — compile row plans for eligible keyed `pp-for`
     // templates and stamp the source with `data-pp-row-plan`
     // anchors so the runtime can match the directive call back
@@ -3337,6 +3382,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // publication keys match `T`'s `#[prop]` field set.
         #slot_props_validation_tokens
 
+        // Template-path validation — field markers + one
+        // `const _: fn() = <T>::__poc_bindable_<root>;` per
+        // template expression root (handler roots resolve
+        // against `#[handlers]`-emitted markers).
+        #template_path_marker_tokens
+        #template_path_assertions_tokens
+
         // Layout-class lint — hard `compile_error!` when the root
         // carries `sticky` / `h-screen` / `min-h-*` / `inset-*` but
         // the component doesn't declare a `display` (and the role
@@ -3615,6 +3667,13 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     ));
 
     let mut arms = Vec::new();
+    // Template-path validation — every name that gets an invoke
+    // arm also gets a `__poc_handler_<name>` marker so the
+    // `#[component]`-emitted references resolve. BTreeSet: cfg-
+    // split methods with the same name must not emit duplicate
+    // marker items.
+    let mut handler_marker_names: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     // RFC-097 §3.3 — names of `&self` (read-only) handlers; the runtime
     // skips the dirty sweep for these.
     let mut readonly_names: Vec<String> = Vec::new();
@@ -3848,6 +3907,10 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 ::pocopine::__private::JsValue::UNDEFINED
             }
         });
+        // Markers are emitted cfg-unconditionally on purpose:
+        // the component-side reference must resolve on host AND
+        // wasm even when the method itself is cfg-gated.
+        handler_marker_names.insert(name.clone());
         // RFC-097 §3.3 — `&self` (immutable reference, no `mut`) is a
         // read-only handler. By-value `self` and `&mut self` stay swept.
         if receiver.reference.is_some() && receiver.mutability.is_none() {
@@ -4222,10 +4285,33 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // Template-path validation markers: handler names for the
+    // `__poc_handler_*` references, plus `__poc_bindable_*` for
+    // `#[computed]` fields — readable scope keys the
+    // `#[component]` macro cannot see from the struct alone.
+    let template_path_markers = {
+        let handler_markers =
+            template_paths::handler_marker_items(handler_marker_names.into_iter());
+        let computed_names: std::collections::BTreeSet<String> = computed_methods
+            .iter()
+            .map(|c| c.field_name.clone())
+            .collect();
+        let computed_markers = template_paths::bindable_marker_items(computed_names.into_iter());
+        quote! {
+            #[doc(hidden)]
+            impl #ty {
+                #handler_markers
+                #computed_markers
+            }
+        }
+    };
+
     let out = quote! {
         #input
 
         #computed_impl
+
+        #template_path_markers
 
         impl ::pocopine::__private::HandlerDispatch for #ty {
             fn invoke_handler(

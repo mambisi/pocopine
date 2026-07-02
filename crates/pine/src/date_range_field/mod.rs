@@ -96,6 +96,35 @@ impl PineDateRangeField {
             self.focus_field_segment("start-field", "segment-year");
         }
     }
+
+    /// End-field min: the greater of the author's `min_value` and
+    /// the currently picked `start`. Keeps the user from picking
+    /// an end that precedes start.
+    #[computed]
+    fn effective_end_min(
+        min_value: &Option<DateValue>,
+        start: &Option<DateValue>,
+    ) -> Option<DateValue> {
+        match (*min_value, *start) {
+            (Some(m), Some(s)) if s > m => Some(s),
+            (None, Some(s)) => Some(s),
+            (m, _) => m,
+        }
+    }
+
+    /// Start-field max: the lesser of the author's `max_value`
+    /// and the currently picked `end`.
+    #[computed]
+    fn effective_start_max(
+        max_value: &Option<DateValue>,
+        end: &Option<DateValue>,
+    ) -> Option<DateValue> {
+        match (*max_value, *end) {
+            (Some(m), Some(e)) if e < m => Some(e),
+            (None, Some(e)) => Some(e),
+            (m, _) => m,
+        }
+    }
 }
 
 impl PineDateRangeField {
@@ -117,27 +146,6 @@ impl PineDateRangeField {
         };
         if let Ok(html) = segment.dyn_into::<HtmlElement>() {
             let _ = html.focus();
-        }
-    }
-
-    /// End-field min: the greater of the author's `min_value` and
-    /// the currently picked `start`. Keeps the user from picking
-    /// an end that precedes start.
-    pub fn effective_end_min(&self) -> Option<DateValue> {
-        match (self.min_value, self.start) {
-            (Some(m), Some(s)) if s > m => Some(s),
-            (None, Some(s)) => Some(s),
-            (m, _) => m,
-        }
-    }
-
-    /// Start-field max: the lesser of the author's `max_value`
-    /// and the currently picked `end`.
-    pub fn effective_start_max(&self) -> Option<DateValue> {
-        match (self.max_value, self.end) {
-            (Some(m), Some(e)) if e < m => Some(e),
-            (None, Some(e)) => Some(e),
-            (m, _) => m,
         }
     }
 }

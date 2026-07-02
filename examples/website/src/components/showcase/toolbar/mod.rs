@@ -24,4 +24,8 @@ use serde::{Deserialize, Serialize};
 pub struct ToolbarDemo {}
 
 #[handlers]
-impl ToolbarDemo {}
+impl ToolbarDemo {
+    /// Showcase no-op — the demo exercises toolbar focus/roving
+    /// tabindex, not the action itself.
+    pub fn action_bump(&mut self) {}
+}

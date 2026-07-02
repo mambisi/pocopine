@@ -85,6 +85,43 @@ impl PineTimeRangeField {
             self.focus_field_segment("start-field", selector);
         }
     }
+
+    /// End-time min: prefer `start` when it's later than the
+    /// author's `min_value`. Simple lexicographic compare works
+    /// for `"HH:MM"` / `"HH:MM:SS"` strings.
+    #[computed]
+    fn effective_end_min(min_value: &str, start: &str) -> String {
+        match (min_value, start) {
+            ("", "") => String::new(),
+            (m, "") => m.to_string(),
+            ("", s) => s.to_string(),
+            (m, s) => {
+                if s > m {
+                    s.to_string()
+                } else {
+                    m.to_string()
+                }
+            }
+        }
+    }
+
+    /// Start-time max: prefer `end` when it's earlier than the
+    /// author's `max_value`.
+    #[computed]
+    fn effective_start_max(max_value: &str, end: &str) -> String {
+        match (max_value, end) {
+            ("", "") => String::new(),
+            (m, "") => m.to_string(),
+            ("", e) => e.to_string(),
+            (m, e) => {
+                if e < m {
+                    e.to_string()
+                } else {
+                    m.to_string()
+                }
+            }
+        }
+    }
 }
 
 impl PineTimeRangeField {
@@ -122,39 +159,6 @@ impl PineTimeRangeField {
         };
         if let Ok(html) = segment.dyn_into::<HtmlElement>() {
             let _ = html.focus();
-        }
-    }
-
-    /// End-time min: prefer `start` when it's later than the
-    /// author's `min_value`. Simple lexicographic compare works
-    /// for `"HH:MM"` / `"HH:MM:SS"` strings.
-    pub fn effective_end_min(&self) -> String {
-        match (self.min_value.as_str(), self.start.as_str()) {
-            ("", "") => String::new(),
-            (m, "") => m.to_string(),
-            ("", s) => s.to_string(),
-            (m, s) => {
-                if s > m {
-                    s.to_string()
-                } else {
-                    m.to_string()
-                }
-            }
-        }
-    }
-
-    pub fn effective_start_max(&self) -> String {
-        match (self.max_value.as_str(), self.end.as_str()) {
-            ("", "") => String::new(),
-            (m, "") => m.to_string(),
-            ("", e) => e.to_string(),
-            (m, e) => {
-                if e < m {
-                    e.to_string()
-                } else {
-                    m.to_string()
-                }
-            }
         }
     }
 }

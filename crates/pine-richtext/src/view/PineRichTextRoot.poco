@@ -2,7 +2,7 @@
       contenteditable="true"
       style="white-space: pre-wrap;"
       pp-ref="surface"
-      :data-empty="state == null">
+      :data-empty="doc == null">
   <!-- TODO: doc renderer goes here. Today the surface is empty and
        contentEditable lets the browser handle text input, but no model
        sync runs yet. The next step is a `render` module that walks
