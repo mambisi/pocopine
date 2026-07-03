@@ -331,7 +331,15 @@ async fn run_loop<A: AiAgent>(
                 &agent_label,
                 // No steering hook on the typed run; `+ Sync` keeps the loop's
                 // future `Send` (it runs inside Send flow handlers).
-                None::<&(dyn Fn(&str, &serde_json::Value) -> loop_core::ToolDecision + Sync)>,
+                None::<
+                    &(
+                         dyn for<'a> Fn(
+                        &'a pocopine_agenkit_core::ToolCall,
+                    )
+                        -> futures::future::BoxFuture<'a, loop_core::ToolDecision>
+                             + Sync
+                     ),
+                >,
                 ToolErrorMode::Propagate,
                 &observer,
             )

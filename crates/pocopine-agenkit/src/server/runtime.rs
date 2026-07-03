@@ -25,6 +25,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, AgentThreadId, Content, CostEstimate, Message, ModelRef, RunId,
     StepId, StepKind, StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage,
@@ -278,7 +279,8 @@ impl UsageRecord {
 #[derive(Clone, Default)]
 pub(crate) struct Hooks {
     #[allow(clippy::type_complexity)]
-    before_tool_call: Option<Arc<dyn Fn(&str, &serde_json::Value) -> ToolDecision + Send + Sync>>,
+    before_tool_call:
+        Option<Arc<dyn for<'a> Fn(&'a ToolCall) -> BoxFuture<'a, ToolDecision> + Send + Sync>>,
 }
 
 /// A handle to cancel a running turn. Cloneable; calling [`abort`](AbortHandle::abort)
@@ -902,14 +904,19 @@ impl AgentSessionBuilder {
         self
     }
 
-    /// Set a `before_tool_call` steering hook (L3): called with the tool id and
-    /// arguments before every tool runs, returning a [`ToolDecision`] to proceed,
-    /// **block** it (an approval/trust gate — the reason is fed back to the
-    /// model), or **replace** its arguments. This is the host-side mirror of the
+    /// Set a `before_tool_call` steering hook (L3): called with the full
+    /// [`ToolCall`] (invocation `id`, `tool_id`, `args`) before every tool runs,
+    /// resolving to a [`ToolDecision`] to proceed, **block** it (an
+    /// approval/trust gate — the reason is fed back to the model), or
+    /// **replace** its arguments. The hook is async so an approval gate can
+    /// await a human decision; a synchronous hook wraps its body in
+    /// `Box::pin(async move { .. })`. The invocation id is the same id the
+    /// `ToolStarted`/`ToolBlocked` events carry, so a policy layer can correlate
+    /// its decision with the emitted events. This is the host-side mirror of the
     /// (parked) WIT extension hook.
     pub fn before_tool_call<F>(mut self, hook: F) -> Self
     where
-        F: Fn(&str, &serde_json::Value) -> ToolDecision + Send + Sync + 'static,
+        F: for<'a> Fn(&'a ToolCall) -> BoxFuture<'a, ToolDecision> + Send + Sync + 'static,
     {
         self.hooks.before_tool_call = Some(Arc::new(hook));
         self
@@ -1245,10 +1252,23 @@ mod tests {
             Principal::anonymous(),
             AgentConfig::new().tools(["recorder"]),
         );
+        // The hook receives the full ToolCall — record the invocation id it saw
+        // so we can correlate it with the emitted ToolBlocked event (the F2
+        // property a policy layer relies on).
+        let hook_seen: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let hook_seen_in = hook_seen.clone();
         let controls = TurnControls {
             hooks: Hooks {
-                before_tool_call: Some(Arc::new(|_tool, _args| ToolDecision::Block {
-                    reason: "needs approval".to_string(),
+                before_tool_call: Some(Arc::new(move |call| {
+                    let hook_seen_in = hook_seen_in.clone();
+                    Box::pin(async move {
+                        assert_eq!(call.tool_id, "recorder");
+                        *hook_seen_in.lock().unwrap() = Some(call.id.clone());
+                        ToolDecision::Block {
+                            reason: "needs approval".to_string(),
+                        }
+                    })
                 })),
             },
             ..TurnControls::default()
@@ -1264,13 +1284,23 @@ mod tests {
             !ran.load(Ordering::Relaxed),
             "the blocked tool must not run"
         );
-        let mut saw_block = false;
+        let mut blocked_id = None;
         while let Ok(ev) = rx.try_recv() {
-            if matches!(ev, AgentEvent::ToolBlocked { .. }) {
-                saw_block = true;
+            if let AgentEvent::ToolBlocked { id, .. } = ev {
+                blocked_id = Some(id);
             }
         }
-        assert!(saw_block, "should have emitted ToolBlocked");
+        let blocked_id = blocked_id.expect("should have emitted ToolBlocked");
+        let hook_id = hook_seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("hook should have run");
+        assert!(!hook_id.is_empty(), "invocation id must be non-empty");
+        assert_eq!(
+            hook_id, blocked_id,
+            "the hook and the ToolBlocked event must carry the same invocation id"
+        );
     }
 
     #[tokio::test]

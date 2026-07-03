@@ -23,6 +23,41 @@ pub enum ToolLifecycle {
     Deprecated,
 }
 
+/// The policy class a tool belongs to — selects which
+/// [`PolicyConfigSection`](crate::config::PolicyConfigSection) override
+/// (`read_mode` / `write_mode` / `command_mode` / `network_mode`) applies to
+/// it. Declared explicitly on the spec rather than derived from
+/// [`CapabilitySet`] (a capability set cannot express "any command").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolClass {
+    /// Reads workspace/session state; `read_mode` applies.
+    Read,
+    /// Mutates workspace/session/memory state; `write_mode` applies.
+    Write,
+    /// Runs commands / controls processes; `command_mode` applies.
+    Command,
+    /// Makes network egress; `network_mode` applies.
+    Network,
+    /// No class override applies — the spec's own mode always rules
+    /// (secrets, MCP verbs whose real gate is subsystem-local). The
+    /// conservative default.
+    #[default]
+    Other,
+}
+
+impl ToolClass {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Command => "command",
+            Self::Network => "network",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// Agenkitty's policy/research wrapper around Agenkit's descriptor.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
@@ -30,6 +65,8 @@ pub struct ToolSpec {
     pub kind: ToolKind,
     #[serde(default = "default_lifecycle")]
     pub lifecycle: ToolLifecycle,
+    #[serde(default)]
+    pub class: ToolClass,
     #[serde(default)]
     pub capabilities: CapabilitySet,
     #[serde(default)]
@@ -42,6 +79,7 @@ impl ToolSpec {
             descriptor: ToolDescriptor::new(id, description),
             kind: ToolKind::BuiltIn,
             lifecycle: ToolLifecycle::Available,
+            class: ToolClass::Other,
             capabilities: CapabilitySet::default(),
             mode: ToolMode::Ask,
         }
@@ -49,6 +87,21 @@ impl ToolSpec {
 
     pub fn side_effecting(mut self) -> Self {
         self.descriptor.side_effect = ToolSideEffectPolicy::SideEffecting;
+        self
+    }
+
+    pub fn with_class(mut self, class: ToolClass) -> Self {
+        self.class = class;
+        self
+    }
+
+    pub fn with_mode(mut self, mode: ToolMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn with_capabilities(mut self, capabilities: CapabilitySet) -> Self {
+        self.capabilities = capabilities;
         self
     }
 }

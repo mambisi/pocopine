@@ -11,13 +11,44 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use agenkitty::policy::{ApprovalDecision, ApprovalRequest, ToolApprover};
 use agenkitty::tools::mcp::{
-    CapabilitySet, McpConnection, McpObserver, McpRuntime, McpServerConfig, McpToolAdapter,
-    McpToolsTool, McpTransportConfig, NetworkCapability, PinStatus, register_mcp_tools,
+    CapabilitySet, McpAuditKind, McpConnection, McpObserver, McpRuntime, McpServerConfig,
+    McpToolAdapter, McpToolsTool, McpTransportConfig, NetworkCapability, PinStatus,
+    register_mcp_tools,
 };
 use pocopine_agenkit::prelude::Agenkit;
-use pocopine_agenkit::server::{AuthUser, MockProvider, Principal, SecretString};
+use pocopine_agenkit::server::{AuthUser, BoxFuture, MockProvider, Principal, SecretString};
 use tempfile::TempDir;
+
+/// A scripted approver: answers every request with the configured decision and
+/// records the requests it saw.
+struct ScriptedApprover {
+    approve: bool,
+    seen: std::sync::Mutex<Vec<ApprovalRequest>>,
+}
+
+impl ScriptedApprover {
+    fn new(approve: bool) -> Self {
+        Self {
+            approve,
+            seen: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ToolApprover for ScriptedApprover {
+    fn approve<'a>(&'a self, request: ApprovalRequest) -> BoxFuture<'a, ApprovalDecision> {
+        Box::pin(async move {
+            self.seen.lock().unwrap().push(request);
+            if self.approve {
+                ApprovalDecision::Approved
+            } else {
+                ApprovalDecision::denied("denied by operator")
+            }
+        })
+    }
+}
 
 /// Absolute path to the compiled fixture server bin (cargo sets this for tests).
 const FIXTURE: &str = env!("CARGO_BIN_EXE_mcp_fixture_server");
@@ -669,6 +700,267 @@ async fn ask_tool_is_denied_until_approved_then_rug_pull_redenies() {
         .await
         .expect_err("a rug-pulled tool must be re-denied until re-approval");
     assert_eq!(err.kind(), "tool_policy");
+
+    runtime.shutdown_all().await;
+}
+
+/// An installed [`ToolApprover`] resolves an unapproved `Ask` tool interactively
+/// (M1d): approval records the pin (no re-prompt on the next call); denial fails
+/// the call with the operator's reason. Without an approver the same call fails
+/// closed (covered above).
+#[tokio::test]
+async fn ask_tool_resolves_through_the_host_approver() {
+    let (_dir, root) = workspace();
+    let approver = Arc::new(ScriptedApprover::new(true));
+    let runtime = Arc::new(
+        McpRuntime::new(vec![fixture_config(&[])])
+            .unwrap()
+            .with_root(root.to_path_buf())
+            .with_default_path(host_path())
+            .with_approver(approver.clone()),
+    );
+    runtime.connect_all().await.unwrap();
+    let conn = runtime.connection("fixture").unwrap();
+    let tool = conn
+        .tools()
+        .iter()
+        .find(|t| t.name == "alpha")
+        .expect("fixture exposes alpha")
+        .clone();
+    let pins = runtime.pins();
+    let observer = Arc::new(McpObserver::default());
+    let adapter = McpToolAdapter::new(
+        "mcp.fixture.alpha",
+        "fixture",
+        &tool,
+        runtime.clone(),
+        ToolMode::Ask,
+        pins.clone(),
+        observer.clone(),
+    )
+    .unwrap();
+
+    // First call: the approver is consulted, approves, and the pin is recorded.
+    let out = adapter
+        .invoke(serde_json::json!({ "text": "hi" }), &Principal::anonymous())
+        .await
+        .expect("an operator-approved Ask tool runs");
+    assert_eq!(out["content"][0]["text"], "hi");
+    assert!(pins.is_approved("fixture", "alpha", &tool.pin_hash()));
+    // The interactive approval lands in the audit trail like any other approval.
+    assert!(
+        observer
+            .audit()
+            .iter()
+            .any(|entry| entry.kind == McpAuditKind::Approval),
+        "an operator approval must be audited"
+    );
+
+    // Second call: already pinned — no new approval request.
+    adapter
+        .invoke(
+            serde_json::json!({ "text": "again" }),
+            &Principal::anonymous(),
+        )
+        .await
+        .expect("a pinned tool runs without re-prompting");
+    {
+        let seen = approver.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "approval is asked exactly once");
+        assert_eq!(seen[0].tool_id, "mcp.fixture.alpha");
+        assert!(
+            seen[0]
+                .detail
+                .as_ref()
+                .is_some_and(|detail| detail["transport"].as_str().unwrap_or("").contains("stdio")),
+            "the approval detail must carry the T1 transport payload"
+        );
+    }
+
+    runtime.shutdown_all().await;
+}
+
+/// A rug-pulled (definition-changed) adapter must NOT be resolvable through the
+/// approver: the operator would be judging registration-time metadata while the
+/// live tool differs. The approver is never consulted; the call stays fail
+/// closed pending re-registration — the pin guard survives M1d intact.
+#[tokio::test]
+async fn rug_pulled_adapter_never_prompts_the_approver() {
+    let (_dir, root) = workspace();
+    let approver = Arc::new(ScriptedApprover::new(true));
+    let runtime = Arc::new(
+        McpRuntime::new(vec![fixture_config(&[])])
+            .unwrap()
+            .with_root(root.to_path_buf())
+            .with_default_path(host_path())
+            .with_approver(approver.clone()),
+    );
+    runtime.connect_all().await.unwrap();
+    let conn = runtime.connection("fixture").unwrap();
+    let tool = conn
+        .tools()
+        .iter()
+        .find(|t| t.name == "alpha")
+        .expect("fixture exposes alpha")
+        .clone();
+    let pins = runtime.pins();
+    let adapter = McpToolAdapter::new(
+        "mcp.fixture.alpha",
+        "fixture",
+        &tool,
+        runtime.clone(),
+        ToolMode::Ask,
+        pins.clone(),
+        Arc::new(McpObserver::default()),
+    )
+    .unwrap();
+
+    // First call: normal interactive approval (observes + pins the live
+    // definition).
+    adapter
+        .invoke(serde_json::json!({ "text": "hi" }), &Principal::anonymous())
+        .await
+        .expect("an operator-approved Ask tool runs");
+    assert_eq!(approver.seen.lock().unwrap().len(), 1);
+
+    // The server rug-pulls: the live observed definition no longer matches the
+    // adapter's registration-time pin; the prior approval is cleared.
+    assert_eq!(
+        pins.observe("fixture", "alpha", "rug-pulled-hash"),
+        PinStatus::Changed
+    );
+
+    // The approver is installed and says yes to everything — and must STILL
+    // never be consulted: the operator would be judging registration-time
+    // metadata while the live tool differs.
+    let err = adapter
+        .invoke(serde_json::json!({ "text": "hi" }), &Principal::anonymous())
+        .await
+        .expect_err("a rug-pulled adapter must stay fail closed");
+    assert_eq!(err.kind(), "tool_policy");
+    assert_eq!(
+        approver.seen.lock().unwrap().len(),
+        1,
+        "the approver must not be re-consulted for a stale definition"
+    );
+    assert!(
+        !pins.is_approved("fixture", "alpha", &tool.pin_hash()),
+        "no approval may be recorded for the stale registration-time hash"
+    );
+
+    runtime.shutdown_all().await;
+}
+
+/// A definition change landing while the operator is deciding (the human await
+/// can take minutes) must refuse the approval: `approve_if_current` binds to the
+/// exact prompted hash, so a mid-prompt swap fails closed instead of dispatching
+/// under metadata the operator approved before the change.
+#[tokio::test]
+async fn definition_change_during_the_approval_prompt_refuses_the_approval() {
+    use agenkitty::tools::mcp::PinStore;
+
+    /// Approves everything — but swaps the observed definition first, modeling
+    /// a `tools/list_changed` rediscovery landing mid-prompt.
+    struct MidPromptSwapApprover {
+        pins: Arc<PinStore>,
+    }
+
+    impl ToolApprover for MidPromptSwapApprover {
+        fn approve<'a>(&'a self, _request: ApprovalRequest) -> BoxFuture<'a, ApprovalDecision> {
+            Box::pin(async move {
+                self.pins.observe("fixture", "alpha", "changed-mid-prompt");
+                ApprovalDecision::Approved
+            })
+        }
+    }
+
+    let (_dir, root) = workspace();
+    let runtime_seed = McpRuntime::new(vec![fixture_config(&[])])
+        .unwrap()
+        .with_root(root.to_path_buf())
+        .with_default_path(host_path());
+    let pins = runtime_seed.pins();
+    let runtime = Arc::new(
+        runtime_seed.with_approver(Arc::new(MidPromptSwapApprover { pins: pins.clone() })),
+    );
+    runtime.connect_all().await.unwrap();
+    let conn = runtime.connection("fixture").unwrap();
+    let tool = conn
+        .tools()
+        .iter()
+        .find(|t| t.name == "alpha")
+        .expect("fixture exposes alpha")
+        .clone();
+    let adapter = McpToolAdapter::new(
+        "mcp.fixture.alpha",
+        "fixture",
+        &tool,
+        runtime.clone(),
+        ToolMode::Ask,
+        runtime.pins(),
+        Arc::new(McpObserver::default()),
+    )
+    .unwrap();
+
+    let err = adapter
+        .invoke(serde_json::json!({ "text": "hi" }), &Principal::anonymous())
+        .await
+        .expect_err("an approval for a definition that changed mid-prompt must be refused");
+    assert_eq!(err.kind(), "tool_policy");
+    assert!(
+        !runtime
+            .pins()
+            .is_approved("fixture", "alpha", &tool.pin_hash()),
+        "the stale prompted hash must not be approved"
+    );
+    assert!(
+        !runtime
+            .pins()
+            .is_approved("fixture", "alpha", "changed-mid-prompt"),
+        "the swapped definition must not be silently approved either"
+    );
+
+    runtime.shutdown_all().await;
+}
+
+/// Operator denial fails the call with the operator's reason and records no pin.
+#[tokio::test]
+async fn ask_tool_denied_by_the_host_approver_fails_closed() {
+    let (_dir, root) = workspace();
+    let runtime = Arc::new(
+        McpRuntime::new(vec![fixture_config(&[])])
+            .unwrap()
+            .with_root(root.to_path_buf())
+            .with_default_path(host_path())
+            .with_approver(Arc::new(ScriptedApprover::new(false))),
+    );
+    runtime.connect_all().await.unwrap();
+    let conn = runtime.connection("fixture").unwrap();
+    let tool = conn
+        .tools()
+        .iter()
+        .find(|t| t.name == "alpha")
+        .expect("fixture exposes alpha")
+        .clone();
+    let pins = runtime.pins();
+    let adapter = McpToolAdapter::new(
+        "mcp.fixture.alpha",
+        "fixture",
+        &tool,
+        runtime.clone(),
+        ToolMode::Ask,
+        pins.clone(),
+        Arc::new(McpObserver::default()),
+    )
+    .unwrap();
+
+    let err = adapter
+        .invoke(serde_json::json!({ "text": "hi" }), &Principal::anonymous())
+        .await
+        .expect_err("an operator-denied Ask tool must fail");
+    assert_eq!(err.kind(), "tool_policy");
+    assert!(err.to_string().contains("denied by the operator"));
+    assert!(!pins.is_approved("fixture", "alpha", &tool.pin_hash()));
 
     runtime.shutdown_all().await;
 }

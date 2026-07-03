@@ -27,6 +27,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::policy::{ApprovalDecision, ApprovalRequest};
+
 use super::adapter::shape_call_result;
 use super::admission::{AdmissionDecision, admit};
 use super::common::MCP_CALL_TOOL_ID;
@@ -152,21 +154,73 @@ impl McpCallTool {
                 {
                     // For an `Ask` tool the decision carries the T1-complete
                     // approval payload (command/origin + pinned description +
-                    // params); surface the request for a host to act on, then fail
-                    // closed (the interactive approve/deny loop is deferred, M4).
+                    // params); surface the request, then resolve it through the
+                    // host approver (M1d) — approval records the current pin so
+                    // the session doesn't re-prompt. No approver = fail closed.
+                    // An `Allow` tool in this branch is a rug-pull (its pin was
+                    // invalidated); that stays fail closed, never an approval.
+                    let mut approved = false;
                     if let AdmissionDecision::Ask(prompt) = &decision {
                         self.runtime.observer().approval_requested(
                             &input.server,
                             &tool.name,
                             &prompt.summary(),
                         );
+                        if let Some(approver) = self.runtime.approver() {
+                            let request = ApprovalRequest::new(
+                                MCP_CALL_TOOL_ID,
+                                format!(
+                                    "mcp tool `{}` on server `{}` requires approval",
+                                    tool.name, input.server
+                                ),
+                            )
+                            .with_detail(serde_json::json!({
+                                "server": prompt.server,
+                                "tool": prompt.tool,
+                                "description": prompt.description,
+                                "params_schema": prompt.params_schema,
+                                "transport": prompt.transport.summary(),
+                            }));
+                            match approver.approve(request).await {
+                                ApprovalDecision::Approved => {
+                                    // The human decision may have taken minutes;
+                                    // a `tools/list_changed` that arrived
+                                    // mid-prompt is only a pending dirty flag
+                                    // until the next convergence. Re-converge
+                                    // NOW, then bind the approval to the exact
+                                    // prompted hash: any change during the
+                                    // prompt makes `approve_if_current` refuse
+                                    // → fail closed below.
+                                    self.runtime
+                                        .ready_connection_as(&input.server, principal)
+                                        .await?;
+                                    if self.runtime.pins().approve_if_current(
+                                        &input.server,
+                                        &tool.name,
+                                        &tool.pin_hash(),
+                                    ) {
+                                        self.runtime.observer().approval(&input.server, &tool.name);
+                                        approved = true;
+                                    }
+                                }
+                                ApprovalDecision::Denied { reason } => {
+                                    return Err(AgenkitError::tool_policy(format!(
+                                        "mcp.call: tool `{}` on server `{}` was denied \
+                                         by the operator: {reason}",
+                                        input.tool, input.server
+                                    )));
+                                }
+                            }
+                        }
                     }
-                    return Err(AgenkitError::tool_policy(format!(
-                        "mcp.call: tool `{}` on server `{}` is not currently approved: its \
-                         definition was never approved or has changed since approval \
-                         (re-approval required)",
-                        input.tool, input.server
-                    )));
+                    if !approved {
+                        return Err(AgenkitError::tool_policy(format!(
+                            "mcp.call: tool `{}` on server `{}` is not currently approved: its \
+                             definition was never approved or has changed since approval \
+                             (re-approval required)",
+                            input.tool, input.server
+                        )));
+                    }
                 }
             }
         }

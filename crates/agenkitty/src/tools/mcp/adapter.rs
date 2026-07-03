@@ -36,7 +36,7 @@ use pocopine_agenkit::server::{AiToolContext, BoxFuture, DynTool, Principal, Sec
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult, SchemaRef, ToolDescriptor};
 use serde_json::{Map, Value, json};
 
-use crate::policy::ToolMode;
+use crate::policy::{ApprovalDecision, ApprovalRequest, ToolMode};
 
 use super::admission::build_ask_prompt;
 use super::client::McpToolDef;
@@ -180,7 +180,7 @@ impl McpToolAdapter {
 
         // Capability-scoped admission (D5) + pin/rug-pull guard (D8/T2), decided
         // *after* rediscovery and immediately before dispatch.
-        self.check_admission()?;
+        self.check_admission(principal).await?;
 
         let arguments = match args {
             Value::Object(map) => Some(map),
@@ -207,8 +207,13 @@ impl McpToolAdapter {
     ///   **approved** in the store. `Allow` is auto-approved at registration (the
     ///   operator allowlist), but a rug-pulled (re-hashed) or list-changed
     ///   definition clears that approval, so even an allowlisted tool fails closed
-    ///   until re-approval. `Ask` additionally requires an explicit host approval.
-    fn check_admission(&self) -> AgenkitResult<()> {
+    ///   until re-approval. `Ask` additionally requires an explicit host approval,
+    ///   resolved through the runtime's [`ToolApprover`](crate::policy::ToolApprover)
+    ///   when one is installed (M1d) — approval records the pin — and failing
+    ///   closed otherwise. `principal` re-converges the connection after the
+    ///   (possibly minutes-long) human await, so a `tools/list_changed` that
+    ///   arrived mid-prompt lands before the approval binds.
+    async fn check_admission(&self, principal: &Principal) -> AgenkitResult<()> {
         match self.mode {
             ToolMode::Deny => Err(AgenkitError::tool_policy(format!(
                 "mcp tool `{}` is denied by policy (un-allowlisted tool on an untrusted server)",
@@ -223,8 +228,10 @@ impl McpToolAdapter {
                 } else {
                     // An unapproved `Ask` tool: surface the T1-complete approval
                     // request (command/origin + pinned description + params, built
-                    // from the live server config) for a host to act on, then fail
-                    // closed (the interactive approve/deny loop is deferred, M4).
+                    // from the live server config), then resolve it through the
+                    // host approver — or fail closed without one. An `Allow` tool
+                    // in this branch is a rug-pull (its pin was invalidated);
+                    // that stays fail closed, never an approval prompt.
                     if self.mode == ToolMode::Ask
                         && let Some(config) = self.runtime.server(&self.server)
                     {
@@ -239,6 +246,62 @@ impl McpToolAdapter {
                             &self.tool_name,
                             &prompt.summary(),
                         );
+                        // Prompt only while this adapter's registration-time
+                        // definition is still the *live observed* one: a
+                        // rediscovered (`tools/list_changed`) or rug-pulled
+                        // definition must not be re-enabled by an operator
+                        // judging stale metadata — the adapter stays fail
+                        // closed pending re-registration.
+                        if self
+                            .pins
+                            .is_current(&self.server, &self.tool_name, &self.pin_hash)
+                            && let Some(approver) = self.runtime.approver()
+                        {
+                            let request = ApprovalRequest::new(
+                                self.id,
+                                format!(
+                                    "mcp tool `{}` on server `{}` requires approval",
+                                    self.tool_name, self.server
+                                ),
+                            )
+                            .with_detail(serde_json::json!({
+                                "server": prompt.server,
+                                "tool": prompt.tool,
+                                "description": prompt.description,
+                                "params_schema": prompt.params_schema,
+                                "transport": prompt.transport.summary(),
+                            }));
+                            match approver.approve(request).await {
+                                ApprovalDecision::Approved => {
+                                    // The human decision may have taken minutes;
+                                    // a `tools/list_changed` that arrived
+                                    // mid-prompt is only a pending dirty flag
+                                    // until the next convergence. Re-converge
+                                    // NOW so the pin store reflects the live
+                                    // definition, then bind the approval to the
+                                    // exact prompted hash: any change during the
+                                    // prompt makes `approve_if_current` refuse
+                                    // (fall through to fail closed).
+                                    self.runtime
+                                        .ready_connection_as(&self.server, principal)
+                                        .await?;
+                                    if self.pins.approve_if_current(
+                                        &self.server,
+                                        &self.tool_name,
+                                        &self.pin_hash,
+                                    ) {
+                                        self.observer.approval(&self.server, &self.tool_name);
+                                        return Ok(());
+                                    }
+                                }
+                                ApprovalDecision::Denied { reason } => {
+                                    return Err(AgenkitError::tool_policy(format!(
+                                        "mcp tool `{}` was denied by the operator: {reason}",
+                                        self.id
+                                    )));
+                                }
+                            }
+                        }
                     }
                     Err(AgenkitError::tool_policy(format!(
                         "mcp tool `{}` is not currently approved: its pinned definition was \
