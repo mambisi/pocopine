@@ -213,6 +213,19 @@ impl CurrentArtifactContext {
         }
     }
 
+    /// A provenance ref pointing at the active session thread, when known — the
+    /// artifact side of the session↔artifact round-trip. Prepended to an
+    /// artifact's `source_refs` so the artifact records which session produced
+    /// it (the session side is the metadata store's `link_artifact`).
+    pub fn thread_ref(&self) -> Option<SessionSourceRef> {
+        self.thread_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| SessionSourceRef::Thread {
+                thread_id: id.to_string(),
+            })
+    }
+
     /// The (scope, namespace) pairs this caller may access.
     pub fn accessible(&self) -> Vec<(ArtifactScope, String)> {
         [ArtifactScope::Session, ArtifactScope::Project]

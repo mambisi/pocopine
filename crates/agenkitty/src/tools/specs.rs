@@ -21,10 +21,10 @@ use super::fs::{
 use super::{
     ARTIFACT_DELETE_TOOL_ID, ARTIFACT_LINK_TOOL_ID, ARTIFACT_LIST_TOOL_ID, ARTIFACT_READ_TOOL_ID,
     ARTIFACT_WRITE_TOOL_ID, MEMORY_FORGET_TOOL_ID, MEMORY_READ_TOOL_ID, MEMORY_SEARCH_TOOL_ID,
-    MEMORY_UPDATE_TOOL_ID, MEMORY_WRITE_TOOL_ID, NET_FETCH_TOOL_ID, PATCH_APPLY_TOOL_ID,
-    PATCH_PREVIEW_TOOL_ID, SECRET_LIST_TOOL_ID, SECRET_REQUEST_TOOL_ID, SECRET_REVOKE_TOOL_ID,
-    SECRET_USE_TOOL_ID, SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID,
-    SESSION_NOTE_TOOL_ID, SESSION_SUMMARY_TOOL_ID,
+    MEMORY_UPDATE_TOOL_ID, MEMORY_WRITE_TOOL_ID, NET_DOWNLOAD_TOOL_ID, NET_FETCH_TOOL_ID,
+    PATCH_APPLY_TOOL_ID, PATCH_PREVIEW_TOOL_ID, SECRET_LIST_TOOL_ID, SECRET_REQUEST_TOOL_ID,
+    SECRET_REVOKE_TOOL_ID, SECRET_USE_TOOL_ID, SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID,
+    SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID, SESSION_SUMMARY_TOOL_ID,
 };
 
 fn fs_read(id: &str, description: &str) -> ToolSpec {
@@ -141,6 +141,16 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                 network: true,
                 ..CapabilitySet::default()
             }),
+        ToolSpec::built_in(
+            NET_DOWNLOAD_TOOL_ID,
+            "Download an allowlisted URL to an artifact",
+        )
+        .with_class(ToolClass::Network)
+        .with_mode(ToolMode::Ask)
+        .with_capabilities(CapabilitySet {
+            network: true,
+            ..CapabilitySet::default()
+        }),
     ];
     specs.extend(process_tool_specs());
     specs.extend(mcp_tool_specs());
@@ -336,7 +346,10 @@ mod tests {
         for spec in builtin_tool_specs() {
             let id = &spec.descriptor.id;
             assert!(
-                is_known_tool_id(id) || id == NET_FETCH_TOOL_ID || id.starts_with("mcp."),
+                is_known_tool_id(id)
+                    || id == NET_FETCH_TOOL_ID
+                    || id == NET_DOWNLOAD_TOOL_ID
+                    || id.starts_with("mcp."),
                 "spec `{id}` is neither a known tool id nor a documented opt-in"
             );
         }

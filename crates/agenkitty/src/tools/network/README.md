@@ -24,9 +24,13 @@ against a host `NetPolicy`. With no allowlist it fetches nothing.
 > CONNECT-authorization core is done; wiring it into the process sandbox is the
 > one remaining step (see *Roadmap*).
 >
-> **Deferred / not yet built** (see *Roadmap*): `net.download` (waits on the
-> artifacts tool), `net.resolve`, robots.txt, the URL-in-context anti-exfiltration
-> control, and a response cache.
+> **Also built:** `net.download` — GET one allowlisted URL through the same
+> guarded engine and store the bounded body as a content-hashed **artifact**
+> (returns the artifact id, not the bytes); binary is expected, so there is no
+> content-type gate. Opt-in via `register_network_tools_with_artifacts`.
+>
+> **Deferred / not yet built** (see *Roadmap*): `net.resolve`, robots.txt, the
+> URL-in-context anti-exfiltration control, and a response cache.
 
 ---
 
@@ -225,10 +229,14 @@ tests, and the HTTP plumbing is thin glue over `reqwest`.
 
 ## Roadmap (deferred)
 
-- **`net.download`** — bounded binary → the artifact store (content-hashed).
-  Waits on the artifacts tool (currently plan-only).
 - **`net.resolve`** — host-enabled DNS/URL metadata.
 - **robots.txt**, **URL-in-context anti-exfiltration**, **response cache**.
+
+> **`net.download`** shipped (M3): the guarded engine now lives in
+> `http::GuardedHttp`, shared verbatim by `net.fetch` and `net.download`, so the
+> SSRF/redirect/pin logic exists in exactly one place. `net.download` stores the
+> capped body as an artifact (clamped to the artifact `MAX_CONTENT_BYTES`) and
+> returns the content-hashed metadata.
 
 > Egress proxy (both tiers, incl. the Tier-2 namespace shim) is **built**; the
 > bwrap-namespace integration needs validation on a Linux+bwrap host.

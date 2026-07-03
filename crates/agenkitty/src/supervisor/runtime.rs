@@ -18,8 +18,8 @@ use crate::policy::{ToolApprover, no_approver_reason};
 use crate::project::load_project_config;
 use crate::tools::session::{redact_json_value, redact_text_to_limit};
 use crate::tools::{
-    ArtifactRuntime, CurrentArtifactContext, CurrentMemoryContext, CurrentSessionContext,
-    InMemoryArtifactStore, LocalArtifactStore, LocalJsonlMemoryStore,
+    ArtifactRuntime, ArtifactScope, CurrentArtifactContext, CurrentMemoryContext,
+    CurrentSessionContext, InMemoryArtifactStore, LocalArtifactStore, LocalJsonlMemoryStore,
     LocalJsonlSessionMetadataStore, MemoryRuntime, SecretRuntime, SessionRuntime,
     builtin_tool_specs, current_time_ms, known_artifact_tool_ids, known_memory_tool_ids,
     known_session_tool_ids, register_memory_tools, register_session_tools,
@@ -27,8 +27,8 @@ use crate::tools::{
 };
 use agenkitty_core::config::PolicyConfigSection;
 use agenkitty_core::{
-    ApprovalDecision, ApprovalRequest, PolicyDecision, PolicyEvaluator, SessionIdentity,
-    SessionSourceRef, SessionStoreKind,
+    ApprovalDecision, ApprovalRequest, PolicyDecision, PolicyEvaluator, SessionArtifactLink,
+    SessionIdentity, SessionSourceRef, SessionStoreKind,
 };
 
 #[derive(Clone, Debug)]
@@ -430,7 +430,13 @@ impl FrameworkRunner {
                             Err(reason) => ToolDecision::Block { reason },
                         };
                     }
-                    if known_artifact_tool_ids().contains(&tool) {
+                    // net.download stores into the artifact runtime, so it takes
+                    // the same caller-derived artifact context_token as the
+                    // artifact.* tools (a host must also register it — it is
+                    // opt-in and not in the default set).
+                    if known_artifact_tool_ids().contains(&tool)
+                        || tool == crate::tools::NET_DOWNLOAD_TOOL_ID
+                    {
                         let context = current_artifact.lock().ok().and_then(|guard| guard.clone());
                         let Some(context) = context else {
                             return ToolDecision::Block {
@@ -530,13 +536,75 @@ impl FrameworkRunner {
         if let Ok(mut current) = current_artifact.lock() {
             *current = None;
         }
+
+        // Run-end cleanup seam: link this run's session-scoped artifacts into
+        // the session metadata so a session's outputs are discoverable via
+        // `SessionExport.artifact_links`. Process-handle reaping (a session-
+        // aware process sandbox) will also hang here — see [`finalize_run`].
+        self.finalize_run(&thread_id).await?;
+
         Ok(AgentRunReport {
             thread_id,
             session: report_identity,
             events,
         })
     }
+
+    /// The run-end cleanup seam. Today it links the run's session-scoped
+    /// artifacts into the session metadata store (deduped against existing
+    /// links, so a resumed session doesn't double-link). It deliberately does
+    /// **not** `close_session` — a run may be resumed, and marking a resumable
+    /// session closed every run is wrong; explicit close stays
+    /// `SessionHost::close`. Process-handle reaping is deferred: it needs the
+    /// process sandbox to become session-aware (a thread key on each handle +
+    /// a reap-by-session method + exposing the table to the runner), which is
+    /// its own unit rather than a change smuggled into this seam.
+    async fn finalize_run(&self, thread_id: &str) -> Result<()> {
+        let accessible = vec![(ArtifactScope::Session, thread_id.to_string())];
+        let artifacts = self
+            .artifact_runtime
+            .store()
+            .list(
+                &accessible,
+                Some(ArtifactScope::Session),
+                ARTIFACT_LINK_SCAN_LIMIT,
+            )
+            .await?;
+        if artifacts.is_empty() {
+            return Ok(());
+        }
+        let already_linked: std::collections::HashSet<String> = self
+            .session_runtime
+            .store()
+            .list_artifact_links(thread_id)
+            .await?
+            .into_iter()
+            .map(|link| link.artifact_id)
+            .collect();
+        for artifact in artifacts {
+            if already_linked.contains(&artifact.id) {
+                continue;
+            }
+            self.session_runtime
+                .store()
+                .link_artifact(
+                    thread_id,
+                    SessionArtifactLink {
+                        artifact_id: artifact.id,
+                        source_refs: artifact.source_refs,
+                        promotion_policy: None,
+                        created_at_ms: artifact.created_at_ms,
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
 }
+
+/// Upper bound on artifacts linked into the session at run end (a safety cap on
+/// a pathological run that produced an unbounded number of artifacts).
+const ARTIFACT_LINK_SCAN_LIMIT: usize = 1_000;
 
 fn mock_builder() -> AgenkitBuilder {
     Agenkit::builder()
@@ -936,6 +1004,45 @@ mod tests {
             .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].name, "report.md");
+        // Artifact side of the round-trip: the artifact records its session.
+        assert!(stored[0].source_refs.contains(&SessionSourceRef::Thread {
+            thread_id: report.thread_id.clone(),
+        }));
+        // Session side: finalize_run linked the artifact into session metadata,
+        // so it's discoverable via the session's artifact links / export.
+        let links = runner
+            .session_runtime
+            .store()
+            .list_artifact_links(&report.thread_id)
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].artifact_id, stored[0].id);
+        assert!(links[0].source_refs.contains(&SessionSourceRef::Thread {
+            thread_id: report.thread_id.clone(),
+        }));
+
+        // Idempotent across a resume: re-running the same thread does not
+        // double-link the already-linked artifact.
+        let resumed = runner
+            .run_prompt(AgentRunOptions {
+                agent_id: "test".to_string(),
+                model: "local/default".to_string(),
+                system: "Use tools when needed.".to_string(),
+                prompt: "noop".to_string(),
+                thread_id: Some(report.thread_id.clone()),
+                max_steps_per_turn: 4,
+                tool_ids: vec!["artifact.write".to_string()],
+            })
+            .await
+            .unwrap();
+        let links = runner
+            .session_runtime
+            .store()
+            .list_artifact_links(&resumed.thread_id)
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1, "resume must not double-link");
     }
 
     #[tokio::test]

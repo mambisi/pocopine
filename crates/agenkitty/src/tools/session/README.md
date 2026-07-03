@@ -453,16 +453,40 @@ Artifacts:
 
 ## Deferred Work
 
-- Link patch metadata to session checkpoints/events.
-- Link process handles to session lifecycle cleanup.
-- Link artifacts to session source refs and promotion policy.
+- **Link process handles to session lifecycle cleanup** — reap owner/session
+  process handles when a session ends. Blocked on the process sandbox becoming
+  **session-aware**: `ProcessEntry` carries only a `Principal` (and the runner
+  pins every session to one principal), the `ProcessTable` is built inside
+  `register_process_tools_with` and never handed to the runner, and spawn has no
+  thread id to key on. Reaping by principal today would kill *other* live
+  sessions' processes. Needs a thread key on each handle + a `reap_owned_by`
+  method + exposing the table — its own unit, not smuggled into the run-end
+  seam (`FrameworkRunner::finalize_run`, where it will hang once the table is
+  reachable). Until then the process `TableInner` `Drop` SIGKILLs all groups at
+  full runtime teardown (the CLI's common single-run case).
+- Add promotion policy to session↔artifact links (the link itself is now wired,
+  see below; `promotion_policy` is recorded as `None`).
 - Add model-facing `session.fork` once fork UX is proven.
 - Add host `session.rewind` with clear branch semantics.
-- Add session-scoped cleanup hook adapters for process and artifact outputs.
 - Add session search over transcript/events.
 - Add workspace snapshot integration.
 - Keep hosted dashboard/control-plane integration and multi-agent graph
   visualization in the private product layer.
+
+**Wired (M3):**
+- **Session ↔ artifact provenance round-trips.** An artifact written during a
+  run records its originating session on its own `source_refs`
+  (`SessionSourceRef::Thread`), and the runner's run-end
+  `finalize_run` links each session-scoped artifact into the session metadata
+  store (deduped against existing links, so a resumed run never double-links) —
+  so a session's outputs are discoverable via `SessionExport.artifact_links`.
+- **Patch (and every tool) → session refs.** Each tool call — including
+  `patch.apply` — already emits a `SessionSourceRef::ToolCall { call_id,
+  tool_id }` on its session event (the call-id plumbing), so patch edits are
+  discoverable from session events without a bespoke checkpoint link.
+- `finalize_run` deliberately does **not** `close_session`: a run may be
+  resumed, so marking a resumable session closed every run is wrong. Explicit
+  close stays `SessionHost::close`.
 
 ## Testing
 
