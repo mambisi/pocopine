@@ -201,10 +201,16 @@ Builder methods on `ProcessRunTool` / `ProcessSpawnTool`:
 - `cargo test -p agenkitty --test process_tool` — agent-path examples (a mock
   model issues real tool calls).
 
-Sandbox tests are gated on capability: they skip cleanly when `python3` is
-absent, and the bubblewrap tests probe a real minimal namespace sandbox
-(`bwrap_usable()`) rather than just `bwrap --version`, so they no-op where
-unprivileged user namespaces are disabled.
+Sandbox tests are gated on capability: they skip when `python3` is absent, and
+the bubblewrap tests probe a real minimal namespace sandbox (`bwrap_usable()`)
+rather than just `bwrap --version`, so they skip where unprivileged user
+namespaces are disabled — printing a `SKIP <test>: …` line so a skip is visible
+in `--nocapture` output rather than a silent vacuous pass.
+
+The **Tier-2 egress lockdown is validated end-to-end** by
+`--test process_tool::egress_shim_is_the_only_route_out_of_the_namespace` on a
+bwrap-capable host: a `--unshare-net` child's only egress is the bound proxy
+UDS via the in-namespace shim (direct egress dead, proxied egress round-trips).
 
 ---
 

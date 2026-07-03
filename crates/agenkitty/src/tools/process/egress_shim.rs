@@ -9,9 +9,13 @@
 //! behaves.
 //!
 //! The relay + supervisor are unit-tested on the host; the full namespace
-//! integration (bwrap `--unshare-net` + bound UDS) must be validated on a real
-//! Linux+bubblewrap host (this repo's bwrap tests skip where namespaces are
-//! unavailable).
+//! integration (bwrap `--unshare-net` + bound UDS) is validated end-to-end by
+//! `tests/process_tool.rs::egress_shim_is_the_only_route_out_of_the_namespace`
+//! on a real Linux+bubblewrap host — direct egress is dead, proxied egress
+//! round-trips through the shim → UDS → proxy. That validation caught (and
+//! fixed) a real bug: `bwrap --tmpfs` on `/var/run` (a symlink to `/run` on
+//! modern Linux) aborted the whole sandbox, so the mask now skips symlinked
+//! dirs. The bwrap-gated tests skip *loudly* where namespaces are unavailable.
 
 use std::path::PathBuf;
 use std::process::Stdio;
