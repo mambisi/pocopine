@@ -19,7 +19,7 @@ use pocopine_agenkit::server::{Principal, SecretString};
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
 use url::Url;
 
-use crate::policy::ToolMode;
+use crate::policy::{ToolApprover, ToolMode};
 use crate::tools::network::{HickoryResolver, Resolve};
 use crate::tools::secrets::{SecretRuntime, resolve_secret_headers, validate_secret_env_name};
 
@@ -98,6 +98,9 @@ struct McpRuntimeInner {
     /// builds the production hickory resolver lazily on the first HTTP connect;
     /// tests inject a mock via [`McpRuntime::with_http_resolver`].
     http_resolver: Option<Arc<dyn Resolve>>,
+    /// Host approver for `Ask`-admitted tools without an approved current pin
+    /// (M1d). `None` = fail closed, exactly the pre-approver semantics.
+    approver: Option<Arc<dyn ToolApprover>>,
 }
 
 impl std::fmt::Debug for McpRuntimeInner {
@@ -202,6 +205,7 @@ impl McpRuntime {
                 default_path: default_path(),
                 secret_runtime: None,
                 http_resolver: None,
+                approver: None,
             }),
             state: Arc::new(McpRuntimeState::default()),
         })
@@ -237,6 +241,19 @@ impl McpRuntime {
     pub fn with_http_resolver(mut self, resolver: Arc<dyn Resolve>) -> Self {
         Arc::make_mut(&mut self.inner).http_resolver = Some(resolver);
         self
+    }
+
+    /// Install the host approver consulted when an `Ask`-admitted tool has no
+    /// approved current pin (M1d). Approval records the pin for the session;
+    /// without an approver such calls fail closed.
+    pub fn with_approver(mut self, approver: Arc<dyn ToolApprover>) -> Self {
+        Arc::make_mut(&mut self.inner).approver = Some(approver);
+        self
+    }
+
+    /// The installed host approver, if any.
+    pub(crate) fn approver(&self) -> Option<Arc<dyn ToolApprover>> {
+        self.inner.approver.clone()
     }
 
     /// The DNS resolver for remote endpoints, building the production hickory

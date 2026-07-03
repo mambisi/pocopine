@@ -124,7 +124,7 @@ The durable, multi-turn conversation layer the loop runs on. agenkit stays state
 
 ## Out of scope (this roadmap)
 
-- The agent runtime **loop** itself (multi-turn orchestration, tool-loop control, the interactive UI) — that's the layer that *consumes* this SDK; separate roadmap.
+- The agent runtime **loop** itself (multi-turn orchestration, tool-loop control, the interactive UI) — that's the layer that *consumes* this SDK; see [roadmap-agenkitty.md](./roadmap-agenkitty.md).
 - A secret manager / vault.
 - Image / audio **generation** (input multimodal already exists via `ContentPart::Media`).
 - Long-tail vendor breadth beyond Anthropic + OpenAI-compatible (gateways cover most).

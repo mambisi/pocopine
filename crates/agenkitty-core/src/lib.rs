@@ -14,7 +14,9 @@ pub mod supervisor;
 pub mod tools;
 
 pub use events::{FrameworkEvent, FrameworkEventKind, RunStatus};
-pub use policy::{CapabilitySet, PolicyDecision, ToolMode};
+pub use policy::{
+    ApprovalDecision, ApprovalRequest, CapabilitySet, PolicyDecision, PolicyEvaluator, ToolMode,
+};
 pub use sessions::{
     SessionArtifactLink, SessionCheckpoint, SessionCheckpointKind, SessionClosure, SessionEvent,
     SessionEventCursor, SessionEventKind, SessionEventPolicy, SessionEventRange, SessionExport,
@@ -22,5 +24,6 @@ pub use sessions::{
 };
 pub use supervisor::{AgentSpec, BudgetSpec, SandboxSpec, WorkspaceSpec};
 pub use tools::{
-    ToolKind, ToolLifecycle, ToolSelection, ToolSpec, ToolUseOutcome, ToolUseRequest, ToolUseStatus,
+    ToolClass, ToolKind, ToolLifecycle, ToolSelection, ToolSpec, ToolUseOutcome, ToolUseRequest,
+    ToolUseStatus,
 };

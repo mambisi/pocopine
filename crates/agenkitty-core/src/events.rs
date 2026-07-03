@@ -12,6 +12,10 @@ pub struct FrameworkEvent {
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// The per-invocation tool-call id (the same id the agenkit loop hands the
+    /// `before_tool_call` hook), so policy decisions and events correlate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SessionSourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -24,6 +28,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::Started,
             message: Some(message.into()),
             tool: None,
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -34,6 +39,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::AssistantText,
             message: Some(text.into()),
             tool: None,
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -44,6 +50,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::Stopped { status },
             message: None,
             tool: None,
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -54,6 +61,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::Failed,
             message: Some(error.into()),
             tool: None,
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -64,6 +72,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::ToolStarted,
             message: None,
             tool: Some(tool.into()),
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -74,6 +83,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::ToolCompleted,
             message: None,
             tool: Some(tool.into()),
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -84,6 +94,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::ToolFailed,
             message: Some(error.into()),
             tool: Some(tool.into()),
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -94,6 +105,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::ToolBlocked,
             message: Some(reason.into()),
             tool: Some(tool.into()),
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -104,6 +116,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::Compacted,
             message: Some(format!("folded {folded} messages")),
             tool: None,
+            call_id: None,
             source_refs: Vec::new(),
             payload: Some(serde_json::json!({ "folded": folded })),
         }
@@ -114,6 +127,7 @@ impl FrameworkEvent {
             kind: FrameworkEventKind::Unknown,
             message: Some(message.into()),
             tool: None,
+            call_id: None,
             source_refs: Vec::new(),
             payload: None,
         }
@@ -126,6 +140,11 @@ impl FrameworkEvent {
 
     pub fn with_payload(mut self, payload: Value) -> Self {
         self.payload = Some(payload);
+        self
+    }
+
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = Some(call_id.into());
         self
     }
 }

@@ -8,20 +8,26 @@ use pocopine_agenkit::server::SecretString;
 use pocopine_agenkit::server::session::JsonlSessionStore;
 use pocopine_agenkit::server::{
     AgentConfig, AgentEvent, AgentSession, AuthUser, MockProvider, Principal, SessionThreadStore,
-    StopReason, ToolDecision,
+    StopReason, ToolCall, ToolDecision,
 };
 use pocopine_agenkit_core::AgentThreadId;
 use pocopine_agenkit_oai::OpenAiProvider;
 
 use crate::events::{FrameworkEvent, RunStatus};
+use crate::policy::{ToolApprover, no_approver_reason};
+use crate::project::load_project_config;
 use crate::tools::session::{redact_json_value, redact_text_to_limit};
 use crate::tools::{
     CurrentMemoryContext, CurrentSessionContext, LocalJsonlMemoryStore,
-    LocalJsonlSessionMetadataStore, MemoryRuntime, SessionRuntime, current_time_ms,
-    known_memory_tool_ids, known_session_tool_ids, register_memory_tools, register_session_tools,
-    register_tools_with_runtimes, session_event_from_framework,
+    LocalJsonlSessionMetadataStore, MemoryRuntime, SessionRuntime, builtin_tool_specs,
+    current_time_ms, known_memory_tool_ids, known_session_tool_ids, register_memory_tools,
+    register_session_tools, register_tools_with_runtimes, session_event_from_framework,
 };
-use agenkitty_core::{SessionIdentity, SessionSourceRef, SessionStoreKind};
+use agenkitty_core::config::PolicyConfigSection;
+use agenkitty_core::{
+    ApprovalDecision, ApprovalRequest, PolicyDecision, PolicyEvaluator, SessionIdentity,
+    SessionSourceRef, SessionStoreKind,
+};
 
 #[derive(Clone, Debug)]
 pub struct AgentRunOptions {
@@ -60,6 +66,22 @@ pub struct FrameworkRunner {
     /// namespace.
     project_id: Option<String>,
     transcript_store: SessionStoreKind,
+    /// The central tool-call policy gate (F1): built-in specs + the project's
+    /// `[policy]` overrides, consulted in `before_tool_call` before any
+    /// context injection. Project-less runners evaluate under the defaults.
+    policy: Arc<PolicyEvaluator>,
+    /// The host approver for `Ask` decisions (M1d). `None` = headless: every
+    /// Ask fails closed.
+    approver: Option<Arc<dyn ToolApprover>>,
+}
+
+/// The evaluator for runners without a project config: every tool's
+/// spec-declared default mode rules.
+fn default_policy() -> Arc<PolicyEvaluator> {
+    Arc::new(PolicyEvaluator::new(
+        PolicyConfigSection::default(),
+        builtin_tool_specs(),
+    ))
 }
 
 #[derive(Clone)]
@@ -102,6 +124,8 @@ impl FrameworkRunner {
             memory_runtime,
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
+            policy: default_policy(),
+            approver: None,
         }
     }
 
@@ -179,6 +203,8 @@ impl FrameworkRunner {
             memory_runtime,
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
+            policy: default_policy(),
+            approver: None,
         })
     }
 
@@ -216,6 +242,10 @@ impl FrameworkRunner {
         root: impl AsRef<Path>,
     ) -> Result<Self> {
         let project_id = Some(project_id_from_root(root.as_ref()));
+        let policy = Arc::new(PolicyEvaluator::new(
+            load_project_config(root.as_ref())?.policy,
+            builtin_tool_specs(),
+        ));
         let session_runtime = Arc::new(SessionRuntime::in_memory());
         let memory_runtime = Arc::new(MemoryRuntime::in_memory());
         let agenkit = register_tools_with_runtimes(
@@ -231,6 +261,8 @@ impl FrameworkRunner {
             memory_runtime,
             project_id,
             transcript_store: SessionStoreKind::InMemory,
+            policy,
+            approver: None,
         })
     }
 
@@ -240,6 +272,10 @@ impl FrameworkRunner {
         session_root: impl AsRef<Path>,
     ) -> Result<Self> {
         let project_id = Some(project_id_from_root(root.as_ref()));
+        let policy = Arc::new(PolicyEvaluator::new(
+            load_project_config(root.as_ref())?.policy,
+            builtin_tool_specs(),
+        ));
         let session_root = session_root.as_ref();
         let transcript_root = session_root.join("threads");
         let metadata_root = session_root.join("metadata");
@@ -265,7 +301,16 @@ impl FrameworkRunner {
             memory_runtime,
             project_id,
             transcript_store: SessionStoreKind::LocalJsonl,
+            policy,
+            approver: None,
         })
+    }
+
+    /// Install the host approver for `Ask` policy decisions. Without one,
+    /// every Ask fails closed (headless semantics).
+    pub fn with_approver(mut self, approver: Arc<dyn ToolApprover>) -> Self {
+        self.approver = Some(approver);
+        self
     }
 
     pub async fn run_prompt(&self, options: AgentRunOptions) -> Result<AgentRunReport> {
@@ -287,44 +332,81 @@ impl FrameworkRunner {
         let memory_runtime_for_hook = self.memory_runtime.clone();
         let current_session_for_hook = current_session.clone();
         let current_memory_for_hook = current_memory.clone();
+        let policy_for_hook = self.policy.clone();
+        let approver_for_hook = self.approver.clone();
         let session = AgentSession::builder(&self.agenkit)
             .agent_id(agent_id.clone())
             .principal(principal)
             .config(config)
-            .before_tool_call(move |tool, args| {
-                // Session and memory tools each need their own runtime-injected
-                // context_token; everything else proceeds untouched.
-                if known_session_tool_ids().contains(&tool) {
-                    let context = current_session_for_hook
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.clone());
-                    let Some(context) = context else {
-                        return ToolDecision::Block {
-                            reason: "session context is not available".to_string(),
+            .before_tool_call(move |call: &ToolCall| {
+                let policy = policy_for_hook.clone();
+                let approver = approver_for_hook.clone();
+                let session_runtime = session_runtime_for_hook.clone();
+                let memory_runtime = memory_runtime_for_hook.clone();
+                let current_session = current_session_for_hook.clone();
+                let current_memory = current_memory_for_hook.clone();
+                Box::pin(async move {
+                    let tool = call.tool_id.as_str();
+                    // The central policy gate (F1) runs first: a denied call
+                    // never reaches context injection or a runtime. `Ask`
+                    // resolves through the host approver (M1d) and fails
+                    // closed without one — the same semantics the secret
+                    // runtime uses.
+                    let mut rewritten = None;
+                    match policy.evaluate_call(call) {
+                        PolicyDecision::Allow => {}
+                        PolicyDecision::Deny { reason } => return ToolDecision::Block { reason },
+                        PolicyDecision::Ask { reason } => {
+                            let Some(approver) = approver else {
+                                return ToolDecision::Block {
+                                    reason: no_approver_reason(&reason),
+                                };
+                            };
+                            let request = ApprovalRequest::new(tool, reason)
+                                .with_call_id(call.id.clone())
+                                .with_detail(call.args.clone());
+                            match approver.approve(request).await {
+                                ApprovalDecision::Approved => {}
+                                ApprovalDecision::Denied { reason } => {
+                                    return ToolDecision::Block { reason };
+                                }
+                            }
+                        }
+                        PolicyDecision::Rewrite { args } => rewritten = Some(args),
+                    }
+                    let args = rewritten.as_ref().unwrap_or(&call.args);
+                    // Session and memory tools each need their own
+                    // runtime-injected context_token; everything else runs
+                    // with the policy-approved arguments.
+                    if known_session_tool_ids().contains(&tool) {
+                        let context = current_session.lock().ok().and_then(|guard| guard.clone());
+                        let Some(context) = context else {
+                            return ToolDecision::Block {
+                                reason: "session context is not available".to_string(),
+                            };
                         };
-                    };
-                    return match session_runtime_for_hook.inject_context_args(args, context) {
-                        Ok(args) => ToolDecision::ReplaceArgs { args },
-                        Err(reason) => ToolDecision::Block { reason },
-                    };
-                }
-                if known_memory_tool_ids().contains(&tool) {
-                    let context = current_memory_for_hook
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.clone());
-                    let Some(context) = context else {
-                        return ToolDecision::Block {
-                            reason: "memory context is not available".to_string(),
+                        return match session_runtime.inject_context_args(args, context) {
+                            Ok(args) => ToolDecision::ReplaceArgs { args },
+                            Err(reason) => ToolDecision::Block { reason },
                         };
-                    };
-                    return match memory_runtime_for_hook.inject_context_args(args, context) {
-                        Ok(args) => ToolDecision::ReplaceArgs { args },
-                        Err(reason) => ToolDecision::Block { reason },
-                    };
-                }
-                ToolDecision::Proceed
+                    }
+                    if known_memory_tool_ids().contains(&tool) {
+                        let context = current_memory.lock().ok().and_then(|guard| guard.clone());
+                        let Some(context) = context else {
+                            return ToolDecision::Block {
+                                reason: "memory context is not available".to_string(),
+                            };
+                        };
+                        return match memory_runtime.inject_context_args(args, context) {
+                            Ok(args) => ToolDecision::ReplaceArgs { args },
+                            Err(reason) => ToolDecision::Block { reason },
+                        };
+                    }
+                    match rewritten {
+                        Some(args) => ToolDecision::ReplaceArgs { args },
+                        None => ToolDecision::Proceed,
+                    }
+                })
             })
             .open(resume_id)
             .await?;
@@ -430,6 +512,7 @@ fn map_agent_event(event: AgentEvent) -> FrameworkEvent {
             FrameworkEvent::assistant_text(redact_text_to_limit(&text, 4096))
         }
         AgentEvent::ToolStarted { id, tool, args } => FrameworkEvent::tool_started(tool.clone())
+            .with_call_id(id.clone())
             .with_payload(serde_json::json!({
                 "call_id": id,
                 "args": redact_json_value(&args, 2048),
@@ -437,6 +520,7 @@ fn map_agent_event(event: AgentEvent) -> FrameworkEvent {
             .with_source_ref(tool_call_ref(&id, &tool)),
         AgentEvent::ToolCompleted { id, tool, output } => {
             FrameworkEvent::tool_completed(tool.clone())
+                .with_call_id(id.clone())
                 .with_payload(serde_json::json!({
                     "call_id": id,
                     "output": redact_json_value(&output, 2048),
@@ -445,11 +529,13 @@ fn map_agent_event(event: AgentEvent) -> FrameworkEvent {
         }
         AgentEvent::ToolFailed { id, tool, error } => {
             FrameworkEvent::tool_failed(tool.clone(), redact_text_to_limit(&error, 4096))
+                .with_call_id(id.clone())
                 .with_payload(serde_json::json!({ "call_id": id }))
                 .with_source_ref(tool_call_ref(&id, &tool))
         }
         AgentEvent::ToolBlocked { id, tool, reason } => {
             FrameworkEvent::tool_blocked(tool.clone(), redact_text_to_limit(&reason, 4096))
+                .with_call_id(id.clone())
                 .with_payload(serde_json::json!({ "call_id": id }))
                 .with_source_ref(tool_call_ref(&id, &tool))
         }
@@ -506,6 +592,191 @@ mod tests {
                 .iter()
                 .any(|event| event.message.as_deref() == Some("hello from agenkitty mock"))
         );
+    }
+
+    async fn run_fs_write_prompt(dir: &std::path::Path) -> AgentRunReport {
+        let provider = MockProvider::new("local")
+            .on_prompt_tool(
+                "write note",
+                "fs.write",
+                serde_json::json!({ "path": "note.txt", "content": "hello" }),
+            )
+            .default_text("done");
+        let builder = Agenkit::builder()
+            .provider(provider)
+            .default_model(ModelRef::new("local/default"));
+        let runner = FrameworkRunner::from_builder_with_repo_tools(builder, dir).unwrap();
+        runner
+            .run_prompt(AgentRunOptions {
+                agent_id: "test".to_string(),
+                model: "local/default".to_string(),
+                system: "Use tools when needed.".to_string(),
+                prompt: "write note".to_string(),
+                thread_id: None,
+                max_steps_per_turn: 4,
+                tool_ids: vec!["fs.write".to_string()],
+            })
+            .await
+            .unwrap()
+    }
+
+    fn tool_blocked_event(report: &AgentRunReport) -> &FrameworkEvent {
+        report
+            .events
+            .iter()
+            .find(|event| matches!(event.kind, crate::events::FrameworkEventKind::ToolBlocked))
+            .expect("a ToolBlocked event")
+    }
+
+    #[tokio::test]
+    async fn policy_asks_fail_closed_without_an_approver() {
+        // fs.write's spec defaults to Ask; with no project override and no
+        // approver, the call must be blocked before the tool runs.
+        let dir = tempfile::tempdir().unwrap();
+        let report = run_fs_write_prompt(dir.path()).await;
+
+        let blocked = tool_blocked_event(&report);
+        assert_eq!(blocked.tool.as_deref(), Some("fs.write"));
+        assert!(
+            blocked.call_id.as_deref().is_some_and(|id| !id.is_empty()),
+            "blocked event must carry the invocation id"
+        );
+        assert!(!dir.path().join("note.txt").exists(), "tool must not run");
+    }
+
+    #[tokio::test]
+    async fn project_write_mode_deny_blocks_fs_write_at_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".agenkitty")).unwrap();
+        fs::write(
+            dir.path().join(".agenkitty").join("config.toml"),
+            "[policy]\nwrite_mode = \"deny\"\n",
+        )
+        .unwrap();
+        let report = run_fs_write_prompt(dir.path()).await;
+
+        let blocked = tool_blocked_event(&report);
+        assert_eq!(blocked.tool.as_deref(), Some("fs.write"));
+        assert!(blocked.call_id.is_some());
+        assert!(!dir.path().join("note.txt").exists(), "tool must not run");
+    }
+
+    #[tokio::test]
+    async fn approver_approval_lets_an_ask_tool_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = MockProvider::new("local")
+            .on_prompt_tool(
+                "write note",
+                "fs.write",
+                serde_json::json!({ "path": "note.txt", "content": "hello" }),
+            )
+            .default_text("done");
+        let builder = Agenkit::builder()
+            .provider(provider)
+            .default_model(ModelRef::new("local/default"));
+        let runner = FrameworkRunner::from_builder_with_repo_tools(builder, dir.path())
+            .unwrap()
+            .with_approver(Arc::new(crate::policy::StaticApprover(true)));
+        let report = runner
+            .run_prompt(AgentRunOptions {
+                agent_id: "test".to_string(),
+                model: "local/default".to_string(),
+                system: "Use tools when needed.".to_string(),
+                prompt: "write note".to_string(),
+                thread_id: None,
+                max_steps_per_turn: 4,
+                tool_ids: vec!["fs.write".to_string()],
+            })
+            .await
+            .unwrap();
+
+        assert!(report.events.iter().any(|event| {
+            matches!(event.kind, crate::events::FrameworkEventKind::ToolCompleted)
+                && event.tool.as_deref() == Some("fs.write")
+        }));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn approver_denial_blocks_an_ask_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = MockProvider::new("local")
+            .on_prompt_tool(
+                "write note",
+                "fs.write",
+                serde_json::json!({ "path": "note.txt", "content": "hello" }),
+            )
+            .default_text("done");
+        let builder = Agenkit::builder()
+            .provider(provider)
+            .default_model(ModelRef::new("local/default"));
+        let runner = FrameworkRunner::from_builder_with_repo_tools(builder, dir.path())
+            .unwrap()
+            .with_approver(Arc::new(crate::policy::StaticApprover(false)));
+        let report = runner
+            .run_prompt(AgentRunOptions {
+                agent_id: "test".to_string(),
+                model: "local/default".to_string(),
+                system: "Use tools when needed.".to_string(),
+                prompt: "write note".to_string(),
+                thread_id: None,
+                max_steps_per_turn: 4,
+                tool_ids: vec!["fs.write".to_string()],
+            })
+            .await
+            .unwrap();
+
+        let blocked = tool_blocked_event(&report);
+        assert_eq!(blocked.tool.as_deref(), Some("fs.write"));
+        assert!(
+            blocked
+                .message
+                .as_deref()
+                .is_some_and(|reason| reason.contains("denied by operator"))
+        );
+        assert!(!dir.path().join("note.txt").exists(), "tool must not run");
+    }
+
+    #[tokio::test]
+    async fn project_write_mode_allow_loosens_fs_write() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".agenkitty")).unwrap();
+        fs::write(
+            dir.path().join(".agenkitty").join("config.toml"),
+            "[policy]\nwrite_mode = \"allow\"\n",
+        )
+        .unwrap();
+        let report = run_fs_write_prompt(dir.path()).await;
+
+        assert!(
+            report.events.iter().any(|event| {
+                matches!(event.kind, crate::events::FrameworkEventKind::ToolCompleted)
+                    && event.tool.as_deref() == Some("fs.write")
+            }),
+            "fs.write must complete under write_mode = allow"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("note.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_project_config_fails_runner_construction() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".agenkitty")).unwrap();
+        fs::write(
+            dir.path().join(".agenkitty").join("config.toml"),
+            "[policy]\nwrite_mode = \"yolo\"\n",
+        )
+        .unwrap();
+        let builder = Agenkit::builder()
+            .provider(MockProvider::new("local").default_text("hi"))
+            .default_model(ModelRef::new("local/default"));
+        assert!(FrameworkRunner::from_builder_with_repo_tools(builder, dir.path()).is_err());
     }
 
     #[tokio::test]
@@ -686,6 +957,14 @@ mod tests {
             .unwrap();
         let project_root = temp.path().join("agenkitty-qwen");
         copy_dir_all(&example_root, &project_root).unwrap();
+        // patch.apply is write-class (default Ask, fails closed headless);
+        // this test drives the mutation itself, so its project loosens the
+        // class explicitly.
+        fs::write(
+            project_root.join(".agenkitty").join("config.toml"),
+            "[policy]\nwrite_mode = \"allow\"\n",
+        )
+        .unwrap();
 
         let provider = MockProvider::new("local")
             .on_prompt_tool(

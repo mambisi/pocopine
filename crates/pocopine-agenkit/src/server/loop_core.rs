@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, Message, ModelRef, StepId, StepKind, StepStatus, ToolCall, Usage,
     events,
@@ -126,7 +127,7 @@ pub(crate) async fn dispatch_tool_calls<H>(
     observer: &(dyn LoopObserver + Sync),
 ) -> AgenkitResult<Vec<Message>>
 where
-    H: Fn(&str, &serde_json::Value) -> ToolDecision + ?Sized,
+    H: for<'a> Fn(&'a ToolCall) -> BoxFuture<'a, ToolDecision> + ?Sized,
 {
     let mut out = Vec::with_capacity(response.tool_calls.len() + 1);
     // The assistant's tool-request turn — kept (with any text the model emitted
@@ -150,10 +151,15 @@ where
         let step = observer.tool_started(call);
 
         // `before_tool_call` hook (L3): block (approval/trust gate) or replace the
-        // arguments before running. Absent on the typed run (`None`).
-        let decision = before_tool_call
-            .map(|hook| hook(&call.tool_id, &call.args))
-            .unwrap_or(ToolDecision::Proceed);
+        // arguments before running. Receives the full [`ToolCall`] so a policy
+        // layer can correlate its decision with the invocation id (the same id
+        // the `ToolStarted`/`ToolBlocked` events carry), and is async so an
+        // approval gate can await a human decision. Absent on the typed run
+        // (`None`).
+        let decision = match before_tool_call {
+            Some(hook) => hook(call).await,
+            None => ToolDecision::Proceed,
+        };
 
         let result_text = match decision {
             ToolDecision::Block { reason } => {

@@ -10,12 +10,6 @@ pub enum ToolMode {
     Deny,
 }
 
-impl ToolMode {
-    pub fn ask() -> Self {
-        Self::Ask
-    }
-}
-
 /// Framework-level policy result before it is adapted to Agenkit's
 /// `ToolDecision`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

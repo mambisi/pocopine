@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pocopine_agenkit::server::{Principal, SecretString};
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
 
-use crate::policy::ToolMode;
+use crate::policy::{
+    ApprovalDecision, ApprovalRequest, ToolApprover, ToolMode, no_approver_reason,
+};
 
 use super::resolver::{AgentSecretResolver, InMemorySecretResolver};
 use super::tools::{
@@ -25,6 +27,12 @@ struct GrantRecord {
 struct SecretRuntimeInner {
     grants: HashMap<String, GrantRecord>,
     counter: u64,
+}
+
+/// Outcome of the grant-request policy gate before any approver is consulted.
+enum RequestGate {
+    Allowed,
+    NeedsApproval,
 }
 
 /// Exact request tuple that may be pre-authorized by a host policy.
@@ -84,6 +92,9 @@ impl Default for SecretRequestPolicy {
 pub struct SecretRuntime {
     resolver: Arc<dyn AgentSecretResolver>,
     policy: SecretRequestPolicy,
+    /// Host approver for `Ask`-mode grant requests (M1d). `None` = every
+    /// non-preauthorized Ask fails closed.
+    approver: Option<Arc<dyn ToolApprover>>,
     inner: Arc<Mutex<SecretRuntimeInner>>,
 }
 
@@ -100,6 +111,7 @@ impl SecretRuntime {
         Self {
             resolver,
             policy: SecretRequestPolicy::default(),
+            approver: None,
             inner: Arc::new(Mutex::new(SecretRuntimeInner {
                 grants: HashMap::new(),
                 counter: 0,
@@ -124,6 +136,13 @@ impl SecretRuntime {
     /// closed.
     pub fn with_preauthorized_grant(mut self, grant: SecretGrantKey) -> Self {
         self.policy.preauthorized.insert(grant);
+        self
+    }
+
+    /// Install the host approver consulted for `Ask`-mode grant requests that
+    /// are not pre-authorized. Without one they fail closed.
+    pub fn with_approver(mut self, approver: Arc<dyn ToolApprover>) -> Self {
+        self.approver = Some(approver);
         self
     }
 
@@ -166,7 +185,33 @@ impl SecretRuntime {
                 input.secret_ref, input.target_tool
             )));
         }
-        self.ensure_request_allowed(&input)?;
+        match self.request_gate(&input)? {
+            RequestGate::Allowed => {}
+            RequestGate::NeedsApproval => {
+                let reason = format!(
+                    "secret request `{}` for `{}` requires host approval",
+                    input.secret_ref, input.target_tool
+                );
+                let Some(approver) = &self.approver else {
+                    return Err(AgenkitError::tool_policy(no_approver_reason(&reason)));
+                };
+                let request = ApprovalRequest::new(SECRET_REQUEST_TOOL_ID, reason.clone())
+                    .with_detail(serde_json::json!({
+                        "secret_ref": input.secret_ref,
+                        "purpose": input.purpose,
+                        "target_tool": input.target_tool,
+                        "destination": input.destination,
+                    }));
+                match approver.approve(request).await {
+                    ApprovalDecision::Approved => {}
+                    ApprovalDecision::Denied { reason } => {
+                        return Err(AgenkitError::tool_policy(format!(
+                            "secret request denied: {reason}"
+                        )));
+                    }
+                }
+            }
+        }
 
         let now = current_time_ms();
         let ttl = input
@@ -211,17 +256,14 @@ impl SecretRuntime {
         Ok(grant)
     }
 
-    fn ensure_request_allowed(&self, input: &SecretRequestInput) -> AgenkitResult<()> {
+    fn request_gate(&self, input: &SecretRequestInput) -> AgenkitResult<RequestGate> {
         let key = SecretGrantKey::from_request(input);
         if self.policy.preauthorized.contains(&key) {
-            return Ok(());
+            return Ok(RequestGate::Allowed);
         }
         match self.policy.mode {
-            ToolMode::Allow => Ok(()),
-            ToolMode::Ask => Err(AgenkitError::tool_policy(format!(
-                "secret request `{}` for `{}` requires host approval",
-                input.secret_ref, input.target_tool
-            ))),
+            ToolMode::Allow => Ok(RequestGate::Allowed),
+            ToolMode::Ask => Ok(RequestGate::NeedsApproval),
             ToolMode::Deny => Err(AgenkitError::tool_policy(format!(
                 "secret request `{}` for `{}` is not pre-authorized",
                 input.secret_ref, input.target_tool
@@ -571,6 +613,37 @@ mod tests {
 
         assert_eq!(err.kind(), "tool_policy");
         assert!(err.to_string().contains("requires host approval"));
+    }
+
+    #[tokio::test]
+    async fn approver_approval_issues_an_ask_mode_grant() {
+        let runtime = SecretRuntime::new(Arc::new(InMemorySecretResolver::new().insert(
+            SecretMetadata::new("github-token", "GitHub token", SecretScope::User),
+            SecretString::new("ghp_secret"),
+        )))
+        .with_approver(Arc::new(crate::policy::StaticApprover(true)));
+
+        let grant = runtime
+            .request(request(), &Principal::anonymous())
+            .await
+            .unwrap();
+        assert_eq!(grant.secret_ref, "github-token");
+    }
+
+    #[tokio::test]
+    async fn approver_denial_fails_an_ask_mode_grant() {
+        let runtime = SecretRuntime::new(Arc::new(InMemorySecretResolver::new().insert(
+            SecretMetadata::new("github-token", "GitHub token", SecretScope::User),
+            SecretString::new("ghp_secret"),
+        )))
+        .with_approver(Arc::new(crate::policy::StaticApprover(false)));
+
+        let err = runtime
+            .request(request(), &Principal::anonymous())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "tool_policy");
+        assert!(err.to_string().contains("denied"));
     }
 
     #[tokio::test]

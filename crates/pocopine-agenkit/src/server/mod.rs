@@ -71,6 +71,8 @@ pub use runtime::{
     AbortHandle, AgentConfig, AgentEvent, AgentSession, AgentSessionBuilder, CapturePolicy,
     StopReason, ToolDecision,
 };
+// Beside [`ToolDecision`]: the parameter type a `before_tool_call` hook receives.
+pub use pocopine_agenkit_core::ToolCall;
 pub use thread::{
     AgentThreadHandle, AgentThreadStore, SessionThreadStore, ThreadBuilder, ThreadOwner,
 };

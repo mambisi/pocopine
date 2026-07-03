@@ -10,6 +10,7 @@ pub mod patch;
 pub mod process;
 pub mod secrets;
 pub mod session;
+pub mod specs;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -69,6 +70,8 @@ pub use secrets::{
     SecretRevokeOutput, SecretRevokeTool, SecretRuntime, SecretScope, SecretUseInput,
     SecretUseOutput, SecretUseTool, known_secret_tool_ids, register_secret_tools,
 };
+pub use specs::builtin_tool_specs;
+
 pub use session::{
     CurrentSessionContext, InMemorySessionMetadataStore, LocalJsonlSessionMetadataStore,
     SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID,

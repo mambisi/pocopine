@@ -1,11 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use pocopine_agenkit::server::SecretString;
 
 use crate::events::{EventFormat, render_human, render_jsonl};
+use crate::policy::TtyApprover;
 use crate::project::ProjectContext;
 use crate::supervisor::{AgentRunOptions, FrameworkRunner, QwenProviderConfig};
 use crate::tools::resolve_tool_ids;
@@ -151,6 +153,12 @@ async fn run_prompt(args: RunArgs) -> Result<()> {
             args.model.unwrap_or_else(|| "local/default".to_string()),
         ),
         ProviderArg::Qwen => qwen_runner(args.model, args.env_file, &project.root, &session_root)?,
+    };
+    // Interactive terminal: Ask-gated tools prompt the operator. Headless
+    // (piped/CI): no approver, every Ask fails closed.
+    let runner = match TtyApprover::if_interactive() {
+        Some(approver) => runner.with_approver(Arc::new(approver)),
+        None => runner,
     };
     let report = runner
         .run_prompt(AgentRunOptions {
