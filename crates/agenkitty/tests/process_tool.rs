@@ -15,9 +15,10 @@ use std::time::Duration;
 use agenkitty::policy::ToolMode;
 use agenkitty::tools::{
     InMemorySecretResolver, ProcessKillInput, ProcessKillTool, ProcessReadInput, ProcessReadTool,
-    ProcessRunTool, ProcessSpawnInput, ProcessSpawnTool, ProcessTable, ProcessToolConfig,
-    ProcessWriteInput, ProcessWriteTool, SECRET_REQUEST_TOOL_ID, SecretMetadata, SecretRuntime,
-    SecretScope, register_process_tools, register_process_tools_with, register_secret_tools,
+    ProcessRunInput, ProcessRunTool, ProcessSpawnInput, ProcessSpawnTool, ProcessTable,
+    ProcessToolConfig, ProcessWriteInput, ProcessWriteTool, SECRET_REQUEST_TOOL_ID, SandboxPolicy,
+    SecretMetadata, SecretRuntime, SecretScope, register_process_tools,
+    register_process_tools_with, register_secret_tools,
 };
 use futures::StreamExt;
 use pocopine_agenkit::prelude::{Agenkit, ModelRef};
@@ -386,4 +387,185 @@ async fn spawn_interact_and_kill() {
         )
         .unwrap_err();
     assert_eq!(err.kind(), "not_found");
+}
+
+// --- Tier-2 egress lockdown, end-to-end (F4) -----------------------------
+//
+// The unit tests cover the pieces (bwrap argv construction, the host-side relay
+// splice, the shim's HTTP_PROXY export). This is the whole thing on a real
+// Linux+bwrap host: a child in `--unshare-net` (no internet route) whose ONLY
+// reachable egress is the bound proxy UDS via the in-namespace shim. It proves
+// both halves — direct egress is dead, proxied egress round-trips — so neither
+// half can silently regress.
+
+/// `bwrap` can be installed yet unable to create namespaces (userns disabled).
+fn bwrap_usable() -> bool {
+    std::process::Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--unshare-pid",
+            "--",
+            "/bin/true",
+        ])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn have(binary: &str) -> bool {
+    std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+fn run_input(command: &[&str], timeout_ms: u64) -> ProcessRunInput {
+    ProcessRunInput {
+        command: command.iter().map(|s| s.to_string()).collect(),
+        cwd: None,
+        env: None,
+        secret_env: Default::default(),
+        timeout_ms: Some(timeout_ms),
+        memory_mb: None,
+        shell: None,
+    }
+}
+
+/// A minimal HTTP forward-proxy on a Unix socket, standing in for the real
+/// `EgressProxy`. It accepts one connection (the shim's splice), reads the
+/// child's proxied request, records its request line, and answers `200 OK` +
+/// `marker` — so a `marker` in the child's stdout proves egress round-tripped
+/// THROUGH this UDS. Runs on a blocking std thread with a bounded accept
+/// deadline so it self-terminates (and `join` returns) even if no one connects.
+fn spawn_fake_uds_proxy(
+    path: std::path::PathBuf,
+    marker: &'static str,
+    seen: Arc<std::sync::Mutex<Option<String>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) else {
+            return;
+        };
+        // Poll-accept with a deadline so a child that never connects can't hang
+        // the test — the thread returns and the marker assertion fails cleanly.
+        listener.set_nonblocking(true).ok();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut conn = loop {
+            match listener.accept() {
+                Ok((conn, _)) => break conn,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return,
+            }
+        };
+        conn.set_nonblocking(false).ok();
+        let mut buf = [0u8; 4096];
+        let n = conn.read(&mut buf).unwrap_or(0);
+        let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+        if let Ok(mut slot) = seen.lock() {
+            *slot = request.lines().next().map(str::to_string);
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{marker}",
+            marker.len()
+        );
+        let _ = conn.write_all(response.as_bytes());
+        let _ = conn.flush();
+    })
+}
+
+/// `example.invalid` never resolves; the child can only obtain the marker via
+/// the proxy (which answers regardless of host), so "marker in stdout" is an
+/// unambiguous proof of proxied egress.
+const PROBE_URL: &str = "http://example.invalid/probe";
+
+#[tokio::test]
+async fn egress_shim_is_the_only_route_out_of_the_namespace() {
+    if !bwrap_usable() || !have("python3") {
+        eprintln!(
+            "SKIP egress_shim_is_the_only_route_out_of_the_namespace: needs bwrap namespaces + python3"
+        );
+        return;
+    }
+    const MARKER: &str = "EGRESS-MARKER-9f3c";
+    let workspace = tempfile::tempdir().unwrap();
+    let shim_bin = env!("CARGO_BIN_EXE_agenkitty");
+
+    // Part A — CONTROL: plain `--unshare-net` (no proxy). Direct egress is dead.
+    // A raw connect to an unroutable TEST-NET address (192.0.2.1, no DNS) fails
+    // immediately — the namespace has no route out (whether by seccomp denying
+    // the socket or the empty netns having no route, either way: no egress).
+    let direct_probe = "import socket,sys; s=socket.socket(); s.settimeout(3); \
+         sys.exit(0 if s.connect_ex(('192.0.2.1', 80)) == 0 else 7)";
+    let bare = ProcessRunTool::new(workspace.path())
+        .unwrap()
+        .with_sandbox(SandboxPolicy::workspace(workspace.path()).using_bubblewrap());
+    let direct = bare
+        .run(run_input(&["python3", "-c", direct_probe], 15_000))
+        .await
+        .unwrap();
+    assert_ne!(
+        direct.exit_code,
+        Some(0),
+        "direct egress must fail in --unshare-net (stdout: {:?}, stderr: {:?})",
+        direct.stdout.text,
+        direct.stderr.text
+    );
+
+    // Part B — egress mode: the same-namespace child, now with the shim + bound
+    // proxy UDS. Its only egress is the proxy, so an HTTP request round-trips
+    // through the shim → UDS → proxy and returns the marker.
+    let proxy_probe = format!(
+        "import urllib.request,sys; \
+         sys.stdout.write(urllib.request.urlopen('{PROBE_URL}', timeout=8).read().decode())"
+    );
+    let uds_dir = tempfile::tempdir().unwrap();
+    let uds = uds_dir.path().join("egress.sock");
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let proxy = spawn_fake_uds_proxy(uds.clone(), MARKER, seen.clone());
+
+    let locked = ProcessRunTool::new(workspace.path()).unwrap().with_sandbox(
+        SandboxPolicy::workspace(workspace.path())
+            .using_bubblewrap()
+            .with_egress_proxy_uds(&uds)
+            .with_egress_shim_path(shim_bin),
+    );
+    let proxied = locked
+        .run(run_input(&["python3", "-c", &proxy_probe], 20_000))
+        .await
+        .unwrap();
+    let _ = proxy.join();
+
+    assert_eq!(
+        proxied.exit_code,
+        Some(0),
+        "proxied egress must succeed (stdout: {:?}, stderr: {:?})",
+        proxied.stdout.text,
+        proxied.stderr.text
+    );
+    assert!(
+        proxied.stdout.text.contains(MARKER),
+        "the child must have received the proxy's marker — proof egress went \
+         through the bound UDS (stdout: {:?}, stderr: {:?})",
+        proxied.stdout.text,
+        proxied.stderr.text
+    );
+    // The proxy saw the child's request for the probe host — egress reached it.
+    let request_line = seen.lock().unwrap().clone();
+    assert!(
+        request_line
+            .as_deref()
+            .is_some_and(|line| line.contains("example.invalid")),
+        "the proxy should have received the child's request for the probe host, \
+         got: {request_line:?}"
+    );
 }

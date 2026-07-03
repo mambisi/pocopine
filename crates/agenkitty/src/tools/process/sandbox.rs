@@ -182,8 +182,16 @@ pub(crate) fn bwrap_args(
     if let Some(uds) = &policy.egress_proxy_uds {
         args.push("--unshare-net".to_string());
         for dir in EGRESS_SOCKET_MASK_DIRS {
-            args.push("--tmpfs".to_string());
-            args.push(dir.to_string());
+            // Only tmpfs-mask a dir that exists as a REAL directory. `/var/run`
+            // is a symlink to `/run` on modern Linux, and `bwrap --tmpfs` on a
+            // symlink path aborts the whole sandbox ("Can't mount tmpfs on
+            // …/var/run: No such file or directory"). Skipping it is safe: the
+            // symlink's target (`/run`) is itself in the mask list, so anything
+            // reachable through it is still hidden.
+            if is_real_dir(dir) {
+                args.push("--tmpfs".to_string());
+                args.push(dir.to_string());
+            }
         }
         bind_writable_roots(policy, &mut args, true);
         let path = uds.display().to_string();
@@ -212,6 +220,16 @@ pub(crate) fn bwrap_args(
 }
 
 const EGRESS_SOCKET_MASK_DIRS: &[&str] = &["/run", "/var/run", "/tmp", "/dev/shm"];
+
+/// Whether `path` exists as a real directory (not a symlink, not missing).
+/// `symlink_metadata` does not follow the link, so a symlink returns `false` —
+/// which is what keeps `bwrap --tmpfs` off a symlinked mask dir like
+/// `/var/run` → `/run`.
+fn is_real_dir(path: &str) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir())
+        .unwrap_or(false)
+}
 
 fn bind_writable_roots(policy: &SandboxPolicy, args: &mut Vec<String>, egress_mode: bool) {
     if policy.confine_filesystem {
@@ -274,12 +292,26 @@ mod tests {
         let args = bwrap_args(&policy, &workspace_root, &BTreeMap::new());
         assert!(args.iter().any(|a| a == "--unshare-net"));
         // Host socket dirs are masked with tmpfs so AF_UNIX can't reach e.g.
-        // /run/docker.sock directly.
-        for dir in ["/run", "/var/run", "/tmp"] {
+        // /run/docker.sock directly. `/run` and `/tmp` are real dirs on any
+        // host, so they are always masked.
+        for dir in ["/run", "/tmp"] {
             assert!(
                 args.windows(2).any(|w| w[0] == "--tmpfs" && w[1] == dir),
                 "{dir} should be tmpfs-masked in egress mode"
             );
+        }
+        // Invariant: EVERY dir handed to `--tmpfs` must be a real directory.
+        // `bwrap --tmpfs` on a symlink (e.g. `/var/run` → `/run` on modern
+        // Linux) aborts the whole sandbox, so symlinked/missing mask dirs are
+        // skipped — the regression F4 validation caught on a real host.
+        for w in args.windows(2) {
+            if w[0] == "--tmpfs" {
+                assert!(
+                    is_real_dir(&w[1]),
+                    "--tmpfs target `{}` must be a real directory, not a symlink",
+                    w[1]
+                );
+            }
         }
         // The proxy UDS is bound AFTER the tmpfs masks so it survives them.
         let uds_bind = args.windows(3).position(|w| {

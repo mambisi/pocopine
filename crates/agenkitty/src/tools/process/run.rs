@@ -751,6 +751,7 @@ mod sandbox_tests {
     #[tokio::test]
     async fn seccomp_blocks_inet_sockets_when_network_off() {
         if !have("python3") {
+            eprintln!("SKIP seccomp_blocks_inet_sockets_when_network_off: python3 unavailable");
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
@@ -788,6 +789,7 @@ mod sandbox_tests {
     #[tokio::test]
     async fn seccomp_blocks_ptrace() {
         if !have("python3") {
+            eprintln!("SKIP seccomp_blocks_ptrace: python3 unavailable");
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
@@ -876,6 +878,7 @@ mod sandbox_tests {
     #[tokio::test]
     async fn bubblewrap_confines_writes() {
         if !bwrap_usable() {
+            eprintln!("SKIP bubblewrap_confines_writes: bwrap user namespaces unavailable");
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
@@ -912,6 +915,7 @@ mod sandbox_tests {
     #[tokio::test]
     async fn bubblewrap_isolates_pid_namespace() {
         if !bwrap_usable() || !have("python3") {
+            eprintln!("SKIP bubblewrap_isolates_pid_namespace: needs bwrap namespaces + python3");
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
@@ -953,6 +957,7 @@ mod sandbox_tests {
     #[tokio::test]
     async fn bubblewrap_passes_env_to_child() {
         if !bwrap_usable() {
+            eprintln!("SKIP bubblewrap_passes_env_to_child: bwrap user namespaces unavailable");
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
@@ -974,6 +979,9 @@ mod sandbox_tests {
     #[tokio::test]
     async fn bubblewrap_secret_wins_over_request_env() {
         if !bwrap_usable() {
+            eprintln!(
+                "SKIP bubblewrap_secret_wins_over_request_env: bwrap user namespaces unavailable"
+            );
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
@@ -1006,6 +1014,7 @@ mod sandbox_tests {
     #[tokio::test]
     async fn bubblewrap_denies_ptrace() {
         if !bwrap_usable() || !have("python3") {
+            eprintln!("SKIP bubblewrap_denies_ptrace: needs bwrap namespaces + python3");
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
