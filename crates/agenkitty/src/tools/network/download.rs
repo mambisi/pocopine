@@ -96,11 +96,13 @@ impl NetDownloadTool {
                 principal,
                 NET_DOWNLOAD_TOOL_ID,
                 cap,
+                // Binary is expected for a download — no content-type gate.
+                |_status, _content_type| Ok(()),
             )
             .await?;
         if response.truncated {
             return Err(AgenkitError::validation(format!(
-                "download exceeded the {MAX_CONTENT_BYTES} byte artifact cap"
+                "download exceeded the {cap} byte cap"
             )));
         }
         // Same durable-artifact contract as artifact.write/link: a body that
@@ -155,6 +157,7 @@ impl NetDownloadTool {
         tracing::info!(
             target: "pocopine.log",
             tool = NET_DOWNLOAD_TOOL_ID,
+            host = %response.origin_host,
             status = response.status.as_u16(),
             artifact_id = %stored.id,
             size = stored.size,

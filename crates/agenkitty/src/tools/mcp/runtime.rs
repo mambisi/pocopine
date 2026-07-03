@@ -19,11 +19,11 @@ use pocopine_agenkit::server::{Principal, SecretString};
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
 use url::Url;
 
-use crate::policy::{ToolApprover, ToolMode};
+use crate::policy::{ApprovalDecision, ApprovalRequest, ToolApprover, ToolMode};
 use crate::tools::network::{HickoryResolver, Resolve};
 use crate::tools::secrets::{SecretRuntime, resolve_secret_headers, validate_secret_env_name};
 
-use super::admission::resolve_mode;
+use super::admission::{AskPrompt, resolve_mode};
 use super::client::{McpConnection, McpToolDef};
 use super::common::{McpToolEntry, namespaced_tool_id, schema_digest};
 use super::config::{McpServerConfig, McpTransportConfig};
@@ -254,6 +254,71 @@ impl McpRuntime {
     /// The installed host approver, if any.
     pub(crate) fn approver(&self) -> Option<Arc<dyn ToolApprover>> {
         self.inner.approver.clone()
+    }
+
+    /// Resolve an `Ask` MCP tool through the host approver. This is the ONE
+    /// copy of the security-critical approval sequence, shared by both dispatch
+    /// paths (the `mcp.call` verb and the imported `mcp.<server>.<tool>`
+    /// adapter) so the ordering can never drift between them:
+    ///
+    /// 1. audit that an approval was requested;
+    /// 2. **prompt only while the prompted definition is still the live
+    ///    observed one** (`is_current`) — a rediscovered/rug-pulled definition
+    ///    is never re-enabled by an operator judging stale metadata;
+    /// 3. with no approver, fail closed (`Ok(false)`);
+    /// 4. on approval, **re-converge** the connection (a `tools/list_changed`
+    ///    that landed during the possibly-minutes-long prompt is only a pending
+    ///    dirty flag until now), then bind the approval to the *exact prompted
+    ///    hash* via `approve_if_current` — a change during the prompt makes it
+    ///    refuse (`Ok(false)`);
+    /// 5. on denial, surface the operator's reason.
+    ///
+    /// Returns `Ok(true)` iff the tool is now approved+bound and may dispatch.
+    pub(crate) async fn resolve_ask_approval(
+        &self,
+        tool_id: &str,
+        pin_hash: &str,
+        prompt: &AskPrompt,
+        principal: &Principal,
+        // The caller's observer (the adapter carries its own; `mcp.call` uses
+        // the runtime's), so the approval audit lands where that path records.
+        observer: &McpObserver,
+    ) -> AgenkitResult<bool> {
+        // The prompt carries the server + server-local tool name — the pin-store
+        // key and audit subject — so they aren't passed separately.
+        let (server, tool_name) = (prompt.server.as_str(), prompt.tool.as_str());
+        observer.approval_requested(server, tool_name, &prompt.summary());
+        if !self.pins().is_current(server, tool_name, pin_hash) {
+            return Ok(false);
+        }
+        let Some(approver) = self.approver() else {
+            return Ok(false);
+        };
+        let request = ApprovalRequest::new(
+            tool_id,
+            format!("mcp tool `{tool_name}` on server `{server}` requires approval"),
+        )
+        .with_detail(serde_json::json!({
+            "server": prompt.server,
+            "tool": prompt.tool,
+            "description": prompt.description,
+            "params_schema": prompt.params_schema,
+            "transport": prompt.transport.summary(),
+        }));
+        match approver.approve(request).await {
+            ApprovalDecision::Approved => {
+                self.ready_connection_as(server, principal).await?;
+                if self.pins().approve_if_current(server, tool_name, pin_hash) {
+                    observer.approval(server, tool_name);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            ApprovalDecision::Denied { reason } => Err(AgenkitError::tool_policy(format!(
+                "mcp tool `{tool_name}` on server `{server}` was denied by the operator: {reason}"
+            ))),
+        }
     }
 
     /// The DNS resolver for remote endpoints, building the production hickory

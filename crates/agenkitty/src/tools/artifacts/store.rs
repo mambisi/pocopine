@@ -222,15 +222,33 @@ fn lock_err<T>(_err: std::sync::PoisonError<T>) -> AgenkitError {
     AgenkitError::internal("artifact store lock poisoned")
 }
 
-/// Cut a bounded window out of `bytes`: UTF-8 text when the slice is valid
-/// UTF-8, base64 otherwise. `max_bytes` is clamped to the read-window cap.
+/// Cut a bounded window out of `bytes`: UTF-8 text when the slice is text,
+/// base64 when it is genuinely binary. `max_bytes` is clamped to the
+/// read-window cap.
+///
+/// A window boundary that lands mid-codepoint (the cap splits a multi-byte
+/// char) does **not** flip a text artifact to base64: the trailing incomplete
+/// bytes are dropped from this window — `end` retreats to the last char
+/// boundary, so the split char returns whole in the next page — while a byte
+/// that is invalid UTF-8 in the *middle* of the slice marks the content binary.
 pub(super) fn content_window(bytes: &[u8], offset: u64, max_bytes: usize) -> ArtifactContentWindow {
     let start = (offset as usize).min(bytes.len());
     let max = max_bytes.clamp(1, MAX_READ_WINDOW_BYTES);
-    let end = start.saturating_add(max).min(bytes.len());
+    let mut end = start.saturating_add(max).min(bytes.len());
     let slice = &bytes[start..end];
     let (content, encoding) = match std::str::from_utf8(slice) {
         Ok(text) => (text.to_string(), ArtifactEncoding::Utf8),
+        Err(err) if err.error_len().is_none() && err.valid_up_to() > 0 => {
+            // The only invalid bytes are an incomplete multi-byte char at the
+            // very end: keep the valid text prefix and shrink the window so the
+            // split char reappears whole next page (the caller's next offset is
+            // `start + content.len()`).
+            let valid = err.valid_up_to();
+            let text =
+                std::str::from_utf8(&slice[..valid]).expect("valid_up_to bytes are valid UTF-8");
+            end = start + valid;
+            (text.to_string(), ArtifactEncoding::Utf8)
+        }
         Err(_) => (base64_encode(slice), ArtifactEncoding::Base64),
     };
     ArtifactContentWindow {
@@ -398,6 +416,36 @@ mod tests {
         assert_eq!(window.encoding, ArtifactEncoding::Base64);
         assert_eq!(window.offset, 1);
         assert!(window.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_window_boundary_mid_codepoint_stays_text() {
+        // "aé" — 'é' is two bytes (0xC3 0xA9). A 2-byte window from offset 0
+        // ends in the MIDDLE of 'é'. A pure-text artifact must not flip to
+        // base64: the window returns "a" (dropping the split char), and the
+        // next window returns "é" whole.
+        let store = InMemoryArtifactStore::new();
+        store
+            .write(
+                draft("t.md", ArtifactScope::Session, "thread-1"),
+                "aé".as_bytes().to_vec(),
+            )
+            .await
+            .unwrap();
+        let (_, first) = store.read("art-1", &session_ns(), 0, 2).await.unwrap();
+        assert_eq!(first.encoding, ArtifactEncoding::Utf8);
+        assert_eq!(first.content, "a"); // split char dropped from this window
+        assert!(first.truncated);
+        // The caller's next offset is start + the byte length it consumed.
+        let next_offset = first.offset + first.content.len() as u64;
+        assert_eq!(next_offset, 1);
+        let (_, second) = store
+            .read("art-1", &session_ns(), next_offset, 8)
+            .await
+            .unwrap();
+        assert_eq!(second.encoding, ArtifactEncoding::Utf8);
+        assert_eq!(second.content, "é");
+        assert!(!second.truncated);
     }
 
     #[tokio::test]

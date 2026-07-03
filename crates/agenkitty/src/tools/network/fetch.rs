@@ -70,6 +70,10 @@ impl NetFetchTool {
         input: NetFetchInput,
         principal: &Principal,
     ) -> NetResult<NetFetchOutput> {
+        // net.fetch is a *text* surface: the header validator rejects binary
+        // bodies (routed to net.download) BEFORE the body is read, so a binary
+        // response returns the deterministic classification error without
+        // spending bandwidth. The guard ran on every hop inside `get`.
         let response = self
             .http
             .get(
@@ -78,12 +82,12 @@ impl NetFetchTool {
                 principal,
                 NET_FETCH_TOOL_ID,
                 self.http.policy().max_response_bytes(),
+                |_status, content_type| classify_content_type(content_type).map(|_| ()),
             )
             .await?;
 
-        // net.fetch is a *text* surface: reject binary bodies (routed to
-        // net.download). The body was read under the cap already; the guard
-        // ran on every hop.
+        // Re-derive the kind from the (already-validated) content type to pick
+        // the renderer.
         let kind = classify_content_type(&response.content_type)?;
         let text = String::from_utf8_lossy(&response.body).into_owned();
         let rendered = match kind {
@@ -104,6 +108,7 @@ impl NetFetchTool {
         tracing::info!(
             target: "pocopine.log",
             tool = NET_FETCH_TOOL_ID,
+            host = %response.origin_host,
             status = response.status.as_u16(),
             truncated,
             "net.fetch completed"
