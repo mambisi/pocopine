@@ -63,6 +63,10 @@ pub struct FrameworkRunner {
     session_runtime: Arc<SessionRuntime>,
     memory_runtime: Arc<MemoryRuntime>,
     artifact_runtime: Arc<ArtifactRuntime>,
+    /// The secret runtime registered with the tools. Retained so `with_approver`
+    /// can share the runner's one approver with the secret-grant gate. Empty
+    /// (no resolver) for runners that don't register secret tools.
+    secret_runtime: Arc<SecretRuntime>,
     /// Stable project id for this runner, derived from the canonical project
     /// root. `None` for project-less runners (mock / bare provider). Used to seed
     /// `SessionIdentity::project_id` on a fresh run so project/agent memory has a
@@ -126,6 +130,7 @@ impl FrameworkRunner {
             session_runtime,
             memory_runtime,
             artifact_runtime: Arc::new(ArtifactRuntime::in_memory()),
+            secret_runtime: Arc::new(SecretRuntime::empty()),
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
             policy: default_policy(),
@@ -206,6 +211,7 @@ impl FrameworkRunner {
             session_runtime,
             memory_runtime,
             artifact_runtime: Arc::new(ArtifactRuntime::in_memory()),
+            secret_runtime: Arc::new(SecretRuntime::empty()),
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
             policy: default_policy(),
@@ -256,12 +262,13 @@ impl FrameworkRunner {
         let artifact_runtime = Arc::new(ArtifactRuntime::new(Arc::new(
             InMemoryArtifactStore::new().with_workspace_root(root.as_ref()),
         )));
+        let secret_runtime = Arc::new(SecretRuntime::empty());
         let agenkit = register_tools_with_all_runtimes_and_artifacts(
             builder,
             root,
             session_runtime.clone(),
             memory_runtime.clone(),
-            Arc::new(SecretRuntime::empty()),
+            secret_runtime.clone(),
             artifact_runtime.clone(),
         )?
         .build()?;
@@ -270,6 +277,7 @@ impl FrameworkRunner {
             session_runtime,
             memory_runtime,
             artifact_runtime,
+            secret_runtime,
             project_id,
             transcript_store: SessionStoreKind::InMemory,
             policy,
@@ -305,12 +313,13 @@ impl FrameworkRunner {
             LocalArtifactStore::open(session_root.join("artifacts"))?
                 .with_workspace_root(root.as_ref()),
         )));
+        let secret_runtime = Arc::new(SecretRuntime::empty());
         let agenkit = register_tools_with_all_runtimes_and_artifacts(
             builder.thread_store(thread_store),
             root,
             session_runtime.clone(),
             memory_runtime.clone(),
-            Arc::new(SecretRuntime::empty()),
+            secret_runtime.clone(),
             artifact_runtime.clone(),
         )?
         .build()?;
@@ -319,6 +328,7 @@ impl FrameworkRunner {
             session_runtime,
             memory_runtime,
             artifact_runtime,
+            secret_runtime,
             project_id,
             transcript_store: SessionStoreKind::LocalJsonl,
             policy,
@@ -326,11 +336,14 @@ impl FrameworkRunner {
         })
     }
 
-    /// Install the host approver for `Ask` policy decisions. Without one,
-    /// every Ask fails closed (headless semantics). The artifact runtime
-    /// shares the same approver (project-scoped writes ask through it).
+    /// Install the host approver for `Ask` policy decisions. One approver is
+    /// shared across every gate: the central dispatch gate (`self.approver`),
+    /// the artifact runtime (project-scoped writes), and the secret runtime
+    /// (Ask-mode grant requests) — so an interactive run can approve any of
+    /// them, and none silently fails closed for lack of wiring.
     pub fn with_approver(mut self, approver: Arc<dyn ToolApprover>) -> Self {
         self.artifact_runtime.set_approver(approver.clone());
+        self.secret_runtime.set_approver(approver.clone());
         self.approver = Some(approver);
         self
     }
@@ -379,10 +392,11 @@ impl FrameworkRunner {
                     // never reaches context injection or a runtime. `Ask`
                     // resolves through the host approver (M1d) and fails
                     // closed without one — the same semantics the secret
-                    // runtime uses.
-                    let mut rewritten = None;
+                    // runtime uses. The dispatch evaluator only ever returns
+                    // Allow / Ask / Deny (argument rewriting is the
+                    // context-injection layer's job below, not the policy
+                    // decision's), so `Rewrite` is not produced here.
                     match policy.evaluate_call(call) {
-                        PolicyDecision::Allow => {}
                         PolicyDecision::Deny { reason } => return ToolDecision::Block { reason },
                         PolicyDecision::Ask { reason } => {
                             let Some(approver) = approver else {
@@ -400,12 +414,12 @@ impl FrameworkRunner {
                                 }
                             }
                         }
-                        PolicyDecision::Rewrite { args } => rewritten = Some(args),
+                        _ => {}
                     }
-                    let args = rewritten.as_ref().unwrap_or(&call.args);
+                    let args = &call.args;
                     // Session and memory tools each need their own
-                    // runtime-injected context_token; everything else runs
-                    // with the policy-approved arguments.
+                    // runtime-injected context_token; everything else proceeds
+                    // with the approved arguments.
                     if known_session_tool_ids().contains(&tool) {
                         let context = current_session.lock().ok().and_then(|guard| guard.clone());
                         let Some(context) = context else {
@@ -448,10 +462,7 @@ impl FrameworkRunner {
                             Err(reason) => ToolDecision::Block { reason },
                         };
                     }
-                    match rewritten {
-                        Some(args) => ToolDecision::ReplaceArgs { args },
-                        None => ToolDecision::Proceed,
-                    }
+                    ToolDecision::Proceed
                 })
             })
             .open(resume_id)
@@ -541,7 +552,17 @@ impl FrameworkRunner {
         // the session metadata so a session's outputs are discoverable via
         // `SessionExport.artifact_links`. Process-handle reaping (a session-
         // aware process sandbox) will also hang here — see [`finalize_run`].
-        self.finalize_run(&thread_id).await?;
+        // The run has already completed and its events are persisted, so a
+        // best-effort cleanup failure (transient IO, disk full) must NOT
+        // discard the report: log and return it anyway.
+        if let Err(err) = self.finalize_run(&thread_id).await {
+            tracing::warn!(
+                target: "pocopine.log",
+                thread_id = %thread_id,
+                error = %err,
+                "run-end artifact linking failed; report is still returned"
+            );
+        }
 
         Ok(AgentRunReport {
             thread_id,

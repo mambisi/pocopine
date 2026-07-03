@@ -72,6 +72,9 @@ impl Resolve for HickoryResolver {
 /// vs store) — the SSRF/redirect/pin/budget guarantees are already applied.
 pub(super) struct FetchedResponse {
     pub final_url: String,
+    /// The origin host the request was made to (the allowlisted host the agent
+    /// asked for) — the security-relevant field of an egress audit log.
+    pub origin_host: String,
     pub status: StatusCode,
     pub content_type: String,
     pub body: Vec<u8>,
@@ -130,6 +133,11 @@ impl GuardedHttp {
     /// re-authorized + pinned), sending the injected + `requested` secret
     /// headers only to the origin host, and reading the body capped at `cap`
     /// bytes. `tool_id` binds resolved secret handles to the calling tool.
+    ///
+    /// `validate_headers(status, content_type)` runs on the **final** response
+    /// *before* the body is read, so a caller (e.g. net.fetch rejecting binary)
+    /// gets a deterministic classification error without downloading a body it
+    /// will discard.
     pub(super) async fn get(
         &self,
         url: &str,
@@ -137,6 +145,7 @@ impl GuardedHttp {
         principal: &Principal,
         tool_id: &str,
         cap: usize,
+        validate_headers: impl Fn(StatusCode, &str) -> NetResult<()>,
     ) -> NetResult<FetchedResponse> {
         self.charge_request()?;
         let mut target = self.authorize(url).await?;
@@ -187,9 +196,13 @@ impl GuardedHttp {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_string();
+        // Reject on the headers (e.g. binary content type) before spending
+        // bandwidth on a body the caller will discard.
+        validate_headers(status, &content_type)?;
         let (body, truncated) = read_capped(response, cap).await?;
         Ok(FetchedResponse {
             final_url,
+            origin_host,
             status,
             content_type,
             body,

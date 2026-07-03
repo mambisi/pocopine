@@ -23,6 +23,26 @@ pub fn no_approver_reason(reason: &str) -> String {
     format!("{reason}; no approver is configured")
 }
 
+/// Non-interactive auto-approver: approves every request. This is the explicit
+/// opt-out from the fail-closed default — a host installs it (e.g. the CLI's
+/// `--yes` flag) to run write/command/`Ask`-class tools in CI or a piped
+/// invocation where no operator can answer a prompt. It must never be the
+/// default; installing it means the caller has accepted running unattended.
+pub struct AutoApprover;
+
+impl ToolApprover for AutoApprover {
+    fn approve<'a>(&'a self, request: ApprovalRequest) -> BoxFuture<'a, ApprovalDecision> {
+        // The request still routes through here (and is auditable), it is just
+        // answered "approved" without a human.
+        tracing::info!(
+            target: "pocopine.log",
+            tool = %request.tool_id,
+            "auto-approved (--yes)"
+        );
+        Box::pin(async { ApprovalDecision::Approved })
+    }
+}
+
 /// Interactive terminal approver: prints the request (bounded + redacted) to
 /// stderr and reads `y`/`N` from stdin on a blocking thread. Anything but an
 /// explicit `y`/`yes` is a denial — including EOF and a non-terminal stdin, so
@@ -96,6 +116,16 @@ mod tests {
         let approver = StaticApprover(true);
         let decision = approver
             .approve(ApprovalRequest::new("fs.write", "write-class tool"))
+            .await;
+        assert!(decision.is_approved());
+    }
+
+    #[tokio::test]
+    async fn auto_approver_approves_every_request() {
+        // The `--yes` escape hatch: approves without a human so headless/CI
+        // runs can execute Ask-gated tools.
+        let decision = AutoApprover
+            .approve(ApprovalRequest::new("fs.write", "headless run"))
             .await;
         assert!(decision.is_approved());
     }

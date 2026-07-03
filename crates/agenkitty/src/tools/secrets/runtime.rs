@@ -93,8 +93,10 @@ pub struct SecretRuntime {
     resolver: Arc<dyn AgentSecretResolver>,
     policy: SecretRequestPolicy,
     /// Host approver for `Ask`-mode grant requests (M1d). `None` = every
-    /// non-preauthorized Ask fails closed.
-    approver: Option<Arc<dyn ToolApprover>>,
+    /// non-preauthorized Ask fails closed. Interior-mutable because the runner
+    /// installs its approver *after* the runtime was built and moved into
+    /// registration (same as `ArtifactRuntime`).
+    approver: Arc<Mutex<Option<Arc<dyn ToolApprover>>>>,
     inner: Arc<Mutex<SecretRuntimeInner>>,
 }
 
@@ -111,7 +113,7 @@ impl SecretRuntime {
         Self {
             resolver,
             policy: SecretRequestPolicy::default(),
-            approver: None,
+            approver: Arc::new(Mutex::new(None)),
             inner: Arc::new(Mutex::new(SecretRuntimeInner {
                 grants: HashMap::new(),
                 counter: 0,
@@ -141,9 +143,22 @@ impl SecretRuntime {
 
     /// Install the host approver consulted for `Ask`-mode grant requests that
     /// are not pre-authorized. Without one they fail closed.
-    pub fn with_approver(mut self, approver: Arc<dyn ToolApprover>) -> Self {
-        self.approver = Some(approver);
+    pub fn with_approver(self, approver: Arc<dyn ToolApprover>) -> Self {
+        self.set_approver(approver);
         self
+    }
+
+    /// Set the host approver after construction — the runner shares one
+    /// approver across the policy hook, the artifact runtime, and this secret
+    /// runtime, installed once `with_approver` is called on the runner.
+    pub fn set_approver(&self, approver: Arc<dyn ToolApprover>) {
+        if let Ok(mut slot) = self.approver.lock() {
+            *slot = Some(approver);
+        }
+    }
+
+    fn approver(&self) -> Option<Arc<dyn ToolApprover>> {
+        self.approver.lock().ok().and_then(|slot| slot.clone())
     }
 
     pub async fn list(&self, principal: &Principal) -> AgenkitResult<Vec<SecretMetadata>> {
@@ -192,7 +207,7 @@ impl SecretRuntime {
                     "secret request `{}` for `{}` requires host approval",
                     input.secret_ref, input.target_tool
                 );
-                let Some(approver) = &self.approver else {
+                let Some(approver) = self.approver() else {
                     return Err(AgenkitError::tool_policy(no_approver_reason(&reason)));
                 };
                 // The detail carries every security-relevant field the operator
@@ -620,6 +635,32 @@ mod tests {
 
         assert_eq!(err.kind(), "tool_policy");
         assert!(err.to_string().contains("requires host approval"));
+    }
+
+    #[tokio::test]
+    async fn set_approver_after_construction_reaches_the_grant_gate() {
+        // The runner installs the shared approver AFTER the secret runtime was
+        // built + moved into registration, so set_approver must reach the gate.
+        let runtime = SecretRuntime::new(Arc::new(InMemorySecretResolver::new().insert(
+            SecretMetadata::new("github-token", "GitHub token", SecretScope::User),
+            SecretString::new("ghp_secret"),
+        )));
+        // No approver yet → Ask fails closed.
+        assert_eq!(
+            runtime
+                .request(request(), &Principal::anonymous())
+                .await
+                .unwrap_err()
+                .kind(),
+            "tool_policy"
+        );
+        // Install it post-construction (interior-mutable) → the grant issues.
+        runtime.set_approver(Arc::new(crate::policy::StaticApprover(true)));
+        let grant = runtime
+            .request(request(), &Principal::anonymous())
+            .await
+            .unwrap();
+        assert_eq!(grant.secret_ref, "github-token");
     }
 
     #[tokio::test]

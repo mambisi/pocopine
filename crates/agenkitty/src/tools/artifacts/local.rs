@@ -201,7 +201,10 @@ impl LocalArtifactStore {
         let tmp = self
             .blobs_dir
             .join(format!("{sha256}.{:016x}.tmp", rand::random::<u64>()));
-        {
+        // Write the temp blob, then atomically rename it into place. On ANY
+        // failure (write, flush, or rename) the temp file is removed — a
+        // disk-full write must not leave an orphaned `<sha>.<rand>.tmp` behind.
+        let write_result = (|| {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -209,13 +212,13 @@ impl LocalArtifactStore {
                 .map_err(io_err)?;
             file.write_all(contents).map_err(io_err)?;
             file.flush().map_err(io_err)?;
-        }
-        // `rename` replaces any stale/corrupt regular file at `blob` atomically.
-        if let Err(err) = fs::rename(&tmp, &blob) {
+            // `rename` replaces any stale/corrupt regular file at `blob`.
+            fs::rename(&tmp, &blob).map_err(io_err)
+        })();
+        if write_result.is_err() {
             let _ = fs::remove_file(&tmp);
-            return Err(io_err(err));
         }
-        Ok(())
+        write_result
     }
 
     /// Read a blob without following a planted symlink, and verify the bytes

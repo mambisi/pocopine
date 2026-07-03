@@ -100,21 +100,29 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         write_allow(MEMORY_WRITE_TOOL_ID, "Write a memory entry"),
         write_allow(MEMORY_UPDATE_TOOL_ID, "Update a memory entry"),
         write_allow(MEMORY_FORGET_TOOL_ID, "Tombstone a memory entry"),
-        // artifacts — durable run outputs. Session-scope writes default Allow;
-        // the *project*-scope Ask lives inside the tool (the runtime consults
-        // the host approver per scope — an id-keyed spec can't split on args).
-        // Deletion is destructive regardless of scope → dispatch-gated Ask.
+        // artifacts — durable run outputs, subsystem-gated (`Other`) so the
+        // `write_mode` class override never touches them (they are not
+        // workspace edits). write/link carry their OWN authoritative scope gate
+        // inside the tool (session Allow, project → host approver), so the
+        // outer spec is Allow — an outer Ask would double-prompt the same
+        // approver the inner gate already consults. delete is destructive
+        // regardless of scope, so its `Other`/Ask always asks — no class
+        // override can downgrade it.
         read(ARTIFACT_READ_TOOL_ID, "Read an artifact window"),
         read(ARTIFACT_LIST_TOOL_ID, "List stored artifacts"),
-        write_allow(ARTIFACT_WRITE_TOOL_ID, "Store a run-output artifact"),
-        write_allow(
+        other(
+            ARTIFACT_WRITE_TOOL_ID,
+            "Store a run-output artifact",
+            ToolMode::Allow,
+        )
+        .side_effecting(),
+        other(
             ARTIFACT_LINK_TOOL_ID,
             "Link a workspace file as an artifact",
-        ),
-        ToolSpec::built_in(ARTIFACT_DELETE_TOOL_ID, "Delete an artifact")
-            .with_class(ToolClass::Write)
-            .with_mode(ToolMode::Ask)
-            .side_effecting(),
+            ToolMode::Allow,
+        )
+        .side_effecting(),
+        other(ARTIFACT_DELETE_TOOL_ID, "Delete an artifact", ToolMode::Ask).side_effecting(),
         // secrets — subsystem-gated (`Other`): the secret runtime's own
         // mode + exact-tuple preauthorization + approver routing is the
         // authoritative gate, so the outer specs are Allow — an outer Ask
@@ -335,6 +343,44 @@ mod tests {
                 evaluator.effective_mode(spec),
                 ToolMode::Allow,
                 "`{id}` must pass the outer gate; its runtime is the authority"
+            );
+        }
+    }
+
+    #[test]
+    fn artifact_tools_are_subsystem_gated_not_write_class() {
+        use super::{ARTIFACT_DELETE_TOOL_ID, ARTIFACT_LINK_TOOL_ID, ARTIFACT_WRITE_TOOL_ID};
+        // artifact.* carry their own inner scope gate, so classing them Write
+        // would let write_mode both double-gate write/link and downgrade
+        // delete's always-Ask. They must be Other-class.
+        let loosened = PolicyEvaluator::new(
+            PolicyConfigSection {
+                write_mode: Some(ToolMode::Allow),
+                ..PolicyConfigSection::default()
+            },
+            builtin_tool_specs(),
+        );
+        // delete stays Ask even when write_mode = allow (its own gate is the
+        // authority; no class override downgrades a destructive op).
+        let delete = loosened.spec(ARTIFACT_DELETE_TOOL_ID).unwrap();
+        assert_eq!(delete.class, ToolClass::Other);
+        assert_eq!(loosened.effective_mode(delete), ToolMode::Ask);
+        // write/link are Allow at the outer gate (their inner scope gate asks
+        // for project scope) even when write_mode = ask — no double prompt.
+        let asked = PolicyEvaluator::new(
+            PolicyConfigSection {
+                write_mode: Some(ToolMode::Ask),
+                ..PolicyConfigSection::default()
+            },
+            builtin_tool_specs(),
+        );
+        for id in [ARTIFACT_WRITE_TOOL_ID, ARTIFACT_LINK_TOOL_ID] {
+            let spec = asked.spec(id).unwrap();
+            assert_eq!(spec.class, ToolClass::Other, "`{id}` must be Other-class");
+            assert_eq!(
+                asked.effective_mode(spec),
+                ToolMode::Allow,
+                "`{id}` outer gate must be Allow; the inner scope gate is the authority"
             );
         }
     }

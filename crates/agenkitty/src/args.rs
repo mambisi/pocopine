@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pocopine_agenkit::server::SecretString;
 
 use crate::events::{EventFormat, render_human, render_jsonl};
-use crate::policy::TtyApprover;
+use crate::policy::{AutoApprover, ToolApprover, TtyApprover};
 use crate::project::ProjectContext;
 use crate::supervisor::{AgentRunOptions, FrameworkRunner, QwenProviderConfig};
 use crate::tools::resolve_tool_ids;
@@ -78,6 +78,12 @@ struct RunArgs {
     /// Render format.
     #[arg(long, default_value = "human")]
     format: OutputFormat,
+    /// Auto-approve every `Ask`-gated tool call without prompting. Required to
+    /// run write/command tools non-interactively (CI, piped input) where no
+    /// operator can answer the TTY prompt. Without it, `Ask` tools fail closed
+    /// in a non-terminal invocation.
+    #[arg(long, short = 'y')]
+    yes: bool,
     /// Prompt to send to the agent.
     prompt: String,
 }
@@ -154,10 +160,17 @@ async fn run_prompt(args: RunArgs) -> Result<()> {
         ),
         ProviderArg::Qwen => qwen_runner(args.model, args.env_file, &project.root, &session_root)?,
     };
-    // Interactive terminal: Ask-gated tools prompt the operator. Headless
-    // (piped/CI): no approver, every Ask fails closed.
-    let runner = match TtyApprover::if_interactive() {
-        Some(approver) => runner.with_approver(Arc::new(approver)),
+    // Approver selection: `--yes` auto-approves (the explicit opt-out for
+    // CI/piped runs); otherwise prompt the operator when on a terminal;
+    // otherwise no approver, so every Ask fails closed (the secure default —
+    // a non-interactive run without `--yes` cannot silently run gated tools).
+    let approver: Option<Arc<dyn ToolApprover>> = if args.yes {
+        Some(Arc::new(AutoApprover))
+    } else {
+        TtyApprover::if_interactive().map(|a| Arc::new(a) as Arc<dyn ToolApprover>)
+    };
+    let runner = match approver {
+        Some(approver) => runner.with_approver(approver),
         None => runner,
     };
     let report = runner
