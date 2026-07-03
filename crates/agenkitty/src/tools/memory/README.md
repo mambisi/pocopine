@@ -111,9 +111,14 @@ title, body, tags, or reason.
   carry optional relation edges (`derived_from`/`supersedes`/`contradicts`/…).
   Contradiction-repair policy and Agenkit checkpoint cross-referencing remain
   deferred.
-- **Shared secret classification** across fs, patch, process, artifacts,
-  session, and memory is deferred; v1 memory uses its own conservative
-  predicate.
+- **Shared secret classification** is **done** (F3): the content classifier is
+  `agenkitty_core::looks_like_secret` — one predicate that memory and artifacts
+  *reject* on and the session redactor *redacts* with. Because every tool's
+  result is redacted through the session redactor on its way into the event
+  log, fs / patch / process / network are covered transitively (their
+  workspace-content returns are redacted in the persisted event, not corrupted
+  at the source). Path-based secret-file policy (`.env`, …) stays a separate
+  fs-tool concern.
 - **Alternate ids and backends** are deferred: content-hash/ULID ids, SQLite
   FTS, vector search, and graph storage can be added as store adapters without
   changing the model-facing tool contract.

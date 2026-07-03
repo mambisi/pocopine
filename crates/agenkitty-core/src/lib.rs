@@ -9,9 +9,12 @@ pub mod config;
 pub mod events;
 pub mod policy;
 pub mod sandbox_api;
+pub mod secrets;
 pub mod sessions;
 pub mod supervisor;
 pub mod tools;
+
+pub use secrets::{body_looks_like_secret, looks_like_secret};
 
 pub use events::{FrameworkEvent, FrameworkEventKind, RunStatus};
 pub use policy::{

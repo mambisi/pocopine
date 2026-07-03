@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agenkitty_core::SessionSourceRef;
+use agenkitty_core::looks_like_secret;
 use pocopine_agenkit::server::session::ThreadId;
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
 use schemars::JsonSchema;
@@ -659,60 +660,16 @@ fn require_non_empty(field: &str, value: String) -> AgenkitResult<String> {
 }
 
 fn reject_secret_like(field: &str, value: &str) -> AgenkitResult<()> {
+    // Memory *rejects* secret-like content (rather than redacting): secrets
+    // must never land in a durable agent store. The classifier is the shared
+    // one in `agenkitty_core` (F3) — one predicate across memory / artifacts /
+    // the session redactor.
     if looks_like_secret(value) {
         return Err(AgenkitError::tool_policy(format!(
             "memory entry {field} looks like a secret; secrets must not be written to memory"
         )));
     }
     Ok(())
-}
-
-/// Heuristic secret detector ported from the session redactor. Memory *rejects*
-/// secret-like content rather than redacting it. A shared classifier across
-/// fs/patch/process/artifacts/session/memory is a deferred follow-up.
-pub fn looks_like_secret(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("bearer ")
-        || lower.contains("private key")
-        || lower.contains("-----begin ")
-        || contains_sensitive_assignment(&lower)
-}
-
-fn contains_sensitive_assignment(lower_text: &str) -> bool {
-    for key in [
-        "api_key",
-        "apikey",
-        "api-key",
-        "x-api-key",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "token",
-        "authorization",
-        "password",
-        "secret",
-        "private_key",
-    ] {
-        let mut offset = 0;
-        while let Some(position) = lower_text[offset..].find(key) {
-            let start = offset + position;
-            let end = start + key.len();
-            if is_assignment_boundary(lower_text, start, end) {
-                return true;
-            }
-            offset = end;
-        }
-    }
-    false
-}
-
-fn is_assignment_boundary(text: &str, start: usize, end: usize) -> bool {
-    let before = text[..start].chars().next_back();
-    if before.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
-        return false;
-    }
-    let after = text[end..].trim_start();
-    after.starts_with('=') || after.starts_with(':')
 }
 
 pub(super) fn lock_err<T>(_: std::sync::PoisonError<T>) -> AgenkitError {

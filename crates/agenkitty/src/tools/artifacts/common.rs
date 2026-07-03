@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::policy::{ApprovalDecision, ApprovalRequest, ToolApprover, no_approver_reason};
-use crate::tools::memory::looks_like_secret;
 
 pub use crate::tools::memory::current_time_ms;
 
@@ -398,12 +397,11 @@ pub fn validate_media_type(media_type: Option<String>) -> AgenkitResult<String> 
 }
 
 /// Reject text content that looks like credential material. Artifacts are
-/// durable and citable; secrets belong to the secrets tool. Binary content is
-/// checked against its UTF-8 projection when one exists.
+/// durable and citable; secrets belong to the secrets tool. Uses the shared
+/// [`agenkitty_core::body_looks_like_secret`] classifier (F3) — true binary
+/// (non-UTF-8) is never flagged.
 pub fn reject_secret_like_content(contents: &[u8]) -> AgenkitResult<()> {
-    if let Ok(text) = std::str::from_utf8(contents)
-        && looks_like_secret(text)
-    {
+    if agenkitty_core::body_looks_like_secret(contents) {
         return Err(AgenkitError::tool_policy(
             "artifact content looks like credential material; store secrets through the \
              secrets tool, never as artifacts",

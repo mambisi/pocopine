@@ -21,7 +21,7 @@ use super::policy::NetPolicy;
 use super::ssrf::Resolve;
 use crate::tools::artifacts::{
     ArtifactDraft, ArtifactRuntime, ArtifactScope, MAX_CONTENT_BYTES, current_time_ms,
-    validate_artifact_name, validate_media_type,
+    reject_secret_like_content, validate_artifact_name, validate_media_type,
 };
 use crate::tools::secrets::SecretRuntime;
 
@@ -103,6 +103,10 @@ impl NetDownloadTool {
                 "download exceeded the {MAX_CONTENT_BYTES} byte artifact cap"
             )));
         }
+        // Same durable-artifact contract as artifact.write/link: a body that
+        // looks like credential material is refused — net.download must not be
+        // a side door for persisting secrets.
+        reject_secret_like_content(&response.body)?;
         // The declared media type is advisory; validate/normalize it, falling
         // back to a generic binary type when the caller gave none and the
         // server sent none.
