@@ -858,53 +858,14 @@ pub(crate) fn redact_source_refs(source_refs: Vec<SessionSourceRef>) -> Vec<Sess
         .collect()
 }
 
+/// The session redactor replaces text carrying credential material with
+/// `[redacted]` before it persists. This is the *redaction* side of the shared
+/// [`agenkitty_core::looks_like_secret`] classifier (F3) — the same predicate
+/// memory/artifacts *reject* on — so every tool's output flowing through this
+/// redactor (fs / patch / process / network results become session events) is
+/// covered by one predicate.
 fn text_needs_full_redaction(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("bearer ")
-        || lower.contains("private key")
-        || lower.contains("-----begin ")
-        || contains_sensitive_assignment(&lower)
-}
-
-fn contains_sensitive_assignment(lower_text: &str) -> bool {
-    for key in [
-        "api_key",
-        "apikey",
-        "api-key",
-        "x-api-key",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "token",
-        "authorization",
-        "password",
-        "secret",
-        "client_secret",
-        "secret_key",
-        "credential",
-        "credentials",
-        "private_key",
-    ] {
-        let mut offset = 0;
-        while let Some(position) = lower_text[offset..].find(key) {
-            let start = offset + position;
-            let end = start + key.len();
-            if is_assignment_boundary(lower_text, start, end) {
-                return true;
-            }
-            offset = end;
-        }
-    }
-    false
-}
-
-fn is_assignment_boundary(text: &str, start: usize, end: usize) -> bool {
-    let before = text[..start].chars().next_back();
-    if before.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
-        return false;
-    }
-    let after = text[end..].trim_start();
-    after.starts_with('=') || after.starts_with(':')
+    agenkitty_core::looks_like_secret(text)
 }
 
 fn is_sensitive_key(key: &str) -> bool {

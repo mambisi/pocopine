@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use agenkitty_core::looks_like_secret;
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +19,7 @@ use super::common::{
     MAX_TITLE_BYTES, MemoryCompactionReport, MemoryCompactionRequest, MemoryEntry, MemoryFuture,
     MemoryKind, MemoryPatch, MemoryScope, MemorySearchFilter, MemorySearchHit, MemorySource,
     MemoryStore, MemoryStoreKind, MemoryTombstone, bound_text, current_time_ms, lock_err,
-    looks_like_secret, normalize_tags,
+    normalize_tags,
 };
 
 /// One durable event in the memory log. Compaction is persisted as one `Append`

@@ -28,7 +28,7 @@ pub use common::{
     MemoryCompactionRequest, MemoryEntry, MemoryEntryView, MemoryFuture, MemoryKind, MemoryPatch,
     MemoryRelation, MemoryRelationKind, MemoryRetention, MemoryRuntime, MemoryScope,
     MemorySearchFilter, MemorySearchHit, MemorySource, MemoryStore, MemoryStoreKind,
-    MemoryTombstone, bound_text, current_time_ms, looks_like_secret, normalize_tags,
+    MemoryTombstone, bound_text, current_time_ms, normalize_tags,
 };
 pub use forget::{MEMORY_FORGET_TOOL_ID, MemoryForgetInput, MemoryForgetOutput, MemoryForgetTool};
 pub use local::LocalJsonlMemoryStore;

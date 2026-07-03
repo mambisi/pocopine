@@ -29,7 +29,7 @@ pub use common::{
     ArtifactContentWindow, ArtifactDraft, ArtifactEncoding, ArtifactFuture, ArtifactMetadata,
     ArtifactRuntime, ArtifactScope, ArtifactStore, ArtifactStoreKind, CurrentArtifactContext,
     MAX_CONTENT_BYTES, MAX_LIST_LIMIT, MAX_NAME_BYTES, MAX_READ_WINDOW_BYTES, content_hash,
-    current_time_ms, validate_artifact_name, validate_media_type,
+    current_time_ms, reject_secret_like_content, validate_artifact_name, validate_media_type,
 };
 pub use delete::{ARTIFACT_DELETE_TOOL_ID, ArtifactDeleteInput, ArtifactDeleteTool};
 pub use link::{ARTIFACT_LINK_TOOL_ID, ArtifactLinkInput, ArtifactLinkTool};

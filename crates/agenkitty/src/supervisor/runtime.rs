@@ -689,6 +689,22 @@ mod tests {
         assert_eq!(event.message.as_deref(), Some("[redacted]"));
     }
 
+    #[test]
+    fn tool_output_carrying_a_secret_is_redacted_in_the_event() {
+        // Every tool's output flows through map_agent_event -> the session
+        // redactor, which uses the shared F3 classifier. So a secret in a
+        // process/fs/patch tool result is redacted before it persists — the
+        // transitive coverage for the tools that legitimately return workspace
+        // content (they must not be corrupted at the source, only redacted here).
+        let event = map_agent_event(AgentEvent::ToolCompleted {
+            id: "call-1".to_string(),
+            tool: "process.run".to_string(),
+            output: serde_json::json!({ "stdout": "export TOKEN=bearer sk-live-123" }),
+        });
+        let payload = event.payload.expect("tool payload");
+        assert_eq!(payload["output"]["stdout"], "[redacted]");
+    }
+
     #[tokio::test]
     async fn mock_runner_produces_assistant_text() {
         let report = FrameworkRunner::mock()
