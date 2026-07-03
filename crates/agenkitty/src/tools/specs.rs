@@ -19,11 +19,12 @@ use super::fs::{
     FS_WRITE_TOOL_ID,
 };
 use super::{
-    MEMORY_FORGET_TOOL_ID, MEMORY_READ_TOOL_ID, MEMORY_SEARCH_TOOL_ID, MEMORY_UPDATE_TOOL_ID,
-    MEMORY_WRITE_TOOL_ID, NET_FETCH_TOOL_ID, PATCH_APPLY_TOOL_ID, PATCH_PREVIEW_TOOL_ID,
-    SECRET_LIST_TOOL_ID, SECRET_REQUEST_TOOL_ID, SECRET_REVOKE_TOOL_ID, SECRET_USE_TOOL_ID,
-    SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID,
-    SESSION_SUMMARY_TOOL_ID,
+    ARTIFACT_DELETE_TOOL_ID, ARTIFACT_LINK_TOOL_ID, ARTIFACT_LIST_TOOL_ID, ARTIFACT_READ_TOOL_ID,
+    ARTIFACT_WRITE_TOOL_ID, MEMORY_FORGET_TOOL_ID, MEMORY_READ_TOOL_ID, MEMORY_SEARCH_TOOL_ID,
+    MEMORY_UPDATE_TOOL_ID, MEMORY_WRITE_TOOL_ID, NET_FETCH_TOOL_ID, PATCH_APPLY_TOOL_ID,
+    PATCH_PREVIEW_TOOL_ID, SECRET_LIST_TOOL_ID, SECRET_REQUEST_TOOL_ID, SECRET_REVOKE_TOOL_ID,
+    SECRET_USE_TOOL_ID, SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID,
+    SESSION_NOTE_TOOL_ID, SESSION_SUMMARY_TOOL_ID,
 };
 
 fn fs_read(id: &str, description: &str) -> ToolSpec {
@@ -99,15 +100,34 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         write_allow(MEMORY_WRITE_TOOL_ID, "Write a memory entry"),
         write_allow(MEMORY_UPDATE_TOOL_ID, "Update a memory entry"),
         write_allow(MEMORY_FORGET_TOOL_ID, "Tombstone a memory entry"),
+        // artifacts — durable run outputs. Session-scope writes default Allow;
+        // the *project*-scope Ask lives inside the tool (the runtime consults
+        // the host approver per scope — an id-keyed spec can't split on args).
+        // Deletion is destructive regardless of scope → dispatch-gated Ask.
+        read(ARTIFACT_READ_TOOL_ID, "Read an artifact window"),
+        read(ARTIFACT_LIST_TOOL_ID, "List stored artifacts"),
+        write_allow(ARTIFACT_WRITE_TOOL_ID, "Store a run-output artifact"),
+        write_allow(
+            ARTIFACT_LINK_TOOL_ID,
+            "Link a workspace file as an artifact",
+        ),
+        ToolSpec::built_in(ARTIFACT_DELETE_TOOL_ID, "Delete an artifact")
+            .with_class(ToolClass::Write)
+            .with_mode(ToolMode::Ask)
+            .side_effecting(),
         // secrets — subsystem-gated (`Other`): the secret runtime's own
-        // per-grant mode stays authoritative; class overrides never loosen it.
+        // mode + exact-tuple preauthorization + approver routing is the
+        // authoritative gate, so the outer specs are Allow — an outer Ask
+        // would block a headless host's preauthorized grants at dispatch
+        // (before the tuple check runs) and double-prompt interactive runs.
+        // Class overrides never touch these either way.
         other(SECRET_LIST_TOOL_ID, "List secret metadata", ToolMode::Allow),
         other(
             SECRET_REQUEST_TOOL_ID,
             "Request a secret grant",
-            ToolMode::Ask,
+            ToolMode::Allow,
         ),
-        other(SECRET_USE_TOOL_ID, "Use a secret grant", ToolMode::Ask),
+        other(SECRET_USE_TOOL_ID, "Use a secret grant", ToolMode::Allow),
         other(
             SECRET_REVOKE_TOOL_ID,
             "Revoke a secret grant",
@@ -244,6 +264,11 @@ mod tests {
         .collect();
         ids.extend(known_session_tool_ids().iter().map(|id| id.to_string()));
         ids.extend(known_memory_tool_ids().iter().map(|id| id.to_string()));
+        ids.extend(
+            super::super::known_artifact_tool_ids()
+                .iter()
+                .map(|id| id.to_string()),
+        );
         ids.extend(known_patch_tool_ids().iter().map(|id| id.to_string()));
         ids.extend(known_secret_tool_ids().iter().map(|id| id.to_string()));
         #[cfg(unix)]
@@ -268,6 +293,39 @@ mod tests {
         }
         for id in all_known_tool_ids() {
             assert!(seen.contains(&id), "known tool `{id}` has no policy spec");
+        }
+    }
+
+    #[test]
+    fn subsystem_gated_tools_pass_the_outer_gate_untouched() {
+        // Secrets (and MCP verbs) are class `Other` AND outer-mode Allow: the
+        // subsystem's own gate — the secret runtime's mode + exact-tuple
+        // preauthorization, MCP capability admission — is the sole authority.
+        // An outer Ask would block a headless host's preauthorized grants at
+        // dispatch and double-prompt interactive runs.
+        let evaluator = PolicyEvaluator::new(
+            // Even with every class loosened/tightened, `Other` is untouched.
+            PolicyConfigSection {
+                read_mode: Some(ToolMode::Deny),
+                write_mode: Some(ToolMode::Deny),
+                command_mode: Some(ToolMode::Deny),
+                network_mode: Some(ToolMode::Deny),
+            },
+            builtin_tool_specs(),
+        );
+        for id in [
+            SECRET_LIST_TOOL_ID,
+            SECRET_REQUEST_TOOL_ID,
+            SECRET_USE_TOOL_ID,
+            SECRET_REVOKE_TOOL_ID,
+        ] {
+            let spec = evaluator.spec(id).expect("spec exists");
+            assert_eq!(spec.class, ToolClass::Other, "`{id}` must be Other-class");
+            assert_eq!(
+                evaluator.effective_mode(spec),
+                ToolMode::Allow,
+                "`{id}` must pass the outer gate; its runtime is the authority"
+            );
         }
     }
 
