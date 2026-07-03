@@ -16,9 +16,21 @@ else is defence in depth.
 | Tool id | Purpose | Side effect | Default policy |
 |---|---|---|---|
 | `net.fetch` | GET one allowlisted URL → bounded, paginated markdown/text | side-effecting | opt-in (needs a `NetPolicy` + the network capability) |
+| `net.resolve` | Resolve one allowlisted URL through the SSRF guard **without fetching** → canonical host, port, validated (public) addresses | read-only | opt-in; registered alongside `net.fetch` |
 
 `net.fetch` is **not** in any default tool set: it is registered explicitly
 against a host `NetPolicy`. With no allowlist it fetches nothing.
+
+`net.resolve` is a **pre-flight**: the same admission as a fetch (scheme + host
++ port allowlist → DNS → private/metadata block → pin) but it stops before
+connecting, so an agent can check reachability and see where an allowlisted host
+resolves. A blocked/non-allowlisted target errors exactly as a fetch would and —
+like a fetch — never echoes a blocked address (no reconnaissance oracle); a
+success is proof the host is allowlisted and resolves entirely to public
+addresses, so surfacing them is safe. It defaults `Ask` like every other
+outbound net tool — a resolve still emits a real DNS query to a (possibly
+attacker-encoded) subdomain, so it is approval-gated on top of the allowlist,
+and it counts against `NetPolicy::max_requests`.
 
 > **Also built:** the subprocess **egress proxy** ([`EgressProxy`](#egress-proxy-for-subprocesses)) — its
 > CONNECT-authorization core is done; wiring it into the process sandbox is the

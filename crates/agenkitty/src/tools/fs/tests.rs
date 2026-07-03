@@ -287,6 +287,7 @@ fn fs_copy_move_and_remove_mutate_inside_root() {
         .run(FsCopyInput {
             source: "source.txt".to_string(),
             destination: "copy.txt".to_string(),
+            recursive: None,
         })
         .unwrap();
     FsMoveTool::new(dir.path())
@@ -300,12 +301,159 @@ fn fs_copy_move_and_remove_mutate_inside_root() {
         .unwrap()
         .run(FsRemoveInput {
             path: "moved.txt".to_string(),
+            recursive: None,
         })
         .unwrap();
 
     assert!(dir.path().join("source.txt").exists());
     assert!(!dir.path().join("copy.txt").exists());
     assert!(!dir.path().join("moved.txt").exists());
+}
+
+#[test]
+fn fs_copy_directory_requires_recursive_then_copies_the_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+    fs::write(dir.path().join("src/a.txt"), "aaa").unwrap();
+    fs::write(dir.path().join("src/nested/b.txt"), "bbbb").unwrap();
+    let tool = FsCopyTool::new(dir.path()).unwrap();
+
+    // A directory source without `recursive` is refused.
+    let err = tool
+        .run(FsCopyInput {
+            source: "src".to_string(),
+            destination: "dst".to_string(),
+            recursive: None,
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), "validation");
+    assert!(!dir.path().join("dst").exists());
+
+    // With `recursive: true` the whole tree is copied (bytes = total content).
+    let out = tool
+        .run(FsCopyInput {
+            source: "src".to_string(),
+            destination: "dst".to_string(),
+            recursive: Some(true),
+        })
+        .unwrap();
+    assert_eq!(out.bytes, Some(7)); // "aaa" + "bbbb"
+    assert_eq!(
+        fs::read_to_string(dir.path().join("dst/a.txt")).unwrap(),
+        "aaa"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("dst/nested/b.txt")).unwrap(),
+        "bbbb"
+    );
+}
+
+#[test]
+fn fs_copy_recursive_refuses_a_secret_classified_entry() {
+    // Regression: a recursive copy must not relocate a secret-classified file
+    // (e.g. .docker/config.json) out of its classified path, where fs.read of
+    // the copy would then serve it.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".docker")).unwrap();
+    fs::write(dir.path().join(".docker/config.json"), "registry-creds").unwrap();
+    let err = FsCopyTool::new(dir.path())
+        .unwrap()
+        .run(FsCopyInput {
+            source: ".docker".to_string(),
+            destination: "leak".to_string(),
+            recursive: Some(true),
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), "tool_policy");
+    // The secret was not relocated, and the partial copy was cleaned up.
+    assert!(!dir.path().join("leak/config.json").exists());
+    assert!(!dir.path().join("leak").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn fs_copy_recursive_refuses_a_special_file_in_the_tree() {
+    // A fifo/socket/device would make fs::copy block or misbehave; copy_tree
+    // must refuse rather than hang. Create a fifo via `mkfifo` (skip if absent).
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    let fifo = dir.path().join("src/pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !made || !fifo.exists() {
+        eprintln!("SKIP fs_copy_recursive_refuses_a_special_file_in_the_tree: mkfifo unavailable");
+        return;
+    }
+    let err = FsCopyTool::new(dir.path())
+        .unwrap()
+        .run(FsCopyInput {
+            source: "src".to_string(),
+            destination: "dst".to_string(),
+            recursive: Some(true),
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), "validation");
+}
+
+#[test]
+fn fs_copy_refuses_a_destination_inside_the_source_tree() {
+    // Regression: a recursive copy into its own subtree (src -> src/copy) would
+    // self-recurse forever once copy_tree created the destination.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/a.txt"), "a").unwrap();
+    let tool = FsCopyTool::new(dir.path()).unwrap();
+
+    let err = tool
+        .run(FsCopyInput {
+            source: "src".to_string(),
+            destination: "src/copy".to_string(),
+            recursive: Some(true),
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), "validation");
+    assert!(!dir.path().join("src/copy").exists());
+
+    // A sibling destination (not under source) is still allowed.
+    tool.run(FsCopyInput {
+        source: "src".to_string(),
+        destination: "backup".to_string(),
+        recursive: Some(true),
+    })
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.path().join("backup/a.txt")).unwrap(),
+        "a"
+    );
+}
+
+#[test]
+fn fs_remove_directory_needs_recursive_when_non_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("tree/inner")).unwrap();
+    fs::write(dir.path().join("tree/inner/f.txt"), "x").unwrap();
+    let tool = FsRemoveTool::new(dir.path()).unwrap();
+
+    // A non-empty directory without `recursive` is refused.
+    let err = tool
+        .run(FsRemoveInput {
+            path: "tree".to_string(),
+            recursive: None,
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), "validation");
+    assert!(dir.path().join("tree/inner/f.txt").exists());
+
+    // With `recursive: true` the tree is removed.
+    tool.run(FsRemoveInput {
+        path: "tree".to_string(),
+        recursive: Some(true),
+    })
+    .unwrap();
+    assert!(!dir.path().join("tree").exists());
 }
 
 #[test]
@@ -356,6 +504,7 @@ fn fs_remove_removes_symlink_itself() {
         .unwrap()
         .run(FsRemoveInput {
             path: "link.txt".to_string(),
+            recursive: None,
         })
         .unwrap();
 

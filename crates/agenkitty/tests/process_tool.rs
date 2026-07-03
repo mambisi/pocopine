@@ -446,14 +446,17 @@ fn spawn_fake_uds_proxy(
     marker: &'static str,
     seen: Arc<std::sync::Mutex<Option<String>>>,
 ) -> std::thread::JoinHandle<()> {
+    use std::io::{Read, Write};
+    // Bind SYNCHRONOUSLY before returning, so the socket file exists by the time
+    // the caller builds `bwrap … --bind <uds> <uds>` — otherwise a scheduling
+    // delay could make bwrap bind-mount a not-yet-created path and abort.
+    let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind fake proxy uds");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
     std::thread::spawn(move || {
-        use std::io::{Read, Write};
-        let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) else {
-            return;
-        };
         // Poll-accept with a deadline so a child that never connects can't hang
         // the test — the thread returns and the marker assertion fails cleanly.
-        listener.set_nonblocking(true).ok();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut conn = loop {
             match listener.accept() {

@@ -300,7 +300,8 @@ impl SessionMetadataStore for LocalJsonlSessionMetadataStore {
                 let Some(session) = session else {
                     return Vec::new();
                 };
-                let limit = filter.limit.max(1);
+                // `limit == 0` means "no cap" — matching InMemorySessionMetadataStore.
+                // (A caller like session.search relies on this to scan every event.)
                 let mut events = Vec::new();
                 for event in &session.events {
                     if filter.after_seq.is_some_and(|after| event.seq <= after) {
@@ -316,7 +317,7 @@ impl SessionMetadataStore for LocalJsonlSessionMetadataStore {
                         continue;
                     }
                     events.push(event.clone());
-                    if events.len() >= limit {
+                    if filter.limit > 0 && events.len() >= filter.limit {
                         break;
                     }
                 }

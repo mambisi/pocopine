@@ -22,9 +22,10 @@ use super::{
     ARTIFACT_DELETE_TOOL_ID, ARTIFACT_LINK_TOOL_ID, ARTIFACT_LIST_TOOL_ID, ARTIFACT_READ_TOOL_ID,
     ARTIFACT_WRITE_TOOL_ID, MEMORY_FORGET_TOOL_ID, MEMORY_READ_TOOL_ID, MEMORY_SEARCH_TOOL_ID,
     MEMORY_UPDATE_TOOL_ID, MEMORY_WRITE_TOOL_ID, NET_DOWNLOAD_TOOL_ID, NET_FETCH_TOOL_ID,
-    PATCH_APPLY_TOOL_ID, PATCH_PREVIEW_TOOL_ID, SECRET_LIST_TOOL_ID, SECRET_REQUEST_TOOL_ID,
-    SECRET_REVOKE_TOOL_ID, SECRET_USE_TOOL_ID, SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID,
-    SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID, SESSION_SUMMARY_TOOL_ID,
+    NET_RESOLVE_TOOL_ID, PATCH_APPLY_TOOL_ID, PATCH_PREVIEW_TOOL_ID, SECRET_LIST_TOOL_ID,
+    SECRET_REQUEST_TOOL_ID, SECRET_REVOKE_TOOL_ID, SECRET_USE_TOOL_ID, SESSION_CHECKPOINT_TOOL_ID,
+    SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID, SESSION_SEARCH_TOOL_ID,
+    SESSION_SUMMARY_TOOL_ID,
 };
 
 fn fs_read(id: &str, description: &str) -> ToolSpec {
@@ -91,6 +92,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         // session — bounded, redacted session metadata.
         read(SESSION_INFO_TOOL_ID, "Describe the current session"),
         read(SESSION_EVENTS_TOOL_ID, "List session events"),
+        read(SESSION_SEARCH_TOOL_ID, "Search session events"),
         write_allow(SESSION_NOTE_TOOL_ID, "Record a session note"),
         write_allow(SESSION_SUMMARY_TOOL_ID, "Record a session summary"),
         write_allow(SESSION_CHECKPOINT_TOOL_ID, "Record a session checkpoint"),
@@ -143,6 +145,18 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ),
         // network — opt-in; NetPolicy + the SSRF guard stay the inner gate.
         ToolSpec::built_in(NET_FETCH_TOOL_ID, "Fetch an allowlisted URL")
+            .with_class(ToolClass::Network)
+            .with_mode(ToolMode::Ask)
+            .with_capabilities(CapabilitySet {
+                network: true,
+                ..CapabilitySet::default()
+            }),
+        // net.resolve fetches no body, but it still emits a real outbound DNS
+        // query to an allowlisted host's (possibly attacker-encoded) subdomain —
+        // a covert channel invisible to the operator if it ran silently. So it
+        // defaults `Ask` like every other outbound net tool (defense in depth on
+        // top of the allowlist); the request budget bounds it further.
+        ToolSpec::built_in(NET_RESOLVE_TOOL_ID, "Resolve an allowlisted URL")
             .with_class(ToolClass::Network)
             .with_mode(ToolMode::Ask)
             .with_capabilities(CapabilitySet {
@@ -394,6 +408,7 @@ mod tests {
             assert!(
                 is_known_tool_id(id)
                     || id == NET_FETCH_TOOL_ID
+                    || id == NET_RESOLVE_TOOL_ID
                     || id == NET_DOWNLOAD_TOOL_ID
                     || id.starts_with("mcp."),
                 "spec `{id}` is neither a known tool id nor a documented opt-in"

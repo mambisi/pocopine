@@ -156,6 +156,19 @@ Returns a bounded event window for the active session. It supports:
 
 Output is redacted and byte-bounded.
 
+`session.search`
+
+Full-text search across the active session's events (messages, tool calls, and
+note/summary/checkpoint creations, which are all recorded as events). Inputs:
+
+- `query` (case-insensitive; matches message, tool id, or JSON payload)
+- optional event-kind filters
+- explicit limit (most-recent matches first)
+
+Output is the same redacted, byte-bounded event view as `session.events`, plus
+the total `match_count`. It is a default session tool (alongside `session.info`
+and `session.events`).
+
 `session.note`
 
 Writes a session-scoped note. Inputs require:
