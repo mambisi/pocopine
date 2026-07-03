@@ -195,12 +195,19 @@ impl SecretRuntime {
                 let Some(approver) = &self.approver else {
                     return Err(AgenkitError::tool_policy(no_approver_reason(&reason)));
                 };
+                // The detail carries every security-relevant field the operator
+                // is authorizing — including the lifetime knobs (`ttl_ms`,
+                // `inheritable`) the model chose, which are applied verbatim
+                // after approval. Omitting them would let an operator approve a
+                // max-TTL or inheritable grant without seeing it.
                 let request = ApprovalRequest::new(SECRET_REQUEST_TOOL_ID, reason.clone())
                     .with_detail(serde_json::json!({
                         "secret_ref": input.secret_ref,
                         "purpose": input.purpose,
                         "target_tool": input.target_tool,
                         "destination": input.destination,
+                        "ttl_ms": input.ttl_ms,
+                        "inheritable": input.inheritable.unwrap_or(false),
                     }));
                 match approver.approve(request).await {
                     ApprovalDecision::Approved => {}
@@ -628,6 +635,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(grant.secret_ref, "github-token");
+    }
+
+    #[tokio::test]
+    async fn approval_detail_carries_every_security_relevant_field() {
+        use crate::policy::{ApprovalDecision, ApprovalRequest, ToolApprover};
+        use pocopine_agenkit::server::BoxFuture;
+
+        // A recording approver captures the detail the operator would see.
+        struct Recorder(std::sync::Mutex<Option<ApprovalRequest>>);
+        impl ToolApprover for Recorder {
+            fn approve<'a>(&'a self, request: ApprovalRequest) -> BoxFuture<'a, ApprovalDecision> {
+                *self.0.lock().unwrap() = Some(request);
+                Box::pin(async { ApprovalDecision::Approved })
+            }
+        }
+        let recorder = Arc::new(Recorder(std::sync::Mutex::new(None)));
+        let runtime = SecretRuntime::new(Arc::new(
+            InMemorySecretResolver::new().insert(
+                SecretMetadata::new("github-token", "GitHub token", SecretScope::User)
+                    .with_purposes(["repo-read"])
+                    .with_target_tools(["process.run"])
+                    .with_destinations(["GITHUB_TOKEN"]),
+                SecretString::new("ghp_secret"),
+            ),
+        ))
+        .with_approver(recorder.clone());
+
+        let input = SecretRequestInput {
+            ttl_ms: Some(3_600_000),
+            inheritable: Some(true),
+            ..request()
+        };
+        runtime
+            .request(input, &Principal::anonymous())
+            .await
+            .unwrap();
+
+        let seen = recorder.0.lock().unwrap().clone().expect("approver ran");
+        let detail = seen.detail.expect("detail present");
+        // The lifetime knobs the model chose must be visible to the operator.
+        assert_eq!(detail["ttl_ms"], 3_600_000);
+        assert_eq!(detail["inheritable"], true);
+        assert_eq!(detail["target_tool"], "process.run");
+        assert_eq!(detail["destination"], "GITHUB_TOKEN");
     }
 
     #[tokio::test]

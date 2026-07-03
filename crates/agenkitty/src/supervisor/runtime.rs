@@ -18,10 +18,12 @@ use crate::policy::{ToolApprover, no_approver_reason};
 use crate::project::load_project_config;
 use crate::tools::session::{redact_json_value, redact_text_to_limit};
 use crate::tools::{
-    CurrentMemoryContext, CurrentSessionContext, LocalJsonlMemoryStore,
-    LocalJsonlSessionMetadataStore, MemoryRuntime, SessionRuntime, builtin_tool_specs,
-    current_time_ms, known_memory_tool_ids, known_session_tool_ids, register_memory_tools,
-    register_session_tools, register_tools_with_runtimes, session_event_from_framework,
+    ArtifactRuntime, CurrentArtifactContext, CurrentMemoryContext, CurrentSessionContext,
+    InMemoryArtifactStore, LocalArtifactStore, LocalJsonlMemoryStore,
+    LocalJsonlSessionMetadataStore, MemoryRuntime, SecretRuntime, SessionRuntime,
+    builtin_tool_specs, current_time_ms, known_artifact_tool_ids, known_memory_tool_ids,
+    known_session_tool_ids, register_memory_tools, register_session_tools,
+    register_tools_with_all_runtimes_and_artifacts, session_event_from_framework,
 };
 use agenkitty_core::config::PolicyConfigSection;
 use agenkitty_core::{
@@ -60,6 +62,7 @@ pub struct FrameworkRunner {
     agenkit: Agenkit,
     session_runtime: Arc<SessionRuntime>,
     memory_runtime: Arc<MemoryRuntime>,
+    artifact_runtime: Arc<ArtifactRuntime>,
     /// Stable project id for this runner, derived from the canonical project
     /// root. `None` for project-less runners (mock / bare provider). Used to seed
     /// `SessionIdentity::project_id` on a fresh run so project/agent memory has a
@@ -122,6 +125,7 @@ impl FrameworkRunner {
             agenkit,
             session_runtime,
             memory_runtime,
+            artifact_runtime: Arc::new(ArtifactRuntime::in_memory()),
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
             policy: default_policy(),
@@ -201,6 +205,7 @@ impl FrameworkRunner {
             agenkit,
             session_runtime,
             memory_runtime,
+            artifact_runtime: Arc::new(ArtifactRuntime::in_memory()),
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
             policy: default_policy(),
@@ -248,17 +253,23 @@ impl FrameworkRunner {
         ));
         let session_runtime = Arc::new(SessionRuntime::in_memory());
         let memory_runtime = Arc::new(MemoryRuntime::in_memory());
-        let agenkit = register_tools_with_runtimes(
+        let artifact_runtime = Arc::new(ArtifactRuntime::new(Arc::new(
+            InMemoryArtifactStore::new().with_workspace_root(root.as_ref()),
+        )));
+        let agenkit = register_tools_with_all_runtimes_and_artifacts(
             builder,
             root,
             session_runtime.clone(),
             memory_runtime.clone(),
+            Arc::new(SecretRuntime::empty()),
+            artifact_runtime.clone(),
         )?
         .build()?;
         Ok(Self {
             agenkit,
             session_runtime,
             memory_runtime,
+            artifact_runtime,
             project_id,
             transcript_store: SessionStoreKind::InMemory,
             policy,
@@ -288,17 +299,26 @@ impl FrameworkRunner {
         let memory_runtime = Arc::new(MemoryRuntime::new(Arc::new(LocalJsonlMemoryStore::open(
             memory_root,
         )?)));
-        let agenkit = register_tools_with_runtimes(
+        // Durable artifacts live beside the session data; linked artifacts
+        // resolve against the project workspace.
+        let artifact_runtime = Arc::new(ArtifactRuntime::new(Arc::new(
+            LocalArtifactStore::open(session_root.join("artifacts"))?
+                .with_workspace_root(root.as_ref()),
+        )));
+        let agenkit = register_tools_with_all_runtimes_and_artifacts(
             builder.thread_store(thread_store),
             root,
             session_runtime.clone(),
             memory_runtime.clone(),
+            Arc::new(SecretRuntime::empty()),
+            artifact_runtime.clone(),
         )?
         .build()?;
         Ok(Self {
             agenkit,
             session_runtime,
             memory_runtime,
+            artifact_runtime,
             project_id,
             transcript_store: SessionStoreKind::LocalJsonl,
             policy,
@@ -307,8 +327,10 @@ impl FrameworkRunner {
     }
 
     /// Install the host approver for `Ask` policy decisions. Without one,
-    /// every Ask fails closed (headless semantics).
+    /// every Ask fails closed (headless semantics). The artifact runtime
+    /// shares the same approver (project-scoped writes ask through it).
     pub fn with_approver(mut self, approver: Arc<dyn ToolApprover>) -> Self {
+        self.artifact_runtime.set_approver(approver.clone());
         self.approver = Some(approver);
         self
     }
@@ -328,10 +350,14 @@ impl FrameworkRunner {
         let resume_id = options.thread_id.map(AgentThreadId::new);
         let current_session: Arc<Mutex<Option<CurrentSessionContext>>> = Arc::new(Mutex::new(None));
         let current_memory: Arc<Mutex<Option<CurrentMemoryContext>>> = Arc::new(Mutex::new(None));
+        let current_artifact: Arc<Mutex<Option<CurrentArtifactContext>>> =
+            Arc::new(Mutex::new(None));
         let session_runtime_for_hook = self.session_runtime.clone();
         let memory_runtime_for_hook = self.memory_runtime.clone();
+        let artifact_runtime_for_hook = self.artifact_runtime.clone();
         let current_session_for_hook = current_session.clone();
         let current_memory_for_hook = current_memory.clone();
+        let current_artifact_for_hook = current_artifact.clone();
         let policy_for_hook = self.policy.clone();
         let approver_for_hook = self.approver.clone();
         let session = AgentSession::builder(&self.agenkit)
@@ -343,8 +369,10 @@ impl FrameworkRunner {
                 let approver = approver_for_hook.clone();
                 let session_runtime = session_runtime_for_hook.clone();
                 let memory_runtime = memory_runtime_for_hook.clone();
+                let artifact_runtime = artifact_runtime_for_hook.clone();
                 let current_session = current_session_for_hook.clone();
                 let current_memory = current_memory_for_hook.clone();
+                let current_artifact = current_artifact_for_hook.clone();
                 Box::pin(async move {
                     let tool = call.tool_id.as_str();
                     // The central policy gate (F1) runs first: a denied call
@@ -402,6 +430,18 @@ impl FrameworkRunner {
                             Err(reason) => ToolDecision::Block { reason },
                         };
                     }
+                    if known_artifact_tool_ids().contains(&tool) {
+                        let context = current_artifact.lock().ok().and_then(|guard| guard.clone());
+                        let Some(context) = context else {
+                            return ToolDecision::Block {
+                                reason: "artifact context is not available".to_string(),
+                            };
+                        };
+                        return match artifact_runtime.inject_context_args(args, context) {
+                            Ok(args) => ToolDecision::ReplaceArgs { args },
+                            Err(reason) => ToolDecision::Block { reason },
+                        };
+                    }
                     match rewritten {
                         Some(args) => ToolDecision::ReplaceArgs { args },
                         None => ToolDecision::Proceed,
@@ -453,6 +493,12 @@ impl FrameworkRunner {
                 thread_id: Some(thread_id.clone()),
             });
         }
+        if let Ok(mut current) = current_artifact.lock() {
+            *current = Some(CurrentArtifactContext {
+                project_id: report_identity.project_id.clone().unwrap_or_default(),
+                thread_id: Some(thread_id.clone()),
+            });
+        }
 
         let started = FrameworkEvent::started(format!("started session {thread_id}"));
         self.session_runtime
@@ -479,6 +525,9 @@ impl FrameworkRunner {
             *current = None;
         }
         if let Ok(mut current) = current_memory.lock() {
+            *current = None;
+        }
+        if let Ok(mut current) = current_artifact.lock() {
             *current = None;
         }
         Ok(AgentRunReport {
@@ -834,6 +883,59 @@ mod tests {
                 .iter()
                 .any(|event| event.tool.as_deref() == Some("fs.read"))
         );
+    }
+
+    #[tokio::test]
+    async fn mock_runner_executes_artifact_write_tool() {
+        // artifact.write is Write-class / Allow by default (session scope), so
+        // it dispatches without prompts and the context token round-trips.
+        let dir = tempfile::tempdir().unwrap();
+        let provider = MockProvider::new("local")
+            .on_prompt_tool(
+                "save report",
+                "artifact.write",
+                serde_json::json!({
+                    "name": "report.md",
+                    "content": "# Findings",
+                    "scope": "session"
+                }),
+            )
+            .default_text("done");
+        let builder = Agenkit::builder()
+            .provider(provider)
+            .default_model(ModelRef::new("local/default"));
+        let runner = FrameworkRunner::from_builder_with_repo_tools(builder, dir.path()).unwrap();
+
+        let report = runner
+            .run_prompt(AgentRunOptions {
+                agent_id: "test".to_string(),
+                model: "local/default".to_string(),
+                system: "Use tools when needed.".to_string(),
+                prompt: "save report".to_string(),
+                thread_id: None,
+                max_steps_per_turn: 4,
+                tool_ids: vec!["artifact.write".to_string()],
+            })
+            .await
+            .unwrap();
+
+        assert!(report.events.iter().any(|event| {
+            matches!(event.kind, crate::events::FrameworkEventKind::ToolCompleted)
+                && event.tool.as_deref() == Some("artifact.write")
+        }));
+        // The artifact landed in the runner's store under the session namespace.
+        let accessible = vec![(
+            crate::tools::ArtifactScope::Session,
+            report.thread_id.clone(),
+        )];
+        let stored = runner
+            .artifact_runtime
+            .store()
+            .list(&accessible, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].name, "report.md");
     }
 
     #[tokio::test]

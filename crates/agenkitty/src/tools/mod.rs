@@ -1,5 +1,6 @@
 //! Host adapters for Agenkitty tool contracts.
 
+pub mod artifacts;
 pub mod fs;
 #[cfg(unix)]
 pub mod mcp;
@@ -19,6 +20,12 @@ use pocopine_agenkit::server::AgenkitBuilder;
 use pocopine_agenkit_core::AgenkitResult;
 
 pub use agenkitty_core::tools::*;
+pub use artifacts::{
+    ARTIFACT_DELETE_TOOL_ID, ARTIFACT_LINK_TOOL_ID, ARTIFACT_LIST_TOOL_ID, ARTIFACT_READ_TOOL_ID,
+    ARTIFACT_WRITE_TOOL_ID, ArtifactRuntime, ArtifactScope, CurrentArtifactContext,
+    InMemoryArtifactStore, LocalArtifactStore, known_artifact_tool_ids, register_artifact_tools,
+    resolve_artifact_tool_ids,
+};
 pub use fs::{
     FS_APPEND_TOOL_ID, FS_COPY_TOOL_ID, FS_EXISTS_TOOL_ID, FS_LIST_TOOL_ID, FS_MKDIR_TOOL_ID,
     FS_MOVE_TOOL_ID, FS_READ_TOOL_ID, FS_REMOVE_TOOL_ID, FS_SEARCH_TOOL_ID, FS_STAT_TOOL_ID,
@@ -141,7 +148,9 @@ pub fn register_tools_with_runtimes(
 }
 
 /// Register the repo tools with caller-owned session, memory, and secret
-/// runtimes.
+/// runtimes (the artifact runtime defaults to in-memory with the project root
+/// as its link workspace; pass a caller-owned one via
+/// [`register_tools_with_all_runtimes_and_artifacts`]).
 pub fn register_tools_with_all_runtimes(
     builder: AgenkitBuilder,
     root: impl AsRef<Path>,
@@ -149,12 +158,36 @@ pub fn register_tools_with_all_runtimes(
     memory_runtime: Arc<MemoryRuntime>,
     secret_runtime: Arc<SecretRuntime>,
 ) -> AgenkitResult<AgenkitBuilder> {
+    let artifact_runtime = Arc::new(ArtifactRuntime::new(Arc::new(
+        InMemoryArtifactStore::new().with_workspace_root(root.as_ref()),
+    )));
+    register_tools_with_all_runtimes_and_artifacts(
+        builder,
+        root,
+        session_runtime,
+        memory_runtime,
+        secret_runtime,
+        artifact_runtime,
+    )
+}
+
+/// Register the repo tools with caller-owned session, memory, secret, and
+/// artifact runtimes.
+pub fn register_tools_with_all_runtimes_and_artifacts(
+    builder: AgenkitBuilder,
+    root: impl AsRef<Path>,
+    session_runtime: Arc<SessionRuntime>,
+    memory_runtime: Arc<MemoryRuntime>,
+    secret_runtime: Arc<SecretRuntime>,
+    artifact_runtime: Arc<ArtifactRuntime>,
+) -> AgenkitResult<AgenkitBuilder> {
     let root = root.as_ref();
     let builder = register_secret_tools(builder, secret_runtime.clone())?;
     let builder = register_fs_tools(builder, root)?;
     let builder = register_patch_tools(builder, root)?;
     let builder = register_session_tools(builder, session_runtime);
     let builder = register_memory_tools(builder, memory_runtime);
+    let builder = register_artifact_tools(builder, artifact_runtime);
     #[cfg(unix)]
     let builder = register_process_tools_with(
         builder,
@@ -209,6 +242,7 @@ fn is_known_tool_id(id: &str) -> bool {
     resolve_fs_tool_ids(&[id.to_string()]).is_ok()
         || known_session_tool_ids().contains(&id)
         || known_memory_tool_ids().contains(&id)
+        || known_artifact_tool_ids().contains(&id)
         || known_patch_tool_ids().contains(&id)
         || known_secret_tool_ids().contains(&id)
         || is_known_process_tool_id(id)

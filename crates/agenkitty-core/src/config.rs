@@ -18,8 +18,11 @@ pub struct AgenkittyConfig {
     pub policy: PolicyConfigSection,
 }
 
+// `default`: a partial `[agent]` table (e.g. only `model`) fills its other
+// fields from `Default` rather than failing on a missing `id`/`model`.
+// `deny_unknown_fields` still rejects typos — the two compose.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct AgentConfigSection {
     pub id: String,
     pub model: String,
@@ -43,8 +46,10 @@ impl Default for AgentConfigSection {
     }
 }
 
+// See `AgentConfigSection`: a partial `[workspace]` table fills the rest from
+// `Default`; unknown keys are still rejected.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct WorkspaceConfigSection {
     pub root: PathBuf,
     #[serde(default)]
@@ -127,5 +132,22 @@ mod tests {
         // A typo must never silently fail open to the default policy.
         assert!(toml::from_str::<PolicyConfigSection>("write_mdoe = \"deny\"").is_err());
         assert!(toml::from_str::<AgenkittyConfig>("[polciy]\nwrite_mode = \"deny\"").is_err());
+    }
+
+    #[test]
+    fn partial_sections_fill_the_rest_from_defaults() {
+        // A partial [agent]/[workspace] table must not fail on the fields it
+        // omits — they fall back to Default while unknown keys still error.
+        let config: AgenkittyConfig = toml::from_str(
+            "[agent]\nmodel = \"anthropic/claude\"\n\n[workspace]\nwritable_roots = [\"src\"]\n",
+        )
+        .unwrap();
+        assert_eq!(config.agent.model, "anthropic/claude");
+        assert_eq!(config.agent.id, "agenkitty"); // defaulted
+        assert_eq!(config.workspace.writable_roots, vec![PathBuf::from("src")]);
+        assert_eq!(config.workspace.root, PathBuf::from(".")); // defaulted
+
+        // Unknown keys inside a partial section still hard-error.
+        assert!(toml::from_str::<AgenkittyConfig>("[agent]\nmdoel = \"x\"\n").is_err());
     }
 }
