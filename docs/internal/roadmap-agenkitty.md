@@ -34,7 +34,7 @@ and per-tool feature tails are the whole backlog.
 | **M3** ✅ | **Unblocked integrations** | **Done:** `net.download` (guarded engine extracted to `http::GuardedHttp`, shared verbatim by `net.fetch`; body stored as a content-hashed artifact, cap clamped to the artifact limit); session↔artifact provenance round-trip (artifact records its `Thread` source ref; runner `finalize_run` links session artifacts into session metadata, deduped/resume-safe). **Already satisfied:** patch→session refs (every tool call emits a `ToolCall` source ref via M1's call-id plumbing). **Deferred (own unit):** session-close process reaping — needs the process sandbox to become session-aware (thread key + `reap_owned_by` + table exposure); reaping by principal would kill other sessions' processes. Promotion policy recorded as `None`. | A download lands as a citable artifact honoring `NetPolicy` + byte caps; a session-scoped artifact is discoverable via `SessionExport.artifact_links`; a resume does not double-link. |
 | **M4** ✅ | **Shared secret classifier** (F3) | **Done:** the content classifier is `agenkitty_core::looks_like_secret` (pure/wasm-safe). It collapsed **three** forks — memory's `looks_like_secret`, the session redactor's `text_needs_full_redaction`, and the `contains_sensitive_assignment`/`is_assignment_boundary` helpers duplicated in both — into one, with the union (session-superset) key list, and killed artifacts' `crate::tools::memory` fork. memory + artifacts **reject** on it; the session redactor **redacts** with it, which covers fs / patch / process / network **transitively** (their tool-result output is redacted through the session redactor into the event log — never corrupted at the source, since those tools legitimately return workspace content). Path-based secret-file policy stays a separate fs concern. | One classifier crate-path, zero per-tool forks; memory/session/artifacts tests green; a supervisor test proves a `process.run` secret in tool output is redacted in the persisted event (the fs/patch/process transitive coverage). |
 | **M5** ✅ | **bwrap namespace e2e** (F4) | **Done:** `tests/process_tool.rs::egress_shim_is_the_only_route_out_of_the_namespace` validates Tier-2 egress end-to-end on a real bwrap host — direct egress dead (`--unshare-net`), proxied egress round-trips through the shim → bound UDS → proxy. This **caught a real production bug**: `bwrap --tmpfs /var/run` (a symlink to `/run` on modern Linux) aborted the entire egress sandbox, so it never started; the mask now skips symlinked/missing dirs (safe — the target `/run` is masked in its own right), with a unit-test invariant that every `--tmpfs` target is a real dir. M0 folded in: the bwrap/python3-gated tests skip **loudly** (`SKIP <test>: …`) instead of a silent vacuous pass. | Direct egress fails + proxied egress succeeds, end to end (not argv construction); skips are visible. |
-| **M6** | **Per-tool tails** | Priority-ordered per-family features (table below): MCP persistent pin store / admission-inside-lock / binary hash pin / HTTP fixture; network anti-exfil / `net.resolve` / cache / robots; memory SQLite FTS / compaction / contradiction-repair / multi-proc; session search / fork / rewind-as-branch; fs recursive copy+remove. | Each tail item gates independently on its own tests; no tail blocks another milestone. |
+| **M6** ◑ | **Per-tool tails** | Priority-ordered per-family features (table below). **Shipped:** fs recursive copy/remove, `net.resolve`, `session.search`. **Deferred with rationale** (design-gated or convention-conflicting, not effort-gated): memory log-compaction (needs a retention policy), memory SQLite-FTS (no bundled DB), `session.fork`/rewind (UX-gated), network anti-exfil/cache/robots (research), MCP persistent pins + hardening (dedicated security cycle). See the M6 detail. | Each tail item gates independently on its own tests; no tail blocks another milestone. |
 
 **Sequencing.** `M0 → M1 → M2 → M3 → M4 → M6`, with **M5 host-dependent and
 parallel to everything**. M1 is the keystone: the Ask path is the
@@ -182,6 +182,42 @@ All small once M2 lands; each is an existing prose deferral:
 | **memory** | SQLite FTS store adapter → JSONL log compaction → contradiction-repair policy (the `contradicts` relation exists; the repair flow doesn't) → multi-process writer coordination |
 | **session** | search over transcript/events → model-facing `session.fork` (after fork UX is proven host-side) → `session.rewind` as *new branch from checkpoint*, never in-place mutation |
 | **fs** | recursive `fs.copy` + `fs.remove` behind an explicit recursive/symlink policy |
+
+**Shipped (the cleanly-buildable, convention-compatible tails):**
+
+- ✅ **fs recursive `fs.copy` + `fs.remove`** — opt-in `recursive: bool`;
+  symlink-safe tree copy (recreates links, never follows out of tree),
+  `remove_dir_all` for non-empty removal, both confined under the root.
+- ✅ **`net.resolve`** — the SSRF-guarded pre-flight (same admission as a fetch,
+  stops before connecting); never echoes a blocked IP; `Allow` within the
+  Network class.
+- ✅ **`session.search`** — full-text search across the redacted event stream
+  (messages/tool ids/payloads, which include note/summary/checkpoint events);
+  a default session tool.
+
+**Deferred with rationale (each gated on a decision or risk, not effort):**
+
+- **memory JSONL log compaction** — *not a mechanical rewrite.* `MemoryState`
+  retains every revision, so a behaviour-preserving rewrite reproduces the log
+  verbatim (no shrinkage). Real compaction needs a **retention policy**
+  decision — how many versions to keep, whether to drop the (already
+  unreadable) bodies of tombstoned entries — which changes observable
+  point-in-time-read behaviour. A design call, not a tail.
+- **memory SQLite-FTS adapter** — conflicts with the standing "ship a
+  DB-agnostic trait + in-memory impl, no bundled store, no `sqlx`/`rusqlite`
+  in-crate" rule. Belongs in a host adapter behind `MemoryStore`, not the crate.
+- **memory contradiction-repair / multi-proc** — policy/UX design (auto-repair
+  vs surface) and cross-process coordination; both design-gated.
+- **`session.fork` / `session.rewind`** — explicitly UX-gated in the row above
+  ("after fork UX is proven host-side").
+- **network anti-exfiltration** — research (URL-in-context provenance);
+  **cache / robots.txt** are lower-value and deferred behind it.
+- **MCP project-persistent pin store** (+ admission-inside-lock, binary hash
+  pin, HTTP/SSE fixture) — persisting TOFU pins/approvals across sessions is a
+  security-critical change to the rug-pull-detection core with real design
+  decisions (persist-approvals semantics, the pin-file tamper trust model,
+  load-time validation). It deserves a **dedicated design + review cycle**, not
+  a rushed add; the in-memory session-scoped store (OQ4) stands until then.
 
 Cross-family stragglers, placed where their dependency lands: memory ↔
 agenkit-checkpoint cross-refs (after agenkit exposes checkpoint ids);

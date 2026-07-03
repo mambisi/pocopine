@@ -13,6 +13,7 @@ pub mod http;
 pub mod policy;
 pub mod proxy;
 pub mod registry;
+pub mod resolve;
 pub mod ssrf;
 
 pub use download::{NET_DOWNLOAD_TOOL_ID, NetDownloadInput, NetDownloadOutput, NetDownloadTool};
@@ -25,6 +26,7 @@ pub use registry::{
     known_network_tool_ids, register_network_tools, register_network_tools_with_artifacts,
     register_network_tools_with_secrets,
 };
+pub use resolve::{NET_RESOLVE_TOOL_ID, NetResolveInput, NetResolveOutput, NetResolveTool};
 pub use ssrf::{
     MAX_URL_LEN, Resolve, UrlTarget, ValidatedTarget, guard, ip_is_blocked, normalize_host,
     resolve_and_pin, validate_url,

@@ -52,7 +52,7 @@ impl SessionEventsTool {
                 },
             )
             .await?;
-        let (events, truncated) = bounded_event_views(events);
+        let (events, truncated) = bounded_event_views(events, MAX_EVENT_OUTPUT_BYTES);
         let next_after_seq = events.last().map(|event| event.seq);
         Ok(SessionEventsOutput {
             thread_id: context.identity.thread_id,
@@ -176,13 +176,19 @@ impl From<SessionEvent> for SessionEventView {
     }
 }
 
-fn bounded_event_views(events: Vec<SessionEvent>) -> (Vec<SessionEventView>, bool) {
+/// Render events to views, stopping once the serialized output would exceed
+/// `max_bytes` (always keeping at least one). Shared by `session.events` and
+/// `session.search`.
+pub(super) fn bounded_event_views(
+    events: Vec<SessionEvent>,
+    max_bytes: usize,
+) -> (Vec<SessionEventView>, bool) {
     let mut views = Vec::new();
     let mut bytes = 0usize;
     for event in events {
         let view = SessionEventView::from(event);
         let estimate = serde_json::to_vec(&view).map_or(0, |value| value.len());
-        if !views.is_empty() && bytes.saturating_add(estimate) > MAX_EVENT_OUTPUT_BYTES {
+        if !views.is_empty() && bytes.saturating_add(estimate) > max_bytes {
             return (views, true);
         }
         bytes = bytes.saturating_add(estimate);

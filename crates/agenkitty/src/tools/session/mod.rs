@@ -7,6 +7,7 @@ mod info;
 mod local;
 mod note;
 mod registry;
+mod search;
 mod source_ref;
 mod summary;
 
@@ -32,6 +33,9 @@ pub use note::{SESSION_NOTE_TOOL_ID, SessionNoteInput, SessionNoteOutput, Sessio
 pub use registry::{
     default_session_tool_ids, known_session_tool_ids, register_session_tools,
     resolve_session_tool_ids,
+};
+pub use search::{
+    SESSION_SEARCH_TOOL_ID, SessionSearchInput, SessionSearchOutput, SessionSearchTool,
 };
 pub use source_ref::{SessionEventRangeSpec, SessionSourceRefSpec};
 pub use summary::{

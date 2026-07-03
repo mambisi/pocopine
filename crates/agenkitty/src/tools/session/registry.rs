@@ -7,6 +7,7 @@ use super::common::SessionRuntime;
 use super::events::{SESSION_EVENTS_TOOL_ID, SessionEventsTool};
 use super::info::{SESSION_INFO_TOOL_ID, SessionInfoTool};
 use super::note::{SESSION_NOTE_TOOL_ID, SessionNoteTool};
+use super::search::{SESSION_SEARCH_TOOL_ID, SessionSearchTool};
 use super::summary::{SESSION_SUMMARY_TOOL_ID, SessionSummaryTool};
 
 pub fn register_session_tools(
@@ -16,6 +17,7 @@ pub fn register_session_tools(
     builder
         .tool(SessionInfoTool::new(runtime.clone()))
         .tool(SessionEventsTool::new(runtime.clone()))
+        .tool(SessionSearchTool::new(runtime.clone()))
         .tool(SessionNoteTool::new(runtime.clone()))
         .tool(SessionSummaryTool::new(runtime.clone()))
         .tool(SessionCheckpointTool::new(runtime))
@@ -25,6 +27,7 @@ pub fn default_session_tool_ids() -> Vec<String> {
     vec![
         SESSION_INFO_TOOL_ID.to_string(),
         SESSION_EVENTS_TOOL_ID.to_string(),
+        SESSION_SEARCH_TOOL_ID.to_string(),
     ]
 }
 
@@ -46,10 +49,11 @@ pub fn resolve_session_tool_ids(raw: &[String]) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
-pub fn known_session_tool_ids() -> [&'static str; 5] {
+pub fn known_session_tool_ids() -> [&'static str; 6] {
     [
         SESSION_INFO_TOOL_ID,
         SESSION_EVENTS_TOOL_ID,
+        SESSION_SEARCH_TOOL_ID,
         SESSION_NOTE_TOOL_ID,
         SESSION_SUMMARY_TOOL_ID,
         SESSION_CHECKPOINT_TOOL_ID,
@@ -62,7 +66,11 @@ mod tests {
 
     #[test]
     fn session_tool_id_resolution_validates() {
-        assert_eq!(resolve_session_tool_ids(&[]).unwrap().len(), 2);
+        assert_eq!(resolve_session_tool_ids(&[]).unwrap().len(), 3);
+        assert_eq!(
+            resolve_session_tool_ids(&["session.search".to_string()]).unwrap(),
+            vec![SESSION_SEARCH_TOOL_ID.to_string()]
+        );
         assert_eq!(
             resolve_session_tool_ids(&["session.note".to_string()]).unwrap(),
             vec![SESSION_NOTE_TOOL_ID.to_string()]

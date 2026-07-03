@@ -181,17 +181,17 @@ pub(crate) fn bwrap_args(
     // sensitive sockets there under Tier-2.
     if let Some(uds) = &policy.egress_proxy_uds {
         args.push("--unshare-net".to_string());
-        for dir in EGRESS_SOCKET_MASK_DIRS {
-            // Only tmpfs-mask a dir that exists as a REAL directory. `/var/run`
-            // is a symlink to `/run` on modern Linux, and `bwrap --tmpfs` on a
-            // symlink path aborts the whole sandbox ("Can't mount tmpfs on
-            // …/var/run: No such file or directory"). Skipping it is safe: the
-            // symlink's target (`/run`) is itself in the mask list, so anything
-            // reachable through it is still hidden.
-            if is_real_dir(dir) {
-                args.push("--tmpfs".to_string());
-                args.push(dir.to_string());
-            }
+        // Mask the socket dirs, but resolve each to its REAL directory first.
+        // `/var/run` is a symlink to `/run` on modern Linux, and `bwrap --tmpfs`
+        // on a symlink path aborts the whole sandbox ("Can't mount tmpfs on
+        // …/var/run: No such file or directory"). Resolving to the canonical
+        // target and masking THAT (a) avoids the abort and (b) can never leave a
+        // symlinked mask dir's target exposed — the target is what gets the
+        // tmpfs, regardless of how the entry aliases it. Aliases collapse to one
+        // mount via the dedup.
+        for real in real_mask_dirs() {
+            args.push("--tmpfs".to_string());
+            args.push(real);
         }
         bind_writable_roots(policy, &mut args, true);
         let path = uds.display().to_string();
@@ -221,14 +221,28 @@ pub(crate) fn bwrap_args(
 
 const EGRESS_SOCKET_MASK_DIRS: &[&str] = &["/run", "/var/run", "/tmp", "/dev/shm"];
 
-/// Whether `path` exists as a real directory (not a symlink, not missing).
-/// `symlink_metadata` does not follow the link, so a symlink returns `false` —
-/// which is what keeps `bwrap --tmpfs` off a symlinked mask dir like
-/// `/var/run` → `/run`.
-fn is_real_dir(path: &str) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir())
-        .unwrap_or(false)
+/// The canonical real directories to tmpfs-mask in egress mode: each entry of
+/// [`EGRESS_SOCKET_MASK_DIRS`] resolved through symlinks to its real directory,
+/// deduplicated, and dropping any that is missing or not a directory. Masking
+/// the *canonical target* (not the alias) is what keeps `bwrap --tmpfs` off a
+/// symlink (which would abort the sandbox) while guaranteeing the real socket
+/// dir behind an alias like `/var/run` → `/run` is still hidden.
+fn real_mask_dirs() -> Vec<String> {
+    let mut real = Vec::new();
+    for dir in EGRESS_SOCKET_MASK_DIRS {
+        // `canonicalize` resolves symlinks and requires the path to exist.
+        let Ok(canonical) = std::fs::canonicalize(dir) else {
+            continue;
+        };
+        if !canonical.is_dir() {
+            continue;
+        }
+        let canonical = canonical.display().to_string();
+        if !real.contains(&canonical) {
+            real.push(canonical);
+        }
+    }
+    real
 }
 
 fn bind_writable_roots(policy: &SandboxPolicy, args: &mut Vec<String>, egress_mode: bool) {
@@ -300,15 +314,19 @@ mod tests {
                 "{dir} should be tmpfs-masked in egress mode"
             );
         }
-        // Invariant: EVERY dir handed to `--tmpfs` must be a real directory.
+        // Invariant: EVERY dir handed to `--tmpfs` must be a CANONICAL real
+        // directory (equal to its own canonicalization → not a symlink).
         // `bwrap --tmpfs` on a symlink (e.g. `/var/run` → `/run` on modern
-        // Linux) aborts the whole sandbox, so symlinked/missing mask dirs are
-        // skipped — the regression F4 validation caught on a real host.
+        // Linux) aborts the whole sandbox, so mask dirs are resolved to their
+        // real targets — the regression F4 validation caught on a real host.
         for w in args.windows(2) {
             if w[0] == "--tmpfs" {
-                assert!(
-                    is_real_dir(&w[1]),
-                    "--tmpfs target `{}` must be a real directory, not a symlink",
+                let target = std::path::Path::new(&w[1]);
+                assert!(target.is_dir(), "--tmpfs target `{}` must be a dir", w[1]);
+                assert_eq!(
+                    std::fs::canonicalize(target).ok().as_deref(),
+                    Some(target),
+                    "--tmpfs target `{}` must be canonical (not a symlink)",
                     w[1]
                 );
             }

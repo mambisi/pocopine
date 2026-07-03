@@ -80,6 +80,9 @@ pub struct SessionEventFilter {
     pub after_seq: Option<u64>,
     pub start_seq: Option<u64>,
     pub end_seq: Option<u64>,
+    /// Maximum events to return. **`0` means no cap** (scan the whole thread) —
+    /// every [`SessionMetadataStore`] must honor that sentinel identically
+    /// (`session.search` relies on it). Do not coerce `0` to `1`.
     pub limit: usize,
     pub kinds: Vec<SessionEventKind>,
 }

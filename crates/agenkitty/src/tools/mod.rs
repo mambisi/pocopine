@@ -52,8 +52,9 @@ pub use memory::{
     resolve_memory_tool_ids,
 };
 pub use network::{
-    NET_DOWNLOAD_TOOL_ID, NET_FETCH_TOOL_ID, NetDownloadInput, NetDownloadOutput, NetDownloadTool,
-    NetFetchInput, NetFetchOutput, NetFetchTool, NetPolicy, known_network_tool_ids,
+    NET_DOWNLOAD_TOOL_ID, NET_FETCH_TOOL_ID, NET_RESOLVE_TOOL_ID, NetDownloadInput,
+    NetDownloadOutput, NetDownloadTool, NetFetchInput, NetFetchOutput, NetFetchTool, NetPolicy,
+    NetResolveInput, NetResolveOutput, NetResolveTool, known_network_tool_ids,
     register_network_tools, register_network_tools_with_artifacts,
 };
 pub use patch::{
@@ -83,15 +84,15 @@ pub use specs::builtin_tool_specs;
 pub use session::{
     CurrentSessionContext, InMemorySessionMetadataStore, LocalJsonlSessionMetadataStore,
     SESSION_CHECKPOINT_TOOL_ID, SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID,
-    SESSION_SUMMARY_TOOL_ID, SessionCheckpointInput, SessionCheckpointKindSpec,
-    SessionCheckpointOutput, SessionCheckpointTool, SessionEventFilter, SessionEventKindFilter,
-    SessionEventRangeSpec, SessionEventView, SessionEventsInput, SessionEventsOutput,
-    SessionEventsTool, SessionInfoInput, SessionInfoOutput, SessionInfoTool,
+    SESSION_SEARCH_TOOL_ID, SESSION_SUMMARY_TOOL_ID, SessionCheckpointInput,
+    SessionCheckpointKindSpec, SessionCheckpointOutput, SessionCheckpointTool, SessionEventFilter,
+    SessionEventKindFilter, SessionEventRangeSpec, SessionEventView, SessionEventsInput,
+    SessionEventsOutput, SessionEventsTool, SessionInfoInput, SessionInfoOutput, SessionInfoTool,
     SessionMetadataCloseResult, SessionMetadataStore, SessionNoteInput, SessionNoteOutput,
-    SessionNoteTool, SessionRuntime, SessionSourceRefSpec, SessionSummaryInput,
-    SessionSummaryOutput, SessionSummaryTool, current_time_ms, default_session_tool_ids,
-    known_session_tool_ids, register_session_tools, resolve_session_tool_ids,
-    session_event_from_framework,
+    SessionNoteTool, SessionRuntime, SessionSearchInput, SessionSearchOutput, SessionSearchTool,
+    SessionSourceRefSpec, SessionSummaryInput, SessionSummaryOutput, SessionSummaryTool,
+    current_time_ms, default_session_tool_ids, known_session_tool_ids, register_session_tools,
+    resolve_session_tool_ids, session_event_from_framework,
 };
 
 pub fn register_tools(

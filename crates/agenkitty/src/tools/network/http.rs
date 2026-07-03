@@ -129,6 +129,20 @@ impl GuardedHttp {
         &self.policy
     }
 
+    /// Resolve + validate `raw` through the full guard (scheme/host/port
+    /// allowlist → DNS → SSRF block → pin) WITHOUT connecting. The returned
+    /// [`ValidatedTarget`] is the pre-flight net.resolve surfaces; a refused
+    /// (non-allowlisted or private/metadata) target errors here exactly as it
+    /// would for a fetch, and — like a fetch — never echoes a blocked IP.
+    pub(super) async fn resolve(&self, raw: &str) -> NetResult<ValidatedTarget> {
+        // Charge the request budget BEFORE resolving: a resolve triggers a real
+        // DNS lookup, so — like `get` — it must count against
+        // `NetPolicy::max_requests`, or net.resolve would be an uncapped DNS
+        // channel (covert exfil / internal-name enumeration) that fetch bounds.
+        self.charge_request()?;
+        self.authorize(raw).await
+    }
+
     /// GET `url` with the full guard, following redirects manually (each hop
     /// re-authorized + pinned), sending the injected + `requested` secret
     /// headers only to the origin host, and reading the body capped at `cap`
