@@ -7,6 +7,7 @@
       :data-hover="hover_visible"
       :data-tooltip="tooltip_mode"
       :data-animate="animate"
+      :data-ring-animating="animating_bars"
       :data-animation-duration="animation_duration"
       :data-animation-easing="animation_easing"
       :style="animation_style"
@@ -39,6 +40,8 @@
               :data-value="bar.value"
               :data-max="bar.max"
               :data-percentage="bar.percentage"
+              :data-leaving="bar.leaving ? 'true' : 'false'"
+              :style="bar.leaving ? 'display: none;' : bar.track_style"
               @click.stop="select_bar(bar.key)"></path>
       </template>
     </g>
@@ -53,6 +56,7 @@
               :aria-selected="bar.key == selected_key ? 'true' : 'false'"
               :stroke-width="bar.stroke_width"
               :stroke-dasharray="bar.stroke_dasharray"
+              :opacity="bar.opacity"
               :data-key="bar.key"
               :data-label="bar.label"
               :data-value="bar.value"
@@ -62,6 +66,8 @@
               :data-hovered="bar.key == hover_key"
               :data-focused="bar.key == focused_key"
               :data-selected="bar.key == selected_key"
+              :data-entering="bar.entering ? 'true' : 'false'"
+              :data-leaving="bar.leaving ? 'true' : 'false'"
               @click.stop="select_bar(bar.key)"></path>
       </template>
     </g>

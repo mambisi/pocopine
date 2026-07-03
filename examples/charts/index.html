@@ -347,7 +347,12 @@
     }
 
     .pine-chart-root[data-animate="true"] .pine-chart-radial-bar {
-      animation: pine-chart-radial-fill var(--pine-chart-animation-duration) var(--pine-chart-animation-easing);
+      transition-property: transform;
+    }
+
+    .pine-chart-root[data-animate="true"][data-ring-animating] .pine-chart-radial-bar {
+      animation: none;
+      transition-property: transform;
     }
 
     .pine-chart-root[data-animate="true"] .pine-chart-area[data-leaving="true"],
@@ -364,6 +369,10 @@
     }
 
     .pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-leaving="true"] {
+      pointer-events: none;
+    }
+
+    .pine-chart-root[data-animate="true"] .pine-chart-radial-bar[data-leaving="true"] {
       pointer-events: none;
     }
 
@@ -396,12 +405,6 @@
       from {
         opacity: 0;
         transform: scaleY(0);
-      }
-    }
-
-    @keyframes pine-chart-radial-fill {
-      from {
-        stroke-dasharray: 0 1;
       }
     }
 
@@ -633,8 +636,8 @@
     }
 
     .pine-chart-pie-slice[data-hovered] {
-      opacity: 0.92;
-      transform: scale(1.035);
+      opacity: 0.96;
+      transform: translate(var(--pine-chart-slice-hover-x, 0), var(--pine-chart-slice-hover-y, 0));
     }
 
     .pine-chart-pie-slice[data-label="Organic"],
@@ -658,7 +661,7 @@
     }
 
     .pine-chart-radial-track {
-      opacity: 0.14;
+      opacity: calc(0.14 * var(--pine-chart-radial-track-opacity, 1));
       stroke: #526173;
       stroke-linecap: round;
       vector-effect: non-scaling-stroke;

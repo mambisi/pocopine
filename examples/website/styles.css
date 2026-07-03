@@ -666,7 +666,7 @@ html { scroll-behavior: smooth; }
 .pine-chart-legend-marker[data-series="Segment B"] { background: #d96c2c; }
 
 .pine-chart-radial-track {
-  opacity: 0.14;
+  opacity: calc(0.14 * var(--pine-chart-radial-track-opacity, 1));
   stroke: var(--fg-muted);
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
@@ -844,4 +844,3 @@ html { scroll-behavior: smooth; }
   background: var(--bg-hover);
   outline: none;
 }
-

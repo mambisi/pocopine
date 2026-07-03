@@ -4,7 +4,10 @@ use core::fmt::Write;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::animation::{DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_style};
+use crate::animation::{
+    DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_duration_ms,
+    animation_style, easing_progress,
+};
 use crate::cartesian::{
     CartesianChartState, CartesianHoverPlacement, ChartStateFields, DEFAULT_EMPTY_MESSAGE,
     pointer_event_svg_point, step_key, sync_tooltip_fields,
@@ -19,6 +22,7 @@ use crate::legend::LegendItem;
 use crate::svg::format_tick;
 
 const FULL_CIRCLE_DEGREES: f64 = 360.0;
+const RADIAL_LEAVING_PRUNE_PROGRESS: f64 = 0.995;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartRadialBar {
@@ -162,6 +166,8 @@ impl RadialBarChartGeometry {
                     percentage_label,
                     aria_label,
                     track_d,
+                    track_opacity: 1.0,
+                    track_style: radial_track_style(1.0),
                     value_d,
                     value_visible: bar.value > 0.0,
                     stroke_dasharray: stroke_dasharray(progress),
@@ -169,11 +175,16 @@ impl RadialBarChartGeometry {
                     inner_radius: inner,
                     outer_radius: outer,
                     stroke_width: thickness,
+                    opacity: 1.0,
+                    center_x: center.x,
+                    center_y: center.y,
                     start_angle,
                     end_angle,
                     value_end_angle,
                     label_x: label_point.x,
                     label_y: label_point.y,
+                    entering: false,
+                    leaving: false,
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
@@ -219,6 +230,8 @@ pub struct SvgRadialBar {
     pub percentage_label: String,
     pub aria_label: String,
     pub track_d: String,
+    pub track_opacity: f64,
+    pub track_style: String,
     pub value_d: String,
     pub value_visible: bool,
     pub stroke_dasharray: String,
@@ -226,11 +239,16 @@ pub struct SvgRadialBar {
     pub inner_radius: f64,
     pub outer_radius: f64,
     pub stroke_width: f64,
+    pub opacity: f64,
+    pub center_x: f64,
+    pub center_y: f64,
     pub start_angle: f64,
     pub end_angle: f64,
     pub value_end_angle: f64,
     pub label_x: f64,
     pub label_y: f64,
+    pub entering: bool,
+    pub leaving: bool,
 }
 
 impl SvgRadialBar {
@@ -247,9 +265,9 @@ impl SvgRadialBar {
         )
     }
 
-    fn contains(&self, point: Point, center: Point) -> bool {
-        let dx = point.x - center.x;
-        let dy = point.y - center.y;
+    fn contains(&self, point: Point) -> bool {
+        let dx = point.x - self.center_x;
+        let dy = point.y - self.center_y;
         let radius = (dx * dx + dy * dy).sqrt();
         if radius < self.inner_radius || radius > self.outer_radius {
             return false;
@@ -286,6 +304,31 @@ struct NormalizedRadialBar {
     label: String,
     value: f64,
     max: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct RadialBarFrame {
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    inner_radius: f64,
+    outer_radius: f64,
+    stroke_width: f64,
+    opacity: f64,
+    track_opacity: f64,
+    start_angle: f64,
+    end_angle: f64,
+    progress: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct RadialBarAnimation {
+    key: String,
+    from: RadialBarFrame,
+    to: RadialBarFrame,
+    duration_ms: u32,
+    entering: bool,
+    leaving: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -344,6 +387,10 @@ pub struct PineRadialBarChart {
     pub tooltip_mode: String,
     pub tooltip_aria_hidden: String,
     pub animation_style: String,
+    pub animation_generation: u32,
+    pub animating_bars: bool,
+    bar_animations: Vec<RadialBarAnimation>,
+    animation_started_at_ms: f64,
     pub state: String,
     pub view_box: String,
     pub bars: Vec<SvgRadialBar>,
@@ -406,6 +453,10 @@ impl Default for PineRadialBarChart {
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
             ),
+            animation_generation: 0,
+            animating_bars: false,
+            bar_animations: Vec::new(),
+            animation_started_at_ms: 0.0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             bars: Vec::new(),
@@ -608,7 +659,13 @@ impl PineRadialBarChart {
         match RadialBarChartGeometry::new(&self.data, &self.options()) {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
-                self.bars = geometry.bars;
+                let mut bars = geometry.bars;
+                if self.animate {
+                    self.prepare_bar_animations(&mut bars);
+                } else {
+                    self.clear_bar_animations();
+                }
+                self.bars = bars;
                 self.legend_items = geometry.legend_items;
                 self.center_x = geometry.center.x;
                 self.center_y = geometry.center.y;
@@ -621,6 +678,18 @@ impl PineRadialBarChart {
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
+                if self.animate
+                    && !self.bars.is_empty()
+                    && animation_duration_ms(self.animation_duration) > 0
+                {
+                    self.prepare_empty_bar_exit();
+                    self.legend_items = radial_bar_legend_items(&self.data);
+                    self.clear_hover();
+                    self.clear_selection();
+                    self.error.clear();
+                    self.state_fields().apply(CartesianChartState::Ready);
+                    return;
+                }
                 self.clear_geometry();
                 self.clear_hover();
                 self.clear_selection();
@@ -634,6 +703,194 @@ impl PineRadialBarChart {
                 self.error = error.to_string();
                 self.state_fields().apply(CartesianChartState::Invalid);
             }
+        }
+    }
+
+    fn prepare_bar_animations(&mut self, next: &mut Vec<SvgRadialBar>) {
+        let duration_ms = animation_duration_ms(self.animation_duration);
+        if duration_ms == 0 {
+            self.clear_bar_animations();
+            return;
+        }
+
+        let mut animations = Vec::new();
+        for bar in next.iter_mut() {
+            if let Some(previous) = self
+                .bars
+                .iter()
+                .find(|previous| !previous.leaving && previous.key == bar.key)
+            {
+                let from = bar_frame(previous);
+                let to = bar_frame(bar);
+                if radial_frames_match(&from, &to) && !previous.entering {
+                    configure_static_bar(bar);
+                    continue;
+                }
+                let entering = previous.entering;
+                bar.entering = entering;
+                bar.leaving = false;
+                animations.push(RadialBarAnimation {
+                    key: bar.key.clone(),
+                    from: from.clone(),
+                    to,
+                    duration_ms,
+                    entering,
+                    leaving: false,
+                });
+                apply_bar_frame(bar, &from);
+                continue;
+            }
+
+            let to = bar_frame(bar);
+            let from = radial_zero_frame(&to);
+            bar.entering = true;
+            bar.leaving = false;
+            animations.push(RadialBarAnimation {
+                key: bar.key.clone(),
+                from: from.clone(),
+                to,
+                duration_ms,
+                entering: true,
+                leaving: false,
+            });
+            apply_bar_frame(bar, &from);
+        }
+
+        for previous in self.bars.iter().filter(|previous| !previous.leaving) {
+            if next.iter().any(|bar| bar.key == previous.key) {
+                continue;
+            }
+            let mut leaving = previous.clone();
+            let from = bar_frame(previous);
+            let to = radial_zero_frame(&from);
+            leaving.entering = false;
+            leaving.leaving = true;
+            apply_bar_frame(&mut leaving, &from);
+            animations.push(RadialBarAnimation {
+                key: leaving.key.clone(),
+                from,
+                to,
+                duration_ms,
+                entering: false,
+                leaving: true,
+            });
+            next.push(leaving);
+        }
+
+        if animations.is_empty() {
+            self.clear_bar_animations();
+            return;
+        }
+        self.bar_animations = animations;
+        self.animating_bars = true;
+        self.animation_started_at_ms = now_ms();
+        self.start_bar_animation_loop();
+    }
+
+    fn prepare_empty_bar_exit(&mut self) {
+        let duration_ms = animation_duration_ms(self.animation_duration);
+        if duration_ms == 0 || self.bars.is_empty() {
+            self.clear_bar_animations();
+            return;
+        }
+        let mut animations = Vec::new();
+        for bar in &mut self.bars {
+            let from = bar_frame(bar);
+            let to = radial_zero_frame(&from);
+            bar.entering = false;
+            bar.leaving = true;
+            animations.push(RadialBarAnimation {
+                key: bar.key.clone(),
+                from,
+                to,
+                duration_ms,
+                entering: false,
+                leaving: true,
+            });
+        }
+        self.bar_animations = animations;
+        self.animating_bars = true;
+        self.animation_started_at_ms = now_ms();
+        self.start_bar_animation_loop();
+    }
+
+    fn clear_bar_animations(&mut self) {
+        self.bar_animations.clear();
+        self.animating_bars = false;
+    }
+
+    fn start_bar_animation_loop(&mut self) {
+        self.animation_generation = self.animation_generation.wrapping_add(1);
+        let generation = self.animation_generation;
+        let me = pocopine::this::<Self>();
+        pocopine::spawn_scoped(async move {
+            loop {
+                let now = pocopine::timers::next_frame().await;
+                if me.update(|chart| chart.tick_bar_animations(generation, now)) {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn tick_bar_animations(&mut self, generation: u32, now_ms: f64) -> bool {
+        if generation != self.animation_generation || self.bar_animations.is_empty() {
+            return true;
+        }
+
+        let animations = self.bar_animations.clone();
+        let elapsed_ms = (now_ms - self.animation_started_at_ms).max(0.0);
+        let easing = self.animation_easing.clone();
+        let complete = animations
+            .iter()
+            .all(|animation| bar_animation_progress(animation, elapsed_ms) >= 1.0);
+        let mut prune_leaving_keys = Vec::new();
+
+        for bar in &mut self.bars {
+            let Some(animation) = animations.iter().find(|animation| animation.key == bar.key)
+            else {
+                configure_static_bar(bar);
+                continue;
+            };
+
+            let progress = bar_animation_progress(animation, elapsed_ms);
+            if animation.leaving && progress >= RADIAL_LEAVING_PRUNE_PROGRESS {
+                prune_leaving_keys.push(bar.key.clone());
+                continue;
+            }
+            let eased_progress = easing_progress(progress, &easing);
+            let mut frame = interpolate_bar_frame(&animation.from, &animation.to, eased_progress);
+            frame.opacity = radial_animation_opacity(animation, eased_progress);
+            apply_bar_frame(bar, &frame);
+            bar.entering = animation.entering && progress < 1.0;
+            bar.leaving = animation.leaving;
+        }
+
+        if !prune_leaving_keys.is_empty() {
+            self.bars.retain(|bar| {
+                !bar.leaving || !prune_leaving_keys.iter().any(|key| key == &bar.key)
+            });
+        }
+        self.sync_hover_bar();
+
+        if complete {
+            self.finish_bar_animations(generation);
+            return true;
+        }
+        false
+    }
+
+    fn finish_bar_animations(&mut self, generation: u32) {
+        if generation != self.animation_generation {
+            return;
+        }
+        self.clear_bar_animations();
+        self.bars.retain(|bar| !bar.leaving);
+        self.bars.iter_mut().for_each(configure_static_bar);
+        self.sync_hover_bar();
+        if self.bars.is_empty() {
+            self.clear_geometry();
+            self.state_fields().apply(CartesianChartState::Empty);
         }
     }
 
@@ -664,15 +921,12 @@ impl PineRadialBarChart {
             return;
         }
 
-        let center = Point {
-            x: self.center_x,
-            y: self.center_y,
-        };
         let plot = self.plot_rect();
         let Some(update) = self
             .bars
             .iter()
-            .find(|bar| bar.contains(point, center))
+            .filter(|bar| !bar.leaving)
+            .find(|bar| bar.contains(point))
             .map(|bar| bar.hover_update(plot, self.width, self.height))
         else {
             self.clear_hover();
@@ -684,7 +938,10 @@ impl PineRadialBarChart {
 
     fn step_bar_focus(&mut self, step: isize) {
         if let Some(key) = step_key(
-            self.bars.iter().map(|bar| bar.key.as_str()),
+            self.bars
+                .iter()
+                .filter(|bar| !bar.leaving)
+                .map(|bar| bar.key.as_str()),
             &self.focused_key,
             step,
         ) {
@@ -693,18 +950,19 @@ impl PineRadialBarChart {
     }
 
     fn has_bar_key(&self, key: &str) -> bool {
-        self.bars.iter().any(|bar| bar.key == key)
+        self.bars.iter().any(|bar| !bar.leaving && bar.key == key)
     }
 
     fn selection_for_bar(&self, key: &str) -> Option<ChartSelection> {
         self.bars
             .iter()
-            .find(|bar| bar.key == key)
+            .find(|bar| !bar.leaving && bar.key == key)
             .map(SvgRadialBar::selection)
     }
 
     fn clear_geometry(&mut self) {
         self.bars.clear();
+        self.clear_bar_animations();
         self.hover_bar = SvgRadialBar::default();
         self.legend_items.clear();
         self.center_x = 0.0;
@@ -788,7 +1046,7 @@ impl PineRadialBarChart {
         self.hover_bar = self
             .bars
             .iter()
-            .find(|bar| bar.key == self.hover_key)
+            .find(|bar| !bar.leaving && bar.key == self.hover_key)
             .cloned()
             .unwrap_or_default();
     }
@@ -949,6 +1207,173 @@ fn stroke_dasharray(progress: f64) -> String {
     format!("{} 1", clean(progress.clamp(0.0, 1.0)))
 }
 
+fn configure_static_bar(bar: &mut SvgRadialBar) {
+    bar.entering = false;
+    bar.leaving = false;
+    bar.opacity = 1.0;
+    set_radial_track_opacity(bar, 1.0);
+}
+
+fn bar_frame(bar: &SvgRadialBar) -> RadialBarFrame {
+    RadialBarFrame {
+        center_x: bar.center_x,
+        center_y: bar.center_y,
+        radius: bar.radius,
+        inner_radius: bar.inner_radius,
+        outer_radius: bar.outer_radius,
+        stroke_width: bar.stroke_width,
+        opacity: bar.opacity,
+        track_opacity: bar.track_opacity,
+        start_angle: bar.start_angle,
+        end_angle: bar.end_angle,
+        progress: radial_bar_progress(bar),
+    }
+}
+
+fn radial_bar_progress(bar: &SvgRadialBar) -> f64 {
+    bar.stroke_dasharray
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or_else(|| {
+            if bar.max > 0.0 {
+                bar.value / bar.max
+            } else {
+                0.0
+            }
+        })
+        .clamp(0.0, 1.0)
+}
+
+fn radial_zero_frame(frame: &RadialBarFrame) -> RadialBarFrame {
+    RadialBarFrame {
+        progress: 0.0,
+        opacity: 0.0,
+        track_opacity: 0.0,
+        ..frame.clone()
+    }
+}
+
+fn apply_bar_frame(bar: &mut SvgRadialBar, frame: &RadialBarFrame) {
+    let center = Point {
+        x: frame.center_x,
+        y: frame.center_y,
+    };
+    if let Ok(path) = arc_path(center, frame.radius, frame.start_angle, frame.end_angle) {
+        bar.track_d = path.clone();
+        bar.value_d = if frame.progress > 0.0 {
+            path
+        } else {
+            String::new()
+        };
+    }
+    let progress = frame.progress.clamp(0.0, 1.0);
+    bar.value_visible = progress > 0.0;
+    bar.stroke_dasharray = stroke_dasharray(progress);
+    bar.radius = frame.radius;
+    bar.inner_radius = frame.inner_radius;
+    bar.outer_radius = frame.outer_radius;
+    bar.stroke_width = frame.stroke_width;
+    bar.opacity = frame.opacity.clamp(0.0, 1.0);
+    set_radial_track_opacity(bar, frame.track_opacity);
+    bar.center_x = frame.center_x;
+    bar.center_y = frame.center_y;
+    bar.start_angle = frame.start_angle;
+    bar.end_angle = frame.end_angle;
+    bar.value_end_angle = frame.start_angle + (frame.end_angle - frame.start_angle) * progress;
+    let label_angle = if progress > 0.0 {
+        frame.start_angle + (bar.value_end_angle - frame.start_angle) * 0.5
+    } else {
+        frame.start_angle
+    };
+    let label_point = polar_point(center, frame.radius, label_angle);
+    bar.label_x = label_point.x;
+    bar.label_y = label_point.y;
+}
+
+fn interpolate_bar_frame(
+    from: &RadialBarFrame,
+    to: &RadialBarFrame,
+    progress: f64,
+) -> RadialBarFrame {
+    RadialBarFrame {
+        center_x: lerp(from.center_x, to.center_x, progress),
+        center_y: lerp(from.center_y, to.center_y, progress),
+        radius: lerp(from.radius, to.radius, progress),
+        inner_radius: lerp(from.inner_radius, to.inner_radius, progress),
+        outer_radius: lerp(from.outer_radius, to.outer_radius, progress),
+        stroke_width: lerp(from.stroke_width, to.stroke_width, progress),
+        opacity: lerp(from.opacity, to.opacity, progress),
+        track_opacity: lerp(from.track_opacity, to.track_opacity, progress),
+        start_angle: lerp(from.start_angle, to.start_angle, progress),
+        end_angle: lerp(from.end_angle, to.end_angle, progress),
+        progress: lerp(from.progress, to.progress, progress),
+    }
+}
+
+fn radial_frames_match(left: &RadialBarFrame, right: &RadialBarFrame) -> bool {
+    const EPSILON: f64 = 0.001;
+    (left.center_x - right.center_x).abs() <= EPSILON
+        && (left.center_y - right.center_y).abs() <= EPSILON
+        && (left.radius - right.radius).abs() <= EPSILON
+        && (left.inner_radius - right.inner_radius).abs() <= EPSILON
+        && (left.outer_radius - right.outer_radius).abs() <= EPSILON
+        && (left.stroke_width - right.stroke_width).abs() <= EPSILON
+        && (left.opacity - right.opacity).abs() <= EPSILON
+        && (left.track_opacity - right.track_opacity).abs() <= EPSILON
+        && (left.start_angle - right.start_angle).abs() <= EPSILON
+        && (left.end_angle - right.end_angle).abs() <= EPSILON
+        && (left.progress - right.progress).abs() <= EPSILON
+}
+
+fn bar_animation_progress(animation: &RadialBarAnimation, elapsed_ms: f64) -> f64 {
+    if elapsed_ms <= 0.0 {
+        return 0.0;
+    }
+    if animation.duration_ms == 0 {
+        return 1.0;
+    }
+    (elapsed_ms / animation.duration_ms as f64).clamp(0.0, 1.0)
+}
+
+fn radial_animation_opacity(animation: &RadialBarAnimation, eased_progress: f64) -> f64 {
+    const EXIT_FADE_COMPLETE: f64 = 0.68;
+    const ENTER_FADE_COMPLETE: f64 = 0.45;
+
+    if animation.leaving {
+        let fade = (eased_progress / EXIT_FADE_COMPLETE).clamp(0.0, 1.0);
+        return clean(1.0 - fade);
+    }
+    if animation.entering {
+        return clean((eased_progress / ENTER_FADE_COMPLETE).clamp(0.0, 1.0));
+    }
+    clean(lerp(animation.from.opacity, animation.to.opacity, eased_progress).clamp(0.0, 1.0))
+}
+
+fn radial_track_style(opacity: f64) -> String {
+    format!(
+        "--pine-chart-radial-track-opacity:{};",
+        clean(opacity.clamp(0.0, 1.0))
+    )
+}
+
+fn set_radial_track_opacity(bar: &mut SvgRadialBar, opacity: f64) {
+    bar.track_opacity = opacity.clamp(0.0, 1.0);
+    bar.track_style = radial_track_style(bar.track_opacity);
+}
+
+fn lerp(from: f64, to: f64, progress: f64) -> f64 {
+    clean(from + (to - from) * progress)
+}
+
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map(|performance| performance.now())
+        .unwrap_or_else(js_sys::Date::now)
+}
+
 fn is_full_arc(start_angle: f64, end_angle: f64) -> bool {
     (end_angle - start_angle).abs() >= FULL_CIRCLE_DEGREES
 }
@@ -1106,9 +1531,9 @@ mod tests {
                 .unwrap();
         let bar = &geometry.bars[0];
 
-        assert!(bar.contains(Point { x: 50.0, y: 20.0 }, geometry.center));
-        assert!(!bar.contains(Point { x: 50.0, y: 50.0 }, geometry.center));
-        assert!(!bar.contains(Point { x: 50.0, y: -5.0 }, geometry.center));
+        assert!(bar.contains(Point { x: 50.0, y: 20.0 }));
+        assert!(!bar.contains(Point { x: 50.0, y: 50.0 }));
+        assert!(!bar.contains(Point { x: 50.0, y: -5.0 }));
     }
 
     #[test]

@@ -70,8 +70,8 @@
               <pine-chart-responsive aspect_ratio="1" min_height="240" width="min(300px, 100%)">
                 <pine-pie-chart label="Channel share"
                                 pp-bind:data="pie_data"
-                                animate="true" animation_duration="180"
-                                animation_easing="ease-out"></pine-pie-chart>
+                                animate="true" animation_duration="320"
+                                animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"></pine-pie-chart>
               </pine-chart-responsive>
               <pine-chart-legend label="Pie legend" pp-bind:items="pie_legend"></pine-chart-legend>
             </div>
@@ -109,8 +109,8 @@
                                 pp-bind:data="pie_data"
                                 inner_radius="0.6"
                                 center_label="Channels" center_value="4"
-                                animate="true" animation_duration="180"
-                                animation_easing="ease-out"></pine-pie-chart>
+                                animate="true" animation_duration="320"
+                                animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"></pine-pie-chart>
               </pine-chart-responsive>
               <pine-chart-legend label="Donut legend" pp-bind:items="pie_legend"></pine-chart-legend>
             </div>
@@ -122,8 +122,8 @@
                                        pp-bind:data="radial_data"
                                        inner_radius="0.34" ring_gap="7"
                                        center_label="Avg" pp-bind:center_value="radial_center"
-                                       animate="true" animation_duration="900"
-                                       animation_easing="ease"></pine-radial-bar-chart>
+                                       animate="true" animation_duration="420"
+                                       animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"></pine-radial-bar-chart>
               </pine-chart-responsive>
               <pine-chart-legend label="Radial legend" pp-bind:items="radial_legend"></pine-chart-legend>
             </div>
