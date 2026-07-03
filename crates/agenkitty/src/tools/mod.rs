@@ -52,8 +52,9 @@ pub use memory::{
     resolve_memory_tool_ids,
 };
 pub use network::{
-    NET_FETCH_TOOL_ID, NetFetchInput, NetFetchOutput, NetFetchTool, NetPolicy,
-    known_network_tool_ids, register_network_tools,
+    NET_DOWNLOAD_TOOL_ID, NET_FETCH_TOOL_ID, NetDownloadInput, NetDownloadOutput, NetDownloadTool,
+    NetFetchInput, NetFetchOutput, NetFetchTool, NetPolicy, known_network_tool_ids,
+    register_network_tools, register_network_tools_with_artifacts,
 };
 pub use patch::{
     PATCH_APPLY_TOOL_ID, PATCH_PREVIEW_TOOL_ID, PatchApplyTool, PatchFileSummary, PatchInput,

@@ -62,8 +62,10 @@ impl ArtifactLinkTool {
             )
             .await?;
 
-        let source_refs: Vec<SessionSourceRef> =
-            input.source_refs.into_iter().map(Into::into).collect();
+        // Record the originating session on the artifact (session side is the
+        // metadata store's `link_artifact`, wired at run end).
+        let mut source_refs: Vec<SessionSourceRef> = context.thread_ref().into_iter().collect();
+        source_refs.extend(input.source_refs.into_iter().map(Into::into));
         // The store resolves + confines the path and derives size/hash from
         // the live file; a link never owns stored bytes.
         let stored = self
