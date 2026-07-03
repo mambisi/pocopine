@@ -338,8 +338,8 @@
                         pp-bind:end_angle="pie_end_angle"
                         pp-bind:center_label="pie_center_label"
                         animate="true"
-                        animation_duration="180"
-                        animation_easing="ease-out"
+                        animation_duration="320"
+                        animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"
                         pp-bind:center_value="pie_center_value"></pine-pie-chart>
       </pine-chart-responsive>
 
@@ -375,8 +375,8 @@
                                pp-bind:center_label="radial_center_label"
                                pp-bind:center_value="radial_center_value"
                                animate="true"
-                               animation_duration="900"
-                               animation_easing="ease"></pine-radial-bar-chart>
+                               animation_duration="420"
+                               animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"></pine-radial-bar-chart>
       </pine-chart-responsive>
 
       <pine-chart-legend class="chart-card-legend"

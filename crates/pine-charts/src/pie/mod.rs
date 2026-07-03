@@ -5,7 +5,8 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::animation::{
-    DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_duration_ms, animation_style,
+    DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING, animation_duration_ms,
+    animation_style, easing_progress,
 };
 use crate::cartesian::{
     CartesianHoverPlacement, ChartStateFields, DEFAULT_EMPTY_MESSAGE, pointer_event_svg_point,
@@ -23,6 +24,7 @@ use crate::svg::format_tick;
 const FULL_CIRCLE_DEGREES: f64 = 360.0;
 const PIE_SLICE_DELAY_MS: u32 = 28;
 const PIE_LEAVING_PRUNE_PROGRESS: f64 = 0.995;
+const PIE_HOVER_OFFSET_PX: f64 = 4.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartPieSlice {
@@ -153,6 +155,7 @@ impl PieChartGeometry {
                     label_x: label_point.x,
                     label_y: label_point.y,
                     animation_style: slice_animation_style(index),
+                    hover_style: slice_hover_style(center, outer_radius, slice_start, slice_end),
                     center_x: center.x,
                     center_y: center.y,
                     outer_radius,
@@ -208,6 +211,7 @@ pub struct SvgPieSlice {
     pub label_x: f64,
     pub label_y: f64,
     pub animation_style: String,
+    pub hover_style: String,
     pub center_x: f64,
     pub center_y: f64,
     pub outer_radius: f64,
@@ -706,12 +710,11 @@ impl PinePieChart {
                 let entering = previous.entering;
                 slice.entering = entering;
                 slice.leaving = false;
-                let delay_ms = if entering { slice_delay_ms(index) } else { 0 };
                 animations.push(PieSliceAnimation {
                     key: slice.key.clone(),
                     from: from.clone(),
                     to,
-                    delay_ms,
+                    delay_ms: 0,
                     duration_ms,
                     entering,
                     leaving: false,
@@ -734,7 +737,7 @@ impl PinePieChart {
                 key: slice.key.clone(),
                 from: from.clone(),
                 to,
-                delay_ms: slice_delay_ms(index),
+                delay_ms: 0,
                 duration_ms,
                 entering: true,
                 leaving: false,
@@ -1082,7 +1085,7 @@ impl PinePieChart {
     }
 
     fn update_hover_overlay_visibility(&mut self) {
-        self.hover_overlay_visible = self.hover_visible && !self.animating_slices;
+        self.hover_overlay_visible = false;
     }
 
     fn reconcile_selection(&mut self) {
@@ -1341,6 +1344,12 @@ fn apply_slice_frame(slice: &mut SvgPieSlice, frame: &PieSliceFrame) {
     );
     slice.label_x = label_point.x;
     slice.label_y = label_point.y;
+    slice.hover_style = slice_hover_style(
+        center,
+        frame.outer_radius,
+        frame.start_angle,
+        frame.end_angle,
+    );
 }
 
 fn interpolate_slice_frame(
@@ -1379,29 +1388,22 @@ fn slice_animation_progress(animation: &PieSliceAnimation, elapsed_ms: f64) -> f
     (elapsed_ms / animation.duration_ms as f64).clamp(0.0, 1.0)
 }
 
-fn easing_progress(progress: f64, easing: &str) -> f64 {
-    let progress = progress.clamp(0.0, 1.0);
-    match easing.trim() {
-        "linear" => progress,
-        "ease-in" => progress * progress,
-        "ease-out" => 1.0 - (1.0 - progress).powi(2),
-        "ease-in-out" => {
-            if progress < 0.5 {
-                2.0 * progress * progress
-            } else {
-                1.0 - (-2.0 * progress + 2.0).powi(2) * 0.5
-            }
-        }
-        _ => progress * progress * (3.0 - 2.0 * progress),
-    }
-}
-
 fn lerp(from: f64, to: f64, progress: f64) -> f64 {
     clean(from + (to - from) * progress)
 }
 
 fn slice_animation_style(index: usize) -> String {
     format!("--pine-chart-slice-delay: {}ms;", slice_delay_ms(index))
+}
+
+fn slice_hover_style(center: Point, outer_radius: f64, start_angle: f64, end_angle: f64) -> String {
+    let offset = PIE_HOVER_OFFSET_PX.min(outer_radius * 0.08);
+    let midpoint = polar_point(center, offset, (start_angle + end_angle) * 0.5);
+    format!(
+        "--pine-chart-slice-hover-x:{}px;--pine-chart-slice-hover-y:{}px;",
+        clean(midpoint.x - center.x),
+        clean(midpoint.y - center.y)
+    )
 }
 
 fn slice_delay_ms(index: usize) -> u32 {

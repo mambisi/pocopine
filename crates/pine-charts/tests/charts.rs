@@ -123,6 +123,35 @@ fn first_arc_radius(path: &str) -> f64 {
     radius.parse().expect("expected numeric SVG arc radius")
 }
 
+fn first_dash_progress(value: &str) -> f64 {
+    value
+        .split_whitespace()
+        .next()
+        .expect("expected SVG dash progress")
+        .parse()
+        .expect("expected numeric SVG dash progress")
+}
+
+fn svg_opacity(element: &Element) -> f64 {
+    element
+        .get_attribute("opacity")
+        .expect("expected SVG opacity")
+        .parse()
+        .expect("expected numeric SVG opacity")
+}
+
+fn css_variable_number(element: &Element, name: &str) -> f64 {
+    element
+        .get_attribute("style")
+        .unwrap_or_default()
+        .split(';')
+        .find_map(|declaration| declaration.trim().strip_prefix(name))
+        .and_then(|value| value.strip_prefix(':'))
+        .expect("expected CSS variable")
+        .parse()
+        .expect("expected numeric CSS variable")
+}
+
 fn direct_svg_layers(svg: &Element) -> Vec<String> {
     let groups = svg.query_selector_all(":scope > g[data-layer]").unwrap();
     (0..groups.length())
@@ -897,7 +926,7 @@ async fn pie_chart_morphs_shape_without_svg_animate_nodes() {
 }
 
 #[wasm_bindgen_test]
-async fn pie_chart_prunes_finished_leaving_slices_before_delayed_entries_finish() {
+async fn pie_chart_prunes_finished_leaving_slices_while_new_entries_settle() {
     let host = mount_fixture::<PieChartFixture>();
     settle().await;
 
@@ -932,7 +961,15 @@ async fn pie_chart_prunes_finished_leaving_slices_before_delayed_entries_finish(
             .unwrap()
             .get_attribute("data-entering")
             .as_deref(),
-        Some("true")
+        Some("false")
+    );
+    assert!(
+        !host
+            .query_selector(".pine-pie-chart")
+            .unwrap()
+            .unwrap()
+            .has_attribute("data-slice-animating"),
+        "new entries should settle with the same coherent tween as removed slices"
     );
 
     host.remove();
@@ -2389,7 +2426,10 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     dispatch_pointer_move(&svg, 50.0, 10.0);
     settle().await;
 
-    assert!(!first.has_attribute("data-hovered"));
+    assert!(first.has_attribute("data-hovered"));
+    let first_style = first.get_attribute("style").unwrap_or_default();
+    assert!(first_style.contains("--pine-chart-slice-hover-x:"));
+    assert!(first_style.contains("--pine-chart-slice-hover-y:"));
     let hovered_key = first.get_attribute("data-key").unwrap();
     let hover_slice = host
         .query_selector(".pine-chart-pie-hover .pine-chart-pie-slice")
@@ -2402,6 +2442,17 @@ async fn pie_chart_renders_donut_slices_and_selection() {
         Some(hovered_key.as_str())
     );
     assert!(hover_slice.has_attribute("data-hovered"));
+    let hover_layer = host
+        .query_selector(".pine-chart-pie-hover")
+        .unwrap()
+        .unwrap();
+    assert!(
+        hover_layer
+            .get_attribute("style")
+            .unwrap_or_default()
+            .contains("display: none"),
+        "expected pie hover to style the canonical slice, not stack a duplicate hover arc"
+    );
     let tooltip = host
         .query_selector(".pine-chart-pie-tooltip")
         .unwrap()
@@ -2478,6 +2529,52 @@ impl Default for RadialBarChartFixture {
 #[handlers]
 impl RadialBarChartFixture {}
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <button class="swap-radial" @click="swap">Swap</button>
+  <pine-radial-bar-chart class="animated-rings"
+                         label="Rings"
+                         width="120"
+                         height="120"
+                         margin_top="0"
+                         margin_right="0"
+                         margin_bottom="0"
+                         margin_left="0"
+                         inner_radius="0.3"
+                         ring_gap="4"
+                         animate="true"
+                         animation_duration="80"
+                         animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"
+                         pp-bind:data="data"></pine-radial-bar-chart>
+</div>
+"#)]
+struct RadialAnimationFixture {
+    data: Vec<ChartRadialBar>,
+}
+
+impl Default for RadialAnimationFixture {
+    fn default() -> Self {
+        Self {
+            data: vec![
+                ChartRadialBar::new("Activation", 84.0, 100.0),
+                ChartRadialBar::new("Retention", 68.0, 100.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl RadialAnimationFixture {
+    pub fn swap(&mut self) {
+        self.data = vec![
+            ChartRadialBar::new("API", 74.0, 100.0),
+            ChartRadialBar::new("Render", 62.0, 100.0),
+            ChartRadialBar::new("Network", 58.0, 100.0),
+        ];
+    }
+}
+
 #[wasm_bindgen_test]
 async fn radial_bar_chart_renders_rings_hover_and_selection() {
     let host = mount_fixture::<RadialBarChartFixture>();
@@ -2495,6 +2592,7 @@ async fn radial_bar_chart_renders_rings_hover_and_selection() {
     assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
     assert!(!chart.has_attribute("data-hover"));
+    assert!(!chart.has_attribute("data-ring-animating"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     assert_eq!(
@@ -2602,6 +2700,159 @@ async fn radial_bar_chart_renders_rings_hover_and_selection() {
 }
 
 #[wasm_bindgen_test]
+async fn radial_bar_chart_tweens_ring_swaps_with_enter_and_exit_state() {
+    let host = mount_fixture::<RadialAnimationFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".animated-rings").unwrap().unwrap();
+    assert!(chart.has_attribute("data-ring-animating"));
+    let activation_entering = host
+        .query_selector(".pine-chart-radial-bar[data-label='Activation']")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        activation_entering
+            .get_attribute("data-entering")
+            .as_deref(),
+        Some("true")
+    );
+    assert!(
+        first_dash_progress(
+            &activation_entering
+                .get_attribute("stroke-dasharray")
+                .unwrap()
+        ) < 0.84,
+        "initial radial entry should be driven by the renderer tween"
+    );
+    assert!(
+        svg_opacity(&activation_entering) < 1.0,
+        "initial radial entry should fade in on the renderer tween"
+    );
+
+    sleep_ms(100).await;
+    settle().await;
+
+    assert!(!chart.has_attribute("data-ring-animating"));
+    let activation_before = host
+        .query_selector(".pine-chart-radial-bar[data-label='Activation']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("stroke-dasharray")
+        .unwrap();
+
+    host.query_selector(".swap-radial")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    assert!(chart.has_attribute("data-ring-animating"));
+    assert_eq!(
+        host.query_selector(".pine-chart-radial-bar[data-label='Activation']")
+            .unwrap()
+            .unwrap()
+            .get_attribute("data-leaving")
+            .as_deref(),
+        Some("true")
+    );
+    let activation_track = host
+        .query_selector(".pine-chart-radial-track[data-label='Activation']")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        activation_track.get_attribute("data-leaving").as_deref(),
+        Some("true")
+    );
+    assert!(
+        activation_track
+            .get_attribute("style")
+            .unwrap_or_default()
+            .contains("display: none"),
+        "leaving radial tracks should not leave a gray exit ghost"
+    );
+    assert_eq!(
+        host.query_selector(".pine-chart-radial-bar[data-label='API']")
+            .unwrap()
+            .unwrap()
+            .get_attribute("data-entering")
+            .as_deref(),
+        Some("true")
+    );
+    let api_track = host
+        .query_selector(".pine-chart-radial-track[data-label='API']")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    assert!(
+        css_variable_number(&api_track, "--pine-chart-radial-track-opacity") < 1.0,
+        "entering radial tracks should fade in instead of popping as full gray rings"
+    );
+
+    sleep_ms(24).await;
+    settle().await;
+
+    let activation_mid = host
+        .query_selector(".pine-chart-radial-bar[data-label='Activation']")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    let activation_mid_dash = activation_mid.get_attribute("stroke-dasharray").unwrap();
+    let api_mid = host
+        .query_selector(".pine-chart-radial-bar[data-label='API']")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    let api_mid_dash = api_mid.get_attribute("stroke-dasharray").unwrap();
+    assert!(
+        first_dash_progress(&activation_mid_dash) < first_dash_progress(&activation_before),
+        "leaving ring should shrink instead of disappearing"
+    );
+    assert!(
+        svg_opacity(&activation_mid) < 1.0,
+        "leaving ring should fade before the tiny final sweep"
+    );
+    assert!(
+        first_dash_progress(&api_mid_dash) > 0.0 && first_dash_progress(&api_mid_dash) < 0.74,
+        "entering ring should fill from zero during the renderer-owned tween"
+    );
+    assert!(
+        svg_opacity(&api_mid) > 0.0,
+        "entering ring should fade in on the renderer-owned tween"
+    );
+
+    sleep_ms(120).await;
+    settle().await;
+
+    assert!(
+        host.query_selector(".pine-chart-radial-bar[data-label='Activation']")
+            .unwrap()
+            .is_none(),
+        "leaving ring pruned after the tween"
+    );
+    let api_done = host
+        .query_selector(".pine-chart-radial-bar[data-label='API']")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        api_done.get_attribute("data-entering").as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        api_done.get_attribute("stroke-dasharray").as_deref(),
+        Some("0.74 1")
+    );
+    assert_eq!(api_done.get_attribute("opacity").as_deref(), Some("1"));
+    assert!(!chart.has_attribute("data-ring-animating"));
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
 async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updates() {
     let host = mount_fixture::<PieChartFixture>();
     settle().await;
@@ -2655,6 +2906,10 @@ async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updat
     assert!(
         first_arc_radius(&paid_animating_path) > 1.0,
         "expected entering slice to keep chart radius while the arc grows, got {paid_animating_path}"
+    );
+    assert_ne!(
+        paid_animating_path, "M50,100 A50,50 0 0 1 50,100 L50,75 A25,25 0 0 0 50,75 Z",
+        "entering slices should start their sector tween immediately, not wait for the CSS delay hook"
     );
     let chart = host.query_selector(".pine-pie-chart").unwrap().unwrap();
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
@@ -2767,7 +3022,7 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
             .is_none()
     );
 
-    sleep_ms(34).await;
+    sleep_ms(12).await;
     settle().await;
 
     let shrinking_referral = host

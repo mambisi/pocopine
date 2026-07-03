@@ -418,13 +418,19 @@ Chart animation is opt-in. Set `animate="true"` on a chart root to emit
 `data-animate="true"`, `data-animation-duration`, `data-animation-easing`, and
 CSS variables
 `--pine-chart-animation-duration` / `--pine-chart-animation-easing`.
+For pie, donut, and radial bar charts, the same easing value drives the
+renderer-owned geometry tween. CSS named easing values and `cubic-bezier(...)`
+curves are supported, so a prop such as
+`animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"` affects SVG path or
+`stroke-dasharray` interpolation instead of only the surrounding CSS hooks.
 The renderer keeps marks keyed by series, slice, or point identity. Application
 CSS can keyframe newly inserted marks while existing marks remain stable during
 add/remove updates. If an application wants an existing mark to replay an entry
 animation after a data change, change that mark's key deliberately or use CSS
 transitions for the changed property.
-Area series and pie/donut slices also retain removed marks for one animation
-window and expose `data-leaving="true"` before pruning them from the DOM.
+Area series, pie/donut slices, and radial rings also retain removed marks for
+one animation window and expose `data-leaving="true"` before pruning them from
+the DOM.
 
 ## Styling Hooks
 
@@ -499,20 +505,26 @@ The component emits stable hooks:
 - `data-selected`
 - `data-entering="true|false"`
 - `data-leaving="true|false"`
+- `data-ring-animating`
 - `data-active`
 - `data-empty`
 - `data-invalid`
 - `--pine-chart-animation-duration`
 - `--pine-chart-animation-easing`
+- `--pine-chart-radial-track-opacity`
 - `--pine-chart-slice-delay`
 
 The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
-treatment. Pie/donut slices expose `data-entering` and `data-leaving` so CSS
-can style keyed mark changes. The chart owns pie/donut animation by
-interpolating sector geometry in component state, following the same broad
-model as Recharts' animated pie sectors. That keeps the rendered `d` attribute
-authoritative for interaction, donut radius changes, and half-donut morphs.
+treatment. Pie/donut slices and radial rings expose `data-entering` and
+`data-leaving` so CSS can style keyed mark changes. The chart owns pie/donut
+animation by interpolating sector geometry in component state, using the
+chart's `animation_easing` curve for the same path tween that moves slice
+start/end angles and donut radii. Radial charts use the same curve for ring
+radius, stroke width, and progress interpolation, and expose
+`data-ring-animating` on the root while that renderer-owned tween is active.
+That keeps rendered SVG geometry authoritative for interaction, donut radius
+changes, half-donut morphs, initial ring entry, and ring swaps.
 
 ```css
 .pine-chart-root {
@@ -658,7 +670,10 @@ authoritative for interaction, donut radius changes, and half-donut morphs.
 }
 
 .pine-chart-pie-slice[data-hovered] {
-  transform: scale(1.03);
+  transform: translate(
+    var(--pine-chart-slice-hover-x, 0),
+    var(--pine-chart-slice-hover-y, 0)
+  );
 }
 
 .pine-chart-root[data-empty] .pine-chart-svg {

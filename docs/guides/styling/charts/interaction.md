@@ -208,12 +208,16 @@ animation variables. Keyframe entry animations should target keyed marks as they
 enter the DOM; add/remove updates then animate only the new line, area, bar,
 point, or pie segment instead of restarting the whole chart.
 
-Pie/donut slices expose `data-entering="true"` during entry. Area series and
-pie/donut slices expose `data-leaving="true"` during exit so CSS or
-renderer-owned animation can show removal before the renderer prunes the mark.
-Pie/donut enter, exit, and shape changes are rendered by interpolating sector
-geometry in component state, so the visible path itself sweeps between sector
-angles and radii.
+Pie/donut slices and radial rings expose `data-entering="true"` during entry.
+Area series, pie/donut slices, and radial rings expose `data-leaving="true"`
+during exit so CSS or renderer-owned animation can show removal before the
+renderer prunes the mark. Pie/donut enter, exit, and shape changes are rendered
+by interpolating sector geometry in component state, so the visible path itself
+sweeps between sector angles and radii. Radial initial entry and ring swaps
+interpolate radius, stroke width, and `stroke-dasharray` in component state, with
+`data-ring-animating` on the root while the tween is active. CSS named easing
+values and `cubic-bezier(...)` values in `animation_easing` are applied to
+those renderer-owned tweens.
 
 ## Styling
 
@@ -258,6 +262,13 @@ angles and radii.
 .pine-chart-pie-slice[data-hovered] {
   opacity: 1;
   stroke: currentColor;
+}
+
+.pine-chart-pie-slice[data-hovered] {
+  transform: translate(
+    var(--pine-chart-slice-hover-x, 0),
+    var(--pine-chart-slice-hover-y, 0)
+  );
 }
 
 .pine-chart-marker[data-focused],

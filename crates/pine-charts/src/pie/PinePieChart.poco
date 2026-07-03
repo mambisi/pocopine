@@ -44,12 +44,12 @@
                 :data-label="slice.label"
                 :data-value="slice.value"
                 :data-percentage="slice.percentage"
-                :data-hovered="slice.key == hover_key && animating_slices"
+                :data-hovered="slice.key == hover_key && !slice.leaving"
                 :data-focused="slice.key == focused_key"
                 :data-selected="slice.key == selected_key"
                 :data-entering="slice.entering ? 'true' : 'false'"
                 :data-leaving="slice.leaving ? 'true' : 'false'"
-                :style="slice.animation_style"
+                :style="slice.animation_style + slice.hover_style"
                 @click.stop="select_slice(slice.key)"></path>
         </g>
       </template>
