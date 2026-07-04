@@ -1908,6 +1908,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         .find(|(n, _)| n == "pp-let")
                         .map(|(_, v)| v.trim().to_string())
                         .filter(|v| !v.is_empty());
+                    check_branch_body_roots("pp-case", case_el, ctx);
                     let body_ident =
                         analyze_lift_body(case_el, emissions).map(|(html, body_ctx)| {
                             ctx.absorb_lifted_refs(&body_ctx);
@@ -1980,6 +1981,12 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             .map(|(_, v)| v.clone())
             .filter(|s| !s.trim().is_empty());
         if el.tag == "template" && pocopine_expr::parse(&if_expr).is_ok() {
+            // Exactly one element root, enforced at compile time —
+            // the runtime clone stamps only the FIRST root, so a
+            // multi-root body used to silently drop its extra roots
+            // out of the conditional (and a zero-root body errors
+            // at install).
+            check_branch_body_roots("pp-if", el, ctx);
             // RFC-058 Phase 4.1d — try to lift the body
             // subtree into a fragment fn the runtime installer
             // invokes instead of `clone_template_body` +
@@ -2368,6 +2375,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                                      (RFC-094)",
                                 ));
                             }
+                            check_branch_body_roots(kind, member, ctx);
                             let mut member_needs = false;
                             let body_ident =
                                 analyze_lift_body(member, emissions).map(|(html, body_ctx)| {
@@ -3167,6 +3175,47 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
 /// per-subtree state stays isolated; nested fragment fns get
 /// pushed into the shared `Emissions` queue so every emission
 /// lands at the top of the parent's `register()` body.
+/// The number of element roots in a structural `<template>` body. `pp-if` /
+/// `pp-else-if` / `pp-else` / `pp-case` bodies must have exactly one: the
+/// runtime clone path (`clone_template_body`) stamps ONLY the first element
+/// root, so extra roots silently vanish from the branch, and a zero-root body
+/// errors at install — both are surfaced as compile-time diagnostics by the
+/// classifier instead.
+fn template_body_element_count(template_el: &Element) -> usize {
+    template_el
+        .children
+        .iter()
+        .filter(|c| matches!(c, Node::Element(_)))
+        .count()
+}
+
+/// Push the compile-time diagnostic for a structural `<template>` body whose
+/// element-root count breaks the exactly-one rule (the branch analogue of the
+/// component single-root rule). Non-whitespace top-level TEXT is rejected on
+/// the same grounds: the runtime clone stamps only the single element root,
+/// so `<template pp-if>Prefix <span>…</span></template>` would silently drop
+/// `Prefix` from the branch.
+fn check_branch_body_roots(directive: &str, template_el: &Element, ctx: &mut AnalysisCtx) {
+    let roots = template_body_element_count(template_el);
+    if roots != 1 {
+        ctx.diagnostics.push(format!(
+            "`{directive}` template must have exactly one root element (found {roots}) — \
+             wrap the branch body in a single container",
+        ));
+        return;
+    }
+    let has_loose_text = template_el
+        .children
+        .iter()
+        .any(|c| matches!(c, Node::Text(text, _) if !text.trim().is_empty()));
+    if has_loose_text {
+        ctx.diagnostics.push(format!(
+            "`{directive}` template has text beside its root element — the text would \
+             silently drop out of the branch; move it inside the root container",
+        ));
+    }
+}
+
 fn analyze_lift_body(
     template_el: &Element,
     emissions: &mut Emissions,
@@ -3233,6 +3282,31 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
     }
     let mut ctx = AnalysisCtx::default();
     let mut path: Vec<u16> = Vec::new();
+    // RFC-058 Phase 6.2 parity for slot content: scan TOP-LEVEL text
+    // nodes for `{{expr}}` interpolation. `walk` only scans the text
+    // children of elements it visits, so bare text passed directly as
+    // slot content (`<x-chip>{{ label }}</x-chip>`) was never collected
+    // and rendered as raw braces. The entry anchors at the fragment
+    // root (empty `node_path`): `stamp_dynamic_slot_with` resolves
+    // paths against its temporary root element, whose text children
+    // are exactly these nodes.
+    let mut text_index: u16 = 0;
+    for node in nodes {
+        let Node::Text(text, _) = node else { continue };
+        if text.contains("{{")
+            && let Ok(segments) = parse_interp_segments(text)
+            && segments
+                .iter()
+                .any(|s| matches!(s, InterpSegment::Dynamic(_)))
+        {
+            ctx.interps.push(InterpLite {
+                node_path: Vec::new(),
+                text_index,
+                segments,
+            });
+        }
+        text_index += 1;
+    }
     for (i, node) in nodes.iter().enumerate() {
         if let Node::Element(el) = node {
             let idx = nodes
@@ -3251,13 +3325,13 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
     } else {
         html
     };
-    let is_dynamic = !ctx.bindings.is_empty()
-        || !ctx.listeners.is_empty()
-        || !ctx.refs.is_empty()
-        || !ctx.child_mounts.is_empty()
-        || !ctx.if_plans.is_empty()
-        || !ctx.for_plans.is_empty()
-        || !ctx.teleport_plans.is_empty();
+    // Anything the analyzer collected must survive into an installed
+    // plan — a `Static` emission drops the plan wholesale, which used
+    // to silently discard a slot whose only dynamic content was
+    // interpolation (or a native pp-model). `has_any_entry` is the
+    // exhaustive "collected anything" predicate, so a new entry kind
+    // can't be forgotten here again.
+    let is_dynamic = ctx.has_any_entry();
     let ident = emissions.alloc_slot_frag_ident("slot_frag");
     if is_dynamic {
         Some(SlotFragmentEmission::Dynamic {
@@ -3512,6 +3586,90 @@ mod tests {
         emit_compiled_expr_option, is_lift_eligible_opaque, is_supported_modifier,
         parse_pp_directive_name,
     };
+
+    fn analyze(source: &str) -> super::EmittedTemplatePlan {
+        let (ast, errors) = crate::template_parser::parse(source, "test.poco");
+        assert!(errors.is_empty(), "template must parse: {errors:?}");
+        super::analyze_template_plan(&ast, &[], None)
+    }
+
+    #[test]
+    fn multi_root_pp_if_body_is_a_compile_error() {
+        // The runtime clone stamps only the FIRST root — extra roots used
+        // to silently drop out of the conditional. Now a diagnostic.
+        let plan =
+            analyze("<div><template pp-if=\"open\"><span>a</span><span>b</span></template></div>");
+        let out = plan.if_body_fns.to_string();
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("exactly one root element"), "{out}");
+
+        // Zero element roots errors too (the runtime install would fail).
+        let plan = analyze("<div><template pp-if=\"open\">text only</template></div>");
+        let out = plan.if_body_fns.to_string();
+        assert!(out.contains("exactly one root element"), "{out}");
+
+        // Non-whitespace text beside the single root errors too — the
+        // runtime stamps only the element root, silently dropping the text.
+        let plan = analyze("<div><template pp-if=\"open\">Prefix <span>a</span></template></div>");
+        let out = plan.if_body_fns.to_string();
+        assert!(out.contains("text beside its root element"), "{out}");
+
+        // A single root (whitespace/comments around it are fine) stays clean.
+        let plan = analyze(
+            "<div><template pp-if=\"open\">\n  <!-- note -->\n  <span>a</span>\n</template></div>",
+        );
+        let out = plan.if_body_fns.to_string();
+        assert!(!out.contains("compile_error"), "{out}");
+    }
+
+    #[test]
+    fn multi_root_chain_member_and_case_bodies_are_compile_errors() {
+        // pp-else members share the single-root rule with the chain head.
+        let plan = analyze(
+            "<div><template pp-if=\"open\"><span>a</span></template>\
+             <template pp-else><span>b</span><span>c</span></template></div>",
+        );
+        let out = plan.if_body_fns.to_string();
+        assert!(
+            out.contains("`pp-else` template must have exactly one root element"),
+            "{out}"
+        );
+
+        // pp-case arms too.
+        let plan = analyze(
+            "<div><template pp-match=\"state\">\
+             <template pp-case=\"Ready\"><b>y</b><b>z</b></template>\
+             </template></div>",
+        );
+        let out = plan.if_body_fns.to_string();
+        assert!(
+            out.contains("`pp-case` template must have exactly one root element"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn bare_interpolation_in_slot_content_lifts_into_a_dynamic_fragment() {
+        // `<x-chip>{{ label }}</x-chip>` — bare text passed as slot content
+        // used to render as raw braces: `walk` never visited the text (it
+        // only scans element children), and an interp-only ctx was emitted
+        // as a Static fragment that dropped the plan.
+        let plan = analyze("<div><x-chip>{{ label }}</x-chip></div>");
+        let out = plan.slot_fragment_fns.to_string();
+        assert!(
+            out.contains("install_static_interp_target"),
+            "interp-only slot content must emit a dynamic fragment: {out}"
+        );
+
+        // Element-wrapped interp inside slot content: collected by `walk`
+        // but previously discarded by the Static emission path.
+        let plan = analyze("<div><x-chip><span>Hi {{ name }}</span></x-chip></div>");
+        let out = plan.slot_fragment_fns.to_string();
+        assert!(
+            out.contains("install_static_interp_target"),
+            "element-wrapped slot interp must survive into the plan: {out}"
+        );
+    }
 
     #[test]
     fn parse_failure_emits_compile_error_with_directive_hint() {

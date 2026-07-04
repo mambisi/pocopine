@@ -1040,6 +1040,12 @@ fn materialize_slot(slot_el: &Element) {
         parent_proxy: &fragment_parent_proxy,
         child_scope_id: owner_scope_id,
     });
+    // Re-home any effects the fragment installed against its detached
+    // wrapper (bare `{{ }}` slot text) onto the live element receiving the
+    // content, so they release with the subtree instead of leaking.
+    if let Some(parent_el) = parent.dyn_ref::<Element>() {
+        adopt_pending_effects(&buffer, parent_el);
+    }
     let kids = buffer.child_nodes();
     let mut snapshot: Vec<Node> = Vec::with_capacity(kids.length() as usize);
     for i in 0..kids.length() {
@@ -1442,6 +1448,48 @@ pub fn track_effect_on(el: &Element, id: EffectId) {
     .unwrap_or_else(Array::new);
     list.push(&JsValue::from_f64(id.0 as f64));
     set_private(el, EFFECTS_KEY, &list);
+}
+
+/// Where a detached-install wrapper's effect ids wait for a live owner (see
+/// [`stash_wrapper_effects`] / [`adopt_pending_effects`]).
+const PENDING_EFFECTS_KEY: &str = "__pp_pending_effects";
+
+/// Move the effect ids tracked on `wrapper` — a temporary install host that
+/// never enters the DOM (e.g. `stamp_dynamic_slot_with`'s `<div>`) — onto the
+/// buffer `host`, so the splice site can re-home them on a live element via
+/// [`adopt_pending_effects`]. Without this, an effect resolved against the
+/// wrapper itself (a bare top-level `{{ }}` slot interpolation) is never
+/// released: `release_subtree` walks live elements only.
+pub(crate) fn stash_wrapper_effects(wrapper: &Element, host: &web_sys::DocumentFragment) {
+    if let Some(v) = get_private(wrapper, EFFECTS_KEY)
+        && v.is_object()
+    {
+        let _ = Reflect::set(host.as_ref(), &PENDING_EFFECTS_KEY.into(), &v);
+        set_private(wrapper, EFFECTS_KEY, &JsValue::UNDEFINED);
+    }
+}
+
+/// Re-home effect ids stashed on a fragment buffer by
+/// [`stash_wrapper_effects`] onto `owner` — the live element that contains
+/// the spliced content, so the effects release exactly when that subtree
+/// does.
+pub(crate) fn adopt_pending_effects(host: &web_sys::DocumentFragment, owner: &Element) {
+    let Ok(v) = Reflect::get(host.as_ref(), &PENDING_EFFECTS_KEY.into()) else {
+        return;
+    };
+    let Ok(arr) = v.dyn_into::<Array>() else {
+        return;
+    };
+    for i in 0..arr.length() {
+        if let Some(n) = arr.get(i).as_f64() {
+            track_effect_on(owner, EffectId(n as u64));
+        }
+    }
+    let _ = Reflect::set(
+        host.as_ref(),
+        &PENDING_EFFECTS_KEY.into(),
+        &JsValue::UNDEFINED,
+    );
 }
 
 // ── Element-scoped listener side-table ────────────────────────────

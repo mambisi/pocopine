@@ -235,6 +235,28 @@ impl PlanSlotDynamicHost {
     }
 }
 
+/// Slot content that is *bare* `{{ }}` interpolation (no wrapping
+/// element, no pp-text). The classifier scans top-level slot text
+/// nodes and emits a dynamic fragment whose interp installs against
+/// the author (parent) scope — previously this rendered as raw
+/// braces (the AgenKitty `<pine-avatar-fallback>{{ initials }}</…>`
+/// finding).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanSlotInterpHost.html")]
+struct PlanSlotInterpHost {
+    label: String,
+}
+
+#[handlers]
+impl PlanSlotInterpHost {
+    pub fn on_setup(&mut self) {
+        self.label = "first".into();
+    }
+    pub fn bump(&mut self) {
+        self.label = "second".into();
+    }
+}
+
 /// Child used by the compiled-finalize regression test. Its
 /// `on_mount` write proves a lifted fragment containing a child
 /// component can finish lifecycle without falling back to the
@@ -952,6 +974,7 @@ fn register_all() {
     Rfc064KeyedFastHost::register();
     Rfc064GenericPrependHost::register();
     PlanSlotDynamicHost::register();
+    PlanSlotInterpHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
     PlanHostDirectiveChild::register();
@@ -1569,6 +1592,81 @@ async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
     assert_eq!(plan_failure_count(), 0);
 
     host.remove();
+}
+
+/// Bare `{{ }}` interpolation as slot content compiles in the
+/// author's scope — parity with `pp-text` in the same position.
+/// The top-level text node lifts into a dynamic slot fragment
+/// (root-anchored interp entry) that renders and reactively
+/// updates; no raw braces ever reach the DOM.
+#[wasm_bindgen_test]
+async fn slot_content_interpolation_renders_in_author_scope() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<plan-slot-interp-host></plan-slot-interp-host>");
+    tick().await;
+
+    let shell = host
+        .query_selector(".psc-shell")
+        .unwrap()
+        .expect("slot child shell must mount");
+    let text = shell.text_content().unwrap_or_default();
+    assert!(
+        text.contains("first ready"),
+        "slot interp must render the author scope's field: {text:?}"
+    );
+    assert!(
+        !text.contains("{{"),
+        "no raw braces may reach the DOM: {text:?}"
+    );
+
+    host.query_selector(".psih-bump")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    let text = shell.text_content().unwrap_or_default();
+    assert!(
+        text.contains("second ready"),
+        "slot interp must update reactively: {text:?}"
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+/// The bare-slot-interp effect must RELEASE on unmount. Its install
+/// resolves against `stamp_dynamic_slot_with`'s detached wrapper, which
+/// never enters the DOM — the runtime re-homes the effect onto the live
+/// element receiving the spliced content, so subtree release disposes it
+/// (previously it leaked, keeping the parent scope + text node alive
+/// across remounts).
+#[wasm_bindgen_test]
+async fn slot_interp_effect_releases_on_unmount() {
+    register_all();
+    reset_plan_failure_count();
+
+    async fn cycle() {
+        let host = mount("<plan-slot-interp-host></plan-slot-interp-host>");
+        tick().await;
+        pocopine_core::mount::release_compiled_subtree(&host);
+        host.remove();
+        tick().await;
+    }
+
+    // The warm-up absorbs any one-time global effects; after it, a
+    // steady-state mount/release cycle must be effect-neutral.
+    cycle().await;
+    let (baseline, _) = pocopine_core::reactive::stats();
+    cycle().await;
+    let (after, _) = pocopine_core::reactive::stats();
+    assert_eq!(
+        after, baseline,
+        "a slot-interp mount/release cycle must not leak effects"
+    );
 }
 
 /// RFC-058 Phase 4.1d — body fragment lifting. The macro emits
