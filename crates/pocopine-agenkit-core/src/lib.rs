@@ -43,6 +43,7 @@ pub mod events;
 pub mod flow;
 pub mod id;
 pub mod manifest;
+pub mod redact;
 pub mod reduce;
 pub mod retrieval;
 pub mod schema;
@@ -66,13 +67,14 @@ pub use id::{
     AgentThreadId, ModelRef, ParallelGroupId, ProviderRef, RunId, SessionId, StepId, TraceId,
 };
 pub use manifest::{ContextGapDiagnostic, ContextManifest, DeclaredResource};
+pub use redact::{Redactor, is_sensitive_key, truncate_utf8};
 pub use reduce::ReducerDecision;
 pub use retrieval::{
     Citation, RetrievalHit, RetrievalQuery, RetrievalSet, RetrieverDescriptor, SourceRef,
 };
 pub use schema::SchemaRef;
 pub use sse::SseFraming;
-pub use stream::FlowStreamEvent;
+pub use stream::{AgentWireEvent, FlowStreamEvent, WireStopReason};
 pub use thread::{AgentThreadDescriptor, ThreadCheckpoint, ThreadMessage};
 pub use tool::{ToolCall, ToolDescriptor, ToolResult};
 pub use tool_name::{ToolNameMap, sanitize_tool_name};

@@ -68,9 +68,12 @@ pub use provider::{
 pub use reduce::ReduceBuilder;
 pub use retrieval::{AiRetriever, DynRetriever, RetrieverRegistry, retriever_as_tool};
 pub use runtime::{
-    AbortHandle, AgentConfig, AgentEvent, AgentSession, AgentSessionBuilder, CapturePolicy,
-    StopReason, ToolDecision,
+    AbortHandle, AgentConfig, AgentEvent, AgentEventRedactor, AgentSession, AgentSessionBuilder,
+    CapturePolicy, StopReason, ToolDecision,
 };
+// Beside [`AgentEventRedactor`]: the policy it applies and the wire type it
+// produces (both live in the wasm-safe core crate so clients can decode).
+pub use pocopine_agenkit_core::{AgentWireEvent, Redactor, WireStopReason};
 // Beside [`ToolDecision`]: the parameter type a `before_tool_call` hook receives.
 pub use pocopine_agenkit_core::ToolCall;
 pub use thread::{

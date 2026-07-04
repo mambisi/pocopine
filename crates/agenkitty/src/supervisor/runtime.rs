@@ -528,7 +528,9 @@ impl FrameworkRunner {
         let mut events = vec![started];
         let mut stream = session.prompt(options.prompt);
         while let Some(event) = stream.next().await {
-            let event = map_agent_event(event);
+            let Some(event) = map_agent_event(event) else {
+                continue;
+            };
             self.session_runtime
                 .store()
                 .append_event(
@@ -643,9 +645,15 @@ fn project_id_from_root(root: &Path) -> String {
         .into_owned()
 }
 
-fn map_agent_event(event: AgentEvent) -> FrameworkEvent {
-    match event {
+/// Map a runtime event onto the supervisor's persisted [`FrameworkEvent`]
+/// surface. `None` = deliberately dropped: `AssistantDelta` fragments are a
+/// live-UI concern (ephemeral by contract) — this batch runner persists the
+/// assembled `AssistantText` that follows them, so folding every word-sized
+/// fragment into the session log would only bloat it.
+fn map_agent_event(event: AgentEvent) -> Option<FrameworkEvent> {
+    Some(match event {
         AgentEvent::Started => FrameworkEvent::started("turn started"),
+        AgentEvent::AssistantDelta { .. } => return None,
         AgentEvent::AssistantText { text } => {
             FrameworkEvent::assistant_text(redact_text_to_limit(&text, 4096))
         }
@@ -686,7 +694,7 @@ fn map_agent_event(event: AgentEvent) -> FrameworkEvent {
         }),
         AgentEvent::Failed { error } => FrameworkEvent::failed(redact_text_to_limit(&error, 4096)),
         _ => FrameworkEvent::unknown("unknown agenkit event"),
-    }
+    })
 }
 
 fn tool_call_ref(call_id: &str, tool_id: &str) -> SessionSourceRef {
@@ -705,9 +713,22 @@ mod tests {
     fn map_agent_event_redacts_assistant_text_in_report_events() {
         let event = map_agent_event(AgentEvent::AssistantText {
             text: "api_key=secret".to_string(),
-        });
+        })
+        .expect("assistant text maps to an event");
 
         assert_eq!(event.message.as_deref(), Some("[redacted]"));
+    }
+
+    #[test]
+    fn map_agent_event_drops_assistant_deltas() {
+        // Deltas are ephemeral live-UI fragments; the batch supervisor persists
+        // only the assembled AssistantText that follows them.
+        assert!(
+            map_agent_event(AgentEvent::AssistantDelta {
+                text: "frag".to_string(),
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -721,7 +742,8 @@ mod tests {
             id: "call-1".to_string(),
             tool: "process.run".to_string(),
             output: serde_json::json!({ "stdout": "export TOKEN=bearer sk-live-123" }),
-        });
+        })
+        .expect("tool completion maps to an event");
         let payload = event.payload.expect("tool payload");
         assert_eq!(payload["output"]["stdout"], "[redacted]");
     }

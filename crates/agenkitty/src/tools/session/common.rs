@@ -11,7 +11,7 @@ use agenkitty_core::{
     SessionNote, SessionSourceRef, SessionStoreKind, SessionSummary,
 };
 use pocopine_agenkit::server::session::ThreadId;
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
+use pocopine_agenkit_core::{AgenkitError, AgenkitResult, Redactor};
 use serde_json::{Map, Value};
 
 pub type SessionMetadataFuture<'a, T> = Pin<Box<dyn Future<Output = AgenkitResult<T>> + Send + 'a>>;
@@ -712,44 +712,23 @@ pub(super) fn redact_text(text: &str) -> String {
     redact_text_to_limit(text, 4096)
 }
 
+/// The session redactor: the shared wire-boundary [`Redactor`] (truncation,
+/// sensitive-key blanking) plugged with [`agenkitty_core::looks_like_secret`]
+/// — the redaction side of the shared classifier (F3), the same predicate
+/// memory/artifacts *reject* on — so every tool's output flowing through here
+/// (fs / patch / process / network results become session events) is covered
+/// by one predicate.
+fn wire_redactor() -> &'static Redactor {
+    static REDACTOR: std::sync::OnceLock<Redactor> = std::sync::OnceLock::new();
+    REDACTOR.get_or_init(|| Redactor::new().secret_classifier(agenkitty_core::looks_like_secret))
+}
+
 pub(crate) fn redact_text_to_limit(text: &str, max_bytes: usize) -> String {
-    if text_needs_full_redaction(text) {
-        return "[redacted]".to_string();
-    }
-    truncate_utf8(text, max_bytes)
+    wire_redactor().text_to_limit(text, max_bytes)
 }
 
 pub(crate) fn redact_json_value(value: &Value, max_string_bytes: usize) -> Value {
-    redact_json_value_at_depth(value, max_string_bytes, 0)
-}
-
-fn redact_json_value_at_depth(value: &Value, max_string_bytes: usize, depth: usize) -> Value {
-    const MAX_JSON_REDACTION_DEPTH: usize = 64;
-    if depth > MAX_JSON_REDACTION_DEPTH {
-        return Value::String("[redacted: too deep]".to_string());
-    }
-    match value {
-        Value::String(text) => Value::String(redact_text_to_limit(text, max_string_bytes)),
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .map(|item| redact_json_value_at_depth(item, max_string_bytes, depth + 1))
-                .collect(),
-        ),
-        Value::Object(object) => {
-            let mut redacted = Map::new();
-            for (key, value) in object {
-                let value = if is_sensitive_key(key) {
-                    Value::String("[redacted]".to_string())
-                } else {
-                    redact_json_value_at_depth(value, max_string_bytes, depth + 1)
-                };
-                redacted.insert(key.clone(), value);
-            }
-            Value::Object(redacted)
-        }
-        _ => value.clone(),
-    }
+    wire_redactor().json_to_limit(value, max_string_bytes)
 }
 
 pub(crate) fn redact_artifact_link(mut link: SessionArtifactLink) -> SessionArtifactLink {
@@ -859,58 +838,6 @@ pub(crate) fn redact_source_refs(source_refs: Vec<SessionSourceRef>) -> Vec<Sess
             },
         })
         .collect()
-}
-
-/// The session redactor replaces text carrying credential material with
-/// `[redacted]` before it persists. This is the *redaction* side of the shared
-/// [`agenkitty_core::looks_like_secret`] classifier (F3) — the same predicate
-/// memory/artifacts *reject* on — so every tool's output flowing through this
-/// redactor (fs / patch / process / network results become session events) is
-/// covered by one predicate.
-fn text_needs_full_redaction(text: &str) -> bool {
-    agenkitty_core::looks_like_secret(text)
-}
-
-fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
-    matches!(
-        normalized.as_str(),
-        "apikey"
-            | "xapikey"
-            | "token"
-            | "accesstoken"
-            | "refreshtoken"
-            | "idtoken"
-            | "authorization"
-            | "auth"
-            | "password"
-            | "passwd"
-            | "pwd"
-            | "secret"
-            | "clientsecret"
-            | "secretkey"
-            | "privatekey"
-            | "credential"
-            | "credentials"
-    ) || normalized.ends_with("apikey")
-        || normalized.ends_with("token")
-        || normalized.ends_with("secret")
-        || normalized.ends_with("password")
-}
-
-pub fn truncate_utf8(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
 }
 
 fn lock_err<T>(_: std::sync::PoisonError<T>) -> AgenkitError {

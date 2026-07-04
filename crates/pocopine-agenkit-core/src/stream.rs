@@ -213,6 +213,110 @@ pub enum FlowStreamEvent {
     Unknown,
 }
 
+/// The public, client-safe projection of a conversational agent turn — the
+/// session analogue of [`FlowStreamEvent`]. Produced by
+/// `pocopine_agenkit::server::AgentEventRedactor`, the stateful adapter that
+/// maps the trusted host-side `AgentEvent` firehose through a
+/// [`Redactor`](crate::redact::Redactor) — classifying the *assembled* delta
+/// text so a fragment-split secret can't stream out — so every UI bridge
+/// (SSE, websocket, CLI) shares one redaction-by-construction path instead of
+/// hand-rolling its own trusted→wire mapping.
+///
+/// Tool `args`/`output` ride the wire *redacted* (size-capped, sensitive keys
+/// blanked, classifier-checked) — present because a chat harness renders them;
+/// a bridge that wants them off the wire entirely can drop the fields in its
+/// own mapping.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AgentWireEvent {
+    /// A prompt was accepted; the turn begins.
+    Started,
+    /// An incremental fragment of the assistant's answer (a live view — the
+    /// assembled message follows as [`AssistantText`](AgentWireEvent::AssistantText)).
+    AssistantDelta {
+        /// The next fragment of the assistant's text.
+        text: String,
+    },
+    /// An assistant text response (assembled; may precede tool calls).
+    AssistantText {
+        /// The assistant's text.
+        text: String,
+    },
+    /// A tool call is about to run.
+    ToolStarted {
+        /// The provider's call id.
+        id: String,
+        /// The tool's registry id.
+        tool: String,
+        /// The call arguments (redacted).
+        args: serde_json::Value,
+    },
+    /// A tool call returned.
+    ToolCompleted {
+        /// The provider's call id.
+        id: String,
+        /// The tool's registry id.
+        tool: String,
+        /// The tool's output (redacted).
+        output: serde_json::Value,
+    },
+    /// A tool call failed (the loop continues).
+    ToolFailed {
+        /// The provider's call id.
+        id: String,
+        /// The tool's registry id.
+        tool: String,
+        /// The error text (redacted).
+        error: String,
+    },
+    /// A hook blocked a tool call.
+    ToolBlocked {
+        /// The provider's call id.
+        id: String,
+        /// The tool's registry id.
+        tool: String,
+        /// Why it was blocked (redacted).
+        reason: String,
+    },
+    /// The thread was compacted.
+    Compacted {
+        /// How many messages were folded into the summary.
+        folded: u64,
+    },
+    /// Terminal: the turn finished successfully.
+    Stopped {
+        /// Why the turn ended.
+        reason: WireStopReason,
+    },
+    /// Terminal: the turn failed.
+    Failed {
+        /// The error text (redacted).
+        error: String,
+    },
+    /// Forward-compatibility fallback: an event tag this build does not know.
+    /// Never constructed by the server; produced on the decode side so an
+    /// older client skips a newer server's events instead of failing.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Why a turn ended, on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum WireStopReason {
+    /// The model answered with no tool calls — waiting for the next prompt.
+    Idle,
+    /// The per-turn step budget was hit.
+    MaxSteps,
+    /// The turn was cancelled.
+    Aborted,
+    /// Forward-compatibility fallback for a reason this build does not know.
+    #[serde(other)]
+    Unknown,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +397,31 @@ mod tests {
         let event: FlowStreamEvent =
             serde_json::from_str(r#"{"event":"added_in_a_future_version"}"#).unwrap();
         assert_eq!(event, FlowStreamEvent::Unknown);
+    }
+
+    #[test]
+    fn agent_wire_events_are_tagged_and_degrade_to_unknown() {
+        let delta = AgentWireEvent::AssistantDelta {
+            text: "hel".to_string(),
+        };
+        let json = serde_json::to_string(&delta).unwrap();
+        assert!(json.contains(r#""event":"assistant_delta""#));
+        assert_eq!(
+            serde_json::from_str::<AgentWireEvent>(&json).unwrap(),
+            delta
+        );
+
+        let stopped = AgentWireEvent::Stopped {
+            reason: WireStopReason::MaxSteps,
+        };
+        let json = serde_json::to_string(&stopped).unwrap();
+        assert!(json.contains(r#""reason":"max_steps""#));
+
+        // An old client reading a newer server's stream skips, not fails.
+        let event: AgentWireEvent =
+            serde_json::from_str(r#"{"event":"added_in_a_future_version"}"#).unwrap();
+        assert_eq!(event, AgentWireEvent::Unknown);
+        let reason: WireStopReason = serde_json::from_str(r#""new_reason""#).unwrap();
+        assert_eq!(reason, WireStopReason::Unknown);
     }
 }
