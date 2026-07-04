@@ -1,0 +1,6 @@
+<div class="ptsc-shell">
+  <button class="ptsc-open" pp-on:click="open_it">open</button>
+  <template pp-if="open" pp-teleport="body">
+    <div class="ptsc-body"><slot></slot></div>
+  </template>
+</div>

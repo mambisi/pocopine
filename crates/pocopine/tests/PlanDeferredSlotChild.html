@@ -1,0 +1,6 @@
+<div class="pdsc-shell">
+  <button class="pdsc-open" pp-on:click="open_it">open</button>
+  <template pp-if="open">
+    <div class="pdsc-body"><slot></slot></div>
+  </template>
+</div>
