@@ -261,7 +261,8 @@ pub fn catalog() -> Catalog {
                         None,
                         false,
                         "border-b",
-                        "border, border-0/2/4, sides t/r/b/l, styles solid/dashed/…",
+                        "border, widths border-0/2/4 (all sides or per side: border-l-2), \
+                         sides t/r/b/l, styles solid/dashed/…",
                     ),
                     fam(
                         "rounded",
