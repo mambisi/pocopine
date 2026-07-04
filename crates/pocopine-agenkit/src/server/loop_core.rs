@@ -16,15 +16,18 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Message, ModelRef, StepId, StepKind, StepStatus, ToolCall, Usage,
-    events,
+    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, StepId, StepKind,
+    StepStatus, ToolCall, Usage, events,
 };
 
 use super::agenkit::AgenkitInner;
 use super::context::AiContext;
-use super::provider::{GenerateRequest, GenerateResponse, Provider, ProviderContext};
+use super::provider::{
+    FinishReason, GenerateRequest, GenerateResponse, Provider, ProviderContext, StreamChunk,
+};
 use super::run::RunState;
 
 /// A `before_tool_call` hook's decision for one tool call (L3). Mirrors the
@@ -71,6 +74,11 @@ pub(crate) trait LoopObserver {
     fn model_request(&self, _model: &ModelRef) -> Option<StepId> {
         None
     }
+    /// A user-visible fragment of the assistant's answer arrived on the model's
+    /// response stream (only [`run_model_step_streamed`] reports these). The
+    /// assembled text still arrives whole via the response — deltas are a live
+    /// view, not a substitute.
+    fn assistant_delta(&self, _delta: &str) {}
     /// The model responded (`usage` = token accounting, if the provider gave it).
     fn model_response(&self, _step: Option<StepId>, _model: &ModelRef, _usage: Option<Usage>) {}
     /// A tool is about to run; returns the trace step it opened.
@@ -104,6 +112,78 @@ pub(crate) async fn run_model_step(
         .generate(request, cx)
         .await
         .map_err(super::generate::reclassify_overflow)?;
+    observer.model_response(step, model, response.usage);
+    Ok(response)
+}
+
+/// Call the model for one step, **streaming**: like [`run_model_step`], but
+/// consumes the provider's incremental stream — reporting each user-visible text
+/// fragment through [`LoopObserver::assistant_delta`] as it arrives — and then
+/// assembles the same finished [`GenerateResponse`] (reasoning + text + tool
+/// calls + usage) the one-shot path returns, so the caller's termination logic
+/// is unchanged. A provider without native streaming degrades to a single delta
+/// carrying the whole answer (§D13). The assembly mirrors the flow path's
+/// `run_streamed` (`server/generate.rs`): reasoning rides the response content
+/// server-side only — it is never reported as a delta (§D10).
+pub(crate) async fn run_model_step_streamed(
+    provider: &Arc<dyn Provider>,
+    request: GenerateRequest,
+    cx: &ProviderContext,
+    model: &ModelRef,
+    observer: &(dyn LoopObserver + Sync),
+) -> AgenkitResult<GenerateResponse> {
+    let step = observer.model_request(model);
+
+    // Honor the declared streaming capability: stream natively when supported,
+    // else adapt a one-shot generation to the streaming contract (§D13).
+    let mut stream = if provider.capabilities().streaming {
+        provider.generate_stream(request, cx)
+    } else {
+        super::provider::fallback_stream(provider.as_ref(), request, cx)
+    };
+
+    let mut text = String::new();
+    let mut thinking_parts: Vec<ContentPart> = Vec::new();
+    let mut tool_calls = Vec::new();
+    let mut usage = None;
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(StreamChunk::Text(delta)) => {
+                observer.assistant_delta(&delta);
+                text.push_str(&delta);
+            }
+            Ok(StreamChunk::Thinking { text, signature }) => {
+                thinking_parts.push(ContentPart::thinking(text, signature));
+            }
+            Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
+            Ok(StreamChunk::Usage(reported)) => usage = Some(reported),
+            // A mid-stream failure fails the step (partial text is discarded —
+            // the caller's turn fails and nothing is persisted, so a consumer
+            // never sees deltas confirmed by a final message).
+            Err(error) => return Err(super::generate::reclassify_overflow(error)),
+        }
+    }
+    drop(stream);
+
+    let finish_reason = if tool_calls.is_empty() {
+        FinishReason::Stop
+    } else {
+        FinishReason::ToolCalls
+    };
+    // Reasoning parts (if any) precede the answer text — parity with the
+    // non-streamed response shape, so replay/persistence see one contract.
+    let content = if thinking_parts.is_empty() {
+        Content::text(text)
+    } else {
+        thinking_parts.push(ContentPart::text(text));
+        Content::from_parts(thinking_parts)
+    };
+    let response = GenerateResponse {
+        content,
+        tool_calls,
+        usage,
+        finish_reason,
+    };
     observer.model_response(step, model, response.usage);
     Ok(response)
 }
