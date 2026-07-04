@@ -1,0 +1,9 @@
+<div class="prph-root">
+  <button class="prph-remove" pp-on:click="remove_first">remove</button>
+  <template pp-for="item in items" pp-key="item">
+    <div class="prph-row">
+      <span class="prph-label" pp-text="item"></span>
+      <plan-teleport-slot-child><span class="prph-content">menu</span></plan-teleport-slot-child>
+    </div>
+  </template>
+</div>

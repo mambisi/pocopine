@@ -425,6 +425,15 @@ impl Scope {
         })
     }
 
+    /// Live scope count — a cheap health counter for tests/devtools (the
+    /// registry-side sibling of `reactive::stats`). Compiled rows have no
+    /// per-row effects, so a leaked LoopScope is invisible to the effect
+    /// counter; this is the metric that catches it.
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    pub fn count() -> usize {
+        SCOPES.with(|s| s.borrow().len())
+    }
+
     /// Remove a scope from the registry. Called when its element is
     /// unmounted. Also drops any refs + captured slot content
     /// registered against this scope so we don't leak element

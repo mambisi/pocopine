@@ -1,6 +1,10 @@
 <div class="ptsc-shell">
   <button class="ptsc-open" pp-on:click="open_it">open</button>
+  <button class="ptsc-close" pp-on:click="close_it">close</button>
   <template pp-if="open" pp-teleport="body">
-    <div class="ptsc-body"><slot></slot></div>
+    <div class="ptsc-body"
+         pp-transition:leave="ptsc-leaving"
+         pp-transition:leave-start="ptsc-leave-from"
+         pp-transition:leave-end="ptsc-leave-to"><slot></slot></div>
   </template>
 </div>
