@@ -317,6 +317,9 @@ impl PlanTeleportSlotChild {
     pub fn open_it(&mut self) {
         self.open = true;
     }
+    pub fn close_it(&mut self) {
+        self.open = false;
+    }
 }
 
 /// Compound host over the teleporting child.
@@ -326,6 +329,29 @@ struct PlanCompoundTeleportHost {}
 
 #[handlers]
 impl PlanCompoundTeleportHost {}
+
+/// A keyed pp-for whose rows each host a teleporting child (the AkTreeRow
+/// shape): opening the row's portal puts a clone at `<body>`; deleting the
+/// row must reap that clone. Row teardown is table-driven (it never walks
+/// the row's DOM), so the per-element teleport stash used to be skipped
+/// entirely — orphaning the panel at the viewport corner.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanRowPortalHost.html")]
+struct PlanRowPortalHost {
+    items: Vec<String>,
+}
+
+#[handlers]
+impl PlanRowPortalHost {
+    pub fn on_setup(&mut self) {
+        self.items = vec!["a".to_string(), "b".to_string()];
+    }
+    pub fn remove_first(&mut self) {
+        if !self.items.is_empty() {
+            self.items.remove(0);
+        }
+    }
+}
 
 /// Child used by the compiled-finalize regression test. Its
 /// `on_mount` write proves a lifted fragment containing a child
@@ -1050,6 +1076,7 @@ fn register_all() {
     PlanCompoundDeferredHost::register();
     PlanTeleportSlotChild::register();
     PlanCompoundTeleportHost::register();
+    PlanRowPortalHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
     PlanHostDirectiveChild::register();
@@ -1836,6 +1863,224 @@ async fn slot_outlet_in_teleported_child_body_projects_on_open() {
     );
 
     // Cleanup: drop the teleported node too, so later tests see a clean body.
+    if let Some(node) = body.query_selector(".ptsc-body").unwrap() {
+        node.remove();
+    }
+    host.remove();
+}
+
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(w) = window() {
+            let _ = w
+                .set_timeout_with_callback_and_timeout_and_arguments_0(resolve.unchecked_ref(), ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// The exact AgenKitty-11 timeline: the panel's close (leave) animation is
+/// STILL RUNNING when the row unmounts. The row teardown must reap the
+/// mid-leave clone immediately — not wait for a completion that may never
+/// come — and the leave's late backstop callback must then no-op instead of
+/// double-freeing.
+#[wasm_bindgen_test]
+async fn deleting_a_row_mid_close_animation_reaps_the_portal_clone() {
+    register_all();
+    reset_plan_failure_count();
+
+    // Give the clone a real CSS transition (the leave path discovers
+    // animated elements via the fixture's `pp-transition:leave*` attrs;
+    // the stylesheet makes the leave classes actually animate).
+    let style = doc().create_element("style").unwrap();
+    style.set_text_content(Some(
+        ".ptsc-body { opacity: 1; transition: opacity 0.25s linear; } \
+         .ptsc-leave-to { opacity: 0; }",
+    ));
+    doc().head().unwrap().append_child(&style).unwrap();
+
+    let host = mount("<plan-row-portal-host></plan-row-portal-host>");
+    tick().await;
+    let body = doc().body().unwrap();
+
+    // Open, then start CLOSING (leave animation begins; clone still in DOM).
+    host.query_selector(".prph-row .ptsc-open")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    host.query_selector(".prph-row .ptsc-close")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    // Self-check that the test exercises what it claims: the leave window
+    // must actually be OPEN here — the clone still in the DOM, mid-leave.
+    // Without this the test would pass vacuously (a synchronous close
+    // removes the clone before the row delete ever runs).
+    assert!(
+        body.query_selector(".ptsc-body").unwrap().is_some(),
+        "close must start an ANIMATED leave — clone gone means the leave \
+         window never opened and this test is not testing mid-leave"
+    );
+
+    // Delete the row inside the leave window.
+    host.query_selector(".prph-remove")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    assert!(
+        body.query_selector(".ptsc-body").unwrap().is_none(),
+        "row teardown must reap the mid-leave clone immediately"
+    );
+
+    // Ride out the transition + the 1s leave backstop: the late completion
+    // must be a no-op (no resurrection, no double-free panic).
+    sleep_ms(1200).await;
+    assert!(
+        body.query_selector(".ptsc-body").unwrap().is_none(),
+        "late leave completion must not resurrect the clone"
+    );
+
+    style.remove();
+    host.remove();
+}
+
+/// The compiled single-remove FAST path must release the removed row's loop
+/// scope + reactive bookkeeping too — it early-returns before the drain path,
+/// so it needs its own post-removal release (review finding on the
+/// drain-path fix).
+#[wasm_bindgen_test]
+async fn compiled_single_remove_fast_path_releases_the_row_scope() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+    assert_eq!(host.query_selector_all(".r64k-row").unwrap().length(), 3);
+
+    // Compiled rows have no per-row effects (one list-level watcher drives
+    // them), so the leak is only visible in the SCOPE registry: removing a
+    // row must evict exactly its LoopScope.
+    let before = pocopine_core::scope::Scope::count();
+    host.query_selector(".r64k-remove")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(host.query_selector_all(".r64k-row").unwrap().length(), 2);
+    let after = pocopine_core::scope::Scope::count();
+
+    assert_eq!(
+        after,
+        before - 1,
+        "fast-path removal must evict the removed row's loop scope \
+         (scopes {before} -> {after})",
+    );
+
+    host.remove();
+}
+
+/// Row removal must be effect-neutral: everything nested in the row —
+/// component scopes, reactive effects, listeners — releases with it. Before
+/// the fix the drain paths only detached the DOM (relying on a
+/// MutationObserver removed in RFC-058 Phase 6.5), leaking all of it.
+#[wasm_bindgen_test]
+async fn removing_a_keyed_row_releases_its_nested_effects() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<plan-row-portal-host></plan-row-portal-host>");
+    tick().await;
+
+    async fn remove_once(host: &Element) {
+        host.query_selector(".prph-remove")
+            .unwrap()
+            .unwrap()
+            .dyn_ref::<HtmlElement>()
+            .unwrap()
+            .click();
+        tick().await;
+    }
+
+    // Warm-up removal absorbs one-time lazy state, then a steady-state
+    // removal must strictly DROP live effects (the removed row's).
+    remove_once(&host).await; // 2 rows → 1
+    let (before, _) = pocopine_core::reactive::stats();
+    remove_once(&host).await; // 1 row → 0
+    let (after, _) = pocopine_core::reactive::stats();
+    assert!(
+        after < before,
+        "removing a row must release its nested effects (before={before}, after={after})"
+    );
+
+    host.remove();
+}
+
+/// Deleting a keyed pp-for row must reap any portal clone its subtree
+/// teleported to `<body>` (AgenKitty finding 11: deleting a tree row while
+/// its context menu was open/closing orphaned the panel at the viewport
+/// corner indefinitely). Row teardown is table-driven — it never walks the
+/// row's DOM — so the clone stashed on the portal's origin element inside
+/// the row was never released.
+#[wasm_bindgen_test]
+async fn deleting_a_row_reaps_its_teleported_portal_clone() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<plan-row-portal-host></plan-row-portal-host>");
+    tick().await;
+    let body = doc().body().unwrap();
+
+    // Open the FIRST row's portal → clone lands at <body>.
+    host.query_selector(".prph-row .ptsc-open")
+        .unwrap()
+        .expect("row's portal trigger mounts")
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert!(
+        body.query_selector(".ptsc-body .prph-content")
+            .unwrap()
+            .is_some(),
+        "portal clone must be at <body> while the row lives"
+    );
+
+    // Delete the first row while its portal is OPEN.
+    host.query_selector(".prph-remove")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    assert!(
+        host.query_selector_all(".prph-row").unwrap().length() == 1,
+        "one row must remain"
+    );
+    // The orphan: the clone must be gone with its row.
+    assert!(
+        body.query_selector(".ptsc-body").unwrap().is_none(),
+        "deleting the row must reap its teleported clone: {:?}",
+        body.query_selector(".ptsc-body")
+            .unwrap()
+            .map(|n| n.outer_html())
+    );
+
+    // Cleanup for later tests.
     if let Some(node) = body.query_selector(".ptsc-body").unwrap() {
         node.remove();
     }

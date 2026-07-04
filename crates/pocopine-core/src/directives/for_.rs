@@ -147,10 +147,16 @@ fn fire_staggered_enter(clones: &[Element], stagger_ms: u32) {
 }
 
 fn remove_or_leave(root: &Element) {
+    // RFC-058 Phase 6.5 — no MutationObserver releases removed subtrees
+    // anymore, so removal must release synchronously (mirrors pp-if's
+    // leave completion): otherwise every nested component scope, effect,
+    // and listener in the row leaks — and any portal clone stashed on a
+    // descendant (`pp-teleport`) is orphaned at its target forever.
     if !crate::directives::transition::has_transition_in_subtree(root) {
         if let Some(parent) = root.parent_node() {
             let _ = parent.remove_child(root);
         }
+        crate::mount::release_subtree(root.as_ref());
         return;
     }
     let root_cap = root.clone();
@@ -158,6 +164,7 @@ fn remove_or_leave(root: &Element) {
         if let Some(parent) = root_cap.parent_node() {
             let _ = parent.remove_child(&root_cap);
         }
+        crate::mount::release_subtree(root_cap.as_ref());
     });
 }
 
@@ -1190,6 +1197,11 @@ fn try_single_remove_fast_path(
         if let Some(parent) = entry.element.parent_node() {
             let _ = parent.remove_child(&entry.element);
         }
+        // Same post-removal release contract as the drain path (RFC-058
+        // Phase 6.5 — no observer releases removed subtrees): drop the
+        // row's loop scope, nested state, and any teleport stash, or the
+        // fast path leaks what the slow path now frees.
+        crate::mount::release_subtree(entry.element.as_ref());
         crate::directives::for_plan::unmount_row_compiled(entry.scope_id);
     }
     crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
@@ -1834,6 +1846,13 @@ fn run_keyed(
                     if let Some(parent) = el.parent_node() {
                         let _ = parent.remove_child(&el);
                     }
+                    // RFC-058 Phase 6.5 — the MutationObserver that used to
+                    // release removed rows asynchronously is gone: release
+                    // here, synchronously, or everything nested in the row
+                    // (component scopes, effects, listeners — and any
+                    // pp-teleport clone stashed on a descendant, which would
+                    // otherwise stay orphaned at its target) leaks.
+                    crate::mount::release_subtree(el.as_ref());
                     crate::directives::for_plan::unmount_row_compiled(scope_id_for_unmount);
                     retract_from_prior(&prior_for_retract, &key_for_retract);
                     // No transition → the entry is fully retired
@@ -1841,20 +1860,35 @@ fn run_keyed(
                     // below keeps the dead entry out of
                     // `fresh.extend(leavers)`, which would
                     // otherwise re-stash it into `prior` and let
-                    // the *next* reconcile reuse the clone after
-                    // its scope was already removed by the async
-                    // observer — `mount_row_compiled` would then
-                    // run with `loop_state = None` and every
-                    // binding would evaluate to UNDEFINED.
+                    // the *next* reconcile reuse the released clone —
+                    // `mount_row_compiled` would then run with
+                    // `loop_state = None` and every binding would
+                    // evaluate to UNDEFINED.
                     continue;
                 }
+                let done_synchronously = Rc::new(std::cell::Cell::new(false));
+                let done_flag = done_synchronously.clone();
                 crate::directives::transition::leave_subtree(&el, move || {
                     if let Some(parent) = el_for_cb.parent_node() {
                         let _ = parent.remove_child(&el_for_cb);
                     }
+                    // Completion-only release: a leaver resumed mid-leave
+                    // (its key re-added) cancels the leave, so this callback
+                    // never fires for it and the clone stays live — same
+                    // contract as pp-if's leave teardown.
+                    crate::mount::release_subtree(el_for_cb.as_ref());
                     crate::directives::for_plan::unmount_row_compiled(scope_id_for_unmount);
                     retract_from_prior(&prior_for_retract, &key_for_retract);
+                    done_flag.set(true);
                 });
+                // Reduced motion / disabled animations complete the leave
+                // SYNCHRONOUSLY: the clone above is already released, so it
+                // must not enter the reuse pool — same reasoning as the
+                // no-transition branch (a re-added key would otherwise
+                // resurrect a scope-less, listener-less clone).
+                if done_synchronously.get() {
+                    continue;
+                }
             }
             leavers.push(entry);
         }
