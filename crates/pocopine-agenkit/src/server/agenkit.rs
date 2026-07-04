@@ -121,6 +121,12 @@ impl Agenkit {
         &self.inner.embedders
     }
 
+    /// The configured agent-thread store — e.g. to list a principal's threads
+    /// for a sidebar (`agenkit.thread_store().list(owner)`).
+    pub fn thread_store(&self) -> &Arc<dyn AgentThreadStore> {
+        &self.inner.thread_store
+    }
+
     /// A fresh execution context over the runtime's app state.
     pub fn context(&self) -> AiContext {
         AiContext::new(self.inner.state.clone())

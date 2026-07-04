@@ -74,6 +74,7 @@ pub use runtime::{
 // Beside [`ToolDecision`]: the parameter type a `before_tool_call` hook receives.
 pub use pocopine_agenkit_core::ToolCall;
 pub use thread::{
-    AgentThreadHandle, AgentThreadStore, SessionThreadStore, ThreadBuilder, ThreadOwner,
+    AgentThreadHandle, AgentThreadMeta, AgentThreadStore, SessionThreadStore, ThreadBuilder,
+    ThreadOwner,
 };
 pub use tool::{AiTool, DynTool, ToolRegistry};

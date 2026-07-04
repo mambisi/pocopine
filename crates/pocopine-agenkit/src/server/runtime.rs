@@ -662,6 +662,14 @@ impl AgentSession {
         self.thread.history().await
     }
 
+    /// Merge `patch` into this thread's attributes (e.g. a title, so a sidebar
+    /// can label the conversation) — see
+    /// [`AgentThreadStore`](super::thread::AgentThreadStore::update_attributes)
+    /// for the merge semantics and the reserved keys.
+    pub async fn update_attributes(&self, patch: serde_json::Value) -> AgenkitResult<()> {
+        self.thread.update_attributes(patch).await
+    }
+
     /// The durable usage provenance entries for this thread (this thread's own
     /// turns only — a fork reports its own usage, not the inherited prefix's).
     /// Empty if the backing store doesn't record provenance.

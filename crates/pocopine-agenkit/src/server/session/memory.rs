@@ -74,6 +74,26 @@ impl SessionStore for MemorySessionStore {
         })())
     }
 
+    fn threads<'a>(&'a self) -> SessionFuture<'a, Vec<ThreadMeta>> {
+        ready((|| {
+            let threads = self.lock()?;
+            Ok(threads.values().map(|e| e.meta.clone()).collect())
+        })())
+    }
+
+    fn set_attributes<'a>(
+        &'a self,
+        id: &'a ThreadId,
+        attributes: serde_json::Value,
+    ) -> SessionFuture<'a, ()> {
+        ready((|| {
+            let mut threads = self.lock()?;
+            let entry = threads.get_mut(id).ok_or(SessionError::NotFound)?;
+            entry.meta.attributes = attributes;
+            Ok(())
+        })())
+    }
+
     fn append<'a>(
         &'a self,
         id: &'a ThreadId,
