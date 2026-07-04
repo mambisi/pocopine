@@ -1,10 +1,18 @@
 /* <pine-icon> renders as role="visual" → <span>. Inline-flex so
    it aligns to baseline with sibling text like any other inline
-   glyph, while letting the injected SVG fill the sized box. */
+   glyph, while letting the injected SVG fill the sized box.
+
+   The 1em default box makes an unsized icon ride the surrounding
+   font-size — exactly what a paired text/icon scale wants. It's a
+   class rule (not an inline style), so app CSS can override
+   width/height without `!important`; an explicit `size` prop wins
+   via the inline style the component then writes. */
 .pine-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 1em;
+  height: 1em;
   line-height: 1;
   vertical-align: middle;
 }

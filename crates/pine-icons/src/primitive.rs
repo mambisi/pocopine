@@ -20,7 +20,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "PineIcon.poco",
     style = "PineIcon.css",
@@ -37,7 +37,11 @@ pub struct PineIcon {
     /// the common case.
     #[prop]
     pub variant: String,
-    /// Render size in CSS pixels. `0` falls back to `20`.
+    /// Render size in CSS pixels. Unset (`0`) writes no inline
+    /// style at all: the icon's box defaults to `1em` via CSS, so
+    /// it rides the surrounding font-size and app stylesheets can
+    /// resize it without `!important`. An explicit size pins the
+    /// box in px via inline style.
     #[prop]
     pub size: u32,
     /// Computed SVG body, fed to `pp-html` in the template.
@@ -53,19 +57,6 @@ pub struct PineIcon {
     pub svg_hash: u64,
     /// Computed inline-style for the sized box.
     pub size_style: String,
-}
-
-impl Default for PineIcon {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            variant: String::new(),
-            size: 20,
-            svg: String::new(),
-            svg_hash: 0,
-            size_style: String::new(),
-        }
-    }
 }
 
 #[handlers]
@@ -137,12 +128,19 @@ impl PineIcon {
         }
     }
 
-    /// Recompute the inline `width/height` style. Same no-op
-    /// guard pattern — resizing a primitive without actually
+    /// Recompute the inline `width/height` style. Unset (`0`)
+    /// emits NO inline style — the `.pine-icon` class defaults the
+    /// box to `1em`, and keeping the style attribute empty is what
+    /// lets app CSS override the size without `!important`. Same
+    /// no-op guard pattern — resizing a primitive without actually
     /// changing `size` shouldn't retrigger downstream effects.
     fn refresh_size_style(&mut self) {
-        let s = if self.size == 0 { 20 } else { self.size };
-        let next = format!("width:{s}px;height:{s}px");
+        let next = if self.size == 0 {
+            String::new()
+        } else {
+            let s = self.size;
+            format!("width:{s}px;height:{s}px")
+        };
         if self.size_style != next {
             self.size_style = next;
         }

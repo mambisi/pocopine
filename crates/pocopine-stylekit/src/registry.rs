@@ -39,6 +39,11 @@ impl CssType {
                     || value.ends_with('%')
                     || value.ends_with("vh")
                     || value.ends_with("vw")
+                    || value.ends_with("vmin")
+                    || value.ends_with("vmax")
+                    // `ch` covers the prose-measure idiom (`max-w-[56ch]`);
+                    // note `.ends_with("ch")` isn't shadowed by another unit.
+                    || value.ends_with("ch")
                     || value.ends_with("fr")
                     || value.starts_with("calc(")
                     || value.starts_with("min(")
@@ -612,6 +617,9 @@ fn static_utility(base: &str) -> Option<Decls> {
         "whitespace-nowrap" => d("white-space", "nowrap"),
         "whitespace-normal" => d("white-space", "normal"),
         "whitespace-pre" => d("white-space", "pre"),
+        "whitespace-pre-line" => d("white-space", "pre-line"),
+        "whitespace-pre-wrap" => d("white-space", "pre-wrap"),
+        "whitespace-break-spaces" => d("white-space", "break-spaces"),
         // resize
         "resize" => d("resize", "both"),
         "resize-x" => d("resize", "horizontal"),
@@ -1344,15 +1352,27 @@ fn try_border(base: &str, tokens: &ThemeTokens) -> Resolved {
     if let Ok(n) = name.parse::<u32>() {
         return Some(Ok(decl("border-width", &format!("{n}px"))));
     }
-    // Per-side colour: `border-t-<color>` → border-top-color, etc.
-    for (pfx, prop) in [
-        ("t-", "border-top-color"),
-        ("r-", "border-right-color"),
-        ("b-", "border-bottom-color"),
-        ("l-", "border-left-color"),
+    // Per-side width or colour: `border-l-2` → border-left-width,
+    // `border-l-accent` → border-left-color. The numeric check runs
+    // first so the width scale mirrors the all-sides `border-2` (and
+    // the arbitrary `border-l-[2px]` path) instead of misrouting the
+    // digit into a colour lookup.
+    for (pfx, side) in [
+        ("t-", "top"),
+        ("r-", "right"),
+        ("b-", "bottom"),
+        ("l-", "left"),
     ] {
-        if let Some(color) = name.strip_prefix(pfx) {
-            return Some(resolve_color_value(prop, color, tokens, base));
+        if let Some(rest) = name.strip_prefix(pfx) {
+            if let Ok(n) = rest.parse::<u32>() {
+                return Some(Ok(decl(&format!("border-{side}-width"), &format!("{n}px"))));
+            }
+            return Some(resolve_color_value(
+                &format!("border-{side}-color"),
+                rest,
+                tokens,
+                base,
+            ));
         }
     }
     Some(resolve_color_value("border-color", name, tokens, base))
@@ -3606,10 +3626,21 @@ mod tests {
         // negative fractional translate composes via the transform chain
         assert!(css("-translate-y-1/2").contains("--pp-ty: -50%;"));
         assert!(css("-translate-y-1/2").contains("transform: translate(var(--pp-tx"));
+        // whitespace — full white-space set (pre-wrap was the AgenKitty gap)
+        assert!(css("whitespace-pre-wrap").contains("white-space: pre-wrap;"));
+        assert!(css("whitespace-pre-line").contains("white-space: pre-line;"));
+        assert!(css("whitespace-break-spaces").contains("white-space: break-spaces;"));
         // per-side border colour
         assert!(css("border-t-accent").contains("border-top-color:"));
+        // per-side border WIDTH — the numeric scale mirrors border-2
+        assert!(css("border-l-2").contains("border-left-width: 2px;"));
+        assert!(css("border-t-4").contains("border-top-width: 4px;"));
+        assert!(css("border-r-0").contains("border-right-width: 0px;"));
         // arbitrary min()/clamp() lengths now accepted
         assert!(css("w-[min(90%,32rem)]").contains("width: min(90%,32rem);"));
+        // ch/vmin/vmax units accepted in Length-typed arbitrary values
+        assert!(css("max-w-[56ch]").contains("max-width: 56ch;"));
+        assert!(css("h-[10vmin]").contains("height: 10vmin;"));
         // group-hover → ancestor-prefixed selector; last-of-type pseudo
         assert!(css("group-hover:opacity-50").contains(".group:hover "));
         assert!(css("last-of-type:border-b-0").contains(":last-of-type"));

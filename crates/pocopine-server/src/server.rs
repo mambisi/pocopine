@@ -35,7 +35,8 @@ use crate::plugin::{
     ServerListening,
 };
 use crate::{
-    ServerFunctionRouteConflict, SharedAuthProvider, auth_middleware, install_server_functions,
+    ServerFunctionRoute, ServerFunctionRouteConflict, SharedAuthProvider, auth_middleware,
+    install_server_functions,
 };
 
 /// App-level extension point on the host side.
@@ -97,12 +98,39 @@ impl Server {
     /// All linked `#[server]` functions are installed before plugin
     /// work starts, so later [`Self::layer`] calls wrap those routes.
     ///
+    /// **Linking requirement:** `#[server]` routes are collected via
+    /// `inventory`, which only sees crates the binary actually
+    /// **links**. A `[[bin]]` that never references the lib crate
+    /// defining its server functions links none of them — every
+    /// server-fn POST then falls through to the static fallback as a
+    /// 405. Make the binary reference the defining crate (e.g.
+    /// `use my_app::…;` or call its setup fn); a prominent startup
+    /// warning is logged when zero routes register.
+    ///
     /// When `POCOPINE_ASSETS_BUCKET` is set, the RFC-100 Mode B asset
     /// proxy (`GET /assets/<hash>/<path>`, serving the private bucket)
     /// is installed automatically — zero code in the app's `main`; see
     /// the env contract on [`crate::ASSETS_BUCKET_ENV`].
     pub fn new(router: Router) -> Self {
         let (router, server_function_conflicts) = install_server_functions(router);
+        // 0 routes is almost always a linking mistake, not an app without
+        // server functions: `inventory` only collects from crates the binary
+        // links, so a `[[bin]]` that never references its lib crate links
+        // zero `#[server]` fns — and every POST 405s with no hint why.
+        if inventory::iter::<ServerFunctionRoute>
+            .into_iter()
+            .next()
+            .is_none()
+        {
+            tracing::warn!(
+                target: "pocopine.log",
+                "0 server functions registered — if this app defines #[server] \
+                 functions, the binary probably does not reference the crate that \
+                 defines them (routes are collected from linked crates only); \
+                 every server-fn POST will fall through to the static fallback \
+                 as a 405",
+            );
+        }
         let router = crate::assets::install_assets_proxy(router);
         Self {
             router,
