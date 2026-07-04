@@ -39,7 +39,7 @@ use super::agenkit::{Agenkit, AgenkitInner};
 use super::context::AiContext;
 pub use super::loop_core::ToolDecision;
 use super::loop_core::{
-    LoopObserver, ToolErrorMode, TraceObserver, dispatch_tool_calls, run_model_step,
+    LoopObserver, ToolErrorMode, TraceObserver, dispatch_tool_calls, run_model_step_streamed,
 };
 use super::provider::{GenerateRequest, ProviderContext};
 use super::run::RunState;
@@ -68,7 +68,21 @@ pub enum StopReason {
 pub enum AgentEvent {
     /// A prompt was accepted; the loop begins.
     Started,
-    /// A model text response within the turn (may precede tool calls).
+    /// An incremental fragment of an assistant text response, emitted as the
+    /// model streams — many per [`AssistantText`](AgentEvent::AssistantText),
+    /// which follows with the assembled message. Deltas are **ephemeral**: they
+    /// are never persisted to the thread log (only the final message is), so a
+    /// consumer that ignores them (or an older client) sees exactly the
+    /// pre-delta behavior. A provider without native streaming delivers the
+    /// whole answer as one delta.
+    AssistantDelta {
+        /// The next fragment of the assistant's text.
+        text: String,
+    },
+    /// A model text response within the turn (may precede tool calls). The
+    /// assembled message — the same text the preceding
+    /// [`AssistantDelta`](AgentEvent::AssistantDelta)s carried piecewise — and
+    /// what is persisted to the thread log.
     AssistantText {
         /// The assistant's text.
         text: String,
@@ -447,7 +461,11 @@ impl AgentLoop {
                     max_tokens: self.config.max_tokens,
                     thinking: Default::default(),
                 };
-                let response = run_model_step(&provider, request, &cx, &model, &observer).await?;
+                // Streamed: each text fragment reaches the firehose as an
+                // `AssistantDelta` (via the observer) while the step assembles
+                // the full response for the transcript.
+                let response =
+                    run_model_step_streamed(&provider, request, &cx, &model, &observer).await?;
 
                 let text = response.text_output();
                 if !text.is_empty() {
@@ -529,6 +547,12 @@ struct RuntimeObserver<'a> {
 impl LoopObserver for RuntimeObserver<'_> {
     fn model_request(&self, model: &ModelRef) -> Option<StepId> {
         self.trace.model_request(model)
+    }
+
+    fn assistant_delta(&self, delta: &str) {
+        let _ = self.events.send(AgentEvent::AssistantDelta {
+            text: delta.to_string(),
+        });
     }
 
     fn model_response(&self, step: Option<StepId>, model: &ModelRef, usage: Option<Usage>) {
@@ -1157,6 +1181,39 @@ mod tests {
         // A second prompt appends another turn (multi-turn conversation).
         let _ = session.prompt("again").collect::<Vec<_>>().await;
         assert_eq!(session.history().await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn session_prompt_streams_assistant_deltas_that_assemble_the_final_text() {
+        let agenkit = chat("hello streaming world");
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+
+        let events: Vec<AgentEvent> = session.prompt("hi").collect().await;
+
+        // Multiple deltas arrive (the mock streams word-sized fragments), all
+        // BEFORE the assembled AssistantText, and concatenate to exactly it.
+        let mut assembled = String::new();
+        let mut deltas = 0;
+        let mut final_text = None;
+        for event in &events {
+            match event {
+                AgentEvent::AssistantDelta { text } => {
+                    assert!(final_text.is_none(), "delta after final text: {events:?}");
+                    assembled.push_str(text);
+                    deltas += 1;
+                }
+                AgentEvent::AssistantText { text } => final_text = Some(text.clone()),
+                _ => {}
+            }
+        }
+        assert!(deltas > 1, "expected word-sized deltas, got {deltas}");
+        assert_eq!(final_text.as_deref(), Some("hello streaming world"));
+        assert_eq!(assembled, "hello streaming world");
+
+        // Deltas are ephemeral: the thread log holds only user + final message.
+        let history = session.history().await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].content.as_text(), "hello streaming world");
     }
 
     #[tokio::test]
