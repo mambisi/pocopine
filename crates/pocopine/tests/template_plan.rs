@@ -257,6 +257,76 @@ impl PlanSlotInterpHost {
     }
 }
 
+/// A compound component: its own `<slot>` outlet sits INSIDE a child
+/// component's slot content (`<plan-slot-child><slot></slot></plan-slot-child>`)
+/// — the AkContextMenu shape. The consumer's projected content must traverse
+/// the child boundary and land inside the child's shell, and the sibling
+/// `:label`-bound child (the `pine-icon :name` shape) must bind against the
+/// author's scope — one rejected `<slot>` used to poison the whole fragment
+/// tree, leaving the binding a raw attribute.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanCompoundHost.html")]
+struct PlanCompoundHost {
+    badge: String,
+}
+
+#[handlers]
+impl PlanCompoundHost {
+    pub fn on_setup(&mut self) {
+        self.badge = "badge-ok".into();
+    }
+}
+
+/// A child whose own `<slot>` outlet is DEFERRED inside a `pp-if` body (the
+/// dropdown-portal shape): the outlet only exists once `open` flips, so the
+/// slot content handed to it by a compound host must materialize LATE —
+/// long after everyone mounted.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanDeferredSlotChild.html")]
+struct PlanDeferredSlotChild {
+    open: bool,
+}
+
+#[handlers]
+impl PlanDeferredSlotChild {
+    pub fn open_it(&mut self) {
+        self.open = true;
+    }
+}
+
+/// Compound host over the deferred child: its outlet rides the child's slot
+/// content into a pp-if body two boundaries deep.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanCompoundDeferredHost.html")]
+struct PlanCompoundDeferredHost {}
+
+#[handlers]
+impl PlanCompoundDeferredHost {}
+
+/// The full dropdown-portal shape: the child's `<slot>` lives in a
+/// `pp-if` + `pp-teleport="body"` template, so the projected content must
+/// materialize late AND land teleported outside the host tree.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanTeleportSlotChild.html")]
+struct PlanTeleportSlotChild {
+    open: bool,
+}
+
+#[handlers]
+impl PlanTeleportSlotChild {
+    pub fn open_it(&mut self) {
+        self.open = true;
+    }
+}
+
+/// Compound host over the teleporting child.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanCompoundTeleportHost.html")]
+struct PlanCompoundTeleportHost {}
+
+#[handlers]
+impl PlanCompoundTeleportHost {}
+
 /// Child used by the compiled-finalize regression test. Its
 /// `on_mount` write proves a lifted fragment containing a child
 /// component can finish lifecycle without falling back to the
@@ -975,6 +1045,11 @@ fn register_all() {
     Rfc064GenericPrependHost::register();
     PlanSlotDynamicHost::register();
     PlanSlotInterpHost::register();
+    PlanCompoundHost::register();
+    PlanDeferredSlotChild::register();
+    PlanCompoundDeferredHost::register();
+    PlanTeleportSlotChild::register();
+    PlanCompoundTeleportHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
     PlanHostDirectiveChild::register();
@@ -1635,6 +1710,135 @@ async fn slot_content_interpolation_renders_in_author_scope() {
     );
 
     assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+/// Compound-component slot projection (the AkContextMenu shape): a `<slot>`
+/// outlet inside a CHILD component's slot content must still receive the
+/// consumer's projected content — traversing the child boundary — and no
+/// literal unresolved `<slot>` element may survive in the DOM.
+#[wasm_bindgen_test]
+async fn slot_outlet_inside_child_slot_content_projects_consumer_content() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host =
+        mount("<plan-compound-host><span class=\"pch-item\">projected</span></plan-compound-host>");
+    tick().await;
+
+    // The consumer's content traversed plan-compound-host's template INTO
+    // plan-slot-child's shell.
+    let item = host
+        .query_selector(".psc-shell .pch-item")
+        .unwrap()
+        .expect("consumer content must project through the child boundary");
+    assert_eq!(item.text_content().as_deref(), Some("projected"));
+
+    // The sibling bound child compiled in the author's scope (symptom 3:
+    // one rejected <slot> used to leave `:label` a raw attribute).
+    let badge = host
+        .query_selector(".psc-shell .phdc-label")
+        .unwrap()
+        .expect("bound child inside the slot content must mount");
+    assert_eq!(badge.text_content().as_deref(), Some("badge-ok"));
+
+    // No inert outlet left behind.
+    assert!(
+        host.query_selector("slot").unwrap().is_none(),
+        "no literal <slot> may survive materialisation: {:?}",
+        host.inner_html()
+    );
+
+    host.remove();
+}
+
+/// The deferred variant (the dropdown-portal shape): the compound host's
+/// outlet rides the child's slot content into a `pp-if` body, so the
+/// consumer's content must materialize LATE — when the branch opens — not
+/// at mount. Before the fix the whole chain silently dropped the content
+/// and cloned an inert literal `<slot>` on open.
+#[wasm_bindgen_test]
+async fn slot_outlet_in_deferred_child_body_projects_on_open() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount(
+        "<plan-compound-deferred-host><span class=\"pcdh-item\">late</span>\
+         </plan-compound-deferred-host>",
+    );
+    tick().await;
+
+    // Closed: the deferred body (and the projected content) is absent.
+    assert!(
+        host.query_selector(".pdsc-body").unwrap().is_none(),
+        "deferred body must not exist before open"
+    );
+
+    host.query_selector(".pdsc-open")
+        .unwrap()
+        .expect("child shell mounts")
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    let item = host
+        .query_selector(".pdsc-body .pcdh-item")
+        .unwrap()
+        .expect("consumer content must project into the opened deferred body");
+    assert_eq!(item.text_content().as_deref(), Some("late"));
+    assert!(
+        host.query_selector("slot").unwrap().is_none(),
+        "no literal <slot> may survive the deferred materialisation: {:?}",
+        host.inner_html()
+    );
+
+    host.remove();
+}
+
+/// The full dropdown-portal shape (`pp-if` + `pp-teleport="body"`): the
+/// projected consumer content must materialize on open AND land in the
+/// teleport target (document body), outside the host tree.
+#[wasm_bindgen_test]
+async fn slot_outlet_in_teleported_child_body_projects_on_open() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount(
+        "<plan-compound-teleport-host><span class=\"pcth-item\">ported</span>\
+         </plan-compound-teleport-host>",
+    );
+    tick().await;
+
+    let body = doc().body().unwrap();
+    assert!(
+        body.query_selector(".ptsc-body").unwrap().is_none(),
+        "teleported body must not exist before open"
+    );
+
+    host.query_selector(".ptsc-open")
+        .unwrap()
+        .expect("child shell mounts")
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    // The content teleported to <body> WITH the projected consumer item.
+    let ported = body
+        .query_selector(".ptsc-body .pcth-item")
+        .unwrap()
+        .expect("consumer content must project into the teleported body");
+    assert_eq!(ported.text_content().as_deref(), Some("ported"));
+    assert!(
+        body.query_selector(".ptsc-body slot").unwrap().is_none(),
+        "no literal <slot> may survive in the teleported body"
+    );
+
+    // Cleanup: drop the teleported node too, so later tests see a clean body.
+    if let Some(node) = body.query_selector(".ptsc-body").unwrap() {
+        node.remove();
+    }
     host.remove();
 }
 

@@ -2158,9 +2158,10 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         emissions.slot_fragments.push(emission);
                     }
                     None => {
-                        // Slot body falls outside the lift
-                        // envelope — surfaced via
-                        // `record_plan_failure` at install time.
+                        // Slot body falls outside the lift envelope
+                        // (e.g. pp-route content): no fragment is
+                        // emitted; the runtime falls back to the
+                        // light-DOM capture path for this slot.
                     }
                 }
             }
@@ -2191,9 +2192,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         emissions.slot_fragments.push(emission);
                     }
                     None => {
-                        // Unliftable default slot content —
-                        // surfaced via `record_plan_failure`
-                        // at install time.
+                        // Unliftable default slot content — no
+                        // fragment is emitted; the runtime falls
+                        // back to the light-DOM capture path.
                     }
                 }
             }
@@ -3367,7 +3368,18 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
                 return slot_subtree_is_lift_eligible(&el.children);
             }
             if el.tag == "slot" {
-                return false;
+                // Phase 3.5e — a `<slot>` outlet inside slot content (the
+                // compound-component shape: the author's outlet forwarded
+                // through a child, `<x-menu><slot></slot></x-menu>`) lifts
+                // like any template-level outlet: `walk` emits a
+                // `SlotOutletLite`, and the fragment's install pass
+                // materialises it against the author scope (the stamped
+                // fragment's top-level children carry the author's borrowed
+                // scope binding, so `enclosing_scope` resolves ownership
+                // correctly). Rejecting it here used to poison the WHOLE
+                // nested fragment tree — the consumer's projected content
+                // silently vanished and an inert `<slot>` landed in the DOM.
+                return true;
             }
             // Phase 3.5d expansion: non-HTML5 tags = nested
             // child mounts are now allowed. The mount

@@ -978,6 +978,16 @@ fn materialize_slot(slot_el: &Element) {
     let (owner_scope_id, owner_proxy) = match enclosing_scope(slot_el) {
         Some(s) => s,
         None => {
+            // No owner anywhere up the tree: the outlet can't be projected
+            // into, so it is dropped — observably, not silently. A
+            // mis-threaded fragment (e.g. a nested outlet materialised
+            // after losing its author-scope stamp) shows up here instead
+            // of as vanishing content.
+            web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(
+                "pocopine: <slot> outlet has no enclosing scope — dropping it \
+                 (its projected content will not render)",
+            ));
+            crate::templates_plan::record_plan_failure();
             let _ = parent.remove_child(slot_el);
             return;
         }
