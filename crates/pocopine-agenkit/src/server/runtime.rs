@@ -27,9 +27,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, Content, CostEstimate, Message, ModelRef, RunId,
-    StepId, StepKind, StepStatus, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage,
-    events,
+    AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, Content, CostEstimate, Message,
+    ModelRef, Redactor, RunId, StepId, StepKind, StepStatus, ThreadRetention, ToolCall,
+    ToolDescriptor, TraceId, Usage, WireStopReason, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -208,6 +208,133 @@ impl AgentConfig {
     pub fn max_steps_per_turn(mut self, steps: u32) -> Self {
         self.max_steps_per_turn = steps.max(1);
         self
+    }
+}
+
+/// The trusted→wire adapter every UI bridge (SSE, websocket, CLI) shares,
+/// instead of hand-rolling its own (§D10, redaction-by-construction): feed it
+/// each [`AgentEvent`] from a turn stream, forward each `Some` it returns.
+///
+/// It is **stateful** so streaming can't leak what whole-message redaction
+/// would catch: a secret split across [`AssistantDelta`] fragments (`api_`
+/// then `key = sk-…`) evades any per-fragment classifier, so the adapter
+/// classifies the **assembled** text so far on every fragment. When the
+/// classifier trips, the fragment is replaced by one `[redacted]` marker and
+/// every later fragment of that message is suppressed (`None`); the final
+/// [`AssistantText`] is redacted whole as usual, so the client's replace-on-
+/// final rendering converges. Non-delta events map statelessly: free text and
+/// error strings through [`Redactor::text`], tool args/outputs through
+/// [`Redactor::json`] (size-capped, credential-shaped keys blanked).
+///
+/// One adapter instance per event stream (its state is one in-flight
+/// message); construct with the same [`Redactor`] the bridge uses elsewhere.
+///
+/// [`AssistantDelta`]: AgentEvent::AssistantDelta
+/// [`AssistantText`]: AgentEvent::AssistantText
+#[derive(Debug)]
+pub struct AgentEventRedactor {
+    redactor: Redactor,
+    /// The in-flight assistant message assembled from its deltas — what the
+    /// classifier runs on, so a fragment-split secret is still caught.
+    assembled: String,
+    /// The classifier tripped on the assembled prefix: the remaining deltas
+    /// of this message are suppressed.
+    tripped: bool,
+}
+
+impl AgentEventRedactor {
+    /// A stream adapter applying `redactor` to every event.
+    pub fn new(redactor: Redactor) -> Self {
+        Self {
+            redactor,
+            assembled: String::new(),
+            tripped: false,
+        }
+    }
+
+    /// Map the next event of the stream. `None` = deliberately dropped (a
+    /// suppressed delta after the classifier tripped) — forward everything
+    /// else to the client.
+    pub fn redact(&mut self, event: &AgentEvent) -> Option<AgentWireEvent> {
+        match event {
+            AgentEvent::AssistantDelta { text } => {
+                if self.tripped {
+                    return None;
+                }
+                self.assembled.push_str(text);
+                if self.redactor.flags_secret(&self.assembled) {
+                    // Trip: one marker crosses (so a live caret shows the
+                    // redaction), the rest of the message is suppressed, and
+                    // the assembled AssistantText below replaces it all.
+                    self.tripped = true;
+                    self.assembled.clear();
+                    return Some(AgentWireEvent::AssistantDelta {
+                        text: pocopine_agenkit_core::redact::REDACTED.to_string(),
+                    });
+                }
+                Some(AgentWireEvent::AssistantDelta {
+                    text: self.redactor.text(text),
+                })
+            }
+            // A message boundary (assembled text / new turn / terminal):
+            // reset the delta state, then map statelessly.
+            AgentEvent::AssistantText { .. }
+            | AgentEvent::Started
+            | AgentEvent::Stopped { .. }
+            | AgentEvent::Failed { .. } => {
+                self.assembled.clear();
+                self.tripped = false;
+                Some(redact_agent_event(event, &self.redactor))
+            }
+            other => Some(redact_agent_event(other, &self.redactor)),
+        }
+    }
+}
+
+/// Stateless single-event mapping (everything but the delta accumulation).
+/// Internal: the public adapter is [`AgentEventRedactor`] — exposing this
+/// would invite exactly the per-fragment-classification leak it guards
+/// against.
+fn redact_agent_event(event: &AgentEvent, redactor: &Redactor) -> AgentWireEvent {
+    match event {
+        AgentEvent::Started => AgentWireEvent::Started,
+        AgentEvent::AssistantDelta { text } => AgentWireEvent::AssistantDelta {
+            text: redactor.text(text),
+        },
+        AgentEvent::AssistantText { text } => AgentWireEvent::AssistantText {
+            text: redactor.text(text),
+        },
+        AgentEvent::ToolStarted { id, tool, args } => AgentWireEvent::ToolStarted {
+            id: id.clone(),
+            tool: tool.clone(),
+            args: redactor.json(args),
+        },
+        AgentEvent::ToolCompleted { id, tool, output } => AgentWireEvent::ToolCompleted {
+            id: id.clone(),
+            tool: tool.clone(),
+            output: redactor.json(output),
+        },
+        AgentEvent::ToolFailed { id, tool, error } => AgentWireEvent::ToolFailed {
+            id: id.clone(),
+            tool: tool.clone(),
+            error: redactor.text(error),
+        },
+        AgentEvent::ToolBlocked { id, tool, reason } => AgentWireEvent::ToolBlocked {
+            id: id.clone(),
+            tool: tool.clone(),
+            reason: redactor.text(reason),
+        },
+        AgentEvent::Compacted { folded } => AgentWireEvent::Compacted { folded: *folded },
+        AgentEvent::Stopped { reason } => AgentWireEvent::Stopped {
+            reason: match reason {
+                StopReason::Idle => WireStopReason::Idle,
+                StopReason::MaxSteps => WireStopReason::MaxSteps,
+                StopReason::Aborted => WireStopReason::Aborted,
+            },
+        },
+        AgentEvent::Failed { error } => AgentWireEvent::Failed {
+            error: redactor.text(error),
+        },
     }
 }
 
@@ -1189,6 +1316,109 @@ mod tests {
         // A second prompt appends another turn (multi-turn conversation).
         let _ = session.prompt("again").collect::<Vec<_>>().await;
         assert_eq!(session.history().await.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn redactor_adapter_maps_events_through_the_shared_policy() {
+        let mut adapter =
+            AgentEventRedactor::new(Redactor::new().secret_classifier(|t| t.contains("sk-live")));
+
+        // Assistant text carrying a secret is fully redacted.
+        let wire = adapter
+            .redact(&AgentEvent::AssistantText {
+                text: "key sk-live-1".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            wire,
+            AgentWireEvent::AssistantText {
+                text: "[redacted]".to_string()
+            }
+        );
+
+        // Tool args: credential-shaped keys blanked, the rest passes.
+        let wire = adapter
+            .redact(&AgentEvent::ToolStarted {
+                id: "c1".to_string(),
+                tool: "net.fetch".to_string(),
+                args: serde_json::json!({ "url": "https://x.test", "api_key": "abc" }),
+            })
+            .unwrap();
+        let AgentWireEvent::ToolStarted { args, .. } = wire else {
+            panic!("expected ToolStarted, got {wire:?}");
+        };
+        assert_eq!(args["api_key"], "[redacted]");
+        assert_eq!(args["url"], "https://x.test");
+
+        // Benign deltas and terminal reasons map across.
+        assert_eq!(
+            adapter.redact(&AgentEvent::AssistantDelta {
+                text: "hel".to_string()
+            }),
+            Some(AgentWireEvent::AssistantDelta {
+                text: "hel".to_string()
+            })
+        );
+        assert_eq!(
+            adapter.redact(&AgentEvent::Stopped {
+                reason: StopReason::MaxSteps
+            }),
+            Some(AgentWireEvent::Stopped {
+                reason: WireStopReason::MaxSteps
+            })
+        );
+    }
+
+    #[test]
+    fn redactor_adapter_catches_a_secret_split_across_delta_fragments() {
+        // The P1 leak shape: no single fragment matches the classifier, but
+        // the assembled text does. The adapter classifies the assembled
+        // prefix, so the fragment completing the secret is replaced by one
+        // [redacted] marker and everything after it is suppressed — the
+        // credential value never streams out.
+        let mut adapter = AgentEventRedactor::new(
+            Redactor::new().secret_classifier(|t| t.contains("api_key = sk-live")),
+        );
+        let delta = |t: &str| AgentEvent::AssistantDelta {
+            text: t.to_string(),
+        };
+
+        assert_eq!(
+            adapter.redact(&delta("Use api_")),
+            Some(AgentWireEvent::AssistantDelta {
+                text: "Use api_".to_string()
+            })
+        );
+        // This fragment completes the secret in the ASSEMBLED text (the
+        // fragment alone doesn't match) → one marker, not the fragment.
+        assert_eq!(
+            adapter.redact(&delta("key = sk-live")),
+            Some(AgentWireEvent::AssistantDelta {
+                text: "[redacted]".to_string()
+            })
+        );
+        // The secret's tail — and anything after — is suppressed outright.
+        assert_eq!(adapter.redact(&delta("-12345 rest of answer")), None);
+        assert_eq!(adapter.redact(&delta(" more")), None);
+
+        // The assembled message is redacted whole, and the message boundary
+        // resets the adapter for the next message.
+        assert_eq!(
+            adapter
+                .redact(&AgentEvent::AssistantText {
+                    text: "Use api_key = sk-live-12345 rest of answer more".to_string()
+                })
+                .unwrap(),
+            AgentWireEvent::AssistantText {
+                text: "[redacted]".to_string()
+            }
+        );
+        assert_eq!(
+            adapter.redact(&delta("clean again")),
+            Some(AgentWireEvent::AssistantDelta {
+                text: "clean again".to_string()
+            })
+        );
     }
 
     #[tokio::test]
