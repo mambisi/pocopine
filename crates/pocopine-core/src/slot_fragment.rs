@@ -318,6 +318,13 @@ pub fn stamp_dynamic_slot_with(
         }
     }
     install_plan(&temp, parent_scope_id, parent_proxy);
+    // Effects the install pass tracked on the wrapper itself — a bare
+    // top-level `{{ }}` interpolation resolves against the wrapper (empty
+    // node_path) — must not die with it: the wrapper never enters the DOM,
+    // and `release_subtree` walks live elements only. Park them on the host
+    // buffer; the splice site (`materialize_slot`) re-homes them onto the
+    // live element that receives the content.
+    crate::mount::stash_wrapper_effects(&temp, host);
 
     let kids = temp.child_nodes();
     let mut snapshot: Vec<web_sys::Node> = Vec::with_capacity(kids.length() as usize);

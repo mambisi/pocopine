@@ -121,8 +121,12 @@
           <dd class="font-mono text-[12px]" pp-text="$store.storage.detail.content_type || '—'"></dd>
 
           <template pp-if="$store.storage.detail.created_label">
-            <dt>Created</dt>
-            <dd pp-text="$store.storage.detail.created_label"></dd>
+            <!-- pp-if bodies need a single root; display:contents keeps the
+                 dt/dd participating in the dl's grid as direct items. -->
+            <div class="contents">
+              <dt>Created</dt>
+              <dd pp-text="$store.storage.detail.created_label"></dd>
+            </div>
           </template>
 
           <dt>Updated</dt>
