@@ -213,6 +213,20 @@ impl SessionStore for ExternalizingSessionStore {
         self.inner.meta(id)
     }
 
+    fn threads<'a>(&'a self) -> SessionFuture<'a, Vec<ThreadMeta>> {
+        self.inner.threads()
+    }
+
+    fn set_attributes<'a>(
+        &'a self,
+        id: &'a ThreadId,
+        attributes: serde_json::Value,
+    ) -> SessionFuture<'a, ()> {
+        // Like create_thread: metadata is small and frequently queried — never
+        // externalized.
+        self.inner.set_attributes(id, attributes)
+    }
+
     fn append<'a>(
         &'a self,
         id: &'a ThreadId,

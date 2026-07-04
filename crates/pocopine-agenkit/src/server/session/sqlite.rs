@@ -211,6 +211,73 @@ impl SessionStore for SqliteSessionStore {
         }))
     }
 
+    fn threads<'a>(&'a self) -> SessionFuture<'a, Vec<ThreadMeta>> {
+        Self::ready(self.with_conn(|conn| {
+            // last_seq per thread via the same MAX(seq)+1 seek `meta` uses — a
+            // correlated subquery on the (thread_id, seq) PK, not a COUNT scan.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT t.id, t.parent, t.fork_at_seq, t.created_ms, t.attributes, \
+                            (SELECT COALESCE(MAX(seq), -1) + 1 FROM records r \
+                             WHERE r.thread_id = t.id) \
+                     FROM threads t",
+                )
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                })
+                .map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, parent_id, fork_at, created_ms, attrs_json, last_seq) =
+                    row.map_err(db_err)?;
+                let parent = match (parent_id, fork_at) {
+                    (Some(p), Some(f)) => Some(ParentLink {
+                        parent: ThreadId::new(p),
+                        fork_at_seq: f as u64,
+                    }),
+                    _ => None,
+                };
+                out.push(ThreadMeta {
+                    id: ThreadId::new(id),
+                    parent,
+                    created_ms: created_ms as u64,
+                    last_seq: last_seq as u64,
+                    attributes: serde_json::from_str(&attrs_json).map_err(json_err)?,
+                });
+            }
+            Ok(out)
+        }))
+    }
+
+    fn set_attributes<'a>(
+        &'a self,
+        id: &'a ThreadId,
+        attributes: serde_json::Value,
+    ) -> SessionFuture<'a, ()> {
+        Self::ready(self.with_conn(move |conn| {
+            let attrs_json = serde_json::to_string(&attributes).map_err(json_err)?;
+            let updated = conn
+                .execute(
+                    "UPDATE threads SET attributes = ?2 WHERE id = ?1",
+                    params![id.as_str(), attrs_json],
+                )
+                .map_err(db_err)?;
+            if updated == 0 {
+                return Err(SessionError::NotFound);
+            }
+            Ok(())
+        }))
+    }
+
     fn append<'a>(
         &'a self,
         id: &'a ThreadId,

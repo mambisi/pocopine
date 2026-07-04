@@ -2,8 +2,9 @@
 //!
 //! Each thread is two files in the store dir: `<id>.jsonl` — the append-only
 //! record log, one JSON [`Record`](super::Record) per line — and `<id>.meta.json`
-//! — the immutable thread metadata (parent link + creation time). `last_seq` is
-//! derived from the log's line count, so the meta file is written once.
+//! — the thread metadata (parent link + creation time + attributes; rewritten
+//! only by `set_attributes`). `last_seq` is derived from the log's line count,
+//! so appends never touch the meta file.
 //!
 //! This is the **dev/reference** durable store: `children` and `last_seq` scan
 //! files (O(n)). A production store would keep a KV/SQL index (the roadmap's
@@ -20,7 +21,8 @@ use super::{
     ThreadMeta, backend, now_ms,
 };
 
-/// The on-disk meta sidecar (immutable; `last_seq` is derived from the log).
+/// The on-disk meta sidecar (`last_seq` is derived from the log; the file is
+/// rewritten only when `set_attributes` replaces the attributes).
 #[derive(Serialize, Deserialize)]
 struct StoredMeta {
     id: ThreadId,
@@ -79,6 +81,32 @@ async fn count_records(path: &Path) -> SessionResult<u64> {
         Err(e) => return Err(backend(e)),
     };
     Ok(body.lines().filter(|l| !l.trim().is_empty()).count() as u64)
+}
+
+/// Scan the store dir for meta sidecars (missing dir → empty). Shared by
+/// `children` (which filters by parent) and `threads` (which returns them all).
+async fn scan_metas(dir: &Path) -> SessionResult<Vec<StoredMeta>> {
+    let mut out = Vec::new();
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(backend(e)),
+    };
+    while let Some(entry) = entries.next_entry().await.map_err(backend)? {
+        let path = entry.path();
+        if !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".meta.json"))
+        {
+            continue;
+        }
+        let body = tokio::fs::read_to_string(&path).await.map_err(backend)?;
+        let stored: StoredMeta =
+            serde_json::from_str(&body).map_err(|e| SessionError::Corrupt(e.to_string()))?;
+        out.push(stored);
+    }
+    Ok(out)
 }
 
 /// Parse a JSONL log file into records (missing file → empty).
@@ -203,34 +231,54 @@ impl SessionStore for JsonlSessionStore {
         })
     }
 
-    fn children<'a>(&'a self, id: &'a ThreadId) -> SessionFuture<'a, Vec<ThreadId>> {
+    fn threads<'a>(&'a self) -> SessionFuture<'a, Vec<ThreadMeta>> {
         Box::pin(async move {
             let mut out = Vec::new();
-            let mut entries = match tokio::fs::read_dir(&self.dir).await {
-                Ok(e) => e,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-                Err(e) => return Err(backend(e)),
-            };
-            while let Some(entry) = entries.next_entry().await.map_err(backend)? {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                if !path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.ends_with(".meta.json"))
-                {
-                    continue;
-                }
-                let body = tokio::fs::read_to_string(&path).await.map_err(backend)?;
-                let stored: StoredMeta = serde_json::from_str(&body)
-                    .map_err(|e| SessionError::Corrupt(e.to_string()))?;
-                if stored.parent.as_ref().is_some_and(|p| &p.parent == id) {
-                    out.push(stored.id);
-                }
+            for stored in scan_metas(&self.dir).await? {
+                let last_seq = count_records(&self.log_path(&stored.id)?).await?;
+                out.push(ThreadMeta {
+                    id: stored.id,
+                    parent: stored.parent,
+                    created_ms: stored.created_ms,
+                    last_seq,
+                    attributes: stored.attributes,
+                });
             }
             Ok(out)
+        })
+    }
+
+    fn set_attributes<'a>(
+        &'a self,
+        id: &'a ThreadId,
+        attributes: serde_json::Value,
+    ) -> SessionFuture<'a, ()> {
+        Box::pin(async move {
+            let path = self.meta_path(id)?;
+            let body = match tokio::fs::read_to_string(&path).await {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(SessionError::NotFound);
+                }
+                Err(e) => return Err(backend(e)),
+            };
+            let mut stored: StoredMeta =
+                serde_json::from_str(&body).map_err(|e| SessionError::Corrupt(e.to_string()))?;
+            stored.attributes = attributes;
+            let json = serde_json::to_string(&stored).map_err(backend)?;
+            tokio::fs::write(&path, json).await.map_err(backend)?;
+            Ok(())
+        })
+    }
+
+    fn children<'a>(&'a self, id: &'a ThreadId) -> SessionFuture<'a, Vec<ThreadId>> {
+        Box::pin(async move {
+            Ok(scan_metas(&self.dir)
+                .await?
+                .into_iter()
+                .filter(|s| s.parent.as_ref().is_some_and(|p| &p.parent == id))
+                .map(|s| s.id)
+                .collect())
         })
     }
 

@@ -206,6 +206,22 @@ pub trait SessionStore: Send + Sync {
     /// Load a thread's metadata, or `None` if it doesn't exist.
     fn meta<'a>(&'a self, id: &'a ThreadId) -> SessionFuture<'a, Option<ThreadMeta>>;
 
+    /// Every thread's metadata, in no guaranteed order (callers filter/sort).
+    /// This powers owner-scoped enumeration a layer up (e.g. a chat sidebar via
+    /// `AgentThreadStore::list`); the session layer itself stays attribute-blind.
+    fn threads<'a>(&'a self) -> SessionFuture<'a, Vec<ThreadMeta>>;
+
+    /// Replace a thread's creator-attached `attributes` verbatim.
+    /// [`SessionError::NotFound`] for a missing thread. The session layer still
+    /// never interprets attributes — merge/validation policy belongs to the
+    /// caller (read-modify-write is safe: a thread is single-writer by design,
+    /// so there is no lost-update race to guard here).
+    fn set_attributes<'a>(
+        &'a self,
+        id: &'a ThreadId,
+        attributes: serde_json::Value,
+    ) -> SessionFuture<'a, ()>;
+
     /// Append a record to a thread; returns the stored record (with its `seq`).
     fn append<'a>(
         &'a self,

@@ -65,6 +65,25 @@ impl<'a> ThreadOwner<'a> {
     }
 }
 
+/// A thread's listing metadata — what an owner-scoped enumeration (e.g. a chat
+/// sidebar) needs: identity, parentage (to rebuild the fork tree), creation
+/// time, and the creator-attached attributes (the agent id, plus anything set
+/// via [`update_attributes`](AgentThreadStore::update_attributes), e.g. a
+/// title).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AgentThreadMeta {
+    /// The opaque thread id.
+    pub id: AgentThreadId,
+    /// The thread this one forked from, `None` for a root thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<AgentThreadId>,
+    /// When the thread was created (Unix ms).
+    pub created_ms: u64,
+    /// The thread's attributes, verbatim.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub attributes: serde_json::Value,
+}
+
 /// Durable-or-not storage for agent threads.
 ///
 /// Every method carries the caller's [`ThreadOwner`] so the store can scope
@@ -147,6 +166,37 @@ pub trait AgentThreadStore: Send + Sync + 'static {
     ) -> BoxFuture<'_, AgenkitResult<Option<AgentThreadId>>> {
         let _ = (id, owner);
         Box::pin(async move { Ok(None) })
+    }
+
+    /// The threads owned by `owner`, newest-first (by creation time), with
+    /// parent links so a caller can rebuild the fork tree (a chat sidebar's
+    /// query). The default is empty — a store that doesn't support enumeration
+    /// simply lists nothing (the `fork` → `Ok(None)` convention).
+    fn list(&self, owner: ThreadOwner<'_>) -> BoxFuture<'_, AgenkitResult<Vec<AgentThreadMeta>>> {
+        let _ = owner;
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    /// Merge `patch` (a JSON object) into the attributes of a thread owned by
+    /// `owner` — how a caller stores mutable thread state like a title or a
+    /// `kind`. Shallow merge: each patch key replaces that attribute; a `null`
+    /// value **removes** it. The runtime-owned keys (`owner`, `agent_id`) are
+    /// reserved — a patch naming them is rejected, so the owner scope can never
+    /// be rewritten through this path. A missing/foreign thread is
+    /// `not_found` (no existence oracle). The default errors — a store that
+    /// doesn't support mutation must not silently drop the update.
+    fn update_attributes(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+        patch: serde_json::Value,
+    ) -> BoxFuture<'_, AgenkitResult<()>> {
+        let _ = (id, owner, patch);
+        Box::pin(async move {
+            Err(AgenkitError::config(
+                "thread store does not support attribute updates",
+            ))
+        })
     }
 
     /// Record a `state-change` provenance entry (model / usage / cost) alongside
@@ -445,6 +495,93 @@ impl AgentThreadStore for SessionThreadStore {
         })
     }
 
+    fn list(&self, owner: ThreadOwner<'_>) -> BoxFuture<'_, AgenkitResult<Vec<AgentThreadMeta>>> {
+        let sessions = self.sessions.clone();
+        let want = owner.key().map(str::to_string);
+        Box::pin(async move {
+            let mut metas: Vec<session::ThreadMeta> = sessions
+                .threads()
+                .await
+                .map_err(session_err)?
+                .into_iter()
+                .filter(|m| Self::stored_owner(&m.attributes) == want.as_deref())
+                .collect();
+            // Newest-first; the id tiebreak keeps the order deterministic when
+            // several threads share a creation millisecond.
+            metas.sort_by(|a, b| {
+                b.created_ms
+                    .cmp(&a.created_ms)
+                    .then_with(|| b.id.cmp(&a.id))
+            });
+            Ok(metas
+                .into_iter()
+                .map(|m| AgentThreadMeta {
+                    id: AgentThreadId::new(m.id.as_str()),
+                    parent: m.parent.map(|p| AgentThreadId::new(p.parent.as_str())),
+                    created_ms: m.created_ms,
+                    attributes: m.attributes,
+                })
+                .collect())
+        })
+    }
+
+    fn update_attributes(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+        patch: serde_json::Value,
+    ) -> BoxFuture<'_, AgenkitResult<()>> {
+        let sessions = self.sessions.clone();
+        let tid = session::ThreadId::new(id.as_str());
+        let want = owner.key().map(str::to_string);
+        Box::pin(async move {
+            let Some(object) = patch.as_object() else {
+                return Err(AgenkitError::validation(
+                    "thread attribute patch must be a JSON object",
+                ));
+            };
+            // The scope/identity keys are runtime-owned: rejecting them here
+            // (not silently skipping) keeps a patch's effect exactly what it
+            // says, and the owner scope unrewritable through this path.
+            for reserved in ["owner", "agent_id"] {
+                if object.contains_key(reserved) {
+                    return Err(AgenkitError::validation(format!(
+                        "thread attribute `{reserved}` is reserved"
+                    )));
+                }
+            }
+            // Owner-scoped, like every other mutation (no existence oracle).
+            let Some(meta) = owner_checked_meta(sessions.as_ref(), &tid, want.as_deref()).await?
+            else {
+                return Err(AgenkitError::not_found("thread not found"));
+            };
+            let mut merged = match meta.attributes {
+                serde_json::Value::Object(map) => map,
+                _ => serde_json::Map::new(),
+            };
+            for (key, value) in object {
+                if value.is_null() {
+                    merged.remove(key);
+                } else {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+            sessions
+                .set_attributes(&tid, serde_json::Value::Object(merged))
+                .await
+                .map_err(session_err)?;
+            // Audit trail: the patch rides the provenance channel (it never
+            // reaches the model), so who-renamed-what is reconstructable from
+            // the durable log.
+            let audit = serde_json::json!({ "kind": "attributes", "patch": patch });
+            sessions
+                .append(&tid, RecordKind::StateChange, audit)
+                .await
+                .map_err(session_err)?;
+            Ok(())
+        })
+    }
+
     fn append_state_change(
         &self,
         id: &AgentThreadId,
@@ -562,6 +699,15 @@ impl AgentThreadHandle {
                 store: self.store.clone(),
                 owner,
             }))
+    }
+
+    /// Merge `patch` into the thread's attributes (e.g. a title) — see
+    /// [`AgentThreadStore::update_attributes`] for the merge semantics and the
+    /// reserved keys.
+    pub async fn update_attributes(&self, patch: serde_json::Value) -> AgenkitResult<()> {
+        self.store
+            .update_attributes(&self.id, self.owner(), patch)
+            .await
     }
 
     /// Record a provenance entry (model / usage / cost) outside the conversation
@@ -896,6 +1042,145 @@ mod tests {
         assert_eq!(full[0].content.as_text(), "q1");
         assert_eq!(full[1].content.as_text(), "a1");
         assert_eq!(full[2].content.as_text(), "q2");
+    }
+
+    #[tokio::test]
+    async fn list_returns_only_the_owners_threads_newest_first_with_parents() {
+        let store = SessionThreadStore::in_memory();
+        let (alice_p, bob_p) = (alice(), bob());
+        let alice = ThreadOwner::from_principal(&alice_p);
+        let bob = ThreadOwner::from_principal(&bob_p);
+
+        let first = store
+            .create("chat", alice, ThreadRetention::Durable)
+            .await
+            .unwrap();
+        // Distinct creation timestamps so newest-first is observable.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = store
+            .create("chat", alice, ThreadRetention::Durable)
+            .await
+            .unwrap();
+        let foreign = store
+            .create("chat", bob, ThreadRetention::Durable)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let branch = store.fork(&first, alice).await.unwrap().unwrap();
+
+        let listed = store.list(alice).await.unwrap();
+        let ids: Vec<&str> = listed.iter().map(|m| m.id.as_str()).collect();
+        // Alice's three threads, newest-first; Bob's never appears.
+        assert_eq!(ids, vec![branch.as_str(), second.as_str(), first.as_str()]);
+        assert!(!ids.contains(&foreign.as_str()));
+        // Parent links let a caller rebuild the fork tree.
+        assert_eq!(listed[0].parent.as_ref().unwrap(), &first);
+        assert!(listed[1].parent.is_none());
+        // Attributes ride along (the agent id the runtime stored at create).
+        assert_eq!(listed[2].attributes["agent_id"], "chat");
+
+        // Bob's view is scoped to his own thread.
+        let bobs = store.list(bob).await.unwrap();
+        assert_eq!(bobs.len(), 1);
+        assert_eq!(bobs[0].id, foreign);
+        // Anonymous is its own bucket — none of the above.
+        assert!(
+            store
+                .list(ThreadOwner::anonymous())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_attributes_merges_removes_and_guards_reserved_keys() {
+        let store = SessionThreadStore::in_memory();
+        let (alice_p, bob_p) = (alice(), bob());
+        let alice = ThreadOwner::from_principal(&alice_p);
+        let bob = ThreadOwner::from_principal(&bob_p);
+        let id = store
+            .create("chat", alice, ThreadRetention::Durable)
+            .await
+            .unwrap();
+
+        // Merge in a title + kind; the runtime-owned keys survive untouched.
+        store
+            .update_attributes(
+                &id,
+                alice,
+                serde_json::json!({ "title": "First chat", "kind": "chat" }),
+            )
+            .await
+            .unwrap();
+        let meta = &store.list(alice).await.unwrap()[0];
+        assert_eq!(meta.attributes["title"], "First chat");
+        assert_eq!(meta.attributes["kind"], "chat");
+        assert_eq!(meta.attributes["agent_id"], "chat");
+
+        // A later patch replaces one key and null-removes another.
+        store
+            .update_attributes(
+                &id,
+                alice,
+                serde_json::json!({ "kind": "notebook", "title": null }),
+            )
+            .await
+            .unwrap();
+        let meta = &store.list(alice).await.unwrap()[0];
+        assert_eq!(meta.attributes["kind"], "notebook");
+        assert!(meta.attributes.get("title").is_none());
+
+        // Reserved keys are rejected — the owner scope can't be rewritten.
+        for patch in [
+            serde_json::json!({ "owner": "bob" }),
+            serde_json::json!({ "agent_id": "other" }),
+            serde_json::json!("not an object"),
+        ] {
+            assert!(store.update_attributes(&id, alice, patch).await.is_err());
+        }
+        // A foreign principal can't mutate (reads as not-found)...
+        assert!(
+            store
+                .update_attributes(&id, bob, serde_json::json!({ "title": "hijack" }))
+                .await
+                .is_err()
+        );
+        // ...and nothing above leaked through.
+        let meta = &store.list(alice).await.unwrap()[0];
+        assert_eq!(
+            SessionThreadStore::stored_owner(&meta.attributes),
+            Some("alice")
+        );
+        assert_eq!(meta.attributes["kind"], "notebook");
+
+        // Each successful update left an audit entry on the provenance channel.
+        let audits = store.state_changes(&id, alice).await.unwrap();
+        assert_eq!(audits.len(), 2);
+        assert_eq!(audits[0]["kind"], "attributes");
+        assert_eq!(audits[0]["patch"]["title"], "First chat");
+    }
+
+    #[tokio::test]
+    async fn list_and_update_attributes_work_on_the_sqlite_backend() {
+        // The same owner-scoped listing + mutation through the indexed store.
+        let store = SessionThreadStore::new(Arc::new(
+            session::SqliteSessionStore::open_in_memory().unwrap(),
+        ));
+        let alice_p = alice();
+        let alice = ThreadOwner::from_principal(&alice_p);
+        let id = store
+            .create("chat", alice, ThreadRetention::Durable)
+            .await
+            .unwrap();
+        store
+            .update_attributes(&id, alice, serde_json::json!({ "title": "sq" }))
+            .await
+            .unwrap();
+        let listed = store.list(alice).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].attributes["title"], "sq");
     }
 
     #[tokio::test]
