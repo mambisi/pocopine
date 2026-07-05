@@ -786,9 +786,13 @@ mod tests {
         );
         // Non-image media has no wire mapping yet.
         assert!(
-            with_media("openai/gpt-4o", Role::User, media("audio/mpeg", Some("https://x/a"), None))
-                .ensure_media_support()
-                .is_err()
+            with_media(
+                "openai/gpt-4o",
+                Role::User,
+                media("audio/mpeg", Some("https://x/a"), None)
+            )
+            .ensure_media_support()
+            .is_err()
         );
         // Media outside a user message has no wire mapping yet.
         assert!(
@@ -803,9 +807,7 @@ mod tests {
                 .is_err()
         );
         // No media at all: trivially fine, even on a non-vision model.
-        assert!(
-            request("hello", false).ensure_media_support().is_ok()
-        );
+        assert!(request("hello", false).ensure_media_support().is_ok());
     }
 
     #[test]
