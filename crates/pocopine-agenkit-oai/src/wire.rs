@@ -77,12 +77,17 @@ impl ChatRequest {
     /// Map a neutral request. `stream` toggles SSE; `strict_schema` selects
     /// native `json_schema` structured output (vs `json_object`);
     /// `max_tokens_param` selects which output-token field to send.
+    ///
+    /// Errors (config) when the request carries media this wire cannot deliver
+    /// — see [`GenerateRequest::ensure_media_support`] — instead of silently
+    /// dropping an attachment.
     pub(crate) fn from_agenkit(
         request: &GenerateRequest,
         stream: bool,
         strict_schema: bool,
         max_tokens_param: MaxTokensParam,
-    ) -> Self {
+    ) -> AgenkitResult<Self> {
+        request.ensure_media_support()?;
         let has_tools = !request.tools.is_empty();
         // Collision-safe tool-name map for this request's tools, used for both
         // the tool defs and any replayed assistant tool calls in history.
@@ -132,7 +137,7 @@ impl ChatRequest {
             MaxTokensParam::MaxTokens => (request.max_tokens, None),
             MaxTokensParam::MaxCompletionTokens => (None, request.max_tokens),
         };
-        Self {
+        Ok(Self {
             model: request.model.model().to_string(),
             messages,
             tools: request
@@ -157,7 +162,7 @@ impl ChatRequest {
                 .then(|| reasoning_effort(request.thinking))
                 .flatten(),
             extra: request.provider_options.clone(),
-        }
+        })
     }
 }
 
@@ -316,18 +321,77 @@ fn make_nullable(schema: &mut serde_json::Value) {
 pub(crate) struct WireMessage {
     pub(crate) role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) content: Option<String>,
+    pub(crate) content: Option<WireContent>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) tool_calls: Vec<WireToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_call_id: Option<String>,
 }
 
+/// A message body: the plain string shape for text-only content (what every
+/// gateway accepts), or the content-parts array when media rides along.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum WireContent {
+    Text(String),
+    Parts(Vec<WireContentPart>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum WireContentPart {
+    Text { text: String },
+    ImageUrl { image_url: WireImageUrl },
+}
+
+#[derive(Serialize)]
+pub(crate) struct WireImageUrl {
+    pub(crate) url: String,
+}
+
+/// Map neutral content to the wire body. Text-only content keeps the plain
+/// string shape (unchanged, maximum gateway compatibility); content carrying
+/// media becomes a parts array in author order, an image referenced by `url`
+/// or inlined as a `data:` URI. `GenerateRequest::ensure_media_support`
+/// (checked at request mapping) guarantees every media part is an image with a
+/// source, and that media only occurs in user messages.
+fn wire_content(content: &Content) -> WireContent {
+    let has_media = content
+        .parts
+        .iter()
+        .any(|part| matches!(part, ContentPart::Media(_)));
+    if !has_media {
+        return WireContent::Text(content.as_text());
+    }
+    let mut parts = Vec::new();
+    for part in &content.parts {
+        match part {
+            ContentPart::Text { text } => parts.push(WireContentPart::Text { text: text.clone() }),
+            ContentPart::Media(media) => {
+                let url = media.url.clone().unwrap_or_else(|| {
+                    format!(
+                        "data:{};base64,{}",
+                        media.media_type,
+                        media.data_base64.as_deref().unwrap_or_default()
+                    )
+                });
+                parts.push(WireContentPart::ImageUrl {
+                    image_url: WireImageUrl { url },
+                });
+            }
+            // Parity with `Content::as_text()`: Json/Thinking parts never cross
+            // the wire as user-visible content.
+            ContentPart::Json { .. } | ContentPart::Thinking { .. } => {}
+        }
+    }
+    WireContent::Parts(parts)
+}
+
 impl WireMessage {
     pub(crate) fn text(role: &'static str, content: impl Into<String>) -> Self {
         Self {
             role,
-            content: Some(content.into()),
+            content: Some(WireContent::Text(content.into())),
             tool_calls: Vec::new(),
             tool_call_id: None,
         }
@@ -348,7 +412,7 @@ impl WireMessage {
         let content = if message.content.is_empty() && !message.tool_calls.is_empty() {
             None
         } else {
-            Some(message.content.as_text())
+            Some(wire_content(&message.content))
         };
         Self {
             role,
@@ -664,12 +728,88 @@ mod tests {
             "search_options".to_string(),
             serde_json::json!({"forced_search": true}),
         );
-        let wire = ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens);
+        let wire =
+            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens).unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         assert_eq!(body["enable_search"], serde_json::json!(true));
         assert_eq!(body["search_options"]["forced_search"], serde_json::json!(true));
         // Typed fields are unaffected.
         assert_eq!(body["model"], serde_json::json!("qwen-plus"));
+    }
+
+    #[test]
+    fn user_images_become_content_parts() {
+        use pocopine_agenkit_core::MediaPart;
+        let request = GenerateRequest {
+            model: ModelRef::new("openai/gpt-4o"),
+            messages: vec![Message::new(
+                Role::User,
+                Content::from_parts(vec![
+                    ContentPart::text("what is in this image?"),
+                    ContentPart::Media(MediaPart {
+                        media_type: "image/png".to_string(),
+                        url: Some("https://example.com/cat.png".to_string()),
+                        data_base64: None,
+                        name: None,
+                    }),
+                    ContentPart::Media(MediaPart {
+                        media_type: "image/jpeg".to_string(),
+                        url: None,
+                        data_base64: Some("QUJD".to_string()),
+                        name: None,
+                    }),
+                ]),
+            )],
+            ..GenerateRequest::default()
+        };
+        let wire =
+            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens).unwrap();
+        let body = serde_json::to_value(&wire).unwrap();
+        let content = &body["messages"][0]["content"];
+        assert!(content.is_array(), "media content uses the parts shape");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "what is in this image?");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "https://example.com/cat.png");
+        // Inline base64 is carried as a data: URI.
+        assert_eq!(content[2]["image_url"]["url"], "data:image/jpeg;base64,QUJD");
+    }
+
+    #[test]
+    fn text_only_content_keeps_the_plain_string_shape() {
+        // Gateways universally accept the plain string body; text-only messages
+        // must not silently migrate to the parts shape.
+        let request = GenerateRequest {
+            model: ModelRef::new("openai/gpt-4o"),
+            messages: vec![Message::new(Role::User, "hi")],
+            ..GenerateRequest::default()
+        };
+        let wire =
+            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens).unwrap();
+        let body = serde_json::to_value(&wire).unwrap();
+        assert_eq!(body["messages"][0]["content"], serde_json::json!("hi"));
+    }
+
+    #[test]
+    fn media_the_wire_cannot_carry_errors_instead_of_dropping() {
+        use pocopine_agenkit_core::MediaPart;
+        // Audio has no Chat Completions mapping here yet — the request must
+        // fail loudly, not silently strip the attachment.
+        let request = GenerateRequest {
+            model: ModelRef::new("openai/gpt-4o"),
+            messages: vec![Message::new(
+                Role::User,
+                Content::from_parts(vec![ContentPart::Media(MediaPart {
+                    media_type: "audio/mpeg".to_string(),
+                    url: Some("https://example.com/a.mp3".to_string()),
+                    data_base64: None,
+                    name: None,
+                })]),
+            )],
+            ..GenerateRequest::default()
+        };
+        let result = ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens);
+        assert!(result.is_err());
     }
 
     #[test]

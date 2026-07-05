@@ -10,8 +10,8 @@
 
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
 use pocopine_agenkit_core::{
-    Content, ContentPart, Message, ModelRef, Role, ThinkingLevel, ToolCall, ToolDescriptor,
-    ToolNameMap, Usage,
+    AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel, ToolCall,
+    ToolDescriptor, ToolNameMap, Usage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,11 +84,16 @@ pub(crate) struct ThinkingConfig {
 impl MessagesRequest {
     /// Map a neutral request. `stream` toggles SSE; `default_max_tokens` fills
     /// the required cap when the request omits one.
+    ///
+    /// Errors (config) when the request carries media this wire cannot deliver
+    /// — see [`GenerateRequest::ensure_media_support`] — instead of silently
+    /// dropping an attachment.
     pub(crate) fn from_agenkit(
         request: &GenerateRequest,
         stream: bool,
         default_max_tokens: u32,
-    ) -> Self {
+    ) -> AgenkitResult<Self> {
+        request.ensure_media_support()?;
         // The Messages API has no system role: hoist `request.system` plus any
         // System-role messages into the top-level `system` field.
         let mut system = request.system.clone();
@@ -162,7 +167,7 @@ impl MessagesRequest {
             }
         });
 
-        Self {
+        Ok(Self {
             model: request.model.model().to_string(),
             max_tokens,
             system,
@@ -172,7 +177,7 @@ impl MessagesRequest {
             thinking,
             stream: stream.then_some(true),
             extra: request.provider_options.clone(),
-        }
+        })
     }
 }
 
@@ -194,7 +199,7 @@ fn fold_messages(messages: &[Message], names: &ToolNameMap) -> Vec<WireMessage> 
     for message in messages {
         let (role, blocks) = match message.role {
             Role::System => continue, // hoisted to top-level `system`
-            Role::User => ("user", text_block(&message.content).into_iter().collect()),
+            Role::User => ("user", user_blocks(&message.content)),
             Role::Assistant => assistant_blocks(message, names),
             Role::Tool => ("user", tool_result_blocks(message)),
         };
@@ -215,6 +220,44 @@ fn fold_messages(messages: &[Message], names: &ToolNameMap) -> Vec<WireMessage> 
 fn text_block(content: &Content) -> Option<ContentBlock> {
     let text = content.as_text();
     (!text.is_empty()).then_some(ContentBlock::Text { text })
+}
+
+/// User content: the single joined text block when there is no media (the
+/// common path, unchanged), else per-part text/image blocks in author order.
+/// `GenerateRequest::ensure_media_support` (checked at request mapping)
+/// guarantees every media part is an image with a source.
+fn user_blocks(content: &Content) -> Vec<ContentBlock> {
+    let has_media = content
+        .parts
+        .iter()
+        .any(|part| matches!(part, ContentPart::Media(_)));
+    if !has_media {
+        return text_block(content).into_iter().collect();
+    }
+    let mut blocks = Vec::new();
+    for part in &content.parts {
+        match part {
+            ContentPart::Text { text } if !text.is_empty() => blocks.push(ContentBlock::Text {
+                text: text.clone(),
+            }),
+            ContentPart::Media(media) => {
+                let source = match (&media.url, &media.data_base64) {
+                    (Some(url), _) => ImageSource::Url { url: url.clone() },
+                    (None, Some(data)) => ImageSource::Base64 {
+                        media_type: media.media_type.clone(),
+                        data: data.clone(),
+                    },
+                    // Rejected upstream by `ensure_media_support`.
+                    (None, None) => continue,
+                };
+                blocks.push(ContentBlock::Image { source });
+            }
+            // Parity with `Content::as_text()`: Json/Thinking parts never cross
+            // the wire as user-visible content.
+            _ => {}
+        }
+    }
+    blocks
 }
 
 fn assistant_blocks(message: &Message, names: &ToolNameMap) -> (&'static str, Vec<ContentBlock>) {
@@ -290,6 +333,11 @@ pub(crate) enum ContentBlock {
     Text {
         text: String,
     },
+    /// An image attachment in a user message, referenced by URL or inlined as
+    /// base64.
+    Image {
+        source: ImageSource,
+    },
     /// A replayed reasoning block (W4): `thinking` text + the opaque `signature`
     /// the model returned, sent back verbatim so Anthropic can verify it.
     Thinking {
@@ -305,6 +353,15 @@ pub(crate) enum ContentBlock {
         tool_use_id: String,
         content: String,
     },
+}
+
+/// An image block's source: `{"type":"url","url":..}` or
+/// `{"type":"base64","media_type":..,"data":..}`.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
 }
 
 #[derive(Serialize)]
@@ -554,13 +611,50 @@ mod tests {
             ],
             ..GenerateRequest::default()
         };
-        let wire = MessagesRequest::from_agenkit(&request, false, 4096);
+        let wire = MessagesRequest::from_agenkit(&request, false, 4096).unwrap();
         assert_eq!(wire.system.as_deref(), Some("be brief\nalso be kind"));
         // The system message is hoisted out, leaving only the user turn.
         let value = to_value(&wire);
         assert_eq!(value["messages"].as_array().unwrap().len(), 1);
         assert_eq!(value["messages"][0]["role"], "user");
         assert_eq!(value["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn user_images_become_image_blocks() {
+        use pocopine_agenkit_core::MediaPart;
+        let request = GenerateRequest {
+            model: models::anthropic::CLAUDE_OPUS_4_8,
+            messages: vec![Message::new(
+                Role::User,
+                Content::from_parts(vec![
+                    ContentPart::text("describe this"),
+                    ContentPart::Media(MediaPart {
+                        media_type: "image/png".to_string(),
+                        url: None,
+                        data_base64: Some("QUJD".to_string()),
+                        name: None,
+                    }),
+                    ContentPart::Media(MediaPart {
+                        media_type: "image/png".to_string(),
+                        url: Some("https://example.com/cat.png".to_string()),
+                        data_base64: None,
+                        name: None,
+                    }),
+                ]),
+            )],
+            ..GenerateRequest::default()
+        };
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
+        let content = &value["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "describe this");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "QUJD");
+        assert_eq!(content[2]["source"]["type"], "url");
+        assert_eq!(content[2]["source"]["url"], "https://example.com/cat.png");
     }
 
     #[test]
@@ -573,7 +667,7 @@ mod tests {
         request
             .provider_options
             .insert("metadata".to_string(), serde_json::json!({"user_id": "u-1"}));
-        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         assert_eq!(value["metadata"]["user_id"], "u-1");
         // Typed fields are unaffected.
         assert_eq!(value["max_tokens"], 4096);
@@ -587,7 +681,7 @@ mod tests {
             json_schema: Some(serde_json::json!({"type": "object", "properties": {}})),
             ..GenerateRequest::default()
         };
-        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         assert_eq!(value["tool_choice"]["type"], "tool");
         assert_eq!(value["tool_choice"]["name"], STRUCTURED_TOOL_NAME);
         assert_eq!(value["tools"][0]["name"], STRUCTURED_TOOL_NAME);
@@ -602,7 +696,7 @@ mod tests {
             json_schema: Some(serde_json::json!({"type": "object"})),
             ..GenerateRequest::default()
         };
-        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         assert!(value.get("tool_choice").is_none() || value["tool_choice"].is_null());
         assert_eq!(value["tools"][0]["name"], "search");
     }
@@ -620,7 +714,7 @@ mod tests {
             ],
             ..GenerateRequest::default()
         };
-        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         let names: Vec<&str> = value["tools"]
             .as_array()
             .unwrap()
@@ -646,7 +740,7 @@ mod tests {
             }],
             ..GenerateRequest::default()
         };
-        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         let messages = value["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 1, "the turn must not be dropped");
         assert_eq!(messages[0]["role"], "user");
@@ -679,7 +773,7 @@ mod tests {
             ],
             ..GenerateRequest::default()
         };
-        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         let messages = value["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[1]["role"], "assistant");

@@ -239,7 +239,7 @@ impl AnthropicProvider {
 
     async fn message(&self, request: GenerateRequest) -> AgenkitResult<GenerateResponse> {
         let names = ToolNameMap::from_descriptors(&request.tools);
-        let wire = MessagesRequest::from_agenkit(&request, false, self.default_max_tokens);
+        let wire = MessagesRequest::from_agenkit(&request, false, self.default_max_tokens)?;
         let response = self
             .send_with_retry(&wire, Some(self.request_timeout))
             .await?;
@@ -259,7 +259,7 @@ impl AnthropicProvider {
         tx: UnboundedSender<AgenkitResult<StreamChunk>>,
     ) -> AgenkitResult<()> {
         let names = ToolNameMap::from_descriptors(&request.tools);
-        let wire = MessagesRequest::from_agenkit(&request, true, self.default_max_tokens);
+        let wire = MessagesRequest::from_agenkit(&request, true, self.default_max_tokens)?;
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
 
