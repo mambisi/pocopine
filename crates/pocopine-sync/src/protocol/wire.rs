@@ -89,6 +89,45 @@ impl<T> SyncRow<T> {
     }
 }
 
+/// Positive deletion record for one row, carried on pull responses.
+///
+/// A tombstone is the authority saying "this key existed and was
+/// deleted" — as opposed to a row merely being absent from a snapshot,
+/// which is ambiguous (deleted? no longer matching the query's filter?
+/// beyond the snapshot limit? lost at the backend?). Clients apply
+/// tombstoned deletes with confidence; un-tombstoned absences stay a
+/// policy decision (see `EvictionReason` in `pocopine-sync-query`).
+///
+/// Retention is the source's business: keep tombstones for a window
+/// comfortably longer than the longest expected client offline period,
+/// then GC. A client that was offline past the window sees the row as
+/// an unexplained absence rather than a confirmed delete — degraded,
+/// never wrong.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncTombstone {
+    pub key: RowKey,
+    /// Version the row had when it was deleted, when the source tracks
+    /// one. Informational — equality on `key` is what drives the
+    /// client-side delete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<RowVersion>,
+}
+
+impl SyncTombstone {
+    pub fn new(key: impl Into<String>) -> SyncResult<Self> {
+        Ok(Self {
+            key: RowKey::new(key)?,
+            version: None,
+        })
+    }
+
+    /// Attach the deleted row's last version.
+    pub fn version(mut self, version: impl Into<String>) -> SyncResult<Self> {
+        self.version = Some(RowVersion::new(version)?);
+        Ok(self)
+    }
+}
+
 /// One ordered change in a sync stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]

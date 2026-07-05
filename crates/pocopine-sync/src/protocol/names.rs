@@ -163,6 +163,17 @@ opaque_string_type!(
     "session id",
     "Ephemeral sync session identity for one running client instance."
 );
+opaque_string_type!(
+    SyncScope,
+    "scope",
+    "Opaque server-derived principal scope for one authenticated response. \
+     Sources derive it from the request's authenticated context (user id, \
+     tenant id, or a hash of either — the client never interprets it, only \
+     compares for equality). Carried on `/open` and `/pull` responses so \
+     the client can refuse to settle another principal's server truth into \
+     a compartment a different principal populated. `None` (the default) \
+     means the stream doesn't scope its responses and the guard is inert."
+);
 
 #[cfg(test)]
 mod tests {
