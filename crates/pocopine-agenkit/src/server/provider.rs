@@ -216,6 +216,28 @@ impl GenerateRequest {
         }
         Ok(())
     }
+
+    /// Validate this request's tool use against the catalog: a model the
+    /// catalog **positively** marks `tools: false` (chat-only models like
+    /// `gpt-5-chat-latest`) cannot take tool definitions — error (config)
+    /// instead of sending a request the provider rejects or, worse, quietly
+    /// answers without ever calling a tool. An alias the catalog doesn't index
+    /// passes — the provider decides — mirroring
+    /// [`GenerateRequest::ensure_media_support`].
+    pub fn ensure_tool_support(&self) -> AgenkitResult<()> {
+        if self.tools.is_empty() {
+            return Ok(());
+        }
+        if let Some(model) = super::catalog::lookup(&self.model)
+            && !model.tools
+        {
+            return Err(AgenkitError::config(format!(
+                "model `{}` does not support tool calling (catalog: tools = false)",
+                self.model
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// A model generation response.
@@ -808,6 +830,40 @@ mod tests {
         );
         // No media at all: trivially fine, even on a non-vision model.
         assert!(request("hello", false).ensure_media_support().is_ok());
+    }
+
+    #[test]
+    fn tool_gate_blocks_only_positively_toolless_models() {
+        let with_tools = |model: &str| GenerateRequest {
+            model: ModelRef::new(model),
+            messages: vec![Message::new(Role::User, "hi")],
+            tools: vec![pocopine_agenkit_core::ToolDescriptor::new("echo", "Echo")],
+            ..GenerateRequest::default()
+        };
+        // Catalog says tools: true → pass; unknown alias → pass (the provider
+        // decides).
+        assert!(with_tools("openai/gpt-4o").ensure_tool_support().is_ok());
+        assert!(
+            with_tools("openrouter/unlisted")
+                .ensure_tool_support()
+                .is_ok()
+        );
+        // A chat-only model the catalog positively marks toolless fails fast.
+        assert!(
+            with_tools("openai/gpt-5-chat-latest")
+                .ensure_tool_support()
+                .is_err()
+        );
+        // Without tool defs the flag is irrelevant.
+        assert!(
+            GenerateRequest {
+                model: ModelRef::new("openai/gpt-5-chat-latest"),
+                messages: vec![Message::new(Role::User, "hi")],
+                ..GenerateRequest::default()
+            }
+            .ensure_tool_support()
+            .is_ok()
+        );
     }
 
     #[test]

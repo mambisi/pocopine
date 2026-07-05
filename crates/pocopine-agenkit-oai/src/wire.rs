@@ -20,6 +20,14 @@ fn model_supports_reasoning(model: &ModelRef) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the catalog **positively** denies native schema-constrained output
+/// for `model`. An unknown alias passes (the provider decides); a known model
+/// with `structured_output: false` degrades to the `json_object` fallback
+/// instead of sending a `json_schema` response_format the endpoint 400s on.
+fn model_denies_structured_output(model: &ModelRef) -> bool {
+    pocopine_agenkit::server::catalog::lookup(model).is_some_and(|m| !m.structured_output)
+}
+
 /// Map a [`ThinkingLevel`] to OpenAI's `reasoning_effort`. `Off` requests none.
 fn reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
     match level {
@@ -97,6 +105,11 @@ impl ChatRequest {
         thinking_param: ThinkingParam,
     ) -> AgenkitResult<Self> {
         request.ensure_media_support()?;
+        request.ensure_tool_support()?;
+        // A model the catalog positively marks structured_output: false can't
+        // take native strict json_schema — demote to the json_object fallback
+        // (still valid JSON; the runtime validates the shape).
+        let strict_schema = strict_schema && !model_denies_structured_output(&request.model);
         let has_tools = !request.tools.is_empty();
         // Collision-safe tool-name map for this request's tools, used for both
         // the tool defs and any replayed assistant tool calls in history.
@@ -765,6 +778,63 @@ mod tests {
         );
         // Typed fields are unaffected.
         assert_eq!(body["model"], serde_json::json!("qwen-plus"));
+    }
+
+    #[test]
+    fn structured_output_denial_demotes_strict_to_json_object() {
+        // gpt-3.5-turbo is positively structured_output: false in the catalog:
+        // even with strict requested and a strict-compatible schema, the wire
+        // degrades to json_object instead of a response_format the endpoint
+        // rejects. An unknown alias keeps strict (the provider decides).
+        let schema = serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}});
+        let request = |model: &str| GenerateRequest {
+            model: ModelRef::new(model),
+            messages: vec![Message::new(Role::User, "hi")],
+            json_schema: Some(schema.clone()),
+            ..GenerateRequest::default()
+        };
+        let wire = ChatRequest::from_agenkit(
+            &request("openai/gpt-3.5-turbo"),
+            false,
+            true,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        )
+        .unwrap();
+        assert!(matches!(
+            wire.response_format,
+            Some(ResponseFormat::JsonObject)
+        ));
+        let wire = ChatRequest::from_agenkit(
+            &request("openrouter/unlisted"),
+            false,
+            true,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        )
+        .unwrap();
+        assert!(matches!(
+            wire.response_format,
+            Some(ResponseFormat::JsonSchema { .. })
+        ));
+    }
+
+    #[test]
+    fn toolless_models_fail_fast_at_the_wire() {
+        let request = GenerateRequest {
+            model: ModelRef::new("openai/gpt-5-chat-latest"),
+            messages: vec![Message::new(Role::User, "hi")],
+            tools: vec![pocopine_agenkit_core::ToolDescriptor::new("echo", "Echo")],
+            ..GenerateRequest::default()
+        };
+        let result = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        );
+        assert!(result.is_err());
     }
 
     #[test]

@@ -28,6 +28,14 @@ fn model_supports_reasoning(model: &ModelRef) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the catalog **positively** denies tool calling for `model`. An
+/// unknown alias passes (the provider decides). Used to skip the forced
+/// structured-output tool — the trick rides tool calling, so a toolless model
+/// gets the system-prompt fallback instead of a request the endpoint rejects.
+fn model_denies_tools(model: &ModelRef) -> bool {
+    pocopine_agenkit::server::catalog::lookup(model).is_some_and(|m| !m.tools)
+}
+
 /// Map a [`ThinkingLevel`] to an Anthropic extended-thinking `budget_tokens`.
 /// `Off` requests no thinking. The minimum Anthropic accepts is 1024.
 fn reasoning_budget(level: ThinkingLevel) -> Option<u32> {
@@ -94,6 +102,7 @@ impl MessagesRequest {
         default_max_tokens: u32,
     ) -> AgenkitResult<Self> {
         request.ensure_media_support()?;
+        request.ensure_tool_support()?;
         // The Messages API has no system role: hoist `request.system` plus any
         // System-role messages into the top-level `system` field.
         let mut system = request.system.clone();
@@ -127,8 +136,9 @@ impl MessagesRequest {
             // A forced `tool_choice` is incompatible with extended thinking
             // (Anthropic rejects forcing a specific tool while thinking is on), so
             // when thinking is requested fall back to the system-prompt approach
-            // even with no user tools.
-            if !has_user_tools && thinking_budget.is_none() {
+            // even with no user tools. Likewise for a model the catalog
+            // positively marks toolless — the trick rides tool calling.
+            if !has_user_tools && thinking_budget.is_none() && !model_denies_tools(&request.model) {
                 // With no user tools, force a single tool whose `input_schema` is
                 // the requested shape — the model must "call" it, yielding
                 // schema-constrained JSON.
@@ -618,6 +628,31 @@ mod tests {
         assert_eq!(value["messages"].as_array().unwrap().len(), 1);
         assert_eq!(value["messages"][0]["role"], "user");
         assert_eq!(value["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn toolless_model_gets_the_prompt_fallback_not_a_forced_tool() {
+        // The forced structured-output tool rides tool calling; a model the
+        // catalog positively marks toolless (gpt-5-chat-latest resolves via the
+        // model-portion fallback) gets the system-prompt fallback instead.
+        let request = GenerateRequest {
+            model: ModelRef::new("openai/gpt-5-chat-latest"),
+            messages: vec![Message::new(Role::User, "summarize")],
+            json_schema: Some(serde_json::json!({"type": "object", "properties": {}})),
+            ..GenerateRequest::default()
+        };
+        let wire = MessagesRequest::from_agenkit(&request, false, 4096).unwrap();
+        let value = to_value(&wire);
+        assert!(value.get("tool_choice").is_none() || value["tool_choice"].is_null());
+        assert!(
+            value.get("tools").is_none() || value["tools"].as_array().is_none_or(Vec::is_empty)
+        );
+        assert!(
+            wire.system
+                .as_deref()
+                .is_some_and(|s| s.contains("JSON Schema")),
+            "schema instruction should ride the system prompt"
+        );
     }
 
     #[test]
