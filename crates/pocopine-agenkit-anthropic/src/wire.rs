@@ -237,9 +237,9 @@ fn user_blocks(content: &Content) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     for part in &content.parts {
         match part {
-            ContentPart::Text { text } if !text.is_empty() => blocks.push(ContentBlock::Text {
-                text: text.clone(),
-            }),
+            ContentPart::Text { text } if !text.is_empty() => {
+                blocks.push(ContentBlock::Text { text: text.clone() })
+            }
             ContentPart::Media(media) => {
                 let source = match (&media.url, &media.data_base64) {
                     (Some(url), _) => ImageSource::Url { url: url.clone() },
@@ -664,9 +664,10 @@ mod tests {
             messages: vec![Message::new(Role::User, "hi")],
             ..GenerateRequest::default()
         };
-        request
-            .provider_options
-            .insert("metadata".to_string(), serde_json::json!({"user_id": "u-1"}));
+        request.provider_options.insert(
+            "metadata".to_string(),
+            serde_json::json!({"user_id": "u-1"}),
+        );
         let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
         assert_eq!(value["metadata"]["user_id"], "u-1");
         // Typed fields are unaffected.

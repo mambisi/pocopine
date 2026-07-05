@@ -153,9 +153,12 @@ impl ChatRequest {
         let wants_reasoning =
             model_supports_reasoning(&request.model) && request.thinking != ThinkingLevel::Off;
         let (reasoning_effort, enable_thinking) = match thinking_param {
-            ThinkingParam::ReasoningEffort => {
-                (wants_reasoning.then(|| reasoning_effort(request.thinking)).flatten(), None)
-            }
+            ThinkingParam::ReasoningEffort => (
+                wants_reasoning
+                    .then(|| reasoning_effort(request.thinking))
+                    .flatten(),
+                None,
+            ),
             ThinkingParam::EnableThinking => (None, wants_reasoning.then_some(true)),
         };
         Ok(Self {
@@ -746,11 +749,20 @@ mod tests {
             "search_options".to_string(),
             serde_json::json!({"forced_search": true}),
         );
-        let wire =
-            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort).unwrap();
+        let wire = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        )
+        .unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         assert_eq!(body["enable_search"], serde_json::json!(true));
-        assert_eq!(body["search_options"]["forced_search"], serde_json::json!(true));
+        assert_eq!(
+            body["search_options"]["forced_search"],
+            serde_json::json!(true)
+        );
         // Typed fields are unaffected.
         assert_eq!(body["model"], serde_json::json!("qwen-plus"));
     }
@@ -792,7 +804,10 @@ mod tests {
 
     #[test]
     fn thinking_off_and_non_reasoning_models_send_no_reasoning_field() {
-        let params = [ThinkingParam::ReasoningEffort, ThinkingParam::EnableThinking];
+        let params = [
+            ThinkingParam::ReasoningEffort,
+            ThinkingParam::EnableThinking,
+        ];
         // `Off` on a reasoning-capable model: nothing, under either dialect.
         let off = GenerateRequest {
             model: ModelRef::new("qwen/qwen-plus"),
@@ -848,17 +863,29 @@ mod tests {
             )],
             ..GenerateRequest::default()
         };
-        let wire =
-            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort).unwrap();
+        let wire = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        )
+        .unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         let content = &body["messages"][0]["content"];
         assert!(content.is_array(), "media content uses the parts shape");
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "what is in this image?");
         assert_eq!(content[1]["type"], "image_url");
-        assert_eq!(content[1]["image_url"]["url"], "https://example.com/cat.png");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            "https://example.com/cat.png"
+        );
         // Inline base64 is carried as a data: URI.
-        assert_eq!(content[2]["image_url"]["url"], "data:image/jpeg;base64,QUJD");
+        assert_eq!(
+            content[2]["image_url"]["url"],
+            "data:image/jpeg;base64,QUJD"
+        );
     }
 
     #[test]
@@ -870,8 +897,14 @@ mod tests {
             messages: vec![Message::new(Role::User, "hi")],
             ..GenerateRequest::default()
         };
-        let wire =
-            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort).unwrap();
+        let wire = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        )
+        .unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         assert_eq!(body["messages"][0]["content"], serde_json::json!("hi"));
     }
@@ -894,7 +927,13 @@ mod tests {
             )],
             ..GenerateRequest::default()
         };
-        let result = ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort);
+        let result = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        );
         assert!(result.is_err());
     }
 
