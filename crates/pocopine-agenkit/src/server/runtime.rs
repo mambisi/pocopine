@@ -28,8 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, Content, CostEstimate, Message,
-    ModelRef, Redactor, RunId, StepId, StepKind, StepStatus, ThreadRetention, ToolCall,
-    ToolDescriptor, TraceId, Usage, WireStopReason, events,
+    ModelRef, Redactor, RunId, StepId, StepKind, StepStatus, ThinkingLevel, ThreadRetention,
+    ToolCall, ToolDescriptor, TraceId, Usage, WireStopReason, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -152,6 +152,7 @@ pub struct AgentConfig {
     pub(crate) tool_ids: Vec<String>,
     pub(crate) max_tokens: Option<u32>,
     pub(crate) max_steps_per_turn: u32,
+    pub(crate) thinking: ThinkingLevel,
     pub(crate) provider_options: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -166,6 +167,7 @@ impl Default for AgentConfig {
             tool_ids: Vec::new(),
             max_tokens: None,
             max_steps_per_turn: 8,
+            thinking: ThinkingLevel::Off,
             provider_options: serde_json::Map::new(),
         }
     }
@@ -209,6 +211,16 @@ impl AgentConfig {
     /// early when the model stops calling tools; this is the runaway guard.
     pub fn max_steps_per_turn(mut self, steps: u32) -> Self {
         self.max_steps_per_turn = steps.max(1);
+        self
+    }
+
+    /// Request model reasoning ("thinking") at the given level on every model
+    /// call this agent makes (default [`ThinkingLevel::Off`]). Providers map
+    /// the level to their own knob — Anthropic's `budget_tokens`, OpenAI's
+    /// `reasoning_effort`, DashScope's `enable_thinking` — and only honour it
+    /// for reasoning-capable models (per the catalog); others ignore it.
+    pub fn thinking(mut self, level: ThinkingLevel) -> Self {
+        self.thinking = level;
         self
     }
 
@@ -601,7 +613,7 @@ impl AgentLoop {
                     tools: tools.clone(),
                     json_schema: None, // conversational: free text, not structured output
                     max_tokens: self.config.max_tokens,
-                    thinking: Default::default(),
+                    thinking: self.config.thinking,
                     provider_options: self.config.provider_options.clone(),
                 };
                 // Streamed: each text fragment reaches the firehose as an
@@ -1213,6 +1225,58 @@ mod tests {
             .tool(Echo)
             .build()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn turn_requests_carry_config_thinking_and_provider_options() {
+        use crate::server::{GenerateRequest, GenerateResponse, Provider, ProviderContext};
+        use std::sync::Mutex;
+
+        // Records the request the turn hands the provider, so the config→wire
+        // plumbing is asserted end-to-end (not just builder state).
+        struct Recorder {
+            last: Arc<Mutex<Option<GenerateRequest>>>,
+        }
+        impl Provider for Recorder {
+            fn id(&self) -> &str {
+                "local"
+            }
+            fn generate<'a>(
+                &'a self,
+                request: GenerateRequest,
+                _cx: &'a ProviderContext,
+            ) -> crate::server::BoxFuture<'a, AgenkitResult<GenerateResponse>> {
+                *self.last.lock().unwrap() = Some(request);
+                Box::pin(async { Ok(GenerateResponse::text("ok")) })
+            }
+        }
+
+        let last = Arc::new(Mutex::new(None));
+        let agenkit = Agenkit::builder()
+            .provider(Recorder { last: last.clone() })
+            .default_model(ModelRef::new("local/default"))
+            .build()
+            .unwrap();
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new()
+                .thinking(ThinkingLevel::High)
+                .provider_option("enable_search", true),
+        );
+        let (tx, _rx) = unbounded_channel();
+        let mut messages = vec![Message::user("hi")];
+        loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
+
+        let request = last.lock().unwrap().take().expect("provider was called");
+        assert_eq!(request.thinking, ThinkingLevel::High);
+        assert_eq!(
+            request.provider_options.get("enable_search"),
+            Some(&serde_json::json!(true))
+        );
     }
 
     #[tokio::test]

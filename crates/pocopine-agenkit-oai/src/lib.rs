@@ -69,6 +69,25 @@ pub enum MaxTokensParam {
     MaxCompletionTokens,
 }
 
+/// Which reasoning-request field a Chat Completions request sends when a
+/// [`ThinkingLevel`](pocopine_agenkit_core::ThinkingLevel) is set for a
+/// reasoning-capable model (per the catalog).
+///
+/// OpenAI and most compatible gateways take a `reasoning_effort` string;
+/// DashScope (Alibaba Cloud Model Studio / Qwen3) takes an `enable_thinking`
+/// boolean instead and rejects `reasoning_effort`. Default is
+/// [`ThinkingParam::ReasoningEffort`]; `QwenProvider` overrides (see
+/// [`OpenAiProvider::with_thinking_param`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThinkingParam {
+    /// Send `reasoning_effort: "minimal" | "low" | "medium" | "high"`.
+    ReasoningEffort,
+    /// Send `enable_thinking: true` for any requested level. `Off` omits the
+    /// field, preserving the endpoint's default; an explicit
+    /// `enable_thinking: false` can ride `provider_options`.
+    EnableThinking,
+}
+
 /// A provider backed by an OpenAI-compatible `/v1/chat/completions` endpoint.
 #[derive(Clone)]
 pub struct OpenAiProvider {
@@ -80,6 +99,8 @@ pub struct OpenAiProvider {
     strict_schema: bool,
     /// Which output-token field to send; `None` auto-derives from `base_url`.
     max_tokens_param: Option<MaxTokensParam>,
+    /// Which reasoning-request field to send for a requested thinking level.
+    thinking_param: ThinkingParam,
     /// Total timeout for a non-streaming request.
     request_timeout: Duration,
     /// Retries on transient failures (429 / 5xx / network errors).
@@ -112,6 +133,7 @@ impl OpenAiProvider {
             organization: None,
             strict_schema: true,
             max_tokens_param: None,
+            thinking_param: ThinkingParam::ReasoningEffort,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_retries: DEFAULT_MAX_RETRIES,
             // A connect timeout only on the shared client: an unreachable
@@ -159,6 +181,14 @@ impl OpenAiProvider {
     /// Force which output-token field is sent, overriding base-URL detection.
     pub fn with_max_tokens_param(mut self, param: MaxTokensParam) -> Self {
         self.max_tokens_param = Some(param);
+        self
+    }
+
+    /// Which reasoning-request field a thinking level maps to (default
+    /// [`ThinkingParam::ReasoningEffort`]; DashScope endpoints want
+    /// [`ThinkingParam::EnableThinking`]).
+    pub fn with_thinking_param(mut self, param: ThinkingParam) -> Self {
+        self.thinking_param = param;
         self
     }
 
@@ -272,7 +302,7 @@ impl OpenAiProvider {
     async fn chat(&self, request: GenerateRequest) -> AgenkitResult<GenerateResponse> {
         let names = ToolNameMap::from_descriptors(&request.tools);
         let wire =
-            ChatRequest::from_agenkit(&request, false, self.strict_schema, self.max_tokens_param())?;
+            ChatRequest::from_agenkit(&request, false, self.strict_schema, self.max_tokens_param(), self.thinking_param)?;
         let response = self
             .send_with_retry(&wire, Some(self.request_timeout))
             .await?;
@@ -293,7 +323,7 @@ impl OpenAiProvider {
     ) -> AgenkitResult<()> {
         let names = ToolNameMap::from_descriptors(&request.tools);
         let wire =
-            ChatRequest::from_agenkit(&request, true, self.strict_schema, self.max_tokens_param())?;
+            ChatRequest::from_agenkit(&request, true, self.strict_schema, self.max_tokens_param(), self.thinking_param)?;
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
 

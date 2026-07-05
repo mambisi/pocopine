@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, Message, ModelRef, Role, StepId, StepKind, StepStatus,
-    ToolDescriptor, events,
+    ThinkingLevel, ToolDescriptor, events,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -48,6 +48,7 @@ pub struct AiAgentBuilder<A: ?Sized> {
     tool_ids: Vec<String>,
     max_tokens: Option<u32>,
     max_steps: u32,
+    thinking: ThinkingLevel,
     provider_options: serde_json::Map<String, serde_json::Value>,
     _marker: PhantomData<fn() -> A>,
 }
@@ -60,6 +61,7 @@ impl<A: ?Sized> Default for AiAgentBuilder<A> {
             tool_ids: Vec::new(),
             max_tokens: None,
             max_steps: 4,
+            thinking: ThinkingLevel::Off,
             provider_options: serde_json::Map::new(),
             _marker: PhantomData,
         }
@@ -104,6 +106,15 @@ impl<A: ?Sized> AiAgentBuilder<A> {
     /// Bound the model+tool loop (default 4).
     pub fn max_steps(mut self, max_steps: u32) -> Self {
         self.max_steps = max_steps;
+        self
+    }
+
+    /// Request model reasoning ("thinking") at the given level on every model
+    /// call this agent makes (default [`ThinkingLevel::Off`]). Providers map
+    /// the level to their own knob and only honour it for reasoning-capable
+    /// models (per the catalog); others ignore it.
+    pub fn thinking(mut self, level: ThinkingLevel) -> Self {
+        self.thinking = level;
         self
     }
 
@@ -294,9 +305,7 @@ async fn run_loop<A: AiAgent>(
             tools: tools.clone(),
             json_schema: Some(schema.clone()),
             max_tokens: config.max_tokens,
-            // The agent loop doesn't request reasoning (W4 is scoped to the `Ai`
-            // generate builder); defaults to `ThinkingLevel::Off`.
-            thinking: Default::default(),
+            thinking: config.thinking,
             provider_options: config.provider_options.clone(),
         };
         let response = loop_core::run_model_step(provider, request, &cx, model, &observer).await?;
