@@ -272,7 +272,7 @@ impl OpenAiProvider {
     async fn chat(&self, request: GenerateRequest) -> AgenkitResult<GenerateResponse> {
         let names = ToolNameMap::from_descriptors(&request.tools);
         let wire =
-            ChatRequest::from_agenkit(&request, false, self.strict_schema, self.max_tokens_param());
+            ChatRequest::from_agenkit(&request, false, self.strict_schema, self.max_tokens_param())?;
         let response = self
             .send_with_retry(&wire, Some(self.request_timeout))
             .await?;
@@ -293,7 +293,7 @@ impl OpenAiProvider {
     ) -> AgenkitResult<()> {
         let names = ToolNameMap::from_descriptors(&request.tools);
         let wire =
-            ChatRequest::from_agenkit(&request, true, self.strict_schema, self.max_tokens_param());
+            ChatRequest::from_agenkit(&request, true, self.strict_schema, self.max_tokens_param())?;
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
 

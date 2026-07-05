@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt};
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, ThinkingLevel, ToolCall,
-    ToolDescriptor, Usage,
+    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel,
+    ToolCall, ToolDescriptor, Usage,
 };
 
 use super::credentials::ProviderCredential;
@@ -163,6 +163,58 @@ impl GenerateRequest {
             .last()
             .map(|m| m.content.as_text())
             .unwrap_or_default()
+    }
+
+    /// Validate this request's media parts before building a provider wire
+    /// request. The wires carry image input on **user** messages; anything they
+    /// cannot carry errors here instead of being silently dropped:
+    ///
+    /// - a media part that is not `image/*` (no wire carries audio or documents
+    ///   yet),
+    /// - an image with neither a `url` nor inline `data_base64`,
+    /// - a media part outside a user message (assistant/tool media has no wire
+    ///   mapping yet), or
+    /// - a model the catalog **positively** marks `vision: false`. An alias the
+    ///   catalog doesn't index passes — the provider decides — so an unlisted
+    ///   gateway model keeps working.
+    pub fn ensure_media_support(&self) -> AgenkitResult<()> {
+        let mut has_images = false;
+        for message in &self.messages {
+            for part in &message.content.parts {
+                let ContentPart::Media(media) = part else {
+                    continue;
+                };
+                if message.role != Role::User {
+                    return Err(AgenkitError::config(format!(
+                        "media parts are only supported in user messages \
+                         (found `{}` in a {:?} message)",
+                        media.media_type, message.role
+                    )));
+                }
+                if !media.media_type.starts_with("image/") {
+                    return Err(AgenkitError::config(format!(
+                        "media type `{}` is not supported by this provider wire (images only)",
+                        media.media_type
+                    )));
+                }
+                if media.url.is_none() && media.data_base64.is_none() {
+                    return Err(AgenkitError::config(
+                        "image media part carries neither a url nor inline data_base64",
+                    ));
+                }
+                has_images = true;
+            }
+        }
+        if has_images
+            && let Some(model) = super::catalog::lookup(&self.model)
+            && !model.vision
+        {
+            return Err(AgenkitError::config(format!(
+                "model `{}` does not accept image input (catalog: vision = false)",
+                self.model
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -689,6 +741,71 @@ mod tests {
         assert!(registry.resolve(&ModelRef::new("openai/gpt")).is_err());
         // Unnamespaced resolves because there is exactly one provider.
         assert!(registry.resolve(&ModelRef::new("default")).is_ok());
+    }
+
+    #[test]
+    fn media_gate_is_loud_instead_of_lossy() {
+        use pocopine_agenkit_core::{Content, ContentPart, MediaPart};
+        fn media(media_type: &str, url: Option<&str>, data: Option<&str>) -> ContentPart {
+            ContentPart::Media(MediaPart {
+                media_type: media_type.to_string(),
+                url: url.map(str::to_string),
+                data_base64: data.map(str::to_string),
+                name: None,
+            })
+        }
+        fn with_media(model: &str, role: Role, part: ContentPart) -> GenerateRequest {
+            GenerateRequest {
+                model: ModelRef::new(model),
+                messages: vec![Message::new(
+                    role,
+                    Content::from_parts(vec![ContentPart::text("look"), part]),
+                )],
+                ..GenerateRequest::default()
+            }
+        }
+
+        let image = || media("image/png", Some("https://x/y.png"), None);
+        // A vision-capable model and an alias the catalog doesn't index both
+        // pass — an unlisted gateway model must keep working.
+        assert!(
+            with_media("openai/gpt-4o", Role::User, image())
+                .ensure_media_support()
+                .is_ok()
+        );
+        assert!(
+            with_media("openrouter/unlisted-vision", Role::User, image())
+                .ensure_media_support()
+                .is_ok()
+        );
+        // A model the catalog positively marks vision: false fails fast.
+        assert!(
+            with_media("openai/gpt-3.5-turbo", Role::User, image())
+                .ensure_media_support()
+                .is_err()
+        );
+        // Non-image media has no wire mapping yet.
+        assert!(
+            with_media("openai/gpt-4o", Role::User, media("audio/mpeg", Some("https://x/a"), None))
+                .ensure_media_support()
+                .is_err()
+        );
+        // Media outside a user message has no wire mapping yet.
+        assert!(
+            with_media("openai/gpt-4o", Role::Tool, image())
+                .ensure_media_support()
+                .is_err()
+        );
+        // An image with neither url nor inline data can't be sent at all.
+        assert!(
+            with_media("openai/gpt-4o", Role::User, media("image/png", None, None))
+                .ensure_media_support()
+                .is_err()
+        );
+        // No media at all: trivially fine, even on a non-vision model.
+        assert!(
+            request("hello", false).ensure_media_support().is_ok()
+        );
     }
 
     #[test]
