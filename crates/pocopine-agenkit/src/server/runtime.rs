@@ -152,6 +152,7 @@ pub struct AgentConfig {
     pub(crate) tool_ids: Vec<String>,
     pub(crate) max_tokens: Option<u32>,
     pub(crate) max_steps_per_turn: u32,
+    pub(crate) provider_options: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for AgentConfig {
@@ -165,6 +166,7 @@ impl Default for AgentConfig {
             tool_ids: Vec::new(),
             max_tokens: None,
             max_steps_per_turn: 8,
+            provider_options: serde_json::Map::new(),
         }
     }
 }
@@ -207,6 +209,19 @@ impl AgentConfig {
     /// early when the model stops calling tools; this is the runaway guard.
     pub fn max_steps_per_turn(mut self, steps: u32) -> Self {
         self.max_steps_per_turn = steps.max(1);
+        self
+    }
+
+    /// Attach a provider-specific request field carried on every model call
+    /// this agent makes (the "extra body" escape hatch) — e.g.
+    /// `.provider_option("enable_search", true)` for DashScope's built-in web
+    /// search. See [`Ai::provider_option`](crate::Ai::provider_option).
+    pub fn provider_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.provider_options.insert(key.into(), value.into());
         self
     }
 }
@@ -587,6 +602,7 @@ impl AgentLoop {
                     json_schema: None, // conversational: free text, not structured output
                     max_tokens: self.config.max_tokens,
                     thinking: Default::default(),
+                    provider_options: self.config.provider_options.clone(),
                 };
                 // Streamed: each text fragment reaches the firehose as an
                 // `AssistantDelta` (via the observer) while the step assembles

@@ -30,6 +30,7 @@ pub struct Ai {
     messages: Vec<Message>,
     max_tokens: Option<u32>,
     thinking: ThinkingLevel,
+    provider_options: serde_json::Map<String, serde_json::Value>,
     tracer: Option<Arc<RunState>>,
     parent_step: Option<StepId>,
 }
@@ -43,6 +44,7 @@ impl Ai {
             messages: Vec::new(),
             max_tokens: None,
             thinking: ThinkingLevel::Off,
+            provider_options: serde_json::Map::new(),
             tracer: None,
             parent_step: None,
         }
@@ -98,6 +100,21 @@ impl Ai {
         self
     }
 
+    /// Attach a provider-specific request field (the "extra body" escape
+    /// hatch), merged verbatim into the top level of the wire request — e.g.
+    /// `.provider_option("enable_search", true)` for DashScope's built-in web
+    /// search. Prefer a typed knob where one exists (`thinking`, `max_tokens`);
+    /// the provider receives unknown keys as-is and rejects what it doesn't
+    /// accept.
+    pub fn provider_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.provider_options.insert(key.into(), value.into());
+        self
+    }
+
     /// Switch to typed structured output for `T`.
     ///
     /// `T` must derive `schemars::JsonSchema` so the runtime can constrain the
@@ -133,6 +150,7 @@ impl Ai {
             json_schema,
             max_tokens: self.max_tokens,
             thinking: self.thinking,
+            provider_options: self.provider_options.clone(),
         })
     }
 
@@ -518,6 +536,16 @@ impl<T: DeserializeOwned + JsonSchema> AiStructured<T> {
     /// Request model reasoning ("thinking") at the given level (roadmap W4).
     pub fn thinking(mut self, level: ThinkingLevel) -> Self {
         self.ai = self.ai.thinking(level);
+        self
+    }
+
+    /// Attach a provider-specific request field (see [`Ai::provider_option`]).
+    pub fn provider_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.ai = self.ai.provider_option(key, value);
         self
     }
 

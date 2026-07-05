@@ -135,6 +135,12 @@ pub struct GenerateRequest {
     /// to [`ThinkingLevel::Off`]; providers only honour it for reasoning-capable
     /// models and ignore it otherwise.
     pub thinking: ThinkingLevel,
+    /// Provider-specific request fields, merged verbatim into the top level of
+    /// the provider's wire request body (the "extra body" escape hatch) — e.g.
+    /// DashScope's `enable_search: true`. Prefer a typed knob where one exists;
+    /// a key that duplicates a typed wire field serializes as a JSON duplicate,
+    /// and which of the two the provider honours is undefined.
+    pub provider_options: serde_json::Map<String, serde_json::Value>,
 }
 
 impl GenerateRequest {
