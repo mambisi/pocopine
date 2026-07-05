@@ -17,9 +17,9 @@ use crate::schema::{
     BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, CLEAR_STREAM_SQL,
     DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL,
     META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
-    MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
-    SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
-    UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
+    MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, MIGRATION_V4_TO_V5_ADD_SCOPE, SCHEMA_VERSION,
+    SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL,
+    UPSERT_MUTATION_SQL, UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
 
 /// SQLite-backed [`SyncLocalStore`] for host/native targets.
@@ -210,9 +210,9 @@ fn migrate_schema(tx: &Transaction<'_>) -> SyncResult<()> {
     // silently stamped as v4 (which would compile but explode at first
     // `UPSERT_MUTATION_SQL`).
     match version {
-        2 | 3 => {}
+        2..=4 => {}
         v if v == SCHEMA_VERSION => return Ok(()),
-        // Any other version (e.g. v1 or a future v5+) falls through to
+        // Any other version (e.g. v1 or a future v6+) falls through to
         // validate_schema_version which returns
         // `incompatible sync sqlite schema version`.
         _ => return Ok(()),
@@ -232,6 +232,13 @@ fn migrate_schema(tx: &Transaction<'_>) -> SyncResult<()> {
     // as a forced wipe — so this migration is non-destructive.
     if !column_exists(tx, "__pocopine_streams", "app_schema_version")? {
         tx.execute(MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, [])
+            .map_err(sqlite_error)?;
+    }
+    // v4 -> v5 (also runs for older stores after the alters above):
+    // scope column on the streams table. Existing rows observe `NULL`
+    // = "never observed a scope; adopt on next save" — non-destructive.
+    if !column_exists(tx, "__pocopine_streams", "scope")? {
+        tx.execute(MIGRATION_V4_TO_V5_ADD_SCOPE, [])
             .map_err(sqlite_error)?;
     }
     // Only stamp the new version when we actually migrated forward.
@@ -328,6 +335,7 @@ fn hydrate_stream(
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<u32>>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .optional()
@@ -335,7 +343,7 @@ fn hydrate_stream(
 
     let rows = load_rows(conn, &stream)?;
     let pending_mutations = pending_mutation_records(conn, &stream)?;
-    let Some((collection, cursor, application_schema_version)) = stream_meta else {
+    let Some((collection, cursor, application_schema_version, scope)) = stream_meta else {
         if rows.is_empty() && pending_mutations.is_empty() {
             return Ok(LocalStreamSnapshot::empty(stream));
         }
@@ -347,6 +355,7 @@ fn hydrate_stream(
             rows,
             pending_mutations,
             application_schema_version: None,
+            scope: None,
         });
     };
 
@@ -357,6 +366,7 @@ fn hydrate_stream(
         rows,
         pending_mutations,
         application_schema_version,
+        scope: scope.map(pocopine_sync::SyncScope::new).transpose()?,
     })
 }
 
@@ -370,6 +380,7 @@ fn save_snapshot(conn: &mut Connection, snapshot: LocalSnapshotBatch) -> SyncRes
         snapshot.cursor.as_ref(),
         now,
         snapshot.application_schema_version,
+        snapshot.scope.as_ref(),
     )?;
     tx.execute(DELETE_STREAM_ROWS_SQL, params![snapshot.stream.as_str()])
         .map_err(sqlite_error)?;
@@ -383,15 +394,16 @@ fn apply_changes(conn: &mut Connection, changes: LocalChangeBatch) -> SyncResult
     let tx = conn.transaction().map_err(sqlite_error)?;
     let now = epoch_ms();
     let stream = changes.stream;
-    // apply_changes doesn't carry an advertised schema_version (it's a
-    // post-open delta path), so pass None — the coalesce in the UPSERT
-    // preserves whatever value `save_snapshot` already recorded.
+    // apply_changes doesn't carry an advertised schema_version or a
+    // scope (it's a post-open delta path), so pass None — the coalesce
+    // in the UPSERT preserves whatever `save_snapshot` already recorded.
     upsert_stream(
         &tx,
         &stream,
         &changes.collection,
         changes.cursor.as_ref(),
         now,
+        None,
         None,
     )?;
     let changes = changes_after_last_reset(changes.changes);
@@ -464,6 +476,7 @@ fn mark_push_result(conn: &mut Connection, result: LocalPushResult) -> SyncResul
             collection,
             result.cursor.as_ref(),
             now,
+            None,
             None,
         )?;
     } else if let Some(cursor) = result.cursor.as_ref() {
@@ -661,12 +674,13 @@ fn upsert_stream(
     cursor: Option<&SyncCursor>,
     updated_at_ms: i64,
     application_schema_version: Option<u32>,
+    scope: Option<&pocopine_sync::SyncScope>,
 ) -> SyncResult<()> {
     // The UPSERT uses `coalesce(excluded.app_schema_version,
-    // __pocopine_streams.app_schema_version)` so passing `None` here
-    // doesn't clobber a previously recorded value. The storage-level
-    // `schema_version` column at ?4 still records this constant for
-    // historical reasons.
+    // __pocopine_streams.app_schema_version)` (same for `scope`) so
+    // passing `None` here doesn't clobber a previously recorded value.
+    // The storage-level `schema_version` column at ?4 still records
+    // this constant for historical reasons.
     tx.execute(
         UPSERT_STREAM_SQL,
         params![
@@ -676,6 +690,7 @@ fn upsert_stream(
             SCHEMA_VERSION,
             updated_at_ms,
             application_schema_version,
+            scope.map(pocopine_sync::SyncScope::as_str),
         ],
     )
     .map_err(sqlite_error)?;
@@ -1807,6 +1822,91 @@ mod tests {
         .unwrap();
         let s = block(store.hydrate_stream(&stream)).unwrap();
         assert_eq!(s.application_schema_version, Some(5));
+    }
+
+    #[test]
+    fn sqlite_store_migrates_v4_to_v5_scope_column() {
+        // Simulate a v4 store: streams table WITH app_schema_version
+        // but WITHOUT scope, seed schema_version=4, and verify open
+        // succeeds + existing rows observe NULL scope + a scoped save
+        // stamps and a scope-less save preserves (coalesce).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table __pocopine_meta (
+                key text primary key,
+                value text not null
+            );
+            create table __pocopine_streams (
+                stream text primary key,
+                collection text not null,
+                cursor text,
+                schema_version integer not null,
+                app_schema_version integer,
+                updated_at_ms integer not null
+            );
+            create table __pocopine_rows (
+                stream text not null,
+                row_key text not null,
+                version text,
+                payload text not null,
+                pending integer not null default 0,
+                conflict integer not null default 0,
+                updated_at_ms integer not null,
+                primary key (stream, row_key)
+            );
+            create table __pocopine_mutations (
+                enqueue_seq integer primary key autoincrement,
+                stream text not null,
+                mutation_id text not null unique,
+                row_key text,
+                base_version text,
+                op text not null,
+                payload text,
+                optimistic_row text,
+                status text not null,
+                error text,
+                created_at_ms integer not null,
+                updated_at_ms integer not null
+            );
+            insert into __pocopine_meta (key, value) values ('schema_version', '4');
+            insert into __pocopine_streams (stream, collection, cursor, schema_version, updated_at_ms)
+                values ('posts', 'posts', null, 4, 0);",
+        )
+        .unwrap();
+
+        let store = SqliteLocalStore::from_connection(conn).unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        // Existing row pre-migration → scope observes None.
+        let s = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(s.scope, None);
+
+        // A scoped save stamps the compartment.
+        let scope = pocopine_sync::SyncScope::new("user:alice").unwrap();
+        block(
+            store.save_snapshot(
+                LocalSnapshotBatch::new(
+                    stream.clone(),
+                    SyncCollectionName::new("posts").unwrap(),
+                    vec![],
+                    None,
+                )
+                .with_scope(Some(scope.clone())),
+            ),
+        )
+        .unwrap();
+        let s = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(s.scope, Some(scope.clone()));
+
+        // A later scope-less save preserves the stamp (coalesce).
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            stream.clone(),
+            SyncCollectionName::new("posts").unwrap(),
+            vec![],
+            None,
+        )))
+        .unwrap();
+        let s = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(s.scope, Some(scope));
     }
 
     fn block<T>(future: SyncLocalFuture<'_, T>) -> SyncResult<T> {

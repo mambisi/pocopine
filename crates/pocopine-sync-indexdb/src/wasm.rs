@@ -253,9 +253,12 @@ async fn save_snapshot(database_name: String, snapshot: LocalSnapshotBatch) -> S
     // Only overwrite when the caller carries a value; passing `None`
     // from a code path that hasn't observed the advertised version yet
     // must not clobber a previously recorded value. Mirrors the
-    // `coalesce(...)` in the SQLite UPSERT.
+    // `coalesce(...)` in the SQLite UPSERT. Same contract for `scope`.
     if let Some(version) = snapshot.application_schema_version {
         state.application_schema_version = Some(version);
+    }
+    if let Some(scope) = snapshot.scope {
+        state.scope = Some(scope);
     }
     put_stream_state(&store, &state).await?;
     await_transaction(done).await?;
