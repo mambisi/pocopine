@@ -32,7 +32,7 @@ use pocopine_agenkit::server::{
     ProviderContext, StreamChunk,
 };
 use pocopine_agenkit_core::{AgenkitError, AgenkitResult};
-use pocopine_agenkit_oai::{MaxTokensParam, OpenAiProvider};
+use pocopine_agenkit_oai::{MaxTokensParam, OpenAiProvider, ThinkingParam};
 
 /// The default DashScope OpenAI-compatible API base URL.
 ///
@@ -77,6 +77,9 @@ impl QwenProvider {
                 // DashScope compatible-mode uses the broad OpenAI-compatible
                 // `max_tokens` field, not OpenAI's newer `max_completion_tokens`.
                 .with_max_tokens_param(MaxTokensParam::MaxTokens)
+                // DashScope's reasoning knob is the `enable_thinking` boolean
+                // (Qwen3 family), not OpenAI's `reasoning_effort` string.
+                .with_thinking_param(ThinkingParam::EnableThinking)
                 // Prefer the widely-supported json_object path for Qwen; callers
                 // can opt into strict json_schema if their model/endpoint supports it.
                 .with_strict_schema(false),
@@ -118,6 +121,13 @@ impl QwenProvider {
     /// Force which output-token field is sent.
     pub fn with_max_tokens_param(mut self, param: MaxTokensParam) -> Self {
         self.inner = self.inner.with_max_tokens_param(param);
+        self
+    }
+
+    /// Which reasoning-request field a thinking level maps to (defaults to
+    /// [`ThinkingParam::EnableThinking`] — DashScope's dialect).
+    pub fn with_thinking_param(mut self, param: ThinkingParam) -> Self {
+        self.inner = self.inner.with_thinking_param(param);
         self
     }
 

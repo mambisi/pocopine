@@ -8,7 +8,7 @@ use pocopine_agenkit_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::MaxTokensParam;
+use crate::{MaxTokensParam, ThinkingParam};
 
 /// Whether a model is reasoning-capable per the W1 catalog. Only such models get
 /// a `reasoning_effort`; everything else ignores [`ThinkingLevel`]. An unknown
@@ -59,6 +59,13 @@ pub(crate) struct ChatRequest {
     /// unless requested for a reasoning-capable model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reasoning_effort: Option<&'static str>,
+    /// DashScope's thinking toggle (Qwen3 family), sent instead of
+    /// `reasoning_effort` under [`ThinkingParam::EnableThinking`]: `true` for
+    /// any requested level on a reasoning-capable model. `Off` omits the field
+    /// (the endpoint's default stands; an explicit `false` rides
+    /// `provider_options`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_thinking: Option<bool>,
     /// Provider-specific extra body fields
     /// (`GenerateRequest::provider_options`), flattened verbatim into the top
     /// level of the request — e.g. DashScope's `enable_search`. Serialized
@@ -76,7 +83,8 @@ pub(crate) struct StreamOptions {
 impl ChatRequest {
     /// Map a neutral request. `stream` toggles SSE; `strict_schema` selects
     /// native `json_schema` structured output (vs `json_object`);
-    /// `max_tokens_param` selects which output-token field to send.
+    /// `max_tokens_param` selects which output-token field to send;
+    /// `thinking_param` selects which reasoning field a thinking level maps to.
     ///
     /// Errors (config) when the request carries media this wire cannot deliver
     /// — see [`GenerateRequest::ensure_media_support`] — instead of silently
@@ -86,6 +94,7 @@ impl ChatRequest {
         stream: bool,
         strict_schema: bool,
         max_tokens_param: MaxTokensParam,
+        thinking_param: ThinkingParam,
     ) -> AgenkitResult<Self> {
         request.ensure_media_support()?;
         let has_tools = !request.tools.is_empty();
@@ -137,6 +146,18 @@ impl ChatRequest {
             MaxTokensParam::MaxTokens => (request.max_tokens, None),
             MaxTokensParam::MaxCompletionTokens => (None, request.max_tokens),
         };
+        // Reasoning (W4): only for reasoning-capable models — `Off` and
+        // unknown/non-reasoning models send nothing. The endpoint dialect picks
+        // the field: OpenAI-style `reasoning_effort`, or DashScope's boolean
+        // `enable_thinking` (which has no level granularity).
+        let wants_reasoning =
+            model_supports_reasoning(&request.model) && request.thinking != ThinkingLevel::Off;
+        let (reasoning_effort, enable_thinking) = match thinking_param {
+            ThinkingParam::ReasoningEffort => {
+                (wants_reasoning.then(|| reasoning_effort(request.thinking)).flatten(), None)
+            }
+            ThinkingParam::EnableThinking => (None, wants_reasoning.then_some(true)),
+        };
         Ok(Self {
             model: request.model.model().to_string(),
             messages,
@@ -156,11 +177,8 @@ impl ChatRequest {
             stream_options: stream.then_some(StreamOptions {
                 include_usage: true,
             }),
-            // Reasoning effort (W4): only for reasoning-capable models; `Off` and
-            // unknown/non-reasoning models send nothing.
-            reasoning_effort: model_supports_reasoning(&request.model)
-                .then(|| reasoning_effort(request.thinking))
-                .flatten(),
+            reasoning_effort,
+            enable_thinking,
             extra: request.provider_options.clone(),
         })
     }
@@ -729,12 +747,80 @@ mod tests {
             serde_json::json!({"forced_search": true}),
         );
         let wire =
-            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens).unwrap();
+            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort).unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         assert_eq!(body["enable_search"], serde_json::json!(true));
         assert_eq!(body["search_options"]["forced_search"], serde_json::json!(true));
         // Typed fields are unaffected.
         assert_eq!(body["model"], serde_json::json!("qwen-plus"));
+    }
+
+    #[test]
+    fn thinking_param_selects_the_reasoning_field() {
+        // qwen-plus is reasoning-capable per the catalog.
+        let request = GenerateRequest {
+            model: ModelRef::new("qwen/qwen-plus"),
+            messages: vec![Message::new(Role::User, "hi")],
+            thinking: ThinkingLevel::Medium,
+            ..GenerateRequest::default()
+        };
+        // OpenAI dialect: `reasoning_effort`, no `enable_thinking`.
+        let wire = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::ReasoningEffort,
+        )
+        .unwrap();
+        let body = serde_json::to_value(&wire).unwrap();
+        assert_eq!(body["reasoning_effort"], "medium");
+        assert!(body.get("enable_thinking").is_none());
+        // DashScope dialect: `enable_thinking: true`, no `reasoning_effort`.
+        let wire = ChatRequest::from_agenkit(
+            &request,
+            false,
+            false,
+            MaxTokensParam::MaxTokens,
+            ThinkingParam::EnableThinking,
+        )
+        .unwrap();
+        let body = serde_json::to_value(&wire).unwrap();
+        assert_eq!(body["enable_thinking"], serde_json::json!(true));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn thinking_off_and_non_reasoning_models_send_no_reasoning_field() {
+        let params = [ThinkingParam::ReasoningEffort, ThinkingParam::EnableThinking];
+        // `Off` on a reasoning-capable model: nothing, under either dialect.
+        let off = GenerateRequest {
+            model: ModelRef::new("qwen/qwen-plus"),
+            messages: vec![Message::new(Role::User, "hi")],
+            ..GenerateRequest::default()
+        };
+        // A level on a model the catalog marks non-reasoning: nothing either.
+        let non_reasoning = GenerateRequest {
+            model: ModelRef::new("openai/gpt-3.5-turbo"),
+            messages: vec![Message::new(Role::User, "hi")],
+            thinking: ThinkingLevel::High,
+            ..GenerateRequest::default()
+        };
+        for request in [&off, &non_reasoning] {
+            for param in params {
+                let wire = ChatRequest::from_agenkit(
+                    request,
+                    false,
+                    false,
+                    MaxTokensParam::MaxTokens,
+                    param,
+                )
+                .unwrap();
+                let body = serde_json::to_value(&wire).unwrap();
+                assert!(body.get("reasoning_effort").is_none());
+                assert!(body.get("enable_thinking").is_none());
+            }
+        }
     }
 
     #[test]
@@ -763,7 +849,7 @@ mod tests {
             ..GenerateRequest::default()
         };
         let wire =
-            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens).unwrap();
+            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort).unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         let content = &body["messages"][0]["content"];
         assert!(content.is_array(), "media content uses the parts shape");
@@ -785,7 +871,7 @@ mod tests {
             ..GenerateRequest::default()
         };
         let wire =
-            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens).unwrap();
+            ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort).unwrap();
         let body = serde_json::to_value(&wire).unwrap();
         assert_eq!(body["messages"][0]["content"], serde_json::json!("hi"));
     }
@@ -808,7 +894,7 @@ mod tests {
             )],
             ..GenerateRequest::default()
         };
-        let result = ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens);
+        let result = ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens, ThinkingParam::ReasoningEffort);
         assert!(result.is_err());
     }
 
