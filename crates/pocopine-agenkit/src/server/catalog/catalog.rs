@@ -20,6 +20,15 @@ pub struct ModelPricing {
 }
 
 /// Static metadata for one model, resolved from a [`ModelRef`] alias.
+///
+/// The capability flags describe the **model** (per the upstream LiteLLM
+/// data); what the **transport** supports (streaming, strict `json_schema`,
+/// the tool wire) is
+/// [`ProviderCapabilities`](crate::server::ProviderCapabilities) on the
+/// provider. The runtime gates on both: a capability needs a model that has it
+/// and a wire that carries it. The post-`vision` flags default to `false` when
+/// deserializing, so a config-loaded entry written before they existed stays
+/// valid.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Model {
     /// The `"provider/model"` alias this entry describes. A [`ModelRef`] so a
@@ -34,6 +43,26 @@ pub struct Model {
     pub reasoning: bool,
     /// Whether the model accepts image input.
     pub vision: bool,
+    /// Whether the model supports native tool/function calling.
+    #[serde(default)]
+    pub tools: bool,
+    /// Whether the provider offers built-in web search for this model (e.g.
+    /// DashScope `enable_search`, OpenAI search-preview models).
+    #[serde(default)]
+    pub web_search: bool,
+    /// Whether the model accepts audio input.
+    #[serde(default)]
+    pub audio_input: bool,
+    /// Whether the model can produce audio output.
+    #[serde(default)]
+    pub audio_output: bool,
+    /// Whether the model accepts PDF/document input.
+    #[serde(default)]
+    pub pdf_input: bool,
+    /// Whether the model supports native schema-constrained structured output
+    /// (`response_schema` / strict `json_schema`).
+    #[serde(default)]
+    pub structured_output: bool,
     /// Token prices.
     pub pricing: ModelPricing,
 }
@@ -121,6 +150,17 @@ mod tests {
         let before = ids.len();
         ids.dedup();
         assert_eq!(before, ids.len(), "duplicate model ids in catalog");
+    }
+
+    #[test]
+    fn capability_flags_survive_generation() {
+        // Anchors that won't regress upstream: Claude Opus does tools, vision,
+        // PDF input, and structured output; gpt-3.5-turbo does tools but has no
+        // vision or audio.
+        let opus = lookup(&models::anthropic::CLAUDE_OPUS_4_8).expect("opus 4.8");
+        assert!(opus.tools && opus.vision && opus.pdf_input && opus.structured_output);
+        let turbo = lookup(&models::openai::GPT_3_5_TURBO).expect("gpt-3.5-turbo");
+        assert!(turbo.tools && !turbo.vision && !turbo.audio_input && !turbo.audio_output);
     }
 
     #[test]

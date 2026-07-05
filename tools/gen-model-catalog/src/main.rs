@@ -30,16 +30,28 @@ const DEFAULT_OUT_DIR: &str = "crates/pocopine-agenkit/src/server/catalog";
 const PROVIDERS: &[&str] = &["anthropic", "openai", "qwen"];
 
 /// One mapped catalog entry (provider/model with our normalized fields).
+#[derive(Default)]
 struct Entry {
     id: String,
     context_window: u32,
     max_output: u32,
     reasoning: bool,
     vision: bool,
+    tools: bool,
+    web_search: bool,
+    audio_input: bool,
+    audio_output: bool,
+    pdf_input: bool,
+    structured_output: bool,
     input: f64,
     output: f64,
     cache_read: f64,
     cache_creation: f64,
+}
+
+/// Read one of LiteLLM's `supports_*` capability booleans (absent ⇒ false).
+fn supports(m: &Map<String, Value>, k: &str) -> bool {
+    m.get(k).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn main() -> ExitCode {
@@ -152,14 +164,14 @@ fn map_entry(key: &str, v: &Value) -> Option<Entry> {
         id: format!("{provider}/{model}"),
         context_window,
         max_output,
-        reasoning: m
-            .get("supports_reasoning")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        vision: m
-            .get("supports_vision")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        reasoning: supports(m, "supports_reasoning"),
+        vision: supports(m, "supports_vision"),
+        tools: supports(m, "supports_function_calling"),
+        web_search: supports(m, "supports_web_search"),
+        audio_input: supports(m, "supports_audio_input"),
+        audio_output: supports(m, "supports_audio_output"),
+        pdf_input: supports(m, "supports_pdf_input"),
+        structured_output: supports(m, "supports_response_schema"),
         input: per_mtok(input),
         output: per_mtok(num(m, "output_cost_per_token").unwrap_or(0.0)),
         cache_read: per_mtok(num(m, "cache_read_input_token_cost").unwrap_or(0.0)),
@@ -202,12 +214,20 @@ fn render(entries: &[Entry], consts: &[(String, String)]) -> String {
     for (e, (provider, name)) in entries.iter().zip(consts) {
         s.push_str(&format!(
             "        Model {{ id: models::{provider}::{name}, context_window: {}, max_output: {}, \
-             reasoning: {}, vision: {}, pricing: ModelPricing {{ input: {}, output: {}, \
+             reasoning: {}, vision: {}, tools: {}, web_search: {}, audio_input: {}, \
+             audio_output: {}, pdf_input: {}, structured_output: {}, \
+             pricing: ModelPricing {{ input: {}, output: {}, \
              cache_read: {}, cache_creation: {} }} }},\n",
             e.context_window,
             e.max_output,
             e.reasoning,
             e.vision,
+            e.tools,
+            e.web_search,
+            e.audio_input,
+            e.audio_output,
+            e.pdf_input,
+            e.structured_output,
             lit(e.input),
             lit(e.output),
             lit(e.cache_read),
@@ -369,7 +389,9 @@ mod tests {
                 "litellm_provider": "openai", "mode": "chat",
                 "max_input_tokens": 128000, "max_output_tokens": 16384,
                 "input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
-                "cache_read_input_token_cost": 1.25e-6, "supports_vision": true
+                "cache_read_input_token_cost": 1.25e-6, "supports_vision": true,
+                "supports_function_calling": true, "supports_response_schema": true,
+                "supports_web_search": true
             },
             "dashscope/qwen-plus": {
                 "litellm_provider": "dashscope", "mode": "chat",
@@ -403,6 +425,11 @@ mod tests {
         assert!((gpt.output - 10.0).abs() < 1e-9);
         assert!((gpt.cache_read - 1.25).abs() < 1e-9);
         assert!(gpt.vision && !gpt.reasoning);
+        assert!(gpt.tools && gpt.structured_output && gpt.web_search);
+        assert!(!gpt.audio_input && !gpt.audio_output && !gpt.pdf_input);
+        // Absent capability keys default to false (the qwen fixture has none).
+        let qwen_caps = &got[2];
+        assert!(!qwen_caps.tools && !qwen_caps.structured_output);
 
         let qwen = &got[2];
         assert_eq!(qwen.id, "qwen/qwen-plus");
@@ -448,32 +475,30 @@ mod tests {
                 max_output: 64_000,
                 reasoning: true,
                 vision: true,
+                tools: true,
                 input: 15.0,
                 output: 75.0,
                 cache_read: 1.5,
                 cache_creation: 18.75,
+                ..Entry::default()
             },
             Entry {
                 id: "openai/gpt-4o".to_string(),
                 context_window: 128_000,
                 max_output: 16_384,
-                reasoning: false,
                 vision: true,
                 input: 2.5,
                 output: 10.0,
                 cache_read: 1.25,
-                cache_creation: 0.0,
+                ..Entry::default()
             },
             Entry {
                 id: "qwen/qwen-plus".to_string(),
                 context_window: 131_072,
                 max_output: 8192,
-                reasoning: false,
-                vision: false,
                 input: 0.4,
                 output: 1.2,
-                cache_read: 0.0,
-                cache_creation: 0.0,
+                ..Entry::default()
             },
         ];
         let consts = const_assignments(&entries);
@@ -510,25 +535,11 @@ mod tests {
         let entries = vec![
             Entry {
                 id: "openai/gpt-4o".to_string(),
-                context_window: 1,
-                max_output: 1,
-                reasoning: false,
-                vision: false,
-                input: 0.0,
-                output: 0.0,
-                cache_read: 0.0,
-                cache_creation: 0.0,
+                ..Entry::default()
             },
             Entry {
                 id: "openai/gpt.4o".to_string(),
-                context_window: 1,
-                max_output: 1,
-                reasoning: false,
-                vision: false,
-                input: 0.0,
-                output: 0.0,
-                cache_read: 0.0,
-                cache_creation: 0.0,
+                ..Entry::default()
             },
         ];
         let names: Vec<String> = const_assignments(&entries)
