@@ -154,6 +154,7 @@ fn open_response(schema_version: u32, cursor: Option<SyncCursor>) -> SyncOpenRes
         collection: SyncCollectionName::new(COLLECTION).unwrap(),
         cursor,
         schema_version,
+        scope: None,
         params: pocopine_sync::StreamParams::new(),
     }])
 }
@@ -191,6 +192,165 @@ fn test_config() -> QueryClientConfig {
         disable_live: true,
         ..QueryClientConfig::default()
     }
+}
+
+#[tokio::test]
+async fn tombstones_delete_with_confidence_and_absences_report_unexplained() {
+    // Snapshot 1: rows a, b, c. Snapshot 2: only a, plus a tombstone
+    // for b. The engine must (1) remove BOTH b and c from the view —
+    // the server snapshot is the source of truth either way — and
+    // (2) report b as Deleted (tombstoned: don't resurrect) and c as
+    // Unexplained (absent with no explanation: app policy decides).
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            let pull_calls = Rc::new(RefCell::new(0u32));
+            let pull_for_mw = pull_calls.clone();
+            install_middleware(move |req: FetchRequest, _next: FetchNext| {
+                let pull_for_mw = pull_for_mw.clone();
+                async move {
+                    match req.url.as_str() {
+                        SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                        SYNC_PULL_PATH => {
+                            let n = {
+                                let mut c = pull_for_mw.borrow_mut();
+                                *c += 1;
+                                *c
+                            };
+                            let issue = |id: &str, title: &str| Issue {
+                                id: id.into(),
+                                workspace_id: "W1".into(),
+                                title: title.into(),
+                            };
+                            let response = if n == 1 {
+                                snapshot_response(vec![
+                                    issue("a", "kept"),
+                                    issue("b", "deleted elsewhere"),
+                                    issue("c", "lost at the server"),
+                                ])
+                            } else {
+                                snapshot_response(vec![issue("a", "kept")]).with_tombstones(vec![
+                                    pocopine_sync::SyncTombstone::new("b").unwrap(),
+                                ])
+                            };
+                            Ok(json_response(&response))
+                        }
+                        other => Err(ServerError::Network(format!("unexpected {other}"))),
+                    }
+                }
+            });
+
+            let client = query_client_plugin().config(test_config()).into_client();
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            settle_ticks(3).await;
+            assert_eq!(view.rows().len(), 3, "first snapshot populated");
+            // The first snapshot settled onto an empty subscription —
+            // nothing was evicted.
+            assert!(view.take_evictions().is_empty());
+
+            // Wait for the second poll tick to settle.
+            settle_ticks(12).await;
+            let rows = view.rows();
+            assert_eq!(
+                rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                vec!["a"],
+                "server truth wins: both the tombstoned and the absent row leave the view"
+            );
+
+            let evictions = view.take_evictions();
+            let mut summary: Vec<(String, pocopine_sync_query::EvictionReason)> = evictions
+                .iter()
+                .map(|e| (e.row.key.as_str().to_string(), e.reason))
+                .collect();
+            summary.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(
+                summary,
+                vec![
+                    (
+                        "b".to_string(),
+                        pocopine_sync_query::EvictionReason::Deleted
+                    ),
+                    (
+                        "c".to_string(),
+                        pocopine_sync_query::EvictionReason::Unexplained
+                    ),
+                ]
+            );
+            // Drained exactly once.
+            assert!(view.take_evictions().is_empty());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn truncated_snapshots_suppress_unexplained_evictions() {
+    // A snapshot that fills the query's own limit can't distinguish
+    // "absent" from "beyond the page": rows past the limit still
+    // leave the canonical set (server truth), but they must NOT be
+    // reported as Unexplained — a recovery policy acting on them
+    // would re-push rows the server still has.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            let pull_calls = Rc::new(RefCell::new(0u32));
+            let pull_for_mw = pull_calls.clone();
+            install_middleware(move |req: FetchRequest, _next: FetchNext| {
+                let pull_for_mw = pull_for_mw.clone();
+                async move {
+                    match req.url.as_str() {
+                        SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                        SYNC_PULL_PATH => {
+                            let n = {
+                                let mut c = pull_for_mw.borrow_mut();
+                                *c += 1;
+                                *c
+                            };
+                            let issue = |id: &str| Issue {
+                                id: id.into(),
+                                workspace_id: "W1".into(),
+                                title: id.into(),
+                            };
+                            // First snapshot: two rows (under limit).
+                            // Second: two DIFFERENT rows, exactly at
+                            // the limit — the old rows' absence is
+                            // unexplainable.
+                            let response = if n == 1 {
+                                snapshot_response(vec![issue("a"), issue("b")])
+                            } else {
+                                snapshot_response(vec![issue("x"), issue("y")])
+                            };
+                            Ok(json_response(&response))
+                        }
+                        other => Err(ServerError::Network(format!("unexpected {other}"))),
+                    }
+                }
+            });
+
+            let client = query_client_plugin().config(test_config()).into_client();
+            let view = client.observe(
+                Issue::query()
+                    .eq(issues::field::workspace_id, "W1")
+                    .limit(2)
+                    .build(),
+            );
+            settle_ticks(3).await;
+            assert_eq!(view.rows().len(), 2);
+            settle_ticks(12).await;
+
+            let rows = view.rows();
+            assert_eq!(
+                rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                vec!["x", "y"],
+                "the full second snapshot still replaces the view"
+            );
+            assert!(
+                view.take_evictions().is_empty(),
+                "a limit-filling snapshot reports no Unexplained evictions"
+            );
+        })
+        .await;
 }
 
 #[tokio::test]
@@ -483,4 +643,91 @@ fn live_event_filter_drops_non_matching_params() {
     assert!(pocopine_sync_query::live_event_matches_params(
         &want, &empty
     ));
+}
+
+#[tokio::test]
+async fn incremental_upserts_beat_retained_tombstones_for_the_same_key() {
+    // A row deleted and then RECREATED inside the tombstone retention
+    // window arrives as an incremental upsert alongside its retained
+    // tombstone. Presence is the stronger claim: the upsert must win,
+    // while a non-conflicting tombstone in the same delta still
+    // deletes.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            let pull_calls = Rc::new(RefCell::new(0u32));
+            let pull_for_mw = pull_calls.clone();
+            install_middleware(move |req: FetchRequest, _next: FetchNext| {
+                let pull_for_mw = pull_for_mw.clone();
+                async move {
+                    match req.url.as_str() {
+                        SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                        SYNC_PULL_PATH => {
+                            let n = {
+                                let mut c = pull_for_mw.borrow_mut();
+                                *c += 1;
+                                *c
+                            };
+                            let issue = |id: &str| Issue {
+                                id: id.into(),
+                                workspace_id: "W1".into(),
+                                title: id.into(),
+                            };
+                            let response = if n == 1 {
+                                snapshot_response(vec![issue("kept"), issue("doomed")])
+                            } else {
+                                // Incremental delta: "reborn" was
+                                // deleted AND recreated in the window
+                                // (upsert + retained tombstone);
+                                // "doomed" only has its tombstone.
+                                let reborn = issue("reborn");
+                                let change = pocopine_sync::SyncChange {
+                                    stream: SyncStreamName::new(STREAM).unwrap(),
+                                    collection: SyncCollectionName::new(COLLECTION).unwrap(),
+                                    key: Some(pocopine_sync::RowKey::new("reborn").unwrap()),
+                                    op: pocopine_sync::SyncOp::Upsert,
+                                    row: Some(
+                                        SyncRow::new(
+                                            "reborn",
+                                            serde_json::to_value(&reborn).unwrap(),
+                                        )
+                                        .unwrap(),
+                                    ),
+                                    cursor: SyncCursor::new("c_2").unwrap(),
+                                };
+                                SyncPullResponse::incremental(
+                                    SyncStreamName::new(STREAM).unwrap(),
+                                    SyncCollectionName::new(COLLECTION).unwrap(),
+                                    vec![change],
+                                    Some(SyncCursor::new("c_2").unwrap()),
+                                )
+                                .with_tombstones(vec![
+                                    pocopine_sync::SyncTombstone::new("reborn").unwrap(),
+                                    pocopine_sync::SyncTombstone::new("doomed").unwrap(),
+                                ])
+                            };
+                            Ok(json_response(&response))
+                        }
+                        other => Err(ServerError::Network(format!("unexpected {other}"))),
+                    }
+                }
+            });
+
+            let client = query_client_plugin().config(test_config()).into_client();
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            settle_ticks(3).await;
+            assert_eq!(view.rows().len(), 2, "initial snapshot settled");
+            settle_ticks(12).await;
+
+            let mut ids: Vec<String> = view.rows().into_iter().map(|r| r.id).collect();
+            ids.sort();
+            assert_eq!(
+                ids,
+                vec!["kept", "reborn"],
+                "the recreated row survives its retained tombstone; \
+                 the plain tombstone still deletes"
+            );
+        })
+        .await;
 }

@@ -157,6 +157,7 @@ fn open_response(schema_version: u32, cursor: Option<SyncCursor>) -> SyncOpenRes
         collection: SyncCollectionName::new(COLLECTION).unwrap(),
         cursor,
         schema_version,
+        scope: None,
         params: StreamParams::new(),
     }])
 }
@@ -823,6 +824,532 @@ async fn external_change_survives_offline_reload() {
                 assert_eq!(rows[0].id, "issue_ws");
                 assert_eq!(rows[0].title, "delivered over WS");
             }
+        })
+        .await;
+}
+
+// ─── Scope guard: cross-principal clobber prevention ────────────────
+
+thread_local! {
+    // (scope, rows) the mock server currently answers with — flipped
+    // mid-test to simulate a session expiring to a different
+    // principal or a user switch between reloads.
+    static SERVER_PRINCIPAL: RefCell<(String, Vec<Issue>)> =
+        const { RefCell::new((String::new(), Vec::new())) };
+}
+
+fn set_server_principal(scope: &str, rows: Vec<Issue>) {
+    SERVER_PRINCIPAL.with(|p| *p.borrow_mut() = (scope.to_string(), rows));
+}
+
+fn install_scoped_middleware() {
+    reset_middleware();
+    install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+        let (scope, rows) = SERVER_PRINCIPAL.with(|p| p.borrow().clone());
+        // Empty principal = the server answers UNSCOPED (an
+        // anonymous session on a stream that only scopes
+        // authenticated principals, or a scoping rollback).
+        let scope = (!scope.is_empty()).then(|| pocopine_sync::SyncScope::new(scope).unwrap());
+        match req.url.as_str() {
+            SYNC_OPEN_PATH => {
+                let mut response = open_response(1, None);
+                response.streams[0].scope = scope;
+                Ok(json_response(&response))
+            }
+            SYNC_PULL_PATH => Ok(json_response(&snapshot_response(rows).with_scope(scope))),
+            other => Err(ServerError::Network(format!("unexpected {other}"))),
+        }
+    });
+}
+
+fn w1_issue(id: &str) -> Issue {
+    Issue {
+        id: id.into(),
+        workspace_id: "W1".into(),
+        title: id.into(),
+    }
+}
+
+fn w1_query() -> pocopine_sync_query::Query<Issue> {
+    Issue::query().eq(issues::field::workspace_id, "W1").build()
+}
+
+fn w1_compartment() -> SyncStreamName {
+    let stream = SyncStreamName::new(STREAM).unwrap();
+    let mut params = StreamParams::new();
+    params.insert("workspace_id".into(), serde_json::json!("W1"));
+    local_stream_key(&stream, &params)
+}
+
+#[tokio::test]
+async fn scope_change_wipes_local_state_and_resyncs() {
+    // THE rule: when the responding principal changes (session
+    // expired to a guest, user switch), the local cache is someone
+    // else's — clear everything and re-sync. The server is the
+    // source of truth; committed rows rebuild from it when the
+    // original session returns.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            install_scoped_middleware();
+            set_server_principal("user:alice", vec![w1_issue("a1"), w1_issue("a2")]);
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            let view = client.observe(w1_query());
+            settle(4).await;
+            assert_eq!(view.rows().len(), 2, "alice's snapshot settled");
+
+            // Session expires: the server now answers as guest with
+            // an empty view. Alice's local state is cleared and the
+            // guest truth settles.
+            set_server_principal("guest", Vec::new());
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            assert_eq!(
+                view.rows().len(),
+                0,
+                "scope change wiped the previous principal's view"
+            );
+            let persisted = store.hydrate_stream(&w1_compartment()).await.unwrap();
+            assert!(
+                persisted.rows.is_empty(),
+                "the durable compartment was cleared and re-persisted as the new truth"
+            );
+            assert_eq!(
+                persisted.scope,
+                Some(pocopine_sync::SyncScope::new("guest").unwrap()),
+                "the compartment is stamped with the current principal"
+            );
+
+            // Alice's session returns: wipe the guest state, re-sync
+            // her rows FROM THE SERVER — nothing depends on the local
+            // cache surviving.
+            set_server_principal(
+                "user:alice",
+                vec![w1_issue("a1"), w1_issue("a2"), w1_issue("a3")],
+            );
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            assert_eq!(view.rows().len(), 3, "alice re-synced from server truth");
+            let persisted = store.hydrate_stream(&w1_compartment()).await.unwrap();
+            assert_eq!(persisted.rows.len(), 3);
+            assert_eq!(
+                persisted.scope,
+                Some(pocopine_sync::SyncScope::new("user:alice").unwrap())
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn queued_mutations_are_discarded_on_principal_change() {
+    // Unpushed offline mutations belong to the session that made
+    // them. When the principal changes, they are DISCARDED along
+    // with the rest of the local state — never pushed under the new
+    // principal, and not resurrected when the original returns
+    // (clear everything and re-sync; the server is the source of
+    // truth for what exists).
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            install_scoped_middleware();
+            set_server_principal("user:alice", vec![w1_issue("a1")]);
+            FLAKY_MODE.with(|m| *m.borrow_mut() = FlakyMode::Offline);
+            FLAKY_HITS.with(|h| h.borrow_mut().clear());
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            client.register_mutator::<FlakyCreate>();
+            let view = client.observe(w1_query());
+            settle(4).await;
+
+            // Alice queues an offline mutation.
+            let ctx = StubContext::new();
+            client
+                .mutate::<FlakyCreate>(
+                    Issue {
+                        id: "a_queued".into(),
+                        workspace_id: "W1".into(),
+                        title: "alice offline".into(),
+                    },
+                    &ctx,
+                )
+                .await
+                .expect_err("offline mutate returns transport error");
+            assert_eq!(view.state().pending().len(), 1);
+            let hits_after_mutate = FLAKY_HITS.with(|h| h.borrow().len());
+
+            // Principal changes to guest AND the network returns —
+            // the queued mutation must be discarded, not pushed.
+            set_server_principal("guest", Vec::new());
+            FLAKY_MODE.with(|m| *m.borrow_mut() = FlakyMode::Online);
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            assert_eq!(
+                FLAKY_HITS.with(|h| h.borrow().len()),
+                hits_after_mutate,
+                "alice's queued mutation must never push under the guest session"
+            );
+            assert_eq!(
+                view.state().pending().len(),
+                0,
+                "the pending overlay was cleared with the rest of alice's state"
+            );
+            let pending = store.pending_mutations(&w1_compartment()).await.unwrap();
+            assert!(pending.is_empty(), "the durable pending was wiped");
+
+            // Alice returns: her view re-syncs from the server; the
+            // discarded mutation stays discarded.
+            set_server_principal("user:alice", vec![w1_issue("a1")]);
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            assert_eq!(
+                FLAKY_HITS.with(|h| h.borrow().len()),
+                hits_after_mutate,
+                "the discarded mutation is not resurrected"
+            );
+            assert_eq!(view.rows().len(), 1, "server truth re-synced");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn principal_round_trip_resyncs_from_the_server() {
+    // alice -> bob -> alice on the same device and query: each
+    // change wipes the compartment and re-syncs the new principal's
+    // truth from the server. One compartment, always owned by the
+    // CURRENT principal — no sibling caches, no stale state.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            install_scoped_middleware();
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+
+            set_server_principal("user:alice", vec![w1_issue("a1")]);
+            let view = client.observe(w1_query());
+            settle(4).await;
+            assert_eq!(view.rows().len(), 1);
+
+            set_server_principal("user:bob", vec![w1_issue("b1"), w1_issue("b2")]);
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            let mut ids: Vec<String> = view.rows().into_iter().map(|r| r.id).collect();
+            ids.sort();
+            assert_eq!(ids, vec!["b1", "b2"], "bob's truth replaced alice's");
+            let persisted = store.hydrate_stream(&w1_compartment()).await.unwrap();
+            assert_eq!(persisted.rows.len(), 2);
+            assert_eq!(
+                persisted.scope,
+                Some(pocopine_sync::SyncScope::new("user:bob").unwrap())
+            );
+
+            set_server_principal("user:alice", vec![w1_issue("a1")]);
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            let ids: Vec<String> = view.rows().into_iter().map(|r| r.id).collect();
+            assert_eq!(ids, vec!["a1"], "alice re-synced from the server");
+            let persisted = store.hydrate_stream(&w1_compartment()).await.unwrap();
+            assert_eq!(persisted.rows.len(), 1);
+            assert_eq!(
+                persisted.scope,
+                Some(pocopine_sync::SyncScope::new("user:alice").unwrap())
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn unstamped_compartment_adopts_the_first_advertised_scope() {
+    // Migration path: a compartment persisted by a pre-scope server
+    // (no stamp) meets a server that started scoping. The client
+    // adopts silently — no wipe, no redirect — and the next persist
+    // stamps the compartment.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            // Session 1: an UNSCOPED server persists the compartment.
+            reset_middleware();
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    SYNC_PULL_PATH => {
+                        Ok(json_response(&snapshot_response(vec![w1_issue("legacy")])))
+                    }
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client1 = query_client_plugin()
+                .config(test_config_with_store(store_handle.clone()))
+                .into_client();
+            let view1 = client1.observe(w1_query());
+            settle(4).await;
+            assert_eq!(view1.rows().len(), 1);
+            let persisted = store.hydrate_stream(&w1_compartment()).await.unwrap();
+            assert!(
+                persisted.scope.is_none(),
+                "pre-scope compartment is unstamped"
+            );
+            drop(view1);
+            drop(client1);
+            settle(2).await;
+
+            // Session 2: the server now scopes its responses.
+            install_scoped_middleware();
+            set_server_principal("user:alice", vec![w1_issue("legacy"), w1_issue("fresh")]);
+            let client2 = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            let view2 = client2.observe(w1_query());
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            assert_eq!(view2.rows().len(), 2, "adoption settles normally, no wipe");
+            let persisted = store.hydrate_stream(&w1_compartment()).await.unwrap();
+            assert_eq!(
+                persisted.scope,
+                Some(pocopine_sync::SyncScope::new("user:alice").unwrap()),
+                "the PRIMARY compartment got stamped on the next persist"
+            );
+            assert_eq!(persisted.rows.len(), 2);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn external_deletes_record_evictions_on_affected_views() {
+    // Codex R5: a server-confirmed delete routed OUTSIDE a view's own
+    // pull (external change, or another subscription's tombstone)
+    // must still surface as a Deleted eviction on the view it removed
+    // a row from — otherwise that view's recovery policy can never
+    // learn the delete propagated.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    SYNC_PULL_PATH => Ok(json_response(&snapshot_response(vec![
+                        w1_issue("keep"),
+                        w1_issue("doomed"),
+                    ]))),
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            let view = client.observe(w1_query());
+            settle(4).await;
+            assert_eq!(view.rows().len(), 2);
+            let _ = view.take_evictions();
+
+            client
+                .apply_external_changes::<Issue>(
+                    &SyncStreamName::new(STREAM).unwrap(),
+                    vec![RowChange::Delete(
+                        pocopine_sync::RowKey::new("doomed").unwrap(),
+                    )],
+                )
+                .await;
+
+            assert_eq!(view.rows().len(), 1, "the external delete propagated");
+            let evictions = view.take_evictions();
+            assert_eq!(evictions.len(), 1);
+            assert_eq!(evictions[0].row.key.as_str(), "doomed");
+            assert_eq!(
+                evictions[0].reason,
+                pocopine_sync_query::EvictionReason::Deleted
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn offline_first_mutations_work_on_a_hydrated_stamped_view() {
+    // Codex R7: a reload that starts OFFLINE hydrates alice's stamped
+    // compartment but never observes a session scope. Her mutation
+    // must still render on her own view and persist into her own
+    // compartment — never-observed is permissive, only a POSITIVELY
+    // different session scope gates mutation routing.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            // Session 1 (online): alice settles and stamps the
+            // compartment.
+            install_scoped_middleware();
+            set_server_principal("user:alice", vec![w1_issue("a1")]);
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client1 = query_client_plugin()
+                .config(test_config_with_store(store_handle.clone()))
+                .into_client();
+            let view1 = client1.observe(w1_query());
+            settle(4).await;
+            assert_eq!(view1.rows().len(), 1);
+            drop(view1);
+            drop(client1);
+            settle(2).await;
+
+            // Session 2: fully offline — every request fails.
+            reset_middleware();
+            install_middleware(|_req: FetchRequest, _next: FetchNext| async move {
+                Err(ServerError::Network("offline".into()))
+            });
+            FLAKY_MODE.with(|m| *m.borrow_mut() = FlakyMode::Offline);
+            let client2 = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            client2.register_mutator::<FlakyCreate>();
+            let view2 = client2.observe(w1_query());
+            settle(4).await;
+            assert_eq!(view2.rows().len(), 1, "hydrate painted alice's cache");
+
+            let ctx = StubContext::new();
+            client2
+                .mutate::<FlakyCreate>(
+                    Issue {
+                        id: "a_offline_first".into(),
+                        workspace_id: "W1".into(),
+                        title: "offline edit".into(),
+                    },
+                    &ctx,
+                )
+                .await
+                .expect_err("offline mutate returns transport error");
+
+            assert!(
+                view2.rows().iter().any(|r| r.id == "a_offline_first"),
+                "the offline edit renders on the hydrated stamped view"
+            );
+            let pending = store.pending_mutations(&w1_compartment()).await.unwrap();
+            assert_eq!(
+                pending.len(),
+                1,
+                "the offline edit persists into the view's own compartment, not the bare fallback"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn scope_drift_clears_sibling_subscriptions_on_the_same_stream() {
+    // Two live queries on one stream: the drift detected by either
+    // driver must clear BOTH — the refetched response fans out
+    // stream-wide, and a sibling still holding the previous
+    // principal's rows would otherwise mix the two until its own
+    // next tick.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            install_scoped_middleware();
+            set_server_principal("user:alice", vec![w1_issue("a1"), w1_issue("a2")]);
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            let view_a = client.observe(w1_query());
+            let view_b = client.observe(
+                Issue::query()
+                    .eq(issues::field::workspace_id, "W1")
+                    .limit(10)
+                    .build(),
+            );
+            settle(4).await;
+            assert_eq!(view_a.rows().len(), 2);
+            assert_eq!(view_b.rows().len(), 2);
+
+            // Principal changes; whichever driver ticks first fences
+            // BOTH subscriptions before its refetch settles.
+            set_server_principal("user:bob", vec![w1_issue("b1")]);
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            let ids_a: Vec<String> = view_a.rows().into_iter().map(|r| r.id).collect();
+            let ids_b: Vec<String> = view_b.rows().into_iter().map(|r| r.id).collect();
+            assert_eq!(ids_a, vec!["b1"], "no alice leftovers in view A");
+            assert_eq!(ids_b, vec!["b1"], "no alice leftovers in view B");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn scope_drift_wipes_the_bare_stream_pending_fallback() {
+    // A mutation whose predicate matched NO active subscription
+    // parks its durable pending in the bare-stream compartment;
+    // hydrate merges that queue on every driver spawn. A principal
+    // change must wipe it too — otherwise the old principal's
+    // queued mutation replays under whoever reloads next.
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            install_scoped_middleware();
+            set_server_principal("user:alice", vec![w1_issue("a1")]);
+            FLAKY_MODE.with(|m| *m.borrow_mut() = FlakyMode::Offline);
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            client.register_mutator::<FlakyCreate>();
+            let _view = client.observe(w1_query());
+            settle(4).await;
+
+            // A W2 row matches no active subscription — the pending
+            // falls back to the bare-stream compartment.
+            let ctx = StubContext::new();
+            client
+                .mutate::<FlakyCreate>(
+                    Issue {
+                        id: "w2_orphan".into(),
+                        workspace_id: "W2".into(),
+                        title: "no matching view".into(),
+                    },
+                    &ctx,
+                )
+                .await
+                .expect_err("offline mutate returns transport error");
+            let bare = SyncStreamName::new(STREAM).unwrap();
+            assert_eq!(
+                store.pending_mutations(&bare).await.unwrap().len(),
+                1,
+                "the orphan pending parked in the bare compartment"
+            );
+
+            // Principal changes: the drift wipe covers the bare
+            // fallback too.
+            set_server_principal("user:bob", vec![w1_issue("b1")]);
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            assert!(
+                store.pending_mutations(&bare).await.unwrap().is_empty(),
+                "alice's orphan pending must not survive the principal change"
+            );
         })
         .await;
 }
