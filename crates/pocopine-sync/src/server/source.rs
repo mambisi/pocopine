@@ -33,6 +33,28 @@ pub trait SyncStreamSource: Send + Sync + 'static {
         None
     }
 
+    /// Opaque principal scope for one authenticated request.
+    ///
+    /// The framework calls this on every `/open` and `/pull` and stamps
+    /// the result onto the response, so the client can tell WHICH
+    /// principal's truth it is settling. Derive it from the
+    /// authenticated context — a user id, tenant id, or a stable hash
+    /// of either. The client never interprets the value; it only
+    /// compares for equality against the scope persisted with its
+    /// durable cache compartment, refusing to let one principal's
+    /// responses overwrite another principal's cached rows (the
+    /// session-expired-to-guest clobber).
+    ///
+    /// Default `None` = this stream doesn't scope responses; the
+    /// client-side guard stays inert and behavior is unchanged. An
+    /// `Err` fails the request — a source that scopes MUST be able to
+    /// name the principal, and answering unscoped when the session
+    /// can't be resolved is exactly the bug this hook exists to stop.
+    fn scope<'a>(&'a self, ctx: &'a RequestContext) -> SyncBoxFuture<'a, Option<crate::SyncScope>> {
+        let _ = ctx;
+        Box::pin(async { Ok(None) })
+    }
+
     /// Application-level schema version for this stream's row/draft shape.
     ///
     /// Bump this whenever the row, draft, or payload shape changes in a way

@@ -200,6 +200,15 @@ pub struct LocalStreamSnapshot {
     /// advertised value is adopted silently on the next snapshot save.
     #[serde(default)]
     pub application_schema_version: Option<u32>,
+    /// Principal scope this compartment's rows were settled under,
+    /// captured from the server's scoped `/open`/`/pull` responses.
+    /// `None` means "never observed a scope" — a fresh compartment, a
+    /// snapshot persisted before the field existed, or an unscoped
+    /// server. The client compares this against the freshly-advertised
+    /// scope on every open: a mismatch redirects the subscription to a
+    /// scope-qualified compartment instead of overwriting this one.
+    #[serde(default)]
+    pub scope: Option<crate::SyncScope>,
 }
 
 impl LocalStreamSnapshot {
@@ -212,6 +221,7 @@ impl LocalStreamSnapshot {
             rows: Vec::new(),
             pending_mutations: Vec::new(),
             application_schema_version: None,
+            scope: None,
         }
     }
 }
@@ -230,6 +240,13 @@ pub struct LocalSnapshotBatch {
     /// open with a known advertised version will set it.
     #[serde(default)]
     pub application_schema_version: Option<u32>,
+    /// Principal scope to record alongside this snapshot. `None` means
+    /// the caller hasn't observed a scoped response yet; stores keep an
+    /// existing recorded scope in that case (coalesce, mirroring
+    /// `application_schema_version`) so a mid-rollout unscoped save
+    /// doesn't erase a valid stamp.
+    #[serde(default)]
+    pub scope: Option<crate::SyncScope>,
 }
 
 impl LocalSnapshotBatch {
@@ -245,6 +262,7 @@ impl LocalSnapshotBatch {
             cursor,
             rows,
             application_schema_version: None,
+            scope: None,
         }
     }
 
@@ -253,6 +271,13 @@ impl LocalSnapshotBatch {
     /// that advertised the version.
     pub fn with_application_schema_version(mut self, version: Option<u32>) -> Self {
         self.application_schema_version = version;
+        self
+    }
+
+    /// Fluent setter for the principal scope this snapshot was settled
+    /// under.
+    pub fn with_scope(mut self, scope: Option<crate::SyncScope>) -> Self {
+        self.scope = scope;
         self
     }
 }

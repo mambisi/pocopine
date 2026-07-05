@@ -35,6 +35,7 @@ struct MemoryStreamState {
     rows: BTreeMap<RowKey, SyncRow<serde_json::Value>>,
     pending: Vec<LocalPendingMutation>,
     application_schema_version: Option<u32>,
+    scope: Option<crate::SyncScope>,
 }
 
 impl MemoryLocalStore {
@@ -96,6 +97,7 @@ impl SyncLocalStore for MemoryLocalStore {
                 rows: state.rows.values().cloned().collect(),
                 pending_mutations: state.pending.clone(),
                 application_schema_version: state.application_schema_version,
+                scope: state.scope.clone(),
             })
         }))
     }
@@ -116,6 +118,12 @@ impl SyncLocalStore for MemoryLocalStore {
             // recorded value.
             if let Some(version) = snapshot.application_schema_version {
                 state.application_schema_version = Some(version);
+            }
+            // Same coalesce contract as `application_schema_version`:
+            // a save that hasn't observed a scoped response must not
+            // erase a previously recorded stamp.
+            if let Some(scope) = snapshot.scope {
+                state.scope = Some(scope);
             }
             Ok(())
         }))

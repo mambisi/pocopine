@@ -437,6 +437,97 @@ where
         .unwrap()
 }
 
+#[tokio::test]
+async fn open_and_pull_responses_carry_the_source_scope() {
+    let scoped = ScopedStream::new();
+    let sync = SyncServer::builder().public_stream(scoped).build();
+    let router = finalize(sync);
+    let principal = Principal::from_user(AuthUser::new("alice"));
+
+    // /open stamps the per-stream scope the source derived from the
+    // authenticated context.
+    let open = SyncOpenRequest::new([SyncStreamName::new("scoped_stream").unwrap()]);
+    let opened: ServerResult<SyncOpenResponse> = post_json(
+        router.clone(),
+        SYNC_OPEN_PATH,
+        &open,
+        Some(principal.clone()),
+    )
+    .await;
+    let opened = opened.unwrap();
+    assert_eq!(
+        opened.streams[0].scope,
+        Some(crate::SyncScope::new("user:alice").unwrap())
+    );
+
+    // /pull stamps the same scope onto the response (the source's
+    // `pull` didn't set one itself).
+    let pull = SyncPullRequest::new(SyncStreamName::new("scoped_stream").unwrap());
+    let pulled: ServerResult<SyncPullResponse<Value>> =
+        post_json(router.clone(), SYNC_PULL_PATH, &pull, Some(principal)).await;
+    assert_eq!(
+        pulled.unwrap().scope,
+        Some(crate::SyncScope::new("user:alice").unwrap())
+    );
+
+    // An anonymous request resolves to no scope — the wire field is
+    // simply absent and the client guard stays inert.
+    let pulled: ServerResult<SyncPullResponse<Value>> =
+        post_json(router, SYNC_PULL_PATH, &pull, None).await;
+    assert!(pulled.unwrap().scope.is_none());
+}
+
+/// Stream whose `scope` derives from the authenticated principal —
+/// the canonical shape for the cross-principal cache-clobber guard.
+struct ScopedStream {
+    stream: SyncStreamName,
+    collection: SyncCollectionName,
+}
+
+impl ScopedStream {
+    fn new() -> Self {
+        Self {
+            stream: SyncStreamName::new("scoped_stream").unwrap(),
+            collection: SyncCollectionName::new("scoped").unwrap(),
+        }
+    }
+}
+
+impl SyncStreamSource for ScopedStream {
+    fn stream(&self) -> &SyncStreamName {
+        &self.stream
+    }
+
+    fn collection(&self) -> &SyncCollectionName {
+        &self.collection
+    }
+
+    fn scope<'a>(&'a self, ctx: &'a RequestContext) -> SyncBoxFuture<'a, Option<crate::SyncScope>> {
+        let user = ctx.principal().user().map(|user| user.id.clone());
+        Box::pin(async move {
+            user.map(|id| crate::SyncScope::new(format!("user:{id}")))
+                .transpose()
+        })
+    }
+
+    fn pull<'a>(
+        &'a self,
+        _ctx: RequestContext,
+        _request: SyncPullRequest,
+    ) -> SyncBoxFuture<'a, SyncPullResponse<Value>> {
+        let stream = self.stream.clone();
+        let collection = self.collection.clone();
+        Box::pin(async move {
+            Ok(SyncPullResponse::snapshot(
+                stream,
+                collection,
+                Vec::new(),
+                None,
+            ))
+        })
+    }
+}
+
 struct ContextCaptureStream {
     stream: SyncStreamName,
     collection: SyncCollectionName,

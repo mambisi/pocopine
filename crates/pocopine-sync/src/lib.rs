@@ -29,9 +29,9 @@ pub use protocol::{
     SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH, StreamParams, SyncChange, SyncCollectionName,
     SyncConflict, SyncCursor, SyncDeviceId, SyncOp, SyncOpenRequest, SyncOpenResponse,
     SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
-    SyncPushResponse, SyncRejectedMutation, SyncRow, SyncSessionId, SyncStreamName,
-    SyncStreamSubscription, default_schema_version_one, local_stream_key, stream_params_hash,
-    sync_stream_params_tag, sync_stream_tag,
+    SyncPushResponse, SyncRejectedMutation, SyncRow, SyncScope, SyncSessionId, SyncStreamName,
+    SyncStreamSubscription, SyncTombstone, default_schema_version_one, local_stream_key,
+    stream_params_hash, sync_stream_params_tag, sync_stream_tag,
 };
 pub use state::SyncReason;
 

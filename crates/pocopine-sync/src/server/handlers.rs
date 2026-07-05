@@ -52,6 +52,7 @@ async fn open(
             cursor: stream.source.current_cursor(&ctx),
             schema_version: stream.source.schema_version(),
             params: requested.params,
+            scope: stream.source.scope(&ctx).await.map_err(server_error)?,
         });
     }
     Ok(SyncOpenResponse::new(streams))
@@ -79,7 +80,22 @@ pub(crate) async fn pull_handler(
             .source
             .validate_params(&request.params)
             .map_err(server_error)?;
-        stream.source.pull(ctx, request).await.map_err(server_error)
+        // Resolve the responding principal's scope BEFORE the pull so
+        // a scope-resolution failure rejects the request instead of
+        // shipping rows stamped with the wrong (or no) principal.
+        let scope = stream.source.scope(&ctx).await.map_err(server_error)?;
+        let mut response = stream
+            .source
+            .pull(ctx, request)
+            .await
+            .map_err(server_error)?;
+        // Stamp only when the source's `pull` didn't set it itself —
+        // a custom `SyncStreamSource` that stamps per-response keeps
+        // its more specific value.
+        if response.scope.is_none() {
+            response.scope = scope;
+        }
+        Ok(response)
     }
     .await;
     Json(result)
