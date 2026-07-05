@@ -63,6 +63,9 @@ type ObservedCalls = Arc<Mutex<Vec<(BTreeMap<String, Value>, Option<u32>)>>>;
 #[derive(Clone)]
 struct IssuesSource {
     rows: Arc<Mutex<Vec<Issue>>>,
+    /// (row key, workspace_id) pairs the source retains as deletion
+    /// records — the backing table for `list_tombstones`.
+    deleted: Arc<Mutex<Vec<(String, String)>>>,
     observed: ObservedCalls,
 }
 
@@ -87,8 +90,17 @@ impl IssuesSource {
         ];
         Self {
             rows: Arc::new(Mutex::new(rows)),
+            deleted: Arc::new(Mutex::new(Vec::new())),
             observed: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn with_deleted(self, key: &str, workspace: &str) -> Self {
+        self.deleted
+            .lock()
+            .unwrap()
+            .push((key.to_string(), workspace.to_string()));
+        self
     }
 }
 
@@ -135,6 +147,33 @@ impl Source for IssuesSource {
             .take(limit)
             .collect();
         Box::pin(futures::stream::iter(filtered.into_iter().map(Ok)))
+    }
+
+    fn list_tombstones<'a>(
+        &'a self,
+        _ctx: (),
+        query: &'a Query<Self::Row>,
+    ) -> SourceFuture<'a, SyncResult<Vec<pocopine_sync::SyncTombstone>>> {
+        // Deletion records honor the same tenant filter as
+        // `list_stream` — a W1 subscription never learns about W2's
+        // deletes.
+        let workspace_filter = query
+            .params()
+            .get("workspace_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let deleted = self.deleted.lock().unwrap().clone();
+        Box::pin(async move {
+            deleted
+                .into_iter()
+                .filter(|(_, w)| workspace_filter.as_deref().is_none_or(|f| w == f))
+                .map(|(key, _)| pocopine_sync::SyncTombstone::new(key))
+                .collect()
+        })
+    }
+
+    fn scope(&self, _ctx: &()) -> SyncResult<Option<pocopine_sync::SyncScope>> {
+        Ok(Some(pocopine_sync::SyncScope::new("tenant:test")?))
     }
 
     fn get<'a>(
@@ -230,6 +269,68 @@ async fn pull(
     let outer: pocopine_core::ServerResult<SyncPullResponse<Value>> =
         serde_json::from_slice(&bytes).unwrap();
     outer.unwrap()
+}
+
+#[tokio::test]
+async fn snapshot_pull_carries_tenant_filtered_tombstones_and_scope() {
+    // The adapter attaches `Source::list_tombstones` to every
+    // snapshot response (filtered by the same query the rows were)
+    // and the pull handler stamps `Source::scope` — the two halves
+    // of "a server delete propagates with confidence, and only to
+    // the principal it belongs to".
+    let source = IssuesSource::seeded()
+        .with_deleted("i_w1_gone", "W1")
+        .with_deleted("i_w2_gone", "W2");
+    let app = build_app(source);
+
+    let w1 = pull(&app, Some("W1")).await;
+    let keys: Vec<&str> = w1.tombstones.iter().map(|t| t.key.as_str()).collect();
+    assert_eq!(keys, vec!["i_w1_gone"], "W2's delete must not leak to W1");
+    assert_eq!(
+        w1.scope,
+        Some(pocopine_sync::SyncScope::new("tenant:test").unwrap()),
+        "pull handler stamps the typed Source::scope"
+    );
+
+    let all = pull(&app, None).await;
+    assert_eq!(
+        all.tombstones.len(),
+        2,
+        "unfiltered pull sees every tombstone"
+    );
+}
+
+#[tokio::test]
+async fn cap_filled_snapshots_advertise_has_more() {
+    // Codex R1 P2: the adapter clamps even unlimited queries to
+    // max_snapshot_rows, and the client can't see that implicit cap.
+    // A page that fills the effective limit must say `has_more` so
+    // client-side eviction reporting doesn't misread pagination as
+    // loss.
+    pocopine_server::__reset_for_test();
+    let sync = SyncServer::builder()
+        .public_stream(
+            build_source(STREAM, IssuesSource::seeded())
+                .expect("stream name")
+                .max_snapshot_rows(2)
+                .expect("cap")
+                .id(|r: &Issue| r.id.clone()),
+        )
+        .build();
+    let app = Server::new(pocopine_server::axum::Router::new())
+        .plugin(sync_server_plugin(sync))
+        .try_finalize()
+        .expect("server finalizes");
+
+    // Three seeded rows, cap 2: the unfiltered page fills the cap.
+    let all = pull(&app, None).await;
+    assert_eq!(all.rows.len(), 2);
+    assert!(all.has_more, "a cap-filled page may be truncated");
+
+    // One W2 row, cap 2: genuinely complete.
+    let w2 = pull(&app, Some("W2")).await;
+    assert_eq!(w2.rows.len(), 1);
+    assert!(!w2.has_more, "an under-cap page is a full view");
 }
 
 #[tokio::test]
