@@ -15,8 +15,43 @@
 
 use std::collections::BTreeMap;
 
-use pocopine_sync::{ClientMutation, MutationId, RowKey, SyncCursor, SyncReason, SyncRow};
+use pocopine_sync::{
+    ClientMutation, MutationId, RowKey, SyncCursor, SyncReason, SyncRow, SyncScope,
+};
 use serde::{Deserialize, Serialize};
+
+/// Why a canonical row left the view on a settled pull.
+///
+/// The server snapshot stays authoritative either way — the row IS
+/// removed from the view. The reason tells app-level recovery policy
+/// what it may safely do about it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvictionReason {
+    /// The authority carried a tombstone for this key: the row was
+    /// positively deleted. Re-pushing it would resurrect data another
+    /// device deliberately removed — don't.
+    Deleted,
+    /// The row was absent from a full snapshot with no tombstone. The
+    /// engine can't tell "no longer matches the query's filter" from
+    /// "lost at the backend" — that's app policy. A local-first app
+    /// whose rows only ever leave the view by deletion may treat this
+    /// as recoverable and re-push; an app with volatile filters should
+    /// not.
+    Unexplained,
+}
+
+/// One canonical row a settled pull removed from the view, plus why.
+/// Drained via `QueryView::take_evictions`.
+#[derive(Clone, Debug)]
+pub struct EvictedRow<Row> {
+    pub row: SyncRow<Row>,
+    pub reason: EvictionReason,
+}
+
+/// Cap on the eviction report buffer. A consumer that never drains
+/// must not turn the buffer into a leak; on overflow the OLDEST
+/// entries drop first (the newest evictions are the actionable ones).
+const MAX_EVICTIONS: usize = 256;
 
 /// Per-query reactive state. Lives inside a `QuerySubscription`; readers
 /// (via `QueryHandle`) get a reactive borrow.
@@ -29,12 +64,30 @@ pub struct QueryState<Row> {
     canonical_rows: BTreeMap<RowKey, SyncRow<Row>>,
     /// In-flight optimistic mutations, in apply order.
     pending: Vec<PendingOverlay<Row>>,
+    /// Rows settled pulls removed from the view, awaiting a
+    /// `take_evictions` drain. In-memory only — hydrating a stale
+    /// eviction report after reload would hand the app rows to
+    /// re-judge that the next pull re-derives anyway.
+    #[serde(skip)]
+    evictions: Vec<EvictedRow<Row>>,
     /// Server cursor for the next incremental pull.
     pub cursor: Option<SyncCursor>,
     /// Schema version this state's canonical rows were fetched under.
     /// `None` means "never observed" (fresh state); compared on every
     /// open to detect schema drift on this query's compartment.
     pub application_schema_version: Option<u32>,
+    /// Last principal PROVIDED BY THE IMPLEMENTOR that this state's
+    /// canonical rows were settled under (via `Source::scope` /
+    /// `SyncStreamSource::scope` on the server). The engine does not
+    /// model users, sessions, or anonymity — it only compares two
+    /// provided tokens for equality: when both this and a response's
+    /// scope are `Some` and differ, the local state belongs to a
+    /// different principal and the engine clears everything and
+    /// re-syncs. `None` (here or on a response) simply means "no
+    /// principal provided" and never triggers anything. Implementors
+    /// that want session-expiry or anonymous transitions detected
+    /// return a token for those sessions too.
+    pub sync_scope: Option<SyncScope>,
     /// True while the first hydrate + pull are in flight.
     pub loading: bool,
     /// True while a background pull / push is in flight after the first.
@@ -97,8 +150,10 @@ impl<Row> Default for QueryState<Row> {
         Self {
             canonical_rows: BTreeMap::new(),
             pending: Vec::new(),
+            evictions: Vec::new(),
             cursor: None,
             application_schema_version: None,
+            sync_scope: None,
             loading: false,
             syncing: false,
             stale: false,
@@ -144,6 +199,23 @@ impl<Row> QueryState<Row> {
     pub fn pending(&self) -> &[PendingOverlay<Row>] {
         &self.pending
     }
+
+    /// Generation token for in-flight work: every `reset()` bumps it,
+    /// so a task that captured the token before an `.await` can
+    /// detect that the state its request was issued for no longer
+    /// exists (scope-drift fence, schema wipe) and discard the
+    /// response instead of settling it.
+    pub fn request_generation(&self) -> u64 {
+        self.request_generation
+    }
+
+    /// Rows settled pulls have removed from the view since the last
+    /// drain, oldest first. Prefer `QueryView::take_evictions` — a
+    /// drain — so each eviction is judged once; this accessor exists
+    /// for read-only inspection.
+    pub fn evictions(&self) -> &[EvictedRow<Row>] {
+        &self.evictions
+    }
 }
 
 // `remove_canonical` / `push_pending` / `remove_pending` are entrypoints
@@ -156,6 +228,7 @@ impl<Row: Clone> QueryState<Row> {
     pub fn reset(&mut self) {
         self.canonical_rows.clear();
         self.pending.clear();
+        self.evictions.clear();
         self.cursor = None;
         self.loading = false;
         self.syncing = false;
@@ -190,6 +263,33 @@ impl<Row: Clone> QueryState<Row> {
     pub(crate) fn push_pending(&mut self, overlay: PendingOverlay<Row>) {
         self.pending.push(overlay);
         self.bump_version();
+    }
+
+    /// Append eviction records from a settled pull, keeping the buffer
+    /// bounded (oldest entries drop first past [`MAX_EVICTIONS`]).
+    pub(crate) fn record_evictions(&mut self, evicted: Vec<EvictedRow<Row>>) {
+        if evicted.is_empty() {
+            return;
+        }
+        self.evictions.extend(evicted);
+        if self.evictions.len() > MAX_EVICTIONS {
+            let excess = self.evictions.len() - MAX_EVICTIONS;
+            self.evictions.drain(..excess);
+        }
+        self.bump_version();
+    }
+
+    /// Drain the eviction report. Each entry is handed out exactly
+    /// once.
+    pub(crate) fn take_evictions(&mut self) -> Vec<EvictedRow<Row>> {
+        if self.evictions.is_empty() {
+            return Vec::new();
+        }
+        // Draining is a state change observers may care about (an
+        // "n unsynced rows" badge clearing) — bump like every other
+        // mutation.
+        self.bump_version();
+        std::mem::take(&mut self.evictions)
     }
 
     /// Internal helper for the routing engine. Removes EVERY pending

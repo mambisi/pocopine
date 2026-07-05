@@ -1027,9 +1027,8 @@ impl QueryClient {
             return;
         };
         for sub in self.collect_subscriptions_on_stream::<Row>(stream) {
-            let (compartment, canonical, cursor, app_version) = {
+            let (compartment, canonical, cursor, app_version, scope) = {
                 let state = sub.state().borrow();
-                let sub_stream = sub.query().stream().clone();
                 let canonical: Vec<SyncRow<Value>> = state
                     .canonical_rows()
                     .filter_map(|row| {
@@ -1043,10 +1042,11 @@ impl QueryClient {
                     })
                     .collect();
                 (
-                    pocopine_sync::local_stream_key(&sub_stream, sub.query().params()),
+                    pocopine_sync::local_stream_key(sub.query().stream(), sub.query().params()),
                     canonical,
                     state.cursor.clone(),
                     state.application_schema_version,
+                    state.sync_scope.clone(),
                 )
             };
             // sync-query has no separate "collection" surface; reuse the
@@ -1061,7 +1061,8 @@ impl QueryClient {
                 canonical,
                 cursor,
             )
-            .with_application_schema_version(app_version);
+            .with_application_schema_version(app_version)
+            .with_scope(scope);
             if let Err(err) = store.save_snapshot(batch).await {
                 tracing::warn!(
                     target: "pocopine.log",
@@ -1471,36 +1472,38 @@ impl QueryClient {
                 if !state.remove_pending(mutation_id).is_empty() {
                     touched = true;
                 }
-                for change in canonical {
-                    match change {
-                        RowChange::Upsert(row) => {
-                            let key = match row_key_of(row) {
-                                Some(k) => k,
-                                None => continue,
-                            };
-                            if typed.matches(row) {
-                                state.upsert_canonical(SyncRow {
-                                    key,
-                                    version: None,
-                                    value: row.clone(),
-                                    pending: false,
-                                    conflict: false,
-                                });
-                                touched = true;
-                            } else if state.canonical_rows().any(|r| r.key == key) {
-                                state.remove_canonical(&key);
-                                touched = true;
+                {
+                    for change in canonical {
+                        match change {
+                            RowChange::Upsert(row) => {
+                                let key = match row_key_of(row) {
+                                    Some(k) => k,
+                                    None => continue,
+                                };
+                                if typed.matches(row) {
+                                    state.upsert_canonical(SyncRow {
+                                        key,
+                                        version: None,
+                                        value: row.clone(),
+                                        pending: false,
+                                        conflict: false,
+                                    });
+                                    touched = true;
+                                } else if state.canonical_rows().any(|r| r.key == key) {
+                                    state.remove_canonical(&key);
+                                    touched = true;
+                                }
                             }
-                        }
-                        RowChange::Delete(key) => {
-                            if state.canonical_rows().any(|r| &r.key == key) {
-                                state.remove_canonical(key);
-                                touched = true;
+                            RowChange::Delete(key) => {
+                                if state.canonical_rows().any(|r| &r.key == key) {
+                                    state.remove_canonical(key);
+                                    touched = true;
+                                }
                             }
                         }
                     }
+                    touched
                 }
-                touched
             };
             if touched {
                 typed.notify_listeners();
@@ -1533,6 +1536,11 @@ impl QueryClient {
     /// matching key remain visible; the merge in `QueryView::rows`
     /// makes the optimistic upsert win over the canonical until
     /// the matching `mutate()` clears it.
+    ///
+    /// Server-confirmed deletes that remove a row a view actually
+    /// held are recorded as `Deleted` evictions on THAT view — every
+    /// affected subscription learns the delete propagated, not just
+    /// the one whose pull carried the tombstone.
     pub(crate) fn route_canonical_pull<Row>(
         inner: &Rc<QueryClientInner>,
         stream: &SyncStreamName,
@@ -1566,8 +1574,16 @@ impl QueryClient {
                             }
                         }
                         RowChange::Delete(key) => {
-                            if state.canonical_contains(key) {
+                            if let Some(row) = state.canonical_get(key).cloned() {
                                 state.remove_canonical(key);
+                                // The server delete actually removed
+                                // a row from THIS view — report it so
+                                // recovery policy on every affected
+                                // view knows never to re-push it.
+                                state.record_evictions(vec![crate::EvictedRow {
+                                    row,
+                                    reason: crate::EvictionReason::Deleted,
+                                }]);
                                 touched = true;
                             }
                         }
@@ -1623,6 +1639,97 @@ impl QueryClient {
     pub(crate) fn take_replay_entries(inner: &Rc<QueryClientInner>) -> Vec<ReplayEntry> {
         let mut q = inner.replay_queue.borrow_mut();
         q.drain(..).collect()
+    }
+
+    /// Driver-only: the scope-drift fan-out fence. A scope drift
+    /// means the SESSION changed principals, so every subscription
+    /// on the stream (of this Row type — exactly the set a settled
+    /// pull fans out to) is holding the previous principal's state,
+    /// not just the subscription whose pull detected the change.
+    /// Reset each one's in-memory state, stamp it with the newly
+    /// observed scope (each then re-syncs cursor-less from its own
+    /// next pull), and return the distinct compartment keys so the
+    /// caller can wipe the durable side too. Without this fence, the
+    /// refetched response would route the new principal's rows into
+    /// sibling views still showing the old principal's data.
+    ///
+    /// Deliberately does NOT notify listeners: the caller notifies
+    /// via [`Self::notify_stream_subscriptions`] AFTER the durable
+    /// wipes finish, so an `on_update` callback reading the store
+    /// can't observe the previous principal's rows post-reset.
+    pub(crate) fn reset_stream_subscriptions_for_scope_drift<Row>(
+        inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
+        new_scope: Option<pocopine_sync::SyncScope>,
+    ) -> Vec<SyncStreamName>
+    where
+        Row: Clone + 'static,
+    {
+        let mut compartments: Vec<SyncStreamName> = Vec::new();
+        for typed in collect_subscriptions_on_stream_inner::<Row>(inner, stream) {
+            {
+                let mut state = typed.state.borrow_mut();
+                // Preserve the advertised schema version across the
+                // scope reset — a pull-path drift has no follow-up
+                // /open to re-learn it before the next persist.
+                let schema_version = state.application_schema_version;
+                state.reset();
+                state.application_schema_version = schema_version;
+                state.sync_scope = new_scope.clone();
+            }
+            compartments.push(pocopine_sync::local_stream_key(
+                stream,
+                typed.query.params(),
+            ));
+        }
+        // The bare-stream compartment too: `persist_pending_mutation`
+        // falls back to it when no subscription matched at mutate
+        // time, and `hydrate_phase` merges its pendings on every
+        // spawn — a previous principal's queued mutation parked
+        // there must not survive the principal change.
+        compartments.push(stream.clone());
+        compartments.sort();
+        compartments.dedup();
+        compartments
+    }
+
+    /// Driver-only: fire `on_update` listeners on every same-stream
+    /// subscription. Pairs with the fence above — called after the
+    /// durable wipes complete.
+    pub(crate) fn notify_stream_subscriptions<Row>(
+        inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
+    ) where
+        Row: Clone + 'static,
+    {
+        for typed in collect_subscriptions_on_stream_inner::<Row>(inner, stream) {
+            typed.notify_listeners_external();
+        }
+    }
+
+    /// Driver-only: drop EVERY queued replay entry, all streams —
+    /// the "clear everything" half of the scope-drift rule. A
+    /// principal change is a SESSION event: queued mutations made
+    /// under the previous principal exist on every stream, and the
+    /// detecting driver's own replay tick drains the client-wide
+    /// queue, so per-stream dropping would let another stream's
+    /// stale mutation push under the new principal before that
+    /// stream observes its own drift. Durable pendings stay in
+    /// their compartments and are dealt with by each stream's own
+    /// drift wipe. Returns the number of entries dropped.
+    pub(crate) fn clear_replay_queue(inner: &Rc<QueryClientInner>) -> usize {
+        let mut q = inner.replay_queue.borrow_mut();
+        let dropped = q.len();
+        q.clear();
+        if dropped > 0 {
+            tracing::info!(
+                target: "pocopine.log",
+                dropped,
+                "sync-query: discarded ALL queued replays on scope drift \
+                 (the session changed principals; clear everything and re-sync)",
+            );
+        }
+        dropped
     }
 
     /// Register a [`crate::Mutator`] impl so the hydrate path can
@@ -2412,6 +2519,30 @@ impl<Row: 'static> QueryView<Row> {
         }
 
         rows
+    }
+
+    /// Drain the eviction report: every previously-canonical row a
+    /// settled `/pull` has removed from this view since the last
+    /// drain, tagged with WHY (see [`crate::EvictionReason`]).
+    ///
+    /// This is the engine-level hook for local-first recovery policy.
+    /// `Deleted` rows were positively tombstoned at the authority —
+    /// the delete has propagated; re-pushing one would resurrect data
+    /// another device deliberately removed. `Unexplained` rows left a
+    /// full snapshot without a tombstone — an app whose rows only
+    /// leave its filter by deletion may choose to re-push them
+    /// ("server-side loss must not become client-side loss"); an app
+    /// with volatile filters should not.
+    ///
+    /// Typical shape: call from an [`Self::on_update`] callback so
+    /// each settle's report is judged exactly once. The buffer is
+    /// bounded (oldest entries drop past 256) so an app that never
+    /// drains doesn't leak.
+    pub fn take_evictions(&self) -> Vec<crate::EvictedRow<Row>>
+    where
+        Row: Clone,
+    {
+        self.handle.shared_state().borrow_mut().take_evictions()
     }
 
     /// Monotonic state-version counter. Bumps on every mutation
