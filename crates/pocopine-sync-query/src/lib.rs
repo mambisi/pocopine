@@ -81,7 +81,7 @@ pub use predicate::{
 };
 pub use query::{MatchFn, Order, OrderBy, PartitionHashFn, Query, QueryBuilder, QueryKey};
 pub use selector::{AnyArgs, AnyTrackable, SelectorId, SelectorView, TrackToken};
-pub use state::QueryState;
+pub use state::{EvictedRow, EvictionReason, QueryState};
 
 // RFC 090 Phase 1 — Query-native server source. The crate also
 // continues to expose CRUD-shaped registration through

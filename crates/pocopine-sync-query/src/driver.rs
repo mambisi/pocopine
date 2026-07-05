@@ -56,7 +56,7 @@ use serde_json::Value;
 
 use crate::client::{QueryClient, QueryClientInner, QuerySubscription};
 use crate::mutator::RowChange;
-use crate::state::PendingOverlay;
+use crate::state::{EvictedRow, EvictionReason, PendingOverlay};
 use crate::wire::{build_open_request, build_pull_request};
 
 /// Default sync endpoint prefix. Re-exported from `pocopine-sync`
@@ -311,10 +311,16 @@ where
         // gate in apply_open will wipe the in-memory state if
         // /open advertises a fresh version; until that lands, the
         // hydrated rows are shown.
-        self.hydrate_phase().await;
+        let hydrated_pendings = self.hydrate_phase().await;
         if !self.epoch.is_current() {
             return;
         }
+        // The principal the pendings were hydrated under — checked
+        // again at enqueue time, because a SIBLING driver's
+        // scope-drift fence can restamp this subscription while our
+        // /open is still in flight, and the captured pendings must
+        // not replay under the fence's new principal.
+        let hydrated_scope = self.with_state_borrow(|s| s.sync_scope.clone()).flatten();
 
         // ── Phase 1: /open ──────────────────────────────────────
         //
@@ -331,6 +337,11 @@ where
                     return;
                 }
                 self.mark_error(err);
+                // Offline-first: without server contact there is no
+                // drift to vet against, so the hydrated pendings
+                // replay as always (the implementor's scope contract
+                // only speaks through responses).
+                self.enqueue_hydrated_pendings(hydrated_pendings, hydrated_scope);
                 // Fall through to the loop so a subsequent retry can
                 // recover when the network comes back.
                 self.run_loop().await;
@@ -340,11 +351,24 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        if let Err(()) = self.apply_open(open_response).await {
-            // Schema-drift path bumped state.version; nothing more
-            // to do here, the next /pull rebuilds the rows. The
-            // durable wipe (clear_stream) was awaited inside
-            // apply_open so it's already on disk.
+        match self.apply_open(open_response).await {
+            OpenOutcome::Clean | OpenOutcome::SchemaDrift => {
+                // The session's principal is confirmed unchanged, so
+                // the hydrated pendings belong to it — queue their
+                // replays now. Enqueueing BEFORE the open would let
+                // another stream's driver drain and push them in the
+                // window before a scope wipe could discard them.
+                // (Schema drift wiped the DURABLE queue per the
+                // schema-bump contract, but these already-hydrated
+                // replays still fire once; the server's
+                // migrate_payload handles stale payload shapes.)
+                self.enqueue_hydrated_pendings(hydrated_pendings, hydrated_scope);
+            }
+            OpenOutcome::ScopeDrift => {
+                // The principal changed: everything the previous one
+                // touched was cleared inside apply_open — the
+                // hydrated pendings go with it.
+            }
         }
 
         // ── Phase 2: initial /pull ──────────────────────────────
@@ -362,9 +386,15 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        self.apply_pull(pull_response);
+        let scope_changed = self.apply_pull(pull_response);
         if !self.epoch.is_current() {
             return;
+        }
+        if scope_changed {
+            self.refetch_after_scope_drift().await;
+            if !self.epoch.is_current() {
+                return;
+            }
         }
         // Persist the freshly-pulled canonical snapshot. Runs after
         // apply_pull so the persisted view matches what's on the
@@ -407,7 +437,10 @@ where
             if !self.epoch.is_current() {
                 return;
             }
-            // 3. Walk pending replay queue (offline-replay).
+            // 3. Walk pending replay queue (offline-replay). A scope
+            //    change inside tick_pull already dropped the previous
+            //    principal's queued entries — whatever remains
+            //    belongs to the current session.
             self.replay_pending().await;
             if !self.epoch.is_current() {
                 return;
@@ -512,7 +545,11 @@ where
     /// Issue a /pull and route results into canonical state.
     /// Errors surface into `state.error`; the next tick retries.
     async fn tick_pull(&self) {
-        let cursor = self.with_state_borrow(|s| s.cursor.clone()).flatten();
+        let Some((cursor, generation)) =
+            self.with_state_borrow(|s| (s.cursor.clone(), s.request_generation()))
+        else {
+            return;
+        };
         let response = match self.send_pull(cursor).await {
             Ok(resp) => resp,
             Err(err) => {
@@ -526,13 +563,125 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        self.apply_pull(response);
+        // Discard the response if ANY reset (a sibling driver's
+        // scope-drift fence, a schema wipe) invalidated the state
+        // this request was issued for — its cursor belongs to state
+        // that no longer exists, and settling it (especially an
+        // Incremental body) would leave a partial view. The next
+        // tick pulls fresh against the reset state.
+        let still_current = self
+            .with_state_borrow(|s| s.request_generation() == generation)
+            .unwrap_or(false);
+        if !still_current {
+            tracing::debug!(
+                target: "pocopine.log",
+                "sync-query: discarding a pull response issued before a state reset",
+            );
+            return;
+        }
+        let scope_changed = self.apply_pull(response);
         if !self.epoch.is_current() {
             return;
+        }
+        if scope_changed {
+            self.refetch_after_scope_drift().await;
+            if !self.epoch.is_current() {
+                return;
+            }
         }
         // Persist after every successful /pull (RFC 088 §A.3) so a
         // reload after the tick observes the latest canonical set.
         self.persist_snapshot().await;
+    }
+
+    /// The re-sync half of a mid-loop scope drift. `apply_pull`
+    /// already discarded the cross-principal response and reset the
+    /// ORIGINATING subscription (the drifted response was requested
+    /// with the OLD principal's cursor, so settling it — especially
+    /// an `Incremental` body — would leave a partial view). Here we
+    /// extend the wipe to EVERY same-stream subscription — the
+    /// session changed for the whole client, and the refetched
+    /// response fans out stream-wide, so sibling views still holding
+    /// the previous principal's state must be cleared BEFORE the
+    /// settle can reach them — make the wipes durable, and
+    /// immediately re-pull WITHOUT a cursor so the new principal's
+    /// view settles from a full snapshot. If the scope is STILL
+    /// flapping on the refetch, we leave the (empty, wiped) state
+    /// for the next tick to retry.
+    async fn refetch_after_scope_drift(&self) {
+        // The originating sub adopted the new scope in apply_pull's
+        // drift branch — read it back to stamp the siblings.
+        let adopted = self.with_state_borrow(|s| s.sync_scope.clone()).flatten();
+        let compartments = match (self.client.upgrade(), self.subscription.upgrade()) {
+            (Some(client_inner), Some(sub)) => {
+                QueryClient::reset_stream_subscriptions_for_scope_drift::<Row>(
+                    &client_inner,
+                    sub.query().stream(),
+                    adopted,
+                )
+            }
+            _ => return,
+        };
+        if let Some(store) = self.local_store.clone() {
+            for compartment in compartments {
+                if let Err(err) = store.clear_stream(&compartment).await {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = compartment.as_str(),
+                        error = %err,
+                        "sync-query: scope-drift wipe failed; the next persist still \
+                         replaces the compartment's rows",
+                    );
+                }
+                if !self.epoch.is_current() {
+                    return;
+                }
+            }
+        }
+        // Notify AFTER the durable wipes: an `on_update` callback
+        // reading the store must not observe the previous
+        // principal's rows post-reset.
+        if let (Some(client_inner), Some(sub)) =
+            (self.client.upgrade(), self.subscription.upgrade())
+        {
+            QueryClient::notify_stream_subscriptions::<Row>(&client_inner, sub.query().stream());
+        }
+        let response = match self.send_pull(None).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                if self.epoch.is_current() {
+                    self.mark_error(err);
+                }
+                return;
+            }
+        };
+        if !self.epoch.is_current() {
+            return;
+        }
+        if self.apply_pull(response) {
+            // Flapped again mid-refetch — wipe the just-adopted
+            // scope's durable slate too and let the next tick
+            // re-sync.
+            self.clear_durable_compartment().await;
+        }
+    }
+
+    /// Durably wipe this subscription's compartment — the storage
+    /// half of "clear everything and re-sync" on scope drift.
+    async fn clear_durable_compartment(&self) {
+        let Some(store) = self.local_store.clone() else {
+            return;
+        };
+        let compartment = self.compartment_key();
+        if let Err(err) = store.clear_stream(&compartment).await {
+            tracing::warn!(
+                target: "pocopine.log",
+                stream = compartment.as_str(),
+                error = %err,
+                "sync-query: scope-drift wipe failed; the next persist still \
+                 replaces the compartment's rows",
+            );
+        }
     }
 
     /// Walk the pending-replay queue on the client and re-fire
@@ -628,12 +777,14 @@ where
         res.map_err(DriverError::from_server_error)
     }
 
-    /// Apply an `/open` response: validate the stream, detect
-    /// schema drift, install cursor.
+    /// Apply an `/open` response: validate the stream, detect schema
+    /// and scope drift, install cursor.
     ///
-    /// Returns `Err(())` when schema-drift triggered a state
-    /// reset — caller should NOT treat that as a hard error
-    /// (the next `/pull` rebuilds the canonical set).
+    /// Returns which drift (if any) triggered a state reset — never
+    /// a hard error; the next `/pull` rebuilds the canonical set.
+    /// The caller uses the distinction to decide the hydrated
+    /// pendings' fate (kept for schema drift, discarded for scope
+    /// drift).
     ///
     /// Schema-drift wipe atomicity: when drift is detected we
     /// awaited the durable wipe (`clear_stream`) FIRST, then the
@@ -642,9 +793,9 @@ where
     /// transition in one borrow — no observer can land between
     /// `clear_stream` and `reset` and read empty-but-stale-version
     /// state.
-    async fn apply_open(&self, response: SyncOpenResponse) -> Result<(), ()> {
+    async fn apply_open(&self, response: SyncOpenResponse) -> OpenOutcome {
         let Some(sub) = self.subscription.upgrade() else {
-            return Ok(());
+            return OpenOutcome::Clean;
         };
         let stream_name = sub.query().stream().clone();
         let Some(opened) = response
@@ -659,60 +810,150 @@ where
                 "/open response missing stream {}",
                 stream_name.as_str()
             )));
-            return Ok(());
+            return OpenOutcome::Clean;
         };
         let SyncOpenStream {
             cursor,
             schema_version,
+            scope: server_scope,
             ..
         } = opened;
-        // Schema-drift detection MUST run while not holding the
-        // state borrow — the durable wipe is async and we don't
-        // want a `RefMut` held across an .await. Read the cached
-        // version, drop the borrow, run the wipe, then re-borrow
-        // to apply the in-memory transition atomically.
-        let cached = self
-            .with_state_borrow(|s| s.application_schema_version)
-            .flatten();
-        let drift = matches!(cached, Some(c) if c != schema_version);
+        // Drift detection MUST run while not holding the state
+        // borrow — the durable wipe is async and we don't want a
+        // `RefMut` held across an .await. Read the cached values,
+        // drop the borrow, run the wipe, then re-borrow to apply
+        // the in-memory transition atomically.
+        //
+        // Two kinds of drift, one rule — the local cache is stale
+        // or belongs to someone else, so CLEAR EVERYTHING AND
+        // RE-SYNC (the server is the source of truth):
+        //
+        // * schema drift — the advertised application schema
+        //   version differs from the one the cache was written
+        //   under.
+        // * scope drift — the responding principal differs from the
+        //   one the cache settled under (session expired to
+        //   guest/anonymous, user switch, scoping rollback). The
+        //   previous principal's rows AND queued offline mutations
+        //   are discarded; every committed row rebuilds from the
+        //   server on the next pull. A fresh/unstamped cache
+        //   meeting its first scoped response adopts silently — no
+        //   wipe.
+        let (cached_version, cached_scope) = self
+            .with_state_borrow(|s| (s.application_schema_version, s.sync_scope.clone()))
+            .unwrap_or((None, None));
+        let schema_drift = matches!(cached_version, Some(c) if c != schema_version);
+        // The engine only compares two PROVIDED principals: drift
+        // requires both the cached stamp and the advertised scope to
+        // be `Some` and differ. `None` on either side means "no
+        // principal provided" and never triggers anything — users,
+        // sessions, and anonymity are the implementor's model, not
+        // the engine's. Implementors that want expiry/anonymous
+        // transitions detected return a token for those sessions too.
+        let scope_drift = matches!(
+            (&cached_scope, &server_scope),
+            (Some(cached), Some(advertised)) if cached != advertised
+        );
+        let drift = schema_drift || scope_drift;
         if drift {
             tracing::info!(
                 target: "pocopine.log",
                 stream = stream_name.as_str(),
-                from = ?cached,
-                to = schema_version,
-                "sync-query: schema drift detected; resetting state + wiping store",
+                schema_drift,
+                scope_drift,
+                "sync-query: drift detected at /open; clearing local state + re-syncing",
             );
-            if let Some(store) = &self.local_store {
+            if scope_drift {
+                // The previous principal's queued replays must not
+                // push under the new session — drop them alongside
+                // the durable wipe. (Schema-only drift deliberately
+                // leaves the queue alone: sibling queries' pendings
+                // are still this principal's, and stale-schema
+                // payloads are the server's migrate_payload
+                // contract, not the client's problem.)
+                if let Some(client_inner) = self.client.upgrade() {
+                    QueryClient::clear_replay_queue(&client_inner);
+                }
+                // The session changed principals for the WHOLE
+                // client: fence every same-stream subscription (this
+                // one included) — in-memory reset + new stamp — and
+                // wipe every compartment, including the bare-stream
+                // pending fallback, so the initial pull's fan-out
+                // can't mix the new principal's rows into a sibling
+                // still holding the old principal's hydrated state.
+                let compartments = match self.client.upgrade() {
+                    Some(client_inner) => {
+                        QueryClient::reset_stream_subscriptions_for_scope_drift::<Row>(
+                            &client_inner,
+                            &stream_name,
+                            server_scope.clone(),
+                        )
+                    }
+                    None => Vec::new(),
+                };
+                if let Some(store) = &self.local_store {
+                    for compartment in compartments {
+                        if let Err(err) = store.clear_stream(&compartment).await {
+                            tracing::warn!(
+                                target: "pocopine.log",
+                                stream = compartment.as_str(),
+                                error = %err,
+                                "sync-query: drift wipe failed; in-memory reset still proceeds",
+                            );
+                        }
+                        if !self.epoch.is_current() {
+                            return OpenOutcome::Clean;
+                        }
+                    }
+                }
+                // Notify AFTER the durable wipes: an `on_update`
+                // callback reading the store must not observe the
+                // previous principal's rows post-reset (Codex).
+                if let Some(client_inner) = self.client.upgrade() {
+                    QueryClient::notify_stream_subscriptions::<Row>(&client_inner, &stream_name);
+                }
+            } else if let Some(store) = &self.local_store {
                 let compartment = self.compartment_key();
                 if let Err(err) = store.clear_stream(&compartment).await {
                     tracing::warn!(
                         target: "pocopine.log",
                         stream = stream_name.as_str(),
                         error = %err,
-                        "sync-query: schema-drift wipe failed; in-memory reset still proceeds",
+                        "sync-query: drift wipe failed; in-memory reset still proceeds",
                     );
                 }
                 if !self.epoch.is_current() {
-                    return Ok(());
+                    return OpenOutcome::Clean;
                 }
             }
         }
         let mut state = sub.state().borrow_mut();
         if drift {
-            // Reset BEFORE writing the new schema_version so an
-            // observer that reads inside the RefMut would see
+            // Reset BEFORE writing the new schema_version/scope so
+            // an observer that reads inside the RefMut sees
             // `(canonical_empty, version=new)` rather than
             // `(canonical_stale, version=new)`.
             state.reset();
         }
         state.application_schema_version = Some(schema_version);
+        // The stamp is sticky: only a PROVIDED principal updates it,
+        // so a gap of unscoped responses can't erase the last known
+        // owner between two provided-but-different principals.
+        if let Some(scope) = server_scope {
+            state.sync_scope = Some(scope);
+        }
         state.cursor = cursor;
         state.error.clear();
         state.last_reason = SyncReason::Initial;
         drop(state);
         sub.notify_listeners_external();
-        if drift { Err(()) } else { Ok(()) }
+        if scope_drift {
+            OpenOutcome::ScopeDrift
+        } else if schema_drift {
+            OpenOutcome::SchemaDrift
+        } else {
+            OpenOutcome::Clean
+        }
     }
 
     /// Apply a `/pull` response.
@@ -727,39 +968,200 @@ where
     ///
     /// `Incremental` mode just routes the deltas through
     /// `route_canonical_pull`; nothing is wiped first.
-    fn apply_pull(&self, response: SyncPullResponse<Value>) {
+    ///
+    /// Tombstones (either mode) are positive server deletes: they
+    /// route as `RowChange::Delete` to EVERY subscription on the
+    /// stream — the server is the source of truth, so a delete at
+    /// the authority always propagates to the client.
+    ///
+    /// The originating subscription additionally gets an eviction
+    /// report: every previously-canonical row the settle removed,
+    /// tagged `Deleted` (tombstoned) or `Unexplained` (absent from a
+    /// full snapshot with no tombstone). See [`EvictionReason`] for
+    /// what app policy may do with each.
+    ///
+    /// Returns `true` when the response's scope named a DIFFERENT
+    /// principal than the one this subscription settled under
+    /// (session expired mid-loop, user switch). In that case the
+    /// previous principal's local state was cleared — in-memory
+    /// reset, cursor dropped, queued replays discarded, the new
+    /// scope adopted — and the response itself was DISCARDED, not
+    /// settled: it was requested with the old principal's cursor,
+    /// so an `Incremental` body would be a partial delta of the new
+    /// principal's view. The caller must `clear_stream` the durable
+    /// compartment and immediately re-pull WITHOUT a cursor so the
+    /// re-sync settles from a full snapshot (Codex: no cursored
+    /// settles across a principal change).
+    fn apply_pull(&self, response: SyncPullResponse<Value>) -> bool {
         let Some(sub) = self.subscription.upgrade() else {
-            return;
+            return false;
         };
         let Some(client_inner) = self.client.upgrade() else {
-            return;
+            return false;
         };
+
+        // ── Scope drift: clear everything and re-sync ───────────
+        // The response names the principal the session belongs to
+        // NOW. If that differs from the principal this subscription
+        // settled under, the local state (rows, overlays, queued
+        // replays) belongs to someone else — discard it ALL,
+        // including this response, and re-sync fresh. The server is
+        // the source of truth; committed rows rebuild from it. A
+        // fresh/unstamped subscription adopts the first observed
+        // scope silently.
+        let established = {
+            let state = sub.state().borrow();
+            state.sync_scope.clone()
+        };
+        // The engine only compares two PROVIDED principals: drift
+        // requires both the established stamp and the response scope
+        // to be `Some` and differ. `None` on either side means "no
+        // principal provided" and never triggers anything.
+        let scope_drift = matches!(
+            (&established, &response.scope),
+            (Some(mine), Some(theirs)) if mine != theirs
+        );
+        if scope_drift {
+            tracing::info!(
+                target: "pocopine.log",
+                stream = response.stream.as_str(),
+                "sync-query: pull scope changed; clearing local state + re-syncing",
+            );
+            QueryClient::clear_replay_queue(&client_inner);
+            let mut state = sub.state().borrow_mut();
+            // Preserve the advertised schema version across the
+            // scope reset: there is no follow-up /open on this path
+            // to re-learn it, and persisting the refetched rows with
+            // `None` would make the next reload adopt a future
+            // schema bump without the intended wipe.
+            let schema_version = state.application_schema_version;
+            state.reset();
+            state.application_schema_version = schema_version;
+            state.sync_scope = response.scope.clone();
+            return true;
+        }
+        if established.is_none() && response.scope.is_some() {
+            sub.state().borrow_mut().sync_scope = response.scope.clone();
+        }
+
         let stream = response.stream.clone();
         let new_cursor = response.cursor.clone();
+        let is_snapshot = matches!(response.mode, SyncPullMode::Snapshot);
 
         // Build a Vec<RowChange<Row>> from the wire response.
         // Decode failures are warned + skipped per RFC 086.
-        let changes = decode_pull_changes::<Row>(&response);
+        let mut changes = decode_pull_changes::<Row>(&response);
 
-        if matches!(response.mode, SyncPullMode::Snapshot) {
+        // Keys this response positively carries a row FOR, straight
+        // from the wire envelope — snapshot rows plus incremental
+        // upserts. Wire-level (not the decoded set) because a row
+        // that failed to DECODE is still present at the authority
+        // and must not read as evicted or deletable.
+        let mut present_keys: std::collections::HashSet<pocopine_sync::RowKey> =
+            response.rows.iter().map(|r| r.key.clone()).collect();
+        for change in &response.changes {
+            if matches!(change.op, pocopine_sync::SyncOp::Upsert)
+                && let Some(key) = change
+                    .row
+                    .as_ref()
+                    .map(|row| row.key.clone())
+                    .or_else(|| change.key.clone())
+            {
+                present_keys.insert(key);
+            }
+        }
+        let snapshot_keys = &present_keys;
+
+        // Fold tombstones into the routed change set. A tombstone
+        // whose key the same response also carries a row for
+        // (snapshot row, or incremental upsert — a row recreated or
+        // updated inside the tombstone retention window) is
+        // contradictory — trust the row (presence is the stronger
+        // claim) and warn.
+        let mut tombstone_keys: std::collections::HashSet<pocopine_sync::RowKey> =
+            std::collections::HashSet::new();
+        for tombstone in &response.tombstones {
+            if present_keys.contains(&tombstone.key) {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = stream.as_str(),
+                    key = tombstone.key.as_str(),
+                    "sync-query: /pull carried a tombstone for a key the same \
+                     response also carries a row for; ignoring the tombstone",
+                );
+                continue;
+            }
+            if tombstone_keys.insert(tombstone.key.clone()) {
+                changes.push(RowChange::Delete(tombstone.key.clone()));
+            }
+        }
+
+        // Capture the originating subscription's previous canonical
+        // rows BEFORE the snapshot wipe — the eviction report is the
+        // diff between them and what this settle explains.
+        // (Incremental settles don't wipe; their deletes are
+        // recorded by the routing engine per affected view.)
+        let prev_rows: Vec<SyncRow<Row>> = if is_snapshot {
+            let state = sub.state().borrow();
+            state.canonical_rows().cloned().collect()
+        } else {
+            Vec::new()
+        };
+
+        if is_snapshot && !prev_rows.is_empty() {
             // Wipe only THIS subscription's canonical set; the
             // routing engine's predicate evaluation below
             // re-inserts the matching rows. Other subscriptions
             // on the same stream are untouched — their cursors
             // and snapshots are independent.
-            let keys: Vec<pocopine_sync::RowKey> = {
-                let state = sub.state().borrow();
-                state.canonical_rows().map(|r| r.key.clone()).collect()
-            };
-            if !keys.is_empty() {
-                let mut state = sub.state().borrow_mut();
-                for key in keys {
-                    state.remove_canonical(&key);
-                }
+            let mut state = sub.state().borrow_mut();
+            for row in &prev_rows {
+                state.remove_canonical(&row.key);
             }
         }
 
         QueryClient::route_canonical_pull::<Row>(&client_inner, &stream, &changes);
+
+        // Eviction report for the originating subscription. The
+        // routing engine records `Deleted` evictions on every view a
+        // server delete actually removed a row from — which covers
+        // incremental mode entirely, and covers OTHER subscriptions
+        // in snapshot mode. The originating snapshot subscription is
+        // the exception: its rows were wiped BEFORE routing, so the
+        // Delete routing found nothing to remove there — its Deleted
+        // (tombstoned ∩ previously-held) and Unexplained reports are
+        // computed here from the pre-wipe capture.
+        let evictions: Vec<EvictedRow<Row>> = if is_snapshot {
+            // A truncated snapshot (server said has_more, or the row
+            // count hit the query's own limit) can't distinguish
+            // "absent" from "beyond the page" — suppress Unexplained
+            // reports and only keep the positive deletes.
+            let truncated = response.has_more
+                || sub
+                    .query()
+                    .limit()
+                    .is_some_and(|limit| response.rows.len() as u64 >= u64::from(limit));
+            prev_rows
+                .into_iter()
+                .filter_map(|row| {
+                    if tombstone_keys.contains(&row.key) {
+                        Some(EvictedRow {
+                            row,
+                            reason: EvictionReason::Deleted,
+                        })
+                    } else if !snapshot_keys.contains(&row.key) && !truncated {
+                        Some(EvictedRow {
+                            row,
+                            reason: EvictionReason::Unexplained,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Update cursor and reason on the originating
         // subscription (not all subscriptions on the stream — a
@@ -767,6 +1169,7 @@ where
         // this one, since each subscription's /pull is
         // independent).
         let mut state = sub.state().borrow_mut();
+        state.record_evictions(evictions);
         state.cursor = new_cursor;
         state.syncing = false;
         state.loading = false;
@@ -774,6 +1177,7 @@ where
         state.error.clear();
         drop(state);
         sub.notify_listeners_external();
+        scope_drift
     }
 
     /// Stable cache compartment for this driver's subscription.
@@ -799,9 +1203,15 @@ where
     /// Failures are warned and skipped — the subsequent `/open`
     /// + `/pull` rebuild from scratch, the user just doesn't get
     ///   the instant-paint UX.
-    async fn hydrate_phase(&self) {
+    ///
+    /// Returns the hydrated pending mutations. The caller queues
+    /// their replays only AFTER `/open` settles the drift question —
+    /// enqueueing earlier would let another stream's driver drain
+    /// and push them in the window before a drift wipe discards
+    /// them.
+    async fn hydrate_phase(&self) -> Vec<pocopine_sync::ClientMutation<Value>> {
         let Some(store) = self.local_store.clone() else {
-            return;
+            return Vec::new();
         };
         let compartment = self.compartment_key();
         let mut snapshot = match store.hydrate_stream(&compartment).await {
@@ -813,11 +1223,11 @@ where
                     error = %err,
                     "sync-query: hydrate failed; continuing with empty state",
                 );
-                return;
+                return Vec::new();
             }
         };
         if !self.epoch.is_current() {
-            return;
+            return Vec::new();
         }
         // Codex P2: also drain the bare-stream compartment's pending
         // queue. `persist_pending_mutation` writes into the
@@ -854,13 +1264,59 @@ where
                 }
             }
             if !self.epoch.is_current() {
-                return;
+                return Vec::new();
             }
         }
         let Some(sub) = self.subscription.upgrade() else {
+            return Vec::new();
+        };
+        self.apply_hydrated_snapshot(&sub, snapshot)
+    }
+
+    /// Queue the replays for pendings returned by
+    /// [`Self::hydrate_phase`]. Split from the hydrate so `run()` can
+    /// order it AFTER a drift-free `/open`.
+    ///
+    /// `hydrated_scope` is the principal the pendings were hydrated
+    /// under. The same both-provided-and-different rule as every
+    /// other scope check applies at this last gate: if a sibling
+    /// driver's scope-drift fence restamped this subscription with a
+    /// DIFFERENT provided principal while our /open was in flight,
+    /// the pendings belong to the wiped slate and are dropped.
+    fn enqueue_hydrated_pendings(
+        &self,
+        pendings: Vec<pocopine_sync::ClientMutation<Value>>,
+        hydrated_scope: Option<pocopine_sync::SyncScope>,
+    ) {
+        if pendings.is_empty() {
+            return;
+        }
+        let (Some(client_inner), Some(sub)) = (self.client.upgrade(), self.subscription.upgrade())
+        else {
             return;
         };
-        self.apply_hydrated_snapshot(&sub, snapshot);
+        let current_scope = sub.state().borrow().sync_scope.clone();
+        // A REPLAY only fires when the principal context it was
+        // captured under is UNCHANGED. That includes None -> Some:
+        // an orphan pending hydrated with no provided principal
+        // (bare-stream fallback, pre-scope cache) must not replay
+        // once /open names one — the naming itself is new context
+        // the pending was never attributed to.
+        if current_scope.is_some() && hydrated_scope != current_scope {
+            tracing::info!(
+                target: "pocopine.log",
+                stream = sub.query().stream().as_str(),
+                dropped = pendings.len(),
+                "sync-query: discarding hydrated replays; the subscription was \
+                 restamped with a different principal while /open was in flight",
+            );
+            return;
+        }
+        QueryClient::enqueue_hydrated_pending(
+            &client_inner,
+            sub.query().stream().clone(),
+            pendings,
+        );
     }
 
     /// The driver's bare stream name (without the params hash).
@@ -884,7 +1340,7 @@ where
         &self,
         sub: &Rc<QuerySubscription<Row>>,
         snapshot: LocalStreamSnapshot,
-    ) {
+    ) -> Vec<pocopine_sync::ClientMutation<Value>> {
         let stream_name = sub.query().stream().clone();
         let mut state = sub.state().borrow_mut();
         // Adopt the cached schema_version BEFORE writing rows so
@@ -892,6 +1348,14 @@ where
         // version + rows together (we never expose a row count
         // with a stale schema_version).
         state.application_schema_version = snapshot.application_schema_version;
+        // Adopt the compartment's scope stamp — the principal these
+        // cached rows were settled under. `apply_open` reconciles it
+        // against the server's freshly-advertised scope. An unstamped
+        // compartment maps to never-observed (the durable stamp can't
+        // distinguish "legacy" from "observed unscoped"; that's safe
+        // across reloads because the initial pull is cursor-less and
+        // snapshot-replaces).
+        state.sync_scope = snapshot.scope.clone();
         state.cursor = snapshot.cursor.clone();
         // Hydrated canonical rows. Per-row decode failures are
         // logged and skipped; the next /pull will resurface them
@@ -977,25 +1441,15 @@ where
         // mark_loading bumps loading=true).
         // If apply_open detects drift it resets state + notifies
         // empty; if not, the rows stay visible.
-        // Hand persisted pending mutations to the client-level
-        // replay path so the first tick after /open runs them
-        // through the registered MutatorRegistry → AnyMutator.
-        // We pass the wire mutation list (with persistence
-        // envelope intact); the registry unwraps before invoking
-        // apply_remote.
-        let Some(client_inner) = self.client.upgrade() else {
-            return;
-        };
-        let stream_for_replay = stream_name;
-        QueryClient::enqueue_hydrated_pending(
-            &client_inner,
-            stream_for_replay,
-            snapshot
-                .pending_mutations
-                .into_iter()
-                .map(|p| p.mutation)
-                .collect(),
-        );
+        // Return the persisted pending mutations for the caller to
+        // hand to the client-level replay path AFTER a drift-free
+        // /open — the registry unwraps the persistence envelope
+        // before invoking apply_remote.
+        snapshot
+            .pending_mutations
+            .into_iter()
+            .map(|p| p.mutation)
+            .collect()
     }
 
     /// Persist the current canonical state into the local store.
@@ -1014,9 +1468,9 @@ where
         // because the local store contract is `SyncRow<Value>`.
         let snapshot_inputs = {
             let state = sub.state().borrow();
-            let stream = sub.query().stream().clone();
             let cursor = state.cursor.clone();
             let app_version = state.application_schema_version;
+            let scope = state.sync_scope.clone();
             let canonical: Vec<SyncRow<Value>> = state
                 .canonical_rows()
                 .filter_map(|row| {
@@ -1049,10 +1503,12 @@ where
                         .with_optimistic_row(optimistic_row)
                 })
                 .collect();
-            (stream, cursor, app_version, canonical, pending)
+            (cursor, app_version, scope, canonical, pending)
         };
-        let (stream, cursor, app_version, canonical, pending) = snapshot_inputs;
-        let compartment = local_stream_key(&stream, sub.query().params());
+        let (cursor, app_version, scope, canonical, pending) = snapshot_inputs;
+        // Redirect-aware: after a scope redirect this is the
+        // scope-qualified sibling, not the primary key.
+        let compartment = self.compartment_key();
         // sync-query streams don't have a separate "collection"
         // surface; reuse the stream name as the collection token
         // so the local store's compartment is stable. The
@@ -1071,7 +1527,8 @@ where
             }
         };
         let batch = LocalSnapshotBatch::new(compartment.clone(), collection, canonical, cursor)
-            .with_application_schema_version(app_version);
+            .with_application_schema_version(app_version)
+            .with_scope(scope);
         if let Err(err) = store.save_snapshot(batch).await {
             tracing::warn!(
                 target: "pocopine.log",
@@ -1357,6 +1814,24 @@ impl std::fmt::Debug for ReplayEntry {
             .field("mutation_id", &self.mutation_id)
             .finish_non_exhaustive()
     }
+}
+
+/// What `apply_open` did with the advertised stream metadata —
+/// drives whether the hydrated pending mutations may be enqueued
+/// for replay.
+#[derive(Debug)]
+enum OpenOutcome {
+    /// No drift: metadata applied, cached state confirmed.
+    Clean,
+    /// The application schema version changed: state + compartment
+    /// were wiped, BUT the session's principal did not change — the
+    /// hydrated pendings still belong to it and replay once (the
+    /// server's `migrate_payload` contract owns stale payload
+    /// shapes).
+    SchemaDrift,
+    /// The provided principal changed: everything the previous
+    /// principal touched was cleared, hydrated pendings included.
+    ScopeDrift,
 }
 
 /// Why the driver woke up. Returned from `wait_for_tick` so the
