@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use pocopine_sync::{
     RowVersion, StreamParams, SyncCollectionName, SyncError, SyncOp, SyncRejectedMutation,
-    SyncResult, SyncRow, SyncStreamName,
+    SyncResult, SyncRow, SyncScope, SyncStreamName, SyncTombstone,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -245,6 +245,53 @@ pub trait Source: Send + Sync + 'static {
         id: Self::Id,
         expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>>;
+
+    /// Positive deletion records for rows this query would have
+    /// matched (see [`SyncTombstone`]). The adapter attaches the
+    /// returned tombstones to every snapshot pull response, so
+    /// clients can tell "deleted at the authority" apart from "absent
+    /// for an unknown reason" and propagate server deletes with
+    /// confidence instead of guessing from absence.
+    ///
+    /// Default: empty — sources that don't track deletions keep the
+    /// pre-tombstone behavior (all absences unexplained). Sources
+    /// that do (a `deleted_at` column, a deletions side table) should
+    /// scope the result the same way `list_stream` scopes rows
+    /// (tenant filters from `query.params()`) and GC entries after a
+    /// retention window comfortably longer than the longest expected
+    /// client offline period — a too-short window degrades to
+    /// "unexplained absence", never to a wrong delete.
+    fn list_tombstones<'a>(
+        &'a self,
+        ctx: Self::Context,
+        query: &'a Query<Self::Row>,
+    ) -> SourceFuture<'a, SyncResult<Vec<SyncTombstone>>> {
+        let _ = (ctx, query);
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Opaque principal scope for one extracted [`Self::Context`].
+    ///
+    /// Mirrors [`pocopine_sync::SyncStreamSource::scope`] at the typed
+    /// layer: the adapter extracts the context once, then projects it
+    /// through this method and stamps the result onto `/open` and
+    /// `/pull` responses.
+    ///
+    /// **The implementor provides the principal — the engine never
+    /// models one.** The client compares two PROVIDED tokens for
+    /// equality; when they differ, it clears its local state and
+    /// re-syncs from the server. `None` (the default) means "no
+    /// principal provided" and never triggers anything. So: if you
+    /// want session expiry, anonymous access, or user switches to
+    /// invalidate the client cache, return a token for those sessions
+    /// too (e.g. `Some("anon")`, or the session id) — a `None` gap
+    /// between two different tokens is fine (the client's stamp is
+    /// sticky), but a transition INTO a `None`-scoped session is
+    /// invisible to the engine by design.
+    fn scope(&self, ctx: &Self::Context) -> SyncResult<Option<SyncScope>> {
+        let _ = ctx;
+        Ok(None)
+    }
 
     /// Provide an idempotency log keyed on this Source's writes.
     /// Default: `None` — `SourceResource` auto-provisions an
@@ -549,6 +596,22 @@ where
         Ok(())
     }
 
+    /// Delegate to [`Source::scope`] after the usual typed-context
+    /// extraction, so a `Source` impl only thinks in terms of its own
+    /// `Context` type. The open/pull handlers stamp the result onto
+    /// their responses.
+    fn scope<'a>(
+        &'a self,
+        ctx: &'a pocopine_core::server::RequestContext,
+    ) -> pocopine_sync::SyncBoxFuture<'a, Option<SyncScope>> {
+        let source = self.source.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let source_ctx = source.extract_context(ctx).await?;
+            source.scope(&source_ctx)
+        })
+    }
+
     /// RFC 088 §C: delegate to the closure attached via
     /// [`SourceResource::params_of`]. Phase 4 will auto-wire from the
     /// macro.
@@ -622,7 +685,7 @@ where
             // a `Vec<Row>` and wraps it in `futures::stream::iter`
             // gets the same correctness behaviour with no streaming
             // benefit, which is the right escape hatch.
-            let mut row_stream = source.list_stream(source_ctx, &query);
+            let mut row_stream = source.list_stream(source_ctx.clone(), &query);
             // Codex review P2: the cap is `effective_limit`, NOT
             // `max_snapshot_rows`. A `.limit(10)` pull must not
             // ship more than 10 rows even if the source ignores
@@ -664,6 +727,13 @@ where
                 );
             }
 
+            // Positive deletion records ride the same snapshot so the
+            // client can apply server deletes with confidence and
+            // classify the remaining absences. Collected AFTER the row
+            // stream is fully drained (and dropped) so sources backed
+            // by a single connection don't see interleaved queries.
+            let tombstones = source.list_tombstones(source_ctx, &query).await?;
+
             let mut sync_rows: Vec<SyncRow<Value>> = Vec::with_capacity(rows.len());
             for row in rows {
                 let key = (id_of)(&row).to_row_key()?;
@@ -691,9 +761,22 @@ where
                 });
             }
 
-            Ok(pocopine_sync::SyncPullResponse::snapshot(
-                stream, collection, sync_rows, None,
-            ))
+            // Codex R1 P2: a page that FILLS the effective limit may
+            // be truncated — the adapter clamps even unlimited
+            // queries to `max_snapshot_rows`, and the client can't
+            // see that implicit cap. Say so via `has_more` so the
+            // client suppresses `Unexplained` eviction reports for
+            // rows beyond the page instead of misreading pagination
+            // as loss. Conservative by design: a view holding
+            // EXACTLY `cap` rows also reports `has_more` (the server
+            // can't cheaply disprove an extra row when the source
+            // honors the pushed-down limit).
+            let has_more = source_overyielded || sync_rows.len() >= cap;
+            let mut response =
+                pocopine_sync::SyncPullResponse::snapshot(stream, collection, sync_rows, None)
+                    .with_tombstones(tombstones);
+            response.has_more = has_more;
+            Ok(response)
         })
     }
 
@@ -1210,11 +1293,11 @@ mod tests {
         let query: Query<Issue> = query_from_pull_request(&request);
 
         let ctx = test_ctx();
-        let source_ctx = source.extract_context(ctx).await.expect("extract_context");
+        source.extract_context(ctx).await.expect("extract_context");
         let rows: Vec<Issue> = {
             use futures::stream::StreamExt;
             source
-                .list_stream(source_ctx, &query)
+                .list_stream((), &query)
                 .collect::<Vec<_>>()
                 .await
                 .into_iter()
