@@ -64,6 +64,13 @@ pub(crate) struct MessagesRequest {
     pub(crate) thinking: Option<ThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stream: Option<bool>,
+    /// Provider-specific extra body fields
+    /// (`GenerateRequest::provider_options`), flattened verbatim into the top
+    /// level of the request. Serialized after the typed fields, so a
+    /// duplicated key reaches the provider twice (most JSON parsers keep the
+    /// later one).
+    #[serde(flatten)]
+    pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Anthropic's extended-thinking request block: `{"type":"enabled","budget_tokens":N}`.
@@ -164,6 +171,7 @@ impl MessagesRequest {
             tool_choice,
             thinking,
             stream: stream.then_some(true),
+            extra: request.provider_options.clone(),
         }
     }
 }
@@ -552,6 +560,22 @@ mod tests {
         let value = to_value(&wire);
         assert_eq!(value["messages"].as_array().unwrap().len(), 1);
         assert_eq!(value["messages"][0]["role"], "user");
+        assert_eq!(value["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn provider_options_flatten_into_the_request_body() {
+        let mut request = GenerateRequest {
+            model: models::anthropic::CLAUDE_OPUS_4_8,
+            messages: vec![Message::new(Role::User, "hi")],
+            ..GenerateRequest::default()
+        };
+        request
+            .provider_options
+            .insert("metadata".to_string(), serde_json::json!({"user_id": "u-1"}));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096));
+        assert_eq!(value["metadata"]["user_id"], "u-1");
+        // Typed fields are unaffected.
         assert_eq!(value["max_tokens"], 4096);
     }
 

@@ -48,6 +48,7 @@ pub struct AiAgentBuilder<A: ?Sized> {
     tool_ids: Vec<String>,
     max_tokens: Option<u32>,
     max_steps: u32,
+    provider_options: serde_json::Map<String, serde_json::Value>,
     _marker: PhantomData<fn() -> A>,
 }
 
@@ -59,6 +60,7 @@ impl<A: ?Sized> Default for AiAgentBuilder<A> {
             tool_ids: Vec::new(),
             max_tokens: None,
             max_steps: 4,
+            provider_options: serde_json::Map::new(),
             _marker: PhantomData,
         }
     }
@@ -102,6 +104,18 @@ impl<A: ?Sized> AiAgentBuilder<A> {
     /// Bound the model+tool loop (default 4).
     pub fn max_steps(mut self, max_steps: u32) -> Self {
         self.max_steps = max_steps;
+        self
+    }
+
+    /// Attach a provider-specific request field carried on every model call
+    /// this agent makes (the "extra body" escape hatch). See
+    /// [`Ai::provider_option`](crate::Ai::provider_option).
+    pub fn provider_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.provider_options.insert(key.into(), value.into());
         self
     }
 }
@@ -283,6 +297,7 @@ async fn run_loop<A: AiAgent>(
             // The agent loop doesn't request reasoning (W4 is scoped to the `Ai`
             // generate builder); defaults to `ThinkingLevel::Off`.
             thinking: Default::default(),
+            provider_options: config.provider_options.clone(),
         };
         let response = loop_core::run_model_step(provider, request, &cx, model, &observer).await?;
 
@@ -509,6 +524,9 @@ async fn summarize(
         json_schema: None,
         max_tokens: Some(1024),
         thinking: Default::default(),
+        // Compaction is an internal summarization call, not an agent turn — it
+        // doesn't inherit the agent's provider options.
+        provider_options: serde_json::Map::new(),
     };
     Ok(provider
         .generate(request, cx)

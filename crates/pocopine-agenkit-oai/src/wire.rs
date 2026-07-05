@@ -59,6 +59,13 @@ pub(crate) struct ChatRequest {
     /// unless requested for a reasoning-capable model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reasoning_effort: Option<&'static str>,
+    /// Provider-specific extra body fields
+    /// (`GenerateRequest::provider_options`), flattened verbatim into the top
+    /// level of the request — e.g. DashScope's `enable_search`. Serialized
+    /// after the typed fields, so a duplicated key reaches the provider twice
+    /// (most JSON parsers keep the later one).
+    #[serde(flatten)]
+    pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -149,6 +156,7 @@ impl ChatRequest {
             reasoning_effort: model_supports_reasoning(&request.model)
                 .then(|| reasoning_effort(request.thinking))
                 .flatten(),
+            extra: request.provider_options.clone(),
         }
     }
 }
@@ -641,6 +649,28 @@ mod tests {
 
     // Tool-name sanitization + the collision-safe reverse map are tested in
     // `pocopine_agenkit_core::tool_name`.
+
+    #[test]
+    fn provider_options_flatten_into_the_request_body() {
+        let mut request = GenerateRequest {
+            model: ModelRef::new("qwen/qwen-plus"),
+            messages: vec![Message::new(Role::User, "hi")],
+            ..GenerateRequest::default()
+        };
+        request
+            .provider_options
+            .insert("enable_search".to_string(), serde_json::json!(true));
+        request.provider_options.insert(
+            "search_options".to_string(),
+            serde_json::json!({"forced_search": true}),
+        );
+        let wire = ChatRequest::from_agenkit(&request, false, false, MaxTokensParam::MaxTokens);
+        let body = serde_json::to_value(&wire).unwrap();
+        assert_eq!(body["enable_search"], serde_json::json!(true));
+        assert_eq!(body["search_options"]["forced_search"], serde_json::json!(true));
+        // Typed fields are unaffected.
+        assert_eq!(body["model"], serde_json::json!("qwen-plus"));
+    }
 
     #[test]
     fn tool_descriptor_schema_becomes_function_parameters() {
