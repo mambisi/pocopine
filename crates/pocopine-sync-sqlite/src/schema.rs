@@ -11,7 +11,12 @@
 ///   `ALTER TABLE … ADD COLUMN`; existing rows observe `NULL` and the
 ///   client treats `NULL` as "never observed, adopt server value
 ///   silently on next save" rather than as a forced wipe.
-pub const SCHEMA_VERSION: u32 = 4;
+/// * v5: added `__pocopine_streams.scope` — the opaque principal scope
+///   the compartment's rows were settled under (cross-principal
+///   clobber guard). Same in-place `ALTER TABLE … ADD COLUMN`
+///   migration shape as v4; existing rows observe `NULL` = "never
+///   observed a scope", which the client treats as adopt-on-next-save.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Metadata table for device identity and internal settings.
 pub const META_TABLE: &str = "__pocopine_meta";
@@ -41,6 +46,7 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
         cursor text,
         schema_version integer not null,
         app_schema_version integer,
+        scope text,
         updated_at_ms integer not null
     )",
     "create table if not exists __pocopine_rows (
@@ -75,17 +81,20 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
 
 /// SQL upsert used for stream cursor metadata. `app_schema_version`
 /// (?6) is the APPLICATION-level schema version the server most
-/// recently advertised for this stream; `NULL` means "not yet
-/// observed". On conflict we use `coalesce(excluded, existing)` so a
-/// caller passing `NULL` doesn't clobber a previously-recorded value.
+/// recently advertised for this stream; `scope` (?7) is the principal
+/// scope the compartment was settled under; `NULL` means "not yet
+/// observed" for both. On conflict we use `coalesce(excluded,
+/// existing)` so a caller passing `NULL` doesn't clobber a
+/// previously-recorded value.
 pub const UPSERT_STREAM_SQL: &str = "insert into __pocopine_streams
-    (stream, collection, cursor, schema_version, app_schema_version, updated_at_ms)
-    values (?1, ?2, ?3, ?4, ?6, ?5)
+    (stream, collection, cursor, schema_version, app_schema_version, scope, updated_at_ms)
+    values (?1, ?2, ?3, ?4, ?6, ?7, ?5)
     on conflict(stream) do update set
         collection = excluded.collection,
         cursor = excluded.cursor,
         schema_version = excluded.schema_version,
         app_schema_version = coalesce(excluded.app_schema_version, __pocopine_streams.app_schema_version),
+        scope = coalesce(excluded.scope, __pocopine_streams.scope),
         updated_at_ms = excluded.updated_at_ms";
 
 /// SQL statements used to clear one stream before saving a replacement snapshot.
@@ -165,11 +174,11 @@ pub const SELECT_ROWS_SQL: &str = "select row_key, version, payload, pending, co
     order by row_key asc";
 
 /// SQL query used to hydrate stream metadata. Returns `NULL` for
-/// `app_schema_version` on rows that pre-date the v3→v4 migration —
-/// the client treats `NULL` as "never observed; adopt server value
-/// silently on next save" rather than as a forced wipe.
-pub const SELECT_STREAM_SQL: &str =
-    "select collection, cursor, app_schema_version from __pocopine_streams where stream = ?1";
+/// `app_schema_version` / `scope` on rows that pre-date the v3→v4 /
+/// v4→v5 migrations — the client treats `NULL` as "never observed;
+/// adopt server value silently on next save" rather than as a forced
+/// wipe.
+pub const SELECT_STREAM_SQL: &str = "select collection, cursor, app_schema_version, scope from __pocopine_streams where stream = ?1";
 
 /// SQL statements used by `SyncLocalStore::clear_stream`. Drops every
 /// row, mutation queue entry, and the stream metadata row for ONE
@@ -187,6 +196,11 @@ pub const CLEAR_STREAM_SQL: &[&str] = &[
 /// `app_schema_version` column. Existing rows observe `NULL`.
 pub const MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION: &str =
     "alter table __pocopine_streams add column app_schema_version integer";
+
+/// SQL used by the v4 -> v5 migration to add the `scope` column.
+/// Existing rows observe `NULL` = "never observed a scope".
+pub const MIGRATION_V4_TO_V5_ADD_SCOPE: &str =
+    "alter table __pocopine_streams add column scope text";
 
 #[cfg(test)]
 mod tests {

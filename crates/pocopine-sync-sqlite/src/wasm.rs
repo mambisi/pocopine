@@ -6,7 +6,7 @@ use pocopine_sync::{
     ClientMutation, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
     LocalStreamSnapshot, MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor,
     SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
-    SyncResult, SyncRow, SyncStreamName, generate_sync_device_id,
+    SyncResult, SyncRow, SyncScope, SyncStreamName, generate_sync_device_id,
 };
 use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};
@@ -15,9 +15,9 @@ use crate::schema::{
     BOOTSTRAP_SQL, CLEAR_ALL_STREAMS_SQL, CLEAR_ROW_CONFLICT_SQL, CLEAR_STREAM_SQL,
     DELETE_MUTATION_SQL, DELETE_PENDING_FOR_ROW_SQL, DELETE_ROW_SQL, DELETE_STREAM_ROWS_SQL,
     META_DEVICE_ID, META_NEXT_MUTATION_COUNTER, META_SCHEMA_VERSION,
-    MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, SCHEMA_VERSION, SELECT_PENDING_MUTATIONS_SQL,
-    SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL, UPSERT_MUTATION_SQL,
-    UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
+    MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, MIGRATION_V4_TO_V5_ADD_SCOPE, SCHEMA_VERSION,
+    SELECT_PENDING_MUTATIONS_SQL, SELECT_ROWS_SQL, SELECT_STREAM_SQL, UPDATE_ROW_CONFLICT_SQL,
+    UPSERT_MUTATION_SQL, UPSERT_ROW_SQL, UPSERT_STREAM_SQL,
 };
 
 const DEFAULT_DATABASE_NAME: &str = "pocopine_sync.sqlite3";
@@ -261,7 +261,7 @@ async fn migrate_schema() -> SyncResult<()> {
     // see native.rs::migrate_schema for the full rationale. A v1 store
     // must fall through to the reject path in validate_schema_version.
     match version {
-        2 | 3 => {}
+        2..=4 => {}
         v if v == SCHEMA_VERSION => return Ok(()),
         _ => return Ok(()),
     }
@@ -278,7 +278,12 @@ async fn migrate_schema() -> SyncResult<()> {
     if !column_exists("__pocopine_streams", "app_schema_version").await? {
         exec(MIGRATION_V3_TO_V4_ADD_APP_SCHEMA_VERSION, Vec::new()).await?;
     }
-    // Stamp the current version — we only reach here from v2 or v3.
+    // v4 -> v5: scope column on the streams table. Existing rows
+    // observe `NULL` = "never observed a scope" — non-destructive.
+    if !column_exists("__pocopine_streams", "scope").await? {
+        exec(MIGRATION_V4_TO_V5_ADD_SCOPE, Vec::new()).await?;
+    }
+    // Stamp the current version — we only reach here from v2..v4.
     upsert_meta(META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string()).await?;
     Ok(())
 }
@@ -346,6 +351,7 @@ async fn hydrate_stream(stream: SyncStreamName) -> SyncResult<LocalStreamSnapsho
             rows,
             pending_mutations,
             application_schema_version: None,
+            scope: None,
         });
     };
 
@@ -361,6 +367,9 @@ async fn hydrate_stream(stream: SyncStreamName) -> SyncResult<LocalStreamSnapsho
         rows,
         pending_mutations,
         application_schema_version: optional_u32(meta, "app_schema_version")?,
+        scope: optional_string(meta, "scope")?
+            .map(SyncScope::new)
+            .transpose()?,
     })
 }
 
@@ -374,6 +383,7 @@ async fn save_snapshot(snapshot: LocalSnapshotBatch) -> SyncResult<()> {
             snapshot.cursor.as_ref(),
             now,
             snapshot.application_schema_version,
+            snapshot.scope.as_ref(),
         )
         .await?;
         exec(
@@ -395,14 +405,16 @@ async fn apply_changes(changes: LocalChangeBatch) -> SyncResult<()> {
     let result = async {
         let now = epoch_ms();
         let stream = changes.stream;
-        // apply_changes doesn't carry an advertised schema_version (it
-        // is a post-open delta path); pass None — the UPSERT's coalesce
-        // preserves whatever value `save_snapshot` already recorded.
+        // apply_changes doesn't carry an advertised schema_version or a
+        // scope (it is a post-open delta path); pass None — the
+        // UPSERT's coalesce preserves whatever `save_snapshot` already
+        // recorded.
         upsert_stream(
             &stream,
             &changes.collection,
             changes.cursor.as_ref(),
             now,
+            None,
             None,
         )
         .await?;
@@ -481,6 +493,7 @@ async fn mark_push_result(result: LocalPushResult) -> SyncResult<()> {
                 collection,
                 result.cursor.as_ref(),
                 now,
+                None,
                 None,
             )
             .await?;
@@ -684,10 +697,11 @@ async fn upsert_stream(
     cursor: Option<&SyncCursor>,
     updated_at_ms: i64,
     application_schema_version: Option<u32>,
+    scope: Option<&SyncScope>,
 ) -> SyncResult<()> {
     // The UPSERT uses `coalesce(excluded.app_schema_version,
-    // __pocopine_streams.app_schema_version)` so passing `None` here
-    // doesn't clobber a previously recorded value.
+    // __pocopine_streams.app_schema_version)` (same for `scope`) so
+    // passing `None` here doesn't clobber a previously recorded value.
     let app_schema_version_param = match application_schema_version {
         Some(v) => JsValue::from_f64(v as f64),
         None => JsValue::NULL,
@@ -701,6 +715,7 @@ async fn upsert_stream(
             JsValue::from_f64(SCHEMA_VERSION as f64),
             JsValue::from_f64(updated_at_ms as f64),
             app_schema_version_param,
+            optional_param(scope.map(SyncScope::as_str)),
         ],
     )
     .await
