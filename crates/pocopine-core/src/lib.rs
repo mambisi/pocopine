@@ -39,6 +39,7 @@ pub mod model_runtime;
 pub mod mount;
 pub mod mutation_channel;
 pub mod path;
+pub mod path_access;
 pub mod payload_scope;
 pub mod plugin;
 pub mod profiler;

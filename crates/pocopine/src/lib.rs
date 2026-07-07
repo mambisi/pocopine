@@ -46,6 +46,10 @@ pub use pocopine_core::{
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
+// RFC-112 — the nested-path access trait (same name as the derive,
+// different namespace — the serde `Serialize`/`derive(Serialize)`
+// convention).
+pub use pocopine_core::path_access::PathAccess;
 #[cfg(not(target_arch = "wasm32"))]
 pub use pocopine_jobs::{
     DeadLetter, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler, JobId,
@@ -55,8 +59,8 @@ pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{
-    Emit, Props, RouteComponent, app, asset, client_module, component, handlers, job, protected,
-    server, store,
+    Emit, PathAccess, Props, RouteComponent, app, asset, client_module, component, handlers, job,
+    protected, server, store,
 };
 
 pub mod auth {
@@ -102,8 +106,8 @@ pub mod prelude {
         ComponentState, ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, FieldHandle,
         ForComponent, Handle, Hook, Inject, IntoRouteTarget, JobError, JobResult, Loader,
         LoaderContext, LoaderError, LocalStorage, NavigationFailure, NavigationResult,
-        NearestParent, PageLink, PageMeta, PageMetaContext, PageMetaTag, Parent, Permission,
-        Plugin, PluginValidationError, Plugins, Prefetch, PrefetchResult, PrefetchSkip,
+        NearestParent, PageLink, PageMeta, PageMetaContext, PageMetaTag, Parent, PathAccess,
+        Permission, Plugin, PluginValidationError, Plugins, Prefetch, PrefetchResult, PrefetchSkip,
         PrefetchTrigger, Principal, Props, ReturnTo, Role, RouteComponent, RouteConfig,
         RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
         RouteLocation, RouteMeta, RouteMetaKey, RouteName, RouteNavigationCompleted,
@@ -160,7 +164,14 @@ pub mod __private {
     // RFC-095 W2 — per-field dirty-check fingerprint. The macro
     // emits one `field_fingerprint` arm per declared field.
     pub use pocopine_core::fingerprint::fingerprint as fingerprint_value;
+    // RFC-112 — typed nested-path access: the trait, the autoref
+    // dispatch pair (macro-generated call sites), and the leaf
+    // deserializer.
     pub use pocopine_core::fingerprint::quick_len as quick_len_value;
+    pub use pocopine_core::path_access::{
+        PathAccess, PathFpDispatch, PathFpNoAccess, PathFpViaAccess, PathSetDispatch,
+        PathSetNoAccess, PathSetViaAccess, set_leaf as path_set_leaf,
+    };
     // RFC-096 S3 — typed text lane: one `field_as_text` arm per
     // declared field.
     pub use pocopine_core::fingerprint::text_projection;

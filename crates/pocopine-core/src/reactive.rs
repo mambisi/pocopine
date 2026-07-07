@@ -436,11 +436,41 @@ fn field_signal(scope_id: ScopeId, key: &str, mint: bool) -> Option<SignalId> {
             return None;
         }
         let sid = next_signal_id();
+        // RFC-113 — remember which scopes minted dotted (nested)
+        // keys so the flat write path's down-fan can early-out
+        // without allocating (the neutrality gate: flat-only
+        // scopes pay one HashSet miss).
+        if key.contains('.') {
+            NESTED_KEY_SCOPES.with(|n| {
+                n.borrow_mut().insert(scope_id);
+            });
+        }
         map.entry(scope_id)
             .or_default()
             .insert(Cow::Owned(key.to_owned()), sid);
         Some(sid)
     })
+}
+
+thread_local! {
+    /// RFC-113 — scopes that interned at least one dotted key.
+    static NESTED_KEY_SCOPES: RefCell<std::collections::HashSet<ScopeId>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// RFC-113 — does `scope_id` have any leaf-granular (dotted)
+/// tracked keys? The flat write path consults this before its
+/// down-fan scan.
+pub(crate) fn has_nested_keys(scope_id: ScopeId) -> bool {
+    NESTED_KEY_SCOPES.with(|n| n.borrow().contains(&scope_id))
+}
+
+/// RFC-113 — scope teardown for the nested-key marker. Called
+/// alongside the `FIELD_SIGNALS` purges.
+pub(crate) fn forget_nested_keys(scope_id: ScopeId) {
+    NESTED_KEY_SCOPES.with(|n| {
+        n.borrow_mut().remove(&scope_id);
+    });
 }
 
 /// RFC-096 S3 — resolve-or-mint the `SignalId` for `(scope, key)`
@@ -641,6 +671,7 @@ pub fn clear_scope(scope_id: ScopeId) {
             .map(|inner| inner.into_values().collect())
             .unwrap_or_default()
     });
+    forget_nested_keys(scope_id);
     release_field_signals(&sids);
 }
 
@@ -666,6 +697,9 @@ fn release_field_signals(sids: &[SignalId]) {
 pub fn clear_scopes(scope_ids: &[ScopeId]) {
     if scope_ids.is_empty() {
         return;
+    }
+    for sid in scope_ids {
+        forget_nested_keys(*sid);
     }
     let sids: Vec<SignalId> = FIELD_SIGNALS.with(|f| {
         let mut map = f.borrow_mut();
