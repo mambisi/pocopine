@@ -27,7 +27,7 @@ use web_sys::{CustomEvent, CustomEventInit, Element, Event};
 
 use super::content::{ContentError, ContentFormat, Markdown};
 use super::root::{
-    COMMAND_EVENT, CommandRequest, DOC_CHANGED_EVENT, EXPORT_STATE_REQUEST_EVENT,
+    CHANGE_EVENT, COMMAND_EVENT, CommandRequest, DOC_CHANGED_EVENT, EXPORT_STATE_REQUEST_EVENT,
     EXPORT_STATE_RESULT_EVENT, runtime_plugins_view, state_json_from_doc,
 };
 use crate::runtime::{self, EditorRuntime};
@@ -125,13 +125,36 @@ impl From<ContentError> for EditorError {
     }
 }
 
-/// Subscription returned by [`Editor::on_update`]. Drop the
-/// guard to detach the listener — the surface is left
-/// untouched and the callback won't fire again.
+/// Payload delivered to [`Editor::on_change`] — the cheap, per-commit signals
+/// carried by [`CHANGE_EVENT`]. None of these require serializing the document,
+/// so reading them on every keystroke stays flat regardless of document size.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChangeInfo {
+    /// Monotonic per-commit counter (mirrors the surface's `doc_generation`) —
+    /// handy to dedupe or just detect that *something* changed.
+    pub generation: u64,
+    /// True when the document is a single empty textblock — the resting state a
+    /// placeholder shows for. O(1) to compute.
+    pub empty: bool,
+    /// The caret's textblock text, from the block start up to a collapsed caret
+    /// (empty for a ranged selection). An `@`-mention picker reads its trailing
+    /// token from here instead of reaching into the DOM `Selection` — it comes
+    /// from the committed editor state, so there's no anchor-node or
+    /// selection-sync-timing guesswork. O(block).
+    pub caret_prefix: String,
+}
+
+/// Subscription returned by [`Editor::on_update`] / [`Editor::on_change`]. Drop
+/// the guard to detach the listener — the surface is left untouched and the
+/// callback won't fire again.
 #[must_use = "drop the guard to detach the listener"]
 pub struct DocChangeSubscription {
     target: Element,
     closure: Option<Closure<dyn FnMut(Event)>>,
+    /// The event this subscription is attached to — so [`Drop`] detaches the
+    /// right listener whether it came from [`Editor::on_update`]
+    /// ([`DOC_CHANGED_EVENT`]) or [`Editor::on_change`] ([`CHANGE_EVENT`]).
+    event: &'static str,
 }
 
 impl DocChangeSubscription {
@@ -147,7 +170,7 @@ impl Drop for DocChangeSubscription {
     fn drop(&mut self) {
         if let Some(closure) = self.closure.take() {
             let _ = self.target.remove_event_listener_with_callback(
-                DOC_CHANGED_EVENT,
+                self.event,
                 closure.as_ref().unchecked_ref(),
             );
         }
@@ -361,6 +384,40 @@ impl Editor {
         DocChangeSubscription {
             target,
             closure: Some(cb),
+            event: DOC_CHANGED_EVENT,
+        }
+    }
+
+    /// Subscribe to the lightweight [`CHANGE_EVENT`] fired on every commit — a
+    /// cheap companion to [`on_update`](Self::on_update). The callback receives
+    /// only [`ChangeInfo`] (generation / empty / caret prefix); the document is
+    /// never reconstructed or serialized, so this stays flat no matter how large
+    /// the doc or how many inline nodes it holds. Use it for per-keystroke UI
+    /// that keys off the caret or emptiness — a placeholder, an `@`-mention
+    /// picker — instead of `on_update_markdown` (which pays O(doc) every key).
+    ///
+    /// It fires even when the surface sets `suppress_doc_changed`, so an editor
+    /// can switch the heavy [`DOC_CHANGED_EVENT`] off entirely, drive its
+    /// picker/placeholder from `on_change`, and pull content on demand via
+    /// [`get`](Self::get) at save time — typing then serializes nothing.
+    pub fn on_change<Cb>(&self, mut callback: Cb) -> DocChangeSubscription
+    where
+        Cb: FnMut(ChangeInfo) + 'static,
+    {
+        let target = self.surface.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            let Ok(custom) = event.dyn_into::<CustomEvent>() else {
+                return;
+            };
+            let info =
+                serde_wasm_bindgen::from_value::<ChangeInfo>(custom.detail()).unwrap_or_default();
+            callback(info);
+        }) as Box<dyn FnMut(Event)>);
+        let _ = target.add_event_listener_with_callback(CHANGE_EVENT, cb.as_ref().unchecked_ref());
+        DocChangeSubscription {
+            target,
+            closure: Some(cb),
+            event: CHANGE_EVENT,
         }
     }
 
@@ -412,6 +469,7 @@ impl Editor {
         DocChangeSubscription {
             target,
             closure: Some(cb),
+            event: DOC_CHANGED_EVENT,
         }
     }
 

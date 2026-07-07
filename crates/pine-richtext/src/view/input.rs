@@ -263,7 +263,7 @@ where
                 log_input_perf(
                     debug_perf,
                     "input.keydown",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_log.clone(),
                         "combo": combo.clone(),
                         "handled": false,
@@ -278,7 +278,7 @@ where
                 log_input_perf(
                     debug_perf,
                     "input.keydown",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_log,
                         "combo": combo,
                         "handled": false,
@@ -295,7 +295,7 @@ where
                 log_input_perf(
                     debug_perf,
                     "input.keydown",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_log,
                         "combo": combo,
                         "handled": false,
@@ -312,7 +312,7 @@ where
             log_input_perf(
                 debug_perf,
                 "input.keydown",
-                json!({
+                || json!({
                     "runtime": runtime_for_log.clone(),
                     "combo": combo.clone(),
                     "handled": true,
@@ -326,7 +326,7 @@ where
             log_input_perf(
                 debug_perf,
                 "input.keydown.complete",
-                json!({
+                || json!({
                     "runtime": runtime_for_log.clone(),
                     "combo": combo.clone(),
                     "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
@@ -335,7 +335,7 @@ where
             schedule_next_frame_perf(
                 debug_perf,
                 "input.next_frame",
-                json!({
+                || json!({
                     "runtime": runtime_for_log.clone(),
                     "source": "keydown",
                     "combo": combo,
@@ -388,7 +388,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -411,7 +411,7 @@ where
                             log_input_perf(
                                 debug_perf,
                                 "input.beforeinput",
-                                json!({
+                                || json!({
                                     "runtime": runtime_for_log.clone(),
                                     "input_type": input_type.clone(),
                                     "handled": false,
@@ -447,7 +447,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log,
                                 "input_type": input_type,
                                 "handled": true,
@@ -465,7 +465,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput.complete",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type_for_log.clone(),
                                 "rule": true,
@@ -475,7 +475,7 @@ where
                         schedule_next_frame_perf(
                             debug_perf,
                             "input.next_frame",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "source": "beforeinput",
                                 "input_type": input_type_for_log,
@@ -492,7 +492,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": true,
@@ -511,7 +511,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput.complete",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type_for_log.clone(),
                                 "rule": false,
@@ -521,7 +521,7 @@ where
                         schedule_next_frame_perf(
                             debug_perf,
                             "input.next_frame",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "source": "beforeinput",
                                 "input_type": input_type_for_log,
@@ -533,7 +533,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -569,7 +569,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -589,7 +589,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -606,7 +606,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -625,7 +625,7 @@ where
                         log_input_perf(
                             debug_perf,
                             "input.beforeinput",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -645,7 +645,7 @@ where
                     log_input_perf(
                         debug_perf,
                         "input.beforeinput",
-                        json!({
+                        || json!({
                             "runtime": runtime_for_log.clone(),
                             "input_type": input_type.clone(),
                             "handled": true,
@@ -664,7 +664,7 @@ where
                     log_input_perf(
                         debug_perf,
                         "input.beforeinput.complete",
-                        json!({
+                        || json!({
                             "runtime": runtime_for_log,
                             "input_type": input_type_for_log.clone(),
                             "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
@@ -673,7 +673,7 @@ where
                     schedule_next_frame_perf(
                         debug_perf,
                         "input.next_frame",
-                        json!({
+                        || json!({
                             "runtime": runtime_for_log.clone(),
                             "source": "beforeinput",
                             "input_type": input_type_for_log,
@@ -714,7 +714,7 @@ where
                 log_input_perf(
                     debug_perf,
                     "input.paste",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_log.clone(),
                         "handled": false,
                         "reason": "missing_state",
@@ -744,7 +744,7 @@ where
                 log_input_perf(
                     debug_perf,
                     "input.paste",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_log.clone(),
                         "handled": false,
                         "reason": "no_transaction",
@@ -758,7 +758,7 @@ where
             log_input_perf(
                 debug_perf,
                 "input.paste",
-                json!({
+                || json!({
                     "runtime": runtime_for_log.clone(),
                     "handled": true,
                     "mode": mode,
@@ -771,7 +771,7 @@ where
             schedule_next_frame_perf(
                 debug_perf,
                 "input.next_frame",
-                json!({
+                || json!({
                     "runtime": runtime_for_log,
                     "source": "paste",
                 }),
@@ -943,14 +943,14 @@ pub fn read_dom_selection(surface: &Element) -> Option<crate::state::Selection> 
     Some(crate::state::Selection::text_between(anchor, head))
 }
 
-fn log_input_perf(enabled: bool, event: &str, payload: Value) {
+fn log_input_perf(enabled: bool, event: &str, payload: impl FnOnce() -> Value) {
     if !enabled {
         return;
     }
     let value = json!({
         "debug_version": INPUT_DEBUG_LOG_VERSION,
         "event": event,
-        "payload": payload,
+        "payload": payload(),
     });
     let Ok(message) = serde_json::to_string(&value) else {
         return;
@@ -967,7 +967,7 @@ thread_local! {
 fn schedule_next_frame_perf(
     enabled: bool,
     event: &'static str,
-    mut payload: Value,
+    payload: impl FnOnce() -> Value,
     started_at: f64,
 ) {
     if !enabled {
@@ -987,6 +987,8 @@ fn schedule_next_frame_perf(
     if already_pending {
         return;
     }
+    // Enabled and no frame pending → build the payload now (once).
+    let mut payload = payload();
     let callback = Closure::once_into_js(move || {
         NEXT_FRAME_PERF_PENDING.with(|pending| pending.set(false));
         if let Value::Object(ref mut map) = payload {
@@ -995,13 +997,20 @@ fn schedule_next_frame_perf(
                 json!(round_ms(perf_now_ms() - started_at)),
             );
         }
-        log_input_perf(true, event, payload);
+        log_input_perf(true, event, || payload);
     });
     let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn schedule_next_frame_perf(enabled: bool, event: &'static str, payload: Value, started_at: f64) {
+fn schedule_next_frame_perf(
+    enabled: bool,
+    event: &'static str,
+    payload: impl FnOnce() -> Value,
+    started_at: f64,
+) {
+    // Currently a stub. `payload` is a closure so its `json!` is never built
+    // unless this is wired up — no wasted per-keystroke allocation.
     let _ = enabled;
     let _ = event;
     let _ = payload;

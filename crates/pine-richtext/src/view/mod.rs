@@ -21,5 +21,5 @@ pub mod selection;
 pub use crate::render::node_views as node_view;
 pub use crate::render::render_doc_to_html;
 pub use content::{ContentError, ContentFormat, Doc, DocNode, Markdown};
-pub use interop::{DocChangeSubscription, Editor, EditorError};
+pub use interop::{ChangeInfo, DocChangeSubscription, Editor, EditorError};
 pub use root::PineRichTextRoot;

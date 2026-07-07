@@ -78,6 +78,18 @@ pub const EXPORT_STATE_RESULT_EVENT: &str = "pine:richtext:export-state-result";
 /// [`ContentFormat`](super::ContentFormat) over the payload.
 pub const DOC_CHANGED_EVENT: &str = "pine:richtext:doc-changed";
 
+/// Lightweight per-commit signal, dispatched on **every** transaction —
+/// independent of [`PineRichTextRoot::suppress_doc_changed`] (which only gates
+/// the heavy [`DOC_CHANGED_EVENT`]). Its detail carries only cheap fields
+/// ([`view::ChangeInfo`](super::ChangeInfo): a generation counter, whether the
+/// doc is blank, and the caret's textblock-prefix), all O(1) or O(block) to
+/// produce — so a consumer that must react to every keystroke (a placeholder,
+/// an `@`-mention picker) pays no whole-document serialization. Subscribe via
+/// [`view::Editor::on_change`](super::Editor::on_change); an editor that also
+/// sets `suppress_doc_changed` then reads content on demand via
+/// [`Editor::get`](super::Editor::get) types nothing per keystroke at all.
+pub const CHANGE_EVENT: &str = "pine:richtext:change";
+
 /// Payload of a [`COMMAND_EVENT`] CustomEvent. Variants intentionally
 /// stay close to `pine_richtext::commands::*` so the wire shape stays
 /// thin — a toolbar serializes one of these into the `detail`, the
@@ -434,7 +446,7 @@ impl PineRichTextRoot {
         if let Some(state) = commit_slot.borrow().state.as_ref() {
             sync_cursor_from_state(&surface_el, state);
         }
-        log_debug_json(self.debug_json, "mount", json!({ "state": self.doc }));
+        log_debug_json(self.debug_json, "mount", || json!({ "state": self.doc }));
 
         // Track the last-rendered doc so the diff path knows what to
         // compare against on each change.
@@ -503,12 +515,12 @@ impl PineRichTextRoot {
                         log_debug_json(
                             debug_json,
                             "state_provider.live_selection",
-                            json!({ "state": state_debug_json(&next) }),
+                            || json!({ "state": state_debug_json(&next) }),
                         );
                         log_perf(
                             debug_perf,
                             "state_provider",
-                            json!({
+                            || json!({
                                 "runtime": runtime_for_provider.name(),
                                 "live_selection": true,
                                 "live_selection_requested": live_selection,
@@ -528,7 +540,7 @@ impl PineRichTextRoot {
                 log_perf(
                     debug_perf,
                     "state_provider",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_provider.name(),
                         "live_selection": false,
                         "live_selection_requested": live_selection,
@@ -608,11 +620,13 @@ impl PineRichTextRoot {
                     log_debug_json(
                         debug_json,
                         "dispatch.stale_doc",
-                        json!({
-                            "current": state_debug_json(&current),
-                            "transaction": transaction_debug_json(&tr),
-                            "transaction_state": state_debug_json(&state),
-                        }),
+                        || {
+                            json!({
+                                "current": state_debug_json(&current),
+                                "transaction": transaction_debug_json(&tr),
+                                "transaction_state": state_debug_json(&state),
+                            })
+                        },
                     );
                     return;
                 }
@@ -640,11 +654,13 @@ impl PineRichTextRoot {
                 log_debug_json(
                     debug_json,
                     "dispatch.apply",
-                    json!({
-                        "before": before,
-                        "transaction": transaction,
-                        "after": state_debug_json(&next),
-                    }),
+                    || {
+                        json!({
+                            "before": before,
+                            "transaction": transaction,
+                            "after": state_debug_json(&next),
+                        })
+                    },
                 );
                 // Hot-path generation bump. The reactive watcher
                 // used to fire on `root.doc` — a full state JSON
@@ -672,11 +688,18 @@ impl PineRichTextRoot {
                     let slim = doc_changed_event_payload(&next, steps_json);
                     dispatch_doc_changed_event(&surface_for_inner, &slim);
                 }
+                // Lightweight change signal — dispatched on EVERY commit, even
+                // when the heavy doc-changed event above is suppressed. Cheap
+                // fields only (generation / empty / caret prefix), so a
+                // placeholder or `@`-mention picker can react per keystroke at
+                // O(block) cost instead of re-serializing the whole document.
+                let change = change_event_payload(&next, root.doc_generation);
+                dispatch_change_event(&surface_for_inner, &change);
                 let event_ms = perf_now_ms() - event_started_at;
                 log_perf(
                     debug_perf,
                     "dispatch.commit",
-                    json!({
+                    || json!({
                         "runtime": runtime_for_inner.name(),
                         "steps": step_count,
                         "cache_hit": current_cache_hit,
@@ -709,7 +732,7 @@ impl PineRichTextRoot {
                 log_perf(
                     debug_perf,
                     "dispatch.flush_sync",
-                    json!({
+                    || json!({
                         "runtime": runtime_name,
                         "flush_ms": round_ms(perf_now_ms() - flush_started_at),
                         "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
@@ -719,7 +742,7 @@ impl PineRichTextRoot {
                 log_perf(
                     debug_perf,
                     "dispatch.flush_deferred",
-                    json!({
+                    || json!({
                         "runtime": runtime_name,
                         "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
                     }),
@@ -938,11 +961,13 @@ impl PineRichTextRoot {
             log_debug_json(
                 debug_json,
                 "watch.doc",
-                json!({
-                    "dom_changed": reconcile_outcome.dom_changed(),
-                    "patch": reconcile_outcome.as_str(),
-                    "state": state_debug_json(&cached_state),
-                }),
+                || {
+                    json!({
+                        "dom_changed": reconcile_outcome.dom_changed(),
+                        "patch": reconcile_outcome.as_str(),
+                        "state": state_debug_json(&cached_state),
+                    })
+                },
             );
             let mount_started_at = perf_now_ms();
             if reconcile_outcome.should_mount_node_views() {
@@ -969,7 +994,7 @@ impl PineRichTextRoot {
             log_perf(
                 debug_perf,
                 "watch.doc",
-                json!({
+                || json!({
                     "runtime": runtime_for_watch.name(),
                     "patch": reconcile_outcome.as_str(),
                     "dom_changed": reconcile_outcome.dom_changed(),
@@ -1135,6 +1160,61 @@ fn dispatch_doc_changed_event(surface: &Element, state_json: &Value) {
     let _ = surface.dispatch_event(&event);
 }
 
+/// Cheap payload for [`CHANGE_EVENT`] ([`super::ChangeInfo`]): a generation
+/// counter, whether the doc is blank, and the caret's textblock prefix. Unlike
+/// [`doc_changed_event_payload`] it never serializes the document — `empty` is
+/// O(1) and `caret_prefix` is O(block) — so per-keystroke consumers stay flat
+/// regardless of document size.
+fn change_event_payload(state: &EditorState, generation: u64) -> super::ChangeInfo {
+    /// Cap on `caret_prefix` length: a mention token is short, and an unbounded
+    /// block prefix would be O(block) for a huge single paragraph — the point of
+    /// this event is to stay flat. Positions map 1:1 to chars inside a textblock.
+    const CARET_PREFIX_WINDOW: usize = 256;
+
+    let doc = state.doc();
+    // Resting empty state = a single empty textblock. O(1).
+    let empty = doc.child_count() == 1
+        && doc.child(0).map(|child| child.content_size() == 0).unwrap_or(true);
+    // Text in the caret's textblock, up to the caret (bounded). Empty for a
+    // ranged (non-collapsed) selection. O(window), never touches the rest of the
+    // doc — so a mention picker stays flat regardless of paragraph size.
+    let selection = state.selection();
+    let caret_prefix = if selection.is_empty(doc) {
+        let caret = selection.from(doc);
+        doc.resolve(caret)
+            .ok()
+            .and_then(|resolved| {
+                let block_start = resolved.start(resolved.depth())?;
+                let start = block_start.max(caret.saturating_sub(CARET_PREFIX_WINDOW));
+                doc.text_between(start, caret, "").ok()
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    super::ChangeInfo {
+        generation,
+        empty,
+        caret_prefix,
+    }
+}
+
+/// Dispatch the [`CHANGE_EVENT`] CustomEvent at `surface`. Consumers register
+/// via [`super::Editor::on_change`]. `ChangeInfo` is a struct, so it serializes
+/// to a plain JS object (not a `Map`), which `from_value::<ChangeInfo>` reads.
+fn dispatch_change_event(surface: &Element, change: &super::ChangeInfo) {
+    let Ok(detail_js) = serde_wasm_bindgen::to_value(change) else {
+        return;
+    };
+    let init = web_sys::CustomEventInit::new();
+    init.set_bubbles(true);
+    init.set_detail(&detail_js);
+    let Ok(event) = CustomEvent::new_with_event_init_dict(CHANGE_EVENT, &init) else {
+        return;
+    };
+    let _ = surface.dispatch_event(&event);
+}
+
 fn state_debug_json(state: &EditorState) -> Value {
     state
         .to_json()
@@ -1157,14 +1237,18 @@ fn transaction_debug_json(transaction: &Transaction) -> Value {
     })
 }
 
-fn log_debug_json(enabled: bool, event: &str, payload: Value) {
+/// Log a debug-JSON event. `payload` is a **closure** so the (potentially
+/// whole-document) JSON is built only when `enabled` — passing `json!(…)`
+/// directly would serialize eagerly on every commit even with debug off, which
+/// was the dominant per-keystroke cost (`state_debug_json` → `EditorState::to_json`).
+fn log_debug_json(enabled: bool, event: &str, payload: impl FnOnce() -> Value) {
     if !enabled {
         return;
     }
     let value = json!({
         "debug_version": DEBUG_LOG_VERSION,
         "event": event,
-        "payload": payload,
+        "payload": payload(),
     });
     let Ok(message) = serde_json::to_string_pretty(&value) else {
         return;
@@ -1172,14 +1256,14 @@ fn log_debug_json(enabled: bool, event: &str, payload: Value) {
     log_to_console(&message);
 }
 
-fn log_perf(enabled: bool, event: &str, payload: Value) {
+fn log_perf(enabled: bool, event: &str, payload: impl FnOnce() -> Value) {
     if !enabled {
         return;
     }
     let value = json!({
         "debug_version": DEBUG_LOG_VERSION,
         "event": event,
-        "payload": payload,
+        "payload": payload(),
     });
     let Ok(message) = serde_json::to_string(&value) else {
         return;
