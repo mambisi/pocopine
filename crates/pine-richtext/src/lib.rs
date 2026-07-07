@@ -26,6 +26,12 @@ pub mod schema_basic;
 pub mod state;
 pub mod transform;
 
+/// Pure single-span text diff powering the reconciler's incremental text-node
+/// patch. Compiled with the `view` feature (its only consumer) or under `test`
+/// (so its unit/property tests run natively in CI without a browser).
+#[cfg(any(feature = "view", test))]
+mod text_diff;
+
 /// Browser view layer. Renders an `EditorState` into a contentEditable
 /// surface, captures keystrokes, and translates the DOM selection back
 /// into a model `Selection`. Gated behind the `view` feature; enable it

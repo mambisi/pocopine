@@ -57,6 +57,7 @@ optional = true
 features = [
     "AbstractRange",
     "ClipboardEvent",
+    "CharacterData",
     "console",
     "DataTransfer",
     "Document",

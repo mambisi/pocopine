@@ -434,7 +434,7 @@ impl<'a> Reconciler<'a> {
         old_node: &RichNode,
         new_node: &RichNode,
     ) -> Result<bool, ()> {
-        let Some(_) = single_unmarked_text_child(old_node) else {
+        let Some(old_text) = single_unmarked_text_child(old_node) else {
             return Ok(false);
         };
         let Some(new_text) = single_unmarked_text_child(new_node) else {
@@ -450,6 +450,20 @@ impl<'a> Reconciler<'a> {
         if child.node_type() != DomNode::TEXT_NODE {
             return Ok(false);
         }
+        if old_text == new_text {
+            return Ok(true);
+        }
+        // Splice only the changed span instead of rewriting the whole text node.
+        // A keystroke in a large paragraph is then O(edit) DOM work, not
+        // O(paragraph). `text_splice` diffs on chars, so a surrogate pair is
+        // never split (see `crate::text_diff`).
+        if let Some(cd) = child.dyn_ref::<web_sys::CharacterData>() {
+            let (offset, count, replacement) = crate::text_diff::text_splice(old_text, new_text);
+            if cd.replace_data(offset, count, &replacement).is_ok() {
+                return Ok(true);
+            }
+        }
+        // Fallback: whole-node write (non-CharacterData, or replace_data failed).
         child.set_node_value(Some(new_text));
         Ok(true)
     }
