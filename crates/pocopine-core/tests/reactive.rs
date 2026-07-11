@@ -7,10 +7,12 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::Reflect;
+#[cfg(any(debug_assertions, feature = "devtools"))]
+use pocopine_core::{FieldHandle, Handle};
 use pocopine_core::{
-    FieldHandle, Handle, Scope, batch, computed, effect, flush_sync, on_cleanup,
-    on_scope_unmount_for, release, run_now, rw_signal, set_auto_flush, signal, spawn_for_scope,
-    spawn_latest, spawn_latest_for_scope, spawn_scoped, watch, watch_scope_field_now,
+    Scope, batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, run_now,
+    rw_signal, set_auto_flush, signal, spawn_for_scope, spawn_latest, spawn_latest_for_scope,
+    spawn_scoped, watch, watch_scope_field_now,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -309,6 +311,7 @@ fn watch_scope_field_now_reads_existing_value_on_install() {
 }
 
 // RFC-097 — FieldHandle::set writes one field with NO dirty sweep.
+#[cfg(any(debug_assertions, feature = "devtools"))]
 #[wasm_bindgen_test]
 fn field_handle_set_writes_one_field_without_a_sweep() {
     setup();
@@ -351,6 +354,7 @@ fn field_handle_set_writes_one_field_without_a_sweep() {
 }
 
 // RFC-097 — FieldHandle::update is a read-modify-write of one field.
+#[cfg(any(debug_assertions, feature = "devtools"))]
 #[wasm_bindgen_test]
 fn field_handle_update_read_modify_writes_one_field() {
     setup();

@@ -242,12 +242,6 @@ pub trait ComponentState: 'static {
         false
     }
 
-    /// Symmetric with `has_on_mount`. Kept for parity; reserved
-    /// for future devtools coverage displays.
-    fn has_on_unmount(&self) -> bool {
-        false
-    }
-
     /// RFC-038 — enter preset name the component declared at
     /// `#[component(transition = "…")]` (or `transition_in`). The
     /// mount calls this once post-template-clone to stamp the
@@ -448,6 +442,7 @@ impl Scope {
         crate::reactive::clear_scope(id);
         crate::component_computed::clear_scope(id);
         crate::model_runtime::clear_scope(id);
+        crate::lifecycle::__clear_mount_epoch(id);
         crate::task::clear_scope(id);
         // Drop the proxy-trap closures that were pinned in
         // `into_proxy`. The `Box<dyn Any>` drop chain runs the
@@ -1386,6 +1381,3 @@ pub fn invoke_handler(scope_id: ScopeId, key: &str, args: &Array) -> JsValue {
         None => JsValue::UNDEFINED,
     }
 }
-
-#[allow(dead_code)]
-fn _type_check(_: &Function) {}

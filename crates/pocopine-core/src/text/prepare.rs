@@ -39,8 +39,6 @@ pub(crate) struct PreparedSegment {
 
 pub struct PreparedText {
     pub(crate) font: Font,
-    #[allow(dead_code)]
-    pub(crate) options: PrepareOptions,
     pub(crate) segments: Vec<PreparedSegment>,
     pub(crate) soft_hyphen_width: f64,
     pub(crate) normalized: String,
@@ -103,7 +101,6 @@ pub fn prepare<M: Measurer>(
 
     PreparedText {
         font: font.clone(),
-        options,
         segments,
         soft_hyphen_width,
         normalized,

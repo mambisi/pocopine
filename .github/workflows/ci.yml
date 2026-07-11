@@ -130,6 +130,22 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  core-feature-matrix:
+    name: pocopine-core feature matrix
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-21
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pocopine-core-feature-matrix
+      - run: bash scripts/ci/pocopine_core_feature_matrix.sh
+
   clippy-wasm:
     name: clippy (wasm32)
     runs-on: ubuntu-latest

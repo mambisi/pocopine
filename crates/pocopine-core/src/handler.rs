@@ -95,14 +95,6 @@ pub trait HandlerDispatch {
         false
     }
 
-    /// Symmetric with [`has_on_mount`] for `on_unmount`. Currently
-    /// informational — the mount doesn't sweep on unmount — but kept
-    /// for parity and so future devtools can show per-component
-    /// lifecycle coverage.
-    fn has_on_unmount(&self) -> bool {
-        false
-    }
-
     /// RFC-038 — preset name the component animates with by default
     /// on enter (symmetric if `transition_out_preset` returns the
     /// same). Empty string means "no transition preset declared on

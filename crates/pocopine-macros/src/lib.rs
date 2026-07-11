@@ -3283,7 +3283,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     });
-    let has_observes = !observes.is_empty();
     let observe_impl = quote! {
         impl #struct_ident {
             #[doc(hidden)]
@@ -3295,8 +3294,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let _ = &__handle;
                 #(#observe_install_stmts)*
             }
-            #[doc(hidden)]
-            pub const __POCOPINE_HAS_OBSERVES: bool = #has_observes;
         }
     };
 
@@ -3634,9 +3631,6 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn has_on_ready(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_ready(self)
-            }
-            fn has_on_unmount(&self) -> bool {
-                <Self as ::pocopine::__private::HandlerDispatch>::has_on_unmount(self)
             }
             fn transition_in_preset(&self) -> &'static str {
                 #transition_in_literal
@@ -4387,7 +4381,6 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let _ = &__ctx;
                 Self::on_unmount(self #(, #unmount_extractor_args)*);
             }
-            fn has_on_unmount(&self) -> bool { true }
         }
     });
 
@@ -4634,8 +4627,6 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) {
                 let _ = __handle;
             }
-            #[doc(hidden)]
-            pub const __POCOPINE_HAS_OBSERVES: bool = false;
         }
 
         impl ::pocopine::__private::ComponentState for #struct_ident {

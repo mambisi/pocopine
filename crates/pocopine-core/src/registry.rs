@@ -35,14 +35,6 @@ pub type ComponentCtor = fn() -> Scope;
 /// static-plan fallback hook.
 pub type ComponentMountFn = fn(&Element, ScopeId, &JsValue);
 
-/// Kept as a public type so users with their own registration path have
-/// something to hand back to the runtime.
-pub struct ComponentEntry {
-    pub name: &'static str,
-    pub ctor: ComponentCtor,
-    pub mount_template: Option<ComponentMountFn>,
-}
-
 /// Snapshot of a registered canonical entry. Aliases resolve to the
 /// canonical entry by name, so introspection happens through here.
 #[derive(Clone, Copy)]
@@ -322,9 +314,6 @@ pub fn register_component_prefixed(
     register_component(combined, owner, ctor);
 }
 
-/// Exposed for symmetry with the `ComponentEntry` type.
-pub static COMPONENT_ENTRIES: &[ComponentEntry] = &[];
-
 /// Instantiate a component by name. Resolves through aliases. `None` if
 /// the name wasn't registered.
 pub fn instantiate(name: &str) -> Option<Scope> {
@@ -369,6 +358,19 @@ pub fn canonical_component_name(name: &str) -> Option<&'static str> {
             return Some(entry.canonical);
         }
         None
+    })
+}
+
+/// Return the exact registered spelling for a canonical tag or alias.
+/// Unlike [`canonical_component_name`], aliases remain aliases. Lifecycle's
+/// `TagName` extractor uses this to reuse registry-owned static strings.
+pub(crate) fn registered_component_tag(name: &str) -> Option<&'static str> {
+    REGISTRY.with(|r| {
+        let reg = r.borrow();
+        reg.canonical
+            .get_key_value(name)
+            .map(|(&tag, _)| tag)
+            .or_else(|| reg.aliases.get_key_value(name).map(|(&tag, _)| tag))
     })
 }
 

@@ -10,7 +10,7 @@
 //! `Option<T>`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
 use wasm_bindgen::JsCast;
@@ -61,6 +61,9 @@ pub struct LifecycleContext<'a> {
     /// Which lifecycle slot the mount fired this hook from.
     /// Element-dependent extractors guard on this.
     pub phase: LifecyclePhase,
+    /// Per-scope hook epoch, minted with the context so repeated
+    /// extractions stay stable within one hook invocation.
+    mount_epoch: u64,
 }
 
 impl<'a> LifecycleContext<'a> {
@@ -73,6 +76,7 @@ impl<'a> LifecycleContext<'a> {
             el,
             scope_id,
             phase,
+            mount_epoch: next_mount_epoch(scope_id),
         }
     }
 }
@@ -216,20 +220,47 @@ impl<'a> From<LifecycleContext<'a>> for Body {
 #[derive(Clone, Copy)]
 pub struct TagName(pub &'static str);
 
+thread_local! {
+    /// Fallback interner for non-component roots (`pp-as`, plain HTML/SVG).
+    /// Registered component tags already live in the registry as static
+    /// strings, so this table is bounded by the distinct fallback tag names
+    /// observed by the page rather than growing once per extraction.
+    static INTERNED_TAG_NAMES: RefCell<HashSet<&'static str>> = RefCell::new(HashSet::new());
+}
+
+fn intern_tag_name(name: String) -> &'static str {
+    // Preserve TagName's original contract (`tag_name().to_lowercase()`),
+    // including SVG names whose `local_name()` may retain mixed case.
+    let name = name.to_lowercase();
+    if let Some(registered) = crate::registry::registered_component_tag(&name) {
+        return registered;
+    }
+
+    INTERNED_TAG_NAMES.with(|names| {
+        let mut names = names.borrow_mut();
+        if let Some(&existing) = names.get(name.as_str()) {
+            return existing;
+        }
+        let interned: &'static str = Box::leak(name.into_boxed_str());
+        names.insert(interned);
+        interned
+    })
+}
+
 impl<'a> From<LifecycleContext<'a>> for TagName {
     #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
         check_phase(ctx.phase, ELEMENT_PHASES, "TagName");
         // Resolve at hook-call time: rendered-root's parent is
-        // normally the custom-element tag. Leak the string to get
-        // a `'static str` — one per tag-name string, tiny cost,
-        // matches `type_name()`'s existing lifetime story.
+        // normally the custom-element tag. Registered tags reuse the
+        // registry's static string; fallback roots are interned once
+        // per distinct tag rather than leaked once per extraction.
         let name = ctx
             .el
             .parent_element()
-            .map(|p| p.tag_name().to_lowercase())
-            .unwrap_or_else(|| ctx.el.tag_name().to_lowercase());
-        TagName(Box::leak(name.into_boxed_str()))
+            .map(|p| p.local_name())
+            .unwrap_or_else(|| ctx.el.local_name());
+        TagName(intern_tag_name(name))
     }
 }
 
@@ -384,11 +415,19 @@ impl<'a> From<LifecycleContext<'a>> for TeleportHost {
 }
 
 thread_local! {
-    /// Monotonic counter bumped by the mount for each scope's
-    /// first hook firing. `MountEpoch` exposes it so authors can
-    /// tell a re-walk apart from the original mount.
-    static MOUNT_EPOCH_COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Next lifecycle-hook epoch for each live scope. Entries are removed by
+    /// `Scope::remove` (and the compiled-row bulk teardown).
     static MOUNT_EPOCHS: RefCell<HashMap<ScopeId, u64>> = RefCell::new(HashMap::new());
+}
+
+fn next_mount_epoch(scope: ScopeId) -> u64 {
+    MOUNT_EPOCHS.with(|epochs| {
+        let mut epochs = epochs.borrow_mut();
+        let next = epochs.entry(scope).or_insert(0);
+        let current = *next;
+        *next = current.saturating_add(1);
+        current
+    })
 }
 
 /// Monotonic mount epoch for this scope — increments on each hook
@@ -400,16 +439,7 @@ pub struct MountEpoch(pub u64);
 
 impl<'a> From<LifecycleContext<'a>> for MountEpoch {
     fn from(ctx: LifecycleContext<'a>) -> Self {
-        MountEpoch(MOUNT_EPOCHS.with(|m| {
-            let mut map = m.borrow_mut();
-            *map.entry(ctx.scope_id).or_insert_with(|| {
-                MOUNT_EPOCH_COUNTER.with(|c| {
-                    let v = c.get();
-                    c.set(v + 1);
-                    v
-                })
-            })
-        }))
+        MountEpoch(ctx.mount_epoch)
     }
 }
 
@@ -466,6 +496,66 @@ impl<'a, T: 'static> From<LifecycleContext<'a>> for crate::plugin::Plugin<T> {
 impl<'a, T: 'static> From<LifecycleContext<'a>> for Option<crate::plugin::Plugin<T>> {
     fn from(_: LifecycleContext<'a>) -> Self {
         crate::plugin::active_plugin::<T>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mount_epoch_starts_at_zero_and_advances_per_scope() {
+        let first = ScopeId(u64::MAX - 10);
+        let second = ScopeId(u64::MAX - 11);
+        __clear_mount_epoch(first);
+        __clear_mount_epoch(second);
+
+        assert_eq!(next_mount_epoch(first), 0);
+        assert_eq!(next_mount_epoch(first), 1);
+        assert_eq!(next_mount_epoch(second), 0);
+
+        __clear_mount_epoch(first);
+        __clear_mount_epoch(second);
+    }
+
+    #[test]
+    fn mount_epoch_advances_once_per_context_not_per_extractor() {
+        let scope = ScopeId(u64::MAX - 13);
+        __clear_mount_epoch(scope);
+        let el: Element = wasm_bindgen::JsValue::NULL.unchecked_into();
+
+        let first = LifecycleContext::__new(&el, scope, LifecyclePhase::Setup);
+        assert_eq!(MountEpoch::from(first).0, 0);
+        assert_eq!(MountEpoch::from(first).0, 0);
+
+        let second = LifecycleContext::__new(&el, scope, LifecyclePhase::Mount);
+        assert_eq!(MountEpoch::from(second).0, 1);
+        assert_eq!(MountEpoch::from(second).0, 1);
+
+        __clear_mount_epoch(scope);
+    }
+
+    #[test]
+    fn clearing_mount_epoch_resets_the_scope_generation() {
+        let scope = ScopeId(u64::MAX - 12);
+        __clear_mount_epoch(scope);
+
+        assert_eq!(next_mount_epoch(scope), 0);
+        assert_eq!(next_mount_epoch(scope), 1);
+        __clear_mount_epoch(scope);
+        assert_eq!(next_mount_epoch(scope), 0);
+
+        __clear_mount_epoch(scope);
+    }
+
+    #[test]
+    fn tag_name_interner_reuses_one_fallback_allocation() {
+        let first = intern_tag_name("Pocopine-Test-Fallback-Tag".to_owned());
+        let second = intern_tag_name("pocopine-test-fallback-tag".to_owned());
+
+        assert_eq!(first, "pocopine-test-fallback-tag");
+        assert_eq!(first, second);
+        assert!(std::ptr::eq(first.as_ptr(), second.as_ptr()));
     }
 }
 

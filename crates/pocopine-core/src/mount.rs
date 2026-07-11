@@ -1729,7 +1729,6 @@ fn release_subtree_inner(node: &Node) {
                 // didn't host a route loader.
                 crate::router::release_loader_slot(scope_id);
                 Scope::remove(scope_id);
-                crate::lifecycle::__clear_mount_epoch(scope_id);
             }
         }
         crate::directives::transition::release(&el);
