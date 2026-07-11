@@ -145,8 +145,12 @@ mod tests {
         for _ in 0..8000 {
             let old_len = next() % 12;
             let new_len = next() % 12;
-            let old: String = (0..old_len).map(|_| alphabet[next() % alphabet.len()]).collect();
-            let new: String = (0..new_len).map(|_| alphabet[next() % alphabet.len()]).collect();
+            let old: String = (0..old_len)
+                .map(|_| alphabet[next() % alphabet.len()])
+                .collect();
+            let new: String = (0..new_len)
+                .map(|_| alphabet[next() % alphabet.len()])
+                .collect();
             let (offset, count, replacement) = text_splice(&old, &new);
             assert_eq!(
                 apply(&old, offset, count, &replacement),
