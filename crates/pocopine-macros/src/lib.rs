@@ -1597,6 +1597,18 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .map(|s| s.value())
         .unwrap_or_else(|| default_name.clone());
 
+    if matches!(name_str.as_str(), "pp-component" | "pp-outlet") {
+        return syn::Error::new_spanned(
+            &struct_ident,
+            format!(
+                "component tag `<{name_str}>` is reserved by the Pocopine runtime. \
+                 Rename the struct or pass an explicit `name = \"...\"` override."
+            ),
+        )
+        .to_compile_error()
+        .into();
+    }
+
     if HTML5_ELEMENTS.binary_search(&name_str.as_str()).is_ok() {
         return syn::Error::new_spanned(
             &struct_ident,

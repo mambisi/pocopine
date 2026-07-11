@@ -798,7 +798,21 @@ fn install_child_host_directives(
     child: &StaticChildMount,
     template_name: &str,
 ) {
-    for b in child.bindings {
+    // RFC-112 — seed every forwarded prop before evaluating `:is`, so the
+    // dynamic child's first setup observes the complete authored prop set.
+    // Static child components retain source-order installation.
+    let dynamic = child.tag == "pp-component";
+    for b in child
+        .bindings
+        .iter()
+        .filter(|binding| !dynamic || binding.arg != "is")
+        .chain(
+            child
+                .bindings
+                .iter()
+                .filter(|binding| dynamic && binding.arg == "is"),
+        )
+    {
         let Some(evaluator) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
             fail(
                 "child-host-binding-parse",
@@ -808,7 +822,11 @@ fn install_child_host_directives(
             );
             continue;
         };
-        directives::bind::install_eval(el, proxy, b.arg, evaluator);
+        if dynamic {
+            crate::dynamic_component::install_binding(el, proxy, b.arg, evaluator);
+        } else {
+            directives::bind::install_eval(el, proxy, b.arg, evaluator);
+        }
     }
     for l in child.listeners {
         let ast = match expr::parse_cached(l.expr_src) {

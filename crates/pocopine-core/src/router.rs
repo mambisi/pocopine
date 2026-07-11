@@ -2,17 +2,14 @@
 //!
 //! Shape of the runtime:
 //!
-//! * User-declared routes live in a `Vec<Route>` behind a thread-local
-//!   (see [`register_route`]). Patterns are `/foo/:id` style, with
-//!   `*` as the 404-fallback.
-//! * A single `<pp-outlet>` in the DOM is the mount point
-//!   ([`set_outlet`]). The mount recognises the tag and hands its
-//!   element to the router.
-//! * Navigation goes through [`navigate`]. It pushes a new history
-//!   entry, re-matches, unmounts the prior page, and creates a
-//!   `<component-name>` tag with path-params as HTML attributes inside
-//!   the outlet. The existing [`crate::mount::walk`] pipeline picks
-//!   it up and handles tag resolution + prop coercion.
+//! * User-declared route records live in a parent-linked `Vec<Route>`
+//!   behind a thread-local. Flat `App::route` records have no parent;
+//!   `App::layout` builds relative/index children.
+//! * Compiled `<pp-outlet>` sentinels register by owning route scope and
+//!   depth. A nested outlet therefore cannot replace the app's root outlet.
+//! * Navigation matches the deepest route chain and renders it in depth
+//!   order through the same dynamic-component region as `<pp-component>`.
+//!   Sibling navigation preserves the common mounted prefix.
 //! * A synthetic `RouteState` scope drives the `$route` magic. The
 //!   router calls [`trigger_scope`] on its id so any template binding
 //!   reading `$route.path` / `$route.params.<name>` / `$route.query.<name>`
@@ -27,7 +24,7 @@ use once_cell::unsync::OnceCell;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{Element, Event, MouseEvent};
+use web_sys::{Element, Event, MouseEvent, Node};
 
 use crate::app::{
     IntoRouteTarget, Loader, LoaderContext, PageMeta, PageMetaContext, PageMetaFactory,
@@ -54,27 +51,86 @@ enum Segment {
     Wildcard,
 }
 
+/// Stable identity of one registered route record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RouteRecordId(usize);
+
+impl RouteRecordId {
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Clone)]
 pub struct Route {
+    pub id: RouteRecordId,
+    pub parent: Option<RouteRecordId>,
+    pub outlet_depth: usize,
     pub pattern: &'static str,
+    full_pattern: String,
     segments: Vec<Segment>,
+    own_params: Vec<String>,
     pub component_name: &'static str,
     config: RouteRuntimeConfig,
 }
 
 impl Route {
-    fn parse(
+    fn parse_root(
+        id: RouteRecordId,
         pattern: &'static str,
         component_name: &'static str,
         config: RouteRuntimeConfig,
     ) -> Self {
-        let segments = if pattern == "*" {
+        Self::parse_record(
+            id,
+            None,
+            0,
+            pattern,
+            pattern.to_string(),
+            component_name,
+            config,
+        )
+    }
+
+    fn parse_child(
+        id: RouteRecordId,
+        parent: &Route,
+        pattern: &'static str,
+        component_name: &'static str,
+        config: RouteRuntimeConfig,
+    ) -> Self {
+        let full_pattern = join_route_pattern(&parent.full_pattern, pattern);
+        Self::parse_record(
+            id,
+            Some(parent.id),
+            parent.outlet_depth + 1,
+            pattern,
+            full_pattern,
+            component_name,
+            config,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_record(
+        id: RouteRecordId,
+        parent: Option<RouteRecordId>,
+        outlet_depth: usize,
+        pattern: &'static str,
+        full_pattern: String,
+        component_name: &'static str,
+        config: RouteRuntimeConfig,
+    ) -> Self {
+        let segments = if full_pattern == "*" {
             vec![Segment::Wildcard]
         } else {
-            pattern
+            full_pattern
                 .split('/')
                 .filter(|s| !s.is_empty())
                 .map(|s| {
+                    if s == "*" {
+                        return Segment::Wildcard;
+                    }
                     if let Some(name) = s.strip_prefix('*') {
                         return Segment::RestParam(name.to_string());
                     }
@@ -86,31 +142,57 @@ impl Route {
                 })
                 .collect()
         };
+        let own_params = pattern
+            .split('/')
+            .filter_map(|segment| {
+                segment
+                    .strip_prefix(':')
+                    .or_else(|| segment.strip_prefix('*'))
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+            })
+            .collect();
         Route {
+            id,
+            parent,
+            outlet_depth,
             pattern,
+            full_pattern,
             segments,
+            own_params,
             component_name,
             config,
         }
     }
 
-    fn is_wildcard(&self) -> bool {
-        matches!(self.segments.as_slice(), [Segment::Wildcard])
+    #[cfg(test)]
+    fn parse(
+        pattern: &'static str,
+        component_name: &'static str,
+        config: RouteRuntimeConfig,
+    ) -> Self {
+        Self::parse_root(RouteRecordId(0), pattern, component_name, config)
+    }
+
+    fn is_catch_all(&self) -> bool {
+        self.segments
+            .last()
+            .is_some_and(|segment| matches!(segment, Segment::Wildcard | Segment::RestParam(_)))
     }
 
     /// Try to match `path` against this route. Returns captured params
     /// on a successful match, `None` otherwise.
     fn match_path(&self, path: &str) -> Option<HashMap<String, String>> {
-        if self.is_wildcard() {
+        if matches!(self.segments.as_slice(), [Segment::Wildcard]) {
             return Some(HashMap::new());
         }
         let input: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let has_rest = self
+        let has_tail = self
             .segments
             .last()
-            .is_some_and(|segment| matches!(segment, Segment::RestParam(_)));
-        if (!has_rest && input.len() != self.segments.len())
-            || (has_rest && input.len() + 1 < self.segments.len())
+            .is_some_and(|segment| matches!(segment, Segment::RestParam(_) | Segment::Wildcard));
+        if (!has_tail && input.len() != self.segments.len())
+            || (has_tail && input.len() + 1 < self.segments.len())
         {
             return None;
         }
@@ -127,6 +209,8 @@ impl Route {
                     break;
                 }
                 Segment::RestParam(_) => return None,
+                Segment::Wildcard if idx + 1 == self.segments.len() => break,
+                Segment::Wildcard => return None,
                 _ if idx >= input.len() => return None,
                 Segment::Literal(s) if s == input[idx] => {}
                 Segment::Literal(_) => return None,
@@ -134,10 +218,27 @@ impl Route {
                     let got = input[idx];
                     params.insert(name.clone(), url_decode_path_segment(got));
                 }
-                Segment::Wildcard => {}
             }
         }
         Some(params)
+    }
+}
+
+fn join_route_pattern(parent: &str, child: &str) -> String {
+    if child.starts_with('/') {
+        return child.to_string();
+    }
+    if child.is_empty() {
+        return parent.to_string();
+    }
+    if parent == "/" {
+        format!("/{}", child.trim_start_matches('/'))
+    } else {
+        format!(
+            "{}/{}",
+            parent.trim_end_matches('/'),
+            child.trim_start_matches('/'),
+        )
     }
 }
 
@@ -151,12 +252,84 @@ pub(crate) struct RouteRuntimeConfig {
     pub(crate) prefetch: Prefetch,
 }
 
+/// One record in a normalized matched route chain.
+#[derive(Clone, Debug)]
+pub struct MatchedRoute {
+    pub record_id: RouteRecordId,
+    pub component_name: &'static str,
+    pub route_pattern: &'static str,
+    pub params: HashMap<String, String>,
+    pub outlet_depth: usize,
+}
+
+/// Parent-to-child route records matched for one location.
+#[derive(Clone, Debug, Default)]
+pub struct MatchedRouteChain(Vec<MatchedRoute>);
+
+impl MatchedRouteChain {
+    pub fn as_slice(&self) -> &[MatchedRoute] {
+        &self.0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &MatchedRoute> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn last(&self) -> Option<&MatchedRoute> {
+        self.0.last()
+    }
+}
+
+#[derive(Clone)]
+struct MatchedEntry {
+    route: MatchedRoute,
+    config: RouteRuntimeConfig,
+}
+
 #[derive(Clone)]
 struct RouteMatch {
-    component_name: &'static str,
-    route_pattern: Option<&'static str>,
+    entries: Vec<MatchedEntry>,
     params: HashMap<String, String>,
-    config: RouteRuntimeConfig,
+    meta: RouteMeta,
+    include_pattern: bool,
+}
+
+impl RouteMatch {
+    fn deepest(&self) -> &MatchedEntry {
+        self.entries
+            .last()
+            .expect("matched route chain is never empty")
+    }
+
+    fn component_name(&self) -> &'static str {
+        self.deepest().route.component_name
+    }
+
+    fn route_pattern(&self) -> Option<&'static str> {
+        self.include_pattern
+            .then_some(self.deepest().route.route_pattern)
+    }
+
+    fn config(&self) -> &RouteRuntimeConfig {
+        &self.deepest().config
+    }
+
+    fn chain(&self) -> MatchedRouteChain {
+        MatchedRouteChain(
+            self.entries
+                .iter()
+                .map(|entry| entry.route.clone())
+                .collect(),
+        )
+    }
 }
 
 // ─── synthetic `$route` scope ───────────────────────────────────────
@@ -203,7 +376,11 @@ fn map_to_object(map: &HashMap<String, String>) -> JsValue {
 
 thread_local! {
     static ROUTES: RefCell<Vec<Route>> = const { RefCell::new(Vec::new()) };
-    static OUTLET: RefCell<Option<Element>> = const { RefCell::new(None) };
+    static ROOT_OUTLET: RefCell<Option<Element>> = const { RefCell::new(None) };
+    static NESTED_OUTLETS: RefCell<Vec<OutletRegistration>> = const { RefCell::new(Vec::new()) };
+    static ROUTE_MOUNT_CONTEXT: RefCell<Option<RouteMountContext>> = const { RefCell::new(None) };
+    static ACTIVE_ROUTE_MOUNTS: RefCell<Vec<ActiveRouteMount>> = const { RefCell::new(Vec::new()) };
+    static ACTIVE_ROUTE_QUERY: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static ROUTE_SCOPE: OnceCell<Scope> = const { OnceCell::new() };
     static ROUTE_STATE_RC: OnceCell<Rc<RefCell<RouteState>>> =
         const { OnceCell::new() };
@@ -269,6 +446,26 @@ thread_local! {
     static BASE_DOCUMENT_TITLE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+#[derive(Clone)]
+struct OutletRegistration {
+    element: Element,
+    parent_scope: ScopeId,
+    depth: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RouteMountContext {
+    depth: usize,
+}
+
+#[derive(Clone)]
+struct ActiveRouteMount {
+    record_id: RouteRecordId,
+    params: HashMap<String, String>,
+    host: Element,
+    scope_id: Option<ScopeId>,
+}
+
 /// Normalized location returned by programmatic navigation.
 #[derive(Clone, Debug)]
 pub struct RouteLocation {
@@ -280,6 +477,7 @@ pub struct RouteLocation {
     pub route_pattern: Option<&'static str>,
     pub component: Option<&'static str>,
     pub meta: RouteMeta,
+    pub matched: MatchedRouteChain,
 }
 
 /// Why a programmatic navigation could not be accepted.
@@ -414,11 +612,6 @@ fn clear_active_loader_abort(token: RouteToken) {
 /// is overwritten if a previous result was never consumed (e.g.
 /// mount aborted before setup ran); the per-scope `LOADER_SLOTS`
 /// entries are independent and live until each scope's teardown.
-pub(crate) fn put_pending_loader_data(data: Box<dyn std::any::Any>) {
-    let rc: Rc<dyn std::any::Any> = Rc::from(data);
-    put_pending_loader_rc(rc);
-}
-
 fn put_pending_loader_rc(data: Rc<dyn std::any::Any>) {
     PENDING_LOADER_DATA.with(|cell| *cell.borrow_mut() = Some(data));
 }
@@ -573,19 +766,95 @@ pub(crate) fn release_loader_slot(scope_id: ScopeId) {
 
 /// Register a route. Called from `App::route::<C>(pattern)`.
 pub fn register_route(pattern: &'static str, component_name: &'static str) {
-    register_route_with_config(pattern, component_name, RouteRuntimeConfig::default());
+    let _ = register_route_with_config(pattern, component_name, RouteRuntimeConfig::default());
 }
 
 pub(crate) fn register_route_with_config(
     pattern: &'static str,
     component_name: &'static str,
     config: RouteRuntimeConfig,
-) {
+) -> RouteRecordId {
     clear_prefetch_state();
-    ROUTES.with(|r| {
-        let route = Route::parse(pattern, component_name, config);
-        r.borrow_mut().push(route);
-    });
+    ROUTES.with(|routes| {
+        validate_root_pattern(pattern);
+        let mut routes = routes.borrow_mut();
+        let id = RouteRecordId(routes.len());
+        let route = Route::parse_root(id, pattern, component_name, config);
+        validate_record(&routes, &route);
+        routes.push(route);
+        id
+    })
+}
+
+pub(crate) fn register_child_route_with_config(
+    parent: RouteRecordId,
+    pattern: &'static str,
+    component_name: &'static str,
+    config: RouteRuntimeConfig,
+) -> RouteRecordId {
+    clear_prefetch_state();
+    ROUTES.with(|routes| {
+        let mut routes = routes.borrow_mut();
+        let parent_route = routes
+            .get(parent.0)
+            .unwrap_or_else(|| panic!("pocopine router: unknown parent route id {}", parent.0))
+            .clone();
+        let id = RouteRecordId(routes.len());
+        let route = Route::parse_child(id, &parent_route, pattern, component_name, config);
+        validate_record(&routes, &route);
+        routes.push(route);
+        id
+    })
+}
+
+fn validate_root_pattern(pattern: &str) {
+    if pattern != "*" && !pattern.starts_with('/') {
+        panic!("pocopine router: root route pattern `{pattern}` must start with `/` or be `*`");
+    }
+}
+
+fn validate_record(routes: &[Route], route: &Route) {
+    if route.full_pattern == "/_pocopine" || route.full_pattern.starts_with("/_pocopine/") {
+        panic!(
+            "pocopine router: route pattern `{}` uses the reserved `/_pocopine` namespace",
+            route.full_pattern,
+        );
+    }
+    for (index, segment) in route.segments.iter().enumerate() {
+        if matches!(segment, Segment::Wildcard | Segment::RestParam(_))
+            && index + 1 != route.segments.len()
+        {
+            panic!(
+                "pocopine router: wildcard/rest segment in `{}` must be last",
+                route.full_pattern,
+            );
+        }
+    }
+    if routes
+        .iter()
+        .any(|sibling| sibling.parent == route.parent && sibling.is_catch_all())
+    {
+        panic!(
+            "pocopine router: route `{}` appears after a wildcard child; wildcard routes must be last among siblings",
+            route.pattern,
+        );
+    }
+
+    let mut ancestor_params = std::collections::HashSet::new();
+    let mut parent = route.parent;
+    while let Some(parent_id) = parent {
+        let ancestor = &routes[parent_id.0];
+        ancestor_params.extend(ancestor.own_params.iter().cloned());
+        parent = ancestor.parent;
+    }
+    for param in &route.own_params {
+        if !ancestor_params.insert(param.clone()) {
+            panic!(
+                "pocopine router: duplicate route param `{param}` in nested pattern `{}`",
+                route.full_pattern,
+            );
+        }
+    }
 }
 
 pub(crate) fn set_route_rejection_handlers(handlers: Vec<Rc<dyn RouteRejectionHandler>>) {
@@ -608,10 +877,96 @@ pub(crate) fn set_not_found_component(name: Option<&'static str>) {
     NOT_FOUND_COMPONENT.with(|cell| cell.set(name));
 }
 
-/// Tell the router where to mount pages. Called from the mount when
-/// it sees `<pp-outlet>`.
+/// Tell the router where to mount the depth-0 route. Calls made while a
+/// route component itself is mounting are handled by [`register_outlet`]
+/// instead and never replace this root.
 pub fn set_outlet(el: Element) {
-    OUTLET.with(|o| *o.borrow_mut() = Some(el));
+    let previous = ROOT_OUTLET.with(|root| {
+        let mut root = root.borrow_mut();
+        let changed = root
+            .as_ref()
+            .is_some_and(|current| !same_element(current, &el));
+        let previous = changed.then(|| root.take()).flatten();
+        *root = Some(el);
+        previous
+    });
+    if let Some(previous) = previous {
+        ACTIVE_ROUTE_MOUNTS.with(|active| active.borrow_mut().clear());
+        ACTIVE_ROUTE_QUERY.with(|query| query.borrow_mut().clear());
+        NESTED_OUTLETS.with(|outlets| outlets.borrow_mut().clear());
+        crate::dynamic_component::clear(&previous);
+    }
+}
+
+/// Register a compiled `<pp-outlet>` sentinel. Outside a route mount this is
+/// the app root outlet; during a route mount it belongs to the mounting
+/// component's scope at the next depth.
+pub(crate) fn register_outlet(el: Element) {
+    let context = ROUTE_MOUNT_CONTEXT.with(|context| *context.borrow());
+    let Some(context) = context else {
+        set_outlet(el);
+        return;
+    };
+    let Some(parent_scope) = mount::enclosing_scope_id(&el) else {
+        web_sys::console::error_1(&JsValue::from_str(
+            "pocopine router: nested <pp-outlet> has no owning route scope",
+        ));
+        return;
+    };
+    let depth = context.depth + 1;
+    NESTED_OUTLETS.with(|outlets| {
+        let mut outlets = outlets.borrow_mut();
+        outlets.retain(|entry| {
+            !(same_element(&entry.element, &el)
+                || (entry.parent_scope == parent_scope && entry.depth == depth))
+        });
+        outlets.push(OutletRegistration {
+            element: el,
+            parent_scope,
+            depth,
+        });
+    });
+}
+
+pub(crate) fn release_outlet(el: &Element) {
+    NESTED_OUTLETS.with(|outlets| {
+        outlets
+            .borrow_mut()
+            .retain(|entry| !same_element(&entry.element, el));
+    });
+    let released_root = ROOT_OUTLET.with(|root| {
+        let should_clear = root
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| same_element(current, el));
+        if should_clear {
+            root.borrow_mut().take();
+        }
+        should_clear
+    });
+    if released_root {
+        ACTIVE_ROUTE_MOUNTS.with(|active| active.borrow_mut().clear());
+        ACTIVE_ROUTE_QUERY.with(|query| query.borrow_mut().clear());
+        NESTED_OUTLETS.with(|outlets| outlets.borrow_mut().clear());
+        return;
+    }
+
+    ACTIVE_ROUTE_MOUNTS.with(|active| {
+        let mut active = active.borrow_mut();
+        if let Some(index) = active
+            .iter()
+            .position(|mounted| same_element(&mounted.host, el))
+        {
+            active.truncate(index);
+        }
+        if active.is_empty() {
+            ACTIVE_ROUTE_QUERY.with(|query| query.borrow_mut().clear());
+        }
+    });
+}
+
+fn same_element(left: &Element, right: &Element) -> bool {
+    left.is_same_node(Some(right.unchecked_ref::<Node>()))
 }
 
 /// Navigate to `url`. Pushes a history entry and paints the matched
@@ -711,10 +1066,10 @@ pub fn prefetch(target: impl IntoRouteTarget) -> PrefetchResult {
             }
         }
     }
-    if !matched.config.prefetch.includes_loader() {
+    if !matched.config().prefetch.includes_loader() {
         return PrefetchResult::Skipped(PrefetchSkip::LoaderDisabled);
     }
-    let Some(loader) = matched.config.loader.clone() else {
+    let Some(loader) = matched.config().loader.clone() else {
         return PrefetchResult::Skipped(PrefetchSkip::NoLoader);
     };
     let key = loader_cache_key_from_url(target.as_str());
@@ -766,7 +1121,7 @@ pub(crate) fn target_for_name(
             found = Some(Err(RouteTargetError::DuplicateRouteName(name.as_str())));
             return;
         }
-        if route.is_wildcard() {
+        if route.is_catch_all() {
             found = Some(Err(RouteTargetError::UnbuildablePattern(route.pattern)));
             return;
         }
@@ -828,8 +1183,9 @@ fn location_for_url(url: &str) -> RouteLocation {
     let matched = match_route(&path, true);
     let meta = matched
         .as_ref()
-        .map(|m| m.config.meta.clone())
+        .map(|matched| matched.meta.clone())
         .unwrap_or_default();
+    let chain = matched.as_ref().map(RouteMatch::chain).unwrap_or_default();
     RouteLocation {
         full_path: full_path_from_parts(&path, &search, hash.as_deref()),
         path,
@@ -837,11 +1193,12 @@ fn location_for_url(url: &str) -> RouteLocation {
         hash,
         params: matched
             .as_ref()
-            .map(|m| m.params.clone())
+            .map(|matched| matched.params.clone())
             .unwrap_or_default(),
-        route_pattern: matched.as_ref().and_then(|m| m.route_pattern),
-        component: matched.as_ref().map(|m| m.component_name),
+        route_pattern: matched.as_ref().and_then(RouteMatch::route_pattern),
+        component: matched.as_ref().map(RouteMatch::component_name),
         meta,
+        matched: chain,
     }
 }
 
@@ -1051,10 +1408,10 @@ pub fn reevaluate_current() {
 }
 
 fn clear_outlet() {
-    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
-        return;
-    };
-    outlet.set_inner_html("");
+    clear_active_route_mounts(0);
+    if let Some(outlet) = ROOT_OUTLET.with(|outlet| outlet.borrow().clone()) {
+        crate::dynamic_component::clear_immediate(&outlet);
+    }
 }
 
 fn mount_current() -> Option<NavigationFailure> {
@@ -1099,9 +1456,9 @@ fn mount_current() -> Option<NavigationFailure> {
     let search = loc.search().unwrap_or_default();
 
     // Match.
-    let matched = match_route(&path, has_route_hooks);
-    let component_name = matched.as_ref().map(|m| m.component_name);
-    let route_pattern = matched.as_ref().and_then(|m| m.route_pattern);
+    let matched = match_route(&path, true);
+    let component_name = matched.as_ref().map(RouteMatch::component_name);
+    let route_pattern = matched.as_ref().and_then(RouteMatch::route_pattern);
     let params = matched
         .as_ref()
         .map(|m| m.params.clone())
@@ -1126,7 +1483,7 @@ fn mount_current() -> Option<NavigationFailure> {
                         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                             path: path.clone(),
                             route_pattern,
-                            component: Some(matched.component_name),
+                            component: Some(matched.component_name()),
                             reason: "guard_pending",
                             duration_ms: elapsed_since(start_ms),
                         });
@@ -1140,7 +1497,7 @@ fn mount_current() -> Option<NavigationFailure> {
                         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                             path: path.clone(),
                             route_pattern,
-                            component: Some(matched.component_name),
+                            component: Some(matched.component_name()),
                             reason: "guard_redirected",
                             duration_ms: elapsed_since(start_ms),
                         });
@@ -1170,101 +1527,99 @@ fn mount_current() -> Option<NavigationFailure> {
             }
         }
 
-        // Guards passed (or there are no guards). If a loader is
-        // registered for this route, defer the rest of the mount
-        // until the loader resolves; the loader path runs through
-        // `spawn_local` so the synchronous fast path is still
-        // available for routes without loaders.
-        if let Some(loader) = matched.config.loader.clone() {
-            let loader_key = route_navigation_key(&path, &search);
-            cancel_prefetch(&loader_key);
-            if let Some(data) = take_prefetched_loader_data(&loader_key) {
-                put_pending_loader_rc(data);
-                update_route_state(&path, &params, query);
-                return finish_route_mount(
-                    Some(matched.component_name),
-                    route_pattern,
-                    &path,
-                    &params,
-                    matched.config.page_meta.clone(),
-                    has_route_hooks,
-                    start_ms,
-                );
-            }
+        let preserved_prefix = preserved_prefix_len(matched, &query);
+        let loader_key = route_navigation_key(&path, &search);
+        cancel_prefetch(&loader_key);
+        let mut loader_data: HashMap<RouteRecordId, Rc<dyn std::any::Any>> = HashMap::new();
+        if let Some(data) = take_prefetched_loader_data(&loader_key) {
+            loader_data.insert(matched.deepest().route.record_id, data);
+        }
+        let has_loader = matched.entries.iter().skip(preserved_prefix).any(|entry| {
+            entry.config.loader.is_some() && !loader_data.contains_key(&entry.route.record_id)
+        });
+        if has_loader {
             let abort_signal = begin_loader_abort(nav_token);
-            let loader_ctx = LoaderContext {
-                path: path.clone(),
-                params: params.clone(),
-                query: query.clone(),
-                matched_pattern: route_pattern,
-                navigation_token: nav_token,
-                abort_signal,
-            };
             update_route_state(&path, &params, query.clone());
             let matched_for_async = matched.clone();
             let path_for_async = path.clone();
-            let params_for_async = params.clone();
             let query_for_async = query.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let result = loader.run(loader_ctx).await;
-                if !is_token_current(nav_token) {
-                    // Navigation moved on while the loader was in
-                    // flight. Drop the result rather than paint
-                    // stale data over whatever the new navigation
-                    // mounted; emitting a `RouteNavigationFailed`
-                    // event would be misleading because the new
-                    // navigation is healthy and already running.
-                    clear_pending_loader_data();
-                    return;
+                let mut loader_data = loader_data;
+                for entry in matched_for_async.entries.iter().skip(preserved_prefix) {
+                    if loader_data.contains_key(&entry.route.record_id) {
+                        continue;
+                    }
+                    let Some(loader) = entry.config.loader.clone() else {
+                        continue;
+                    };
+                    let loader_ctx = LoaderContext {
+                        path: path_for_async.clone(),
+                        params: entry.route.params.clone(),
+                        query: query_for_async.clone(),
+                        matched_pattern: Some(entry.route.route_pattern),
+                        navigation_token: nav_token,
+                        abort_signal: abort_signal.clone(),
+                    };
+                    let result = loader.run(loader_ctx).await;
+                    if !is_token_current(nav_token) {
+                        clear_pending_loader_data();
+                        return;
+                    }
+                    match result {
+                        Ok(data) => {
+                            loader_data.insert(entry.route.record_id, Rc::from(data));
+                        }
+                        Err(err) => {
+                            clear_active_loader_abort(nav_token);
+                            let rejection = err.to_rejection();
+                            clear_pending_loader_data();
+                            dispatch_route_rejection(
+                                &matched_for_async,
+                                &path_for_async,
+                                &query_for_async,
+                                route_pattern,
+                                &rejection,
+                                RejectionSource::Loader,
+                                has_route_hooks,
+                                start_ms,
+                            );
+                            return;
+                        }
+                    }
                 }
                 clear_active_loader_abort(nav_token);
-                match result {
-                    Ok(data) => {
-                        put_pending_loader_data(data);
-                        finish_route_mount(
-                            Some(matched_for_async.component_name),
-                            route_pattern,
-                            &path_for_async,
-                            &params_for_async,
-                            matched_for_async.config.page_meta.clone(),
-                            has_route_hooks,
-                            start_ms,
-                        );
-                    }
-                    Err(err) => {
-                        // Loader-produced rejection: dispatch through
-                        // the same chain guard rejections use so a
-                        // single auth handler covers both surfaces.
-                        // The rejection itself is identical, but the
-                        // `RouteNavigationFailed` event carries a
-                        // loader-side reason ("loader_unauthorized"
-                        // etc.) so observability can split the two.
-                        let rejection = err.to_rejection();
-                        clear_pending_loader_data();
-                        dispatch_route_rejection(
-                            &matched_for_async,
-                            &path_for_async,
-                            &query_for_async,
-                            route_pattern,
-                            &rejection,
-                            RejectionSource::Loader,
-                            has_route_hooks,
-                            start_ms,
-                        );
-                    }
-                }
+                let _ = finish_route_mount(
+                    Some(&matched_for_async),
+                    preserved_prefix,
+                    &path_for_async,
+                    &query_for_async,
+                    &loader_data,
+                    has_route_hooks,
+                    start_ms,
+                );
             });
             return None;
         }
+
+        update_route_state(&path, &params, query.clone());
+        return finish_route_mount(
+            Some(matched),
+            preserved_prefix,
+            &path,
+            &query,
+            &loader_data,
+            has_route_hooks,
+            start_ms,
+        );
     }
 
-    update_route_state(&path, &params, query);
+    update_route_state(&path, &params, query.clone());
     finish_route_mount(
-        component_name,
-        route_pattern,
+        None,
+        0,
         &path,
-        &params,
-        matched.as_ref().and_then(|m| m.config.page_meta.clone()),
+        &query,
+        &HashMap::new(),
         has_route_hooks,
         start_ms,
     )
@@ -1296,11 +1651,11 @@ fn update_route_state(
 /// resolves successfully). Paints the matched component into the
 /// outlet.
 fn finish_route_mount(
-    component_name: Option<&'static str>,
-    route_pattern: Option<&'static str>,
+    matched: Option<&RouteMatch>,
+    preserved_prefix: usize,
     path: &str,
-    params: &HashMap<String, String>,
-    page_meta: Option<PageMetaFactory>,
+    query: &HashMap<String, String>,
+    loader_data: &HashMap<RouteRecordId, Rc<dyn std::any::Any>>,
     has_route_hooks: bool,
     start_ms: Option<f64>,
 ) -> Option<NavigationFailure> {
@@ -1310,14 +1665,18 @@ fn finish_route_mount(
     // when there's no matching component (404). The router panel
     // uses this to build its recent-history view.
     #[cfg(feature = "devtools")]
-    crate::devtools::hooks::fire_route_change(path, params);
+    {
+        let empty = HashMap::new();
+        let params = matched.map(|matched| &matched.params).unwrap_or(&empty);
+        crate::devtools::hooks::fire_route_change(path, params);
+    }
 
-    let Some(name) = component_name else {
+    let Some(matched) = matched else {
+        clear_active_route_mounts(0);
         // No registered route matched. If the app configured a
         // dedicated 404 component (the lower-friction alternative
         // to a `*` wildcard route), mount it here. Otherwise the
-        // outlet is left in its prior state — guards / loader
-        // never ran because the route doesn't exist.
+        // now-unmatched route subtree stays cleared.
         if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get())
             && mount_component_into_outlet(fallback)
             && has_route_hooks
@@ -1335,21 +1694,16 @@ fn finish_route_mount(
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                 path: path.to_string(),
-                route_pattern,
+                route_pattern: None,
                 component: None,
                 duration_ms: elapsed_since(start_ms),
             });
         }
         return None;
     };
-
-    let Some(win) = web_sys::window() else {
-        return Some(NavigationFailure::MissingWindow);
-    };
-    // Paint into the outlet. `replace_children` removes the previous
-    // page's subtree, which the MutationObserver turns into effect +
-    // scope cleanup via `mount::release_subtree`.
-    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
+    let name = matched.component_name();
+    let route_pattern = matched.route_pattern();
+    if ROOT_OUTLET.with(|outlet| outlet.borrow().is_none()) {
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                 path: path.to_string(),
@@ -1362,75 +1716,23 @@ fn finish_route_mount(
         clear_pending_loader_data();
         apply_page_meta(None);
         return Some(NavigationFailure::MountFailed("missing_outlet"));
-    };
-    let Some(doc) = win.document() else {
+    }
+
+    if let Err(reason) = mount_route_chain(matched, preserved_prefix, query, loader_data) {
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                 path: path.to_string(),
                 route_pattern,
                 component: Some(name),
-                reason: "missing_document",
+                reason,
                 duration_ms: elapsed_since(start_ms),
             });
         }
         clear_pending_loader_data();
         apply_page_meta(None);
-        return Some(NavigationFailure::MountFailed("missing_document"));
-    };
-
-    // Build `<name key="value" ...>`; the mount handles the mount.
-    let el = match doc.create_element(name) {
-        Ok(e) => e,
-        Err(_) => {
-            if has_route_hooks {
-                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                    path: path.to_string(),
-                    route_pattern,
-                    component: Some(name),
-                    reason: "create_element_failed",
-                    duration_ms: elapsed_since(start_ms),
-                });
-            }
-            clear_pending_loader_data();
-            apply_page_meta(None);
-            return Some(NavigationFailure::MountFailed("create_element_failed"));
-        }
-    };
-    for (k, v) in params {
-        let _ = el.set_attribute(k, v);
+        return Some(NavigationFailure::MountFailed(reason));
     }
-    outlet.replace_children_with_node_1(el.as_ref());
-    // RFC-058 Phase 6.5 — drive the route component's mount through
-    // the compiled-only entry. The mount's recursive directive
-    // scan is gone; route components must be `#[component]` types
-    // so their template plan installs every binding/listener via
-    // the macro-emitted entries.
-    mount::mount_child_component(&el, name);
-    mount::finalize_compiled_subtree(&el);
-    // Route enter transition (RFC-005): copy the outlet's `pp-transition*`
-    // config onto the freshly-mounted page root and play the enter sequence,
-    // so the incoming page animates in. Applied to `el` (fresh each nav) and
-    // copied after mount so the walker doesn't consume the attrs. A no-op
-    // when the outlet declares no transition — apps swap instantly as before.
-    for attr in [
-        // RFC-038 preset shorthand (`pp-transition="fade"` / `:in` / `:out`)…
-        "pp-transition",
-        "pp-transition:in",
-        "pp-transition:out",
-        // …or the explicit six-class form.
-        "pp-transition:enter",
-        "pp-transition:enter-start",
-        "pp-transition:enter-end",
-        "pp-transition:leave",
-        "pp-transition:leave-start",
-        "pp-transition:leave-end",
-    ] {
-        if let Some(v) = outlet.get_attribute(attr) {
-            let _ = el.set_attribute(attr, &v);
-        }
-    }
-    crate::directives::transition::enter(&el, || {});
-    apply_page_meta(page_meta);
+    apply_page_meta(matched.config().page_meta.clone());
 
     // The component's `Loader<T>` extractor (if any) consumed the
     // pending slot during setup; for routes without a loader the
@@ -1448,6 +1750,124 @@ fn finish_route_mount(
         });
     }
     None
+}
+
+fn preserved_prefix_len(matched: &RouteMatch, query: &HashMap<String, String>) -> usize {
+    let active = ACTIVE_ROUTE_MOUNTS.with(|active| active.borrow().clone());
+    let mut prefix = active
+        .iter()
+        .zip(matched.entries.iter())
+        .take_while(|(active, entry)| {
+            active.record_id == entry.route.record_id && active.params == entry.route.params
+        })
+        .count();
+    let query_changed = ACTIVE_ROUTE_QUERY.with(|active| *active.borrow() != *query);
+    if query_changed && prefix > 0 {
+        prefix = prefix.min(matched.entries.len().saturating_sub(1));
+    }
+    prefix
+}
+
+fn mount_route_chain(
+    matched: &RouteMatch,
+    preserved_prefix: usize,
+    query: &HashMap<String, String>,
+    loader_data: &HashMap<RouteRecordId, Rc<dyn std::any::Any>>,
+) -> Result<(), &'static str> {
+    let prefix = preserved_prefix.min(matched.entries.len());
+    clear_active_route_mounts(prefix);
+
+    for entry in matched.entries.iter().skip(prefix) {
+        let host = if entry.route.outlet_depth == 0 {
+            ROOT_OUTLET.with(|outlet| outlet.borrow().clone())
+        } else {
+            let parent_scope = ACTIVE_ROUTE_MOUNTS
+                .with(|active| active.borrow().last().and_then(|active| active.scope_id));
+            parent_scope
+                .and_then(|parent_scope| find_nested_outlet(parent_scope, entry.route.outlet_depth))
+        };
+        let Some(host) = host else {
+            clear_active_route_mounts(prefix);
+            return Err(if entry.route.outlet_depth == 0 {
+                "missing_outlet"
+            } else if ACTIVE_ROUTE_MOUNTS.with(|active| {
+                active
+                    .borrow()
+                    .last()
+                    .and_then(|active| active.scope_id)
+                    .is_none()
+            }) {
+                "missing_parent_scope"
+            } else {
+                "missing_nested_outlet"
+            });
+        };
+
+        if let Some(data) = loader_data.get(&entry.route.record_id) {
+            put_pending_loader_rc(data.clone());
+        }
+        let props: HashMap<String, JsValue> = entry
+            .route
+            .params
+            .iter()
+            .map(|(key, value)| (key.clone(), JsValue::from_str(value)))
+            .collect();
+        let previous = ROUTE_MOUNT_CONTEXT.with(|context| {
+            context.replace(Some(RouteMountContext {
+                depth: entry.route.outlet_depth,
+            }))
+        });
+        let mounted =
+            crate::dynamic_component::render(&host, Some(entry.route.component_name), &props);
+        ROUTE_MOUNT_CONTEXT.with(|context| {
+            context.replace(previous);
+        });
+        clear_pending_loader_data();
+        let Some(mounted) = mounted else {
+            clear_active_route_mounts(prefix);
+            return Err("component_not_registered");
+        };
+        ACTIVE_ROUTE_MOUNTS.with(|active| {
+            active.borrow_mut().push(ActiveRouteMount {
+                record_id: entry.route.record_id,
+                params: entry.route.params.clone(),
+                host,
+                scope_id: mounted.scope_id,
+            });
+        });
+    }
+    ACTIVE_ROUTE_QUERY.with(|active| {
+        *active.borrow_mut() = query.clone();
+    });
+    Ok(())
+}
+
+fn find_nested_outlet(parent_scope: ScopeId, depth: usize) -> Option<Element> {
+    NESTED_OUTLETS.with(|outlets| {
+        outlets
+            .borrow()
+            .iter()
+            .rev()
+            .find(|entry| entry.parent_scope == parent_scope && entry.depth == depth)
+            .map(|entry| entry.element.clone())
+    })
+}
+
+fn clear_active_route_mounts(prefix: usize) {
+    let removed = ACTIVE_ROUTE_MOUNTS.with(|active| {
+        let mut active = active.borrow_mut();
+        if prefix >= active.len() {
+            Vec::new()
+        } else {
+            active.split_off(prefix)
+        }
+    });
+    for active in removed.into_iter().rev() {
+        crate::dynamic_component::clear(&active.host);
+    }
+    if prefix == 0 {
+        ACTIVE_ROUTE_QUERY.with(|query| query.borrow_mut().clear());
+    }
 }
 
 fn apply_page_meta(factory: Option<PageMetaFactory>) {
@@ -1581,7 +2001,7 @@ fn dispatch_route_rejection(
         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
             path: path.to_string(),
             route_pattern,
-            component: Some(matched.component_name),
+            component: Some(matched.component_name()),
             reason: rejection.reason(source),
             duration_ms: elapsed_since(start_ms),
         });
@@ -1604,33 +2024,80 @@ fn dispatch_route_rejection(
     }
 }
 
-/// Find the first matching route's component name + params.
+/// Find the first matching route tree, then reconstruct its parent-to-child
+/// chain. Registration order remains authoritative between unrelated records,
+/// catch-alls remain fallbacks, and a matching descendant outranks its own
+/// layout parent (which is how an index child wins at the same URL).
 fn match_route(path: &str, include_pattern: bool) -> Option<RouteMatch> {
     ROUTES.with(|r| {
         let routes = r.borrow();
-        // Specific routes first; wildcards as a fallback.
-        for route in routes.iter().filter(|r| !r.is_wildcard()) {
-            if let Some(params) = route.match_path(path) {
-                return Some(RouteMatch {
-                    component_name: route.component_name,
-                    route_pattern: include_pattern.then_some(route.pattern),
-                    params,
-                    config: route.config.clone(),
-                });
+        let mut best: Option<(&Route, HashMap<String, String>)> = None;
+        for route in routes.iter() {
+            let Some(params) = route.match_path(path) else {
+                continue;
+            };
+            let replace = match best.as_ref() {
+                None => true,
+                Some((current, _)) => {
+                    is_descendant_of(&routes, route.id, current.id)
+                        || (current.is_catch_all() && !route.is_catch_all())
+                }
+            };
+            if replace {
+                best = Some((route, params));
             }
         }
-        for route in routes.iter().filter(|r| r.is_wildcard()) {
-            if let Some(params) = route.match_path(path) {
-                return Some(RouteMatch {
-                    component_name: route.component_name,
-                    route_pattern: include_pattern.then_some(route.pattern),
-                    params,
-                    config: route.config.clone(),
-                });
-            }
+        let (deepest, captured) = best?;
+
+        let mut ids = Vec::new();
+        let mut current = Some(deepest.id);
+        while let Some(id) = current {
+            let route = &routes[id.0];
+            ids.push(id);
+            current = route.parent;
         }
-        None
+        ids.reverse();
+
+        let mut merged_params = HashMap::new();
+        let mut merged_meta = RouteMeta::new();
+        let mut entries = Vec::with_capacity(ids.len());
+        for id in ids {
+            let route = &routes[id.0];
+            for param in &route.own_params {
+                if let Some(value) = captured.get(param) {
+                    merged_params.insert(param.clone(), value.clone());
+                }
+            }
+            merged_meta.merge_from(&route.config.meta);
+            entries.push(MatchedEntry {
+                route: MatchedRoute {
+                    record_id: route.id,
+                    component_name: route.component_name,
+                    route_pattern: route.pattern,
+                    params: merged_params.clone(),
+                    outlet_depth: route.outlet_depth,
+                },
+                config: route.config.clone(),
+            });
+        }
+        Some(RouteMatch {
+            entries,
+            params: merged_params,
+            meta: merged_meta,
+            include_pattern,
+        })
     })
+}
+
+fn is_descendant_of(routes: &[Route], candidate: RouteRecordId, ancestor: RouteRecordId) -> bool {
+    let mut parent = routes[candidate.0].parent;
+    while let Some(parent_id) = parent {
+        if parent_id == ancestor {
+            return true;
+        }
+        parent = routes[parent_id.0].parent;
+    }
+    false
 }
 
 fn evaluate_guards(
@@ -1638,19 +2105,25 @@ fn evaluate_guards(
     path: &str,
     query: &HashMap<String, String>,
 ) -> Option<RouteGuardDecision> {
-    if matched.config.guards.is_empty() {
+    if matched
+        .entries
+        .iter()
+        .all(|entry| entry.config.guards.is_empty())
+    {
         return None;
     }
-    let ctx = RouteContext {
-        path,
-        params: &matched.params,
-        query,
-        matched_pattern: matched.route_pattern,
-    };
-    for guard in &matched.config.guards {
-        match guard.decide(&ctx) {
-            RouteGuardDecision::Allow => {}
-            other => return Some(other),
+    for entry in &matched.entries {
+        let ctx = RouteContext {
+            path,
+            params: &entry.route.params,
+            query,
+            matched_pattern: matched.include_pattern.then_some(entry.route.route_pattern),
+        };
+        for guard in &entry.config.guards {
+            match guard.decide(&ctx) {
+                RouteGuardDecision::Allow => {}
+                other => return Some(other),
+            }
         }
     }
     Some(RouteGuardDecision::Allow)
@@ -1718,7 +2191,7 @@ fn handle_route_rejection(
         path,
         params: &matched.params,
         query,
-        matched_pattern: matched.route_pattern,
+        matched_pattern: matched.route_pattern(),
     };
     ROUTE_REJECTION_HANDLERS.with(|registered| {
         for handler in registered.borrow().iter() {
@@ -1750,7 +2223,7 @@ fn paint_route_error_surface(surface: &RouteErrorSurface) {
 fn paint_default_route_error_surface(surface: &RouteErrorSurface) {
     let Some(win) = web_sys::window() else { return };
     let Some(doc) = win.document() else { return };
-    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
+    let Some(outlet) = ROOT_OUTLET.with(|outlet| outlet.borrow().clone()) else {
         return;
     };
     let Ok(root) = doc.create_element("div") else {
@@ -1778,6 +2251,8 @@ fn paint_default_route_error_surface(surface: &RouteErrorSurface) {
     message.set_text_content(Some(surface.message));
     let _ = root.append_child(&title);
     let _ = root.append_child(&message);
+    clear_active_route_mounts(0);
+    crate::dynamic_component::clear_immediate(&outlet);
     outlet.replace_children_with_node_1(root.as_ref());
 }
 
@@ -1787,22 +2262,11 @@ fn paint_default_route_error_surface(surface: &RouteErrorSurface) {
 /// available or the element couldn't be created — the caller
 /// should fall back to whatever its non-override path is.
 fn mount_component_into_outlet(name: &'static str) -> bool {
-    let Some(win) = web_sys::window() else {
+    let Some(outlet) = ROOT_OUTLET.with(|outlet| outlet.borrow().clone()) else {
         return false;
     };
-    let Some(doc) = win.document() else {
-        return false;
-    };
-    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
-        return false;
-    };
-    let Ok(el) = doc.create_element(name) else {
-        return false;
-    };
-    outlet.replace_children_with_node_1(el.as_ref());
-    mount::mount_child_component(&el, name);
-    mount::finalize_compiled_subtree(&el);
-    true
+    clear_active_route_mounts(0);
+    crate::dynamic_component::render(&outlet, Some(name), &HashMap::new()).is_some()
 }
 
 fn elapsed_since(start_ms: Option<f64>) -> f64 {
@@ -1855,6 +2319,11 @@ mod tests {
 
     fn reset_router_for_test() {
         ROUTES.with(|routes| routes.borrow_mut().clear());
+        ROOT_OUTLET.with(|outlet| outlet.borrow_mut().take());
+        NESTED_OUTLETS.with(|outlets| outlets.borrow_mut().clear());
+        ROUTE_MOUNT_CONTEXT.with(|context| context.borrow_mut().take());
+        ACTIVE_ROUTE_MOUNTS.with(|active| active.borrow_mut().clear());
+        ACTIVE_ROUTE_QUERY.with(|query| query.borrow_mut().clear());
         ROUTE_REJECTION_HANDLERS.with(|handlers| handlers.borrow_mut().clear());
         PENDING_LOADER_DATA.with(|slot| slot.borrow_mut().take());
         LOADER_SLOTS.with(|slots| slots.borrow_mut().clear());
@@ -1863,6 +2332,29 @@ mod tests {
         ROUTE_TOKEN.with(|token| token.set(0));
         PREFETCH_TOKEN.with(|token| token.set(0));
         BASE_DOCUMENT_TITLE.with(|title| title.borrow_mut().take());
+    }
+
+    fn single_match(
+        component_name: &'static str,
+        route_pattern: &'static str,
+        params: HashMap<String, String>,
+        config: RouteRuntimeConfig,
+    ) -> RouteMatch {
+        RouteMatch {
+            entries: vec![MatchedEntry {
+                route: MatchedRoute {
+                    record_id: RouteRecordId(0),
+                    component_name,
+                    route_pattern,
+                    params: params.clone(),
+                    outlet_depth: 0,
+                },
+                config: config.clone(),
+            }],
+            params,
+            meta: config.meta,
+            include_pattern: true,
+        }
     }
 
     #[test]
@@ -1921,6 +2413,144 @@ mod tests {
         let r = Route::parse("*", "not-found", RouteRuntimeConfig::default());
         assert!(r.match_path("/").is_some());
         assert!(r.match_path("/nope/anywhere").is_some());
+    }
+
+    #[test]
+    fn nested_route_matches_parent_to_child_chain_and_merges_params() {
+        reset_router_for_test();
+        let parent = register_route_with_config(
+            "/teams/:team_id",
+            "team-layout",
+            RouteRuntimeConfig::default(),
+        );
+        let child = register_child_route_with_config(
+            parent,
+            "members/:member_id",
+            "team-member",
+            RouteRuntimeConfig::default(),
+        );
+
+        let matched = match_route("/teams/acme/members/user%2042", true).unwrap();
+        assert_eq!(matched.entries.len(), 2);
+        assert_eq!(matched.entries[0].route.record_id, parent);
+        assert_eq!(matched.entries[1].route.record_id, child);
+        assert_eq!(matched.entries[0].route.outlet_depth, 0);
+        assert_eq!(matched.entries[1].route.outlet_depth, 1);
+        assert_eq!(
+            matched.entries[0].route.params.get("team_id"),
+            Some(&"acme".to_string()),
+        );
+        assert_eq!(
+            matched.entries[1].route.params.get("member_id"),
+            Some(&"user 42".to_string()),
+        );
+        assert_eq!(matched.component_name(), "team-member");
+    }
+
+    #[test]
+    fn nested_index_child_wins_at_parent_url() {
+        reset_router_for_test();
+        let parent = register_route_with_config(
+            "/admin-index-test",
+            "admin-layout",
+            RouteRuntimeConfig::default(),
+        );
+        let index = register_child_route_with_config(
+            parent,
+            "",
+            "admin-index",
+            RouteRuntimeConfig::default(),
+        );
+
+        let matched = match_route("/admin-index-test", true).unwrap();
+        assert_eq!(matched.entries.len(), 2);
+        assert_eq!(matched.deepest().route.record_id, index);
+    }
+
+    #[test]
+    fn unrelated_route_trees_keep_registration_order() {
+        reset_router_for_test();
+        let first = register_route_with_config(
+            "/route-priority/:page",
+            "first-flat-route",
+            RouteRuntimeConfig::default(),
+        );
+        let layout = register_route_with_config(
+            "/route-priority",
+            "later-layout",
+            RouteRuntimeConfig::default(),
+        );
+        let _ = register_child_route_with_config(
+            layout,
+            "settings",
+            "later-nested-route",
+            RouteRuntimeConfig::default(),
+        );
+
+        let matched = match_route("/route-priority/settings", true).unwrap();
+        assert_eq!(matched.deepest().route.record_id, first);
+        assert_eq!(matched.entries.len(), 1);
+    }
+
+    #[test]
+    fn nested_wildcard_is_a_child_fallback_not_a_specific_route_override() {
+        reset_router_for_test();
+        let parent = register_route_with_config(
+            "/admin-wild-test",
+            "admin-layout",
+            RouteRuntimeConfig::default(),
+        );
+        let users = register_child_route_with_config(
+            parent,
+            "users",
+            "admin-users",
+            RouteRuntimeConfig::default(),
+        );
+        let fallback = register_child_route_with_config(
+            parent,
+            "*",
+            "admin-not-found",
+            RouteRuntimeConfig::default(),
+        );
+
+        assert_eq!(
+            match_route("/admin-wild-test/users", true)
+                .unwrap()
+                .deepest()
+                .route
+                .record_id,
+            users,
+        );
+        assert_eq!(
+            match_route("/admin-wild-test/missing/deep", true)
+                .unwrap()
+                .deepest()
+                .route
+                .record_id,
+            fallback,
+        );
+        assert_eq!(
+            match_route("/admin-wild-test", true)
+                .unwrap()
+                .deepest()
+                .route
+                .record_id,
+            fallback,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate route param `id`")]
+    fn nested_duplicate_param_names_are_rejected() {
+        reset_router_for_test();
+        let parent =
+            register_route_with_config("/orgs/:id", "org-layout", RouteRuntimeConfig::default());
+        let _ = register_child_route_with_config(
+            parent,
+            "members/:id",
+            "org-member",
+            RouteRuntimeConfig::default(),
+        );
     }
 
     #[test]
@@ -2073,15 +2703,15 @@ mod tests {
         params.insert("uid".to_string(), "7".to_string());
         let mut query = HashMap::new();
         query.insert("tab".to_string(), "profile".to_string());
-        let matched = RouteMatch {
-            component_name: "user-page",
-            route_pattern: Some("/users/:uid"),
+        let matched = single_match(
+            "user-page",
+            "/users/:uid",
             params,
-            config: RouteRuntimeConfig {
+            RouteRuntimeConfig {
                 guards: vec![guard],
                 ..RouteRuntimeConfig::default()
             },
-        };
+        );
 
         assert_eq!(
             evaluate_guards(&matched, "/users/7", &query),
@@ -2100,15 +2730,15 @@ mod tests {
             second_guard_called_for_guard.set(true);
             RouteGuardDecision::Allow
         });
-        let matched = RouteMatch {
-            component_name: "admin",
-            route_pattern: Some("/admin"),
-            params: HashMap::new(),
-            config: RouteRuntimeConfig {
+        let matched = single_match(
+            "admin",
+            "/admin",
+            HashMap::new(),
+            RouteRuntimeConfig {
                 guards: vec![first_guard, second_guard],
                 ..RouteRuntimeConfig::default()
             },
-        };
+        );
 
         assert_eq!(
             evaluate_guards(&matched, "/admin", &HashMap::new()),
@@ -2127,15 +2757,15 @@ mod tests {
             second_guard_called_for_guard.set(true);
             RouteGuardDecision::Allow
         });
-        let matched = RouteMatch {
-            component_name: "admin",
-            route_pattern: Some("/admin"),
-            params: HashMap::new(),
-            config: RouteRuntimeConfig {
+        let matched = single_match(
+            "admin",
+            "/admin",
+            HashMap::new(),
+            RouteRuntimeConfig {
                 guards: vec![first_guard, second_guard],
                 ..RouteRuntimeConfig::default()
             },
-        };
+        );
 
         assert_eq!(
             evaluate_guards(&matched, "/admin", &HashMap::new()),
@@ -2173,12 +2803,12 @@ mod tests {
         params.insert("section".to_string(), "users".to_string());
         let mut query = HashMap::new();
         query.insert("tab".to_string(), "active".to_string());
-        let matched = RouteMatch {
-            component_name: "admin",
-            route_pattern: Some("/admin/:section"),
+        let matched = single_match(
+            "admin",
+            "/admin/:section",
             params,
-            config: RouteRuntimeConfig::default(),
-        };
+            RouteRuntimeConfig::default(),
+        );
 
         assert_eq!(
             handle_route_rejection(&matched, "/admin", &query, &RouteRejection::Unauthorized),
