@@ -169,10 +169,9 @@ impl DocChangeSubscription {
 impl Drop for DocChangeSubscription {
     fn drop(&mut self) {
         if let Some(closure) = self.closure.take() {
-            let _ = self.target.remove_event_listener_with_callback(
-                self.event,
-                closure.as_ref().unchecked_ref(),
-            );
+            let _ = self
+                .target
+                .remove_event_listener_with_callback(self.event, closure.as_ref().unchecked_ref());
         }
     }
 }

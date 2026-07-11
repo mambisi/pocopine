@@ -260,25 +260,21 @@ where
                 Value::Null
             };
             if delete_defer_reason == "defer_text_delete_to_beforeinput" {
-                log_input_perf(
-                    debug_perf,
-                    "input.keydown",
-                    || json!({
+                log_input_perf(debug_perf, "input.keydown", || {
+                    json!({
                         "runtime": runtime_for_log.clone(),
                         "combo": combo.clone(),
                         "handled": false,
                         "reason": "defer_text_delete_to_beforeinput",
                         "total_ms": round_ms(perf_now_ms() - started_at),
-                    }),
-                );
+                    })
+                });
                 return;
             }
             let state_started_at = perf_now_ms();
             let Some(state) = state_provider(true) else {
-                log_input_perf(
-                    debug_perf,
-                    "input.keydown",
-                    || json!({
+                log_input_perf(debug_perf, "input.keydown", || {
+                    json!({
                         "runtime": runtime_for_log,
                         "combo": combo,
                         "handled": false,
@@ -286,16 +282,14 @@ where
                         "delete_defer_reason": delete_defer_reason_value,
                         "state_ms": round_ms(perf_now_ms() - state_started_at),
                         "total_ms": round_ms(perf_now_ms() - started_at),
-                    }),
-                );
+                    })
+                });
                 return;
             };
             let command_started_at = perf_now_ms();
             let Some(tr) = cmd.apply(&state) else {
-                log_input_perf(
-                    debug_perf,
-                    "input.keydown",
-                    || json!({
+                log_input_perf(debug_perf, "input.keydown", || {
+                    json!({
                         "runtime": runtime_for_log,
                         "combo": combo,
                         "handled": false,
@@ -304,15 +298,13 @@ where
                         "state_ms": round_ms(command_started_at - state_started_at),
                         "command_ms": round_ms(perf_now_ms() - command_started_at),
                         "total_ms": round_ms(perf_now_ms() - started_at),
-                    }),
-                );
+                    })
+                });
                 return;
             };
             ev.prevent_default();
-            log_input_perf(
-                debug_perf,
-                "input.keydown",
-                || json!({
+            log_input_perf(debug_perf, "input.keydown", || {
+                json!({
                     "runtime": runtime_for_log.clone(),
                     "combo": combo.clone(),
                     "handled": true,
@@ -320,26 +312,26 @@ where
                     "state_ms": round_ms(command_started_at - state_started_at),
                     "command_ms": round_ms(perf_now_ms() - command_started_at),
                     "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                }),
-            );
+                })
+            });
             dispatch(state, tr, true);
-            log_input_perf(
-                debug_perf,
-                "input.keydown.complete",
-                || json!({
+            log_input_perf(debug_perf, "input.keydown.complete", || {
+                json!({
                     "runtime": runtime_for_log.clone(),
                     "combo": combo.clone(),
                     "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                }),
-            );
+                })
+            });
             schedule_next_frame_perf(
                 debug_perf,
                 "input.next_frame",
-                || json!({
-                    "runtime": runtime_for_log.clone(),
-                    "source": "keydown",
-                    "combo": combo,
-                }),
+                || {
+                    json!({
+                        "runtime": runtime_for_log.clone(),
+                        "source": "keydown",
+                        "combo": combo,
+                    })
+                },
                 started_at,
             );
         }) as Box<dyn FnMut(Event)>);
@@ -385,10 +377,8 @@ where
                     let range_ms = perf_now_ms() - range_started_at;
                     let state_started_at = perf_now_ms();
                     let Some(mut state) = state_provider(!target_range_found) else {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -397,8 +387,8 @@ where
                                 "range_ms": round_ms(range_ms),
                                 "state_ms": round_ms(perf_now_ms() - state_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         return;
                     };
                     if let Some((from, to)) = target_range {
@@ -408,10 +398,8 @@ where
                         } else if let Some(live_state) = state_provider(true) {
                             state = live_state;
                         } else {
-                            log_input_perf(
-                                debug_perf,
-                                "input.beforeinput",
-                                || json!({
+                            log_input_perf(debug_perf, "input.beforeinput", || {
+                                json!({
                                     "runtime": runtime_for_log.clone(),
                                     "input_type": input_type.clone(),
                                     "handled": false,
@@ -420,8 +408,8 @@ where
                                     "range_ms": round_ms(range_ms),
                                     "state_ms": round_ms(perf_now_ms() - state_started_at),
                                     "total_ms": round_ms(perf_now_ms() - started_at),
-                                }),
-                            );
+                                })
+                            });
                             return;
                         }
                     }
@@ -444,10 +432,8 @@ where
                             );
                         }
                         ev.prevent_default();
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log,
                                 "input_type": input_type,
                                 "handled": true,
@@ -458,29 +444,29 @@ where
                                 "range_ms": round_ms(range_ms),
                                 "state_ms": round_ms(perf_now_ms() - state_started_at),
                                 "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         let input_type_for_log = input_type.clone();
                         dispatch(state, tr, false);
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput.complete",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput.complete", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type_for_log.clone(),
                                 "rule": true,
                                 "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         schedule_next_frame_perf(
                             debug_perf,
                             "input.next_frame",
-                            || json!({
-                                "runtime": runtime_for_log.clone(),
-                                "source": "beforeinput",
-                                "input_type": input_type_for_log,
-                                "rule": true,
-                            }),
+                            || {
+                                json!({
+                                    "runtime": runtime_for_log.clone(),
+                                    "source": "beforeinput",
+                                    "input_type": input_type_for_log,
+                                    "rule": true,
+                                })
+                            },
                             started_at,
                         );
                         return;
@@ -489,10 +475,8 @@ where
                     ev.prevent_default();
                     let transaction_started_at = perf_now_ms();
                     if let Some(tr) = insert_text_transaction(&state, data) {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": true,
@@ -504,36 +488,34 @@ where
                                 "state_ms": round_ms(transaction_started_at - state_started_at),
                                 "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
                                 "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         let input_type_for_log = input_type.clone();
                         dispatch(state, tr, false);
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput.complete",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput.complete", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type_for_log.clone(),
                                 "rule": false,
                                 "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         schedule_next_frame_perf(
                             debug_perf,
                             "input.next_frame",
-                            || json!({
-                                "runtime": runtime_for_log.clone(),
-                                "source": "beforeinput",
-                                "input_type": input_type_for_log,
-                                "rule": false,
-                            }),
+                            || {
+                                json!({
+                                    "runtime": runtime_for_log.clone(),
+                                    "source": "beforeinput",
+                                    "input_type": input_type_for_log,
+                                    "rule": false,
+                                })
+                            },
                             started_at,
                         );
                     } else {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -545,8 +527,8 @@ where
                                 "state_ms": round_ms(transaction_started_at - state_started_at),
                                 "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                     }
                 }
                 "deleteContentBackward"
@@ -566,10 +548,8 @@ where
                     let target_range_ms = perf_now_ms() - range_started_at;
                     let state_started_at = perf_now_ms();
                     let Some(state) = state_provider(!target_range_found) else {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -578,18 +558,16 @@ where
                                 "range_ms": round_ms(target_range_ms),
                                 "state_ms": round_ms(perf_now_ms() - state_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         return;
                     };
                     let fallback_range_started_at = perf_now_ms();
                     let range = target_range.or_else(|| delete_fallback_range(&state, &input_type));
                     let range_ms = target_range_ms + (perf_now_ms() - fallback_range_started_at);
                     let Some((from, to)) = range else {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -598,15 +576,13 @@ where
                                 "range_ms": round_ms(range_ms),
                                 "state_ms": round_ms(fallback_range_started_at - state_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         return;
                     };
                     if from == to {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -615,17 +591,15 @@ where
                                 "range_ms": round_ms(range_ms),
                                 "state_ms": round_ms(fallback_range_started_at - state_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         return;
                     }
                     let transaction_started_at = perf_now_ms();
                     let mut tr = state.tr();
                     if tr.delete(from, to).is_err() {
-                        log_input_perf(
-                            debug_perf,
-                            "input.beforeinput",
-                            || json!({
+                        log_input_perf(debug_perf, "input.beforeinput", || {
+                            json!({
                                 "runtime": runtime_for_log.clone(),
                                 "input_type": input_type.clone(),
                                 "handled": false,
@@ -637,15 +611,13 @@ where
                                 "range_ms": round_ms(range_ms),
                                 "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         return;
                     }
                     ev.prevent_default();
-                    log_input_perf(
-                        debug_perf,
-                        "input.beforeinput",
-                        || json!({
+                    log_input_perf(debug_perf, "input.beforeinput", || {
+                        json!({
                             "runtime": runtime_for_log.clone(),
                             "input_type": input_type.clone(),
                             "handled": true,
@@ -657,27 +629,27 @@ where
                             "range_ms": round_ms(range_ms),
                             "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
                             "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                        }),
-                    );
+                        })
+                    });
                     let input_type_for_log = input_type.clone();
                     dispatch(state, tr, false);
-                    log_input_perf(
-                        debug_perf,
-                        "input.beforeinput.complete",
-                        || json!({
+                    log_input_perf(debug_perf, "input.beforeinput.complete", || {
+                        json!({
                             "runtime": runtime_for_log,
                             "input_type": input_type_for_log.clone(),
                             "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                        }),
-                    );
+                        })
+                    });
                     schedule_next_frame_perf(
                         debug_perf,
                         "input.next_frame",
-                        || json!({
-                            "runtime": runtime_for_log.clone(),
-                            "source": "beforeinput",
-                            "input_type": input_type_for_log,
-                        }),
+                        || {
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "source": "beforeinput",
+                                "input_type": input_type_for_log,
+                            })
+                        },
                         started_at,
                     );
                 }
@@ -711,16 +683,14 @@ where
             }
             ev.prevent_default();
             let Some(state) = state_provider(true) else {
-                log_input_perf(
-                    debug_perf,
-                    "input.paste",
-                    || json!({
+                log_input_perf(debug_perf, "input.paste", || {
+                    json!({
                         "runtime": runtime_for_log.clone(),
                         "handled": false,
                         "reason": "missing_state",
                         "total_ms": round_ms(perf_now_ms() - started_at),
-                    }),
-                );
+                    })
+                });
                 return;
             };
             let parse_started_at = perf_now_ms();
@@ -741,40 +711,38 @@ where
                 ),
             };
             let Some(tr) = tr_opt else {
-                log_input_perf(
-                    debug_perf,
-                    "input.paste",
-                    || json!({
+                log_input_perf(debug_perf, "input.paste", || {
+                    json!({
                         "runtime": runtime_for_log.clone(),
                         "handled": false,
                         "reason": "no_transaction",
                         "mode": mode,
                         "parse_ms": round_ms(parse_ms),
                         "total_ms": round_ms(perf_now_ms() - started_at),
-                    }),
-                );
+                    })
+                });
                 return;
             };
-            log_input_perf(
-                debug_perf,
-                "input.paste",
-                || json!({
+            log_input_perf(debug_perf, "input.paste", || {
+                json!({
                     "runtime": runtime_for_log.clone(),
                     "handled": true,
                     "mode": mode,
                     "chars": text.chars().count(),
                     "parse_ms": round_ms(parse_ms),
                     "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
-                }),
-            );
+                })
+            });
             dispatch(state, tr, false);
             schedule_next_frame_perf(
                 debug_perf,
                 "input.next_frame",
-                || json!({
-                    "runtime": runtime_for_log,
-                    "source": "paste",
-                }),
+                || {
+                    json!({
+                        "runtime": runtime_for_log,
+                        "source": "paste",
+                    })
+                },
                 started_at,
             );
         }) as Box<dyn FnMut(Event)>);

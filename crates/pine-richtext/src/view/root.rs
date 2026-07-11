@@ -517,10 +517,8 @@ impl PineRichTextRoot {
                             "state_provider.live_selection",
                             || json!({ "state": state_debug_json(&next) }),
                         );
-                        log_perf(
-                            debug_perf,
-                            "state_provider",
-                            || json!({
+                        log_perf(debug_perf, "state_provider", || {
+                            json!({
                                 "runtime": runtime_for_provider.name(),
                                 "live_selection": true,
                                 "live_selection_requested": live_selection,
@@ -532,15 +530,13 @@ impl PineRichTextRoot {
                                 "from_json_ms": round_ms(from_json_ms),
                                 "selection_ms": round_ms(perf_now_ms() - selection_started_at),
                                 "total_ms": round_ms(perf_now_ms() - started_at),
-                            }),
-                        );
+                            })
+                        });
                         return Some(next);
                     }
                 }
-                log_perf(
-                    debug_perf,
-                    "state_provider",
-                    || json!({
+                log_perf(debug_perf, "state_provider", || {
+                    json!({
                         "runtime": runtime_for_provider.name(),
                         "live_selection": false,
                         "live_selection_requested": live_selection,
@@ -552,8 +548,8 @@ impl PineRichTextRoot {
                         "from_json_ms": round_ms(from_json_ms),
                         "selection_ms": round_ms(perf_now_ms() - selection_started_at),
                         "total_ms": round_ms(perf_now_ms() - started_at),
-                    }),
-                );
+                    })
+                });
                 Some(state)
             });
 
@@ -617,17 +613,13 @@ impl PineRichTextRoot {
                     tr.transform().steps().iter().map(|s| s.to_json()).collect();
                 let step_count = steps_json.len();
                 if current.doc() != state.doc() {
-                    log_debug_json(
-                        debug_json,
-                        "dispatch.stale_doc",
-                        || {
-                            json!({
-                                "current": state_debug_json(&current),
-                                "transaction": transaction_debug_json(&tr),
-                                "transaction_state": state_debug_json(&state),
-                            })
-                        },
-                    );
+                    log_debug_json(debug_json, "dispatch.stale_doc", || {
+                        json!({
+                            "current": state_debug_json(&current),
+                            "transaction": transaction_debug_json(&tr),
+                            "transaction_state": state_debug_json(&state),
+                        })
+                    });
                     return;
                 }
                 let transaction = if debug_json {
@@ -651,17 +643,13 @@ impl PineRichTextRoot {
                     slot.state = Some(next.clone());
                     slot.generation = slot.generation.wrapping_add(1);
                 }
-                log_debug_json(
-                    debug_json,
-                    "dispatch.apply",
-                    || {
-                        json!({
-                            "before": before,
-                            "transaction": transaction,
-                            "after": state_debug_json(&next),
-                        })
-                    },
-                );
+                log_debug_json(debug_json, "dispatch.apply", || {
+                    json!({
+                        "before": before,
+                        "transaction": transaction,
+                        "after": state_debug_json(&next),
+                    })
+                });
                 // Hot-path generation bump. The reactive watcher
                 // used to fire on `root.doc` — a full state JSON
                 // value — so every keystroke queued a multi-KB
@@ -696,10 +684,8 @@ impl PineRichTextRoot {
                 let change = change_event_payload(&next, root.doc_generation);
                 dispatch_change_event(&surface_for_inner, &change);
                 let event_ms = perf_now_ms() - event_started_at;
-                log_perf(
-                    debug_perf,
-                    "dispatch.commit",
-                    || json!({
+                log_perf(debug_perf, "dispatch.commit", || {
+                    json!({
                         "runtime": runtime_for_inner.name(),
                         "steps": step_count,
                         "cache_hit": current_cache_hit,
@@ -719,8 +705,8 @@ impl PineRichTextRoot {
                         "event_ms": round_ms(event_ms),
                         "total_ms": round_ms(perf_now_ms() - update_started_at),
                         "update_ms": round_ms(perf_now_ms() - update_started_at),
-                    }),
-                );
+                    })
+                });
             });
             if sync_flush {
                 // Force the reactive queue to drain before command dispatch returns.
@@ -729,24 +715,20 @@ impl PineRichTextRoot {
                 // returns synchronously into a still-active outer `scope.invoke`.
                 let flush_started_at = perf_now_ms();
                 pocopine_core::flush_sync();
-                log_perf(
-                    debug_perf,
-                    "dispatch.flush_sync",
-                    || json!({
+                log_perf(debug_perf, "dispatch.flush_sync", || {
+                    json!({
                         "runtime": runtime_name,
                         "flush_ms": round_ms(perf_now_ms() - flush_started_at),
                         "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
-                    }),
-                );
+                    })
+                });
             } else {
-                log_perf(
-                    debug_perf,
-                    "dispatch.flush_deferred",
-                    || json!({
+                log_perf(debug_perf, "dispatch.flush_deferred", || {
+                    json!({
                         "runtime": runtime_name,
                         "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
-                    }),
-                );
+                    })
+                });
             }
         };
 
@@ -958,17 +940,13 @@ impl PineRichTextRoot {
             let new_top_level_children = new_doc.child_count();
             let new_doc_size = new_doc.content_size();
             *last_doc_for_watch.borrow_mut() = new_doc;
-            log_debug_json(
-                debug_json,
-                "watch.doc",
-                || {
-                    json!({
-                        "dom_changed": reconcile_outcome.dom_changed(),
-                        "patch": reconcile_outcome.as_str(),
-                        "state": state_debug_json(&cached_state),
-                    })
-                },
-            );
+            log_debug_json(debug_json, "watch.doc", || {
+                json!({
+                    "dom_changed": reconcile_outcome.dom_changed(),
+                    "patch": reconcile_outcome.as_str(),
+                    "state": state_debug_json(&cached_state),
+                })
+            });
             let mount_started_at = perf_now_ms();
             if reconcile_outcome.should_mount_node_views() {
                 mount_registered_node_views(&surface_for_watch, &runtime_for_watch);
@@ -991,10 +969,8 @@ impl PineRichTextRoot {
                 sync_cursor_from_state(&surface_for_watch, &cached_state);
             }
             let cursor_ms = perf_now_ms() - cursor_started_at;
-            log_perf(
-                debug_perf,
-                "watch.doc",
-                || json!({
+            log_perf(debug_perf, "watch.doc", || {
+                json!({
                     "runtime": runtime_for_watch.name(),
                     "patch": reconcile_outcome.as_str(),
                     "dom_changed": reconcile_outcome.dom_changed(),
@@ -1010,8 +986,8 @@ impl PineRichTextRoot {
                     "mount_ms": round_ms(mount_ms),
                     "cursor_ms": round_ms(cursor_ms),
                     "total_ms": round_ms(perf_now_ms() - watch_started_at),
-                }),
-            );
+                })
+            });
         });
     }
 }
@@ -1174,7 +1150,10 @@ fn change_event_payload(state: &EditorState, generation: u64) -> super::ChangeIn
     let doc = state.doc();
     // Resting empty state = a single empty textblock. O(1).
     let empty = doc.child_count() == 1
-        && doc.child(0).map(|child| child.content_size() == 0).unwrap_or(true);
+        && doc
+            .child(0)
+            .map(|child| child.content_size() == 0)
+            .unwrap_or(true);
     // Text in the caret's textblock, up to the caret (bounded). Empty for a
     // ranged (non-collapsed) selection. O(window), never touches the rest of the
     // doc — so a mention picker stays flat regardless of paragraph size.
