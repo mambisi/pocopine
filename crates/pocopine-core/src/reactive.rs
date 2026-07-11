@@ -36,7 +36,6 @@ use slab::Slab;
 
 use js_sys::Promise;
 use wasm_bindgen::JsValue;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
 
 /// Dependency-map key: the scope-scoped field name. Stored as
@@ -840,7 +839,3 @@ pub fn signal_graph_snapshot() -> Vec<SignalSnapshot> {
 pub fn is_scheduler_routed(id: EffectId) -> bool {
     with_effect(id, |e| e.scheduler.is_some()).unwrap_or(false)
 }
-
-// Keep unused-import noise away when `wasm-bindgen-futures` features drift.
-#[allow(dead_code)]
-fn _unused(_: Closure<dyn FnMut()>) {}

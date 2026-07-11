@@ -56,12 +56,6 @@ impl UsesTable {
             .iter()
             .find_map(|(t, p)| (t == tag).then_some(p))
     }
-
-    /// Number of entries (for tests / diagnostics).
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
 }
 
 /// RFC 060 Tier 3 — parse the `extends = [...]` value of a
@@ -218,7 +212,7 @@ mod tests {
         let expr = parse_expr(quote! { [PineContextMenuItem, PineFoo] });
         let entries = parse_uses_array(expr).unwrap();
         let table = resolve_uses(entries).unwrap();
-        assert_eq!(table.len(), 2);
+        assert_eq!(table.entries.len(), 2);
         assert!(table.lookup("pine-context-menu-item").is_some());
         assert!(table.lookup("pine-foo").is_some());
     }
@@ -241,7 +235,7 @@ mod tests {
         });
         let entries = parse_uses_array(expr).unwrap();
         let table = resolve_uses(entries).unwrap();
-        assert_eq!(table.len(), 3);
+        assert_eq!(table.entries.len(), 3);
         assert!(table.lookup("pine-foo").is_some());
         assert!(table.lookup("my-custom-tag").is_some());
         assert!(table.lookup("pine-bar").is_some());

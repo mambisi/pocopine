@@ -117,11 +117,11 @@ pub use reactive::{
     effect_with, flush_sync, on_cleanup, release, run_now, set_auto_flush, track, trigger_scope,
 };
 pub use registry::{
-    COMPONENT_ENTRIES, ComponentCtor, ComponentEntry, ComponentMountFn, ComponentVTable,
-    RegisteredComponent, RegistryError, RegistryErrorKind, assert_registry_clean,
-    canonical_component_name, mark_registered, register_component, register_component_as,
-    register_component_prefixed, register_component_with_mount, registered_component_names,
-    registry_errors, render_boot_error, verify_registry,
+    ComponentCtor, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
+    RegistryErrorKind, assert_registry_clean, canonical_component_name, mark_registered,
+    register_component, register_component_as, register_component_prefixed,
+    register_component_with_mount, registered_component_names, registry_errors, render_boot_error,
+    verify_registry,
 };
 pub use router::{
     MatchedRoute, MatchedRouteChain, NavigationFailure, NavigationResult, PrefetchResult,

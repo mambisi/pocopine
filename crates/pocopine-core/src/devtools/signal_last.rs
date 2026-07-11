@@ -36,9 +36,3 @@ pub(super) fn record(id: SignalId) {
 pub(super) fn get(id: SignalId) -> Option<f64> {
     LAST_CHANGED.with(|m| m.borrow().get(&id).copied())
 }
-
-/// Whole-table snapshot for the signal graph panel.
-#[allow(dead_code)] // used by PR D
-pub(super) fn snapshot() -> HashMap<SignalId, f64> {
-    LAST_CHANGED.with(|m| m.borrow().clone())
-}

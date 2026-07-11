@@ -49,11 +49,6 @@ pub(crate) struct SlotDecl {
     /// `pp-let` binding is typed as `T`. `T` must
     /// `#[derive(Props)]`.
     pub props: Option<Path>,
-    /// Span of the `#[slot(...)]` attribute for diagnostics.
-    /// Currently unused at emit time; kept so future diagnostic
-    /// paths can anchor errors at the declaration.
-    #[allow(dead_code)]
-    pub span: proc_macro2::Span,
 }
 
 #[derive(Debug, Clone)]
@@ -210,7 +205,6 @@ fn parse_slot_attr(attr: &Attribute) -> syn::Result<SlotDecl> {
         mode: mode.unwrap_or(SlotMode::Accepts),
         accepts,
         props,
-        span,
     })
 }
 
@@ -1023,7 +1017,6 @@ mod tests {
                 syn::parse_str::<Path>("PineSeparator").unwrap(),
             ],
             props: None,
-            span: proc_macro2::Span::call_site(),
         }];
         let out = emit_slot_traits(
             &syn::Ident::new("PineContextMenuContent", proc_macro2::Span::call_site()),
@@ -1052,7 +1045,6 @@ mod tests {
                 syn::parse_str::<Path>("PineDialogDescription").unwrap(),
             ],
             props: None,
-            span: proc_macro2::Span::call_site(),
         }];
         let out = emit_slot_traits(
             &syn::Ident::new("PineDialogContent", proc_macro2::Span::call_site()),
@@ -1077,7 +1069,6 @@ mod tests {
             mode: SlotMode::Only,
             accepts: vec![syn::parse_str::<Path>("PineTitle").unwrap()],
             props: None,
-            span: proc_macro2::Span::call_site(),
         }];
         let out = emit_slot_traits(
             &syn::Ident::new("Foo", proc_macro2::Span::call_site()),
@@ -1180,7 +1171,6 @@ mod tests {
             mode: SlotMode::Accepts,
             accepts: Vec::new(),
             props: Some(props_path(props)),
-            span: proc_macro2::Span::call_site(),
         }
     }
 
