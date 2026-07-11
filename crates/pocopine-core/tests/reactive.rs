@@ -7,7 +7,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::Reflect;
-#[cfg(any(debug_assertions, feature = "devtools"))]
 use pocopine_core::{FieldHandle, Handle};
 use pocopine_core::{
     Scope, batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, run_now,
@@ -15,13 +14,28 @@ use pocopine_core::{
     spawn_scoped, watch, watch_scope_field_now,
 };
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 fn setup() {
     // spawn_local's microtask host isn't reliable under
     // `wasm-pack test --node`; drive flushes manually.
     set_auto_flush(false);
+}
+
+async fn next_microtasks(count: usize) {
+    for _ in 0..count {
+        let promise = js_sys::Promise::resolve(&JsValue::NULL);
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+}
+
+struct DropFlag(Rc<Cell<bool>>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
 }
 
 #[wasm_bindgen_test]
@@ -461,6 +475,253 @@ fn on_scope_unmount_for_runs_when_scope_is_removed() {
     Scope::remove(scope.id);
 
     assert!(ran.get());
+}
+
+#[wasm_bindgen_test(async)]
+async fn scoped_task_future_is_dropped_before_it_can_commit_after_unmount() {
+    setup();
+
+    let scope = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let committed = Rc::new(Cell::new(false));
+    let committed_for_task = committed.clone();
+    let started = Rc::new(Cell::new(false));
+    let started_for_task = started.clone();
+    let dropped = Rc::new(Cell::new(false));
+    let dropped_for_task = dropped.clone();
+    let handle = spawn_for_scope(scope.id, async move {
+        started_for_task.set(true);
+        let _drop_flag = DropFlag(dropped_for_task);
+        std::future::pending::<()>().await;
+        committed_for_task.set(true);
+    });
+
+    next_microtasks(1).await;
+    assert!(started.get(), "fixture future must reach Poll::Pending");
+    Scope::remove(scope.id);
+    next_microtasks(2).await;
+
+    assert!(handle.is_cancelled());
+    assert!(dropped.get(), "cancellation must drop the pending future");
+    assert!(
+        !committed.get(),
+        "unmount must drop the scoped future before its post-await commit"
+    );
+}
+
+#[wasm_bindgen_test(async)]
+async fn latest_task_drops_the_superseded_future_before_it_can_commit() {
+    setup();
+
+    let scope = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let first_committed = Rc::new(Cell::new(false));
+    let first_for_task = first_committed.clone();
+    let first_started = Rc::new(Cell::new(false));
+    let started_for_task = first_started.clone();
+    let first_dropped = Rc::new(Cell::new(false));
+    let dropped_for_task = first_dropped.clone();
+    let first = spawn_latest_for_scope(scope.id, "search", async move {
+        started_for_task.set(true);
+        let _drop_flag = DropFlag(dropped_for_task);
+        std::future::pending::<()>().await;
+        first_for_task.set(true);
+    });
+    next_microtasks(1).await;
+    assert!(
+        first_started.get(),
+        "fixture future must be polled before it is superseded"
+    );
+    let second = spawn_latest_for_scope(scope.id, "search", async move {
+        next_microtasks(3).await;
+    });
+
+    next_microtasks(5).await;
+
+    assert!(first.is_cancelled());
+    assert!(
+        first_dropped.get(),
+        "superseding a pending task must drop its future"
+    );
+    assert!(
+        !first_committed.get(),
+        "a superseded latest-wins future must be dropped before it commits"
+    );
+    Scope::remove(scope.id);
+    assert!(
+        !second.is_cancelled(),
+        "a naturally completed task must no longer be retained by its scope"
+    );
+}
+
+#[wasm_bindgen_test(async)]
+async fn completed_scoped_task_is_removed_from_the_scope_registry() {
+    setup();
+
+    let scope = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let handle = spawn_for_scope(scope.id, async move {});
+    next_microtasks(2).await;
+
+    Scope::remove(scope.id);
+
+    assert!(
+        !handle.is_cancelled(),
+        "scope teardown must not cancel a task that already completed"
+    );
+}
+
+#[cfg(any(debug_assertions, feature = "devtools"))]
+#[wasm_bindgen_test]
+fn watcher_read_does_not_reintern_a_field_for_a_dead_scope() {
+    setup();
+
+    let scope = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let scope_id = scope.id;
+    Scope::remove(scope_id);
+    let (_, deps_before) = pocopine_core::reactive::stats();
+
+    let watcher = watch_scope_field_now::<String, _>(scope_id, "value", |_, _| {});
+    release(watcher);
+    let (_, deps_after) = pocopine_core::reactive::stats();
+
+    assert_eq!(
+        deps_after, deps_before,
+        "reading a dead scope must not recreate its field-signal entry"
+    );
+}
+
+#[cfg(any(debug_assertions, feature = "devtools"))]
+#[wasm_bindgen_test(async)]
+async fn deferred_scoped_watcher_skips_install_when_target_dies_first() {
+    setup();
+
+    let owner = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let target = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let (effects_before, deps_before) = pocopine_core::reactive::stats();
+    pocopine_core::scope::with_current_scope_id(owner.id, || {
+        pocopine_core::watch_scope_field_scoped::<String, _>(target.id, "value", |_, _| {});
+    });
+
+    Scope::remove(target.id);
+    next_microtasks(2).await;
+
+    assert_eq!(
+        pocopine_core::reactive::stats(),
+        (effects_before, deps_before),
+        "a deferred watcher must not install after its target scope unmounts"
+    );
+    Scope::remove(owner.id);
+}
+
+#[wasm_bindgen_test]
+fn handle_observe_sentinel_reacts_to_a_targeted_field_write() {
+    setup();
+
+    let state = Rc::new(RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let runs = Rc::new(Cell::new(0));
+    let runs_for_effect = runs.clone();
+    let scope_id = scope.id;
+    effect(move || {
+        pocopine_core::reactive::track(scope_id, "__pp_handle_observe");
+        runs_for_effect.set(runs_for_effect.get() + 1);
+    });
+    let value: FieldHandle<String> = FieldHandle::__new(scope.id, "value");
+
+    value.set("changed".to_string());
+    flush_sync();
+
+    assert_eq!(
+        runs.get(),
+        2,
+        "the any-field sentinel used by Handle::observe must see targeted writes"
+    );
+    Scope::remove(scope.id);
+}
+
+#[wasm_bindgen_test]
+fn compiled_row_bulk_teardown_clears_context_parent_entries() {
+    setup();
+
+    let parent = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    let row = Scope::new(Rc::new(RefCell::new(TestScopeState::default())));
+    pocopine_core::context::set_parent(row.id, parent.id);
+    assert_eq!(pocopine_core::context::parent_of(row.id), Some(parent.id));
+
+    Scope::remove_compiled_rows(&[row.id]);
+
+    assert_eq!(
+        pocopine_core::context::parent_of(row.id),
+        None,
+        "compiled-row bulk teardown must remove the child-to-parent context edge"
+    );
+    Scope::remove(parent.id);
+}
+
+struct AlwaysFailsToSerialize;
+
+impl Serialize for AlwaysFailsToSerialize {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(serde::ser::Error::custom("intentional test failure"))
+    }
+}
+
+#[wasm_bindgen_test]
+fn failed_inline_patch_invalidates_instead_of_certifying_stale_projection() {
+    setup();
+
+    let state = Rc::new(RefCell::new(FuzzState {
+        items: vec![1],
+        ..FuzzState::default()
+    }));
+    let scope = Scope::new(state.clone());
+    let proxy = scope.into_proxy();
+    let initial = Reflect::get(&proxy, &JsValue::from_str("items")).unwrap();
+    assert_eq!(js_sys::Array::from(&initial).get(0).as_f64(), Some(1.0));
+    let handle = Handle::new(state, scope.id);
+
+    handle.update(|state| {
+        state.items[0] = 7;
+        pocopine_core::scope::patch_list_at_inline("items", 0, &AlwaysFailsToSerialize);
+    });
+
+    let refreshed = Reflect::get(&proxy, &JsValue::from_str("items")).unwrap();
+    assert_eq!(
+        js_sys::Array::from(&refreshed).get(0).as_f64(),
+        Some(7.0),
+        "a serialization failure must make the next read rebuild from Rust state"
+    );
+    Scope::remove(scope.id);
+}
+
+#[wasm_bindgen_test]
+fn rejected_reflect_set_invalidates_inline_patch_projection() {
+    setup();
+
+    let state = Rc::new(RefCell::new(FuzzState {
+        items: vec![1],
+        ..FuzzState::default()
+    }));
+    let scope = Scope::new(state.clone());
+    let proxy = scope.into_proxy();
+    let cached = Reflect::get(&proxy, &JsValue::from_str("items")).unwrap();
+    let cached_object: &js_sys::Object = cached.unchecked_ref();
+    let _ = js_sys::Object::freeze(cached_object);
+    let handle = Handle::new(state, scope.id);
+
+    handle.update(|state| {
+        state.items[0] = 9;
+        pocopine_core::scope::patch_list_at_inline("items", 0, &state.items[0]);
+    });
+
+    let refreshed = Reflect::get(&proxy, &JsValue::from_str("items")).unwrap();
+    assert_eq!(
+        js_sys::Array::from(&refreshed).get(0).as_f64(),
+        Some(9.0),
+        "Reflect::set=false must make the next read rebuild from Rust state"
+    );
+    Scope::remove(scope.id);
 }
 
 #[wasm_bindgen_test]

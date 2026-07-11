@@ -2944,6 +2944,8 @@ async fn macro_emits_named_slot_fragment() {
 async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     register_all();
     reset_plan_failure_count();
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    let scopes_before = pocopine_core::scope::Scope::count();
 
     let plan = template_plan_for("plan-scoped-slot-host")
         .expect("plan-scoped-slot-host has one nested non-HTML5 tag");
@@ -3009,6 +3011,15 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
 
     assert_eq!(plan_failure_count(), 0);
 
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    {
+        pocopine_core::mount::release_compiled_subtree(&host);
+        assert_eq!(
+            pocopine_core::scope::Scope::count(),
+            scopes_before,
+            "scoped-slot materialization must release its borrowed SlotScope"
+        );
+    }
     host.remove();
 }
 
@@ -3022,6 +3033,8 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
 async fn macro_lifts_opaque_runtime_directive() {
     register_all();
     reset_plan_failure_count();
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    let listeners_before = pocopine_core::mount::listener_count();
 
     let plan = template_plan_for("plan-opaque-directive-host")
         .expect("plan-opaque-directive-host registers a template plan");
@@ -3068,6 +3081,19 @@ async fn macro_lifts_opaque_runtime_directive() {
 
     assert_eq!(plan_failure_count(), 0);
 
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    {
+        assert!(
+            pocopine_core::mount::listener_count() > listeners_before,
+            "pp-roving must retain its keydown closure in the releasable listener table"
+        );
+        pocopine_core::mount::release_compiled_subtree(&host);
+        assert_eq!(
+            pocopine_core::mount::listener_count(),
+            listeners_before,
+            "pp-roving listener must be removed and its closure dropped on teardown"
+        );
+    }
     host.remove();
 }
 

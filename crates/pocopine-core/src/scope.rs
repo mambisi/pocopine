@@ -481,6 +481,7 @@ impl Scope {
                 map.remove(id);
             }
         });
+        crate::context::clear_scopes(ids);
         crate::reactive::clear_scopes(ids);
         // Compiled rows that never minted a proxy have no entry in
         // PROXY_CLOSURES / PATCHED — the
@@ -1159,13 +1160,13 @@ pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object()
-            && let Ok(new_js) = serde_wasm_bindgen::to_value(row)
-        {
-            let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
-        }
-        // Keep the projection alive across the post-handler sweep.
-        keep_field_fresh(sid, field);
+        let patched = arr.is_object()
+            && serde_wasm_bindgen::to_value(row)
+                .ok()
+                .is_some_and(|new_js| {
+                    Reflect::set(&arr, &(idx as u32).into(), &new_js).unwrap_or(false)
+                });
+        finish_inline_patch(sid, field, patched);
     }
     crate::reactive::trigger(sid, field);
 }
@@ -1180,14 +1181,18 @@ pub fn patch_list_indices_inline<T: serde::Serialize>(field: &str, patches: &[(u
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object() {
+        let mut patched = arr.is_object();
+        if patched {
             for (idx, row) in patches {
-                if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
-                    let _ = Reflect::set(&arr, &(*idx as u32).into(), &new_js);
-                }
+                let ok = serde_wasm_bindgen::to_value(row)
+                    .ok()
+                    .is_some_and(|new_js| {
+                        Reflect::set(&arr, &(*idx as u32).into(), &new_js).unwrap_or(false)
+                    });
+                patched &= ok;
             }
         }
-        keep_field_fresh(sid, field);
+        finish_inline_patch(sid, field, patched);
     }
     crate::reactive::trigger(sid, field);
 }
@@ -1202,6 +1207,16 @@ fn keep_field_fresh(scope_id: ScopeId, field: &str) {
     });
 }
 
+fn finish_inline_patch(scope_id: ScopeId, field: &str, patched: bool) {
+    if patched {
+        keep_field_fresh(scope_id, field);
+    } else {
+        // A partial or rejected JS mutation is not authoritative. Drop the
+        // projection so the next read serializes the Rust field again.
+        invalidate_field(scope_id, field);
+    }
+}
+
 /// Swap two indices inside a cached JS Array for a Vec-like field.
 /// Call from inside a handler after swapping the Rust Vec. This keeps
 /// existing row object identities intact, so keyed `pp-for` can avoid
@@ -1212,15 +1227,20 @@ pub fn swap_list_indices_inline(field: &str, a: usize, b: usize) {
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object() {
+        let patched = if arr.is_object() {
             let a_key = JsValue::from_f64(a as f64);
             let b_key = JsValue::from_f64(b as f64);
-            let a_val = Reflect::get(&arr, &a_key).unwrap_or(JsValue::UNDEFINED);
-            let b_val = Reflect::get(&arr, &b_key).unwrap_or(JsValue::UNDEFINED);
-            let _ = Reflect::set(&arr, &a_key, &b_val);
-            let _ = Reflect::set(&arr, &b_key, &a_val);
-        }
-        keep_field_fresh(sid, field);
+            match (Reflect::get(&arr, &a_key), Reflect::get(&arr, &b_key)) {
+                (Ok(a_val), Ok(b_val)) => {
+                    Reflect::set(&arr, &a_key, &b_val).unwrap_or(false)
+                        && Reflect::set(&arr, &b_key, &a_val).unwrap_or(false)
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        finish_inline_patch(sid, field, patched);
     }
     crate::reactive::trigger(sid, field);
 }
@@ -1234,7 +1254,7 @@ pub fn remove_list_at_inline(field: &str, idx: usize) {
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object() {
+        let patched = if arr.is_object() {
             let array = js_sys::Array::from(&arr);
             let len = array.length();
             let idx = idx as u32;
@@ -1244,14 +1264,20 @@ pub fn remove_list_at_inline(field: &str, idx: usize) {
                         .map_err(|_| JsValue::from_str("Array.splice is not callable"))
                 })
             {
-                let _ = splice.call2(
-                    &arr,
-                    &JsValue::from_f64(idx as f64),
-                    &JsValue::from_f64(1.0),
-                );
+                splice
+                    .call2(
+                        &arr,
+                        &JsValue::from_f64(idx as f64),
+                        &JsValue::from_f64(1.0),
+                    )
+                    .is_ok()
+            } else {
+                false
             }
-        }
-        keep_field_fresh(sid, field);
+        } else {
+            false
+        };
+        finish_inline_patch(sid, field, patched);
     }
     crate::reactive::trigger(sid, field);
 }
@@ -1266,14 +1292,19 @@ pub fn append_list_inline<T: serde::Serialize>(field: &str, start_idx: usize, ro
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object() {
+        let mut patched = arr.is_object();
+        if patched {
             for (offset, row) in rows.iter().enumerate() {
-                if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
-                    let _ = Reflect::set(&arr, &((start_idx + offset) as u32).into(), &new_js);
-                }
+                let ok = serde_wasm_bindgen::to_value(row)
+                    .ok()
+                    .is_some_and(|new_js| {
+                        Reflect::set(&arr, &((start_idx + offset) as u32).into(), &new_js)
+                            .unwrap_or(false)
+                    });
+                patched &= ok;
             }
         }
-        keep_field_fresh(sid, field);
+        finish_inline_patch(sid, field, patched);
     }
     crate::reactive::trigger(sid, field);
 }
@@ -1288,21 +1319,27 @@ pub fn prepend_list_inline<T: serde::Serialize>(field: &str, rows: &[T]) {
     };
     let cached = projection_read(sid, field);
     if let Some(arr) = cached {
-        if arr.is_object() {
+        let mut patched = arr.is_object();
+        if patched {
             let array = js_sys::Array::from(&arr);
             let added = rows.len() as u32;
             let old_len = array.length();
             for idx in (0..old_len).rev() {
-                let value = Reflect::get(&arr, &idx.into()).unwrap_or(JsValue::UNDEFINED);
-                let _ = Reflect::set(&arr, &(idx + added).into(), &value);
+                let ok = Reflect::get(&arr, &idx.into()).ok().is_some_and(|value| {
+                    Reflect::set(&arr, &(idx + added).into(), &value).unwrap_or(false)
+                });
+                patched &= ok;
             }
             for (idx, row) in rows.iter().enumerate() {
-                if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
-                    let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
-                }
+                let ok = serde_wasm_bindgen::to_value(row)
+                    .ok()
+                    .is_some_and(|new_js| {
+                        Reflect::set(&arr, &(idx as u32).into(), &new_js).unwrap_or(false)
+                    });
+                patched &= ok;
             }
         }
-        keep_field_fresh(sid, field);
+        finish_inline_patch(sid, field, patched);
     }
     crate::reactive::trigger(sid, field);
 }

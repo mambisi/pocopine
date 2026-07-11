@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{Element, HtmlElement, window};
 
+thread_local! {
+    static GHOST_LIGHT_DOM_SETUP_COUNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static GHOST_LIGHT_DOM_OUTER_SETUP_COUNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 wasm_bindgen_test_configure!(run_in_browser);
 
 #[derive(Default, Serialize, Deserialize)]
@@ -23,6 +28,45 @@ struct LdsChild {}
 
 #[handlers]
 impl LdsChild {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "lds-ghost-inner",
+    template_inline = r#"<span class="lds-ghost-inner">inner</span>"#
+)]
+struct LdsGhostInner {}
+
+#[handlers]
+impl LdsGhostInner {
+    pub fn on_setup(&mut self) {
+        GHOST_LIGHT_DOM_SETUP_COUNT.with(|count| count.set(count.get() + 1));
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "lds-ghost-outer",
+    template_inline = r#"<span class="lds-ghost-outer">outer</span>"#
+)]
+struct LdsGhostOuter {}
+
+#[handlers]
+impl LdsGhostOuter {
+    pub fn on_setup(&mut self) {
+        GHOST_LIGHT_DOM_OUTER_SETUP_COUNT.with(|count| count.set(count.get() + 1));
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "lds-ghost-host",
+    template_inline = r#"<section class="lds-ghost-host"><slot></slot></section>"#,
+    uses = [LdsGhostInner, LdsGhostOuter],
+)]
+struct LdsGhostHost {}
+
+#[handlers]
+impl LdsGhostHost {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(
@@ -98,6 +142,26 @@ impl LdsIfSlotHost {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "lds-captured-scoped-host",
+    template_inline = r#"
+<section class="lds-captured-scoped-host">
+  <slot name="row" :label="label"></slot>
+</section>
+"#
+)]
+struct LdsCapturedScopedHost {
+    label: String,
+}
+
+#[handlers]
+impl LdsCapturedScopedHost {
+    pub fn on_setup(&mut self) {
+        self.label = "published".to_string();
+    }
+}
+
 fn doc() -> web_sys::Document {
     window().unwrap().document().unwrap()
 }
@@ -132,6 +196,33 @@ async fn default_light_dom_slot_mounts_custom_child() {
         .expect("custom child in captured default slot mounted");
     assert_eq!(child.text_content().as_deref(), Some("child mounted"));
 
+    handle.unmount();
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn captured_light_dom_discovery_skips_detached_nested_candidates() {
+    GHOST_LIGHT_DOM_SETUP_COUNT.with(|count| count.set(0));
+    GHOST_LIGHT_DOM_OUTER_SETUP_COUNT.with(|count| count.set(0));
+    let (host, _root, handle) = mount_with_light_dom::<LdsGhostHost>(
+        "<div><lds-ghost-outer><lds-ghost-inner></lds-ghost-inner></lds-ghost-outer></div>",
+    );
+    tick().await;
+
+    assert_eq!(
+        GHOST_LIGHT_DOM_OUTER_SETUP_COUNT.with(std::cell::Cell::get),
+        1,
+        "captured outer candidate must mount before its stale child is skipped"
+    );
+    assert!(
+        host.query_selector(".lds-ghost-outer").unwrap().is_some(),
+        "captured outer replacement DOM must be present"
+    );
+    assert_eq!(
+        GHOST_LIGHT_DOM_SETUP_COUNT.with(std::cell::Cell::get),
+        0,
+        "mounting the outer captured candidate detached its child, so child setup must not run"
+    );
     handle.unmount();
     host.remove();
 }
@@ -238,5 +329,44 @@ async fn captured_light_dom_slot_inside_pp_if_replays_initially_and_after_reopen
     );
 
     handle.unmount();
+    host.remove();
+}
+
+#[cfg(any(debug_assertions, feature = "devtools"))]
+#[wasm_bindgen_test]
+async fn captured_scoped_slot_releases_its_slot_scope_across_multiple_roots() {
+    let scopes_before = pocopine_core::scope::Scope::count();
+    let (host, _root, handle) = mount_with_light_dom::<LdsCapturedScopedHost>(
+        r#"<template pp-slot="row" pp-let="ctx">
+            leading text
+            <span class="lds-captured-scoped-first">first</span>
+            <b class="lds-captured-scoped-second">second</b>
+            trailing text
+        </template>"#,
+    );
+    tick().await;
+
+    assert!(
+        host.query_selector(".lds-captured-scoped-first")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        host.query_selector(".lds-captured-scoped-second")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        pocopine_core::scope::Scope::count() > scopes_before,
+        "component and captured SlotScope must both be live before teardown"
+    );
+
+    handle.unmount();
+
+    assert_eq!(
+        pocopine_core::scope::Scope::count(),
+        scopes_before,
+        "captured scoped-slot teardown must release text and element roots plus SlotScope"
+    );
     host.remove();
 }

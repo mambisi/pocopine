@@ -2736,6 +2736,7 @@ impl SubtreeHandle {
         }
         mount::release_compiled_subtree(&self.host);
         self.host.set_inner_html("");
+        mount::clear_component_host_stamps(&self.host);
         self.active = false;
     }
 
@@ -2778,6 +2779,12 @@ fn mount_pp_app_subtree(host: &Element) {
                 let Ok(el) = node.dyn_into::<Element>() else {
                     continue;
                 };
+                // Mounting an outer candidate may replace or capture its
+                // original descendants. QuerySelectorAll is a snapshot, so
+                // re-check containment before touching each later candidate.
+                if !host.contains(Some(el.as_ref())) {
+                    continue;
+                }
                 let tag = el.local_name();
                 mount::mount_child_component(&el, &tag);
                 mount::finalize_compiled_subtree(&el);

@@ -44,7 +44,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use wasm_bindgen::JsCast;
+use js_sys::Reflect;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::Element;
 
 use crate::handle::Handle;
@@ -56,15 +57,69 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+const REF_SCOPE_KEY: &str = "__pp_ref_scope";
+const REF_NAME_KEY: &str = "__pp_ref_name";
+
 /// Register `el` as the ref named `name` on `scope_id`. Called by the
 /// `pp-ref` directive during walk.
 pub fn register(scope_id: ScopeId, name: &str, el: &Element) {
+    unregister_element(el);
     REFS.with(|r| {
         r.borrow_mut()
             .entry(scope_id)
             .or_default()
             .insert(name.to_string(), el.clone());
     });
+    let _ = Reflect::set(
+        el.as_ref(),
+        &JsValue::from_str(REF_SCOPE_KEY),
+        &JsValue::from_f64(scope_id.0 as f64),
+    );
+    let _ = Reflect::set(
+        el.as_ref(),
+        &JsValue::from_str(REF_NAME_KEY),
+        &JsValue::from_str(name),
+    );
+}
+
+/// Remove the registration owned by one element. The identity check keeps an
+/// older conditional branch from deleting a newer element that reused the
+/// same ref name before the old branch finished teardown.
+pub(crate) fn unregister_element(el: &Element) {
+    let scope_id = Reflect::get(el.as_ref(), &JsValue::from_str(REF_SCOPE_KEY))
+        .ok()
+        .and_then(|value| value.as_f64())
+        .map(|value| ScopeId(value as u64));
+    let name = Reflect::get(el.as_ref(), &JsValue::from_str(REF_NAME_KEY))
+        .ok()
+        .and_then(|value| value.as_string());
+    if let (Some(scope_id), Some(name)) = (scope_id, name) {
+        REFS.with(|refs| {
+            let mut refs = refs.borrow_mut();
+            let remove_scope = if let Some(scope_refs) = refs.get_mut(&scope_id) {
+                let is_current = scope_refs.get(&name).is_some_and(|current| current == el);
+                if is_current {
+                    scope_refs.remove(&name);
+                }
+                scope_refs.is_empty()
+            } else {
+                false
+            };
+            if remove_scope {
+                refs.remove(&scope_id);
+            }
+        });
+    }
+    let _ = Reflect::set(
+        el.as_ref(),
+        &JsValue::from_str(REF_SCOPE_KEY),
+        &JsValue::UNDEFINED,
+    );
+    let _ = Reflect::set(
+        el.as_ref(),
+        &JsValue::from_str(REF_NAME_KEY),
+        &JsValue::UNDEFINED,
+    );
 }
 
 /// Look up a ref on the current handler's scope. Returns `None`

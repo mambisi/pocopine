@@ -447,6 +447,15 @@ jobs:
           # RFC-058 Phase 6.5 — runtime walker is gone; the
           # browser job runs the template-plan suite (compiled
           # mount + lifecycle) and the Pine compound suite.
+          - name: pocopine-app-root
+            crate: crates/pocopine
+            args: --test pp_app_root
+          - name: pocopine-light-dom-slots
+            crate: crates/pocopine
+            args: --test light_dom_slots
+          - name: pocopine-typed-refs
+            crate: crates/pocopine
+            args: --test refs_typed
           - name: pocopine-template-plan
             crate: crates/pocopine
             args: --test template_plan

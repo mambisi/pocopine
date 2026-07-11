@@ -19,12 +19,13 @@
 #![cfg(target_arch = "wasm32")]
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{Element, window};
+use web_sys::{Element, HtmlElement, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -213,6 +214,60 @@ impl TypedRefsLiftedParent {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "typed-refs-conditional",
+    template_inline = r#"<div class="tr-conditional">
+        <button class="tr-toggle" @click="toggle">toggle</button>
+        <template pp-if="open">
+            <span pp-ref="conditional">conditional</span>
+        </template>
+    </div>"#
+)]
+struct TypedRefsConditional {
+    open: bool,
+}
+
+#[handlers]
+impl TypedRefsConditional {
+    pub fn on_setup(&mut self) {
+        self.open = true;
+    }
+
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn conditional_ref_unregisters_when_its_branch_unmounts() {
+    let host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&host).unwrap();
+    let handle = pocopine::App::mount_subtree::<TypedRefsConditional>(&host);
+    tick().await;
+    let root = host.first_element_child().expect("rendered root");
+    let scope_id = pocopine_core::mount::scope_id_of_element(&root).expect("scope id");
+    assert!(
+        pocopine_core::refs::get_on(scope_id, "conditional").is_some(),
+        "truthy branch registers its ref"
+    );
+
+    host.query_selector(".tr-toggle")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    assert!(
+        pocopine_core::refs::get_on(scope_id, "conditional").is_none(),
+        "branch teardown must unregister the detached ref immediately"
+    );
+    handle.unmount();
+    host.remove();
+}
+
 #[wasm_bindgen_test]
 async fn generated_refs_struct_includes_pp_refs_from_lifted_bodies() {
     OBSERVED_LIFTED_REF_PRESENT.with(|c| *c.borrow_mut() = None);
@@ -317,4 +372,23 @@ async fn generated_refs_struct_method_name_is_compile_time_typo_safe() {
         "free-fn lookup via the same name the macro baked in resolves"
     );
     host.remove();
+}
+
+#[wasm_bindgen_test]
+fn unregistering_an_old_ref_element_does_not_remove_its_replacement() {
+    let parent_scope = Scope::new(Rc::new(RefCell::new(TypedRefsParent::default())));
+    let old = doc().create_element("span").unwrap();
+    let replacement = doc().create_element("span").unwrap();
+    pocopine_core::refs::register(parent_scope.id, "body", &old);
+    pocopine_core::refs::register(parent_scope.id, "body", &replacement);
+
+    pocopine_core::mount::release_compiled_subtree(&old);
+
+    let current = pocopine_core::refs::get_on(parent_scope.id, "body")
+        .expect("replacement ref survives old branch teardown");
+    assert_eq!(
+        current, replacement,
+        "tearing down an old branch must not delete a newer same-name ref"
+    );
+    Scope::remove(parent_scope.id);
 }

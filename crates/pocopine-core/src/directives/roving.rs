@@ -17,15 +17,12 @@
 //!   the host's `aria-activedescendant` and each item's
 //!   `data-highlighted` attribute.
 
-use js_sys::Reflect;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{Element, HtmlElement, KeyboardEvent, NodeList, console};
+use web_sys::{Element, Event, HtmlElement, KeyboardEvent, NodeList, console};
 
 use crate::reactive::ScopeId;
-
-const STATE_KEY: &str = "__pp_roving_state";
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Orientation {
@@ -70,23 +67,6 @@ pub fn install_opaque(
     }
 }
 
-/// Called by `mount::release_subtree` on every released element.
-pub fn release(el: &Element) {
-    let Ok(v) = Reflect::get(el.as_ref(), &STATE_KEY.into()) else {
-        return;
-    };
-    if v.is_undefined() || v.is_null() {
-        return;
-    }
-    if let Ok(target) = v.clone().dyn_into::<web_sys::EventTarget>() {
-        // Impossible to re-use the closure reference after it was
-        // forgotten, so we rely on the `__pp_roving_state` slot
-        // holding a handle the GC will drop alongside the element.
-        let _ = target;
-    }
-    let _ = Reflect::set(el.as_ref(), &STATE_KEY.into(), &JsValue::UNDEFINED);
-}
-
 /// Primary roving install — container owns the arrow-key listener,
 /// items get tabindex management.
 fn install_roving(
@@ -118,8 +98,11 @@ fn install_roving(
     // Keydown listener.
     let container_clone = container.clone();
     let selector_clone = items_selector.clone();
-    let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::wrap(Box::new({
-        move |ev: KeyboardEvent| {
+    let closure: Closure<dyn FnMut(Event)> = Closure::wrap(Box::new({
+        move |ev: Event| {
+            let Ok(ev) = ev.dyn_into::<KeyboardEvent>() else {
+                return;
+            };
             let key = ev.key();
             let action = classify_key(&key, orientation);
             let Some(action) = action else { return };
@@ -175,13 +158,10 @@ fn install_roving(
                 crate::focus::focus_no_scroll(&html);
             }
         }
-    })
-        as Box<dyn FnMut(KeyboardEvent)>);
+    }) as Box<dyn FnMut(Event)>);
 
     let target: &web_sys::EventTarget = container.as_ref();
-    let _ = target.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
-    closure.forget();
-    let _ = Reflect::set(container.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
+    crate::mount::track_listener_on(container, target.clone(), "keydown", false, closure);
 }
 
 /// Entry-transfer form: `pp-roving:<listbox-id>` on an `<input>`.
@@ -201,8 +181,11 @@ fn install_palette_entry(input: &Element, orientation: Orientation) {
     let listbox_arg = read_roving_arg(input);
     let _ = listbox_id;
 
-    let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::wrap(Box::new({
-        move |ev: KeyboardEvent| {
+    let closure: Closure<dyn FnMut(Event)> = Closure::wrap(Box::new({
+        move |ev: Event| {
+            let Ok(ev) = ev.dyn_into::<KeyboardEvent>() else {
+                return;
+            };
             let direction = match classify_key(&ev.key(), orientation) {
                 Some(KeyAction::Next) => FocusEdge::First,
                 Some(KeyAction::Prev) => FocusEdge::Last,
@@ -246,12 +229,9 @@ fn install_palette_entry(input: &Element, orientation: Orientation) {
                 }
             }
         }
-    })
-        as Box<dyn FnMut(KeyboardEvent)>);
+    }) as Box<dyn FnMut(Event)>);
     let target: &web_sys::EventTarget = input_clone.as_ref();
-    let _ = target.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
-    closure.forget();
-    let _ = Reflect::set(input.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
+    crate::mount::track_listener_on(input, target.clone(), "keydown", false, closure);
 }
 
 enum FocusEdge {
@@ -376,8 +356,11 @@ fn install_virtual(
     }
 
     let host_clone = host.clone();
-    let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::wrap(Box::new({
-        move |ev: KeyboardEvent| {
+    let closure: Closure<dyn FnMut(Event)> = Closure::wrap(Box::new({
+        move |ev: Event| {
+            let Ok(ev) = ev.dyn_into::<KeyboardEvent>() else {
+                return;
+            };
             let action = match classify_key(&ev.key(), orientation) {
                 Some(a) => a,
                 None => return,
@@ -433,13 +416,10 @@ fn install_virtual(
             let _ = host_clone.set_attribute("aria-activedescendant", &id);
             set_highlighted(&items, Some(target));
         }
-    })
-        as Box<dyn FnMut(KeyboardEvent)>);
+    }) as Box<dyn FnMut(Event)>);
 
     let target: &web_sys::EventTarget = host.as_ref();
-    let _ = target.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
-    closure.forget();
-    let _ = Reflect::set(host.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
+    crate::mount::track_listener_on(host, target.clone(), "keydown", false, closure);
 }
 
 fn query_virtual_items(listbox_id: &str, selector: &str) -> Vec<Element> {

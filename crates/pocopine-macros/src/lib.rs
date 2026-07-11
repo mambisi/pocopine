@@ -3269,7 +3269,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             {
                 let __scope = __root.scope_id();
                 let __h = ::core::clone::Clone::clone(&__handle);
-                ::pocopine::watch_scope_field::<#field_ty, _>(
+                ::pocopine::watch_scope_field_scoped::<#field_ty, _>(
                     __scope,
                     #field_name_on_root,
                     move |__v, _| {
@@ -4083,7 +4083,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::std::rc::Rc::new(::std::cell::Cell::new(true));
                 let __watch_initial_ticket =
                     ::std::rc::Rc::new(::std::cell::Cell::new(0_u64));
-                ::pocopine::watch_scope_field_now::<#v_ty, _>(__scope, #field_name, move |new, prev| {
+                let __watch_effect = ::pocopine::watch_scope_field_now::<#v_ty, _>(__scope, #field_name, move |new, prev| {
                     let new_v: #v_ty = new.clone();
                     let prev_v: ::core::option::Option<#v_ty> = prev.cloned();
                     if __watch_initial_pending.get() {
@@ -4115,6 +4115,9 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                                 });
                         }
                     }
+                });
+                ::pocopine::on_scope_unmount_for(__scope, move || {
+                    ::pocopine::release(__watch_effect);
                 });
             }
         }

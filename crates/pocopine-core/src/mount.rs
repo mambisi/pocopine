@@ -89,6 +89,7 @@ const RELEASE_SKIP_KEY: &str = "__pp_release_skip";
 /// scope points.
 pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 const MOUNT_HOOK_FIRED_KEY: &str = "__pp_mount_hook_fired";
+const SLOT_SCOPE_OWNER_KEY: &str = "__pp_slot_scope_owner";
 
 #[derive(Clone)]
 struct CapturedSlot {
@@ -108,6 +109,59 @@ thread_local! {
     /// + `as_string` round-trip.
     static COMPONENT_NAMES: RefCell<HashMap<ScopeId, &'static str>> =
         RefCell::new(HashMap::new());
+    /// Number of live top-level nodes in each scoped-slot materialization.
+    /// The nodes borrow the SlotScope for evaluation, while this count gives
+    /// that otherwise-ownerless scope a deterministic teardown point.
+    static SLOT_SCOPE_ROOTS: RefCell<HashMap<ScopeId, usize>> =
+        RefCell::new(HashMap::new());
+}
+
+fn bind_slot_scope_owners(scope_id: ScopeId, roots: &[Node]) {
+    if roots.is_empty() {
+        Scope::remove(scope_id);
+        return;
+    }
+    SLOT_SCOPE_ROOTS.with(|owners| {
+        owners.borrow_mut().insert(scope_id, roots.len());
+    });
+    for root in roots {
+        let _ = Reflect::set(
+            root.as_ref(),
+            &SLOT_SCOPE_OWNER_KEY.into(),
+            &JsValue::from_f64(scope_id.0 as f64),
+        );
+    }
+}
+
+fn release_slot_scope_owner(root: &Node) {
+    let Some(scope_id) = Reflect::get(root.as_ref(), &SLOT_SCOPE_OWNER_KEY.into())
+        .ok()
+        .and_then(|value| value.as_f64())
+        .map(|value| ScopeId(value as u64))
+    else {
+        return;
+    };
+    let _ = Reflect::set(
+        root.as_ref(),
+        &SLOT_SCOPE_OWNER_KEY.into(),
+        &JsValue::UNDEFINED,
+    );
+    let remove_scope = SLOT_SCOPE_ROOTS.with(|owners| {
+        let mut owners = owners.borrow_mut();
+        let Some(remaining) = owners.get_mut(&scope_id) else {
+            return false;
+        };
+        *remaining = remaining.saturating_sub(1);
+        if *remaining == 0 {
+            owners.remove(&scope_id);
+            true
+        } else {
+            false
+        }
+    });
+    if remove_scope {
+        Scope::remove(scope_id);
+    }
 }
 
 /// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
@@ -1077,14 +1131,25 @@ fn materialize_slot(slot_el: &Element) {
             snapshot.push(n);
         }
     }
+    let mut inserted_nodes = Vec::with_capacity(snapshot.len());
+    let mut inserted_elements = Vec::new();
     for n in snapshot {
-        let _ = parent.insert_before(&n, Some(slot_el));
+        if parent.insert_before(&n, Some(slot_el)).is_err() {
+            continue;
+        }
+        inserted_nodes.push(n.clone());
         if let Ok(e) = n.dyn_into::<Element>() {
             if let Some(slot_scope_id) = slot_scope_for_pin {
                 bind_borrowed_scope_to(&e, slot_scope_id, &fragment_parent_proxy);
             }
-            finalize_compiled_subtree(&e);
+            inserted_elements.push(e);
         }
+    }
+    if let Some(slot_scope_id) = slot_scope_for_pin {
+        bind_slot_scope_owners(slot_scope_id, &inserted_nodes);
+    }
+    for element in inserted_elements {
+        finalize_compiled_subtree(&element);
     }
     let _ = parent.remove_child(slot_el);
 }
@@ -1169,9 +1234,13 @@ fn materialize_captured_light_dom_slot(
             snapshot.push(n);
         }
     }
+    let mut inserted_nodes: Vec<Node> = Vec::new();
     let mut inserted: Vec<Element> = Vec::new();
     for n in snapshot {
-        let _ = parent.insert_before(&n, Some(slot_el));
+        if parent.insert_before(&n, Some(slot_el)).is_err() {
+            continue;
+        }
+        inserted_nodes.push(n.clone());
         if let Ok(e) = n.dyn_into::<Element>() {
             inserted.push(e);
         }
@@ -1191,6 +1260,7 @@ fn materialize_captured_light_dom_slot(
         for el in &inserted {
             bind_borrowed_scope_to(el, slot_scope.id, &proxy);
         }
+        bind_slot_scope_owners(slot_scope.id, &inserted_nodes);
     } else {
         for el in &inserted {
             bind_borrowed_scope_to(el, captured.owner_scope_id, &captured.owner_proxy);
@@ -1239,6 +1309,9 @@ fn mount_captured_light_dom_components(root: &Element) {
         }
     }
     for el in roots {
+        if !root.contains(Some(el.as_ref())) {
+            continue;
+        }
         let tag = el.local_name();
         mount_child_component(&el, &tag);
     }
@@ -1682,9 +1755,13 @@ fn release_subtree_inner(node: &Node) {
         // sweep below would pay 5+ `Reflect::get` calls per
         // descendant element for nothing.
         if get_private(&el, RELEASE_SKIP_KEY).is_some() {
+            release_slot_scope_owner(node);
             return;
         }
-        let children = el.children();
+        // Scoped-slot ownership can be stamped on a top-level text node
+        // (for example a bare `{{ ctx.label }}` fragment). Visit all child
+        // nodes, not only elements, so those ownership counts reach zero.
+        let children = el.child_nodes();
         for i in 0..children.length() {
             if let Some(c) = children.item(i) {
                 release_subtree_inner(&c);
@@ -1736,8 +1813,8 @@ fn release_subtree_inner(node: &Node) {
         crate::directives::resize::release(&el);
         crate::directives::intersect::release(&el);
         crate::directives::anchor::release(&el);
-        crate::directives::roving::release(&el);
         crate::directives::flip::release(&el);
+        crate::refs::unregister_element(&el);
         release_listeners(&el);
         match el.local_name().as_str() {
             "pp-component" => crate::dynamic_component::release_host(&el),
@@ -1747,6 +1824,26 @@ fn release_subtree_inner(node: &Node) {
             }
             _ => {}
         }
+    }
+    release_slot_scope_owner(node);
+}
+
+/// Clear the private sentinels that live on a component's custom-element
+/// host. The rendered root owns the scope and is removed separately; these
+/// host-only stamps must not block a later typed remount on the same element.
+pub(crate) fn clear_component_host_stamps(host: &Element) {
+    for key in [
+        "__pp_mounted",
+        HOST_CHILD_SCOPE_ID_KEY,
+        WALKED_KEY,
+        EFFECTS_KEY,
+        LISTENERS_KEY,
+        MOUNT_HOOK_FIRED_KEY,
+        COMPONENT_MOUNT_EVENT_FIRED_KEY,
+        MOUNT_START_MS_KEY,
+        PENDING_EFFECTS_KEY,
+    ] {
+        set_private(host, key, &JsValue::UNDEFINED);
     }
 }
 
