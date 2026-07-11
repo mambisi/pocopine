@@ -104,10 +104,12 @@ fn read_scope_field<V>(scope_id: ScopeId, field: &'static str) -> V
 where
     V: Clone + PartialEq + Default + DeserializeOwned + 'static,
 {
-    track(scope_id, field);
     let Some(scope) = Scope::find(scope_id) else {
         return V::default();
     };
+    // A delayed install may race the target scope's teardown. Do not
+    // recreate an interned field signal after `Scope::remove` has purged it.
+    track(scope_id, field);
     let v = scope.state.borrow().get(field);
     serde_wasm_bindgen::from_value::<V>(v).unwrap_or_default()
 }
@@ -152,18 +154,16 @@ where
     S: Fn() -> T + 'static,
     C: Fn(&T, Option<&T>) + 'static,
 {
-    use std::cell::Cell;
-    use std::rc::Rc;
-    let pending: Rc<Cell<Option<EffectId>>> = Rc::new(Cell::new(None));
-    let pending_for_install = pending.clone();
+    let owner =
+        current_scope_id().expect("watch_scoped called outside a handler / lifecycle context");
     crate::tick::next(move || {
-        let id = watch(source, cb);
-        pending_for_install.set(Some(id));
-    });
-    crate::events::on_scope_unmount(move || {
-        if let Some(id) = pending.take() {
-            crate::reactive::release(id);
+        if Scope::find(owner).is_none() {
+            return;
         }
+        let id = watch(source, cb);
+        // Register after installation. If the initial callback unmounted the
+        // owner, `on_scope_unmount_for` releases the effect immediately.
+        crate::events::on_scope_unmount_for(owner, move || crate::reactive::release(id));
     });
 }
 
@@ -187,20 +187,13 @@ where
     V: Clone + PartialEq + Default + DeserializeOwned + 'static,
     C: Fn(&V, Option<&V>) + 'static,
 {
-    use std::cell::Cell;
-    use std::rc::Rc;
-    // The install is deferred a tick (same as `watch_scope_field`),
-    // so we have to capture the eventually-minted EffectId in a
-    // shared cell that the unmount closure can read.
-    let pending: Rc<Cell<Option<EffectId>>> = Rc::new(Cell::new(None));
-    let pending_for_install = pending.clone();
+    let owner = current_scope_id()
+        .expect("watch_scope_field_scoped called outside a handler / lifecycle context");
     crate::tick::next(move || {
-        let id = watch_scope_field_now(scope_id, field, cb);
-        pending_for_install.set(Some(id));
-    });
-    crate::events::on_scope_unmount(move || {
-        if let Some(id) = pending.take() {
-            crate::reactive::release(id);
+        if Scope::find(owner).is_none() || Scope::find(scope_id).is_none() {
+            return;
         }
+        let id = watch_scope_field_now(scope_id, field, cb);
+        crate::events::on_scope_unmount_for(owner, move || crate::reactive::release(id));
     });
 }

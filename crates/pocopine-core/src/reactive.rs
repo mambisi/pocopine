@@ -608,10 +608,19 @@ fn dispatch_signal(sid: SignalId) {
 /// dispatch quietly (no devtools signal hook): they aren't user
 /// `Signal`s, and the devtools timeline has its own field events.
 pub fn trigger(scope_id: ScopeId, key: &str) {
-    let Some(sid) = field_signal(scope_id, key, false) else {
-        return;
-    };
-    dispatch_signal(sid);
+    if let Some(sid) = field_signal(scope_id, key, false) {
+        dispatch_signal(sid);
+    }
+    // `Handle::observe` intentionally selects from typed Rust state instead
+    // of reading through the proxy, so it subscribes to this reserved
+    // any-field signal. Targeted writes must notify it as well as the named
+    // field; dirty-sweep writes already reach it through `trigger_scope`.
+    const HANDLE_OBSERVE_KEY: &str = "__pp_handle_observe";
+    if key != HANDLE_OBSERVE_KEY
+        && let Some(sid) = field_signal(scope_id, HANDLE_OBSERVE_KEY, false)
+    {
+        dispatch_signal(sid);
+    }
 }
 
 /// Signal-targeted trigger. Skips the `(scope_id, key)` lookup path

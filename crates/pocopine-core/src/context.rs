@@ -235,6 +235,27 @@ pub fn clear_scope(scope: ScopeId) {
     });
 }
 
+/// Bulk counterpart to [`clear_scope`] for compiled `pp-for` row scopes.
+/// Row scopes normally own only a parent edge, but clearing both tables keeps
+/// this correct if a future row feature adds a provided value.
+pub(crate) fn clear_scopes(scopes: &[ScopeId]) {
+    if scopes.is_empty() {
+        return;
+    }
+    PARENTS.with(|parents| {
+        let mut parents = parents.borrow_mut();
+        for scope in scopes {
+            parents.remove(scope);
+        }
+    });
+    PROVIDES.with(|provides| {
+        let mut provides = provides.borrow_mut();
+        for scope in scopes {
+            provides.remove(scope);
+        }
+    });
+}
+
 /// Marker trait paired with each [`ContextKey<T>`] declared via
 /// [`create_context!`]. Lets `Inject<KEY, T>` (RFC 056 §6.5) name a
 /// key at type level on stable Rust without const generics.
