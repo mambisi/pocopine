@@ -56,7 +56,7 @@ use std::ops::Range;
 
 use annotate_snippets::{Level, Renderer, Snippet};
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 
 use crate::template_parser::{Element, Node, TemplateAst};
 
@@ -164,6 +164,109 @@ pub fn emit_path_assertions(
         }
     });
     quote! { #(#checks)* }
+}
+
+/// Predictable marker emitted by `#[handlers]` for a computed value's return
+/// type. The component macro references the same marker when a bare computed
+/// name is bound to `<pp-component :is>`.
+pub(crate) fn computed_type_marker_ident(
+    struct_ident: &syn::Ident,
+    computed_name: &str,
+) -> syn::Ident {
+    format_ident!(
+        "__PocComputedType_{}_{}",
+        struct_ident,
+        computed_name,
+        span = struct_ident.span(),
+    )
+}
+
+/// Enforce the typed dynamic-component selection lane wherever the component
+/// macro can see the Rust type directly.
+///
+/// Bare local fields are asserted through field access. Bare computed names
+/// resolve through the type witness emitted by `#[handlers]`. Dotted paths
+/// (notably `$store.foo.selection` and loop-item fields) cross a dynamic scope
+/// boundary the proc macro cannot type-resolve, so the runtime's strict
+/// `ComponentRef<Host>` wire-shape check remains their backstop.
+pub fn emit_dynamic_component_selection_assertions(
+    ast: &TemplateAst,
+    struct_ident: &syn::Ident,
+    field_idents: &[syn::Ident],
+    span: Span,
+) -> TokenStream {
+    let mut expressions = std::collections::BTreeSet::new();
+    for node in &ast.roots {
+        collect_dynamic_component_selections(node, &mut expressions);
+    }
+
+    let checks = expressions.into_iter().filter_map(|source| {
+        let parsed = pocopine_expr::parse(&source).ok()?;
+        let pocopine_expr::Expr::Path(segments) = parsed.value else {
+            let message = "`<pp-component :is>` must be a path to a typed \
+                           `ComponentRef<Host>` or `Option<ComponentRef<Host>>`; \
+                           construct the selection with \
+                           `ComponentRef::of::<Child>()` in a `ComponentRef<Host>` \
+                           context (or host-scoped \
+                           `from_registered_name` at an external \
+                           boundary) and move conditional logic into a typed Rust field or \
+                           `#[computed]` value";
+            return Some(quote_spanned! {span=>
+                ::core::compile_error!(#message);
+            });
+        };
+
+        if segments.len() != 1 || segments[0].starts_with('$') {
+            return None;
+        }
+        let root = &segments[0];
+        if let Some(field_ident) = field_idents
+            .iter()
+            .find(|ident| ident.to_string().trim_start_matches("r#") == root.as_str())
+        {
+            return Some(quote_spanned! {span=>
+                const _: fn(&#struct_ident) = |__pocopine_state| {
+                    ::pocopine::__private::assert_dynamic_component_selection::<
+                        #struct_ident,
+                        _,
+                    >(
+                        &__pocopine_state.#field_ident,
+                    );
+                };
+            });
+        }
+
+        let marker = computed_type_marker_ident(struct_ident, root);
+        Some(quote_spanned! {span=>
+            const _: fn() = || {
+                ::pocopine::__private::assert_dynamic_component_selection_type::<
+                    #struct_ident,
+                    <#marker as ::pocopine::__private::ComputedTypeWitness>::Output,
+                >();
+            };
+        })
+    });
+
+    quote! { #(#checks)* }
+}
+
+fn collect_dynamic_component_selections(
+    node: &Node,
+    expressions: &mut std::collections::BTreeSet<String>,
+) {
+    let Node::Element(el) = node else {
+        return;
+    };
+    if el.tag == "pp-component" {
+        for (name, value) in &el.attrs {
+            if matches!(name.as_str(), ":is" | "pp-bind:is") {
+                expressions.insert(value.trim().to_string());
+            }
+        }
+    }
+    for child in &el.children {
+        collect_dynamic_component_selections(child, expressions);
+    }
 }
 
 /// Pre-render the panic message at expansion time. When the root

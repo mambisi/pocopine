@@ -93,7 +93,7 @@ impl DynamicBeta {
     </section>"#
 )]
 struct DynamicHost {
-    key: Option<ComponentRef>,
+    key: Option<ComponentRef<DynamicHost>>,
     label: String,
 }
 
@@ -132,7 +132,7 @@ impl DynamicHost {
     </section>"#
 )]
 struct KeepAliveHost {
-    key: Option<ComponentRef>,
+    key: Option<ComponentRef<KeepAliveHost>>,
     label: String,
 }
 
@@ -162,19 +162,79 @@ impl KeepAliveHost {
     </section>"#
 )]
 struct DataDrivenHost {
-    key: String,
+    key: Option<ComponentRef<DataDrivenHost>>,
 }
 
 #[handlers]
 impl DataDrivenHost {
     pub fn on_setup(&mut self) {
-        self.key = ComponentRef::of::<DynamicAlpha>().to_string();
+        self.key = ComponentRef::<Self>::from_registered_name("dc-dynamic-alpha");
     }
 
     pub fn show_unknown(&mut self) {
-        self.key = "dc-not-registered".into();
+        self.key = ComponentRef::<Self>::from_registered_name("dc-not-registered");
     }
 }
+
+/// Mirrors the accidental application pattern this contract must reject:
+/// `$store` exposes a raw registered tag string instead of a `ComponentRef`.
+#[derive(Serialize, Deserialize)]
+#[store(name = "dc_untyped_selection")]
+struct UntypedSelectionStore {
+    key: String,
+}
+
+impl Default for UntypedSelectionStore {
+    fn default() -> Self {
+        Self {
+            key: "dc-dynamic-alpha".into(),
+        }
+    }
+}
+
+#[handlers]
+impl UntypedSelectionStore {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "dc-untyped-selection-host",
+    uses = [DynamicAlpha],
+    template_inline = r#"<pp-component :is="$store.dc_untyped_selection.key"></pp-component>"#
+)]
+struct UntypedSelectionHost {}
+
+#[handlers]
+impl UntypedSelectionHost {}
+
+/// `$store` is outside the component macro's Rust type view, so retain a
+/// runtime check that a typed token is consumed by its declared host.
+#[derive(Serialize, Deserialize)]
+#[store(name = "dc_foreign_selection")]
+struct ForeignSelectionStore {
+    key: Option<ComponentRef<DataDrivenHost>>,
+}
+
+impl Default for ForeignSelectionStore {
+    fn default() -> Self {
+        Self {
+            key: Some(ComponentRef::of::<DynamicAlpha>()),
+        }
+    }
+}
+
+#[handlers]
+impl ForeignSelectionStore {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "dc-foreign-selection-host",
+    uses = [DynamicAlpha],
+    template_inline = r#"<pp-component :is="$store.dc_foreign_selection.key"></pp-component>"#,
+)]
+struct ForeignSelectionHost {}
+
+#[handlers]
+impl ForeignSelectionHost {}
 
 fn document() -> web_sys::Document {
     window().unwrap().document().unwrap()
@@ -260,6 +320,40 @@ fn unknown_data_driven_name_unmounts_the_current_component() {
     handle.unmount();
     host.remove();
     pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn raw_store_string_is_not_a_dynamic_component_selection() {
+    reset_counts();
+    UntypedSelectionStore::__register_store();
+
+    let (host, handle) = mount::<UntypedSelectionHost>();
+
+    assert!(
+        host.query_selector(".dc-alpha").unwrap().is_none(),
+        "a registered tag string must not bypass the ComponentRef contract",
+    );
+    assert_eq!(ALPHA_MOUNTS.with(Cell::get), 0);
+
+    handle.unmount();
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+fn component_ref_cannot_cross_dynamic_hosts() {
+    reset_counts();
+    ForeignSelectionStore::__register_store();
+
+    let (host, handle) = mount::<ForeignSelectionHost>();
+
+    assert!(
+        host.query_selector(".dc-alpha").unwrap().is_none(),
+        "a ComponentRef minted for another host must be rejected",
+    );
+    assert_eq!(ALPHA_MOUNTS.with(Cell::get), 0);
+
+    handle.unmount();
+    host.remove();
 }
 
 #[wasm_bindgen_test]

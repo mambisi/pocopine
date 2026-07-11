@@ -9,10 +9,12 @@
 Add a first-class **dynamic component** element — `<pp-component :is="expr">` —
 that mounts, at runtime, whichever registered component the reactive `:is`
 expression resolves to, swapping it when the expression changes. Rust code uses
-`ComponentRef::of::<C>()`, so the compiler proves that `C` is a component and
-the runtime key comes from `C::NAME`; application authors do not spell a tag
-name. This is the Vue `<component :is>` primitive with a typed Rust selection
-path. It closes the one gap that previously forced either a hand-written
+`ComponentRef::of::<Child>()`, with `Host` inferred from the expected
+`ComponentRef<Host>` type, so the compiler proves that `Child` is a component
+declared in `Host`'s `uses = [...]` contract. Runtime identities come from the
+two component types; application authors do not spell a tag name. This is the
+Vue `<component :is>` primitive with a typed Rust selection path. It closes the
+one gap that previously forced either a hand-written
 `pp-if` switch (one arm per component) or imperative mounting.
 
 ## Motivation
@@ -42,7 +44,7 @@ hydration. It belongs in the framework.
 ## Design
 
 ```html
-<!-- active: Option<ComponentRef>; swap on change -->
+<!-- active: Option<ComponentRef<MyHost>>; swap on change -->
 <pp-component :is="active"></pp-component>
 
 <!-- forward props to the resolved component -->
@@ -55,13 +57,17 @@ hydration. It belongs in the framework.
 <pp-component :is="key" pp-transition:in="fade"></pp-component>
 ```
 
-- **`:is`** — required, reactive. The normal Rust value is a
-  `ComponentRef` constructed with `ComponentRef::of::<C>()`. That constructor
-  requires `C: Component`, registers `C`, and derives the canonical key from
-  `C::NAME`. A registered name is accepted only for genuinely data-driven or
-  plugin screens; use `ComponentRef::from_registered_name` to validate that
-  boundary. Empty or unknown values render nothing (a slot fallback may be
-  offered later).
+- **`:is`** — required, reactive. The normal Rust value is a `ComponentRef`
+  constructed with `ComponentRef::of::<Child>()`. Its expected
+  `ComponentRef<Host>` type supplies `Host`; the constructor then requires
+  `Child: Component` plus the macro-emitted proof that `Host` lists `Child` in
+  `uses`, registers the dependency graph, and derives both canonical keys from
+  their types. Code without an expected type can use
+  `ComponentRef::<Host>::of::<Child>()`. A registered name is accepted only for
+  genuinely data-driven or plugin screens; use
+  `ComponentRef::<Host>::from_registered_name` to validate that boundary
+  against the same host allowlist. Raw strings are never selections. Empty or
+  unknown values render nothing (a slot fallback may be offered later).
 - **Props** — bound attributes forward to the resolved component's declared
   props, exactly as on a static tag.
 - **`keep-alive`** — opt-in. Off (default): leaving a component unmounts it →
@@ -76,6 +82,8 @@ hydration. It belongs in the framework.
 - On mount and on every `:is` change: if the resolved name equals the currently
   mounted one, no-op; else tear down the current subtree (or hide it, under
   `keep-alive`) and mount the new one into the sentinel host.
+- The selection token carries its owning host identity. The outlet rejects a
+  token minted for another host, even when both hosts list the same child.
 - Lifecycle hooks (`on_mount` / `on_ready` / `on_unmount`) fire per swap on the
   child, as with `pp-if`.
 - Cleanup is bound to the `<pp-component>` scope: when it unmounts, its current
@@ -98,9 +106,12 @@ the template compiler, which emits a **reactive mount region**:
 
 `Component` is intentionally not converted into a trait object. It has an
 associated `NAME` and static registration/mount entry points, so it is not
-object-safe. `ComponentRef` is the small erased token: its public constructor is
-typed, while its private runtime payload is the already-validated canonical
-registry name.
+object-safe. `ComponentRef<Host>` is the small child-erased token: its host
+remains in the Rust type, and its public constructor is typed over `Child`,
+while its private runtime payload carries both already-validated canonical
+registry names. The component macro emits a
+`ComponentUses<Child>` proof and a runtime name allowlist for every host from
+the same `uses = [...]` declaration.
 
 Net new surface is small: a sentinel tag + a reactive region generator; the
 mount/registry/reactive primitives are all present and public.
@@ -130,5 +141,9 @@ removes a parallel mount path and gives the router `keep-alive` + nested outlets
 - `keep-alive`: state + scroll survive a round-trip; uncached path is fresh.
 - `pp-transition` fires on swap.
 - Unknown / empty `:is` renders nothing and cleans up.
+- Raw string fields/computed values, children absent from the host's `uses`
+  list, and locally bound references for another host fail compile-time UI
+  tests; raw store strings and cross-host store tokens are rejected by browser
+  tests.
 - `<pp-outlet>` re-expressed on the shared region passes the existing router
   suite (parity check).

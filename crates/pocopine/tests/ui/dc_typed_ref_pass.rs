@@ -14,7 +14,7 @@ impl DcTypedChild {}
     template_inline = r#"<pp-component :is="active"></pp-component>"#,
 )]
 struct DcTypedHost {
-    active: Option<ComponentRef>,
+    active: Option<ComponentRef<DcTypedHost>>,
 }
 
 #[handlers]
