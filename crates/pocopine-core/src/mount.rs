@@ -346,6 +346,20 @@ fn mount_component(
         return;
     }
 
+    // RFC-112 — framework mount sentinels share the custom-tag entry emitted
+    // by the template compiler, but they are not registered user components.
+    // Install their controller directly before registry instantiation.
+    if tag == "pp-component" {
+        crate::dynamic_component::install(el);
+        set_private(el, "__pp_mounted", &JsValue::TRUE);
+        return;
+    }
+    if tag == "pp-outlet" {
+        crate::router::register_outlet(el.clone());
+        set_private(el, "__pp_mounted", &JsValue::TRUE);
+        return;
+    }
+
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
     // engages when all the structural constraints hold; otherwise
@@ -1313,6 +1327,18 @@ pub fn child_component_scope_id(el: &Element) -> Option<ScopeId> {
 }
 
 /// Climb the parent chain until we find an element with a bound scope.
+pub(crate) fn enclosing_scope_id(el: &Element) -> Option<ScopeId> {
+    let mut cur: Option<Element> = Some(el.clone());
+    while let Some(e) = cur {
+        if let Some(id_num) = get_private(&e, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
+            return Some(ScopeId(id_num as u64));
+        }
+        cur = e.parent_element();
+    }
+    None
+}
+
+/// Climb the parent chain until we find an element with a bound scope.
 pub fn enclosing_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     let mut cur: Option<Element> = Some(el.clone());
     while let Some(e) = cur {
@@ -1714,6 +1740,14 @@ fn release_subtree_inner(node: &Node) {
         crate::directives::roving::release(&el);
         crate::directives::flip::release(&el);
         release_listeners(&el);
+        match el.local_name().as_str() {
+            "pp-component" => crate::dynamic_component::release_host(&el),
+            "pp-outlet" => {
+                crate::dynamic_component::release_host(&el);
+                crate::router::release_outlet(&el);
+            }
+            _ => {}
+        }
     }
 }
 

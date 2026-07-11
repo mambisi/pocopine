@@ -68,6 +68,88 @@ pub trait Component {
     }
 }
 
+/// Typed token for a component type selected at runtime.
+///
+/// `Component` itself is intentionally not object-safe: its name and
+/// registration/mount entry points are type-level. `ComponentRef` captures the
+/// canonical registry identity without allocating a component instance or
+/// using `dyn Component`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ComponentRef {
+    name: &'static str,
+}
+
+impl ComponentRef {
+    /// Create a token for `C` and ensure its registry entry is installed.
+    pub fn of<C: Component>() -> Self {
+        C::register();
+        Self { name: C::NAME }
+    }
+
+    /// Resolve an already-registered canonical name or alias.
+    ///
+    /// This is the data-driven/plugin escape hatch. Ordinary Rust code should
+    /// prefer [`Self::of`] so the component type is checked by the compiler.
+    pub fn from_registered_name(name: &str) -> Option<Self> {
+        crate::registry::canonical_component_name(name).map(|name| Self { name })
+    }
+
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+}
+
+impl fmt::Debug for ComponentRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ComponentRef").field(&self.name).finish()
+    }
+}
+
+impl fmt::Display for ComponentRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+impl serde::Serialize for ComponentRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("ComponentRef", 1)?;
+        state.serialize_field("__pocopine_component", self.name)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ComponentRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Typed { __pocopine_component: String },
+            RegisteredName(String),
+        }
+
+        let name = match Wire::deserialize(deserializer)? {
+            Wire::Typed {
+                __pocopine_component,
+            } => __pocopine_component,
+            Wire::RegisteredName(name) => name,
+        };
+        Self::from_registered_name(&name).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "component `{name}` is not registered; construct it with ComponentRef::of::<C>()",
+            ))
+        })
+    }
+}
+
 /// Component that can be mounted by the client router.
 ///
 /// Route-local configuration lives here so guards/loaders stay next
@@ -662,6 +744,20 @@ impl RouteMeta {
             .and_then(|entry| entry.value.as_ref().downcast_ref::<T>())
     }
 
+    pub(crate) fn merge_from(&mut self, other: &RouteMeta) {
+        for incoming in &other.entries {
+            if let Some(existing) = self
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == incoming.id)
+            {
+                existing.value = incoming.value.clone();
+            } else {
+                self.entries.push(incoming.clone());
+            }
+        }
+    }
+
     pub fn contains<T: 'static>(&self, key: RouteMetaKey<T>) -> bool {
         self.get(key).is_some()
     }
@@ -1237,6 +1333,15 @@ mod route_config_tests {
     impl RouteComponent for TestRoute {}
 
     #[test]
+    fn component_ref_derives_its_runtime_name_from_the_component_type() {
+        let component = ComponentRef::of::<TestRoute>();
+
+        assert_eq!(component.name(), TestRoute::NAME);
+        assert_eq!(component.to_string(), TestRoute::NAME);
+        assert_eq!(format!("{component:?}"), "ComponentRef(\"test-route\")");
+    }
+
+    #[test]
     fn route_component_default_config_has_no_guards() {
         let config = TestRoute::config();
         assert!(config.guards.is_empty());
@@ -1750,6 +1855,67 @@ pub struct App {
     devtools: bool,
 }
 
+/// Closure-scoped builder for child routes under an [`App::layout`].
+///
+/// Child paths are relative by default (`"users"`), `""` creates an index
+/// child, and a leading slash creates an absolute child path while preserving
+/// the parent layout chain.
+pub struct RouteLayoutBuilder<'a> {
+    app: &'a mut App,
+    parent: router::RouteRecordId,
+}
+
+impl RouteLayoutBuilder<'_> {
+    pub fn route<C: RouteComponent>(&mut self, pattern: &'static str) -> &mut Self {
+        self.route_with::<C>(pattern, C::config())
+    }
+
+    pub fn route_with<C: Component>(
+        &mut self,
+        pattern: &'static str,
+        config: RouteConfig<C>,
+    ) -> &mut Self {
+        C::register();
+        let _ = router::register_child_route_with_config(
+            self.parent,
+            pattern,
+            C::NAME,
+            config.into_runtime(),
+        );
+        self.app.routes.push(pattern);
+        self.app.record_component_name(C::NAME);
+        self
+    }
+
+    pub fn index<C: RouteComponent>(&mut self) -> &mut Self {
+        self.route::<C>("")
+    }
+
+    pub fn layout<C: RouteComponent>(
+        &mut self,
+        pattern: &'static str,
+        children: impl FnOnce(&mut RouteLayoutBuilder<'_>),
+    ) -> &mut Self {
+        C::register();
+        let parent = router::register_child_route_with_config(
+            self.parent,
+            pattern,
+            C::NAME,
+            C::config().into_runtime(),
+        );
+        self.app.routes.push(pattern);
+        self.app.record_component_name(C::NAME);
+        {
+            let mut nested = RouteLayoutBuilder {
+                app: self.app,
+                parent,
+            };
+            children(&mut nested);
+        }
+        self
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self::default()
@@ -1851,6 +2017,29 @@ impl App {
         self.route_with::<C>(pattern, C::config())
     }
 
+    /// Register a layout route and build its child records in a borrow-scoped
+    /// closure. The layout component contains the `<pp-outlet>` that owns the
+    /// next route depth.
+    pub fn layout<C: RouteComponent>(
+        mut self,
+        pattern: &'static str,
+        children: impl FnOnce(&mut RouteLayoutBuilder<'_>),
+    ) -> Self {
+        C::register();
+        let parent =
+            router::register_route_with_config(pattern, C::NAME, C::config().into_runtime());
+        self.routes.push(pattern);
+        self.record_component_name(C::NAME);
+        {
+            let mut builder = RouteLayoutBuilder {
+                app: &mut self,
+                parent,
+            };
+            children(&mut builder);
+        }
+        self
+    }
+
     /// Source-compatible alias for [`Self::route`].
     ///
     /// Both resolve `C::config()` and register through `route_with`.
@@ -1873,7 +2062,7 @@ impl App {
         config: RouteConfig<C>,
     ) -> Self {
         C::register();
-        router::register_route_with_config(pattern, C::NAME, config.into_runtime());
+        let _ = router::register_route_with_config(pattern, C::NAME, config.into_runtime());
         self.routes.push(pattern);
         self.record_component_name(C::NAME);
         self
@@ -1956,7 +2145,7 @@ impl App {
     /// (default empty body is fine).
     #[doc(hidden)]
     pub fn route_static<C: RouteComponent>(mut self, pattern: &'static str) -> Self {
-        router::register_route_with_config(pattern, C::NAME, C::config().into_runtime());
+        let _ = router::register_route_with_config(pattern, C::NAME, C::config().into_runtime());
         self.routes.push(pattern);
         self.record_component_name(C::NAME);
         self
@@ -2292,6 +2481,17 @@ fn collect_plan_store_names(
     }
     for l in plan.listeners {
         collect_store_names(l.expr_src, into);
+    }
+    for child in plan.child_mounts {
+        for binding in child.bindings {
+            collect_store_names(binding.expr_src, into);
+        }
+        for listener in child.listeners {
+            collect_store_names(listener.expr_src, into);
+        }
+        for model in child.models {
+            collect_store_names(model.expr_src, into);
+        }
     }
     for p in plan.if_plans {
         collect_store_names(p.expr_src, into);

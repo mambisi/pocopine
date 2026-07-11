@@ -216,6 +216,7 @@ fn walk_for_unknown_tags(
 ) {
     if !el.synthetic
         && is_custom_tag(&el.tag)
+        && !is_framework_sentinel(&el.tag)
         && uses.lookup(&el.tag).is_none()
         && seen.insert(el.tag.clone())
     {
@@ -240,6 +241,10 @@ fn walk_for_unknown_tags(
 /// elements, and `HTML5_ELEMENTS` is the canonical native list.
 fn is_custom_tag(tag: &str) -> bool {
     tag.contains('-') && HTML5_ELEMENTS.binary_search(&tag).is_err()
+}
+
+fn is_framework_sentinel(tag: &str) -> bool {
+    matches!(tag, "pp-component" | "pp-outlet")
 }
 
 fn pascal_case(kebab: &str) -> String {
@@ -435,6 +440,18 @@ mod tests {
         assert!(
             tokens.is_empty(),
             "HTML5 natives must not trigger validation, got:\n{tokens}"
+        );
+    }
+
+    #[test]
+    fn framework_sentinels_do_not_require_fake_uses_entries() {
+        let src = r#"<div><pp-component :is="active"></pp-component><pp-outlet></pp-outlet></div>"#;
+        let (ast, _errors) = parse(src, "test.poco");
+        let uses = UsesTable::default();
+        let tokens = emit_unknown_tag_diagnostics(&ast, &uses);
+        assert!(
+            tokens.is_empty(),
+            "framework-owned sentinels must not be resolved as user components: {tokens}",
         );
     }
 

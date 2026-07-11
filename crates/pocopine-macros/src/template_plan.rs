@@ -2037,6 +2037,24 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         return;
     }
 
+    if el.tag == "pp-component" {
+        let has_is_binding = el
+            .attrs
+            .iter()
+            .any(|(name, _)| matches!(name.as_str(), ":is" | "pp-bind:is"));
+        if !has_is_binding {
+            ctx.diagnostics.push(
+                "`<pp-component>` requires a reactive `:is=\"...\"` binding (RFC-112)".to_string(),
+            );
+        }
+        if el.attrs.iter().any(|(name, _)| name == "pp-as") {
+            ctx.diagnostics.push(
+                "`pp-as` is not valid on the reserved `<pp-component>` sentinel (RFC-112)"
+                    .to_string(),
+            );
+        }
+    }
+
     // Whole-subtree boundary: non-HTML5 tags (per council pass 3
     // amendment to RFC-058 §6.2). The element's own attributes
     // and descendants stay mount-owned (slot content is the
@@ -3603,6 +3621,24 @@ mod tests {
         let (ast, errors) = crate::template_parser::parse(source, "test.poco");
         assert!(errors.is_empty(), "template must parse: {errors:?}");
         super::analyze_template_plan(&ast, &[], None)
+    }
+
+    #[test]
+    fn pp_component_requires_reactive_is_and_emits_a_child_mount() {
+        let missing = analyze("<div><pp-component></pp-component></div>");
+        let diagnostics = missing.if_body_fns.to_string();
+        assert!(diagnostics.contains("compile_error"), "{diagnostics}");
+        assert!(diagnostics.contains("reactive"), "{diagnostics}");
+
+        let valid = analyze(r#"<div><pp-component :is="active"></pp-component></div>"#);
+        assert!(
+            !valid.if_body_fns.to_string().contains("compile_error"),
+            "{:?}",
+            valid.if_body_fns.to_string(),
+        );
+        let plan = valid.plan_tokens.unwrap().to_string();
+        assert!(plan.contains("pp-component"), "{plan}");
+        assert!(plan.contains("active"), "{plan}");
     }
 
     #[test]

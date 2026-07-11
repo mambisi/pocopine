@@ -23,6 +23,7 @@ pub mod context;
 pub mod devtools;
 pub mod directives;
 pub mod dom;
+pub(crate) mod dynamic_component;
 pub mod emit;
 pub mod events;
 pub mod expr;
@@ -68,13 +69,13 @@ pub mod watch;
 pub mod web;
 
 pub use app::{
-    App, AppPlugin, Component, IntoRouteTarget, Loader, LoaderContext, LoaderError, PageLink,
-    PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent, RouteConfig,
-    RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
-    RouteLoaderFuture, RouteMeta, RouteMetaKey, RouteName, RouteQuery, RouteRejection,
-    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle, encode_route_fragment,
-    encode_route_path_segment, encode_route_query_part,
+    App, AppPlugin, Component, ComponentRef, IntoRouteTarget, Loader, LoaderContext, LoaderError,
+    PageLink, PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent,
+    RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision,
+    RouteLayoutBuilder, RouteLoader, RouteLoaderFuture, RouteMeta, RouteMetaKey, RouteName,
+    RouteQuery, RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
+    RouteTarget, RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle,
+    encode_route_fragment, encode_route_path_segment, encode_route_query_part,
 };
 pub use client_module::{ClientModule, ClientModuleError};
 pub use computed::{Computed, computed};
@@ -121,8 +122,9 @@ pub use registry::{
     registry_errors, render_boot_error, verify_registry,
 };
 pub use router::{
-    NavigationFailure, NavigationResult, PrefetchResult, PrefetchSkip, ReturnTo, RouteLocation,
-    RouteToken, go, navigate, prefetch, push, reevaluate_current, register_route, replace,
+    MatchedRoute, MatchedRouteChain, NavigationFailure, NavigationResult, PrefetchResult,
+    PrefetchSkip, ReturnTo, RouteLocation, RouteRecordId, RouteToken, go, navigate, prefetch, push,
+    reevaluate_current, register_route, replace,
 };
 pub use scope::{
     ComponentState, Scope, StaticPropKind, append_list_inline, current_scope_id, invalidate_field,
