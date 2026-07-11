@@ -26,12 +26,12 @@ use pocopine_crypto::sha256_hex;
 const RENDER_OPENAPI_URL: &str =
     "https://api-docs.render.com/v1.0/openapi/render-public-api-1.json";
 
-/// SHA-256 of the canonicalised live spec, last reconciled 2026-07-02.
+/// SHA-256 of the canonicalised live spec, last reconciled 2026-07-11.
 /// Update this when the drift test reports a new hash for a reviewed,
-/// deliberate upstream change. (2026-07-02: benign content churn —
+/// deliberate upstream change. (2026-07-11: benign content churn —
 /// every `REQUIRED_OPERATIONS` endpoint and method still present, so no
 /// client change.)
-const EXPECTED_SHA256: &str = "752caf6e5058594220ffd8e17f9964324e88396fd62a424a69c7d19284e4acc2";
+const EXPECTED_SHA256: &str = "f41ec482709bb78a20898db9b91fc26296ed115e9698c42bda04f90f6193d46c";
 
 /// Operations `crate::client` calls.
 const REQUIRED_OPERATIONS: &[(&str, &[&str])] = &[
