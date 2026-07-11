@@ -2860,6 +2860,28 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     };
+    // RFC-112 hardening — local `<pp-component :is="field">` selections
+    // must be `ComponentRef<Host>` / `Option<ComponentRef<Host>>`. Bare computed names
+    // resolve through the return-type markers emitted by `#[handlers]`.
+    // `$store` and other dotted dynamic-scope paths are enforced by the
+    // runtime's strict tagged `ComponentRef` wire shape.
+    let dynamic_component_selection_assertions_tokens = match &template_ast {
+        Some(ast) => {
+            let span = args
+                .template
+                .as_ref()
+                .or(args.template_inline.as_ref())
+                .map(|literal| literal.span())
+                .unwrap_or_else(proc_macro2::Span::call_site);
+            template_paths::emit_dynamic_component_selection_assertions(
+                ast,
+                &struct_ident,
+                &field_idents,
+                span,
+            )
+        }
+        None => proc_macro2::TokenStream::new(),
+    };
 
     // RFC 054 — compile row plans for eligible keyed `pp-for`
     // templates and stamp the source with `data-pp-row-plan`
@@ -3186,6 +3208,34 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
+    // Dynamic-component selections are scoped to the host's typed `uses`
+    // contract. `ComponentRef::of::<Child>()` infers the host from its typed
+    // context and relies on the marker impl,
+    // while the runtime-name escape hatch consults the associated allowlist.
+    // Deduplicate by type path so an explicit alias cannot emit overlapping
+    // marker impls for the same child type.
+    let dynamic_component_contract_tokens = {
+        let mut seen = ::std::collections::BTreeSet::new();
+        let child_types: Vec<&Path> = args
+            .uses
+            .as_ref()
+            .into_iter()
+            .flat_map(|table| table.entries.iter().map(|(_tag, path)| path))
+            .filter(|path| seen.insert(quote! { #path }.to_string()))
+            .collect();
+        quote! {
+            impl ::pocopine::__private::DynamicComponentHost for #struct_ident {
+                const DYNAMIC_COMPONENTS: &'static [&'static str] = &[
+                    #(<#child_types as ::pocopine::__private::Component>::NAME,)*
+                ];
+            }
+
+            #(
+                impl ::pocopine::__private::ComponentUses<#child_types> for #struct_ident {}
+            )*
+        }
+    };
+
     // Give each registration function a distinct name so multiple components
     // in one module don't trip the `pub fn register()` duplicate.
     let _register_fn = format_ident!("__pocopine_register_{}", struct_ident);
@@ -3418,6 +3468,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // against `#[handlers]`-emitted markers).
         #template_path_marker_tokens
         #template_path_assertions_tokens
+        #dynamic_component_selection_assertions_tokens
 
         // Layout-class lint — hard `compile_error!` when the root
         // carries `sticky` / `h-screen` / `min-h-*` / `inset-*` but
@@ -3675,6 +3726,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 <#struct_ident>::__pocopine_mount_template(root, scope_id, proxy);
             }
         }
+
+        #dynamic_component_contract_tokens
     };
 
     out.into()
@@ -3684,6 +3737,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemImpl);
     let ty = input.self_ty.clone();
+    let handlers_type_ident = match ty.as_ref() {
+        Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.clone()),
+        _ => None,
+    };
 
     // Bake a host-side `allow(dead_code)` into the user's impl block.
     // Pine primitives that wrap `web_sys` routinely keep helper fns
@@ -4203,6 +4264,34 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
+    let computed_type_markers: Vec<_> = handlers_type_ident
+        .as_ref()
+        .into_iter()
+        .flat_map(|type_ident| {
+            computed_methods.iter().map(move |entry| {
+                let marker =
+                    template_paths::computed_type_marker_ident(type_ident, &entry.field_name);
+                // Every valid dynamic selection type is a path
+                // (`ComponentRef<Host>` or `Option<ComponentRef<Host>>`). Use `()` for
+                // other return shapes so unrelated reference/impl-trait
+                // computed methods keep compiling, while selecting one still
+                // fails the marker assertion.
+                let output_ty = match &entry.ret_ty {
+                    Type::Path(_) => entry.ret_ty.clone(),
+                    _ => syn::parse_quote!(()),
+                };
+                quote! {
+                    #[doc(hidden)]
+                    #[allow(non_camel_case_types)]
+                    struct #marker;
+
+                    impl ::pocopine::__private::ComputedTypeWitness for #marker {
+                        type Output = #output_ty;
+                    }
+                }
+            })
+        })
+        .collect();
     let computed_impl = if has_computed {
         quote! {
             impl #ty {
@@ -4338,6 +4427,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let out = quote! {
         #input
+
+        #(#computed_type_markers)*
 
         #computed_impl
 

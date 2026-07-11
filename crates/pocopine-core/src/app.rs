@@ -28,6 +28,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -68,30 +69,104 @@ pub trait Component {
     }
 }
 
+/// Runtime view of a component host's macro-checked `uses = [...]` list.
+///
+/// This is used only by the explicitly data-driven
+/// [`ComponentRef::from_registered_name`] boundary. Ordinary Rust selections
+/// use [`ComponentUses`] and remain fully compile-time checked.
+#[doc(hidden)]
+pub trait DynamicComponentHost: Component {
+    const DYNAMIC_COMPONENTS: &'static [&'static str];
+}
+
+/// Compile-time proof that `Host` declares `Child` in its `uses = [...]` list.
+///
+/// The `#[component]` macro emits these implementations. Application code
+/// normally encounters the contract through [`ComponentRef::of`], rather than
+/// implementing or naming this trait directly.
+#[doc(hidden)]
+pub trait ComponentUses<Child: Component>: DynamicComponentHost {}
+
 /// Typed token for a component type selected at runtime.
 ///
 /// `Component` itself is intentionally not object-safe: its name and
-/// registration/mount entry points are type-level. `ComponentRef` captures the
-/// canonical registry identity without allocating a component instance or
-/// using `dyn Component`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ComponentRef {
+/// registration/mount entry points are type-level. `ComponentRef<Host>` keeps
+/// the outlet host in the Rust type while erasing the selected child to its
+/// canonical registry identity. It allocates no component instance and does
+/// not use `dyn Component`.
+pub struct ComponentRef<Host> {
     name: &'static str,
+    _host: PhantomData<fn() -> Host>,
 }
 
-impl ComponentRef {
-    /// Create a token for `C` and ensure its registry entry is installed.
-    pub fn of<C: Component>() -> Self {
-        C::register();
-        Self { name: C::NAME }
+/// Compile-time contract for values bound to `<pp-component :is>` in `Host`.
+///
+/// Kept out of the public authoring surface; macro-generated assertions use
+/// it to reject local string fields and computed values before wasm builds.
+#[doc(hidden)]
+pub trait DynamicComponentSelection<Host: DynamicComponentHost> {}
+
+impl<Host: DynamicComponentHost> DynamicComponentSelection<Host> for ComponentRef<Host> {}
+impl<Host: DynamicComponentHost> DynamicComponentSelection<Host> for Option<ComponentRef<Host>> {}
+
+/// Type witness emitted by `#[handlers]` for each `#[computed]` value.
+#[doc(hidden)]
+pub trait ComputedTypeWitness {
+    type Output;
+}
+
+#[doc(hidden)]
+pub fn assert_dynamic_component_selection<Host, T>(_: &T)
+where
+    Host: DynamicComponentHost,
+    T: DynamicComponentSelection<Host>,
+{
+}
+
+#[doc(hidden)]
+pub fn assert_dynamic_component_selection_type<Host, T>()
+where
+    Host: DynamicComponentHost,
+    T: DynamicComponentSelection<Host>,
+{
+}
+
+impl<Host> ComponentRef<Host>
+where
+    Host: DynamicComponentHost,
+{
+    /// Create a token for `Child` scoped to the dynamic outlet in `Host`.
+    ///
+    /// This compiles only when `Host` declares `Child` in its
+    /// `#[component(uses = [...])]` list.
+    pub fn of<Child>() -> Self
+    where
+        Host: ComponentUses<Child>,
+        Child: Component,
+    {
+        Host::register();
+        Child::register();
+        Self {
+            name: Child::NAME,
+            _host: PhantomData,
+        }
     }
 
-    /// Resolve an already-registered canonical name or alias.
+    /// Resolve a canonical name or alias allowed by `Host`'s `uses` list.
     ///
     /// This is the data-driven/plugin escape hatch. Ordinary Rust code should
     /// prefer [`Self::of`] so the component type is checked by the compiler.
     pub fn from_registered_name(name: &str) -> Option<Self> {
-        crate::registry::canonical_component_name(name).map(|name| Self { name })
+        Host::register();
+        let name = crate::registry::canonical_component_name(name)?;
+        Host::DYNAMIC_COMPONENTS.contains(&name).then_some(Self {
+            name,
+            _host: PhantomData,
+        })
+    }
+
+    pub const fn host(self) -> &'static str {
+        Host::NAME
     }
 
     pub const fn name(self) -> &'static str {
@@ -99,54 +174,86 @@ impl ComponentRef {
     }
 }
 
-impl fmt::Debug for ComponentRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("ComponentRef").field(&self.name).finish()
+impl<Host> Copy for ComponentRef<Host> {}
+
+impl<Host> Clone for ComponentRef<Host> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
-impl fmt::Display for ComponentRef {
+impl<Host> PartialEq for ComponentRef<Host> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl<Host> Eq for ComponentRef<Host> {}
+
+impl<Host> Hash for ComponentRef<Host> {
+    fn hash<State: Hasher>(&self, state: &mut State) {
+        self.name.hash(state);
+    }
+}
+
+impl<Host: DynamicComponentHost> fmt::Debug for ComponentRef<Host> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ComponentRef")
+            .field("host", &Host::NAME)
+            .field("component", &self.name)
+            .finish()
+    }
+}
+
+impl<Host> fmt::Display for ComponentRef<Host> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name)
     }
 }
 
-impl serde::Serialize for ComponentRef {
+impl<Host: DynamicComponentHost> serde::Serialize for ComponentRef<Host> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
 
-        let mut state = serializer.serialize_struct("ComponentRef", 1)?;
+        let mut state = serializer.serialize_struct("ComponentRef", 2)?;
+        state.serialize_field("__pocopine_host", Host::NAME)?;
         state.serialize_field("__pocopine_component", self.name)?;
         state.end()
     }
 }
 
-impl<'de> serde::Deserialize<'de> for ComponentRef {
+impl<'de, Host: DynamicComponentHost> serde::Deserialize<'de> for ComponentRef<Host> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Wire {
-            Typed { __pocopine_component: String },
-            RegisteredName(String),
+        struct Wire {
+            __pocopine_host: String,
+            __pocopine_component: String,
         }
 
-        let name = match Wire::deserialize(deserializer)? {
-            Wire::Typed {
-                __pocopine_component,
-            } => __pocopine_component,
-            Wire::RegisteredName(name) => name,
-        };
-        Self::from_registered_name(&name).ok_or_else(|| {
-            serde::de::Error::custom(format!(
-                "component `{name}` is not registered; construct it with ComponentRef::of::<C>()",
-            ))
-        })
+        Host::register();
+        let wire = Wire::deserialize(deserializer)?;
+        let host = crate::registry::canonical_component_name(&wire.__pocopine_host);
+        let name = crate::registry::canonical_component_name(&wire.__pocopine_component);
+        match (host, name) {
+            (Some(host), Some(name))
+                if host == Host::NAME && Host::DYNAMIC_COMPONENTS.contains(&name) =>
+            {
+                Ok(Self {
+                    name,
+                    _host: PhantomData,
+                })
+            }
+            _ => Err(serde::de::Error::custom(format!(
+                "component `{}` is not allowed by dynamic host `{}`; construct the selection with ComponentRef::of::<Child>() in a ComponentRef<Host> context",
+                wire.__pocopine_component, wire.__pocopine_host,
+            ))),
+        }
     }
 }
 
@@ -1321,11 +1428,24 @@ mod route_config_tests {
     use super::*;
 
     struct TestRoute;
+    struct TestHost;
 
     impl Component for TestRoute {
         const NAME: &'static str = "test-route";
 
         fn register() {}
+    }
+
+    impl Component for TestHost {
+        const NAME: &'static str = "test-host";
+
+        fn register() {}
+    }
+
+    impl ComponentUses<TestRoute> for TestHost {}
+
+    impl DynamicComponentHost for TestHost {
+        const DYNAMIC_COMPONENTS: &'static [&'static str] = &[TestRoute::NAME];
     }
 
     // Hand-written: `#[derive(RouteComponent)]` expands to
@@ -1334,11 +1454,26 @@ mod route_config_tests {
 
     #[test]
     fn component_ref_derives_its_runtime_name_from_the_component_type() {
-        let component = ComponentRef::of::<TestRoute>();
+        let component: ComponentRef<TestHost> = ComponentRef::of::<TestRoute>();
 
+        assert_eq!(component.host(), TestHost::NAME);
         assert_eq!(component.name(), TestRoute::NAME);
         assert_eq!(component.to_string(), TestRoute::NAME);
-        assert_eq!(format!("{component:?}"), "ComponentRef(\"test-route\")");
+        assert_eq!(
+            format!("{component:?}"),
+            "ComponentRef { host: \"test-host\", component: \"test-route\" }"
+        );
+        assert_eq!(
+            serde_json::to_value(component).unwrap(),
+            serde_json::json!({
+                "__pocopine_host": "test-host",
+                "__pocopine_component": "test-route",
+            }),
+        );
+        assert!(
+            serde_json::from_str::<ComponentRef<TestHost>>("\"test-route\"").is_err(),
+            "raw component-name strings must not deserialize as typed selections",
+        );
     }
 
     #[test]

@@ -69,12 +69,14 @@ pub mod watch;
 pub mod web;
 
 pub use app::{
-    App, AppPlugin, Component, ComponentRef, IntoRouteTarget, Loader, LoaderContext, LoaderError,
-    PageLink, PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent,
-    RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision,
+    App, AppPlugin, Component, ComponentRef, ComponentUses, ComputedTypeWitness,
+    DynamicComponentHost, DynamicComponentSelection, IntoRouteTarget, Loader, LoaderContext,
+    LoaderError, PageLink, PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger,
+    RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision,
     RouteLayoutBuilder, RouteLoader, RouteLoaderFuture, RouteMeta, RouteMetaKey, RouteName,
     RouteQuery, RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
     RouteTarget, RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle,
+    assert_dynamic_component_selection, assert_dynamic_component_selection_type,
     encode_route_fragment, encode_route_path_segment, encode_route_query_part,
 };
 pub use client_module::{ClientModule, ClientModuleError};

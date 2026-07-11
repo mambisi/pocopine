@@ -815,6 +815,9 @@ fn install_child_host_directives(
     // dynamic child's first setup observes the complete authored prop set.
     // Static child components retain source-order installation.
     let dynamic = child.tag == "pp-component";
+    if dynamic {
+        crate::dynamic_component::configure_host(el, template_name);
+    }
     for b in child
         .bindings
         .iter()

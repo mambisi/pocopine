@@ -1,0 +1,21 @@
+error[E0277]: the trait bound `std::option::Option<pocopine::ComponentRef<DcSourceHost>>: pocopine::__private::DynamicComponentSelection<DcTargetHost>` is not satisfied
+  --> tests/ui/dc_wrong_host_ref_fail.rs:21:23
+   |
+21 |     template_inline = r#"<pp-component :is="active"></pp-component>"#,
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `DynamicComponentSelection<DcTargetHost>` is not implemented for `std::option::Option<pocopine::ComponentRef<DcSourceHost>>`
+      but trait `DynamicComponentSelection<DcSourceHost>` is implemented for it
+  --> $WORKSPACE/crates/pocopine-core/src/app.rs
+   |
+   | impl<Host: DynamicComponentHost> DynamicComponentSelection<Host> for Option<ComponentRef<Host>> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `DcSourceHost`, found `DcTargetHost`
+note: required by a bound in `pocopine::__private::assert_dynamic_component_selection`
+  --> $WORKSPACE/crates/pocopine-core/src/app.rs
+   |
+   | pub fn assert_dynamic_component_selection<Host, T>(_: &T)
+   |        ---------------------------------- required by a bound in this function
+...
+   |     T: DynamicComponentSelection<Host>,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_dynamic_component_selection`

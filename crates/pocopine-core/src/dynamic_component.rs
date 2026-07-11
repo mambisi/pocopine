@@ -34,9 +34,16 @@ struct MountedComponent {
     scope_id: Option<ScopeId>,
 }
 
+#[derive(Clone, Copy)]
+struct ErasedComponentRef {
+    host: &'static str,
+    name: &'static str,
+}
+
 struct Region {
     id: u64,
     host: Element,
+    expected_host: Option<String>,
     current: Option<MountedComponent>,
     cache: HashMap<&'static str, MountedComponent>,
     leaving: HashMap<u64, MountedComponent>,
@@ -55,16 +62,26 @@ pub(crate) struct MountedInfo {
 /// Install the template-authored `<pp-component>` sentinel.
 pub(crate) fn install(host: &Element) {
     let region = ensure_region(host);
-    let initial_name = host
-        .get_attribute("is")
-        .filter(|name| !name.trim().is_empty());
     {
         let mut region = region.borrow_mut();
         region.keep_alive = host.has_attribute("keep-alive");
     }
-    if let Some(name) = initial_name {
-        set_component(&region, Some(&name));
+    if host
+        .get_attribute("is")
+        .is_some_and(|name| !name.trim().is_empty())
+    {
+        web_sys::console::error_1(&JsValue::from_str(
+            "pocopine: `<pp-component is=\"...\">` cannot select a raw component name; bind a host-scoped `ComponentRef` through `:is`",
+        ));
     }
+}
+
+/// Attach the owning component identity before reactive bindings run.
+///
+/// A `ComponentRef` minted for one host must not be replayed into another
+/// host's outlet, even though both values share the same wire representation.
+pub(crate) fn configure_host(host: &Element, expected_host: &str) {
+    ensure_region(host).borrow_mut().expected_host = Some(expected_host.to_owned());
 }
 
 /// Install one compiled binding on a `<pp-component>` host.
@@ -92,10 +109,36 @@ pub(crate) fn install_binding(
 pub(crate) fn set_binding(host: &Element, arg: &str, value: JsValue) {
     let region = ensure_region(host);
     match arg {
-        "is" => {
-            let name = component_name_from_value(&value);
-            set_component(&region, name.as_deref());
-        }
+        "is" => match component_ref_from_value(&value) {
+            Ok(Some(selection)) => {
+                let expected_host = region.borrow().expected_host.clone();
+                if expected_host.as_deref() == Some(selection.host) {
+                    set_component(&region, Some(selection.name));
+                } else {
+                    web_sys::console::error_1(&JsValue::from_str(&format!(
+                        "pocopine: dynamic selection for host `{}` cannot be used by `<pp-component>` owned by `{}`; construct it with `ComponentRef::of::<Child>()` in a `ComponentRef<Host>` context for this host",
+                        selection.host,
+                        expected_host.as_deref().unwrap_or("<unknown>"),
+                    )));
+                    set_component(&region, None);
+                }
+            }
+            Ok(None) => {
+                set_component(&region, None);
+            }
+            Err(error) => {
+                web_sys::console::error_1(&JsValue::from_str(&format!(
+                    "pocopine: `<pp-component :is>` requires `ComponentRef<Host>` or \
+                         `Option<ComponentRef<Host>>`; raw component-name strings are rejected. \
+                         Construct typed selections with \
+                         `ComponentRef::of::<Child>()` in a typed \
+                         `ComponentRef<Host>` context, or \
+                         validate external names with \
+                         `ComponentRef::<Host>::from_registered_name(...)`: {error}",
+                )));
+                set_component(&region, None);
+            }
+        },
         "keep-alive" => {
             region.borrow_mut().keep_alive = binding_truthy(&value);
         }
@@ -196,6 +239,7 @@ fn ensure_region(host: &Element) -> Rc<RefCell<Region>> {
     let region = Rc::new(RefCell::new(Region {
         id,
         host: host.clone(),
+        expected_host: None,
         current: None,
         cache: HashMap::new(),
         leaving: HashMap::new(),
@@ -431,18 +475,29 @@ fn normalize_prop_name(name: &str) -> String {
     name.replace('-', "_")
 }
 
-fn component_name_from_value(value: &JsValue) -> Option<String> {
-    if let Some(name) = value.as_string() {
-        return Some(name);
+fn component_ref_from_value(value: &JsValue) -> Result<Option<ErasedComponentRef>, String> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
     }
-    for key in ["__pocopine_component", "name", "component", "tag"] {
-        if let Ok(name) = Reflect::get(value, &JsValue::from_str(key))
-            && let Some(name) = name.as_string()
-        {
-            return Some(name);
-        }
+
+    #[derive(serde::Deserialize)]
+    struct Wire {
+        __pocopine_host: String,
+        __pocopine_component: String,
     }
-    None
+
+    let wire =
+        serde_wasm_bindgen::from_value::<Wire>(value.clone()).map_err(|error| error.to_string())?;
+    let host = crate::registry::canonical_component_name(&wire.__pocopine_host)
+        .ok_or_else(|| format!("dynamic host `{}` is not registered", wire.__pocopine_host))?;
+    let name =
+        crate::registry::canonical_component_name(&wire.__pocopine_component).ok_or_else(|| {
+            format!(
+                "dynamic component `{}` is not registered",
+                wire.__pocopine_component,
+            )
+        })?;
+    Ok(Some(ErasedComponentRef { host, name }))
 }
 
 fn binding_truthy(value: &JsValue) -> bool {
