@@ -520,6 +520,7 @@ struct ChildMountLite {
     /// uses it to construct a [`SlotScope`] before invoking the
     /// fragment.
     slot_fragments: Vec<(String, syn::Ident, Option<String>)>,
+    host_shows: Vec<String>,
     host_bindings: Vec<ChildHostBindingLite>,
     host_listeners: Vec<ChildHostListenerLite>,
     host_models: Vec<ChildHostModelLite>,
@@ -1553,6 +1554,16 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
             }
         }
     });
+    let show_tokens = c.host_shows.iter().map(|expr_src| {
+        let expr = proc_macro2::Literal::string(expr_src);
+        let compiled = emit_compiled_expr_option(expr_src);
+        quote! {
+            ::pocopine::__private::StaticChildHostShow {
+                expr_src: #expr,
+                compiled: #compiled,
+            }
+        }
+    });
     let binding_tokens = c.host_bindings.iter().map(|b| {
         let arg = proc_macro2::Literal::string(&b.arg);
         let expr = proc_macro2::Literal::string(&b.expr_src);
@@ -1606,6 +1617,7 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
             node_path: #path,
             tag: #tag,
             slots: &[ #(#slot_tokens),* ],
+            shows: &[ #(#show_tokens),* ],
             bindings: &[ #(#binding_tokens),* ],
             listeners: &[ #(#listener_tokens),* ],
             models: &[ #(#model_tokens),* ],
@@ -2060,11 +2072,11 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // and descendants stay mount-owned (slot content is the
     // common case there), but RFC-058 Phase 3 captures the
     // mount site itself: the runtime applier calls
-    // [`crate::mount::mount_child_component`] before the
-    // mount's recursive descent reaches the tag, and the
-    // mount's `__pp_mounted` guard turns the discovery into a
-    // no-op afterwards.
+    // [`crate::mount::mount_child_component`] before any later
+    // component-discovery pass reaches the tag; the host's
+    // `__pp_mounted` guard makes that attempt a no-op.
     if !is_plan_native(&el.tag) {
+        let mut host_shows = Vec::new();
         let mut host_bindings = Vec::new();
         let mut host_listeners = Vec::new();
         let mut host_models = Vec::new();
@@ -2072,6 +2084,13 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         if !has_pp_as {
             for (name, value) in &el.attrs {
                 match classify_child_host_attr(name, value) {
+                    ChildHostAttrOutcome::Show(expr_src) => {
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: path.clone(),
+                            name: name.clone(),
+                        });
+                        host_shows.push(expr_src);
+                    }
                     ChildHostAttrOutcome::Binding(binding) => {
                         ctx.stripped.push(StrippedAttr {
                             node_path: path.clone(),
@@ -2221,6 +2240,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             node_path: path.clone(),
             tag: el.tag.clone(),
             slot_fragments,
+            host_shows,
             host_bindings,
             host_listeners,
             host_models,
@@ -2975,6 +2995,10 @@ fn classify_listener(
 }
 
 enum ChildHostAttrOutcome {
+    /// `pp-show` controls the custom host element itself in the parent scope,
+    /// but installs after the child mount so fallthrough cannot move its
+    /// inline display declaration to the rendered root.
+    Show(String),
     Binding(ChildHostBindingLite),
     Listener(ChildHostListenerLite),
     Model(ChildHostModelLite),
@@ -3005,6 +3029,12 @@ fn classify_child_host_attr(name: &str, value: &str) -> ChildHostAttrOutcome {
     let Some(rest) = name.strip_prefix("pp-") else {
         return ChildHostAttrOutcome::Preserved;
     };
+    if rest == "show" {
+        if pocopine_expr::parse(value).is_err() {
+            return ChildHostAttrOutcome::Preserved;
+        }
+        return ChildHostAttrOutcome::Show(value.to_string());
+    }
     if let Some(arg) = rest.strip_prefix("bind:") {
         if arg.is_empty() || arg.contains('.') || pocopine_expr::parse(value).is_err() {
             return ChildHostAttrOutcome::Preserved;
@@ -3639,6 +3669,38 @@ mod tests {
         let plan = valid.plan_tokens.unwrap().to_string();
         assert!(plan.contains("pp-component"), "{plan}");
         assert!(plan.contains("active"), "{plan}");
+    }
+
+    #[test]
+    fn pp_show_on_child_host_uses_the_host_directive_plan() {
+        let emitted = analyze(r#"<div><x-button pp-show="visible">Delete</x-button></div>"#);
+        let cleaned = emitted
+            .cleaned_html
+            .as_deref()
+            .expect("child mount should emit cleaned HTML");
+        assert!(!cleaned.contains("pp-show"), "{cleaned}");
+
+        let plan = emitted.plan_tokens.unwrap().to_string();
+        assert!(plan.contains("StaticChildHostShow"), "{plan}");
+        assert!(plan.contains("StaticChildMount"), "{plan}");
+    }
+
+    #[test]
+    fn pp_if_body_can_be_a_slotted_child_component() {
+        let emitted = analyze(
+            r#"<div><template pp-if="open"><x-button @click="remove">Delete</x-button></template></div>"#,
+        );
+        let body_fns = emitted.if_body_fns.to_string();
+        assert!(!body_fns.contains("compile_error"), "{body_fns}");
+        assert!(body_fns.contains("stamp_if_body_with"), "{body_fns}");
+        assert!(body_fns.contains("StaticChildMount"), "{body_fns}");
+        assert!(
+            emitted
+                .slot_fragment_fns
+                .to_string()
+                .contains("stamp_static_html"),
+            "projected text must be emitted as a slot fragment",
+        );
     }
 
     #[test]

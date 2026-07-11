@@ -798,6 +798,19 @@ fn install_child_host_directives(
     child: &StaticChildMount,
     template_name: &str,
 ) {
+    for show in child.shows {
+        let Some(evaluator) = scoped_static_evaluator(scope_id, show.compiled, show.expr_src)
+        else {
+            fail(
+                "child-host-show-parse",
+                template_name,
+                child.node_path,
+                Some(show.expr_src),
+            );
+            continue;
+        };
+        directives::show::install_eval(el, proxy, evaluator);
+    }
     // RFC-112 — seed every forwarded prop before evaluating `:is`, so the
     // dynamic child's first setup observes the complete authored prop set.
     // Static child components retain source-order installation.

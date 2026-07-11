@@ -156,7 +156,7 @@ pub const DIRECTIVES: &[DirectiveSpec] = &[
         None,
         ArgReq::Forbidden,
         Host::Any,
-        "**pp-show** — toggles `display:none` vs the element's default. Element stays in the DOM. Use `pp-if` + `pp-transition` for enter/leave.",
+        "**pp-show** — toggles `display:none` vs the element's default. Element stays in the DOM. Component hosts are supported: false hides the whole rendered subtree; true restores the host's generated `display: contents` rule. Use `pp-if` + `pp-transition` for enter/leave.",
         None,
     ),
     d(

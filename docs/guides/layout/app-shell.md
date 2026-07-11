@@ -200,7 +200,8 @@ Both `breakpoint` and `nav_open` are `#[model]`s:
   declarative `transition: transform` (which would also fire when a
   breakpoint reflow flips the nav into drawer mode, animating an unwanted
   slide-out). See `examples/layout` for the imperative pattern.
-- **Don't `pp-show` a component host.** To hide the trigger outside drawer
-  mode, style its `data-nav-mode` (as above), not `pp-show`.
+- Use the shell's `data-nav-mode` attribute for breakpoint-owned styling, as
+  above. `pp-show` is valid on component hosts, but it is better suited to
+  reactive application state than to CSS-owned layout modes.
 
 See the full demo in [`examples/layout`](../../../examples/layout).

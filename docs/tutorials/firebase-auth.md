@@ -435,13 +435,13 @@ in JavaScript:
 </template>
 ```
 
-For app-bar controls, bind visibility to the store. `pp-show` works
-on plain HTML elements but not on component host tags — bind a
-Boolean attribute instead:
+For app-bar controls, bind visibility to the store. `pp-show` works on both
+plain HTML elements and component hosts; on a component it hides the whole
+rendered subtree without unmounting it:
 
 ```poco
 <button pp-show="$store.app.auth_signed_in" @click="toggle_sidebar">...</button>
-<account-menu :visible="$store.app.auth_signed_in"></account-menu>
+<account-menu pp-show="$store.app.auth_signed_in"></account-menu>
 ```
 
 Use Pine primitives such as `pine-avatar-root`, `pine-popover-root`,

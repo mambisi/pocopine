@@ -176,9 +176,9 @@ pub mod __private {
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
         CondBranch, IfBodyFn, MatchCase, StaticChildHostBinding, StaticChildHostListener,
-        StaticChildHostModel, StaticChildMount, StaticCondPlan, StaticForPlan, StaticInterp,
-        StaticMatchPlan, StaticNativeModel, StaticOpaqueDirective, StaticRef, StaticSlotFragment,
-        StaticSlotOutlet, StaticTeleportPlan,
+        StaticChildHostModel, StaticChildHostShow, StaticChildMount, StaticCondPlan, StaticForPlan,
+        StaticInterp, StaticMatchPlan, StaticNativeModel, StaticOpaqueDirective, StaticRef,
+        StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
     pub use pocopine_core::templates_plan::{

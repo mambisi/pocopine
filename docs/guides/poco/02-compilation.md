@@ -98,7 +98,7 @@ Set `POCOPINE_TEMPLATES_LENIENT=1` to downgrade template errors from build-fatal
 
 The compiled template HTML is cached by `register_template`. On first mount, the runtime parses it once into a `<template>` element (browser HTML parser, fast path) and caches the `HTMLTemplateElement`. Every subsequent mount clones the `.content` `DocumentFragment` via `cloneNode(true)` instead of re-parsing the HTML string.
 
-Directive binding for eligible directives (`pp-text`, `pp-show`, `pp-bind`/`:prop`, `pp-on`/`@event`, `pp-ref`) on native HTML elements is resolved at compile time by the `#[component]` macro (RFC-058). The compiled template plan is emitted as Rust code alongside the component struct and executes when the mount entry point runs. Structural directives (`pp-for`, `pp-if`), `pp-model`, `pp-route`, and every directive under a non-HTML5 (custom-element) root remain mount-owned and are applied at runtime.
+Directive binding for eligible directives (`pp-text`, `pp-show`, `pp-bind`/`:prop`, `pp-on`/`@event`, `pp-ref`) on native HTML elements is resolved at compile time by the `#[component]` macro (RFC-058). Component tags are compiled subtree boundaries, but their own parent-facing forms are planned explicitly: `pp-show`, reactive props, host listeners, component `pp-model`, and `pp-ref`. Structural `<template pp-if>` / `pp-for` / `pp-teleport` sites also compile into plans, and their single body root may be a component tag. The compiled template plan is emitted as Rust code alongside the component struct and executes when the mount entry point runs; there is no recursive runtime directive walk to recover an unplanned component-host attribute.
 
 ## What the macro does not do
 
