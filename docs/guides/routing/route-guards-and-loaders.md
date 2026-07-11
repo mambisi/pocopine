@@ -61,6 +61,23 @@ loaders don't appear in `app!{}` or in `App::route(...).guard(...)`
 chains. The `app!{}` macro and `App::route_component::<C>` resolve
 to `<C as RouteComponent>::config()` automatically.
 
+For nested routes, every layout and child keeps its own
+`RouteComponent::config()`. Guards run parent-to-child before any loader; after
+they all allow, loaders run parent-to-child. A sibling navigation that preserves
+the parent layout does not rerun that preserved record's loader:
+
+```rust
+App::new()
+    .layout::<AdminLayout>("/admin", |admin| {
+        admin.index::<AdminOverview>();
+        admin.route::<AdminUser>("users/:user_id");
+        admin.route::<AdminSettings>("settings");
+    })
+    .run();
+```
+
+See [Router and nested routes](./router.md) for route-tree and outlet semantics.
+
 ## Route guards
 
 A `RouteGuard` is a sync predicate over `&RouteContext`:

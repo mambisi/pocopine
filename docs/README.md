@@ -31,6 +31,7 @@ New here? Start with **[Getting Started](./getting-started/introduction.md)**.
 
 **Routing**
 
+- [Router & nested routes](./guides/routing/router.md) — outlets, nested route trees, params, and layout preservation.
 - [Route guards & loaders](./guides/routing/route-guards-and-loaders.md) — sync guards, async loaders, and fetch middleware for the SPA router.
 
 **Server**
