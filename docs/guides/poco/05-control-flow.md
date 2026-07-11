@@ -30,9 +30,44 @@ wrapping `pp-if`.** Re-parenting siblings under one `<template pp-if>`
 remounts the whole subtree on every flip — you lose state and pay a
 mount. Independent `pp-show`s pay one style write each.
 
-**Rule: `pp-show` never goes on a component host** (`<pine-icon
-pp-show="x">` is wrong — the host has no display box of its own).
-Bind an attribute instead: one `<pine-icon :name="cond ? 'a' : 'b'">`.
+`pp-show` also works directly on a component host:
+
+```poco
+<pine-button pp-show="can_delete" @click="remove">Delete</pine-button>
+```
+
+Pocopine writes inline `display: none` to the custom element when the
+expression is false. When it becomes true, Pocopine removes that inline value,
+restoring the component's generated `display: contents` rule. The component
+stays mounted throughout.
+
+## Directives on component tags
+
+Component tags are scope boundaries, so their parent-facing directives have
+specific meanings:
+
+| Form | Meaning on a component tag |
+|---|---|
+| `pp-show="expr"` | hides or reveals the whole component host; does not unmount it |
+| `:prop="expr"` / `pp-bind:prop` | writes a declared child prop reactively |
+| `@event="handler"` / `pp-on:event` | listens on the custom-element host in the parent scope |
+| `pp-model[:prop]="field"` | binds a declared child model channel |
+| `pp-ref="name"` | registers the host and enables typed child-handle lookup |
+
+Structural directives still belong on `<template>`, but the branch body may
+use a component tag as its single root; no plain-element wrapper is required:
+
+```poco
+<template pp-if="editing">
+  <pine-button @click="remove">Delete</pine-button>
+</template>
+```
+
+Other directives are not forwarded through the component boundary. Put them
+on the native element that owns the behavior. In particular, positioning,
+observation, and visual-transition directives need an element with a layout
+box; use a plain wrapper when the caller must own that box because a normal
+component host uses `display: contents`.
 
 ## `pp-if` chains — mount one branch
 
@@ -50,6 +85,10 @@ write a chain of `<template>` siblings:
   <p class="zero">zero</p>
 </template>
 ```
+
+Each branch must have exactly one element root. That root may be a native
+element or a component tag, including a component with default or named slot
+content.
 
 Chain semantics (Vue's, deliberately):
 

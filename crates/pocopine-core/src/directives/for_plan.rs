@@ -145,12 +145,9 @@ pub struct StaticNativeModel {
 /// RFC-058 Phase 3 — emitted by the macro for every non-HTML5
 /// tag inside a plan-eligible template, so the runtime applier
 /// can call [`crate::mount::mount_child_component`] explicitly
-/// instead of leaving the tag for the mount's auto-discovery
-/// pass to find. Today the mount still walks the subtree; its
-/// `__pp_mounted` guard makes the discovery a no-op for any tag
-/// the plan already mounted. Phase 6 (`legacy-dom` quarantine)
-/// drops the mount discovery and the plan-driven path becomes
-/// the sole entry.
+/// instead of leaving the tag for component discovery. The
+/// host's `__pp_mounted` guard makes any later duplicate mount
+/// attempt a no-op.
 ///
 /// `slots` carries the parent-authored slot fragments from
 /// RFC-058 Phase 3.5b. Empty slice means the parent didn't
@@ -165,9 +162,19 @@ pub struct StaticChildMount {
     pub node_path: &'static [u16],
     pub tag: &'static str,
     pub slots: &'static [StaticSlotFragment],
+    pub shows: &'static [StaticChildHostShow],
     pub bindings: &'static [StaticChildHostBinding],
     pub listeners: &'static [StaticChildHostListener],
     pub models: &'static [StaticChildHostModel],
+}
+
+/// Parent-scope `pp-show` planned on a child-component host. Installed after
+/// the child mounts so fallthrough processing cannot move its inline
+/// `display` declaration onto the rendered root.
+#[doc(hidden)]
+pub struct StaticChildHostShow {
+    pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
 }
 
 /// Parent-scope `pp-bind:<prop>` / `:<prop>` planned on a

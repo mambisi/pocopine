@@ -386,6 +386,60 @@ impl PlanIfChildHost {
     }
 }
 
+/// Component-host directive regression fixture. The child deliberately owns a
+/// default slot so the parent exercises the exact
+/// `<template pp-if><child>content</child></template>` shape.
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "plan-component-directive-child",
+    template_inline = r#"<button class="pcdc-button"><slot></slot></button>"#
+)]
+struct PlanComponentDirectiveChild {}
+
+#[handlers]
+impl PlanComponentDirectiveChild {}
+
+/// Covers structural directives whose target/body root is a component host:
+/// a direct custom-element root under `pp-if`, including projected content and
+/// a parent listener, plus `pp-show` directly on a `display: contents` host.
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "plan-component-directive-host",
+    template_inline = r#"<div class="pcdh-root">
+        <button class="pcdh-toggle-if" @click="toggle_open">toggle branch</button>
+        <button class="pcdh-toggle-show" @click="toggle_visible">toggle visibility</button>
+        <span class="pcdh-clicks" pp-text="clicks"></span>
+        <template pp-if="open">
+            <plan-component-directive-child data-pcdh="if" class="pcdh-if-child" @click="record_click">
+                Delete
+            </plan-component-directive-child>
+        </template>
+        <plan-component-directive-child data-pcdh="show" class="pcdh-show-child" pp-show="visible">
+            Shown
+        </plan-component-directive-child>
+    </div>"#
+)]
+struct PlanComponentDirectiveHost {
+    open: bool,
+    visible: bool,
+    clicks: u32,
+}
+
+#[handlers]
+impl PlanComponentDirectiveHost {
+    pub fn toggle_open(&mut self) {
+        self.open = !self.open;
+    }
+
+    pub fn toggle_visible(&mut self) {
+        self.visible = !self.visible;
+    }
+
+    pub fn record_click(&mut self) {
+        self.clicks += 1;
+    }
+}
+
 /// Child with a parent-writable prop used by the child-host
 /// directive plan regression.
 #[derive(Default, Serialize, Deserialize)]
@@ -1079,6 +1133,8 @@ fn register_all() {
     PlanRowPortalHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
+    PlanComponentDirectiveChild::register();
+    PlanComponentDirectiveHost::register();
     PlanHostDirectiveChild::register();
     PlanIfHostDirectiveHost::register();
     PlanModelDirectiveChild::register();
@@ -2217,6 +2273,104 @@ async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
     );
     assert_eq!(plan_failure_count(), 0);
 
+    host.remove();
+}
+
+/// Component hosts use the compiled child-mount path, so directives authored
+/// on the host must be carried by `StaticChildMount` instead of relying on a
+/// recursive walker. This also pins a direct `pp-if` component root with
+/// projected content, the shape used by button/row components in applications.
+#[wasm_bindgen_test]
+async fn component_hosts_support_pp_if_bodies_and_pp_show() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-component-directive-host")
+        .expect("component-host directive fixture has a template plan");
+    assert_eq!(plan.if_plans.len(), 1);
+    assert!(
+        plan.if_plans[0].body.is_some(),
+        "pp-if body rooted at a slotted child component must lift",
+    );
+
+    let host = mount("<plan-component-directive-host></plan-component-directive-host>");
+    tick().await;
+
+    assert!(
+        host.query_selector("plan-component-directive-child[data-pcdh='if']")
+            .unwrap()
+            .is_none()
+    );
+
+    let shown = host
+        .query_selector("plan-component-directive-child[data-pcdh='show']")
+        .unwrap()
+        .expect("pp-show keeps the component mounted")
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    assert_eq!(
+        shown.style().get_property_value("display").unwrap(),
+        "none",
+        "false pp-show must override the component host's display: contents rule",
+    );
+
+    host.query_selector(".pcdh-toggle-if")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    let branch = host
+        .query_selector("plan-component-directive-child[data-pcdh='if']")
+        .unwrap()
+        .expect("truthy pp-if must stamp its component-rooted body");
+    assert!(
+        branch.text_content().unwrap_or_default().contains("Delete"),
+        "the component's projected default slot content must survive lifting",
+    );
+    branch
+        .query_selector(".pcdc-button")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(read(&host, ".pcdh-clicks"), "1");
+
+    host.query_selector(".pcdh-toggle-show")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(
+        shown.style().get_property_value("display").unwrap(),
+        "",
+        "truthy pp-show must restore the component host's stylesheet display",
+    );
+
+    host.query_selector(".pcdh-toggle-show")
+        .unwrap()
+        .unwrap()
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(
+        shown.style().get_property_value("display").unwrap(),
+        "none",
+        "a later false value must hide the same mounted component host again",
+    );
+    assert!(
+        shown.query_selector(".pcdc-button").unwrap().is_some(),
+        "pp-show toggles visibility without unmounting the child",
+    );
+
+    assert_eq!(plan_failure_count(), 0);
     host.remove();
 }
 
