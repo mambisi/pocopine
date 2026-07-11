@@ -1,0 +1,13 @@
+<section class="admin-layout">
+  <h2>Admin layout</h2>
+  <p>
+    This counter belongs to the layout and survives child navigation:
+    <strong pp-text="visits"></strong>
+    <button @click="bump">increment</button>
+  </p>
+  <nav class="subnav">
+    <a href="/admin" pp-route>overview</a>
+    <a href="/admin/settings" pp-route>settings</a>
+  </nav>
+  <pp-outlet></pp-outlet>
+</section>

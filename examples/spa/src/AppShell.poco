@@ -4,6 +4,7 @@
     <a href="/about" pp-route>about</a>
     <a href="/blog/1" pp-route>post 1</a>
     <a href="/blog/2" pp-route>post 2</a>
+    <a href="/admin" pp-route>admin</a>
     <a href="/missing" pp-route>404 link</a>
   </nav>
   <main>

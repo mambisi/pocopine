@@ -1,6 +1,6 @@
 # RFC 089 - SPA router parity and nested outlets
 
-* **Status:** Accepted (Phases 0–1 typed target/location/navigation API + reserved-namespace enforcement landed; compiled `pp-route` links + nested outlets, Phases 2–5 pending)
+* **Status:** Accepted (Phases 0–3 implemented, including compiled `pp-route`, nested route chains, owned outlets, and common-prefix layout preservation; Phases 4–5 pending)
 * **Author:** pocopine team
 * **Created:** 2026-05-28
 * **Tracking branch:** `review/router-api-docs`
@@ -663,7 +663,7 @@ Update:
   helpers.
 * Keep `navigate(&str)` source-compatible.
 
-### Phase 2 - Nested route matching and outlet ownership
+### Phase 2 - Nested route matching and outlet ownership — implemented
 
 * Replace single `OUTLET` with outlet registrations keyed by navigation
   token, parent scope, and depth.
@@ -673,7 +673,7 @@ Update:
 * Add tests for index children, child params, wildcard child fallback,
   duplicate param rejection, and parent/child guard ordering.
 
-### Phase 3 - Layout preservation
+### Phase 3 - Layout preservation — implemented
 
 * Preserve common matched prefixes across sibling navigations.
 * Add tests proving parent layout scope state survives child route

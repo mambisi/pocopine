@@ -40,6 +40,7 @@ pages = [
   { title = "Lifecycle",    path = "guides/components/04-lifecycle.md" },
   { title = "Extractors",   path = "guides/components/05-extractors.md" },
   { title = "Events",       path = "guides/components/06-events.md" },
+  { title = "Dynamic components", path = "guides/components/07-dynamic-components.md" },
 ]
 
 [[group]]
@@ -98,6 +99,7 @@ pages = [
 section = "Docs"
 title = "Routing"
 pages = [
+  { title = "Router & nested routes", path = "guides/routing/router.md" },
   { title = "Guards & loaders", path = "guides/routing/route-guards-and-loaders.md" },
 ]
 

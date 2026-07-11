@@ -30,3 +30,6 @@ alternatives.
 6. [`06-events.md`](./06-events.md) — emitting and listening: the `emit`
    one-liner, typed `#[derive(Emit)]` events, cancelable events, and the
    `on` / `on_emit` listeners.
+7. [`07-dynamic-components.md`](./07-dynamic-components.md) — selecting a
+   component reactively with typed `ComponentRef` values, forwarding props,
+   preserving instances with `keep-alive`, and validating data-driven names.

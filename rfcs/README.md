@@ -98,3 +98,4 @@ Conventions:
 | 090 | [Merge `pocopine-sync-crud` into `pocopine-sync-query`](./rfc-090-merge-crud-into-query.md) | Implemented |
 | 092 | [Pine Stylekit utility compiler](./rfc-092-pocopine-stylekit.md) | Accepted |
 | 093 | [Pocopine Agenkit plan](./rfc-093-pocopine-agenkit.md) | Draft |
+| 112 | [Dynamic component rendering (`<pp-component :is>`)](./rfc-112-dynamic-component.md) | Implemented |
