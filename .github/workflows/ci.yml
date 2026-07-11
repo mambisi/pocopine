@@ -405,7 +405,7 @@ jobs:
           # version — the test runner ABI must match exactly or
           # ChromeDriver returns `http status: 404` from the
           # session-init handshake.
-          tool: wasm-bindgen-cli@0.2.118
+          tool: wasm-bindgen-cli@0.2.126
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-node-${{ matrix.name }}
@@ -434,6 +434,12 @@ jobs:
           - name: pocopine-template-plan
             crate: crates/pocopine
             args: --test template_plan
+          - name: pocopine-dynamic-component
+            crate: crates/pocopine
+            args: --test dynamic_component
+          - name: pocopine-nested-routes
+            crate: crates/pocopine
+            args: --test nested_routes
           - name: pine
             crate: crates/pine
             args: ""
@@ -450,7 +456,7 @@ jobs:
       - name: install wasm-bindgen-cli (locked)
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen-cli@0.2.118
+          tool: wasm-bindgen-cli@0.2.126
       - uses: browser-actions/setup-firefox@v1
         id: setup-firefox
         with:

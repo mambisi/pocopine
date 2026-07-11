@@ -1,0 +1,5 @@
+error: component tag `<pp-component>` is reserved by the Pocopine runtime. Rename the struct or pass an explicit `name = "..."` override.
+ --> tests/ui/dc_reserved_tag.rs:4:8
+  |
+4 | struct PpComponent {}
+  |        ^^^^^^^^^^^
