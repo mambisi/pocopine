@@ -1,0 +1,18 @@
+error: pocopine: template plan error in component `plan-nested-branch-roots`
+        --> tests/ui/plan_nested_branch_roots.poco
+         |
+         |         <template pp-case="Ready">
+         |         -------------------------- info: `pp-case` template body starts here
+         |           <b>first</b>
+         |           <b>second</b>
+         |           ^^^ `pp-case` template must have exactly one root element (found 2) — wrap the branch body in a single container
+         |
+ --> tests/ui/plan_nested_branch_roots.rs:5:1
+  |
+5 | / #[component(
+6 | |     name = "plan-nested-branch-roots",
+7 | |     template = "plan_nested_branch_roots.poco"
+8 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

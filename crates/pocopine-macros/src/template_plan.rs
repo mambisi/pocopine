@@ -13,7 +13,9 @@
 //! 2. A "cleaned HTML" string — the template re-serialised
 //!    with the classified attributes stripped.
 //!
-//! v1 envelope per RFC-057 §6 (deferred to RFC-058 §6.2):
+//! The original v1 envelope from RFC-057/058 has since expanded to cover
+//! structural bodies, child components, slots, models, and selected opaque
+//! directives. One post-walker rule is now fundamental:
 //!
 //! * Eligible: native HTML elements only — every directive
 //!   on or under a non-HTML5 tag is whole-subtree
@@ -30,9 +32,9 @@
 //!   `window`, `document`, `outside`, `capture`, key
 //!   modifiers, `debounce` + numeric-ms pair.
 //!
-//! Every other attribute survives unchanged on the rewritten
-//! HTML — it's the runtime mount's job to handle them as
-//! today (attribute-preserved fallback, RFC-057 §8.1).
+//! Preserving an uncompiled framework directive in HTML is **not** a runtime
+//! fallback: the generic walker is gone. Such syntax is inert, so analysis
+//! failures must surface as diagnostics instead of silently degrading.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -43,16 +45,15 @@ use crate::template_parser::{Element, Node, TemplateAst};
 pub(crate) struct EmittedTemplatePlan {
     /// `Some(quoted &'static StaticTemplatePlan)` when at least
     /// one plan entry was emitted; `None` when the template has
-    /// nothing eligible (every directive is mount-owned or the
-    /// template has no directives at all). The macro emits
+    /// nothing eligible (normally a fully static template). The macro emits
     /// `register_template_plan` only when this is `Some`.
     pub plan_tokens: Option<TokenStream>,
     /// HTML the macro should pass to `register_template` instead
     /// of the raw `.poco` source. Classified attributes are
     /// stripped; `data-pp-text-managed` is stamped where
     /// `pp-text` was removed. `None` when the analysis emitted
-    /// no entries — the caller falls back to the original
-    /// source bytes.
+    /// no entries — the caller uses the original source bytes. A planner path
+    /// resolution failure also takes that lane, but emits a build warning.
     pub cleaned_html: Option<String>,
     /// RFC-058 Phase 3.5b — `fn` items the macro should emit
     /// inside the parent's `register()` body so the
@@ -71,6 +72,10 @@ pub(crate) struct EmittedTemplatePlan {
     /// mounts use this generated body directly; the generic
     /// plan applier remains for lifted fragment internals only.
     pub specialized_mount_body: Option<TokenStream>,
+    /// Compile-time diagnostics collected at any analysis depth. Kept
+    /// separate from fragment functions so diagnostics-only templates still
+    /// emit errors even when no `StaticTemplatePlan` is generated.
+    pub diagnostics: TokenStream,
     /// RFC 081 — every `pp-ref="name"` collected from the
     /// template, dedup'd in template-order. The consuming
     /// macro emits a `<ComponentName>Refs` struct with one
@@ -78,6 +83,69 @@ pub(crate) struct EmittedTemplatePlan {
     /// can write `refs.body()` instead of
     /// `refs::get_component::<T>("body")`.
     pub ref_names: Vec<String>,
+}
+
+#[derive(Clone)]
+struct PlanDiagnostic {
+    message: String,
+    byte_range: Option<std::ops::Range<usize>>,
+    context: Option<PlanDiagnosticContext>,
+}
+
+#[derive(Clone)]
+struct PlanDiagnosticContext {
+    label: String,
+    byte_range: std::ops::Range<usize>,
+}
+
+#[derive(Default)]
+struct PlanDiagnostics(Vec<PlanDiagnostic>);
+
+impl PlanDiagnostics {
+    fn push(&mut self, message: impl Into<String>) {
+        self.0.push(PlanDiagnostic {
+            message: message.into(),
+            byte_range: None,
+            context: None,
+        });
+    }
+
+    fn push_at(&mut self, message: impl Into<String>, byte_range: std::ops::Range<usize>) {
+        self.0.push(PlanDiagnostic {
+            message: message.into(),
+            byte_range: Some(byte_range),
+            context: None,
+        });
+    }
+
+    fn push_at_with_context(
+        &mut self,
+        message: impl Into<String>,
+        byte_range: std::ops::Range<usize>,
+        context_label: impl Into<String>,
+        context_range: std::ops::Range<usize>,
+    ) {
+        self.0.push(PlanDiagnostic {
+            message: message.into(),
+            byte_range: Some(byte_range),
+            context: Some(PlanDiagnosticContext {
+                label: context_label.into(),
+                byte_range: context_range,
+            }),
+        });
+    }
+
+    fn extend(&mut self, diagnostics: impl IntoIterator<Item = PlanDiagnostic>) {
+        self.0.extend(diagnostics);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &PlanDiagnostic> {
+        self.0.iter()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// Walk the template AST, classify every directive, return the
@@ -99,6 +167,7 @@ pub(crate) fn analyze_template_plan(
     ast: &TemplateAst,
     row_plan_assignments: &[(Vec<u16>, u32)],
     role: Option<(String, String)>,
+    component_name: &str,
 ) -> EmittedTemplatePlan {
     let mut ctx = AnalysisCtx {
         row_plan_assignments: row_plan_assignments.to_vec(),
@@ -114,6 +183,43 @@ pub(crate) fn analyze_template_plan(
             walk(el, &mut ctx, &mut emissions, &mut path);
         }
     }
+    let diagnostics = ctx
+        .diagnostics
+        .iter()
+        .fold(TokenStream::new(), |mut out, diagnostic| {
+            let title = format!("pocopine: template plan error in component `{component_name}`");
+            let rendered = match diagnostic.byte_range.clone() {
+                Some(range) if range.start < range.end && range.end <= ast.source.len() => {
+                    match diagnostic.context.as_ref() {
+                        Some(context)
+                            if context.byte_range.start < context.byte_range.end
+                                && context.byte_range.end <= ast.source.len() =>
+                        {
+                            crate::diagnostics::render_template_error_plain_with_context(
+                                &ast.source,
+                                &ast.file_path,
+                                range,
+                                &title,
+                                &diagnostic.message,
+                                context.byte_range.clone(),
+                                &context.label,
+                            )
+                        }
+                        _ => crate::diagnostics::render_template_error_plain(
+                            &ast.source,
+                            &ast.file_path,
+                            range,
+                            &title,
+                            &diagnostic.message,
+                        ),
+                    }
+                }
+                _ => format!("{title} (`{}`): {}", ast.file_path, diagnostic.message),
+            };
+            let lit = proc_macro2::Literal::string(&rendered);
+            out.extend(quote! { ::core::compile_error!(#lit); });
+            out
+        });
     if !ctx.has_any_entry() && row_plan_assignments.is_empty() {
         return EmittedTemplatePlan {
             plan_tokens: None,
@@ -121,18 +227,13 @@ pub(crate) fn analyze_template_plan(
             slot_fragment_fns: TokenStream::new(),
             if_body_fns: TokenStream::new(),
             specialized_mount_body: None,
+            diagnostics,
             ref_names: ctx.ref_names_dedup(),
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
     let slot_fragment_fns = emit_slot_fragment_fns(&emissions);
-    let mut if_body_fns = emit_if_body_fns(&emissions);
-    // RFC-094 — chain build errors surface as compile_error!
-    // items alongside the emitted fragments.
-    for msg in &ctx.diagnostics {
-        let lit = proc_macro2::Literal::string(msg);
-        if_body_fns.extend(quote! { ::core::compile_error!(#lit); });
-    }
+    let if_body_fns = emit_if_body_fns(&emissions);
     // When the only "entry" is a row-plan stamp (template has no
     // plan-eligible directive on its own), still emit cleaned HTML
     // so the row-plan attribute is baked in — but skip the
@@ -150,6 +251,7 @@ pub(crate) fn analyze_template_plan(
         slot_fragment_fns,
         if_body_fns,
         specialized_mount_body,
+        diagnostics,
         ref_names,
     }
 }
@@ -230,7 +332,7 @@ struct AnalysisCtx {
     native_models: Vec<NativeModelLite>,
     /// RFC-094 — chain build errors surfaced as compile_error!
     /// items (orphan/double/misplaced else, bad member shape).
-    diagnostics: Vec<String>,
+    diagnostics: PlanDiagnostics,
     /// RFC-094 — node paths of consumed pp-else-if/pp-else
     /// member templates (kept in cleaned HTML until the
     /// controller detaches them; the serializer stamps them
@@ -421,10 +523,9 @@ struct IfPlanLite {
     /// RFC-058 Phase 4.1d — `Some` when the body subtree was
     /// lift-eligible and the macro emitted a body fragment fn
     /// the `StaticIfPlan` literal should reference. `None`
-    /// when the body falls outside the v1 envelope (`<slot>`,
-    /// `pp-route`, native `pp-model`, etc.) — the
-    /// runtime installer falls back to the legacy
-    /// `clone_template_body` + `mount::walk` path.
+    /// when the body falls outside the compiled envelope. The runtime may
+    /// clone that body as static HTML, but no generic walker installs native
+    /// directives; it records a plan failure instead.
     body_fn_ident: Option<syn::Ident>,
 }
 
@@ -588,19 +689,18 @@ impl AnalysisCtx {
         out
     }
 
-    /// Drain a nested context's ref names (its own `refs` plus
-    /// anything it already aggregated from deeper lifts) into
-    /// this context's `refs_from_lifted`. Called after each
-    /// `analyze_lift_body` / `analyze_slot_subtree` return so
-    /// refs inside lifted subtrees still reach the outer
-    /// `<ComponentName>Refs` codegen.
-    fn absorb_lifted_refs(&mut self, nested: &AnalysisCtx) {
+    /// Absorb metadata that must escape a lifted subtree's otherwise-isolated
+    /// plan context. Ref names feed the outer typed refs API; diagnostics must
+    /// reach the top-level `compile_error!` emission instead of disappearing
+    /// when a nested body is moved into its own fragment plan.
+    fn absorb_lifted_metadata(&mut self, nested: &AnalysisCtx) {
         for r in &nested.refs {
             self.refs_from_lifted.push(r.name.clone());
         }
         for name in &nested.refs_from_lifted {
             self.refs_from_lifted.push(name.clone());
         }
+        self.diagnostics.extend(nested.diagnostics.iter().cloned());
     }
 
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
@@ -1673,6 +1773,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
             && let Some((item_name, items_expr)) = parse_pp_for(&for_attr)
         {
+            check_branch_body_roots("pp-for", el, ctx);
             let key_expr = el
                 .attrs
                 .iter()
@@ -1704,7 +1805,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 None
             } else {
                 analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
-                    ctx.absorb_lifted_refs(&body_ctx);
+                    ctx.absorb_lifted_metadata(&body_ctx);
                     bodies_need_proxy |= plan_needs_proxy(&body_ctx);
                     let ident = emissions.alloc_if_body_ident("for_body");
                     emissions.if_bodies.push(IfBodyEmission {
@@ -1768,8 +1869,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // RFC-058 Phase 4.3c — try to lift the teleport
             // body into a fragment fn (same v1 envelope as
             // pp-if / pp-for body lifting).
+            check_branch_body_roots("pp-teleport", el, ctx);
             let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
-                ctx.absorb_lifted_refs(&body_ctx);
+                ctx.absorb_lifted_metadata(&body_ctx);
                 let ident = emissions.alloc_if_body_ident("teleport_body");
                 emissions.if_bodies.push(IfBodyEmission {
                     ident: ident.clone(),
@@ -1923,7 +2025,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     check_branch_body_roots("pp-case", case_el, ctx);
                     let body_ident =
                         analyze_lift_body(case_el, emissions).map(|(html, body_ctx)| {
-                            ctx.absorb_lifted_refs(&body_ctx);
+                            ctx.absorb_lifted_metadata(&body_ctx);
                             bodies_need_proxy |= plan_needs_proxy(&body_ctx);
                             let ident = emissions.alloc_if_body_ident("case_body");
                             emissions.if_bodies.push(IfBodyEmission {
@@ -1978,13 +2080,10 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // graduates into a `StaticIfPlan` entry. The applier
     // resolves the template + parses the expression at compile
     // time; the macro strips the `pp-if` attribute from the
-    // cleaned HTML so the runtime mount's directive-dispatch
-    // path doesn't double-install the effect. The template
+    // cleaned HTML so no second installer can see it. The template
     // body lives in `<template>.content` (a separate
     // `DocumentFragment` that doesn't appear in `el.children`),
-    // so body content stays on the mount — exactly like
-    // today's clone+walk path. Phase 4.1c+ will lift the body
-    // into a fragment function.
+    // body therefore needs its own compiled fragment function.
     if let Some(if_expr) = pp_if_value(el) {
         let teleport_selector = el
             .attrs
@@ -2000,15 +2099,13 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // at install).
             check_branch_body_roots("pp-if", el, ctx);
             // RFC-058 Phase 4.1d — try to lift the body
-            // subtree into a fragment fn the runtime installer
-            // invokes instead of `clone_template_body` +
-            // `mount::walk`. v1 envelope is narrow (HTML5
-            // natives + plan-eligible directives only); when
-            // the body falls outside, `body_fn_ident` stays
-            // `None` and the legacy clone+walk path runs.
+            // subtree into a fragment fn the runtime installer invokes.
+            // `body_fn_ident = None` is a fail-fast path, not a directive
+            // fallback: a static clone may render, but native directives in it
+            // remain inert and the runtime records a plan failure.
             let mut bodies_need_proxy = false;
             let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
-                ctx.absorb_lifted_refs(&body_ctx);
+                ctx.absorb_lifted_metadata(&body_ctx);
                 bodies_need_proxy |= plan_needs_proxy(&body_ctx);
                 let ident = emissions.alloc_if_body_ident("if_body");
                 emissions.if_bodies.push(IfBodyEmission {
@@ -2183,7 +2280,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // the dynamic slot's plan so the outer
                         // `<ComponentName>Refs` exposes them.
                         if let SlotFragmentEmission::Dynamic { plan, .. } = &emission {
-                            ctx.absorb_lifted_refs(plan);
+                            ctx.absorb_lifted_metadata(plan);
                         }
                         // Duplicate `pp-slot=NAME` at compile time:
                         // both lift fragments get pushed; the
@@ -2219,7 +2316,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // RFC 081 P2 — absorb pp-ref names from
                         // the default slot's plan.
                         if let SlotFragmentEmission::Dynamic { plan, .. } = &emission {
-                            ctx.absorb_lifted_refs(plan);
+                            ctx.absorb_lifted_metadata(plan);
                         }
                         slot_fragments.push((
                             "default".to_string(),
@@ -2418,7 +2515,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                             let mut member_needs = false;
                             let body_ident =
                                 analyze_lift_body(member, emissions).map(|(html, body_ctx)| {
-                                    ctx.absorb_lifted_refs(&body_ctx);
+                                    ctx.absorb_lifted_metadata(&body_ctx);
                                     member_needs = plan_needs_proxy(&body_ctx);
                                     let ident = emissions.alloc_if_body_ident(if is_else {
                                         "else_body"
@@ -3159,9 +3256,9 @@ fn is_debounce_ms(m: &str) -> bool {
 
 /// RFC-058 Phase 4.1d v1 envelope — `true` when every node in
 /// the lifted body subtree is safe to install via the Phase 1
-/// helpers and the generated specialized install closure. Anything outside this
-/// envelope falls back to the legacy `clone_template_body` +
-/// `mount::walk` path the controller already drives.
+/// helpers and the generated specialized install closure. Anything outside
+/// this envelope can only produce an uninstalled static clone plus a runtime
+/// plan-failure signal; there is no generic walker fallback.
 ///
 /// RFC-058 Phase 6.5 expansion: `<slot>` elements are now
 /// allowed. The macro records them in the body fragment's
@@ -3189,9 +3286,8 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     }
     // Phase 3.5d expansion: non-HTML5 tags are allowed here.
     // `walk()` emits child_mount entries for them into the
-    // body fragment's own static plan, and the runtime fallback
-    // walk over the cleaned fragment binds any preserved
-    // directives inside the mounted child template.
+    // body fragment's own static plan. The child component then runs its own
+    // specialized mount function; no parent-side fallback walk is involved.
     let _ = is_plan_native(&el.tag); // kept for symmetry with slot eligibility
     for (name, _) in &el.attrs {
         if name == "pp-route" {
@@ -3224,20 +3320,6 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
 /// per-subtree state stays isolated; nested fragment fns get
 /// pushed into the shared `Emissions` queue so every emission
 /// lands at the top of the parent's `register()` body.
-/// The number of element roots in a structural `<template>` body. `pp-if` /
-/// `pp-else-if` / `pp-else` / `pp-case` bodies must have exactly one: the
-/// runtime clone path (`clone_template_body`) stamps ONLY the first element
-/// root, so extra roots silently vanish from the branch, and a zero-root body
-/// errors at install — both are surfaced as compile-time diagnostics by the
-/// classifier instead.
-fn template_body_element_count(template_el: &Element) -> usize {
-    template_el
-        .children
-        .iter()
-        .filter(|c| matches!(c, Node::Element(_)))
-        .count()
-}
-
 /// Push the compile-time diagnostic for a structural `<template>` body whose
 /// element-root count breaks the exactly-one rule (the branch analogue of the
 /// component single-root rule). Non-whitespace top-level TEXT is rejected on
@@ -3245,23 +3327,48 @@ fn template_body_element_count(template_el: &Element) -> usize {
 /// so `<template pp-if>Prefix <span>…</span></template>` would silently drop
 /// `Prefix` from the branch.
 fn check_branch_body_roots(directive: &str, template_el: &Element, ctx: &mut AnalysisCtx) {
-    let roots = template_body_element_count(template_el);
-    if roots != 1 {
-        ctx.diagnostics.push(format!(
-            "`{directive}` template must have exactly one root element (found {roots}) — \
+    let element_roots: Vec<&Element> = template_el
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            Node::Element(element) => Some(element),
+            _ => None,
+        })
+        .collect();
+    if element_roots.len() != 1 {
+        let message = format!(
+            "`{directive}` template must have exactly one root element (found {}) — \
              wrap the branch body in a single container",
-        ));
+            element_roots.len(),
+        );
+        if let Some(extra_root) = element_roots.get(1) {
+            ctx.diagnostics.push_at_with_context(
+                message,
+                extra_root.opening_tag_range.clone(),
+                format!("`{directive}` template body starts here"),
+                template_el.opening_tag_range.clone(),
+            );
+        } else {
+            ctx.diagnostics
+                .push_at(message, template_el.opening_tag_range.clone());
+        }
         return;
     }
     let has_loose_text = template_el
         .children
         .iter()
-        .any(|c| matches!(c, Node::Text(text, _) if !text.trim().is_empty()));
+        .any(|child| matches!(child, Node::Text(text, _) if !text.trim().is_empty()));
     if has_loose_text {
-        ctx.diagnostics.push(format!(
-            "`{directive}` template has text beside its root element — the text would \
-             silently drop out of the branch; move it inside the root container",
-        ));
+        // Text-node byte ranges are not mapped by the shared parser yet.
+        // Anchor on the owning template rather than fabricating a plausible
+        // but wrong source coordinate from its 0..0 placeholder range.
+        ctx.diagnostics.push_at(
+            format!(
+                "`{directive}` template has text beside its root element — the text would \
+                 silently drop out of the branch; move it inside the root container",
+            ),
+            template_el.opening_tag_range.clone(),
+        );
     }
 }
 
@@ -3380,7 +3487,10 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
     // interpolation (or a native pp-model). `has_any_entry` is the
     // exhaustive "collected anything" predicate, so a new entry kind
     // can't be forgotten here again.
-    let is_dynamic = ctx.has_any_entry();
+    // A diagnostics-only context must stay attached to the parent long enough
+    // for `absorb_lifted_metadata` to propagate its errors. Treat it as
+    // dynamic even though compilation will stop before the fragment runs.
+    let is_dynamic = ctx.has_any_entry() || !ctx.diagnostics.is_empty();
     let ident = emissions.alloc_slot_frag_ident("slot_frag");
     if is_dynamic {
         Some(SlotFragmentEmission::Dynamic {
@@ -3650,21 +3760,25 @@ mod tests {
     fn analyze(source: &str) -> super::EmittedTemplatePlan {
         let (ast, errors) = crate::template_parser::parse(source, "test.poco");
         assert!(errors.is_empty(), "template must parse: {errors:?}");
-        super::analyze_template_plan(&ast, &[], None)
+        super::analyze_template_plan(&ast, &[], None, "test-component")
+    }
+
+    fn diagnostics(plan: &super::EmittedTemplatePlan) -> String {
+        plan.diagnostics.to_string()
     }
 
     #[test]
     fn pp_component_requires_reactive_is_and_emits_a_child_mount() {
         let missing = analyze("<div><pp-component></pp-component></div>");
-        let diagnostics = missing.if_body_fns.to_string();
-        assert!(diagnostics.contains("compile_error"), "{diagnostics}");
-        assert!(diagnostics.contains("reactive"), "{diagnostics}");
+        let errors = diagnostics(&missing);
+        assert!(errors.contains("compile_error"), "{errors}");
+        assert!(errors.contains("reactive"), "{errors}");
 
         let valid = analyze(r#"<div><pp-component :is="active"></pp-component></div>"#);
         assert!(
-            !valid.if_body_fns.to_string().contains("compile_error"),
+            !diagnostics(&valid).contains("compile_error"),
             "{:?}",
-            valid.if_body_fns.to_string(),
+            diagnostics(&valid),
         );
         let plan = valid.plan_tokens.unwrap().to_string();
         assert!(plan.contains("pp-component"), "{plan}");
@@ -3691,7 +3805,7 @@ mod tests {
             r#"<div><template pp-if="open"><x-button @click="remove">Delete</x-button></template></div>"#,
         );
         let body_fns = emitted.if_body_fns.to_string();
-        assert!(!body_fns.contains("compile_error"), "{body_fns}");
+        assert!(!diagnostics(&emitted).contains("compile_error"));
         assert!(body_fns.contains("stamp_if_body_with"), "{body_fns}");
         assert!(body_fns.contains("StaticChildMount"), "{body_fns}");
         assert!(
@@ -3709,26 +3823,26 @@ mod tests {
         // to silently drop out of the conditional. Now a diagnostic.
         let plan =
             analyze("<div><template pp-if=\"open\"><span>a</span><span>b</span></template></div>");
-        let out = plan.if_body_fns.to_string();
+        let out = diagnostics(&plan);
         assert!(out.contains("compile_error"), "{out}");
         assert!(out.contains("exactly one root element"), "{out}");
 
         // Zero element roots errors too (the runtime install would fail).
         let plan = analyze("<div><template pp-if=\"open\">text only</template></div>");
-        let out = plan.if_body_fns.to_string();
+        let out = diagnostics(&plan);
         assert!(out.contains("exactly one root element"), "{out}");
 
         // Non-whitespace text beside the single root errors too — the
         // runtime stamps only the element root, silently dropping the text.
         let plan = analyze("<div><template pp-if=\"open\">Prefix <span>a</span></template></div>");
-        let out = plan.if_body_fns.to_string();
+        let out = diagnostics(&plan);
         assert!(out.contains("text beside its root element"), "{out}");
 
         // A single root (whitespace/comments around it are fine) stays clean.
         let plan = analyze(
             "<div><template pp-if=\"open\">\n  <!-- note -->\n  <span>a</span>\n</template></div>",
         );
-        let out = plan.if_body_fns.to_string();
+        let out = diagnostics(&plan);
         assert!(!out.contains("compile_error"), "{out}");
     }
 
@@ -3739,7 +3853,7 @@ mod tests {
             "<div><template pp-if=\"open\"><span>a</span></template>\
              <template pp-else><span>b</span><span>c</span></template></div>",
         );
-        let out = plan.if_body_fns.to_string();
+        let out = diagnostics(&plan);
         assert!(
             out.contains("`pp-else` template must have exactly one root element"),
             "{out}"
@@ -3751,11 +3865,72 @@ mod tests {
              <template pp-case=\"Ready\"><b>y</b><b>z</b></template>\
              </template></div>",
         );
-        let out = plan.if_body_fns.to_string();
+        let out = diagnostics(&plan);
         assert!(
             out.contains("`pp-case` template must have exactly one root element"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn multi_root_for_and_teleport_bodies_are_compile_errors() {
+        let plan = analyze(
+            "<div><template pp-for=\"item in items\">\
+             <span>a</span><span>b</span></template></div>",
+        );
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("`pp-for` template must have exactly one root element"),
+            "{out}"
+        );
+
+        let plan = analyze(
+            "<div><template pp-teleport=\"#target\">\
+             <span>a</span><span>b</span></template></div>",
+        );
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("`pp-teleport` template must have exactly one root element"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn nested_branch_body_diagnostics_reach_the_component_expansion() {
+        // Each lifted structural body gets its own AnalysisCtx. A diagnostic
+        // raised by the pp-case below must cross the enclosing pp-if body's
+        // context boundary and reach the top-level compile_error! emission.
+        let plan = analyze(
+            "<div><template pp-if=\"open\"><section>\
+             <template pp-match=\"state\">\
+             <template pp-case=\"Ready\"><b>y</b><b>z</b></template>\
+             </template></section></template></div>",
+        );
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(
+            out.contains("`pp-case` template must have exactly one root element"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_only_top_level_context_still_emits_a_compile_error() {
+        let plan = analyze("<div><template pp-case=\"Ready\"><span>orphan</span></template></div>");
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("only valid as a direct child"), "{out}");
+    }
+
+    #[test]
+    fn diagnostics_only_slot_context_reaches_the_component_expansion() {
+        let plan = analyze(
+            "<div><x-child><template pp-case=\"Ready\">\
+             <span>orphan</span></template></x-child></div>",
+        );
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("only valid as a direct child"), "{out}");
     }
 
     #[test]
