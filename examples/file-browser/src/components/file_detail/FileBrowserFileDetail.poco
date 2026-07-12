@@ -174,8 +174,10 @@
               <div class="pb-3">
                 <dl class="cfe-detail-attrs" pp-show="$store.storage.detail.metadata.length">
                   <template pp-for="meta in $store.storage.detail.metadata" pp-key="meta.key">
-                    <dt class="break-all" pp-text="meta.key"></dt>
-                    <dd class="break-all" pp-text="meta.value"></dd>
+                    <div class="contents">
+                      <dt class="break-all" pp-text="meta.key"></dt>
+                      <dd class="break-all" pp-text="meta.value"></dd>
+                    </div>
                   </template>
                 </dl>
                 <p class="text-[12px] text-ink-50" pp-show="!$store.storage.detail.metadata.length">No metadata found</p>
