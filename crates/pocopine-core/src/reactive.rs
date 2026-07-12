@@ -244,6 +244,18 @@ pub fn set_effect_label(id: EffectId, label: &'static str) {
     let _ = with_effect_mut(id, |e| e.label = Some(label));
 }
 
+/// RFC-115 — remove an effect from the pending flush queue. Echo
+/// suppression for payload-less multi-field watches: the handler's
+/// own dirty sweep conservatively re-triggers keys it observed, and
+/// without a value gate that echo would re-fire the handler forever.
+/// `shift_remove` keeps the surviving queue order (RFC-098 H4).
+#[doc(hidden)]
+pub fn dequeue_effect(id: EffectId) {
+    QUEUE.with(|q| {
+        q.borrow_mut().shift_remove(&id);
+    });
+}
+
 /// Allocate a fresh `SignalId`. Signals share the id pool with scopes
 /// so numeric ids are globally unique across the runtime.
 pub fn next_signal_id() -> SignalId {

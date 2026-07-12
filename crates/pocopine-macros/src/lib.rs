@@ -4005,7 +4005,13 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
         }
         if let Some(fields) = watch_fields {
-            let takes_ref_self = method.sig.receiver().is_some_and(|r| r.reference.is_some());
+            // The documented contract is literally `&mut self` — a shared
+            // receiver compiles but leaves the handler unable to store
+            // its result, so it is rejected too.
+            let takes_mut_self = method
+                .sig
+                .receiver()
+                .is_some_and(|r| r.reference.is_some() && r.mutability.is_some());
             let typed_args: Vec<syn::Type> = method
                 .sig
                 .inputs
@@ -4023,7 +4029,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 // before this check, a no-arg handler compiled green
                 // and the watch silently never fired.
                 let field_ident = fields.into_iter().next().expect("len checked == 1");
-                if !takes_ref_self || typed_args.len() != 2 {
+                if !takes_mut_self || typed_args.len() != 2 {
                     let method_ident = &method.sig.ident;
                     return syn::Error::new_spanned(
                         &method.sig,
@@ -4051,7 +4057,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 // RFC-115 — with two-plus fields there is no single
                 // `(next, prev)`; the coalesced call is payload-less
                 // by contract.
-                if !takes_ref_self || !typed_args.is_empty() {
+                if !takes_mut_self || !typed_args.is_empty() {
                     return syn::Error::new_spanned(
                         &method.sig,
                         "multi-field #[watch] handlers take `&mut self` only — the \
@@ -4349,7 +4355,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             field: field_ident,
             v_ty,
         } => {
-            let field_name = field_ident.to_string();
+            // Scope keys are raw-ident-stripped (`r#type` → `type`).
+            let field_name = field_ident.to_string().trim_start_matches("r#").to_string();
             let ty = ty.clone();
             quote! {
                 {
@@ -4409,43 +4416,25 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             method: method_ident,
             fields,
         } => {
-            let field_names: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+            // Scope keys are raw-ident-stripped (`r#type` → `type`).
+            // Seed deferral, coalescing, echo suppression, and key
+            // validation all live in `watch_scope_fields` (RFC-115) —
+            // the generated closure is just the dispatch.
+            let field_names: Vec<String> = fields
+                .iter()
+                .map(|f| f.to_string().trim_start_matches("r#").to_string())
+                .collect();
             let label = field_names.join(", ");
             let ty = ty.clone();
             quote! {
                 {
                     let __scope = ::pocopine::current_scope_id()
                         .expect("watch installed outside a lifecycle context");
-                    let __watch_initial_pending =
-                        ::std::rc::Rc::new(::std::cell::Cell::new(true));
-                    let __watch_initial_ticket =
-                        ::std::rc::Rc::new(::std::cell::Cell::new(0_u64));
                     let __watch_effect = ::pocopine::watch_scope_fields(
                         __scope,
                         &[#(#field_names),*],
                         #label,
                         move || {
-                            if __watch_initial_pending.get() {
-                                let __ticket = __watch_initial_ticket.get() + 1;
-                                __watch_initial_ticket.set(__ticket);
-                                let __pending = __watch_initial_pending.clone();
-                                let __tickets = __watch_initial_ticket.clone();
-                                ::pocopine::tick::next(move || {
-                                    if !__pending.get() || __tickets.get() != __ticket {
-                                        return;
-                                    }
-                                    __pending.set(false);
-                                    if let Some(scope) = ::pocopine::Scope::find(__scope) {
-                                        if let Some(inner) = scope.typed::<#ty>() {
-                                            ::pocopine::Handle::new(inner, __scope)
-                                                .update(|s| {
-                                                    s.#method_ident();
-                                                });
-                                        }
-                                    }
-                                });
-                                return;
-                            }
                             if let Some(scope) = ::pocopine::Scope::find(__scope) {
                                 if let Some(inner) = scope.typed::<#ty>() {
                                     ::pocopine::Handle::new(inner, __scope)

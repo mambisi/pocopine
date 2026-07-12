@@ -32,6 +32,9 @@ fn handlers_marker_contract() {
     cases.compile_fail("tests/ui/watch_stacked.rs");
     // A watch handler without a reference receiver is rejected.
     cases.compile_fail("tests/ui/watch_no_receiver.rs");
+    // A shared receiver (`&self`) is rejected — the contract is
+    // literally `&mut self`.
+    cases.compile_fail("tests/ui/watch_shared_receiver.rs");
     // A lifecycle-named method without `self` is rejected (previously
     // skipped before name matching — the hook silently never fired).
     cases.compile_fail("tests/ui/lifecycle_no_receiver.rs");

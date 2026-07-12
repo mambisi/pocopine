@@ -11,7 +11,7 @@
 //! with `Handle::with` is that it doesn't go through the proxy, so the
 //! watch silently never fires).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use serde::de::DeserializeOwned;
@@ -137,21 +137,37 @@ where
 /// RFC-115 — one payload-less subscription across several named
 /// fields of one scope (`#[watch(a, b, c)]`).
 ///
-/// The single effect tracks every listed field and invokes `cb` when
-/// any of them fires. Coalescing is scheduler-native: same-flush
-/// triggers on several listed fields queue the effect once (RFC-098
-/// H4 queue dedup), so `cb` runs once per flush pass — and because
-/// the handler runs inside the flush, the flush-cascade cycle guard
-/// bounds divergence like any other queued effect.
+/// One effect tracks every listed field and invokes `cb` when any of
+/// them fires. Coalescing is scheduler-native: same-flush triggers on
+/// several listed fields queue the effect once (RFC-098 H4 queue
+/// dedup), so `cb` runs once per flush pass — and because the handler
+/// runs inside the flush, the flush-cascade cycle guard bounds it
+/// like any other queued effect.
 ///
-/// Unlike the typed single-field watch there is **no `PartialEq`
-/// gate**: `cb` runs on any write to a listed field, including a
-/// write of an unchanged value. Multi-field consumers are
-/// recompute-style and idempotent by contract.
+/// The payload-less form has no `PartialEq` value gate, so three
+/// guards replace it:
 ///
-/// The install run invokes `cb` once — the coalesced initial seed
-/// (parity with the single-field initial call). `label` feeds the
-/// cycle-guard report; the macro passes the joined field list.
+/// - **Install validation** — a listed key that isn't a state field
+///   (a typo) or is a `#[computed]` key is reported on the console
+///   and NOT tracked: a tracked key with no fingerprint arm is
+///   conservatively re-triggered by every dirty sweep on the scope,
+///   which would re-fire this handler on every unrelated update.
+/// - **Provably-unchanged skip** — each run probes the listed
+///   fields' quick-lens + fingerprints; when every probe proves
+///   "unchanged" the callback is skipped. A `None` fingerprint
+///   proves nothing, so those runs stay conservative.
+/// - **Echo suppression** — the handler's own dirty sweep
+///   conservatively re-triggers keys it observed; after `cb` returns
+///   the effect dequeues itself, so a handler's own writes (and
+///   sweep echoes) never re-fire it. Multi-field handlers react to
+///   external changes only — recompute output can't re-invalidate
+///   its own input set.
+///
+/// The initial seed runs once, deferred one tick: the install
+/// typically happens behind `on_ready`'s live borrow, and the seed
+/// callback usually re-enters the scope via `Handle::update`.
+/// `label` feeds the cycle-guard report; the macro passes the joined
+/// field list.
 #[doc(hidden)]
 pub fn watch_scope_fields<C>(
     scope_id: ScopeId,
@@ -162,15 +178,128 @@ pub fn watch_scope_fields<C>(
 where
     C: Fn() + 'static,
 {
-    let id = effect(move || {
-        if Scope::find(scope_id).is_none() {
-            return;
+    let cb: Rc<dyn Fn()> = Rc::new(cb);
+    // Validate once at install — reject keys the sweep can never
+    // prove unchanged (see doc above). Loud, not silent: RFC-115.
+    let tracked: Rc<Vec<&'static str>> = Rc::new(match Scope::find(scope_id) {
+        Some(scope) => {
+            let state = scope.state.borrow();
+            fields
+                .iter()
+                .copied()
+                .filter(|f| {
+                    if !state.keys().contains(f) {
+                        web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
+                            "pocopine: #[watch] field `{f}` does not exist on this \
+                             component — it is ignored (check the field list for typos)"
+                        )));
+                        false
+                    } else if state.is_computed_field(f) {
+                        web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
+                            "pocopine: #[watch] field `{f}` is a #[computed] key — \
+                             computed fields can't be watched; watch their inputs \
+                             instead. It is ignored."
+                        )));
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .collect()
         }
-        for field in fields {
-            track(scope_id, field);
-        }
-        cb();
+        None => fields.to_vec(),
     });
+
+    type Probes = Vec<(Option<u64>, Option<u64>)>;
+    fn probe(scope_id: ScopeId, tracked: &[&'static str]) -> Option<Probes> {
+        let scope = Scope::find(scope_id)?;
+        let state = scope.state.borrow();
+        Some(
+            tracked
+                .iter()
+                .map(|f| (state.field_quick_len(f), state.field_fingerprint(f)))
+                .collect(),
+        )
+    }
+    fn provably_unchanged(prev: &Option<Probes>, now: &Option<Probes>) -> bool {
+        match (prev, now) {
+            (Some(prev), Some(now)) => {
+                prev.len() == now.len()
+                    && prev.iter().zip(now).all(|((pl, pf), (nl, nf))| {
+                        pl == nl && matches!((pf, nf), (Some(a), Some(b)) if a == b)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    let seed_pending = Rc::new(Cell::new(true));
+    let seed_ticket = Rc::new(Cell::new(0_u64));
+    let self_id: Rc<Cell<Option<EffectId>>> = Rc::new(Cell::new(None));
+    let prev_probes: Rc<RefCell<Option<Probes>>> = Rc::new(RefCell::new(None));
+
+    let id = effect({
+        let cb = cb.clone();
+        let tracked = tracked.clone();
+        let seed_pending = seed_pending.clone();
+        let seed_ticket = seed_ticket.clone();
+        let self_id = self_id.clone();
+        let prev_probes = prev_probes.clone();
+        move || {
+            if Scope::find(scope_id).is_none() {
+                return;
+            }
+            for field in tracked.iter() {
+                track(scope_id, field);
+            }
+            let now = probe(scope_id, &tracked);
+            if seed_pending.get() {
+                // Coalesced initial seed, deferred one microtask —
+                // the install runs behind on_ready's live borrow and
+                // the seed re-enters the scope via `Handle::update`.
+                // Scheduled via `spawn_local` (the same cross-host
+                // microtask the flush scheduler uses) rather than
+                // `tick::next`, which needs a `window` and silently
+                // no-ops in windowless hosts.
+                let ticket = seed_ticket.get() + 1;
+                seed_ticket.set(ticket);
+                let pending = seed_pending.clone();
+                let tickets = seed_ticket.clone();
+                let cb = cb.clone();
+                let tracked = tracked.clone();
+                let self_id = self_id.clone();
+                let prev_probes = prev_probes.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(
+                        &wasm_bindgen::JsValue::NULL,
+                    ))
+                    .await;
+                    if !pending.get() || tickets.get() != ticket {
+                        return;
+                    }
+                    pending.set(false);
+                    cb();
+                    *prev_probes.borrow_mut() = probe(scope_id, &tracked);
+                    if let Some(me) = self_id.get() {
+                        crate::reactive::dequeue_effect(me);
+                    }
+                });
+                return;
+            }
+            if provably_unchanged(&prev_probes.borrow(), &now) {
+                return;
+            }
+            cb();
+            // Re-probe after the callback so its own writes don't
+            // read as an external change on the next run, and drop
+            // the sweep echo our own run just queued.
+            *prev_probes.borrow_mut() = probe(scope_id, &tracked);
+            if let Some(me) = self_id.get() {
+                crate::reactive::dequeue_effect(me);
+            }
+        }
+    });
+    self_id.set(Some(id));
     crate::reactive::set_effect_label(id, label);
     id
 }
