@@ -75,6 +75,10 @@ struct EffectEntry {
     /// this effect subscribes to, so `clear_deps_for` is O(deps).
     /// Order is never observed, so a plain `HashSet` is right.
     deps: HashSet<SignalId>,
+    /// RFC-115 — diagnostic label for the cycle-guard report. Watch
+    /// installers stamp the watched field name here so a runaway
+    /// update loop names the field, not just an effect id.
+    label: Option<&'static str>,
 }
 
 /// Runtime configuration for an effect. See [`effect_with`].
@@ -129,6 +133,12 @@ thread_local! {
     // were queued; set semantics still dedupe an effect a single
     // dispatch queues twice.
     static QUEUE: RefCell<IndexSet<EffectId>> = RefCell::new(IndexSet::new());
+
+    // RFC-115 cycle guard — per-effect run counts within one
+    // uninterrupted flush cascade (consecutive flush passes where
+    // each pass was scheduled by the previous one). Cleared when a
+    // pass ends with an empty queue, i.e. the cascade settled.
+    static CASCADE_RUNS: RefCell<HashMap<EffectId, u32>> = RefCell::new(HashMap::new());
     static FLUSH_SCHEDULED: Cell<bool> = const { Cell::new(false) };
     static BATCHING: Cell<u32> = const { Cell::new(0) };
     static AUTO_FLUSH: Cell<bool> = const { Cell::new(true) };
@@ -223,6 +233,13 @@ fn with_effect_mut<R>(id: EffectId, f: impl FnOnce(&mut EffectEntry) -> R) -> Op
     })
 }
 
+/// RFC-115 — attach a diagnostic label to an effect for the
+/// cycle-guard report. Watch installers pass the watched field name.
+/// No-op on a stale id.
+pub fn set_effect_label(id: EffectId, label: &'static str) {
+    let _ = with_effect_mut(id, |e| e.label = Some(label));
+}
+
 /// Allocate a fresh `SignalId`. Signals share the id pool with scopes
 /// so numeric ids are globally unique across the runtime.
 pub fn next_signal_id() -> SignalId {
@@ -297,6 +314,7 @@ fn effect_with_dyn(f: EffectFn, opts: EffectOptions) -> EffectId {
             scheduler,
             cleanups: Vec::new(),
             deps: HashSet::new(),
+            label: None,
         });
         pack_effect_id(slot, generation)
     });
@@ -755,12 +773,47 @@ fn schedule_flush() {
     });
 }
 
+/// RFC-115 — maximum re-runs of one effect within a single flush
+/// cascade before it is reported and suppressed. Matches the
+/// Vue/Svelte "maximum recursive updates" convention.
+const MAX_EFFECT_RERUNS_PER_CASCADE: u32 = 100;
+
 fn flush() {
     FLUSH_SCHEDULED.with(|f| f.set(false));
     // Snapshot and clear so effects that re-trigger during their run land
     // in the next batch, not the current one.
     let ids: Vec<EffectId> = QUEUE.with(|q| q.borrow_mut().drain(..).collect());
     for id in ids {
+        // RFC-115 cycle guard — a divergent self-write (an effect
+        // re-writing its own dependency with a new value every run)
+        // re-queues itself every pass and would chain microtask
+        // flushes forever: a silent hang. Count runs per cascade;
+        // past the cap, report loudly and skip the run. Skipping
+        // stops the self-requeue, so the cascade settles and the
+        // counter resets — the next external trigger fires normally.
+        let runs = CASCADE_RUNS.with(|c| {
+            let mut c = c.borrow_mut();
+            let n = c.entry(id).or_insert(0);
+            *n += 1;
+            *n
+        });
+        if runs > MAX_EFFECT_RERUNS_PER_CASCADE {
+            if runs == MAX_EFFECT_RERUNS_PER_CASCADE + 1 {
+                let label = with_effect(id, |e| e.label).flatten();
+                let what = match label {
+                    Some(field) => format!("the watch on field `{field}`"),
+                    None => format!("effect {:?}", id),
+                };
+                web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
+                    "pocopine: maximum recursive effect re-runs \
+                     ({MAX_EFFECT_RERUNS_PER_CASCADE}) exceeded — {what} keeps \
+                     re-writing its own dependency with a new value (divergent \
+                     update cycle). It is suppressed until the next external \
+                     change; fix the handler so its writes reach a fixpoint."
+                )));
+            }
+            continue;
+        }
         // Clone the body out (Rc bump) and drop the slab borrow before
         // running it. A `None` means the effect was released after it
         // was queued — skip it.
@@ -769,6 +822,13 @@ fn flush() {
             run_effect(id, &body);
         }
     }
+    // Cascade boundary: nothing re-queued during this pass, so the
+    // next flush is externally triggered — reset the run counters.
+    QUEUE.with(|q| {
+        if q.borrow().is_empty() {
+            CASCADE_RUNS.with(|c| c.borrow_mut().clear());
+        }
+    });
 }
 
 /// Force-rerun a specific effect right now. Used by primitives like
