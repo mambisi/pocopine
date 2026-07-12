@@ -127,7 +127,11 @@ where
     V: Clone + PartialEq + Default + DeserializeOwned + 'static,
     C: Fn(&V, Option<&V>) + 'static,
 {
-    watch(move || read_scope_field::<V>(scope_id, field), cb)
+    let id = watch(move || read_scope_field::<V>(scope_id, field), cb);
+    // RFC-115 — the cycle-guard report names the watched field
+    // instead of a bare effect id.
+    crate::reactive::set_effect_label(id, field);
+    id
 }
 
 /// Scope-bound counterpart to [`watch`] — installs the watcher and

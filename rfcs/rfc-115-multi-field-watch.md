@@ -159,21 +159,32 @@ and fixpoint-vs-divergent is undecidable (fixpoint self-writes are
 legitimate, so even a syntactic lint would false-positive).
 
 This RFC therefore adds a **runtime cycle guard** in
-`pocopine-core`: a per-effect re-fire counter within one flush
-cascade (reset when the trampoline fully drains). On breach of the
-cap (**100**, matching the Vue/Svelte convention) the scheduler:
+`pocopine-core` (**shipped ahead of the rest of this RFC**): a
+per-effect run counter within one flush cascade — a cascade being
+consecutive flush passes where each pass was scheduled by the
+previous one; the counters reset when a pass ends with an empty
+queue. On breach of the cap (**100**, matching the Vue/Svelte
+"maximum recursive updates" convention) the scheduler:
 
-- emits `tracing::error!(target: "pocopine.log", ...)` (RFC-069)
-  naming the scope, the effect, and — for watches installed by
-  `#[watch]` — the watched field list;
+- reports once per cascade on the runtime's console-error lane (the
+  same channel as plan failures), naming the watched field when the
+  effect was installed by a field watch (`watch_scope_field_now`
+  stamps the field name as the effect's diagnostic label) or the
+  effect id otherwise;
 - suppresses that effect for the remainder of the cascade, so the
-  app degrades to "watch stopped firing loudly" instead of a hang.
+  app degrades to "watch stopped firing loudly" instead of a hang —
+  and because suppression stops the self-requeue, the cascade
+  settles, the counters clear, and the next external change fires
+  the watch normally.
 
 The guard is counting, not graph analysis — zero cost until a
 cascade actually re-fires the same effect. Multi-field coalescing
 reduces amplification (one handler run per flush instead of one per
 field) but does not remove divergence; the guard is the backstop for
 both forms, and for hand-installed `watch()`/`effect()` closures too.
+(Computed/custom-scheduler effects run inline in dispatch rather
+than through the flush queue; a divergent cycle there is bounded by
+the RFC-098 H3 debug drain assertion and stays out of scope here.)
 
 ## Alternative considered: group the fields and watch the container
 
