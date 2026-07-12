@@ -3869,26 +3869,91 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         };
         let mut watch_field: Option<syn::Ident> = None;
         let mut is_computed = false;
+        // A marker attr the macro recognizes but cannot install must be
+        // a compile error, never a silent strip — a dropped watch reads
+        // as a dead handler at the call site.
+        let mut marker_error: Option<syn::Error> = None;
         method.attrs.retain(|attr| {
             if attr.path().is_ident("watch") {
-                if let Ok(ident) = attr.parse_args::<syn::Ident>() {
-                    watch_field = Some(ident);
+                match attr.parse_args::<syn::Ident>() {
+                    Ok(ident) => {
+                        if watch_field.replace(ident).is_some() && marker_error.is_none() {
+                            marker_error = Some(syn::Error::new_spanned(
+                                attr,
+                                "only one #[watch] attribute per method — write one \
+                                 handler per watched field",
+                            ));
+                        }
+                    }
+                    Err(_) => {
+                        if marker_error.is_none() {
+                            marker_error = Some(syn::Error::new_spanned(
+                                attr,
+                                "#[watch] expects a field name: #[watch(field)]",
+                            ));
+                        }
+                    }
                 }
                 false // strip
             } else if attr.path().is_ident("computed") {
+                if !matches!(attr.meta, syn::Meta::Path(_)) && marker_error.is_none() {
+                    marker_error =
+                        Some(syn::Error::new_spanned(attr, "#[computed] takes no arguments"));
+                }
                 is_computed = true;
                 false
             } else {
                 true
             }
         });
+        if let Some(err) = marker_error {
+            return err.to_compile_error().into();
+        }
+        if watch_field.is_some() && is_computed {
+            return syn::Error::new_spanned(
+                &method.sig.ident,
+                "#[watch] and #[computed] cannot be combined on one method",
+            )
+            .to_compile_error()
+            .into();
+        }
         if let Some(field_ident) = watch_field {
-            // Extract V from the method's first typed arg.
-            let v_ty = method.sig.inputs.iter().find_map(|arg| match arg {
-                FnArg::Typed(PatType { ty, .. }) => Some((**ty).clone()),
-                _ => None,
-            });
-            let Some(v_ty) = v_ty else { continue };
+            // RFC-036 contract: the generated dispatch calls
+            // `s.<method>(new_v, prev_v)`, so only the
+            // `&mut self, (next: V, prev: Option<V>)` shape can ever be
+            // installed. Anything else is rejected here — before this
+            // check, a no-arg handler compiled green and the watch
+            // silently never fired.
+            let takes_ref_self = method
+                .sig
+                .receiver()
+                .is_some_and(|r| r.reference.is_some());
+            let typed_args: Vec<syn::Type> = method
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|arg| match arg {
+                    FnArg::Typed(PatType { ty, .. }) => Some((**ty).clone()),
+                    _ => None,
+                })
+                .collect();
+            if !takes_ref_self || typed_args.len() != 2 {
+                let method_ident = &method.sig.ident;
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    format!(
+                        "#[watch({field_ident})] handler must take `&mut self` and \
+                         `(next: V, prev: Option<V>)` — e.g. `fn {method_ident}(&mut self, \
+                         next: V, prev: Option<V>)`"
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+            let v_ty = typed_args
+                .into_iter()
+                .next()
+                .expect("arity checked to be exactly 2");
             methods_to_skip_in_arms.insert(method.sig.ident.to_string());
             watches.push((method.sig.ident.clone(), field_ident, v_ty));
         }
@@ -3980,6 +4045,23 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     for item in &input.items {
         let ImplItem::Fn(method) = item else { continue };
         let Some(receiver) = method.sig.receiver() else {
+            // A lifecycle-named associated fn would fall out here before
+            // the name match — the hook would compile green and silently
+            // never fire. There is no template-path backstop for
+            // lifecycle names (they are auto-wired, never referenced
+            // from a template), so reject it.
+            let name = method.sig.ident.to_string();
+            if matches!(
+                name.as_str(),
+                "on_setup" | "on_mount" | "on_ready" | "on_unmount"
+            ) {
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    format!("lifecycle method `{name}` must take `&mut self`"),
+                )
+                .to_compile_error()
+                .into();
+            }
             continue;
         };
         let ident = method.sig.ident.clone();

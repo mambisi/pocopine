@@ -1,0 +1,5 @@
+error: #[computed] takes no arguments
+  --> tests/ui/computed_with_args.rs:11:5
+   |
+11 |     #[computed(cached)]
+   |     ^^^^^^^^^^^^^^^^^^^

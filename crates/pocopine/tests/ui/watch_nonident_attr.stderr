@@ -1,0 +1,5 @@
+error: #[watch] expects a field name: #[watch(field)]
+  --> tests/ui/watch_nonident_attr.rs:11:5
+   |
+11 |     #[watch("start_time")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^
