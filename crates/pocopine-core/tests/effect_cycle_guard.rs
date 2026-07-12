@@ -71,6 +71,40 @@ fn divergent_effect_is_capped_and_recovers_after_the_cascade() {
     set_auto_flush(true);
 }
 
+/// Codex P1 regression: an effect that drains the queue itself
+/// (nested `flush_sync`) before its self-write used to reset the
+/// cascade counters mid-cascade — the nested flush saw an empty
+/// queue and declared the cascade settled, so the divergent loop ran
+/// unbounded again. Only the outermost flush may clear the counters.
+#[wasm_bindgen_test]
+fn reentrant_flush_does_not_reset_the_cascade_counter() {
+    set_auto_flush(false);
+    let (s, set) = signal(0u32);
+    let runs = Rc::new(Cell::new(0u32));
+
+    let r = runs.clone();
+    let set_inner = set.clone();
+    effect(move || {
+        let v = s.get();
+        r.set(r.get() + 1);
+        // Drain the (empty) queue mid-run, then self-write.
+        flush_sync();
+        set_inner.set(v + 1);
+    });
+    assert_eq!(runs.get(), 1);
+
+    for _ in 0..300 {
+        flush_sync();
+    }
+    assert_eq!(
+        runs.get(),
+        1 + 100,
+        "a nested flush inside the effect must not reset the cascade counter"
+    );
+
+    set_auto_flush(true);
+}
+
 struct CounterState {
     n: u32,
 }
