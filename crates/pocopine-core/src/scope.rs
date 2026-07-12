@@ -6,7 +6,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use js_sys::{Array, Function, Object, Proxy, Reflect};
@@ -306,6 +306,12 @@ struct ProjectionSlot {
     cached: Option<(u32, JsValue)>,
 }
 
+/// One same-scope callback that arrived while a component handler still
+/// owned the state's mutable borrow. Browser APIs such as `focus()` dispatch
+/// their events synchronously, so the event callback must unwind before the
+/// matching handler can safely borrow the component again.
+type PendingInvocation = Box<dyn FnOnce()>;
+
 thread_local! {
     /// Registry of live scopes keyed by id. Directives look up the scope
     /// here to invoke handlers when an event fires.
@@ -379,6 +385,179 @@ thread_local! {
     /// handler returns.
     static CURRENT_SCOPE_ID: std::cell::Cell<Option<ScopeId>> =
         const { std::cell::Cell::new(None) };
+
+    /// Scopes whose handler-dispatch boundary currently owns `&mut state`.
+    /// Same-scope re-entry joins [`PENDING_INVOCATIONS`] instead of attempting
+    /// a second `RefCell::borrow_mut` while the first handler is on the stack.
+    static ACTIVE_INVOCATIONS: RefCell<HashSet<ScopeId>> = RefCell::new(HashSet::new());
+
+    /// FIFO work queued by synchronous same-scope re-entry. The outer handler
+    /// drains it after releasing its state borrow, still in the same JS turn.
+    static PENDING_INVOCATIONS: RefCell<HashMap<ScopeId, VecDeque<PendingInvocation>>> =
+        RefCell::new(HashMap::new());
+
+    /// A queued event expression may invoke a handler of its own. That nested
+    /// handler must not recursively drain the remaining callbacks before the
+    /// current expression has finished evaluating, so one outer drain owns the
+    /// queue until it is empty.
+    static DRAINING_INVOCATIONS: RefCell<HashSet<ScopeId>> = RefCell::new(HashSet::new());
+}
+
+/// Clear the active marker if a handler unwinds before its normal dispatch
+/// boundary. Work queued by the failed handler is discarded: replaying it on
+/// an unrelated later invocation would be both surprising and unsafe.
+struct ActiveInvocationGuard {
+    scope_id: ScopeId,
+    finished: bool,
+}
+
+impl ActiveInvocationGuard {
+    fn begin(scope_id: ScopeId) -> Self {
+        let inserted = ACTIVE_INVOCATIONS.with(|active| active.borrow_mut().insert(scope_id));
+        debug_assert!(inserted, "active invocation must be queued before begin");
+        Self {
+            scope_id,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self) {
+        ACTIVE_INVOCATIONS.with(|active| {
+            active.borrow_mut().remove(&self.scope_id);
+        });
+        self.finished = true;
+    }
+}
+
+impl Drop for ActiveInvocationGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        ACTIVE_INVOCATIONS.with(|active| {
+            active.borrow_mut().remove(&self.scope_id);
+        });
+        PENDING_INVOCATIONS.with(|pending| {
+            pending.borrow_mut().remove(&self.scope_id);
+        });
+    }
+}
+
+/// Own one per-scope queue drain. A handler invoked by a queued event
+/// expression may finish before the rest of that expression; keeping this
+/// marker set prevents it from recursively draining later callbacks out of
+/// order.
+struct InvocationDrainGuard {
+    scope_id: ScopeId,
+    finished: bool,
+}
+
+impl InvocationDrainGuard {
+    fn begin(scope_id: ScopeId) -> Option<Self> {
+        let inserted = DRAINING_INVOCATIONS.with(|draining| draining.borrow_mut().insert(scope_id));
+        inserted.then_some(Self {
+            scope_id,
+            finished: false,
+        })
+    }
+
+    fn finish(mut self) {
+        DRAINING_INVOCATIONS.with(|draining| {
+            draining.borrow_mut().remove(&self.scope_id);
+        });
+        self.finished = true;
+    }
+}
+
+impl Drop for InvocationDrainGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        DRAINING_INVOCATIONS.with(|draining| {
+            draining.borrow_mut().remove(&self.scope_id);
+        });
+        PENDING_INVOCATIONS.with(|pending| {
+            pending.borrow_mut().remove(&self.scope_id);
+        });
+    }
+}
+
+fn invocation_is_active(scope_id: ScopeId) -> bool {
+    ACTIVE_INVOCATIONS.with(|active| active.borrow().contains(&scope_id))
+}
+
+fn enqueue_invocation(scope_id: ScopeId, task: PendingInvocation) {
+    PENDING_INVOCATIONS.with(|pending| {
+        pending
+            .borrow_mut()
+            .entry(scope_id)
+            .or_default()
+            .push_back(task);
+    });
+}
+
+fn drain_invocations(scope_id: ScopeId) {
+    let has_pending = PENDING_INVOCATIONS.with(|pending| {
+        pending
+            .borrow()
+            .get(&scope_id)
+            .is_some_and(|queue| !queue.is_empty())
+    });
+    if !has_pending {
+        return;
+    }
+    let Some(guard) = InvocationDrainGuard::begin(scope_id) else {
+        return;
+    };
+
+    loop {
+        // Teardown wins over an event that re-entered while unmounting. The
+        // queued callback still owns any JS values it captured, so dropping
+        // the queue here releases them without touching dead component state.
+        if Scope::find(scope_id).is_none() {
+            PENDING_INVOCATIONS.with(|pending| {
+                pending.borrow_mut().remove(&scope_id);
+            });
+            break;
+        }
+        let next = PENDING_INVOCATIONS.with(|pending| {
+            pending
+                .borrow_mut()
+                .get_mut(&scope_id)
+                .and_then(VecDeque::pop_front)
+        });
+        let Some(next) = next else {
+            PENDING_INVOCATIONS.with(|pending| {
+                pending.borrow_mut().remove(&scope_id);
+            });
+            break;
+        };
+        next();
+    }
+
+    guard.finish();
+}
+
+/// Queue a browser event expression when a handler for the same scope is still
+/// holding the component's mutable borrow. Returns whether it queued the task.
+/// The factory runs only on the re-entrant path so ordinary events do not clone
+/// their element, AST, proxy, and event solely to build an unused closure.
+///
+/// Queueing the complete expression (rather than only its first handler call)
+/// also keeps reads, assignments, and multi-statement expressions away from
+/// the active `RefCell` borrow. The outer handler drains it synchronously at
+/// its dispatch boundary.
+pub(crate) fn queue_event_expression_if_active(
+    scope_id: ScopeId,
+    task: impl FnOnce() -> PendingInvocation,
+) -> bool {
+    if invocation_is_active(scope_id) {
+        enqueue_invocation(scope_id, task());
+        true
+    } else {
+        false
+    }
 }
 
 impl Scope {
@@ -934,10 +1113,43 @@ impl Scope {
     /// Invoke a handler by name. Mutates Rust state directly, then
     /// runs the RFC-095 per-field dirty sweep: only fields whose
     /// fingerprints moved get their cache slot dropped and their
-    /// subscribers triggered. Falls back to the blanket
-    /// invalidate + scope-wide trigger when the sweep can't
-    /// snapshot (re-entrant invoke holding the state borrow).
+    /// subscribers triggered.
+    ///
+    /// Browser APIs can synchronously dispatch an event back into the same
+    /// component while its first handler still owns `&mut state` (`focus()` is
+    /// the common case). Such same-scope re-entry joins a synchronous FIFO
+    /// trampoline instead of attempting an aliased `RefCell::borrow_mut`.
+    /// The outer dispatch releases its borrow, completes its dirty sweep, and
+    /// drains the queued work before returning to JavaScript. A queued nested
+    /// invocation returns `undefined` to its immediate caller because its real
+    /// result cannot exist until that caller unwinds.
     pub fn invoke(&self, key: &str, args: &Array) -> JsValue {
+        if invocation_is_active(self.id) {
+            let scope = self.clone();
+            let key = key.to_string();
+            // The nested call returns before it executes, so retain the values
+            // as they existed at the call site instead of only cloning the JS
+            // Array handle (which the caller could mutate while unwinding).
+            let args = args.slice(0, args.length());
+            enqueue_invocation(
+                self.id,
+                Box::new(move || {
+                    let _ = scope.invoke(&key, &args);
+                }),
+            );
+            return JsValue::UNDEFINED;
+        }
+
+        let active = ActiveInvocationGuard::begin(self.id);
+        let out = self.invoke_now(key, args);
+        active.finish();
+        drain_invocations(self.id);
+        out
+    }
+
+    /// One non-reentrant handler invocation. [`Scope::invoke`] owns the
+    /// same-scope trampoline around this method.
+    fn invoke_now(&self, key: &str, args: &Array) -> JsValue {
         let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
         #[cfg(feature = "devtools")]
         let start = crate::devtools::ring::now_ms_for_scope();

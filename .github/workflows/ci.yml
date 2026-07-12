@@ -465,6 +465,9 @@ jobs:
           - name: pocopine-nested-routes
             crate: crates/pocopine
             args: --test nested_routes
+          - name: pocopine-core-scope-reentrancy
+            crate: crates/pocopine-core
+            args: --test scope_reentrancy
           - name: pine
             crate: crates/pine
             args: ""

@@ -949,6 +949,43 @@ struct OpaqueState {
     b: u32,
 }
 
+struct ReentrantInvokeState {
+    order: Rc<RefCell<Vec<&'static str>>>,
+    nested_arg: Rc<RefCell<Option<String>>>,
+}
+
+impl pocopine_core::ComponentState for ReentrantInvokeState {
+    fn get(&self, _key: &str) -> JsValue {
+        JsValue::UNDEFINED
+    }
+
+    fn set(&mut self, _key: &str, _value: JsValue) {}
+
+    fn keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn invoke(&mut self, key: &str, args: &js_sys::Array) -> JsValue {
+        match key {
+            "outer" => {
+                self.order.borrow_mut().push("outer:start");
+                let scope_id = pocopine_core::scope::current_scope_id()
+                    .expect("Scope::invoke binds the current scope");
+                let nested_args = js_sys::Array::of1(&JsValue::from_str("at-call-time"));
+                pocopine_core::scope::invoke_handler(scope_id, "nested", &nested_args);
+                nested_args.set(0, JsValue::from_str("mutated-after-call"));
+                self.order.borrow_mut().push("outer:end");
+            }
+            "nested" => {
+                self.order.borrow_mut().push("nested");
+                *self.nested_arg.borrow_mut() = args.get(0).as_string();
+            }
+            _ => {}
+        }
+        JsValue::UNDEFINED
+    }
+}
+
 impl pocopine_core::ComponentState for OpaqueState {
     fn get(&self, key: &str) -> JsValue {
         match key {
@@ -1034,6 +1071,30 @@ fn dirty_sweep_unknown_fingerprints_fall_back_to_full_trigger() {
         (hits_a.get(), hits_b.get()),
         (2, 2),
         "unknown fingerprints must conservatively re-run every tracked effect",
+    );
+}
+
+#[wasm_bindgen_test]
+fn same_scope_handler_reentry_drains_after_the_active_borrow() {
+    setup();
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let nested_arg = Rc::new(RefCell::new(None));
+    let scope = Scope::new(Rc::new(RefCell::new(ReentrantInvokeState {
+        order: order.clone(),
+        nested_arg: nested_arg.clone(),
+    })));
+
+    scope.invoke("outer", &js_sys::Array::new());
+
+    assert_eq!(
+        order.borrow().as_slice(),
+        ["outer:start", "outer:end", "nested"],
+        "same-scope re-entry drains synchronously after the first handler releases state",
+    );
+    assert_eq!(
+        nested_arg.borrow().as_deref(),
+        Some("at-call-time"),
+        "queued invocation snapshots its argument list",
     );
 }
 
