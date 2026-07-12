@@ -136,9 +136,13 @@ thread_local! {
 
     // RFC-115 cycle guard — per-effect run counts within one
     // uninterrupted flush cascade (consecutive flush passes where
-    // each pass was scheduled by the previous one). Cleared when a
-    // pass ends with an empty queue, i.e. the cascade settled.
+    // each pass was scheduled by the previous one). Cleared when the
+    // OUTERMOST pass ends with an empty queue, i.e. the cascade
+    // settled; `FLUSH_DEPTH` guards against a nested `flush_sync`
+    // (an effect draining the queue mid-run, before its own write)
+    // declaring the cascade over and defeating the cap.
     static CASCADE_RUNS: RefCell<HashMap<EffectId, u32>> = RefCell::new(HashMap::new());
+    static FLUSH_DEPTH: Cell<u32> = const { Cell::new(0) };
     static FLUSH_SCHEDULED: Cell<bool> = const { Cell::new(false) };
     static BATCHING: Cell<u32> = const { Cell::new(0) };
     static AUTO_FLUSH: Cell<bool> = const { Cell::new(true) };
@@ -780,6 +784,7 @@ const MAX_EFFECT_RERUNS_PER_CASCADE: u32 = 100;
 
 fn flush() {
     FLUSH_SCHEDULED.with(|f| f.set(false));
+    FLUSH_DEPTH.with(|d| d.set(d.get() + 1));
     // Snapshot and clear so effects that re-trigger during their run land
     // in the next batch, not the current one.
     let ids: Vec<EffectId> = QUEUE.with(|q| q.borrow_mut().drain(..).collect());
@@ -804,12 +809,17 @@ fn flush() {
                     Some(field) => format!("the watch on field `{field}`"),
                     None => format!("effect {:?}", id),
                 };
+                // Phrased as "re-ran without settling", not "keeps
+                // re-writing": in a fan-out graph the read-only
+                // observers of a divergent signal cap out too, and
+                // they never wrote anything — the writer is only the
+                // *typical* culprit, somewhere in the same cascade.
                 web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
-                    "pocopine: maximum recursive effect re-runs \
-                     ({MAX_EFFECT_RERUNS_PER_CASCADE}) exceeded — {what} keeps \
-                     re-writing its own dependency with a new value (divergent \
-                     update cycle). It is suppressed until the next external \
-                     change; fix the handler so its writes reach a fixpoint."
+                    "pocopine: {what} re-ran {MAX_EFFECT_RERUNS_PER_CASCADE} times \
+                     within a single update cascade without settling — a divergent \
+                     update cycle (typically a handler in this cascade writing a \
+                     watched field with a new value every run). The effect is \
+                     suppressed until the next external change."
                 )));
             }
             continue;
@@ -822,13 +832,23 @@ fn flush() {
             run_effect(id, &body);
         }
     }
+    let depth = FLUSH_DEPTH.with(|d| {
+        let v = d.get() - 1;
+        d.set(v);
+        v
+    });
     // Cascade boundary: nothing re-queued during this pass, so the
     // next flush is externally triggered — reset the run counters.
-    QUEUE.with(|q| {
-        if q.borrow().is_empty() {
-            CASCADE_RUNS.with(|c| c.borrow_mut().clear());
-        }
-    });
+    // Outermost pass only: a nested `flush_sync` mid-effect runs
+    // before that effect's self-write and would otherwise see an
+    // empty queue and reset the counters every pass.
+    if depth == 0 {
+        QUEUE.with(|q| {
+            if q.borrow().is_empty() {
+                CASCADE_RUNS.with(|c| c.borrow_mut().clear());
+            }
+        });
+    }
 }
 
 /// Force-rerun a specific effect right now. Used by primitives like
