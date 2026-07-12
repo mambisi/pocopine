@@ -1,4 +1,4 @@
-error: #[watch(start_time)] handler must take `&mut self` and `(next: V, prev: Option<V>)` — e.g. `fn on_start_time(&mut self, next: V, prev: Option<V>)`
+error: #[watch(start_time)] handler must take `&mut self` and `(next: V, prev: Option<V>)` — e.g. `fn on_start_time(&mut self, next: V, prev: Option<V>)` — or watch several fields with a no-arg handler: #[watch(a, b, c)]
   --> tests/ui/watch_no_receiver.rs:12:5
    |
 12 |     fn on_start_time(_next: String, _prev: Option<String>) {}

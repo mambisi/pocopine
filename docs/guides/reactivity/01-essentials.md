@@ -116,8 +116,37 @@ mount, and runs whenever `field` changes.
 The signature is a contract: `&mut self` plus exactly
 `(new: V, prev: Option<V>)`. Any other shape — no args, a missing
 `prev`, no receiver, a bare `#[watch]` — is a compile error, as is
-stacking two `#[watch]` attributes on one method (write one handler per
-watched field).
+stacking two `#[watch]` attributes on one method (list the fields in
+one attribute instead — below).
+
+### Several fields, one handler — #[watch(a, b, c)]
+
+When the same recompute reacts to many fields, list them (RFC-115).
+Two-plus fields flip the contract: the handler takes `&mut self` and
+**nothing else** — with heterogeneous field types there is no single
+`(new, prev)`, and the coalesced call has no one triggering value.
+Read whatever you need off `self`.
+
+```rust
+#[watch(preset, mode, start_date, start_day, start_time)]
+fn on_when_changed(&mut self) {
+    self.recompute();
+}
+```
+
+Multi-field semantics differ from the typed form in three ways:
+
+* **Coalesced** — several listed fields changing in one flush run the
+  handler once, not once per field.
+* **Seeded** — the handler runs once after mount wiring (replacing
+  the manual `recompute()` seed in `on_mount`).
+* **No equality gate** — it fires on any write to a listed field,
+  even a write of an unchanged value; multi-field handlers should be
+  idempotent recomputes.
+
+A handler that diverges (writes a listed field with a new value every
+run) is stopped by the runtime cycle guard after 100 re-runs in one
+cascade, with a console error naming the field list.
 
 ```rust
 #[derive(Default, Serialize, Deserialize)]

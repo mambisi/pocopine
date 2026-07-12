@@ -1,0 +1,5 @@
+error: multi-field #[watch] handlers take `&mut self` only — the coalesced call has no single (next, prev); read the fields off self
+  --> tests/ui/watch_multi_with_args.rs:13:5
+   |
+13 |     fn on_times(&mut self, _next: String, _prev: Option<String>) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -148,5 +148,5 @@ pub use templates::{
 };
 pub use watch::{
     watch, watch_field, watch_field_scoped, watch_scope_field, watch_scope_field_now,
-    watch_scope_field_scoped, watch_scoped,
+    watch_scope_field_scoped, watch_scope_fields, watch_scoped,
 };

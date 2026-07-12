@@ -1,4 +1,4 @@
-error: only one #[watch] attribute per method — write one handler per watched field
+error: only one #[watch] attribute per method — list every field in one attribute: #[watch(a, b, c)]
   --> tests/ui/watch_stacked.rs:13:5
    |
 13 |     #[watch(end_time)]
