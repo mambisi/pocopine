@@ -359,6 +359,7 @@ pub fn install_static_listener(
 ) {
     let Ok(ast) = listener_ast_for_install(
         entry.expr_src,
+        entry.modifiers,
         "listener-parse",
         template_name,
         entry.node_path,
@@ -369,17 +370,24 @@ pub fn install_static_listener(
 }
 
 /// Parse a listener expression for install. An empty `expr_src` is
-/// an effect-only listener (the macro admits it only alongside
-/// `.prevent`/`.stop`): install with no evaluation step. A non-empty
-/// source that fails to parse records a plan failure.
+/// an effect-only listener, valid only alongside `.prevent`/`.stop`
+/// (the same contract the macro enforces at compile time — a plan
+/// entry violating it is a framework bug and records a plan
+/// failure): install with no evaluation step. A non-empty source
+/// that fails to parse records a plan failure.
 fn listener_ast_for_install(
     expr_src: &'static str,
+    modifiers: &'static [&'static str],
     kind: &str,
     template_name: &str,
     node_path: &'static [u16],
 ) -> Result<Option<Rc<crate::expr::Spanned<crate::expr::Expr>>>, ()> {
     if expr_src.trim().is_empty() {
-        return Ok(None);
+        if modifiers.contains(&"prevent") || modifiers.contains(&"stop") {
+            return Ok(None);
+        }
+        fail(kind, template_name, node_path, Some("<empty listener>"));
+        return Err(());
     }
     match expr::parse_cached(expr_src) {
         Ok(a) => Ok(Some(Rc::new(directives::on::backfill_legacy_call(a)))),
@@ -767,6 +775,7 @@ pub fn apply_static_pp_as_plan(
     for l in plan.listeners.iter().filter(|l| l.node_path.is_empty()) {
         let Ok(ast) = listener_ast_for_install(
             l.expr_src,
+            l.modifiers,
             "pp-as-listener-parse",
             template_name,
             l.node_path,
@@ -847,6 +856,7 @@ fn install_child_host_directives(
     for l in child.listeners {
         let Ok(ast) = listener_ast_for_install(
             l.expr_src,
+            l.modifiers,
             "child-host-listener-parse",
             template_name,
             child.node_path,
