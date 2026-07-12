@@ -191,13 +191,18 @@ the documented alternative; the guide gets a "which one when" note.
      any-change subscription with fuzzy scope questions (computed
      fields? flattened leaves? parent prop writes?).
   3. *The good argument for it — "I added a field and forgot to
-     extend the list" staleness — is better served by dependency
-     tracking*: run the method once as a tracked effect and subscribe
-     to exactly the fields it read (`watchEffect`-style,
-     `#[effect]`). That self-maintains the dependency set and cannot
-     loop on writes to unread fields, but read-tracking through
-     `&mut self` needs its own design (read-phase/write-phase split)
-     and is deferred to a future RFC.
+     extend the list" staleness — is already answered by the
+     container rung*: group the inputs into a struct and
+     `#[watch(container)]` (RFC-044 §5.10.5). A field added to the
+     struct is auto-included — exhaustiveness by construction, with
+     the dependency set still explicit and visible in the type.
+- **Dependency-tracked effects** (`watchEffect`-style implicit
+  subscription). Rejected as a direction, not just deferred: the
+  dependency set is invisible at the call site and *unstable across
+  runs* (a conditional read not taken this run silently drops the
+  subscription), which trades a visible, greppable list for
+  "why didn't this re-run" debugging. Explicit contracts are the
+  framework's position; do not re-propose implicit tracking.
 - **Watching computed fields or cross-scope fields** — same
   restrictions as single-field `#[watch]`.
 - **Predicates/filters** (`#[watch(a, if = ...)]`) — out of scope.
@@ -220,6 +225,7 @@ times per preset change.
 For documentation (`docs/guides/reactivity/`): explicit single-field
 watch when behavior diverges per field → `#[watch(a, b, c)]` for a
 shared recompute over a known set → flattened container watch
-(RFC-044 §5.10.5) when the set is a real domain object → a future
-dependency-tracked `#[effect]` if list maintenance ever becomes a
-genuine pain.
+(RFC-044 §5.10.5) when the set is a real domain object **or** when
+you want new fields auto-included without maintaining a list. Every
+rung keeps the dependency set explicit; there is no implicit-tracking
+rung by design.
