@@ -204,11 +204,13 @@ pub fn emit_from<T: Serialize>(el: &Element, name: &str, detail: T) {
 /// read back whether a listener called `preventDefault`.
 /// Returns `true` when the event was prevented.
 ///
-/// Trade-off vs [`emit`]: because this fires synchronously, any
-/// listener calling back into the caller's scope re-enters its
-/// active borrow. Safe for fire-and-observe patterns (menu item
-/// asks "can I close?") but not for pp-model-style mirror
-/// flows — use the deferred [`emit`] / [`emit_from`] there.
+/// Trade-off vs [`emit`]: a listener on the caller's own scope cannot run a
+/// second component handler while the first still owns `&mut state`. Pocopine
+/// safely queues that handler expression until the active handler boundary,
+/// so a `preventDefault()` performed *inside* the queued handler is too late to
+/// affect this function's return value. The `.prevent` event modifier still
+/// runs synchronously before handler dispatch. Use deferred [`emit`] /
+/// [`emit_from`] for pp-model-style mirror flows.
 pub fn emit_cancelable<T: Serialize>(name: &str, detail: T) -> bool {
     let Some(el) = current_el() else { return false };
     emit_cancelable_from(&el, name, detail)

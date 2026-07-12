@@ -219,13 +219,38 @@ pub fn install(
                     let r: &JsValue = ev.as_ref();
                     r.clone()
                 };
-                with_current_el(&el_for_closure, || {
-                    crate::scope::with_current_scope_id(scope_id, || {
-                        with_current_event(&ev_js, || {
-                            expr::evaluate_with(&ast, &proxy, access.as_ref());
+                // `focus()` and a few other DOM APIs fire their event
+                // synchronously. If this callback re-entered the component
+                // while its initiating handler still owned `&mut state`, even
+                // a plain handler call would panic on `RefCell::borrow_mut`;
+                // reads/assignments elsewhere in the expression could do the
+                // same. Queue the complete expression at the scope's handler
+                // boundary and drain it before the outer JS callback returns.
+                let queued = crate::scope::queue_event_expression_if_active(scope_id, || {
+                    let el = el_for_closure.clone();
+                    let ast = ast.clone();
+                    let proxy = proxy.clone();
+                    let access = access.clone();
+                    let ev_js = ev_js.clone();
+                    Box::new(move || {
+                        with_current_el(&el, || {
+                            crate::scope::with_current_scope_id(scope_id, || {
+                                with_current_event(&ev_js, || {
+                                    expr::evaluate_with(&ast, &proxy, access.as_ref());
+                                });
+                            });
+                        });
+                    })
+                });
+                if !queued {
+                    with_current_el(&el_for_closure, || {
+                        crate::scope::with_current_scope_id(scope_id, || {
+                            with_current_event(&ev_js, || {
+                                expr::evaluate_with(&ast, &proxy, access.as_ref());
+                            });
                         });
                     });
-                });
+                }
             }
         }
     }) as Box<dyn FnMut(Event)>);
