@@ -3913,10 +3913,23 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut on_mount_extractor_count: usize = 0;
     let mut on_ready_extractor_count: usize = 0;
     let mut on_unmount_extractor_count: usize = 0;
-    // (method_ident, field_ident, value_type) for each `#[watch(f)]`
-    // method. The macro auto-generates an `on_ready` that wires a
-    // `watch_field` per entry.
-    let mut watches: Vec<(syn::Ident, syn::Ident, syn::Type)> = Vec::new();
+    // One entry per `#[watch(...)]` method. RFC-115: a single field
+    // keeps the typed `(next, prev)` contract; a two-plus list takes
+    // the payload-less `&mut self` shape and installs one coalesced
+    // multi-field subscription. The macro auto-generates an
+    // `on_ready` that wires each entry.
+    enum WatchEntry {
+        Single {
+            method: syn::Ident,
+            field: syn::Ident,
+            v_ty: Box<syn::Type>,
+        },
+        Multi {
+            method: syn::Ident,
+            fields: Vec<syn::Ident>,
+        },
+    }
+    let mut watches: Vec<WatchEntry> = Vec::new();
     let mut computed_methods: Vec<ComputedMethod> = Vec::new();
 
     // First pass: collect watch metadata while the `#[watch(...)]`
@@ -3929,7 +3942,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
-        let mut watch_field: Option<syn::Ident> = None;
+        let mut watch_fields: Option<Vec<syn::Ident>> = None;
         let mut is_computed = false;
         // A marker attr the macro recognizes but cannot install must be
         // a compile error, never a silent strip — a dropped watch reads
@@ -3937,21 +3950,31 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let mut marker_error: Option<syn::Error> = None;
         method.attrs.retain(|attr| {
             if attr.path().is_ident("watch") {
-                match attr.parse_args::<syn::Ident>() {
-                    Ok(ident) => {
-                        if watch_field.replace(ident).is_some() && marker_error.is_none() {
+                match attr.parse_args_with(Punctuated::<syn::Ident, Token![,]>::parse_terminated) {
+                    Ok(list) if !list.is_empty() => {
+                        let fields: Vec<syn::Ident> = list.into_iter().collect();
+                        for (i, f) in fields.iter().enumerate() {
+                            if fields[..i].contains(f) && marker_error.is_none() {
+                                marker_error = Some(syn::Error::new_spanned(
+                                    f,
+                                    format!("duplicate field `{f}` in the #[watch] list"),
+                                ));
+                            }
+                        }
+                        if watch_fields.replace(fields).is_some() && marker_error.is_none() {
                             marker_error = Some(syn::Error::new_spanned(
                                 attr,
-                                "only one #[watch] attribute per method — write one \
-                                 handler per watched field",
+                                "only one #[watch] attribute per method — list every \
+                                 field in one attribute: #[watch(a, b, c)]",
                             ));
                         }
                     }
-                    Err(_) => {
+                    _ => {
                         if marker_error.is_none() {
                             marker_error = Some(syn::Error::new_spanned(
                                 attr,
-                                "#[watch] expects a field name: #[watch(field)]",
+                                "#[watch] expects field names: #[watch(field)] or \
+                                 #[watch(a, b, c)]",
                             ));
                         }
                     }
@@ -3973,7 +3996,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Some(err) = marker_error {
             return err.to_compile_error().into();
         }
-        if watch_field.is_some() && is_computed {
+        if watch_fields.is_some() && is_computed {
             return syn::Error::new_spanned(
                 &method.sig.ident,
                 "#[watch] and #[computed] cannot be combined on one method",
@@ -3981,13 +4004,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        if let Some(field_ident) = watch_field {
-            // RFC-036 contract: the generated dispatch calls
-            // `s.<method>(new_v, prev_v)`, so only the
-            // `&mut self, (next: V, prev: Option<V>)` shape can ever be
-            // installed. Anything else is rejected here — before this
-            // check, a no-arg handler compiled green and the watch
-            // silently never fired.
+        if let Some(fields) = watch_fields {
             let takes_ref_self = method.sig.receiver().is_some_and(|r| r.reference.is_some());
             let typed_args: Vec<syn::Type> = method
                 .sig
@@ -3998,25 +4015,58 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     _ => None,
                 })
                 .collect();
-            if !takes_ref_self || typed_args.len() != 2 {
-                let method_ident = &method.sig.ident;
-                return syn::Error::new_spanned(
-                    &method.sig,
-                    format!(
-                        "#[watch({field_ident})] handler must take `&mut self` and \
-                         `(next: V, prev: Option<V>)` — e.g. `fn {method_ident}(&mut self, \
-                         next: V, prev: Option<V>)`"
-                    ),
-                )
-                .to_compile_error()
-                .into();
+            if fields.len() == 1 {
+                // RFC-036 contract: the generated dispatch calls
+                // `s.<method>(new_v, prev_v)`, so only the
+                // `&mut self, (next: V, prev: Option<V>)` shape can
+                // ever be installed. Anything else is rejected here —
+                // before this check, a no-arg handler compiled green
+                // and the watch silently never fired.
+                let field_ident = fields.into_iter().next().expect("len checked == 1");
+                if !takes_ref_self || typed_args.len() != 2 {
+                    let method_ident = &method.sig.ident;
+                    return syn::Error::new_spanned(
+                        &method.sig,
+                        format!(
+                            "#[watch({field_ident})] handler must take `&mut self` and \
+                             `(next: V, prev: Option<V>)` — e.g. `fn {method_ident}(&mut \
+                             self, next: V, prev: Option<V>)` — or watch several fields \
+                             with a no-arg handler: #[watch(a, b, c)]"
+                        ),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                let v_ty = typed_args
+                    .into_iter()
+                    .next()
+                    .expect("arity checked to be exactly 2");
+                methods_to_skip_in_arms.insert(method.sig.ident.to_string());
+                watches.push(WatchEntry::Single {
+                    method: method.sig.ident.clone(),
+                    field: field_ident,
+                    v_ty: Box::new(v_ty),
+                });
+            } else {
+                // RFC-115 — with two-plus fields there is no single
+                // `(next, prev)`; the coalesced call is payload-less
+                // by contract.
+                if !takes_ref_self || !typed_args.is_empty() {
+                    return syn::Error::new_spanned(
+                        &method.sig,
+                        "multi-field #[watch] handlers take `&mut self` only — the \
+                         coalesced call has no single (next, prev); read the fields \
+                         off self",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                methods_to_skip_in_arms.insert(method.sig.ident.to_string());
+                watches.push(WatchEntry::Multi {
+                    method: method.sig.ident.clone(),
+                    fields,
+                });
             }
-            let v_ty = typed_args
-                .into_iter()
-                .next()
-                .expect("arity checked to be exactly 2");
-            methods_to_skip_in_arms.insert(method.sig.ident.to_string());
-            watches.push((method.sig.ident.clone(), field_ident, v_ty));
         }
         if is_computed {
             if method.sig.receiver().is_some() {
@@ -4293,53 +4343,123 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // depends on the thread-local `CURRENT_SCOPE_ID`, which isn't
     // set during most watch callback re-runs (triggers come from
     // the parent's effect chain, not a fresh `Scope::invoke`).
-    let watch_installs = watches.iter().map(|(method_ident, field_ident, v_ty)| {
-        let field_name = field_ident.to_string();
-        let ty = ty.clone();
-        quote! {
-            {
-                let __scope = ::pocopine::current_scope_id()
-                    .expect("watch_field installed outside a lifecycle context");
-                let __watch_initial_pending =
-                    ::std::rc::Rc::new(::std::cell::Cell::new(true));
-                let __watch_initial_ticket =
-                    ::std::rc::Rc::new(::std::cell::Cell::new(0_u64));
-                let __watch_effect = ::pocopine::watch_scope_field_now::<#v_ty, _>(__scope, #field_name, move |new, prev| {
-                    let new_v: #v_ty = new.clone();
-                    let prev_v: ::core::option::Option<#v_ty> = prev.cloned();
-                    if __watch_initial_pending.get() {
-                        let __ticket = __watch_initial_ticket.get() + 1;
-                        __watch_initial_ticket.set(__ticket);
-                        let __pending = __watch_initial_pending.clone();
-                        let __tickets = __watch_initial_ticket.clone();
-                        ::pocopine::tick::next(move || {
-                            if !__pending.get() || __tickets.get() != __ticket {
+    let watch_installs = watches.iter().map(|entry| match entry {
+        WatchEntry::Single {
+            method: method_ident,
+            field: field_ident,
+            v_ty,
+        } => {
+            let field_name = field_ident.to_string();
+            let ty = ty.clone();
+            quote! {
+                {
+                    let __scope = ::pocopine::current_scope_id()
+                        .expect("watch_field installed outside a lifecycle context");
+                    let __watch_initial_pending =
+                        ::std::rc::Rc::new(::std::cell::Cell::new(true));
+                    let __watch_initial_ticket =
+                        ::std::rc::Rc::new(::std::cell::Cell::new(0_u64));
+                    let __watch_effect = ::pocopine::watch_scope_field_now::<#v_ty, _>(__scope, #field_name, move |new, prev| {
+                        let new_v: #v_ty = new.clone();
+                        let prev_v: ::core::option::Option<#v_ty> = prev.cloned();
+                        if __watch_initial_pending.get() {
+                            let __ticket = __watch_initial_ticket.get() + 1;
+                            __watch_initial_ticket.set(__ticket);
+                            let __pending = __watch_initial_pending.clone();
+                            let __tickets = __watch_initial_ticket.clone();
+                            ::pocopine::tick::next(move || {
+                                if !__pending.get() || __tickets.get() != __ticket {
+                                    return;
+                                }
+                                __pending.set(false);
+                                if let Some(scope) = ::pocopine::Scope::find(__scope) {
+                                    if let Some(inner) = scope.typed::<#ty>() {
+                                        ::pocopine::Handle::new(inner, __scope)
+                                            .update(|s| {
+                                                s.#method_ident(new_v, ::core::option::Option::None);
+                                            });
+                                    }
+                                }
+                            });
+                            return;
+                        }
+                        if let Some(scope) = ::pocopine::Scope::find(__scope) {
+                            if let Some(inner) = scope.typed::<#ty>() {
+                                ::pocopine::Handle::new(inner, __scope)
+                                    .update(|s| {
+                                        s.#method_ident(new_v, prev_v);
+                                    });
+                            }
+                        }
+                    });
+                    ::pocopine::on_scope_unmount_for(__scope, move || {
+                        ::pocopine::release(__watch_effect);
+                    });
+                }
+            }
+        }
+        // RFC-115 — one coalesced payload-less subscription across the
+        // listed fields. The subscription is a single effect tracking
+        // every field, so same-flush triggers dedupe in the scheduler
+        // queue (the handler runs once per flush) and the handler
+        // stays inside the flush-cascade cycle guard. The install run
+        // is the initial seed; it fires behind on_ready's live borrow,
+        // so it defers one tick like the single-field initial call.
+        WatchEntry::Multi {
+            method: method_ident,
+            fields,
+        } => {
+            let field_names: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+            let label = field_names.join(", ");
+            let ty = ty.clone();
+            quote! {
+                {
+                    let __scope = ::pocopine::current_scope_id()
+                        .expect("watch installed outside a lifecycle context");
+                    let __watch_initial_pending =
+                        ::std::rc::Rc::new(::std::cell::Cell::new(true));
+                    let __watch_initial_ticket =
+                        ::std::rc::Rc::new(::std::cell::Cell::new(0_u64));
+                    let __watch_effect = ::pocopine::watch_scope_fields(
+                        __scope,
+                        &[#(#field_names),*],
+                        #label,
+                        move || {
+                            if __watch_initial_pending.get() {
+                                let __ticket = __watch_initial_ticket.get() + 1;
+                                __watch_initial_ticket.set(__ticket);
+                                let __pending = __watch_initial_pending.clone();
+                                let __tickets = __watch_initial_ticket.clone();
+                                ::pocopine::tick::next(move || {
+                                    if !__pending.get() || __tickets.get() != __ticket {
+                                        return;
+                                    }
+                                    __pending.set(false);
+                                    if let Some(scope) = ::pocopine::Scope::find(__scope) {
+                                        if let Some(inner) = scope.typed::<#ty>() {
+                                            ::pocopine::Handle::new(inner, __scope)
+                                                .update(|s| {
+                                                    s.#method_ident();
+                                                });
+                                        }
+                                    }
+                                });
                                 return;
                             }
-                            __pending.set(false);
                             if let Some(scope) = ::pocopine::Scope::find(__scope) {
                                 if let Some(inner) = scope.typed::<#ty>() {
                                     ::pocopine::Handle::new(inner, __scope)
                                         .update(|s| {
-                                            s.#method_ident(new_v, ::core::option::Option::None);
+                                            s.#method_ident();
                                         });
                                 }
                             }
-                        });
-                        return;
-                    }
-                    if let Some(scope) = ::pocopine::Scope::find(__scope) {
-                        if let Some(inner) = scope.typed::<#ty>() {
-                            ::pocopine::Handle::new(inner, __scope)
-                                .update(|s| {
-                                    s.#method_ident(new_v, prev_v);
-                                });
-                        }
-                    }
-                });
-                ::pocopine::on_scope_unmount_for(__scope, move || {
-                    ::pocopine::release(__watch_effect);
-                });
+                        },
+                    );
+                    ::pocopine::on_scope_unmount_for(__scope, move || {
+                        ::pocopine::release(__watch_effect);
+                    });
+                }
             }
         }
     });

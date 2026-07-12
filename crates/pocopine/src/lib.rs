@@ -39,7 +39,7 @@ pub use pocopine_core::{
     spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped, store,
     swap_list_indices_inline, this, trigger_scope, verify_registry, watch, watch_field,
     watch_field_scoped, watch_scope_field, watch_scope_field_now, watch_scope_field_scoped,
-    watch_scoped,
+    watch_scope_fields, watch_scoped,
 };
 pub use pocopine_core::{
     animate, dom, events, focus, profiler, progress, refs, router, scroll_lock, sse, storage, text,

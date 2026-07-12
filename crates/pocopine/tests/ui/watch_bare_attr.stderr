@@ -1,4 +1,4 @@
-error: #[watch] expects a field name: #[watch(field)]
+error: #[watch] expects field names: #[watch(field)] or #[watch(a, b, c)]
   --> tests/ui/watch_bare_attr.rs:11:5
    |
 11 |     #[watch]

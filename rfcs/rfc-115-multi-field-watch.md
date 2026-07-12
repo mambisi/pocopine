@@ -1,6 +1,6 @@
 # RFC-115: Multi-field watch — `#[watch(a, b, c)]`
 
-**Status:** Proposed
+**Status:** Implemented
 **Crates:** `pocopine-macros` (`#[handlers]`), `pocopine-core` (reactive watch primitives, flush-cascade cycle guard)
 **Relates to:** RFC-026 (`#[watch(field)]` sugar), RFC-036 (watch install machinery), RFC-044 §5.10.5 (flattened-container watch), PR #279 (watch signature contract)
 
@@ -102,18 +102,27 @@ messages:
   message points at the list form.
 - Duplicate idents in one list (`#[watch(a, a)]`) are an error.
 
-### Dispatch semantics
+### Dispatch semantics (as implemented)
 
-- **Coalescing:** the macro installs one subscription per listed
-  field, all sharing a pending cell + generation ticket (the same
-  mechanism the single-field install already uses for its initial
-  seed). The first triggering field in a flush schedules the handler
-  via `tick::next`; subsequent triggers in the same flush bump the
-  ticket and stay collapsed into that one scheduled call.
-- **Initial seed:** parity with single-field watch — one coalesced
-  initial invocation after `on_ready` wiring, regardless of how many
-  fields are listed. (For the motivating component this replaces the
-  manual `recompute()` seed in `on_mount`.)
+- **One effect, not N subscriptions:** the install is a single
+  effect whose body `track`s every listed field. Coalescing is
+  scheduler-native — same-flush triggers on several listed fields
+  queue that one effect once (the RFC-098 H4 `IndexSet` queue
+  dedupes), so the handler runs **once per flush pass**. No pending
+  cell across fields is needed, and because the handler runs inside
+  the flush, it stays inside the flush-cascade **cycle guard's**
+  accounting (a `tick`-deferred handler would escape it).
+- **Initial seed:** the effect's install run is the seed — one
+  invocation regardless of field count, deferred one tick via the
+  same pending/ticket dance as the single-field initial call (the
+  install happens behind `on_ready`'s live borrow). For the
+  motivating component this replaces the manual `recompute()` seed
+  in `on_mount`.
+- **No equality gate:** unlike the typed watch there is no
+  `PartialEq` dedup — the handler fires on any write to a listed
+  field, including a write of an unchanged value. Multi-field
+  handlers are recompute-style and idempotent by contract; this is
+  documented in the guide.
 - **Ordering:** relative order between a multi-field handler and
   single-field handlers on the same flush is unspecified, same as
   between any two watches today.
@@ -122,18 +131,19 @@ messages:
   `&mut self` acquisition and the tick-deferred initial call keep the
   RFC-026 guarantees.
 
-### Core primitive
+### Core primitive (as implemented)
 
 The typed install (`watch_scope_field_now::<V>`) needs `V`, which the
 `#[handlers]` macro cannot know for arbitrary fields (it sees only
 the impl block; the typed single-field form recovers `V` from the
-handler's own signature). Multi-field watch needs a **payload-less
-subscription**: `pocopine-core` grows a
-`watch_scope_field_changed(scope, name, cb)` primitive — same dirty
-propagation as the typed watch (including the RFC-044 dual-key
-container triggering), no value read, no downcast. Per the
-core-owns-engines rule this lands in `pocopine-core`;
-`pocopine-macros` stays a thin consumer.
+handler's own signature). Multi-field watch therefore rides a
+**payload-less subscription**:
+`watch_scope_fields(scope, &[names], label, cb)` in
+`pocopine-core::watch` — one effect tracking every listed field, no
+value read, no downcast. `label` is the joined field list, stamped as
+the effect's diagnostic label so the cycle-guard report names the
+fields. Per the core-owns-engines rule the primitive lands in
+`pocopine-core`; `pocopine-macros` stays a thin consumer.
 
 ## Loop semantics and the cycle guard
 

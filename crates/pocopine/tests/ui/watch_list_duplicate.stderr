@@ -1,0 +1,5 @@
+error: duplicate field `start_time` in the #[watch] list
+  --> tests/ui/watch_list_duplicate.rs:11:25
+   |
+11 |     #[watch(start_time, start_time)]
+   |                         ^^^^^^^^^^

@@ -134,6 +134,47 @@ where
     id
 }
 
+/// RFC-115 — one payload-less subscription across several named
+/// fields of one scope (`#[watch(a, b, c)]`).
+///
+/// The single effect tracks every listed field and invokes `cb` when
+/// any of them fires. Coalescing is scheduler-native: same-flush
+/// triggers on several listed fields queue the effect once (RFC-098
+/// H4 queue dedup), so `cb` runs once per flush pass — and because
+/// the handler runs inside the flush, the flush-cascade cycle guard
+/// bounds divergence like any other queued effect.
+///
+/// Unlike the typed single-field watch there is **no `PartialEq`
+/// gate**: `cb` runs on any write to a listed field, including a
+/// write of an unchanged value. Multi-field consumers are
+/// recompute-style and idempotent by contract.
+///
+/// The install run invokes `cb` once — the coalesced initial seed
+/// (parity with the single-field initial call). `label` feeds the
+/// cycle-guard report; the macro passes the joined field list.
+#[doc(hidden)]
+pub fn watch_scope_fields<C>(
+    scope_id: ScopeId,
+    fields: &'static [&'static str],
+    label: &'static str,
+    cb: C,
+) -> EffectId
+where
+    C: Fn() + 'static,
+{
+    let id = effect(move || {
+        if Scope::find(scope_id).is_none() {
+            return;
+        }
+        for field in fields {
+            track(scope_id, field);
+        }
+        cb();
+    });
+    crate::reactive::set_effect_label(id, label);
+    id
+}
+
 /// Scope-bound counterpart to [`watch`] — installs the watcher and
 /// registers a cleanup against the current scope's unmount, so the
 /// effect is released automatically when the component goes away.
