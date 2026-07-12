@@ -83,7 +83,7 @@ fn focus_event_waits_for_the_active_handler_borrow_to_end() {
         pocopine_core::expr::parse_cached("on_focus($event); assigned = true")
             .expect("event expression parses"),
     );
-    pocopine_core::directives::on::install(&element, scope.id, &proxy, "focus", &[], ast);
+    pocopine_core::directives::on::install(&element, scope.id, &proxy, "focus", &[], Some(ast));
 
     // `HtmlElement::focus()` dispatches `focus` before it returns. The event
     // expression includes both a handler call and a state assignment so the
