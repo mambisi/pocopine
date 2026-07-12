@@ -14,11 +14,11 @@
       <pine-fieldset-legend>Account</pine-fieldset-legend>
       <label class="fieldset-demo-row">
         <span>First name</span>
-        <input type="text" class="fieldset-demo-input" pp-model:value="first_name">
+        <input type="text" class="fieldset-demo-input" pp-model="first_name">
       </label>
       <label class="fieldset-demo-row">
         <span>Last name</span>
-        <input type="text" class="fieldset-demo-input" pp-model:value="last_name">
+        <input type="text" class="fieldset-demo-input" pp-model="last_name">
       </label>
     </pine-fieldset-root>
     <pine-button variant="ghost" @click="toggle" style="margin-top:0.75rem">

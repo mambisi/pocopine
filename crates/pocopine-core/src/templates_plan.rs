@@ -357,26 +357,37 @@ pub fn install_static_listener(
     entry: &'static StaticListener,
     template_name: &str,
 ) {
-    let ast = match expr::parse_cached(entry.expr_src) {
-        Ok(a) => a,
-        Err(_) => {
-            fail(
-                "listener-parse",
-                template_name,
-                entry.node_path,
-                Some(entry.expr_src),
-            );
-            return;
-        }
+    let Ok(ast) = listener_ast_for_install(
+        entry.expr_src,
+        "listener-parse",
+        template_name,
+        entry.node_path,
+    ) else {
+        return;
     };
-    directives::on::install(
-        el,
-        scope_id,
-        proxy,
-        entry.event,
-        entry.modifiers,
-        Rc::new(directives::on::backfill_legacy_call(ast)),
-    );
+    directives::on::install(el, scope_id, proxy, entry.event, entry.modifiers, ast);
+}
+
+/// Parse a listener expression for install. An empty `expr_src` is
+/// an effect-only listener (the macro admits it only alongside
+/// `.prevent`/`.stop`): install with no evaluation step. A non-empty
+/// source that fails to parse records a plan failure.
+fn listener_ast_for_install(
+    expr_src: &'static str,
+    kind: &str,
+    template_name: &str,
+    node_path: &'static [u16],
+) -> Result<Option<Rc<crate::expr::Spanned<crate::expr::Expr>>>, ()> {
+    if expr_src.trim().is_empty() {
+        return Ok(None);
+    }
+    match expr::parse_cached(expr_src) {
+        Ok(a) => Ok(Some(Rc::new(directives::on::backfill_legacy_call(a)))),
+        Err(_) => {
+            fail(kind, template_name, node_path, Some(expr_src));
+            Err(())
+        }
+    }
 }
 
 /// RFC 062 Phase 2 helper used by macro-specialized mount
@@ -754,26 +765,15 @@ pub fn apply_static_pp_as_plan(
         }
     }
     for l in plan.listeners.iter().filter(|l| l.node_path.is_empty()) {
-        let ast = match expr::parse_cached(l.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "pp-as-listener-parse",
-                    template_name,
-                    l.node_path,
-                    Some(l.expr_src),
-                );
-                continue;
-            }
+        let Ok(ast) = listener_ast_for_install(
+            l.expr_src,
+            "pp-as-listener-parse",
+            template_name,
+            l.node_path,
+        ) else {
+            continue;
         };
-        directives::on::install(
-            root,
-            scope_id,
-            proxy,
-            l.event,
-            l.modifiers,
-            Rc::new(directives::on::backfill_legacy_call(ast)),
-        );
+        directives::on::install(root, scope_id, proxy, l.event, l.modifiers, ast);
     }
     for d in plan
         .opaque_directives
@@ -845,26 +845,15 @@ fn install_child_host_directives(
         }
     }
     for l in child.listeners {
-        let ast = match expr::parse_cached(l.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "child-host-listener-parse",
-                    template_name,
-                    child.node_path,
-                    Some(l.expr_src),
-                );
-                continue;
-            }
+        let Ok(ast) = listener_ast_for_install(
+            l.expr_src,
+            "child-host-listener-parse",
+            template_name,
+            child.node_path,
+        ) else {
+            continue;
         };
-        directives::on::install(
-            el,
-            scope_id,
-            proxy,
-            l.event,
-            l.modifiers,
-            Rc::new(directives::on::backfill_legacy_call(ast)),
-        );
+        directives::on::install(el, scope_id, proxy, l.event, l.modifiers, ast);
     }
     for m in child.models {
         directives::model::install_compiled(el, scope_id, proxy, m.arg, m.modifiers, m.expr_src);

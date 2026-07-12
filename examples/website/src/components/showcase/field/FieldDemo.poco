@@ -16,7 +16,7 @@
                class="field-demo-input"
                placeholder="Required"
                required
-               pp-model:value="name">
+               pp-model="name">
       </pine-field-control>
       <pine-field-description>Visible on your profile.</pine-field-description>
       <pine-field-error>Please enter your name.</pine-field-error>

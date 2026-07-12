@@ -83,6 +83,10 @@ pub(crate) struct EmittedTemplatePlan {
     /// can write `refs.body()` instead of
     /// `refs::get_component::<T>("body")`.
     pub ref_names: Vec<String>,
+    /// Build warnings the consuming macro should surface via the
+    /// `#[deprecated]`-const trick (RFC 045 §9.4) — non-fatal
+    /// authoring notes such as the JS-equality desugar.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -229,6 +233,7 @@ pub(crate) fn analyze_template_plan(
             specialized_mount_body: None,
             diagnostics,
             ref_names: ctx.ref_names_dedup(),
+            warnings: ctx.warnings.clone(),
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
@@ -253,6 +258,7 @@ pub(crate) fn analyze_template_plan(
         specialized_mount_body,
         diagnostics,
         ref_names,
+        warnings: ctx.warnings.clone(),
     }
 }
 
@@ -333,6 +339,10 @@ struct AnalysisCtx {
     /// RFC-094 — chain build errors surfaced as compile_error!
     /// items (orphan/double/misplaced else, bad member shape).
     diagnostics: PlanDiagnostics,
+    /// Build warnings surfaced via the `#[deprecated]`-const trick
+    /// (RFC 045 §9.4) — currently the JS-equality desugar notes.
+    /// Unlike `diagnostics`, these don't stop the build.
+    warnings: Vec<String>,
     /// RFC-094 — node paths of consumed pp-else-if/pp-else
     /// member templates (kept in cleaned HTML until the
     /// controller detaches them; the serializer stamps them
@@ -701,6 +711,7 @@ impl AnalysisCtx {
             self.refs_from_lifted.push(name.clone());
         }
         self.diagnostics.extend(nested.diagnostics.iter().cloned());
+        self.warnings.extend(nested.warnings.iter().cloned());
     }
 
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
@@ -1769,9 +1780,35 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     }
 
     if let Some(for_attr) = pp_for_value(el) {
-        if el.tag == "template"
-            && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
-            && let Some((item_name, items_expr)) = parse_pp_for(&for_attr)
+        if el.tag != "template" {
+            // RFC-011 iterated slots: `<li pp-for="file in files">`
+            // wrapping a `<slot>` outlet is the documented shape
+            // (docs/guides/components/03-composition.md) — the slot
+            // publication machinery owns that subtree, not the plan.
+            if subtree_contains_slot(el) {
+                return;
+            }
+            ctx.diagnostics
+                .push("`pp-for` is only valid on a `<template>` (RFC-004)".to_string());
+            return;
+        }
+        if el.attrs.iter().any(|(n, _)| n == "pp-teleport") {
+            ctx.diagnostics.push(
+                "`pp-teleport` cannot be combined with `pp-for` on the same `<template>` \
+                 — teleport a wrapper around the list instead"
+                    .to_string(),
+            );
+            return;
+        }
+        let Some((item_name, items_expr)) = parse_pp_for(&for_attr) else {
+            ctx.diagnostics.push(format!(
+                "`pp-for=\"{for_attr}\"` does not parse — expected `item in items`"
+            ));
+            return;
+        };
+        let Some(items_expr) = check_template_expr(&items_expr, "pp-for", ctx) else {
+            return;
+        };
         {
             check_branch_body_roots("pp-for", el, ctx);
             let key_expr = el
@@ -1779,13 +1816,22 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 .iter()
                 .find(|(n, _)| n == "pp-key")
                 .map(|(_, v)| v.clone())
-                .filter(|s| !s.trim().is_empty());
-            let stagger_ms = el
+                .filter(|s| !s.trim().is_empty())
+                .and_then(|expr| check_template_expr(&expr, "pp-key", ctx));
+            let stagger_ms = match el
                 .attrs
                 .iter()
                 .find(|(n, _)| n == "pp-stagger")
-                .and_then(|(_, v)| v.trim().parse::<u32>().ok())
-                .unwrap_or(0);
+                .map(|(_, v)| v.trim().to_string())
+            {
+                Some(v) if !v.is_empty() => v.parse::<u32>().unwrap_or_else(|_| {
+                    ctx.diagnostics.push(format!(
+                        "`pp-stagger=\"{v}\"` expects milliseconds, e.g. pp-stagger=\"40\""
+                    ));
+                    0
+                }),
+                _ => 0,
+            };
             // RFC-058 Phase 4.2c — try to lift the row body
             // into a fragment fn. Skip when an RFC-054 row
             // plan claims this site (the row-plan fast path
@@ -1838,34 +1884,40 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 name: "pp-stagger".to_string(),
             });
             // Don't recurse — the row body is owned by the
-            // RFC-054 row plan (when present) or the mount
-            // (when absent). Either way the template-plan
-            // classifier doesn't follow `<template>` content.
+            // RFC-054 row plan (when present) or the lifted body
+            // fragment. Either way the template-plan classifier
+            // doesn't follow `<template>` content.
             return;
         }
-        // Ineligible (wrong host, has pp-teleport, or expr
-        // doesn't parse) — fall through to block-boundary skip
-        // so today's mount dispatch handles it.
-        return;
     }
 
     // RFC-058 Phase 4.3 — `pp-teleport` on a `<template>` host
     // graduates into a `StaticTeleportPlan` entry. Eligibility:
     // host is `<template>`, no co-occurring `pp-if` (pp-if owns
     // the mount cycle in that combo and reads pp-teleport
-    // itself), no co-occurring `pp-for` (pp-for graduated above
-    // and shouldn't be paired with pp-teleport on the same
-    // element — degenerate case, leave on mount).
+    // itself). A co-occurring `pp-for` was diagnosed above.
     if let Some(selector) = pp_teleport_value(el) {
         let has_if = el.attrs.iter().any(|(n, _)| n == "pp-if");
         let has_for = el.attrs.iter().any(|(n, _)| n == "pp-for");
+        if el.tag != "template" {
+            ctx.diagnostics
+                .push("`pp-teleport` is only valid on a `<template>` (RFC-006)".to_string());
+            return;
+        }
+        if selector.trim().is_empty() {
+            ctx.diagnostics.push(
+                "`pp-teleport` requires a CSS selector target: pp-teleport=\"#overlay\""
+                    .to_string(),
+            );
+            return;
+        }
         if has_if && !has_for {
             // The pp-if classifier below owns the combined
             // `pp-if` + `pp-teleport` site. It records the
             // selector on StaticIfPlan and strips both source
             // attrs so runtime discovery cannot double-install
             // either controller.
-        } else if el.tag == "template" && !has_if && !has_for && !selector.trim().is_empty() {
+        } else if !has_if && !has_for {
             // RFC-058 Phase 4.3c — try to lift the teleport
             // body into a fragment fn (same v1 envelope as
             // pp-if / pp-for body lifting).
@@ -1894,8 +1946,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             });
             return;
         }
-        // Ineligible (wrong host, has pp-if/pp-for, empty
-        // selector) — leave the mount to dispatch.
+        // Only the `pp-if` combo continues past here — the pp-if
+        // classifier below owns that site.
         if !has_if {
             return;
         }
@@ -2085,13 +2137,21 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // `DocumentFragment` that doesn't appear in `el.children`),
     // body therefore needs its own compiled fragment function.
     if let Some(if_expr) = pp_if_value(el) {
+        if el.tag != "template" {
+            ctx.diagnostics
+                .push("`pp-if` is only valid on a `<template>` (RFC-094)".to_string());
+            return;
+        }
+        let Some(if_expr) = check_template_expr(&if_expr, "pp-if", ctx) else {
+            return;
+        };
         let teleport_selector = el
             .attrs
             .iter()
             .find(|(n, _)| n == "pp-teleport")
             .map(|(_, v)| v.clone())
             .filter(|s| !s.trim().is_empty());
-        if el.tag == "template" && pocopine_expr::parse(&if_expr).is_ok() {
+        {
             // Exactly one element root, enforced at compile time —
             // the runtime clone stamps only the FIRST root, so a
             // multi-root body used to silently drop its extra roots
@@ -2141,9 +2201,6 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             }
             return;
         }
-        // Ineligible (wrong host, has pp-teleport, or expr
-        // doesn't parse) — fall through to mount as today.
-        return;
     }
 
     if el.tag == "pp-component" {
@@ -2180,7 +2237,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         let has_pp_as = el.attrs.iter().any(|(name, _)| name == "pp-as");
         if !has_pp_as {
             for (name, value) in &el.attrs {
-                match classify_child_host_attr(name, value) {
+                match classify_child_host_attr(name, value, ctx) {
                     ChildHostAttrOutcome::Show(expr_src) => {
                         ctx.stripped.push(StrippedAttr {
                             node_path: path.clone(),
@@ -2345,13 +2402,16 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         return;
     }
 
-    // Classify every attribute on this element. `pp-as` hosts
-    // (outside the template root) are skipped whole-subtree —
-    // the dynamic-component path owns them.
+    // Classify every attribute on this element. `pp-as` is
+    // component-only (RFC-019); component tags took the
+    // child-mount branch above, so a native element carrying it
+    // used to be skipped whole-subtree — every directive in the
+    // subtree died silently with it.
     if el.attrs.iter().any(|(name, _)| name == "pp-as") && el.tag != "root" {
+        ctx.diagnostics
+            .push("`pp-as` is only valid on a component tag (RFC-019)".to_string());
         return;
     }
-    let mut listener_unsupported_modifier = false;
     let host_is_native = is_plan_native(&el.tag);
     for (name, value) in &el.attrs {
         if el.tag == "root" && name == "pp-as" {
@@ -2359,16 +2419,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         }
         // Outcome is recorded on `ctx` (stripped entries + plan
         // vecs); nothing branch-worthy remains at this call site.
-        let _ = classify_attr(
-            name,
-            value,
-            path,
-            ctx,
-            host_is_native,
-            &mut listener_unsupported_modifier,
-        );
+        let _ = classify_attr(name, value, path, ctx, &el.tag, host_is_native);
     }
-    let _ = listener_unsupported_modifier; // already handled per-attr
 
     // RFC-058 Phase 6.2 — scan direct text-node children for
     // `{{expr}}` interpolation and lift each into an
@@ -2389,7 +2441,26 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 continue;
             }
             match parse_interp_segments(text) {
-                Ok(segments) if !segments.is_empty() => {
+                Ok(mut segments) if !segments.is_empty() => {
+                    // JS-equality desugar for `{{ a === b }}` — hard
+                    // parse failures stay on the emit path, which
+                    // already produces the teaching compile error.
+                    for segment in &mut segments {
+                        let InterpSegment::Dynamic(src) = segment else {
+                            continue;
+                        };
+                        if pocopine_expr::parse(src).is_err()
+                            && let Some(rewritten) = desugar_js_equality(src)
+                            && pocopine_expr::parse(&rewritten).is_ok()
+                        {
+                            ctx.warnings.push(format!(
+                                "pocopine: `{{{{ {src} }}}}` uses JavaScript equality \
+                                 (`===`/`!==`); pine-expr is Rust-style. Interpreted as \
+                                 `{rewritten}` — update the template to `==`/`!=`."
+                            ));
+                            *src = rewritten;
+                        }
+                    }
                     let any_dynamic = segments
                         .iter()
                         .any(|s| matches!(s, InterpSegment::Dynamic(_)));
@@ -2721,17 +2792,174 @@ enum ClassifyOutcome {
     Preserved,
 }
 
+/// Rewrite JS-style `===` / `!==` to `==` / `!=` outside string
+/// literals. Returns `Some(rewritten)` when at least one rewrite
+/// happened, `None` when the source has no JS equality operator.
+/// Byte-level splices are safe: the replacements are ASCII and
+/// never split a UTF-8 sequence.
+fn desugar_js_equality(src: &str) -> Option<String> {
+    let bytes = src.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut changed = false;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == b'\\' && i + 1 < bytes.len() {
+                out.push(b);
+                out.push(bytes[i + 1]);
+                i += 2;
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+            out.push(b);
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' => {
+                quote = Some(b);
+                out.push(b);
+                i += 1;
+            }
+            b'=' if bytes[i..].starts_with(b"===") => {
+                out.extend_from_slice(b"==");
+                i += 3;
+                changed = true;
+            }
+            b'!' if bytes[i..].starts_with(b"!==") => {
+                out.extend_from_slice(b"!=");
+                i += 3;
+                changed = true;
+            }
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    changed.then(|| String::from_utf8(out).expect("ASCII-only splices preserve UTF-8"))
+}
+
+/// Parse a directive expression the plan is about to install.
+///
+/// - Parses clean → `Some(source unchanged)`.
+/// - JS `===`/`!==` and otherwise clean → `Some(rewritten)` plus a
+///   build warning (the plan installs the Rust-style spelling).
+/// - Anything else → a compile diagnostic and `None`. Before this
+///   check, a parse failure left the attribute `Preserved` — dead
+///   markup since RFC-058 Phase 6.5 retired the runtime dispatch.
+fn check_template_expr(value: &str, directive: &str, ctx: &mut AnalysisCtx) -> Option<String> {
+    match pocopine_expr::parse(value) {
+        Ok(_) => Some(value.to_string()),
+        Err(err) => {
+            if let Some(rewritten) = desugar_js_equality(value)
+                && pocopine_expr::parse(&rewritten).is_ok()
+            {
+                ctx.warnings.push(format!(
+                    "pocopine: `{directive}=\"{value}\"` uses JavaScript equality \
+                     (`===`/`!==`); pine-expr is Rust-style. Interpreted as \
+                     `{rewritten}` — update the template to `==`/`!=`."
+                ));
+                return Some(rewritten);
+            }
+            let hint = err
+                .hint
+                .as_deref()
+                .map(|h| format!(" — {h}"))
+                .unwrap_or_default();
+            ctx.diagnostics.push(format!(
+                "`{directive}` expression `{value}` does not parse: {}{hint}",
+                err.message
+            ));
+            None
+        }
+    }
+}
+
+/// Closest live directive head for a did-you-mean suggestion, or
+/// `None` when nothing is within edit distance 2.
+fn nearest_directive(head: &str) -> Option<&'static str> {
+    nearest_of(head, pocopine_directives::DIRECTIVES.iter().map(|d| d.name))
+}
+
+fn nearest_of<'a>(input: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    candidates
+        .map(|c| (strsim::levenshtein(input, c), c))
+        .min_by_key(|(d, _)| *d)
+        .filter(|(d, _)| *d <= 2)
+        .map(|(_, c)| c)
+}
+
+/// Listener control modifiers the applier implements
+/// (`pocopine-core/src/directives/on.rs`). Everything outside this
+/// set participates in the RFC-013 key filter, which only ever
+/// matches on keyboard events.
+const LISTENER_CONTROL_MODIFIERS: &[&str] = &[
+    "prevent", "stop", "self", "once", "window", "document", "outside", "capture",
+];
+
+fn is_keyboard_event(event: &str) -> bool {
+    matches!(event, "keydown" | "keyup" | "keypress")
+}
+
+/// Event-aware compile-time mirror of the runtime listener modifier
+/// semantics. Control modifiers and `debounce[.ms]` work on any
+/// event; system keys (`ctrl`/`shift`/`alt`/`meta`) filter via the
+/// shared event modifier flags so they're valid anywhere; named /
+/// single-char / word KEY filters only ever match on keyboard
+/// events — anywhere else the listener would install but never
+/// fire. Pushes a diagnostic and returns `false` on the dead shapes.
+fn validate_listener_modifiers(
+    event: &str,
+    modifiers: &[String],
+    display: &str,
+    ctx: &mut AnalysisCtx,
+) -> bool {
+    let keyboard = is_keyboard_event(event);
+    let has_debounce = modifiers.iter().any(|m| m == "debounce");
+    for m in modifiers {
+        let m = m.as_str();
+        let valid = LISTENER_CONTROL_MODIFIERS.contains(&m)
+            || m == "debounce"
+            || (has_debounce && is_debounce_ms(m))
+            || matches!(m, "ctrl" | "shift" | "alt" | "meta")
+            || (keyboard && is_supported_modifier(m));
+        if !valid {
+            let suggestion = nearest_of(
+                m,
+                LISTENER_CONTROL_MODIFIERS
+                    .iter()
+                    .copied()
+                    .chain(["debounce", "ctrl", "shift", "alt", "meta"]),
+            )
+            .map(|s| format!(" — did you mean `.{s}`?"))
+            .unwrap_or_default();
+            ctx.diagnostics.push(format!(
+                "`{display}`: modifier `.{m}` is not a control modifier, and `{event}` \
+                 is not a keyboard event, so a `.{m}` key filter can never match — the \
+                 listener would never fire{suggestion}"
+            ));
+            return false;
+        }
+    }
+    true
+}
+
 fn classify_attr(
     name: &str,
     value: &str,
     path: &[u16],
     ctx: &mut AnalysisCtx,
+    host_tag: &str,
     host_is_native: bool,
-    listener_unsupported_modifier: &mut bool,
 ) -> ClassifyOutcome {
     // RFC-020 listener shorthand: `@event[.mod]`.
     if let Some(rest) = name.strip_prefix('@') {
-        return classify_listener(rest, value, path, ctx, listener_unsupported_modifier);
+        return classify_listener(rest, value, path, ctx);
     }
     // RFC-020 bind shorthand: `:<arg>` (NOT `::` which is
     // illegal in HTML and therefore not a real attribute name).
@@ -2744,13 +2972,13 @@ fn classify_attr(
     if let Some(rest) = name.strip_prefix("pp-") {
         // pp-text="<expr>"
         if rest == "text" {
-            if pocopine_expr::parse(value).is_err() {
+            let Some(expr_src) = check_template_expr(value, "pp-text", ctx) else {
                 return ClassifyOutcome::Preserved;
-            }
+            };
             ctx.bindings.push(BindingLite {
                 node_path: path.to_vec(),
                 kind: BindingKindLite::Text,
-                expr_src: value.to_string(),
+                expr_src,
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.to_vec(),
@@ -2760,13 +2988,13 @@ fn classify_attr(
         }
         // pp-html="<expr>"
         if rest == "html" {
-            if pocopine_expr::parse(value).is_err() {
+            let Some(expr_src) = check_template_expr(value, "pp-html", ctx) else {
                 return ClassifyOutcome::Preserved;
-            }
+            };
             ctx.bindings.push(BindingLite {
                 node_path: path.to_vec(),
                 kind: BindingKindLite::Html,
-                expr_src: value.to_string(),
+                expr_src,
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.to_vec(),
@@ -2776,13 +3004,13 @@ fn classify_attr(
         }
         // pp-show="<expr>"
         if rest == "show" {
-            if pocopine_expr::parse(value).is_err() {
+            let Some(expr_src) = check_template_expr(value, "pp-show", ctx) else {
                 return ClassifyOutcome::Preserved;
-            }
+            };
             ctx.bindings.push(BindingLite {
                 node_path: path.to_vec(),
                 kind: BindingKindLite::Show,
-                expr_src: value.to_string(),
+                expr_src,
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.to_vec(),
@@ -2796,15 +3024,15 @@ fn classify_attr(
         }
         // pp-on:<event>[.<mod>]="<expr>"
         if let Some(rest) = rest.strip_prefix("on:") {
-            return classify_listener(rest, value, path, ctx, listener_unsupported_modifier);
+            return classify_listener(rest, value, path, ctx);
         }
         // pp-ref="<name>"
         if rest == "ref" {
-            // `pp-ref` value is a static name, not an expression
-            // — empty / whitespace is an author bug; let the
-            // mount surface it.
+            // `pp-ref` value is a static name, not an expression.
             let trimmed = value.trim();
             if trimmed.is_empty() {
+                ctx.diagnostics
+                    .push("`pp-ref` requires a non-empty name: pp-ref=\"my_ref\"".to_string());
                 return ClassifyOutcome::Preserved;
             }
             ctx.refs.push(RefLite {
@@ -2854,11 +3082,40 @@ fn classify_attr(
         // native AND the directive has no `:arg` (the arg form
         // is for component target prop selection, not native
         // inputs).
+        if host_is_native && rest.starts_with("model:") {
+            // The `:arg` form selects a component prop; a native
+            // input has no props to select. Used to be preserved —
+            // dead markup since the runtime dispatch retired.
+            ctx.diagnostics.push(format!(
+                "`pp-{rest}`: the `pp-model:<prop>` form targets component models; \
+                 native inputs take bare `pp-model=\"field\"`"
+            ));
+            return ClassifyOutcome::Preserved;
+        }
         if host_is_native && (rest == "model" || rest.starts_with("model.")) {
-            // Parse modifiers (`.number`, `.lazy`). Accept any
-            // unknown modifier silently — runtime currently does
-            // the same; surfacing is a future enhancement.
             let modifiers: Vec<&str> = rest.split('.').skip(1).collect();
+            for m in &modifiers {
+                match *m {
+                    "number" | "lazy" => {}
+                    // Registry-documented, but `NativeModelLite` has no
+                    // trim lane and the applier never implemented one —
+                    // the modifier would be silently dropped.
+                    "trim" => ctx.diagnostics.push(
+                        "`pp-model.trim` is not supported by compiled templates — \
+                         trim in the handler instead"
+                            .to_string(),
+                    ),
+                    other => {
+                        let suggestion = nearest_of(other, ["number", "lazy"].into_iter())
+                            .map(|s| format!(" — did you mean `.{s}`?"))
+                            .unwrap_or_default();
+                        ctx.diagnostics.push(format!(
+                            "unknown `pp-model` modifier `.{other}` — supported: \
+                             `.number`, `.lazy`{suggestion}"
+                        ));
+                    }
+                }
+            }
             let number = modifiers.contains(&"number");
             let lazy = modifiers.contains(&"lazy");
             ctx.native_models.push(NativeModelLite {
@@ -2873,10 +3130,47 @@ fn classify_attr(
             });
             return ClassifyOutcome::Stripped;
         }
-        // Every other pp-* attribute (pp-cloak,
-        // pp-route, pp-transition:*, pp-stagger, etc.) —
-        // preserved on the cleaned HTML and handled by the
-        // runtime mount as today.
+        // Every other pp-* attribute. RFC-058 Phase 6.5 retired the
+        // runtime pp-* dispatch, so `Preserved` is dead markup unless
+        // something else (slot capture, the router's DOM queries, the
+        // plan applier) explicitly consumes the attribute. Check the
+        // shared directive registry: an unknown head is a typo, and a
+        // live head on the wrong host class can never activate.
+        if let Some(parsed) = pocopine_directives::parse_directive_attr(name) {
+            if pocopine_directives::removed_message(&parsed.head).is_some() {
+                // The RFC-063 forbidden-directives pass owns the
+                // migration error for these.
+                return ClassifyOutcome::Preserved;
+            }
+            match pocopine_directives::lookup(&parsed.head) {
+                None => {
+                    let suggestion = nearest_directive(&parsed.head)
+                        .map(|n| format!(" — did you mean `pp-{n}`?"))
+                        .unwrap_or_default();
+                    ctx.diagnostics.push(format!(
+                        "unknown directive `pp-{}`{suggestion}",
+                        parsed.head
+                    ));
+                }
+                Some(spec) => match spec.host {
+                    pocopine_directives::Host::TemplateOnly if host_tag != "template" => {
+                        ctx.diagnostics.push(format!(
+                            "`pp-{}` is only valid on a `<template>`",
+                            spec.name
+                        ));
+                    }
+                    pocopine_directives::Host::ComponentOnly => {
+                        // Component tags took the child-mount branch,
+                        // so this host is a native element.
+                        ctx.diagnostics.push(format!(
+                            "`pp-{}` is only valid on a component tag",
+                            spec.name
+                        ));
+                    }
+                    _ => {}
+                },
+            }
+        }
         return ClassifyOutcome::Preserved;
     }
     // Plain HTML attribute — preserved.
@@ -2976,6 +3270,15 @@ fn parse_interp_segments(input: &str) -> Result<Vec<InterpSegment>, String> {
     Ok(out)
 }
 
+/// Whether any descendant is a `<slot>` outlet — the marker for the
+/// RFC-011 iterated-slot shape (`pp-for` on a native element).
+fn subtree_contains_slot(el: &Element) -> bool {
+    el.children.iter().any(|n| match n {
+        Node::Element(c) => c.tag == "slot" || subtree_contains_slot(c),
+        _ => false,
+    })
+}
+
 /// Allowlist of runtime directives that are safe to lift into a
 /// compile-time `StaticOpaqueDirective` entry. Each entry is a
 /// pure DOM-side effect that installs once and self-manages —
@@ -2988,12 +3291,6 @@ fn is_lift_eligible_opaque(head: &str) -> bool {
 }
 
 fn classify_bind(arg: &str, value: &str, path: &[u16], ctx: &mut AnalysisCtx) -> ClassifyOutcome {
-    // `:<arg>` shorthand. Modifier suffix (`.<mod>`) is
-    // currently unsupported in the planned envelope; preserve
-    // the whole binding in that case.
-    if arg.contains('.') {
-        return ClassifyOutcome::Preserved;
-    }
     classify_bind_inner(&format!(":{arg}"), arg, value, path, ctx)
 }
 
@@ -3004,9 +3301,6 @@ fn classify_bind_full(
     path: &[u16],
     ctx: &mut AnalysisCtx,
 ) -> ClassifyOutcome {
-    if arg.contains('.') {
-        return ClassifyOutcome::Preserved;
-    }
     classify_bind_inner(full_name, arg, value, path, ctx)
 }
 
@@ -3020,15 +3314,24 @@ fn classify_bind_inner(
     if arg.is_empty() {
         return ClassifyOutcome::Preserved;
     }
-    if pocopine_expr::parse(value).is_err() {
+    // Bind takes no `.modifiers` (RFC-020) — a suffixed binding
+    // used to be preserved, i.e. dead markup.
+    if let Some((real_arg, mods)) = arg.split_once('.') {
+        ctx.diagnostics.push(format!(
+            "`{attr_to_strip}`: attribute bindings take no `.modifiers` \
+             (got `.{mods}`) — write `:{real_arg}=\"…\"`"
+        ));
         return ClassifyOutcome::Preserved;
     }
+    let Some(expr_src) = check_template_expr(value, attr_to_strip, ctx) else {
+        return ClassifyOutcome::Preserved;
+    };
     ctx.bindings.push(BindingLite {
         node_path: path.to_vec(),
         kind: BindingKindLite::Bind {
             arg: arg.to_string(),
         },
-        expr_src: value.to_string(),
+        expr_src,
     });
     ctx.stripped.push(StrippedAttr {
         node_path: path.to_vec(),
@@ -3042,41 +3345,30 @@ fn classify_listener(
     value: &str,
     path: &[u16],
     ctx: &mut AnalysisCtx,
-    unsupported: &mut bool,
 ) -> ClassifyOutcome {
     // `rest` is `event[.mod1.mod2…]`.
     let mut parts = rest.split('.');
     let event = match parts.next() {
         Some(e) if !e.is_empty() => e.to_string(),
-        _ => return ClassifyOutcome::Preserved,
+        _ => {
+            ctx.diagnostics
+                .push("`@` listener requires an event name: `@click=\"…\"`".to_string());
+            return ClassifyOutcome::Preserved;
+        }
     };
     let modifiers: Vec<String> = parts.map(|m| m.to_string()).collect();
-    if !modifiers.iter().all(|m| is_supported_modifier(m)) {
-        // RFC-057 §6.1 — unsupported modifier means the whole
-        // listener stays attribute-preserved so the runtime
-        // mount picks it up unchanged.
-        *unsupported = true;
+    if !validate_listener_modifiers(&event, &modifiers, &format!("@{rest}"), ctx) {
         return ClassifyOutcome::Preserved;
     }
-    if pocopine_expr::parse(value).is_err() {
+    let Some(expr_src) = check_listener_expr(value, rest, &modifiers, ctx) else {
         return ClassifyOutcome::Preserved;
-    }
-    let stripped_name = if rest.starts_with(|_: char| false) {
-        rest.to_string()
-    } else {
-        // We don't know whether the source attribute was
-        // `@event...` or `pp-on:event...` — caller passes the
-        // post-prefix `rest`. The full attribute name is
-        // reconstructed from the caller's match arm, but we
-        // need both shapes — stash both forms; the serializer
-        // checks both.
-        rest.to_string()
     };
+    let stripped_name = rest.to_string();
     ctx.listeners.push(ListenerLite {
         node_path: path.to_vec(),
         event,
         modifiers,
-        expr_src: value.to_string(),
+        expr_src,
     });
     // Strip both possible source spellings — the cleaned-HTML
     // serializer drops whichever the author wrote.
@@ -3110,43 +3402,49 @@ enum ChildHostAttrOutcome {
     Preserved,
 }
 
-fn classify_child_host_attr(name: &str, value: &str) -> ChildHostAttrOutcome {
+fn classify_child_host_attr(
+    name: &str,
+    value: &str,
+    ctx: &mut AnalysisCtx,
+) -> ChildHostAttrOutcome {
     if let Some(rest) = name.strip_prefix('@') {
-        return classify_child_host_listener(rest, value);
+        return classify_child_host_listener(rest, value, ctx);
     }
     if let Some(arg) = name.strip_prefix(':') {
-        if arg.is_empty() || arg.contains('.') || pocopine_expr::parse(value).is_err() {
-            return ChildHostAttrOutcome::Preserved;
-        }
-        return ChildHostAttrOutcome::Binding(ChildHostBindingLite {
-            arg: arg.to_string(),
-            expr_src: value.to_string(),
-        });
+        return classify_child_host_bind(name, arg, value, ctx);
     }
     let Some(rest) = name.strip_prefix("pp-") else {
         return ChildHostAttrOutcome::Preserved;
     };
     if rest == "show" {
-        if pocopine_expr::parse(value).is_err() {
+        let Some(expr_src) = check_template_expr(value, "pp-show", ctx) else {
             return ChildHostAttrOutcome::Preserved;
-        }
-        return ChildHostAttrOutcome::Show(value.to_string());
+        };
+        return ChildHostAttrOutcome::Show(expr_src);
     }
     if let Some(arg) = rest.strip_prefix("bind:") {
-        if arg.is_empty() || arg.contains('.') || pocopine_expr::parse(value).is_err() {
-            return ChildHostAttrOutcome::Preserved;
-        }
-        return ChildHostAttrOutcome::Binding(ChildHostBindingLite {
-            arg: arg.to_string(),
-            expr_src: value.to_string(),
-        });
+        return classify_child_host_bind(name, arg, value, ctx);
     }
     if let Some(rest) = rest.strip_prefix("on:") {
-        return classify_child_host_listener(rest, value);
+        return classify_child_host_listener(rest, value, ctx);
     }
     if rest == "model" || rest.starts_with("model.") || rest.starts_with("model:") {
         let (arg, modifiers) = parse_child_host_model(rest);
+        for m in &modifiers {
+            // Registry vocabulary for pp-model (`number`/`trim`/`lazy`).
+            if !matches!(m.as_str(), "number" | "trim" | "lazy") {
+                let suggestion = nearest_of(m, ["number", "trim", "lazy"].into_iter())
+                    .map(|s| format!(" — did you mean `.{s}`?"))
+                    .unwrap_or_default();
+                ctx.diagnostics.push(format!(
+                    "unknown `pp-model` modifier `.{m}` — supported: `.number`, \
+                     `.trim`, `.lazy`{suggestion}"
+                ));
+            }
+        }
         if value.trim().is_empty() {
+            ctx.diagnostics
+                .push("`pp-model` requires a field expression: pp-model=\"field\"".to_string());
             return ChildHostAttrOutcome::Preserved;
         }
         return ChildHostAttrOutcome::Model(ChildHostModelLite {
@@ -3158,6 +3456,8 @@ fn classify_child_host_attr(name: &str, value: &str) -> ChildHostAttrOutcome {
     if rest == "ref" {
         let trimmed = value.trim();
         if trimmed.is_empty() {
+            ctx.diagnostics
+                .push("`pp-ref` requires a non-empty name: pp-ref=\"my_ref\"".to_string());
             return ChildHostAttrOutcome::Preserved;
         }
         return ChildHostAttrOutcome::Ref(trimmed.to_string());
@@ -3165,20 +3465,78 @@ fn classify_child_host_attr(name: &str, value: &str) -> ChildHostAttrOutcome {
     ChildHostAttrOutcome::Preserved
 }
 
-fn classify_child_host_listener(rest: &str, value: &str) -> ChildHostAttrOutcome {
+fn classify_child_host_bind(
+    full_name: &str,
+    arg: &str,
+    value: &str,
+    ctx: &mut AnalysisCtx,
+) -> ChildHostAttrOutcome {
+    if arg.is_empty() {
+        return ChildHostAttrOutcome::Preserved;
+    }
+    if let Some((real_arg, mods)) = arg.split_once('.') {
+        ctx.diagnostics.push(format!(
+            "`{full_name}`: attribute bindings take no `.modifiers` \
+             (got `.{mods}`) — write `:{real_arg}=\"…\"`"
+        ));
+        return ChildHostAttrOutcome::Preserved;
+    }
+    let Some(expr_src) = check_template_expr(value, full_name, ctx) else {
+        return ChildHostAttrOutcome::Preserved;
+    };
+    ChildHostAttrOutcome::Binding(ChildHostBindingLite {
+        arg: arg.to_string(),
+        expr_src,
+    })
+}
+
+fn classify_child_host_listener(
+    rest: &str,
+    value: &str,
+    ctx: &mut AnalysisCtx,
+) -> ChildHostAttrOutcome {
     let mut parts = rest.split('.');
     let Some(event) = parts.next().filter(|s| !s.is_empty()) else {
+        ctx.diagnostics
+            .push("`@` listener requires an event name: `@click=\"…\"`".to_string());
         return ChildHostAttrOutcome::Preserved;
     };
     let modifiers: Vec<String> = parts.map(str::to_string).collect();
-    if !modifiers.iter().all(|m| is_supported_modifier(m)) || pocopine_expr::parse(value).is_err() {
+    if !validate_listener_modifiers(event, &modifiers, &format!("@{rest}"), ctx) {
         return ChildHostAttrOutcome::Preserved;
     }
+    let Some(expr_src) = check_listener_expr(value, rest, &modifiers, ctx) else {
+        return ChildHostAttrOutcome::Preserved;
+    };
     ChildHostAttrOutcome::Listener(ChildHostListenerLite {
         event: event.to_string(),
         modifiers,
-        expr_src: value.to_string(),
+        expr_src,
     })
+}
+
+/// Listener expression check with the effect-only carve-out: an empty
+/// value is valid when the modifier chain carries `.prevent`/`.stop`
+/// (the modifiers ARE the behavior — e.g. `@pointerdown.stop`). The
+/// plan stores an empty `expr_src`; the runtime installs the listener
+/// without an evaluation step.
+fn check_listener_expr(
+    value: &str,
+    rest: &str,
+    modifiers: &[String],
+    ctx: &mut AnalysisCtx,
+) -> Option<String> {
+    if value.trim().is_empty() {
+        if modifiers.iter().any(|m| m == "prevent" || m == "stop") {
+            return Some(String::new());
+        }
+        ctx.diagnostics.push(format!(
+            "`@{rest}` has no handler expression — an empty listener only makes sense \
+             with an effect modifier (`.prevent` / `.stop`)"
+        ));
+        return None;
+    }
+    check_template_expr(value, &format!("@{rest}"), ctx)
 }
 
 fn parse_child_host_model(rest: &str) -> (Option<String>, Vec<String>) {
@@ -4038,6 +4396,265 @@ mod tests {
                 "{modifier} should compile instead of requiring mount fallback"
             );
         }
+    }
+
+    // ─── silent-drop hardening ───────────────────────────────────
+    // RFC-058 Phase 6.5 retired the runtime pp-* dispatch, so a
+    // `Preserved` directive attribute is dead markup, not a fallback.
+    // Every directive the author wrote that the plan cannot install
+    // must surface as a diagnostic (or a build warning for the
+    // JS-equality desugar) — never a silent no-op.
+
+    fn warnings(plan: &super::EmittedTemplatePlan) -> String {
+        plan.warnings.join("\n")
+    }
+
+    #[test]
+    fn unknown_directive_head_is_a_compile_error_with_suggestion() {
+        let plan = analyze(r#"<div><button pp-shwo="isOpen">Toggle</button></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("pp-shwo"), "{out}");
+        assert!(out.contains("pp-show"), "suggestion expected: {out}");
+    }
+
+    #[test]
+    fn registry_live_preserved_directives_stay_clean() {
+        let plan =
+            analyze(r#"<div><a pp-route href="/x">x</a><span pp-transition="fade">y</span></div>"#);
+        let out = diagnostics(&plan);
+        assert!(!out.contains("compile_error"), "{out}");
+    }
+
+    #[test]
+    fn template_only_directives_on_a_native_host_are_compile_errors() {
+        let plan = analyze(r#"<div><div pp-if="open">body</div></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("pp-if") && out.contains("template"), "{out}");
+
+        let plan = analyze(r#"<div><div pp-for="item in items">row</div></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("pp-for") && out.contains("template"), "{out}");
+
+        // RFC-011 iterated slots: pp-for on a native element wrapping
+        // a `<slot>` outlet is the documented shape — stays clean.
+        let plan = analyze(r#"<ul><li pp-for="file in files"><slot name="row"></slot></li></ul>"#);
+        assert!(
+            !diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+
+        let plan = analyze(r##"<div><div pp-teleport="#target">t</div></div>"##);
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("pp-teleport") && out.contains("template"),
+            "{out}"
+        );
+
+        // Orphan template-only helpers on native hosts die silently too.
+        let plan = analyze(r#"<div><div pp-slot="header">x</div></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("pp-slot") && out.contains("template"), "{out}");
+    }
+
+    #[test]
+    fn malformed_pp_for_syntax_is_a_compile_error() {
+        let plan =
+            analyze(r#"<div><template pp-for="item of items"><span>r</span></template></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("item in items"), "{out}");
+    }
+
+    #[test]
+    fn unparseable_directive_expression_is_a_compile_error() {
+        let plan = analyze(r#"<div><span pp-show="(((">x</span></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("pp-show"), "{out}");
+
+        let plan = analyze(r#"<div><button :disabled="(((">x</button></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+
+        let plan = analyze(r#"<div><button @click="(((">x</button></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+    }
+
+    #[test]
+    fn js_triple_equality_desugars_with_a_build_warning() {
+        let plan = analyze(r#"<div><button :disabled="status === 'loading'">Save</button></div>"#);
+        let out = diagnostics(&plan);
+        assert!(!out.contains("compile_error"), "{out}");
+        let warns = warnings(&plan);
+        assert!(
+            warns.contains("==="),
+            "warning should name the JS operator: {warns}"
+        );
+        let tokens = plan
+            .plan_tokens
+            .expect("bind should still plan")
+            .to_string();
+        assert!(
+            tokens.contains("status == 'loading'"),
+            "expr_src should be rewritten to Rust-style equality: {tokens}"
+        );
+
+        let plan =
+            analyze(r#"<div><template pp-if="state !== 'done'"><span>x</span></template></div>"#);
+        assert!(!diagnostics(&plan).contains("compile_error"));
+        assert!(warnings(&plan).contains("!=="), "{}", warnings(&plan));
+    }
+
+    #[test]
+    fn interp_js_equality_desugars_with_a_build_warning() {
+        let plan = analyze("<div><span>{{ state === 'on' }}</span></div>");
+        assert!(!diagnostics(&plan).contains("compile_error"));
+        assert!(warnings(&plan).contains("==="), "{}", warnings(&plan));
+    }
+
+    #[test]
+    fn listener_modifier_that_can_never_fire_is_a_compile_error() {
+        // Misspelled control modifier: the runtime would treat it as a
+        // keyboard key filter, and a click never carries a key.
+        let plan = analyze(r#"<div><button @click.prevnt="save()">s</button></div>"#);
+        let out = diagnostics(&plan);
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(out.contains("prevnt"), "{out}");
+        assert!(out.contains("prevent"), "suggestion expected: {out}");
+
+        // Named keys on non-keyboard events can never match.
+        let plan = analyze(r#"<div><button @click.enter="save()">s</button></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+
+        // `.passive` is registry-documented but the applier never
+        // implemented it — the listener would install as a dead
+        // key filter.
+        let plan = analyze(r#"<div><div @scroll.passive="track()">s</div></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+    }
+
+    #[test]
+    fn effect_only_listener_compiles_without_expression() {
+        // `@pointerdown.stop` with no handler is a real idiom (pine's
+        // own trigger components use it) — the modifiers ARE the
+        // behavior. It used to be preserved, i.e. silently dead.
+        let plan = analyze(r#"<div><button @pointerdown.stop="">x</button></div>"#);
+        assert!(
+            !diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+        let tokens = plan
+            .plan_tokens
+            .expect("effect-only listener should plan")
+            .to_string();
+        assert!(tokens.contains("pointerdown"), "{tokens}");
+
+        let plan = analyze(r#"<div><button @mousedown.prevent="">x</button></div>"#);
+        assert!(
+            !diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+
+        // Without an effect modifier an empty listener does nothing —
+        // that stays an error.
+        let plan = analyze(r#"<div><button @click="">x</button></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+    }
+
+    #[test]
+    fn supported_listener_shapes_stay_clean() {
+        let plan = analyze(
+            r#"<div>
+                 <input @keydown.enter="submit()" />
+                 <input @keyup.q="quick()" />
+                 <input @input.debounce.300="search()" />
+                 <button @click.ctrl="alt()">x</button>
+                 <button @click.outside="close()">y</button>
+               </div>"#,
+        );
+        let out = diagnostics(&plan);
+        assert!(!out.contains("compile_error"), "{out}");
+    }
+
+    #[test]
+    fn native_model_bad_modifier_is_a_compile_error() {
+        let plan = analyze(r#"<div><input pp-model.numbr="age" /></div>"#);
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("compile_error") && out.contains("numbr"),
+            "{out}"
+        );
+        assert!(out.contains("number"), "suggestion expected: {out}");
+
+        // `.trim` is registry-documented but the compiled lift drops it.
+        let plan = analyze(r#"<div><input pp-model.trim="name" /></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+
+        // The prop-selection arg form targets component models only.
+        let plan = analyze(r#"<div><input pp-model:value="age" /></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+
+        let plan = analyze(r#"<div><input pp-model.number.lazy="age" /></div>"#);
+        assert!(!diagnostics(&plan).contains("compile_error"));
+    }
+
+    #[test]
+    fn empty_pp_ref_is_a_compile_error() {
+        let plan = analyze(r#"<div><span pp-ref=" ">x</span></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+    }
+
+    #[test]
+    fn bind_arg_modifier_is_a_compile_error() {
+        let plan = analyze(r#"<div><span :class.once="cls">x</span></div>"#);
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("compile_error") && out.contains("once"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn child_host_attrs_share_the_hardening() {
+        let plan = analyze(r#"<div><x-btn @click.prevnt="go()">x</x-btn></div>"#);
+        assert!(diagnostics(&plan).contains("prevnt"));
+
+        let plan = analyze(r#"<div><x-btn :disabled="a === 'b'">x</x-btn></div>"#);
+        assert!(!diagnostics(&plan).contains("compile_error"));
+        assert!(warnings(&plan).contains("==="), "{}", warnings(&plan));
+
+        let plan = analyze(r#"<div><x-input pp-model:value.numbr="v">x</x-input></div>"#);
+        assert!(diagnostics(&plan).contains("numbr"));
+
+        let plan = analyze(r#"<div><x-input pp-model="">x</x-input></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+    }
+
+    #[test]
+    fn pp_stagger_junk_value_is_a_compile_error() {
+        let plan = analyze(
+            r#"<div><template pp-for="i in items" pp-stagger="fast"><span>r</span></template></div>"#,
+        );
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("compile_error") && out.contains("pp-stagger"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn pp_teleport_misuse_is_a_compile_error() {
+        let plan = analyze(r#"<div><template pp-teleport=" "><span>b</span></template></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+
+        let plan = analyze(
+            r##"<div><template pp-for="i in items" pp-teleport="#t"><span>r</span></template></div>"##,
+        );
+        assert!(diagnostics(&plan).contains("compile_error"));
     }
 
     /// `parse_pp_directive_name` mirrors the runtime

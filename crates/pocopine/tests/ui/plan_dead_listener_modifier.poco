@@ -1,0 +1,3 @@
+<div class="panel">
+  <button @click.prevnt="count = 1">Save</button>
+</div>

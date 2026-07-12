@@ -1,0 +1,3 @@
+<div class="panel">
+  <button pp-shwo="is_open">Toggle</button>
+</div>

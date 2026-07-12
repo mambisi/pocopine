@@ -1,0 +1,10 @@
+error: pocopine: template plan error in component `plan-unknown-directive` (`$DIR/tests/ui/plan_unknown_directive.poco`): unknown directive `pp-shwo` — did you mean `pp-show`?
+  --> tests/ui/plan_unknown_directive.rs:8:1
+   |
+ 8 | / #[component(
+ 9 | |     name = "plan-unknown-directive",
+10 | |     template = "plan_unknown_directive.poco"
+11 | | )]
+   | |__^
+   |
+   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

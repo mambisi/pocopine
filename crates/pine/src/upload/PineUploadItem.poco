@@ -3,6 +3,6 @@
       :data-status="status"
       :data-extension="extension"
       :data-has-error="error ? true : false"
-      :aria-busy="status === 'uploading'">
+      :aria-busy="status == 'uploading'">
   <slot></slot>
 </root>

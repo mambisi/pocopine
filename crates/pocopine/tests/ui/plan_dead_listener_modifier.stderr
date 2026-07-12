@@ -1,0 +1,10 @@
+error: pocopine: template plan error in component `plan-dead-listener-modifier` (`$DIR/tests/ui/plan_dead_listener_modifier.poco`): `@click.prevnt`: modifier `.prevnt` is not a control modifier, and `click` is not a keyboard event, so a `.prevnt` key filter can never match — the listener would never fire — did you mean `.prevent`?
+  --> tests/ui/plan_dead_listener_modifier.rs:8:1
+   |
+ 8 | / #[component(
+ 9 | |     name = "plan-dead-listener-modifier",
+10 | |     template = "plan_dead_listener_modifier.poco"
+11 | | )]
+   | |__^
+   |
+   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)
