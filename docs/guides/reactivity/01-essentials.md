@@ -113,6 +113,12 @@ field, kick off an animation, reset a buffer), use `#[watch(field)]`. The
 method takes `(new, prev)` where `prev` is `None` on the first call after
 mount, and runs whenever `field` changes.
 
+The signature is a contract: `&mut self` plus exactly
+`(new: V, prev: Option<V>)`. Any other shape — no args, a missing
+`prev`, no receiver, a bare `#[watch]` — is a compile error, as is
+stacking two `#[watch]` attributes on one method (write one handler per
+watched field).
+
 ```rust
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinCardDemo.poco")]
