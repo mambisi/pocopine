@@ -219,16 +219,23 @@ fn validate_file_template(
     // `local_file()` returns `None`; the filesystem walk lets
     // validation still run against the authored file.
     //
-    // Tier 3: give up silently (not an error). If neither
-    // lookup found a file, we return Ok((None, None)) and the
-    // caller emits the normal component registration with no
-    // validation. The real cargo build retries with a
-    // file-backed span so any real template bug still gets
-    // caught at build time.
+    // Tier 3: keep the component buildable, but warn. The generated
+    // `include_str!` may still resolve the file even when proc-macro span
+    // provenance was unavailable; in that case raw HTML would otherwise be
+    // registered with an empty mount function and every directive would be
+    // inert without explanation.
     let resolved_path = resolve_template_path(template_path);
     let resolved_path = match resolved_path {
         Some(p) => p,
-        None => return Ok((None, None)),
+        None => {
+            return Ok((
+                Some(unresolved_template_warning_tokens(
+                    &template_path.value(),
+                    component_name,
+                )),
+                None,
+            ));
+        }
     };
     let file_path_str = resolved_path.to_string_lossy().to_string();
 
@@ -360,6 +367,34 @@ fn build_warning_tokens(rendered: &str) -> proc_macro2::TokenStream {
     }
 }
 
+fn unresolved_template_warning_tokens(
+    template_path: &str,
+    component_name: &str,
+) -> proc_macro2::TokenStream {
+    build_warning_tokens(&format!(
+        "pocopine: template plan compilation was skipped for component \
+         `{component_name}` because `{template_path}` could not be resolved uniquely during \
+         macro expansion; directives will be inert. Use a template path relative to the \
+         component module and ensure it resolves uniquely so \
+         the planner can validate and compile it."
+    ))
+}
+
+fn vtable_template_html_tokens(
+    compiled_html: &proc_macro2::Literal,
+    planner_saw_template: bool,
+) -> proc_macro2::TokenStream {
+    if planner_saw_template {
+        quote! { Some(#compiled_html) }
+    } else {
+        // `register()` still stores the include_str!-backed template in the
+        // thread-local registry. Leaving the PHF payload absent lets runtime
+        // lookup fall through to that real source instead of shadowing it
+        // with the empty string produced when macro-time resolution failed.
+        quote! { None }
+    }
+}
+
 /// RFC 045 §9 — the `POCOPINE_TEMPLATES_LENIENT` env-var
 /// escape hatch. Truthy values: `1`, `true`, `yes` (case-
 /// insensitive). Anything else is strict mode.
@@ -397,8 +432,8 @@ fn manifest_relative(path: &std::path::Path) -> String {
 ///   the template filename. An unambiguous match is used as
 ///   the resolved path; zero or >1 matches → give up.
 ///
-/// Returns `None` when neither tier finds an existing file
-/// — the caller treats that as "silent skip," not an error.
+/// Returns `None` when neither tier finds an existing file. The caller keeps
+/// the component buildable, but emits a warning that its directives are inert.
 fn resolve_template_path(template_path: &LitStr) -> Option<std::path::PathBuf> {
     // Tier 1 — span-based (cargo + rust-analyzer file-backed).
     if let Some(caller_rs) = template_path.span().unwrap().local_file() {
@@ -445,9 +480,8 @@ fn resolve_template_path(template_path: &LitStr) -> Option<std::path::PathBuf> {
     if matches.len() == 1 {
         Some(matches.into_iter().next().unwrap())
     } else {
-        // Zero matches → file doesn't exist; nothing to
-        // validate. More than one match → ambiguous; refuse
-        // to guess. Either way, silent skip.
+        // Zero matches → file doesn't exist. More than one match →
+        // ambiguous; refuse to guess. The caller warns in either case.
         None
     }
 }
@@ -1262,6 +1296,40 @@ mod client_module_tests {
 
         let file = LitStr::new("my_thing.client.ts", Span::call_site());
         assert_eq!(client_module_name_from_file(&file).unwrap(), "my-thing");
+    }
+}
+
+#[cfg(test)]
+mod template_validation_tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_template_warns_that_plan_compilation_was_skipped() {
+        let rendered = unresolved_template_warning_tokens(
+            "__pocopine_test_missing_template_7f30b0.poco",
+            "missing-template-fixture",
+        )
+        .to_string();
+        assert!(rendered.contains("missing-template-fixture"), "{rendered}");
+        assert!(
+            rendered.contains("plan compilation was skipped"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("directives will be inert"), "{rendered}");
+    }
+
+    #[test]
+    fn unavailable_planner_source_does_not_shadow_runtime_template_with_empty_phf_html() {
+        let empty = proc_macro2::Literal::string("");
+        assert_eq!(
+            vtable_template_html_tokens(&empty, false).to_string(),
+            "None"
+        );
+
+        let compiled = proc_macro2::Literal::string("<div>ready</div>");
+        let tokens = vtable_template_html_tokens(&compiled, true).to_string();
+        assert!(tokens.contains("Some"), "{tokens}");
+        assert!(tokens.contains("ready"), "{tokens}");
     }
 }
 
@@ -2914,6 +2982,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 ast,
                 &row_plans.assignments,
                 role_for_template_plan.clone(),
+                &name_str,
             )
         })
         .unwrap_or_else(|| template_plan::EmittedTemplatePlan {
@@ -2922,6 +2991,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             slot_fragment_fns: proc_macro2::TokenStream::new(),
             if_body_fns: proc_macro2::TokenStream::new(),
             specialized_mount_body: None,
+            diagnostics: proc_macro2::TokenStream::new(),
             ref_names: Vec::new(),
         });
 
@@ -2969,6 +3039,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|(tag, role_name)| (*tag, role_name.as_str())),
     );
     let compiled_template_html_lit = proc_macro2::Literal::string(&compiled_template_html);
+    let vtable_template_html_tokens =
+        vtable_template_html_tokens(&compiled_template_html_lit, template_ast.is_some());
 
     let template_literal_tokens = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
         let lit = proc_macro2::Literal::string(cleaned);
@@ -3024,6 +3096,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let template_plan_module_ident = format_ident!("__poc_plan_{}", struct_ident);
     let template_plan_tokens_for_vtable = template_plan.plan_tokens.clone();
     let specialized_mount_body = template_plan.specialized_mount_body.clone();
+    let template_plan_diagnostics_tokens = template_plan.diagnostics.clone();
     let template_plan_item_tokens = match template_plan.plan_tokens.clone() {
         Some(plan_tokens) => {
             let slot_fns = template_plan.slot_fragment_fns;
@@ -3445,6 +3518,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // `uses` is declared.
         #unknown_tag_diagnostics_tokens
 
+        // Template-plan diagnostics are emitted independently from the plan
+        // module: an invalid template may collect only diagnostics and emit no
+        // runtime plan at all.
+        #template_plan_diagnostics_tokens
+
         // RFC 063 — hard `compile_error!` for every directive
         // RFC 063 §4.1 deletes (`pp-cloak` today; more in
         // follow-up commits).
@@ -3699,7 +3777,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &::pocopine::__private::ComponentVTable {
                     name: #name_str,
                     register: <#struct_ident>::register,
-                    template_html: Some(#compiled_template_html_lit),
+                    template_html: #vtable_template_html_tokens,
                     plan: #vtable_plan_tokens,
                     mount_template: ::core::option::Option::Some(
                         <#struct_ident as ::pocopine::__private::Component>::mount_template,

@@ -1,0 +1,12 @@
+<div>
+  <template pp-if="open">
+    <section>
+      <template pp-match="state">
+        <template pp-case="Ready">
+          <b>first</b>
+          <b>second</b>
+        </template>
+      </template>
+    </section>
+  </template>
+</div>

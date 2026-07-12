@@ -53,6 +53,80 @@ pub(crate) fn render_template_error(
     format!("{}", Renderer::styled().render(message))
 }
 
+/// Plain-text variant for diagnostics embedded inside generated
+/// `compile_error!` tokens. Rustc applies its own styling around the outer
+/// error; embedding ANSI sequences would make snapshot output and non-TTY
+/// logs display escape bytes instead of readable source context.
+pub(crate) fn render_template_error_plain(
+    poco_src: &str,
+    file_path: &str,
+    byte_range: Range<usize>,
+    title: &str,
+    label: &str,
+) -> String {
+    let message = Level::Error.title(title).snippet(
+        Snippet::source(poco_src)
+            .origin(file_path)
+            .fold(true)
+            .annotation(Level::Error.span(byte_range).label(label)),
+    );
+    let rendered = strip_ansi(&format!("{}", Renderer::styled().render(message)));
+    rendered
+        .strip_prefix("error: ")
+        .unwrap_or(&rendered)
+        .to_string()
+}
+
+/// Render a diagnostic whose primary failure lives inside a structural
+/// template body. The owning `<template ...>` is marked as context and the
+/// offending descendant as the error. `fold(true)` keeps both ends visible
+/// while collapsing the middle of a large or visually dense body.
+pub(crate) fn render_template_error_plain_with_context(
+    poco_src: &str,
+    file_path: &str,
+    byte_range: Range<usize>,
+    title: &str,
+    label: &str,
+    context_range: Range<usize>,
+    context_label: &str,
+) -> String {
+    // Keep the primary error annotation first: annotate-snippets uses
+    // insertion order for the `--> file:line:column` header, while still
+    // rendering source lines in their natural order. The header therefore
+    // remains anchored to the offending child rather than the owner template.
+    let message = Level::Error.title(title).snippet(
+        Snippet::source(poco_src)
+            .origin(file_path)
+            .fold(true)
+            .annotation(Level::Error.span(byte_range).label(label))
+            .annotation(Level::Info.span(context_range).label(context_label)),
+    );
+
+    let rendered = strip_ansi(&format!("{}", Renderer::styled().render(message)));
+    rendered
+        .strip_prefix("error: ")
+        .unwrap_or(&rendered)
+        .to_string()
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
+}
+
 /// Render an error whose byte range is unknown or zero — falls
 /// back to a file-level message without a source snippet.
 /// Used when a `ParseError` surfaces without a range (e.g.
@@ -128,5 +202,102 @@ mod tests {
         let rendered = render_fileless_error("test.poco", "malformed template", "unclosed tag");
         assert!(rendered.contains("test.poco"));
         assert!(rendered.contains("unclosed tag"));
+    }
+
+    #[test]
+    fn compile_error_render_keeps_source_coordinates_without_ansi() {
+        let rendered = render_template_error_plain(
+            "<div>one</div>\n<div>two</div>",
+            "nested.poco",
+            15..18,
+            "invalid nested branch",
+            "second root",
+        );
+        assert!(rendered.contains("nested.poco:2:1"), "{rendered}");
+        assert!(rendered.contains("second root"), "{rendered}");
+        assert!(!rendered.contains('\u{1b}'), "{rendered:?}");
+    }
+
+    #[test]
+    fn compile_error_render_reports_character_column_after_utf8() {
+        let rendered = render_template_error_plain(
+            "é <b>x</b>",
+            "utf8.poco",
+            3..6,
+            "invalid nested branch",
+            "second root",
+        );
+        assert!(rendered.contains("utf8.poco:1:3"), "{rendered}");
+    }
+
+    #[test]
+    fn structural_error_shows_owner_then_offending_child() {
+        let source = r#"<div>
+  <template pp-if="open">
+    <section>
+      <template pp-match="state">
+        <template pp-case="Ready">
+          <b>first</b>
+          <b>second</b>
+        </template>
+      </template>
+    </section>
+  </template>
+</div>
+"#;
+        let context_start = source.find("<template pp-case").unwrap();
+        let context_end = context_start + "<template pp-case=\"Ready\">".len();
+        let primary_start = source.find("<b>second").unwrap();
+        let rendered = render_template_error_plain_with_context(
+            source,
+            "nested.poco",
+            primary_start..primary_start + 3,
+            "invalid nested branch",
+            "second root",
+            context_start..context_end,
+            "`pp-case` template body starts here",
+        );
+
+        assert!(rendered.contains("nested.poco:7:11"), "{rendered}");
+        assert!(
+            rendered.contains("5 |         <template pp-case"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("template body starts here"), "{rendered}");
+        assert!(rendered.contains("<b>second</b>"), "{rendered}");
+    }
+
+    #[test]
+    fn structural_error_folds_a_large_first_child() {
+        let source = r#"<template pp-case="Ready">
+  <section>
+    <div>one</div>
+    <div>two</div>
+    <div>three</div>
+    <div>four</div>
+    <div>five</div>
+    <div>six</div>
+  </section>
+  <b>second</b>
+</template>
+"#;
+        let context_start = source.find("<template pp-case").unwrap();
+        let context_end = context_start + "<template pp-case=\"Ready\">".len();
+        let primary_start = source.find("<b>second").unwrap();
+        let rendered = render_template_error_plain_with_context(
+            source,
+            "nested.poco",
+            primary_start..primary_start + 3,
+            "invalid nested branch",
+            "second root",
+            context_start..context_end,
+            "`pp-case` template body starts here",
+        );
+
+        assert!(rendered.contains("nested.poco:10:3"), "{rendered}");
+        assert!(rendered.contains("<template pp-case"), "{rendered}");
+        assert!(rendered.contains("<b>second</b>"), "{rendered}");
+        assert!(rendered.contains("..."), "{rendered}");
+        assert!(!rendered.contains("<div>three</div>"), "{rendered}");
     }
 }
