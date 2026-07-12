@@ -34,11 +34,11 @@
           <div class="button-row">
             <button type="button"
                     class="seg-btn"
-                    :data-active="week_starts_on === 0"
+                    :data-active="week_starts_on == 0"
                     @click="week_start_sun">Sunday</button>
             <button type="button"
                     class="seg-btn"
-                    :data-active="week_starts_on === 1"
+                    :data-active="week_starts_on == 1"
                     @click="week_start_mon">Monday</button>
           </div>
         </div>
@@ -47,11 +47,11 @@
           <div class="control-title">Bounds</div>
           <label class="date-row">
             <span>Min</span>
-            <input type="date" pp-model:value="min_value">
+            <input type="date" pp-model="min_value">
           </label>
           <label class="date-row">
             <span>Max</span>
-            <input type="date" pp-model:value="max_value">
+            <input type="date" pp-model="max_value">
           </label>
         </div>
 

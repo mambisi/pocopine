@@ -14,7 +14,7 @@
                class="form-demo-input"
                placeholder="Required"
                required
-               pp-model:value="username">
+               pp-model="username">
       </label>
       <button type="submit" class="form-demo-submit">Sign up</button>
     </pine-form-root>

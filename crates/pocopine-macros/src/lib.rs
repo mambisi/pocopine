@@ -2993,6 +2993,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             specialized_mount_body: None,
             diagnostics: proc_macro2::TokenStream::new(),
             ref_names: Vec::new(),
+            warnings: Vec::new(),
         });
 
     // Build the literal to feed into `compile_template`:
@@ -3097,6 +3098,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let template_plan_tokens_for_vtable = template_plan.plan_tokens.clone();
     let specialized_mount_body = template_plan.specialized_mount_body.clone();
     let template_plan_diagnostics_tokens = template_plan.diagnostics.clone();
+    // Non-fatal authoring notes (e.g. the JS-equality desugar)
+    // surface via the same `#[deprecated]`-const trick as the
+    // unresolved-template warning (RFC 045 §9.4).
+    let template_plan_warning_tokens = template_plan
+        .warnings
+        .iter()
+        .map(|w| build_warning_tokens(w))
+        .collect::<proc_macro2::TokenStream>();
     let template_plan_item_tokens = match template_plan.plan_tokens.clone() {
         Some(plan_tokens) => {
             let slot_fns = template_plan.slot_fragment_fns;
@@ -3523,6 +3532,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // runtime plan at all.
         #template_plan_diagnostics_tokens
 
+        // Non-fatal template-plan warnings (deprecated-const trick).
+        #template_plan_warning_tokens
+
         // RFC 063 — hard `compile_error!` for every directive
         // RFC 063 §4.1 deletes (`pp-cloak` today; more in
         // follow-up commits).
@@ -3897,8 +3909,10 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 false // strip
             } else if attr.path().is_ident("computed") {
                 if !matches!(attr.meta, syn::Meta::Path(_)) && marker_error.is_none() {
-                    marker_error =
-                        Some(syn::Error::new_spanned(attr, "#[computed] takes no arguments"));
+                    marker_error = Some(syn::Error::new_spanned(
+                        attr,
+                        "#[computed] takes no arguments",
+                    ));
                 }
                 is_computed = true;
                 false
@@ -3924,10 +3938,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             // installed. Anything else is rejected here — before this
             // check, a no-arg handler compiled green and the watch
             // silently never fired.
-            let takes_ref_self = method
-                .sig
-                .receiver()
-                .is_some_and(|r| r.reference.is_some());
+            let takes_ref_self = method.sig.receiver().is_some_and(|r| r.reference.is_some());
             let typed_args: Vec<syn::Type> = method
                 .sig
                 .inputs

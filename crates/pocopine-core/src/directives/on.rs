@@ -47,7 +47,9 @@ pub fn install(
     proxy: &JsValue,
     event: &str,
     modifiers: &'static [&'static str],
-    ast: Rc<Spanned<Expr>>,
+    // `None` = effect-only listener (`@pointerdown.stop` with no
+    // handler): the modifiers are applied, nothing is evaluated.
+    ast: Option<Rc<Spanned<Expr>>>,
 ) {
     let event = event.to_string();
     let el = el.clone();
@@ -80,38 +82,38 @@ pub fn install(
     // drops via the element-scoped listener table.
     type DebouncedInvoke = (Option<Function>, Option<Closure<dyn FnMut()>>);
     let last_event: Rc<RefCell<Option<Event>>> = Rc::new(RefCell::new(None));
-    let (invoke_fn, debounce_closure): DebouncedInvoke = if debounce_ms.is_some() {
-        let ast = ast.clone();
-        let last_event = last_event.clone();
-        let el_for_debounce = el.clone();
-        let proxy_for_debounce = proxy.clone();
-        let access_for_debounce = access.clone();
-        let c = Closure::wrap(Box::new(move || {
-            let ev = last_event.borrow().clone();
-            let ev_js: JsValue = match &ev {
-                Some(e) => {
-                    let r: &JsValue = e.as_ref();
-                    r.clone()
-                }
-                None => JsValue::UNDEFINED,
-            };
-            with_current_el(&el_for_debounce, || {
-                crate::scope::with_current_scope_id(scope_id, || {
-                    with_current_event(&ev_js, || {
-                        expr::evaluate_with(
-                            &ast,
-                            &proxy_for_debounce,
-                            access_for_debounce.as_ref(),
-                        );
+    let (invoke_fn, debounce_closure): DebouncedInvoke =
+        if let (true, Some(ast)) = (debounce_ms.is_some(), ast.clone()) {
+            let last_event = last_event.clone();
+            let el_for_debounce = el.clone();
+            let proxy_for_debounce = proxy.clone();
+            let access_for_debounce = access.clone();
+            let c = Closure::wrap(Box::new(move || {
+                let ev = last_event.borrow().clone();
+                let ev_js: JsValue = match &ev {
+                    Some(e) => {
+                        let r: &JsValue = e.as_ref();
+                        r.clone()
+                    }
+                    None => JsValue::UNDEFINED,
+                };
+                with_current_el(&el_for_debounce, || {
+                    crate::scope::with_current_scope_id(scope_id, || {
+                        with_current_event(&ev_js, || {
+                            expr::evaluate_with(
+                                &ast,
+                                &proxy_for_debounce,
+                                access_for_debounce.as_ref(),
+                            );
+                        });
                     });
                 });
-            });
-        }) as Box<dyn FnMut()>);
-        let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
-        (Some(f), Some(c))
-    } else {
-        (None, None)
-    };
+            }) as Box<dyn FnMut()>);
+            let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
+            (Some(f), Some(c))
+        } else {
+            (None, None)
+        };
 
     let window = web_sys::window().expect("window");
     let timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
@@ -203,6 +205,11 @@ pub fn install(
                     return;
                 }
             }
+            // Effect-only listener: the modifiers above are the whole
+            // behavior; there is no expression to evaluate.
+            let Some(ast) = ast.as_ref() else {
+                return;
+            };
             if let (Some(ms), Some(invoke_fn)) = (debounce_ms, invoke_fn.as_ref()) {
                 // Remember the most recent event so the delayed
                 // callback can still pass it to the handler.
