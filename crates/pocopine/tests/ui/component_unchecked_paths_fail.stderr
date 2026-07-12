@@ -1,0 +1,5 @@
+error: `unchecked_paths` expects "true" or "false", got "yes"
+  --> tests/ui/component_unchecked_paths_fail.rs:10:23
+   |
+10 |     unchecked_paths = "yes"
+   |                       ^^^^^

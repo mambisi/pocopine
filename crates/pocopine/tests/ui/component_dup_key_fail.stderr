@@ -1,0 +1,5 @@
+error: duplicate `role` argument
+  --> tests/ui/component_dup_key_fail.rs:11:5
+   |
+11 |     role = "toolbar"
+   |     ^^^^
