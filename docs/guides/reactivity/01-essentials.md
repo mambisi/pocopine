@@ -140,13 +140,18 @@ Multi-field semantics differ from the typed form in three ways:
   handler once, not once per field.
 * **Seeded** — the handler runs once after mount wiring (replacing
   the manual `recompute()` seed in `on_mount`).
-* **No equality gate** — it fires on any write to a listed field,
-  even a write of an unchanged value; multi-field handlers should be
-  idempotent recomputes.
+* **External changes only** — instead of the typed form's
+  `(new, prev)` equality gate: runs whose field probes prove nothing
+  changed are skipped, and the handler's **own writes never re-fire
+  it** (recompute output can't re-invalidate its own input set).
+  Write listed fields freely inside the handler; it converges by
+  construction.
 
-A handler that diverges (writes a listed field with a new value every
-run) is stopped by the runtime cycle guard after 100 re-runs in one
-cascade, with a console error naming the field list.
+A field in the list that doesn't exist (typo) or is `#[computed]` is
+a loud console error at mount and is ignored — computed fields can't
+be watched; watch their inputs instead. Cross-effect update loops
+remain bounded by the runtime cycle guard (100 re-runs per cascade,
+console error naming the field list).
 
 ```rust
 #[derive(Default, Serialize, Deserialize)]

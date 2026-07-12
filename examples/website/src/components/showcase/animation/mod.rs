@@ -350,7 +350,7 @@ impl AnimationDemo {
     }
 
     #[watch(motion_x)]
-    fn on_motion_x(&self, _: f64, prev: Option<f64>) {
+    fn on_motion_x(&mut self, _: f64, prev: Option<f64>) {
         let from = self.state_transform_with(
             prev.unwrap_or(self.motion_x),
             self.motion_y,
@@ -362,7 +362,7 @@ impl AnimationDemo {
     }
 
     #[watch(motion_y)]
-    fn on_motion_y(&self, _: f64, prev: Option<f64>) {
+    fn on_motion_y(&mut self, _: f64, prev: Option<f64>) {
         let from = self.state_transform_with(
             self.motion_x,
             prev.unwrap_or(self.motion_y),
@@ -374,7 +374,7 @@ impl AnimationDemo {
     }
 
     #[watch(motion_rotate)]
-    fn on_motion_rotate(&self, _: f64, prev: Option<f64>) {
+    fn on_motion_rotate(&mut self, _: f64, prev: Option<f64>) {
         let from = self.state_transform_with(
             self.motion_x,
             self.motion_y,
@@ -386,7 +386,7 @@ impl AnimationDemo {
     }
 
     #[watch(motion_scale)]
-    fn on_motion_scale(&self, _: f64, prev: Option<f64>) {
+    fn on_motion_scale(&mut self, _: f64, prev: Option<f64>) {
         let from = self.state_transform_with(
             self.motion_x,
             self.motion_y,
@@ -398,7 +398,7 @@ impl AnimationDemo {
     }
 
     #[watch(motion_raise)]
-    fn on_motion_raise(&self, _: f64, prev: Option<f64>) {
+    fn on_motion_raise(&mut self, _: f64, prev: Option<f64>) {
         let from = self.state_transform_with(
             self.motion_x,
             self.motion_y,
@@ -410,7 +410,7 @@ impl AnimationDemo {
     }
 
     #[watch(motion_shadow)]
-    fn on_motion_shadow(&self, _: f64, prev: Option<f64>) {
+    fn on_motion_shadow(&mut self, _: f64, prev: Option<f64>) {
         let from_transform = self.state_transform();
         let from_shadow = state_shadow(prev.unwrap_or(self.motion_shadow));
         self.animate_state_box(from_transform, Some(from_shadow));

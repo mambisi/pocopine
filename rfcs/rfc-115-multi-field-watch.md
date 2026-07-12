@@ -22,8 +22,8 @@ fn on_when_changed(&mut self) {
   coherent single `(next, prev)`, and the dominant real-world use
   (recompute/derive) never reads the payload.
 - **Coalesced dispatch:** when several watched fields change in the
-  same reactive flush, the handler runs **once**, deferred to the
-  tick boundary — not once per field.
+  same reactive flush, the handler runs **once** per flush pass —
+  not once per field.
 
 Both shapes are enforced with spanned compile errors, extending the
 PR #279 contract (a mismatched watch handler is never silently
@@ -113,16 +113,27 @@ messages:
   the flush, it stays inside the flush-cascade **cycle guard's**
   accounting (a `tick`-deferred handler would escape it).
 - **Initial seed:** the effect's install run is the seed — one
-  invocation regardless of field count, deferred one tick via the
-  same pending/ticket dance as the single-field initial call (the
-  install happens behind `on_ready`'s live borrow). For the
-  motivating component this replaces the manual `recompute()` seed
-  in `on_mount`.
-- **No equality gate:** unlike the typed watch there is no
-  `PartialEq` dedup — the handler fires on any write to a listed
-  field, including a write of an unchanged value. Multi-field
-  handlers are recompute-style and idempotent by contract; this is
-  documented in the guide.
+  invocation regardless of field count, deferred one microtask (the
+  install happens behind `on_ready`'s live borrow; scheduled via
+  `spawn_local`, since `tick::next` needs a `window` and no-ops in
+  windowless hosts). For the motivating component this replaces the
+  manual `recompute()` seed in `on_mount`.
+- **Three guards replace the typed form's `PartialEq` gate** (a
+  payload-less callback can't value-compare, and the dirty sweep
+  conservatively re-triggers any tracked key it cannot fingerprint —
+  an ungated multi-watch would re-fire on every sweep):
+  1. *Install validation* — a listed key that isn't a state field
+     (typo) or is `#[computed]` is a loud console error and is never
+     tracked.
+  2. *Provably-unchanged skip* — each run probes the listed fields'
+     quick-lens + fingerprints and skips the callback when every
+     probe proves "unchanged"; a `None` fingerprint proves nothing
+     and stays conservative (flatten leaves keep firing).
+  3. *Echo suppression* — after the callback returns, the effect
+     dequeues itself, so the handler's own writes (and its dirty
+     sweep's conservative echoes) never re-fire it. Multi-field
+     handlers react to **external changes only** and converge by
+     construction; cross-effect loops remain the cycle guard's job.
 - **Ordering:** relative order between a multi-field handler and
   single-field handlers on the same flush is unspecified, same as
   between any two watches today.
