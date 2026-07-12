@@ -1,4 +1,4 @@
-error: `<pp-component>` requires a reactive `:is="..."` binding (RFC-112)
+error: pocopine: template plan error in component `dc-missing-is` (`<inline template for dc-missing-is>`): `<pp-component>` requires a reactive `:is="..."` binding (RFC-112)
  --> tests/ui/dc_missing_is.rs:5:1
   |
 5 | #[component(template_inline = "<pp-component></pp-component>")]
