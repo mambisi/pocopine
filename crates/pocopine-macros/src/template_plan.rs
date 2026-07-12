@@ -1785,7 +1785,17 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // wrapping a `<slot>` outlet is the documented shape
             // (docs/guides/components/03-composition.md) — the slot
             // publication machinery owns that subtree, not the plan.
+            // The pp-for value itself is still validated; directives
+            // deeper in the exempt subtree stay slot-machinery-owned.
             if subtree_contains_slot(el) {
+                match parse_pp_for(&for_attr) {
+                    Some((_, items_expr)) => {
+                        let _ = check_template_expr(&items_expr, "pp-for", ctx);
+                    }
+                    None => ctx.diagnostics.push(format!(
+                        "`pp-for=\"{for_attr}\"` does not parse — expected `item in items`"
+                    )),
+                }
                 return;
             }
             ctx.diagnostics
@@ -1824,13 +1834,15 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 .find(|(n, _)| n == "pp-stagger")
                 .map(|(_, v)| v.trim().to_string())
             {
-                Some(v) if !v.is_empty() => v.parse::<u32>().unwrap_or_else(|_| {
+                // Empty is a truncation, not a request for 0ms —
+                // diagnosed like every other junk value.
+                Some(v) => v.parse::<u32>().unwrap_or_else(|_| {
                     ctx.diagnostics.push(format!(
                         "`pp-stagger=\"{v}\"` expects milliseconds, e.g. pp-stagger=\"40\""
                     ));
                     0
                 }),
-                _ => 0,
+                None => 0,
             };
             // RFC-058 Phase 4.2c — try to lift the row body
             // into a fragment fn. Skip when an RFC-054 row
@@ -2906,13 +2918,39 @@ fn is_keyboard_event(event: &str) -> bool {
     matches!(event, "keydown" | "keyup" | "keypress")
 }
 
+/// Named key modifiers the runtime normalizes (`on.rs named_key_for`).
+const NAMED_KEY_MODIFIERS: &[&str] = &[
+    "escape",
+    "esc",
+    "enter",
+    "tab",
+    "space",
+    "backspace",
+    "delete",
+    "del",
+    "arrow-up",
+    "up",
+    "arrow-down",
+    "down",
+    "arrow-left",
+    "left",
+    "arrow-right",
+    "right",
+    "home",
+    "end",
+    "page-up",
+    "page-down",
+];
+
 /// Event-aware compile-time mirror of the runtime listener modifier
-/// semantics. Control modifiers and `debounce[.ms]` work on any
-/// event; system keys (`ctrl`/`shift`/`alt`/`meta`) filter via the
-/// shared event modifier flags so they're valid anywhere; named /
-/// single-char / word KEY filters only ever match on keyboard
-/// events — anywhere else the listener would install but never
-/// fire. Pushes a diagnostic and returns `false` on the dead shapes.
+/// semantics (`pocopine-core/src/directives/on.rs`). Control
+/// modifiers work on any event; a number is a debounce delay only
+/// directly after `.debounce` (the runtime pairs them positionally);
+/// EVERYTHING else — system keys included — rides the RFC-013 key
+/// filter, which downcasts to `KeyboardEvent` and therefore never
+/// matches on any other event. Pushes a diagnostic and returns
+/// `false` for every shape that would install a listener that can
+/// never fire.
 fn validate_listener_modifiers(
     event: &str,
     modifiers: &[String],
@@ -2920,31 +2958,95 @@ fn validate_listener_modifiers(
     ctx: &mut AnalysisCtx,
 ) -> bool {
     let keyboard = is_keyboard_event(event);
-    let has_debounce = modifiers.iter().any(|m| m == "debounce");
-    for m in modifiers {
+    for (i, m) in modifiers.iter().enumerate() {
         let m = m.as_str();
-        let valid = LISTENER_CONTROL_MODIFIERS.contains(&m)
-            || m == "debounce"
-            || (has_debounce && is_debounce_ms(m))
-            || matches!(m, "ctrl" | "shift" | "alt" | "meta")
-            || (keyboard && is_supported_modifier(m));
-        if !valid {
+        if LISTENER_CONTROL_MODIFIERS.contains(&m) || m == "debounce" {
+            continue;
+        }
+        // Multi-digit numbers are debounce delays; the runtime pairs
+        // one only when it directly follows `.debounce` — anywhere
+        // else it installs as a key filter for a key named "300".
+        if is_debounce_ms(m) && m.len() > 1 {
+            if i > 0 && modifiers[i - 1] == "debounce" {
+                continue;
+            }
+            ctx.diagnostics.push(format!(
+                "`{display}`: `.{m}` only sets a debounce delay directly after \
+                 `.debounce` — write `.debounce.{m}`"
+            ));
+            return false;
+        }
+        if keyboard {
+            if matches!(m, "ctrl" | "shift" | "alt" | "meta")
+                || NAMED_KEY_MODIFIERS.contains(&m)
+                || m.len() == 1
+            {
+                continue;
+            }
+            if is_word_key(m) {
+                // Any word is a legal literal key filter, but a
+                // near-miss of a control modifier or named key is a
+                // typo filtering on a key that can't exist.
+                if let Some(s) = nearest_of(
+                    m,
+                    LISTENER_CONTROL_MODIFIERS
+                        .iter()
+                        .copied()
+                        .chain(NAMED_KEY_MODIFIERS.iter().copied()),
+                )
+                .filter(|s| m.len() >= 3 && strsim::levenshtein(m, s) <= 1)
+                {
+                    ctx.diagnostics.push(format!(
+                        "`{display}`: `.{m}` would install a key filter for a key \
+                         named \"{m}\", which looks like a typo — did you mean `.{s}`?"
+                    ));
+                    return false;
+                }
+                continue;
+            }
+            // Not word-shaped and not a named key (e.g. `arrow_up`) —
+            // it can never match a normalized key name.
+            let suggestion = nearest_of(
+                m,
+                NAMED_KEY_MODIFIERS
+                    .iter()
+                    .copied()
+                    .chain(LISTENER_CONTROL_MODIFIERS.iter().copied()),
+            )
+            .map(|s| format!(" — did you mean `.{s}`?"))
+            .unwrap_or_default();
+            ctx.diagnostics.push(format!(
+                "`{display}`: `.{m}` is not a control modifier or a recognized key \
+                 filter{suggestion}"
+            ));
+            return false;
+        }
+        // Non-keyboard event: everything below is a key filter, and
+        // the runtime key filter downcasts to KeyboardEvent — it can
+        // never match here, so the listener would never fire.
+        let message = if matches!(m, "ctrl" | "shift" | "alt" | "meta") {
+            format!(
+                "`{display}`: `.{m}` is a key filter and only matches keyboard events \
+                 (keydown/keyup/keypress) — on `{event}` the listener would never fire"
+            )
+        } else {
             let suggestion = nearest_of(
                 m,
                 LISTENER_CONTROL_MODIFIERS
                     .iter()
                     .copied()
-                    .chain(["debounce", "ctrl", "shift", "alt", "meta"]),
+                    .chain(["debounce"]),
             )
             .map(|s| format!(" — did you mean `.{s}`?"))
             .unwrap_or_default();
-            ctx.diagnostics.push(format!(
-                "`{display}`: modifier `.{m}` is not a control modifier, and `{event}` \
-                 is not a keyboard event, so a `.{m}` key filter can never match — the \
-                 listener would never fire{suggestion}"
-            ));
-            return false;
-        }
+            format!(
+                "`{display}`: `.{m}` is not a control modifier, and key filters only \
+                 match keyboard events — on `{event}` the listener would never \
+                 fire{suggestion}"
+            )
+        };
+        ctx.diagnostics.push(message);
+        return false;
     }
     true
 }
@@ -3116,11 +3218,19 @@ fn classify_attr(
                     }
                 }
             }
+            if value.trim().is_empty() {
+                ctx.diagnostics
+                    .push("`pp-model` requires a field expression: pp-model=\"field\"".to_string());
+                return ClassifyOutcome::Preserved;
+            }
+            let Some(expr_src) = check_template_expr(value, "pp-model", ctx) else {
+                return ClassifyOutcome::Preserved;
+            };
             let number = modifiers.contains(&"number");
             let lazy = modifiers.contains(&"lazy");
             ctx.native_models.push(NativeModelLite {
                 node_path: path.to_vec(),
-                expr_src: value.to_string(),
+                expr_src,
                 number,
                 lazy,
             });
@@ -3430,27 +3540,33 @@ fn classify_child_host_attr(
     }
     if rest == "model" || rest.starts_with("model.") || rest.starts_with("model:") {
         let (arg, modifiers) = parse_child_host_model(rest);
-        for m in &modifiers {
-            // Registry vocabulary for pp-model (`number`/`trim`/`lazy`).
-            if !matches!(m.as_str(), "number" | "trim" | "lazy") {
-                let suggestion = nearest_of(m, ["number", "trim", "lazy"].into_iter())
-                    .map(|s| format!(" — did you mean `.{s}`?"))
-                    .unwrap_or_default();
-                ctx.diagnostics.push(format!(
-                    "unknown `pp-model` modifier `.{m}` — supported: `.number`, \
-                     `.trim`, `.lazy`{suggestion}"
-                ));
-            }
+        // The component install path (`model::install_component`)
+        // takes no modifiers at all — `.number`/`.trim`/`.lazy` on a
+        // component host are silently dropped at runtime.
+        if let Some(m) = modifiers.first() {
+            let display = if modifiers.len() == 1 {
+                format!(".{m}")
+            } else {
+                format!(".{}", modifiers.join("."))
+            };
+            ctx.diagnostics.push(format!(
+                "component `pp-model` takes no `{display}` modifier — the component \
+                 install path ignores modifiers; coerce inside the child component"
+            ));
+            return ChildHostAttrOutcome::Preserved;
         }
         if value.trim().is_empty() {
             ctx.diagnostics
                 .push("`pp-model` requires a field expression: pp-model=\"field\"".to_string());
             return ChildHostAttrOutcome::Preserved;
         }
+        let Some(expr_src) = check_template_expr(value, "pp-model", ctx) else {
+            return ChildHostAttrOutcome::Preserved;
+        };
         return ChildHostAttrOutcome::Model(ChildHostModelLite {
             arg,
             modifiers,
-            expr_src: value.to_string(),
+            expr_src,
         });
     }
     if rest == "ref" {
@@ -3461,6 +3577,30 @@ fn classify_child_host_attr(
             return ChildHostAttrOutcome::Preserved;
         }
         return ChildHostAttrOutcome::Ref(trimmed.to_string());
+    }
+    // Same registry backstop as the native fall-through: an unknown
+    // pp-* head on a component host used to be preserved dead markup.
+    if let Some(parsed) = pocopine_directives::parse_directive_attr(name)
+        && pocopine_directives::removed_message(&parsed.head).is_none()
+    {
+        match pocopine_directives::lookup(&parsed.head) {
+            None => {
+                let suggestion = nearest_directive(&parsed.head)
+                    .map(|n| format!(" — did you mean `pp-{n}`?"))
+                    .unwrap_or_default();
+                ctx.diagnostics.push(format!(
+                    "unknown directive `pp-{}`{suggestion}",
+                    parsed.head
+                ));
+            }
+            Some(spec) if spec.host == pocopine_directives::Host::TemplateOnly => {
+                ctx.diagnostics.push(format!(
+                    "`pp-{}` is only valid on a `<template>`",
+                    spec.name
+                ));
+            }
+            Some(_) => {}
+        }
     }
     ChildHostAttrOutcome::Preserved
 }
@@ -3556,50 +3696,6 @@ fn parse_child_host_model(rest: &str) -> (Option<String>, Vec<String>) {
         return (None, modifiers);
     }
     (None, Vec::new())
-}
-
-fn is_supported_modifier(m: &str) -> bool {
-    matches!(
-        m,
-        "prevent" | "stop" | "self" | "once" | "window" | "document" | "outside" | "capture"
-    ) || is_key_modifier(m)
-        || is_debounce_modifier(m)
-        || is_debounce_ms(m)
-}
-
-fn is_key_modifier(m: &str) -> bool {
-    matches!(
-        m,
-        "ctrl"
-            | "shift"
-            | "alt"
-            | "meta"
-            | "enter"
-            | "escape"
-            | "esc"
-            | "tab"
-            | "space"
-            | "backspace"
-            | "delete"
-            | "del"
-            | "arrow-up"
-            | "arrow-down"
-            | "arrow-left"
-            | "arrow-right"
-            | "up"
-            | "down"
-            | "left"
-            | "right"
-            | "home"
-            | "end"
-            | "page-up"
-            | "page-down"
-    ) || m.len() == 1
-        || is_word_key(m)
-}
-
-fn is_debounce_modifier(m: &str) -> bool {
-    m == "debounce"
 }
 
 fn is_word_key(m: &str) -> bool {
@@ -4111,7 +4207,7 @@ fn escape_attr(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        emit_compiled_expr_option, is_lift_eligible_opaque, is_supported_modifier,
+        NAMED_KEY_MODIFIERS, emit_compiled_expr_option, is_lift_eligible_opaque,
         parse_pp_directive_name,
     };
 
@@ -4377,6 +4473,8 @@ mod tests {
 
     #[test]
     fn supported_listener_modifiers_include_runtime_named_keys() {
+        // Parity pin against `on.rs named_key_for` — every named key
+        // the runtime normalizes must be admitted at compile time.
         for modifier in [
             "backspace",
             "delete",
@@ -4392,7 +4490,7 @@ mod tests {
             "page-down",
         ] {
             assert!(
-                is_supported_modifier(modifier),
+                NAMED_KEY_MODIFIERS.contains(&modifier),
                 "{modifier} should compile instead of requiring mount fallback"
             );
         }
@@ -4442,6 +4540,14 @@ mod tests {
         let plan = analyze(r#"<ul><li pp-for="file in files"><slot name="row"></slot></li></ul>"#);
         assert!(
             !diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+
+        // …but the carve-out still validates the pp-for value itself.
+        let plan = analyze(r#"<ul><li pp-for="file of files"><slot name="row"></slot></li></ul>"#);
+        assert!(
+            diagnostics(&plan).contains("item in items"),
             "{}",
             diagnostics(&plan)
         );
@@ -4571,13 +4677,59 @@ mod tests {
             r#"<div>
                  <input @keydown.enter="submit()" />
                  <input @keyup.q="quick()" />
+                 <input @keydown.ctrl.enter="send()" />
                  <input @input.debounce.300="search()" />
-                 <button @click.ctrl="alt()">x</button>
                  <button @click.outside="close()">y</button>
                </div>"#,
         );
         let out = diagnostics(&plan);
         assert!(!out.contains("compile_error"), "{out}");
+    }
+
+    #[test]
+    fn runtime_dead_listener_shapes_are_compile_errors() {
+        // System keys ride the RFC-013 key filter, which bails on any
+        // non-KeyboardEvent — `@click.ctrl` never fires at runtime.
+        let plan = analyze(r#"<div><button @click.ctrl="save()">x</button></div>"#);
+        assert!(
+            diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+
+        // The debounce delay pairs positionally: a number anywhere
+        // else installs as a never-matching key filter.
+        let plan = analyze(r#"<div><input @input.300.debounce="search()" /></div>"#);
+        assert!(
+            diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+        let plan = analyze(r#"<div><input @keydown.enter.300="go()" /></div>"#);
+        assert!(
+            diagnostics(&plan).contains("compile_error"),
+            "{}",
+            diagnostics(&plan)
+        );
+
+        // Near-miss control modifiers on keyboard events are typos,
+        // not key filters.
+        let plan = analyze(r#"<div><input @keydown.prevnt="submit()" /></div>"#);
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("compile_error") && out.contains("prevent"),
+            "{out}"
+        );
+
+        // Misspelled named keys get a key-name suggestion, and the
+        // message must not claim keydown is not a keyboard event.
+        let plan = analyze(r#"<div><input @keydown.arrow_up="move()" /></div>"#);
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("compile_error") && out.contains("arrow-up"),
+            "{out}"
+        );
+        assert!(!out.contains("not a keyboard event"), "{out}");
     }
 
     #[test]
@@ -4600,6 +4752,13 @@ mod tests {
 
         let plan = analyze(r#"<div><input pp-model.number.lazy="age" /></div>"#);
         assert!(!diagnostics(&plan).contains("compile_error"));
+
+        // The model value itself is validated: empty or unparseable
+        // used to compile green as a dead two-way binding.
+        let plan = analyze(r#"<div><input pp-model="" /></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+        let plan = analyze(r#"<div><input pp-model="1 +" /></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
     }
 
     #[test]
@@ -4632,6 +4791,22 @@ mod tests {
 
         let plan = analyze(r#"<div><x-input pp-model="">x</x-input></div>"#);
         assert!(diagnostics(&plan).contains("compile_error"));
+
+        // The component install path drops ALL pp-model modifiers —
+        // `.trim`/`.number`/`.lazy` on a component host are dead.
+        let plan = analyze(r#"<div><x-input pp-model:value.trim="v">x</x-input></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+        let plan = analyze(r#"<div><x-input pp-model.number="v">x</x-input></div>"#);
+        assert!(diagnostics(&plan).contains("compile_error"));
+
+        // Unknown directive heads on component hosts get the same
+        // registry check + suggestion as native elements.
+        let plan = analyze(r#"<div><pine-button pp-shwo="is_open">x</pine-button></div>"#);
+        let out = diagnostics(&plan);
+        assert!(
+            out.contains("compile_error") && out.contains("pp-show"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -4644,6 +4819,12 @@ mod tests {
             out.contains("compile_error") && out.contains("pp-stagger"),
             "{out}"
         );
+
+        // Empty is a truncation, not a request for 0ms.
+        let plan = analyze(
+            r#"<div><template pp-for="i in items" pp-stagger=""><span>r</span></template></div>"#,
+        );
+        assert!(diagnostics(&plan).contains("compile_error"));
     }
 
     #[test]
