@@ -176,6 +176,28 @@ the documented alternative; the guide gets a "which one when" note.
   them off `self`; one that needs *which* field changed should use
   single-field watches — that need is the signal the fields have
   diverging behavior.
+- **Watch-all** — `#[watch(self)]` / bare `#[watch]` meaning "every
+  field". Rejected for three reasons:
+  1. *It's a loop generator.* Recompute handlers **write** derived
+     fields; a subscription that includes the handler's own outputs
+     re-triggers on them. Making that safe needs writer-suppression
+     machinery, and whether an unguarded version spins forever or
+     merely echoes depends on store equality short-circuiting. The
+     explicit list is loop-safe by construction: the author lists
+     inputs and omits outputs — a distinction the framework cannot
+     infer.
+  2. *`#[handlers]` cannot enumerate fields* — the struct lives under
+     `#[component]`; watch-all would need a runtime scope-level
+     any-change subscription with fuzzy scope questions (computed
+     fields? flattened leaves? parent prop writes?).
+  3. *The good argument for it — "I added a field and forgot to
+     extend the list" staleness — is better served by dependency
+     tracking*: run the method once as a tracked effect and subscribe
+     to exactly the fields it read (`watchEffect`-style,
+     `#[effect]`). That self-maintains the dependency set and cannot
+     loop on writes to unread fields, but read-tracking through
+     `&mut self` needs its own design (read-phase/write-phase split)
+     and is deferred to a future RFC.
 - **Watching computed fields or cross-scope fields** — same
   restrictions as single-field `#[watch]`.
 - **Predicates/filters** (`#[watch(a, if = ...)]`) — out of scope.
@@ -190,8 +212,14 @@ times per preset change.
 
 ## Open questions
 
-1. Should the coalesced handler also be the vehicle for a future
-   `#[watch(*)]`/whole-state watch? (Deliberately unanswered; the
-   list form neither enables nor blocks it.)
-2. Cap on list length? None proposed — the install cost is linear
+1. Cap on list length? None proposed — the install cost is linear
    and small.
+
+## The escalation ladder
+
+For documentation (`docs/guides/reactivity/`): explicit single-field
+watch when behavior diverges per field → `#[watch(a, b, c)]` for a
+shared recompute over a known set → flattened container watch
+(RFC-044 §5.10.5) when the set is a real domain object → a future
+dependency-tracked `#[effect]` if list maintenance ever becomes a
+genuine pain.
