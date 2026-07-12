@@ -253,7 +253,7 @@ pub fn install(
                     with_current_el(&el_for_closure, || {
                         crate::scope::with_current_scope_id(scope_id, || {
                             with_current_event(&ev_js, || {
-                                expr::evaluate_with(&ast, &proxy, access.as_ref());
+                                expr::evaluate_with(ast, &proxy, access.as_ref());
                             });
                         });
                     });
