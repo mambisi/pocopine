@@ -1,0 +1,5 @@
+error: lifecycle method `on_ready` must take `&mut self`
+  --> tests/ui/lifecycle_no_receiver.rs:11:5
+   |
+11 |     fn on_ready() {}
+   |     ^^^^^^^^^^^^^

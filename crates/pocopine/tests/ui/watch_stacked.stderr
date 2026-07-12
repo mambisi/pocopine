@@ -1,0 +1,5 @@
+error: only one #[watch] attribute per method — write one handler per watched field
+  --> tests/ui/watch_stacked.rs:13:5
+   |
+13 |     #[watch(end_time)]
+   |     ^^^^^^^^^^^^^^^^^^
