@@ -46,7 +46,9 @@ in the template.
 ## What pine-expr does NOT support
 
 * Arithmetic beyond `+`: no `-`, `*`, `/`, `%`, `**`
-* JS-style strict equality: no `===`/`!==` — use `==`/`!=`
+* JS-style strict equality: `===`/`!==` in a directive or `{{ }}`
+  interpolation is desugared to `==`/`!=` with a build warning —
+  write `==`/`!=`; other contexts reject it outright
 * Method calls on objects: no `obj.method()`, no `.length`, no
   `.toFixed()`, no `.slice()`, no `.map()` / `.filter()`
 * Globals: no `Math.*`, no `Date.*`, no `console.*`, no `JSON.*`
@@ -160,8 +162,8 @@ points at the offending span in the `.poco` file:
 |---|---|
 | `progress * 100`, `a / b`, `i % 2` | `` arithmetic operator `*` is not supported in pine-expr `` |
 | `count - 1` | `arithmetic subtraction is not supported in pine-expr` |
-| `status === 'done'` | `` `===` is not supported in pine-expr `` |
-| `x !== 'y'` | `` `!==` is not supported in pine-expr `` |
+| `status === 'done'` | build warning; the template compiles as `status == 'done'` |
+| `x !== 'y'` | build warning; the template compiles as `x != 'y'` |
 | `files.filter(f)` | `method calls on objects are not supported in pine-expr` |
 | `x => x + 1` | `arrow functions are not supported in pine-expr` |
 | `a ?? b` | `` nullish coalescing `??` is not supported in pine-expr `` |
