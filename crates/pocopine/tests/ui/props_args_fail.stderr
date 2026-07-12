@@ -1,0 +1,5 @@
+error: #[derive(Props)] fields take bare `#[prop]` — arguments are not supported here (the wire leaf name is always the field name)
+ --> tests/ui/props_args_fail.rs:8:5
+  |
+8 |     #[prop(name = "series-key")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

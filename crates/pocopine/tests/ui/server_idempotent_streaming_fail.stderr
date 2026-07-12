@@ -1,0 +1,13 @@
+error: #[server(idempotent)] has no effect on a streaming function — the stream transport has no replay envelope; remove `idempotent`
+ --> tests/ui/server_idempotent_streaming_fail.rs:6:17
+  |
+6 | async fn feed() -> StreamServerResult<u32> {
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pocopine::StreamServerResult`
+ --> tests/ui/server_idempotent_streaming_fail.rs:3:5
+  |
+3 | use pocopine::StreamServerResult;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

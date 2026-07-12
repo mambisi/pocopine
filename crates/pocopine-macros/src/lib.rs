@@ -764,17 +764,47 @@ impl Parse for ComponentArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let pairs: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(input)?;
         let mut args = ComponentArgs::default();
+        // A repeated key used to last-one-win silently — the earlier
+        // value vanished with no diagnostic (matches the guard
+        // `ClientModuleArgs::parse` always had).
+        fn set_once(
+            slot: &mut Option<LitStr>,
+            lit: LitStr,
+            path: &syn::Path,
+            key: &str,
+        ) -> syn::Result<()> {
+            if slot.replace(lit).is_some() {
+                return Err(syn::Error::new_spanned(
+                    path,
+                    format!("duplicate `{key}` argument"),
+                ));
+            }
+            Ok(())
+        }
+        let mut unchecked_paths_seen = false;
         for kv in pairs {
             // `uses = [...]` is the one non-string-valued key;
             // handle it first so the string-lit extraction below
             // doesn't reject it.
             if kv.path.is_ident("uses") {
+                if args.uses.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        kv.path,
+                        "duplicate `uses` argument",
+                    ));
+                }
                 let entries = uses::parse_uses_array(kv.value)?;
                 let table = uses::resolve_uses(entries)?;
                 args.uses = Some(table);
                 continue;
             }
             if kv.path.is_ident("extends") {
+                if args.extends.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        kv.path,
+                        "duplicate `extends` argument",
+                    ));
+                }
                 args.extends = Some(uses::parse_extends_array(kv.value)?);
                 continue;
             }
@@ -788,27 +818,47 @@ impl Parse for ComponentArgs {
                 }
             };
             if kv.path.is_ident("name") {
-                args.name = Some(lit);
+                set_once(&mut args.name, lit, &kv.path, "name")?;
             } else if kv.path.is_ident("template") {
-                args.template = Some(lit);
+                set_once(&mut args.template, lit, &kv.path, "template")?;
             } else if kv.path.is_ident("template_inline") {
-                args.template_inline = Some(lit);
+                set_once(&mut args.template_inline, lit, &kv.path, "template_inline")?;
             } else if kv.path.is_ident("style") {
-                args.style = Some(lit);
+                set_once(&mut args.style, lit, &kv.path, "style")?;
             } else if kv.path.is_ident("role") {
-                args.role = Some(lit);
+                set_once(&mut args.role, lit, &kv.path, "role")?;
             } else if kv.path.is_ident("display") {
-                args.display = Some(lit);
+                set_once(&mut args.display, lit, &kv.path, "display")?;
             } else if kv.path.is_ident("transition") {
-                args.transition = Some(lit);
+                set_once(&mut args.transition, lit, &kv.path, "transition")?;
             } else if kv.path.is_ident("transition_in") {
-                args.transition_in = Some(lit);
+                set_once(&mut args.transition_in, lit, &kv.path, "transition_in")?;
             } else if kv.path.is_ident("transition_out") {
-                args.transition_out = Some(lit);
+                set_once(&mut args.transition_out, lit, &kv.path, "transition_out")?;
             } else if kv.path.is_ident("animate") {
-                args.animate = Some(lit);
+                set_once(&mut args.animate, lit, &kv.path, "animate")?;
             } else if kv.path.is_ident("unchecked_paths") {
-                args.unchecked_paths = lit.value() == "true";
+                if unchecked_paths_seen {
+                    return Err(syn::Error::new_spanned(
+                        kv.path,
+                        "duplicate `unchecked_paths` argument",
+                    ));
+                }
+                unchecked_paths_seen = true;
+                // Only the exact booleans — `"yes"`/`"1"` used to
+                // silently leave the opt-out disabled.
+                args.unchecked_paths = match lit.value().as_str() {
+                    "true" => true,
+                    "false" => false,
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            lit,
+                            format!(
+                                "`unchecked_paths` expects \"true\" or \"false\", got \"{other}\""
+                            ),
+                        ));
+                    }
+                };
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
@@ -5152,6 +5202,18 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let sig = &input.sig;
     let body = &input.block;
     let streaming = returns_stream(sig);
+    // The streaming client path wins unconditionally, so `idempotent`
+    // on a streaming fn was parsed, stored, and never consulted —
+    // dead config that read as replay protection.
+    if streaming && policy.idempotent {
+        return syn::Error::new_spanned(
+            &sig.output,
+            "#[server(idempotent)] has no effect on a streaming function — the \
+             stream transport has no replay envelope; remove `idempotent`",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let fn_ident = sig.ident.clone();
     let fn_name_str = fn_ident.to_string();
@@ -5783,10 +5845,18 @@ impl Default for JobConfig {
 fn parse_job_config(attr: TokenStream) -> syn::Result<JobConfig> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse(attr)?;
     let mut config = JobConfig::default();
+    // Repeated keys used to last-one-win silently (contrast
+    // `parse_server_policy`, which guards every duplicate).
+    let mut queue_seen = false;
+    let mut retries_seen = false;
 
     for meta in metas {
         match meta {
             Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("queue") => {
+                if queue_seen {
+                    return Err(syn::Error::new_spanned(path, "duplicate `queue` argument"));
+                }
+                queue_seen = true;
                 let Expr::Lit(ExprLit {
                     lit: Lit::Str(lit), ..
                 }) = value
@@ -5801,6 +5871,16 @@ fn parse_job_config(attr: TokenStream) -> syn::Result<JobConfig> {
             Meta::NameValue(MetaNameValue { path, value, .. })
                 if path.is_ident("retries") || path.is_ident("max_retries") =>
             {
+                if retries_seen {
+                    // Covers both a repeated key and the
+                    // `retries` + `max_retries` alias conflict.
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "duplicate retry count — `retries` and `max_retries` are aliases; \
+                         pass one of them once",
+                    ));
+                }
+                retries_seen = true;
                 let Expr::Lit(ExprLit {
                     lit: Lit::Int(lit), ..
                 }) = value
@@ -6465,8 +6545,22 @@ pub fn derive_props(input: TokenStream) -> TokenStream {
     // `#[component]` (RFC-031): `#[prop]` = exposed, default = state.
     let mut leaves: Vec<(syn::Ident, syn::Type)> = Vec::new();
     for field in fields.named.iter() {
-        if !field.attrs.iter().any(|a| a.path().is_ident("prop")) {
+        let Some(prop_attr) = field.attrs.iter().find(|a| a.path().is_ident("prop")) else {
             continue;
+        };
+        // Bare `#[prop]` only. Arguments used to be recognized,
+        // never parsed, and silently discarded — `#[prop(name =
+        // "…")]` / `#[prop(skip)]` compiled green and did nothing.
+        // (`#[prop(flatten)]` is a `#[component]`-field feature,
+        // not a `#[derive(Props)]` one.)
+        if !matches!(prop_attr.meta, syn::Meta::Path(_)) {
+            return syn::Error::new_spanned(
+                prop_attr,
+                "#[derive(Props)] fields take bare `#[prop]` — arguments are not \
+                 supported here (the wire leaf name is always the field name)",
+            )
+            .to_compile_error()
+            .into();
         }
         let Some(ident) = field.ident.clone() else {
             continue;

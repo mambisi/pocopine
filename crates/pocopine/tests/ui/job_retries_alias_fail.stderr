@@ -1,0 +1,13 @@
+error: duplicate retry count — `retries` and `max_retries` are aliases; pass one of them once
+ --> tests/ui/job_retries_alias_fail.rs:5:48
+  |
+5 | #[pocopine::job(queue = "emails", retries = 3, max_retries = 9)]
+  |                                                ^^^^^^^^^^^
+
+warning: unused import: `pocopine::JobResult`
+ --> tests/ui/job_retries_alias_fail.rs:3:5
+  |
+3 | use pocopine::JobResult;
+  |     ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
