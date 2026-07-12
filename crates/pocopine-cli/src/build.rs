@@ -1,3 +1,4 @@
+use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
 use std::process::Output;
 
@@ -6,31 +7,94 @@ use anyhow::{Context, Result, bail};
 use crate::config::PocopineConfig;
 use crate::tools;
 
+// `wasm-pack` mutates a shared `pkg/` in several non-atomic steps. In
+// particular it removes `package.json` near the start, then interprets any
+// file that reappears before its final manifest step as a wasm-bindgen NPM
+// dependency map. An overlapping build can write the normal manifest in that
+// window, making wasm-pack deserialize `"files": [...]` as a String. Keep the
+// lock outside `pkg/` because wasm-pack owns that directory, and hold it until
+// our post-build hashing has finished renaming the generated pair too.
+const WASM_BUILD_LOCK_FILE: &str = ".pocopine-wasm-build.lock";
+
+enum WasmBuildLockAttempt {
+    Acquired(File),
+    Contended(File),
+}
+
 pub fn wasm(path: &Path, release: bool) -> Result<()> {
     let path = path
         .canonicalize()
         .with_context(|| format!("could not resolve project path: {}", path.display()))?;
-    println!("▶ wasm-pack build ({})", path.display());
-    let project_tools = tools::ProjectTools::load(&path)?;
-    let mut cmd = project_tools.wasm_pack().command();
-    cmd.arg("build").arg("--target").arg("web");
-    if release {
-        cmd.arg("--release");
-    } else {
-        cmd.arg("--dev");
+    with_wasm_build_lock(&path, || {
+        println!("▶ wasm-pack build ({})", path.display());
+        let project_tools = tools::ProjectTools::load(&path)?;
+        let mut cmd = project_tools.wasm_pack().command();
+        cmd.arg("build").arg("--target").arg("web");
+        if release {
+            cmd.arg("--release");
+        } else {
+            cmd.arg("--dev");
+        }
+        cmd.current_dir(&path);
+        // RFC-100 §6 — export the assets/ fingerprint so `asset!`
+        // re-expands (and re-hashes) when the assets tree changed.
+        crate::assets_sync::apply_fingerprint_env(&mut cmd, &path);
+        let status = cmd
+            .status()
+            .context("failed to invoke wasm-pack (is it on $PATH?)")?;
+        if !status.success() {
+            bail!("wasm-pack build failed with status {status}");
+        }
+        hash_pkg_bundle(&path)?;
+        Ok(())
+    })
+}
+
+fn with_wasm_build_lock<T>(project: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _lock = acquire_wasm_build_lock(project)?;
+    operation()
+}
+
+fn acquire_wasm_build_lock(project: &Path) -> Result<File> {
+    match try_wasm_build_lock(project)? {
+        WasmBuildLockAttempt::Acquired(file) => Ok(file),
+        WasmBuildLockAttempt::Contended(file) => {
+            println!("⏳ waiting for another wasm build ({})", project.display());
+            file.lock().with_context(|| {
+                format!(
+                    "wait for wasm build lock: {}",
+                    wasm_build_lock_path(project).display()
+                )
+            })?;
+            Ok(file)
+        }
     }
-    cmd.current_dir(&path);
-    // RFC-100 §6 — export the assets/ fingerprint so `asset!`
-    // re-expands (and re-hashes) when the assets tree changed.
-    crate::assets_sync::apply_fingerprint_env(&mut cmd, &path);
-    let status = cmd
-        .status()
-        .context("failed to invoke wasm-pack (is it on $PATH?)")?;
-    if !status.success() {
-        bail!("wasm-pack build failed with status {status}");
+}
+
+fn try_wasm_build_lock(project: &Path) -> Result<WasmBuildLockAttempt> {
+    let lock_path = wasm_build_lock_path(project);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create wasm build lock directory: {}", parent.display()))?;
     }
-    hash_pkg_bundle(&path)?;
-    Ok(())
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open wasm build lock: {}", lock_path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(WasmBuildLockAttempt::Acquired(file)),
+        Err(TryLockError::WouldBlock) => Ok(WasmBuildLockAttempt::Contended(file)),
+        Err(TryLockError::Error(error)) => {
+            Err(error).with_context(|| format!("lock wasm build: {}", lock_path.display()))
+        }
+    }
+}
+
+fn wasm_build_lock_path(project: &Path) -> std::path::PathBuf {
+    project.join("target").join(WASM_BUILD_LOCK_FILE)
 }
 
 /// Content-hash the wasm-pack output pair so the JS glue and the wasm
@@ -357,6 +421,56 @@ mod tests {
 
     // sha256("wasm-bytes") starts with 7db53183.
     const HASH: &str = "7db53183";
+
+    #[test]
+    fn wasm_build_lock_serializes_and_releases_after_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+
+        let value = with_wasm_build_lock(project, || {
+            assert!(matches!(
+                try_wasm_build_lock(project).unwrap(),
+                WasmBuildLockAttempt::Contended(_)
+            ));
+            Ok(42)
+        })
+        .unwrap();
+
+        assert_eq!(value, 42);
+        assert!(matches!(
+            try_wasm_build_lock(project).unwrap(),
+            WasmBuildLockAttempt::Acquired(_)
+        ));
+    }
+
+    #[test]
+    fn wasm_build_lock_releases_after_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+
+        let result: Result<()> = with_wasm_build_lock(project, || bail!("sentinel failure"));
+
+        assert_eq!(result.unwrap_err().to_string(), "sentinel failure");
+        assert!(matches!(
+            try_wasm_build_lock(project).unwrap(),
+            WasmBuildLockAttempt::Acquired(_)
+        ));
+    }
+
+    #[test]
+    fn wasm_build_lock_is_scoped_to_one_project() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+
+        with_wasm_build_lock(first.path(), || {
+            assert!(matches!(
+                try_wasm_build_lock(second.path()).unwrap(),
+                WasmBuildLockAttempt::Acquired(_)
+            ));
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn rewrite_bundle_refs_handles_fresh_and_rehashed_references() {
