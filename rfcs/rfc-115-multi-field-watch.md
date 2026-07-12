@@ -1,7 +1,7 @@
 # RFC-115: Multi-field watch — `#[watch(a, b, c)]`
 
 **Status:** Proposed
-**Crates:** `pocopine-macros` (`#[handlers]`), `pocopine-core` (reactive watch primitives)
+**Crates:** `pocopine-macros` (`#[handlers]`), `pocopine-core` (reactive watch primitives, flush-cascade cycle guard)
 **Relates to:** RFC-026 (`#[watch(field)]` sugar), RFC-036 (watch install machinery), RFC-044 §5.10.5 (flattened-container watch), PR #279 (watch signature contract)
 
 ## Summary
@@ -134,6 +134,46 @@ propagation as the typed watch (including the RFC-044 dual-key
 container triggering), no value read, no downcast. Per the
 core-owns-engines rule this lands in `pocopine-core`;
 `pocopine-macros` stays a thin consumer.
+
+## Loop semantics and the cycle guard
+
+A watch handler may write fields — including its own watched fields.
+Two runtime invariants already bound this (single- and multi-field
+alike):
+
+1. **Value-equality dedup** (`watch.rs`): the callback only runs when
+   the observed value is `PartialEq`-different from the previous run.
+   A self-write that reaches a fixpoint (`self.a = f(...)`
+   stabilizing) converges after one echo — this is a *supported*
+   pattern (mirror/derived fields).
+2. **The RFC-098 trampoline**: dispatch is structurally
+   non-reentrant; a write during a callback appends to a FIFO
+   worklist. No recursion, no stack overflow.
+
+What is **not** bounded today: a *divergent* self-write
+(`self.a += 1` inside a watch on `a`) produces a distinct value per
+fire, passes the equality gate every time, and re-queues forever — a
+silent hang with no diagnostic. Compile-time detection is out: the
+write typically lives behind a method call the macro can't follow,
+and fixpoint-vs-divergent is undecidable (fixpoint self-writes are
+legitimate, so even a syntactic lint would false-positive).
+
+This RFC therefore adds a **runtime cycle guard** in
+`pocopine-core`: a per-effect re-fire counter within one flush
+cascade (reset when the trampoline fully drains). On breach of the
+cap (**100**, matching the Vue/Svelte convention) the scheduler:
+
+- emits `tracing::error!(target: "pocopine.log", ...)` (RFC-069)
+  naming the scope, the effect, and — for watches installed by
+  `#[watch]` — the watched field list;
+- suppresses that effect for the remainder of the cascade, so the
+  app degrades to "watch stopped firing loudly" instead of a hang.
+
+The guard is counting, not graph analysis — zero cost until a
+cascade actually re-fires the same effect. Multi-field coalescing
+reduces amplification (one handler run per flush instead of one per
+field) but does not remove divergence; the guard is the backstop for
+both forms, and for hand-installed `watch()`/`effect()` closures too.
 
 ## Alternative considered: group the fields and watch the container
 
