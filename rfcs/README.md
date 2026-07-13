@@ -99,3 +99,4 @@ Conventions:
 | 092 | [Pine Stylekit utility compiler](./rfc-092-pocopine-stylekit.md) | Accepted |
 | 093 | [Pocopine Agenkit plan](./rfc-093-pocopine-agenkit.md) | Draft |
 | 112 | [Dynamic component rendering (`<pp-component :is>`)](./rfc-112-dynamic-component.md) | Implemented |
+| 113 | [Typed node views and external blocks for `pine-richtext`](./rfc-113-pine-richtext-typed-node-views.md) | Draft |

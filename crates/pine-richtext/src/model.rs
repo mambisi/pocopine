@@ -6,6 +6,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::typed_nodes::{TypedNodeSpec, WireNode};
 use crate::{RichTextError, RichTextResult};
 
 /// Flexible attribute map used by nodes and marks.
@@ -24,6 +25,7 @@ struct SchemaInner {
     top_node: String,
     linebreak_replacement: Option<String>,
     inline_wrapper: Option<String>,
+    typed_nodes: BTreeMap<String, TypedNodeSpec>,
 }
 
 impl Schema {
@@ -53,11 +55,84 @@ impl Schema {
             .ok_or_else(|| RichTextError::UnknownMarkType(name.to_string()))
     }
 
+    /// Typed semantic descriptor attached to a node type, if any.
+    pub fn typed_node_spec(&self, name: &str) -> Option<&TypedNodeSpec> {
+        self.inner.typed_nodes.get(name)
+    }
+
     /// Node type names in schema order.
     pub fn node_type_names(&self) -> Vec<&str> {
         let mut nodes = self.inner.nodes.values().collect::<Vec<_>>();
         nodes.sort_by_key(|node_type| node_type.rank);
         nodes.into_iter().map(NodeType::name).collect()
+    }
+
+    /// Canonical descriptor of document/transaction wire semantics.
+    /// View components, DOM output, CSS, and runtime labels are intentionally
+    /// absent so harmless presentation changes do not split collaboration.
+    pub(crate) fn wire_descriptor(&self) -> Value {
+        let mut nodes = self.inner.nodes.values().collect::<Vec<_>>();
+        nodes.sort_by_key(|node| node.rank);
+        let nodes = nodes
+            .into_iter()
+            .map(|node| {
+                serde_json::json!({
+                    "name": node.name,
+                    "groups": node.groups.iter().collect::<Vec<_>>(),
+                    "table_role": match node.table_role {
+                        Some(TableRole::Table) => Some("table"),
+                        Some(TableRole::Row) => Some("row"),
+                        Some(TableRole::Cell) => Some("cell"),
+                        None => None,
+                    },
+                    "content": content_node_descriptor(&node.content.root),
+                    "inline": node.inline,
+                    "atom": node.atom,
+                    "marks": mark_policy_descriptor(&node.marks),
+                    "linebreak_replacement": node.linebreak_replacement,
+                    "defining_for_content": node.defining_for_content,
+                    "defining_as_context": node.defining_as_context,
+                    "code": node.code,
+                    "whitespace": match node.whitespace {
+                        Whitespace::Normal => "normal",
+                        Whitespace::Pre => "pre",
+                    },
+                    "selectable": node.selectable,
+                    "isolating": node.isolating,
+                    "attrs": attrs_descriptor(&node.attrs),
+                    "typed_version": self
+                        .inner
+                        .typed_nodes
+                        .get(&node.name)
+                        .map(TypedNodeSpec::version),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut marks = self.inner.marks.values().collect::<Vec<_>>();
+        marks.sort_by_key(|mark| mark.rank);
+        let marks = marks
+            .into_iter()
+            .map(|mark| {
+                serde_json::json!({
+                    "name": mark.name,
+                    "groups": mark.groups.iter().collect::<Vec<_>>(),
+                    "excludes": mark.excludes.iter().collect::<Vec<_>>(),
+                    "excludes_all": mark.excludes_all,
+                    "inclusive": mark.inclusive,
+                    "attrs": attrs_descriptor(&mark.attrs),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::json!({
+            "descriptor_version": 1,
+            "document_encoding_version": 1,
+            "step_encoding_version": 1,
+            "top_node": self.inner.top_node,
+            "nodes": nodes,
+            "marks": marks,
+        })
     }
 
     /// The node type marked as the schema-wide linebreak replacement, if any.
@@ -110,8 +185,19 @@ impl Schema {
             self.check_node(child)?;
         }
 
+        let version = self.typed_node_spec(&name).map(|typed| typed.version());
+        if let Some(typed) = self.typed_node_spec(&name) {
+            typed
+                .validate_attrs(&attrs)
+                .map_err(|error| RichTextError::WireNode {
+                    path: format!("$.{name}.attrs"),
+                    message: error.to_string(),
+                })?;
+        }
+
         Ok(Node {
             name,
+            version,
             attrs,
             marks: Vec::new(),
             content,
@@ -126,6 +212,7 @@ impl Schema {
         let marks = self.normalize_marks(marks)?;
         Ok(Node {
             name: "text".to_string(),
+            version: None,
             attrs: Attrs::new(),
             marks,
             content: Fragment::empty(),
@@ -221,6 +308,24 @@ impl Schema {
     /// Validate a node and all descendants against this schema.
     pub fn check_node(&self, node: &Node) -> RichTextResult<()> {
         let node_type = self.node_type(&node.name)?;
+        if let Some(typed) = self.typed_node_spec(&node.name) {
+            let version = node.version.unwrap_or(1);
+            if version != typed.version() {
+                return Err(RichTextError::WireNode {
+                    path: format!("$.{}.version", node.name),
+                    message: format!(
+                        "typed node version {version} was not migrated to supported version {}",
+                        typed.version()
+                    ),
+                });
+            }
+            typed
+                .validate_attrs(&node.attrs)
+                .map_err(|error| RichTextError::WireNode {
+                    path: format!("$.{}.attrs", node.name),
+                    message: error.to_string(),
+                })?;
+        }
         if node.is_text() {
             if node.name != "text" {
                 return Err(RichTextError::InvalidContent(format!(
@@ -248,6 +353,156 @@ impl Schema {
             self.check_node(child)?;
         }
         Ok(())
+    }
+
+    /// Migrate and materialize a schema-independent wire tree.
+    ///
+    /// Typed nodes are upgraded one adjacent version at a time before any
+    /// [`Node`] is constructed. Errors carry the exact JSON-style child path,
+    /// allowing callers to reject a bad load without replacing live state.
+    pub fn materialize_wire_node(&self, wire: WireNode) -> RichTextResult<Node> {
+        self.materialize_wire_node_at(wire, "$")
+    }
+
+    fn materialize_wire_node_at(&self, mut wire: WireNode, path: &str) -> RichTextResult<Node> {
+        if self.node_type(&wire.name).is_err() {
+            return Err(RichTextError::WireNode {
+                path: path.to_string(),
+                message: format!("unknown semantic node type `{}`", wire.name),
+            });
+        }
+
+        if let Some(typed) = self.typed_node_spec(&wire.name) {
+            let mut version = wire.version.unwrap_or(1);
+            if version > typed.version() {
+                return Err(RichTextError::WireNode {
+                    path: format!("{path}.version"),
+                    message: format!(
+                        "node `{}` uses newer version {version}; runtime supports {}",
+                        wire.name,
+                        typed.version()
+                    ),
+                });
+            }
+            while version < typed.version() {
+                let migration = typed
+                    .migrations()
+                    .iter()
+                    .find(|migration| migration.from == version)
+                    .ok_or_else(|| RichTextError::WireNode {
+                        path: format!("{path}.version"),
+                        message: format!(
+                            "node `{}` has no migration from version {version} to {}",
+                            wire.name,
+                            version + 1
+                        ),
+                    })?;
+                let semantic_name = wire.name.clone();
+                wire = (migration.apply)(wire).map_err(|error| RichTextError::WireNode {
+                    path: path.to_string(),
+                    message: format!(
+                        "migration {}->{} for `{semantic_name}` failed: {error}",
+                        migration.from, migration.to
+                    ),
+                })?;
+                if wire.name != semantic_name {
+                    return Err(RichTextError::WireNode {
+                        path: format!("{path}.type"),
+                        message: format!(
+                            "migration for `{semantic_name}` changed semantic type to `{}`",
+                            wire.name
+                        ),
+                    });
+                }
+                if wire.version != Some(migration.to) {
+                    return Err(RichTextError::WireNode {
+                        path: format!("{path}.version"),
+                        message: format!(
+                            "migration {}->{} returned version {:?}",
+                            migration.from, migration.to, wire.version
+                        ),
+                    });
+                }
+                version = migration.to;
+            }
+            wire.version = Some(typed.version());
+            typed
+                .validate_attrs(&wire.attrs)
+                .map_err(|error| RichTextError::WireNode {
+                    path: format!("{path}.attrs"),
+                    message: error.to_string(),
+                })?;
+        } else if let Some(version) = wire.version {
+            return Err(RichTextError::WireNode {
+                path: format!("{path}.version"),
+                message: format!(
+                    "untyped node `{}` unexpectedly carries wire version {version}",
+                    wire.name
+                ),
+            });
+        }
+
+        let marks = wire
+            .marks
+            .into_iter()
+            .enumerate()
+            .map(|(index, mark)| {
+                let mark_name = mark.type_name().to_string();
+                self.mark(mark_name.clone(), mark.attrs().clone())
+                    .map_err(|error| RichTextError::WireNode {
+                        path: format!("{path}.marks[{index}]"),
+                        message: format!("invalid mark `{mark_name}`: {error}"),
+                    })
+            })
+            .collect::<RichTextResult<Vec<_>>>()?;
+
+        if let Some(text) = wire.text {
+            if wire.name != "text" || !wire.content.is_empty() {
+                return Err(RichTextError::WireNode {
+                    path: path.to_string(),
+                    message: "text payload requires a `text` node with no children".to_string(),
+                });
+            }
+            return self
+                .text(text, marks)
+                .map_err(|error| RichTextError::WireNode {
+                    path: path.to_string(),
+                    message: error.to_string(),
+                });
+        }
+
+        let children = wire
+            .content
+            .into_iter()
+            .enumerate()
+            .map(|(index, child)| {
+                self.materialize_wire_node_at(child, &format!("{path}.content[{index}]"))
+            })
+            .collect::<RichTextResult<Vec<_>>>()?;
+        let expected_leaf = wire.leaf;
+        let mut node = self
+            .node(wire.name, wire.attrs, Fragment::from(children))
+            .map_err(|error| RichTextError::WireNode {
+                path: path.to_string(),
+                message: error.to_string(),
+            })?;
+        node.marks = self
+            .normalize_marks(marks)
+            .map_err(|error| RichTextError::WireNode {
+                path: format!("{path}.marks"),
+                message: error.to_string(),
+            })?;
+        if expected_leaf != node.is_leaf() {
+            return Err(RichTextError::WireNode {
+                path: format!("{path}.leaf"),
+                message: format!(
+                    "stale leaf metadata for `{}`: wire={expected_leaf}, schema={}",
+                    node.type_name(),
+                    node.is_leaf()
+                ),
+            });
+        }
+        Ok(node)
     }
 
     fn validate_child_marks(
@@ -331,6 +586,7 @@ pub struct SchemaBuilder {
     nodes: Vec<NodeSpec>,
     marks: Vec<MarkSpec>,
     top_node: String,
+    typed_nodes: Vec<TypedNodeSpec>,
 }
 
 impl Default for SchemaBuilder {
@@ -346,6 +602,7 @@ impl SchemaBuilder {
             nodes: Vec::new(),
             marks: Vec::new(),
             top_node: "doc".to_string(),
+            typed_nodes: Vec::new(),
         }
     }
 
@@ -361,6 +618,13 @@ impl SchemaBuilder {
         self
     }
 
+    /// Add a typed semantic node descriptor and its model schema shape.
+    pub fn typed_node(mut self, spec: TypedNodeSpec) -> Self {
+        self.nodes.push(spec.spec().clone());
+        self.typed_nodes.push(spec);
+        self
+    }
+
     /// Add a mark spec.
     pub fn mark(mut self, spec: MarkSpec) -> Self {
         self.marks.push(spec);
@@ -371,6 +635,11 @@ impl SchemaBuilder {
     pub fn finish(self) -> RichTextResult<Schema> {
         let mut nodes = BTreeMap::new();
         let mut marks = BTreeMap::new();
+        let typed_nodes = self
+            .typed_nodes
+            .into_iter()
+            .map(|spec| (spec.name().to_string(), spec))
+            .collect::<BTreeMap<_, _>>();
 
         for (rank, spec) in self.nodes.into_iter().enumerate() {
             if nodes.contains_key(&spec.name) {
@@ -385,6 +654,7 @@ impl SchemaBuilder {
                 NodeType {
                     name: spec.name,
                     groups: spec.groups,
+                    table_role: spec.table_role,
                     content,
                     inline: spec.inline,
                     atom: spec.atom,
@@ -451,6 +721,7 @@ impl SchemaBuilder {
                 top_node: self.top_node.clone(),
                 linebreak_replacement: linebreak_replacement.clone(),
                 inline_wrapper: None,
+                typed_nodes: typed_nodes.clone(),
             }),
         };
         let inline_wrapper = ordered
@@ -465,6 +736,7 @@ impl SchemaBuilder {
                 top_node: self.top_node,
                 linebreak_replacement,
                 inline_wrapper,
+                typed_nodes,
             }),
         })
     }
@@ -503,6 +775,70 @@ impl AttributeSpec {
     }
 }
 
+fn attrs_descriptor(attrs: &BTreeMap<String, AttributeSpec>) -> Vec<Value> {
+    attrs
+        .iter()
+        .map(|(name, attr)| {
+            serde_json::json!({
+                "name": name,
+                "required": !attr.has_default(),
+                "default": attr.default_value().map(canonical_json_value),
+            })
+        })
+        .collect()
+}
+
+fn canonical_json_value(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(canonical_json_value).collect()),
+        Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            let mut canonical = serde_json::Map::new();
+            for (key, value) in entries {
+                canonical.insert(key.clone(), canonical_json_value(value));
+            }
+            Value::Object(canonical)
+        }
+        scalar => scalar.clone(),
+    }
+}
+
+fn mark_policy_descriptor(policy: &MarkPolicy) -> Value {
+    match policy {
+        MarkPolicy::All => serde_json::json!({ "kind": "all" }),
+        MarkPolicy::None => serde_json::json!({ "kind": "none" }),
+        MarkPolicy::Set(names) => serde_json::json!({
+            "kind": "set",
+            "names": names.iter().collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn content_node_descriptor(node: &ContentNode) -> Value {
+    match node {
+        ContentNode::Empty => serde_json::json!({ "kind": "empty" }),
+        ContentNode::Name(name) => serde_json::json!({
+            "kind": "name",
+            "name": name,
+        }),
+        ContentNode::Seq(parts) => serde_json::json!({
+            "kind": "sequence",
+            "parts": parts.iter().map(content_node_descriptor).collect::<Vec<_>>(),
+        }),
+        ContentNode::Choice(parts) => serde_json::json!({
+            "kind": "choice",
+            "parts": parts.iter().map(content_node_descriptor).collect::<Vec<_>>(),
+        }),
+        ContentNode::Repeat { node, min, max } => serde_json::json!({
+            "kind": "repeat",
+            "node": content_node_descriptor(node),
+            "min": min,
+            "max": max,
+        }),
+    }
+}
+
 /// How whitespace inside a node is preserved. Matches upstream's
 /// `NodeSpec.whitespace` setting and drives transforms like setBlockType's
 /// newline conversion.
@@ -516,11 +852,28 @@ pub enum Whitespace {
     Pre,
 }
 
+/// Structural role of a node in a semantic table.
+///
+/// This is schema metadata, not a renderer hint. The editor uses it to prove
+/// that a rectangular cell selection points at real cells in one table even
+/// when an extension uses node names other than `table` / `table_row` /
+/// `table_cell`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableRole {
+    /// The outer table node whose direct children are rows.
+    Table,
+    /// A direct table row whose direct children are cells.
+    Row,
+    /// A selectable table cell.
+    Cell,
+}
+
 /// Schema definition for one node type.
 #[derive(Clone, Debug)]
 pub struct NodeSpec {
     name: String,
     groups: BTreeSet<String>,
+    table_role: Option<TableRole>,
     content: String,
     inline: bool,
     atom: bool,
@@ -542,6 +895,7 @@ impl NodeSpec {
         Self {
             name: name.into(),
             groups: BTreeSet::new(),
+            table_role: None,
             content: String::new(),
             inline: false,
             atom: false,
@@ -556,6 +910,40 @@ impl NodeSpec {
             attrs: BTreeMap::new(),
             leaf_text: None,
         }
+    }
+
+    /// Stable semantic node name declared by this spec.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Declared attribute schema, keyed by wire name.
+    ///
+    /// Typed-node runtime construction uses this read-only view to prove the
+    /// derive-generated closed serde key set agrees exactly with the model
+    /// schema before accepting documents or node views.
+    pub fn attrs(&self) -> &BTreeMap<String, AttributeSpec> {
+        &self.attrs
+    }
+
+    /// Source content expression declared by this spec.
+    pub fn content_expression(&self) -> &str {
+        &self.content
+    }
+
+    /// Whether this spec declares an inline node.
+    pub fn is_inline(&self) -> bool {
+        self.inline
+    }
+
+    /// Whether this spec declares atom behavior.
+    pub fn is_atom(&self) -> bool {
+        self.atom
+    }
+
+    /// Whether this node type declares no child content.
+    pub fn is_leaf(&self) -> bool {
+        self.content.is_empty()
     }
 
     /// Provide a function that produces text for instances of this node type
@@ -584,6 +972,17 @@ impl NodeSpec {
     /// Add whitespace-separated group names.
     pub fn group(mut self, groups: impl AsRef<str>) -> Self {
         self.groups.extend(split_names(groups.as_ref()));
+        self
+    }
+
+    /// Declare this node's structural role in a semantic table.
+    ///
+    /// Cell selections use this explicit schema metadata rather than node
+    /// names or CSS/DOM structure. A table extension may therefore choose
+    /// its own stable node names while still participating in rectangular
+    /// selection, history, and clipboard behavior.
+    pub fn table_role(mut self, role: TableRole) -> Self {
+        self.table_role = Some(role);
         self
     }
 
@@ -745,6 +1144,7 @@ impl MarkSpec {
 pub struct NodeType {
     name: String,
     groups: BTreeSet<String>,
+    table_role: Option<TableRole>,
     content: ContentExpr,
     inline: bool,
     atom: bool,
@@ -782,6 +1182,16 @@ impl NodeType {
     /// Whether this node is an atom.
     pub fn is_atom(&self) -> bool {
         self.atom
+    }
+
+    /// Whether this node type declares no child content.
+    pub fn is_leaf(&self) -> bool {
+        self.content.is_empty()
+    }
+
+    /// This node's structural role in a semantic table, when declared.
+    pub fn table_role(&self) -> Option<TableRole> {
+        self.table_role
     }
 
     /// Whether this node type can contain inline content.
@@ -846,6 +1256,7 @@ impl PartialEq for NodeType {
         let Self {
             name,
             groups,
+            table_role,
             content,
             inline,
             atom,
@@ -863,6 +1274,7 @@ impl PartialEq for NodeType {
         } = self;
         *name == other.name
             && *groups == other.groups
+            && *table_role == other.table_role
             && *content == other.content
             && *inline == other.inline
             && *atom == other.atom
@@ -884,6 +1296,7 @@ impl PartialEq for NodeSpec {
         let Self {
             name,
             groups,
+            table_role,
             content,
             inline,
             atom,
@@ -900,6 +1313,7 @@ impl PartialEq for NodeSpec {
         } = self;
         *name == other.name
             && *groups == other.groups
+            && *table_role == other.table_role
             && *content == other.content
             && *inline == other.inline
             && *atom == other.atom
@@ -1612,6 +2026,7 @@ fn repeat_node(node: ContentNode, min: usize, max: Option<usize>) -> ContentNode
 fn synthetic_node_for_type(node_type: &NodeType) -> Node {
     Node {
         name: node_type.name().to_string(),
+        version: None,
         attrs: Attrs::new(),
         marks: Vec::new(),
         content: Fragment::empty(),
@@ -1903,6 +2318,7 @@ impl<'de> Deserialize<'de> for Mark {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub(crate) name: String,
+    pub(crate) version: Option<u32>,
     pub(crate) attrs: Attrs,
     pub(crate) marks: Vec<Mark>,
     pub(crate) content: Fragment,
@@ -1940,6 +2356,7 @@ impl Node {
     ) -> Self {
         Self {
             name,
+            version: None,
             attrs,
             marks,
             content,
@@ -1951,6 +2368,12 @@ impl Node {
     /// Node type name.
     pub fn type_name(&self) -> &str {
         &self.name
+    }
+
+    /// Persisted typed-node wire version, or `None` for built-in/unversioned
+    /// nodes.
+    pub fn version(&self) -> Option<u32> {
+        self.version
     }
 
     /// Node attributes.
@@ -2374,6 +2797,7 @@ impl Node {
         };
         let node = Node {
             name: type_name.to_string(),
+            version: None,
             attrs: Attrs::new(),
             marks: marks.to_vec(),
             content: Fragment::empty(),
@@ -2512,6 +2936,9 @@ impl Serialize for Node {
         S: Serializer,
     {
         let mut len = 1;
+        if self.version.is_some() {
+            len += 1;
+        }
         if !self.attrs.is_empty() {
             len += 1;
         }
@@ -2530,6 +2957,9 @@ impl Serialize for Node {
 
         let mut state = serializer.serialize_struct("Node", len)?;
         state.serialize_field("type", &self.name)?;
+        if let Some(version) = self.version {
+            state.serialize_field("version", &version)?;
+        }
         if !self.attrs.is_empty() {
             state.serialize_field("attrs", &self.attrs)?;
         }
@@ -2559,6 +2989,8 @@ impl<'de> Deserialize<'de> for Node {
             #[serde(rename = "type")]
             name: String,
             #[serde(default)]
+            version: Option<u32>,
+            #[serde(default)]
             attrs: Attrs,
             #[serde(default)]
             marks: Vec<Mark>,
@@ -2578,6 +3010,7 @@ impl<'de> Deserialize<'de> for Node {
 
         Ok(Self {
             name: value.name,
+            version: value.version,
             attrs: value.attrs,
             marks: value.marks,
             content: Fragment::from(value.content),

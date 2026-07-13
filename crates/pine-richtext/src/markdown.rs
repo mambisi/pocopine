@@ -179,6 +179,11 @@ pub enum ParseMapping {
         node_type: String,
         get_attrs: Option<ParseAttrFn>,
     },
+    /// Open a block whose concrete node type and attrs depend on the
+    /// surrounding parse frames. This keeps contextual formats declarative:
+    /// GFM `TableCell`, for example, resolves to `table_header_cell` while a
+    /// `TableHead` frame is open and to `table_cell` in body rows.
+    ContextualBlock(ParseContextualBlockFn),
     /// Push an inline mark onto the active stack for the duration
     /// of the Start/End scope. Text events inside carry the mark.
     Mark {
@@ -207,10 +212,67 @@ pub enum ParseMapping {
 pub type ParseCustomFn =
     Arc<dyn Fn(&Event<'_>, &mut ParseSink<'_>) -> Result<(), ParseError> + Send + Sync>;
 
+/// Resolver for [`ParseMapping::ContextualBlock`].
+///
+/// The returned pair is `(node_type, attrs)`. The context is read-only and
+/// exposes only stable facts about enclosing extension block frames; it cannot
+/// mutate parser state or append nodes as a side effect.
+pub type ParseContextualBlockFn =
+    Arc<dyn Fn(&Event<'_>, &ParseContext<'_>) -> (String, Attrs) + Send + Sync>;
+
 /// Closure shape for `MarkdownParseRule::get_attrs`. The event
 /// passed in is the Start event for `Tag` rules or the atomic
 /// event for `Event` rules.
 pub type ParseAttrFn = Arc<dyn Fn(&Event<'_>) -> Attrs + Send + Sync + 'static>;
+
+/// Read-only context for resolving an extension block from its ancestors.
+pub struct ParseContext<'a> {
+    block_stack: &'a [Block],
+}
+
+impl ParseContext<'_> {
+    /// Whether a contributed ancestor block was opened by `tag`.
+    pub fn has_enclosing_tag(&self, tag: TagKind) -> bool {
+        self.block_stack.iter().rev().any(|block| {
+            matches!(
+                block,
+                Block::Custom {
+                    source_tag: Some(source),
+                    ..
+                } if *source == tag
+            )
+        })
+    }
+
+    /// Number of already-finished children in the nearest contributed block
+    /// named `node_type`.
+    pub fn child_count(&self, node_type: &str) -> Option<usize> {
+        self.block_stack.iter().rev().find_map(|block| match block {
+            Block::Custom {
+                node_type: candidate,
+                children,
+                ..
+            } if candidate == node_type => Some(children.len()),
+            _ => None,
+        })
+    }
+
+    /// Opening event for the nearest contributed block named `node_type`.
+    ///
+    /// This lets descendants read source metadata without smuggling it into
+    /// the durable node attrs. GFM table column alignments are the canonical
+    /// use: they live on `Start(Tag::Table)` and are projected onto each cell.
+    pub fn opening_event(&self, node_type: &str) -> Option<&Event<'static>> {
+        self.block_stack.iter().rev().find_map(|block| match block {
+            Block::Custom {
+                node_type: candidate,
+                source_event,
+                ..
+            } if candidate == node_type => Some(source_event),
+            _ => None,
+        })
+    }
+}
 
 /// Mutable handle passed to [`ParseMapping::Custom`] callbacks.
 /// Exposes a minimal API for appending model nodes to the
@@ -922,6 +984,10 @@ enum Block {
         node_type: String,
         attrs: Attrs,
         children: Vec<Node>,
+        /// Tag kind and opening event that created this contributed frame.
+        /// Retained only during parsing for contextual child resolution.
+        source_tag: Option<TagKind>,
+        source_event: Event<'static>,
     },
 }
 
@@ -1240,8 +1306,30 @@ impl<'a> ParseWalker<'a> {
                     node_type: node_type.clone(),
                     attrs,
                     children: Vec::new(),
+                    source_tag: match rule.matches {
+                        ParseMatch::Tag(tag) => Some(tag),
+                        ParseMatch::Event(_) => None,
+                    },
+                    source_event: start_event.clone(),
                 });
                 self.custom_block_stack.push(node_type.clone());
+            }
+            ParseMapping::ContextualBlock(resolve) => {
+                let context = ParseContext {
+                    block_stack: &self.block_stack,
+                };
+                let (node_type, attrs) = resolve(start_event, &context);
+                self.block_stack.push(Block::Custom {
+                    node_type: node_type.clone(),
+                    attrs,
+                    children: Vec::new(),
+                    source_tag: match rule.matches {
+                        ParseMatch::Tag(tag) => Some(tag),
+                        ParseMatch::Event(_) => None,
+                    },
+                    source_event: start_event.clone(),
+                });
+                self.custom_block_stack.push(node_type);
             }
             ParseMapping::Mark {
                 mark_type,
@@ -1294,7 +1382,7 @@ impl<'a> ParseWalker<'a> {
     /// callback again with a synthesized end event.
     fn apply_rule_close(&mut self, rule: &Arc<MarkdownParseRule>) -> Result<(), ParseError> {
         match &rule.maps_to {
-            ParseMapping::Block { .. } => {
+            ParseMapping::Block { .. } | ParseMapping::ContextualBlock(_) => {
                 self.custom_block_stack.pop();
                 let block = self.block_stack.pop().ok_or(ParseError::Empty)?;
                 let node = self.finish_block(block)?;
@@ -1560,6 +1648,8 @@ impl<'a> ParseWalker<'a> {
                 node_type,
                 attrs,
                 children,
+                source_tag: _,
+                source_event: _,
             } => self
                 .schema
                 .node(&node_type, attrs, Fragment::from(children))

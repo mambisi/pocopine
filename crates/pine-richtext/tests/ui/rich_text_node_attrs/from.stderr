@@ -1,0 +1,5 @@
+error: serde `from` is not supported by RichTextNodeAttrs because it changes the object-map wire shape
+ --> tests/ui/rich_text_node_attrs/from.rs:4:9
+  |
+4 | #[serde(from = "LegacyAttrs")]
+  |         ^^^^

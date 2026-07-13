@@ -1,38 +1,40 @@
 //! Extension contract for pine-richtext.
 //!
-//! A [`RichTextExtension`] bundles everything a plugin contributes to
-//! the editor in one trait: node specs, mark specs, named commands
-//! reachable over the `pine:richtext:command` CustomEvent, keystroke
-//! bindings, custom-element node views, and state plugins.
+//! A [`RichTextExtension`] bundles the target-independent parts of an editor
+//! extension: semantic node/mark specs, native DOM and serialization policies,
+//! named commands, key bindings, input/Markdown rules, and state plugins.
 //!
-//! Extensions register process-globally via [`registry::register`] on
-//! the same lifecycle as `pocopine::App::register::<T>()` — before
-//! `App::run()`. Once the schema has been realized by
-//! [`crate::schema_basic::schema`], further `register` calls panic so
-//! build-time misorder surfaces immediately.
+//! The primary composition boundary is an immutable
+//! [`crate::runtime::EditorRuntime`]. Build one with
+//! [`crate::runtime::RuntimeBuilder::with`], or use `with_view` for an
+//! extension that also implements the browser-only `RichTextViewExtension`.
+//! Typed component views are validated and stored inside that runtime; there is
+//! no process-global node-view registry. Different editors on one page may use
+//! different runtime values and therefore different extension/view sets.
 //!
-//! Phase 4's minimal-disruption shape: extensions install into the
-//! existing process-global registries (`schema_basic`, `node_views`,
-//! plus the new command/keymap tables here). Per-instance scoping is
-//! Phase 4b. Two editors on the same page share one schema and one
-//! extension set.
-//!
-//! See `docs/extensions.md` for a worked example (added in
-//! `Phase 4 commit 4`).
+//! [`registry::register`] remains as a deprecated process-global bootstrap for
+//! adding model extensions to the lazily built **default** runtime. It must run
+//! before any runtime is resolved, cannot carry typed component-view
+//! contributions through its erased model trait, and does not affect explicit
+//! runtimes. See `docs/extensions.md` for current composition examples.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::TypedNodeSpec;
 use crate::commands::BoxedCommand;
 use crate::model::{MarkSpec, NodeSpec};
+use crate::render::NodeDomSpec;
+use crate::serialization::NodeSerializationSpec;
 use crate::state::Plugin;
 
 pub mod registry;
 
-/// Convenience re-export so apps can write
+/// Legacy convenience re-export so apps can write
 /// `pine_richtext::extension::register(...)` without naming the
-/// registry submodule. Identical to [`registry::register`].
+/// registry submodule. Identical to the deprecated [`registry::register`]; new
+/// code should compose an explicit runtime.
 #[allow(deprecated)]
 pub use registry::register;
 
@@ -57,47 +59,55 @@ pub type KeyBindings = Vec<KeyBinding>;
 /// treats that the same as a non-applicable command (silent no-op).
 pub type NamedCommand = Arc<dyn Fn(Value) -> Option<BoxedCommand> + Send + Sync>;
 
-/// Custom-element binding for a node type. When the renderer encounters
-/// a node whose type is registered here, it emits `<tag>` instead of
-/// the default block tag. If `content_selector` is set, the reconciler
-/// looks for that selector inside the custom element when threading
-/// inline content; otherwise the element itself is treated as the
-/// content host.
-///
-/// Forwarded eagerly into [`crate::render::node_views`] at registration
-/// time (see [`registry::register`]) — *not* lazily inside the schema
-/// fold, so the reconciler always sees the node-view tag regardless of
-/// when `schema()` is first called.
-pub struct ExtensionNodeView {
-    /// Model node-type name (e.g. `"task_item"`).
-    pub node_type: String,
-    /// Custom-element tag (e.g. `"pine-task-item"`).
-    pub tag: String,
-    /// CSS selector identifying the content host inside the custom
-    /// element; `None` means the element itself.
-    pub content_selector: Option<String>,
-}
-
 /// Single point of contribution for a pine-richtext extension. Every
 /// method defaults to "contributes nothing" so an extension only
 /// overrides what it needs.
 ///
-/// The registration order determines:
-///   * Node insertion rank in `schema_basic::schema()` (matters for
+/// The runtime's extension fold order determines:
+///   * Node insertion rank in that runtime's schema (matters for
 ///     content-match resolution).
 ///   * Keymap first-wins for overlapping combos. The base keymap is
 ///     installed first, so extensions cannot shadow `Backspace`,
-///     `Delete`, `Enter`, or `Mod-a`.
+///     `Delete`, `Enter`, `ArrowLeft`, `ArrowRight`, or `Mod-a`.
 ///   * Command-name first-wins (a later extension cannot overwrite an
 ///     earlier extension's `wrap_in_bullet_list`, e.g.).
 pub trait RichTextExtension: 'static + Send + Sync {
-    /// Stable identifier. Two extensions sharing a `name()` is a
-    /// build error — the second registration is dropped with a warning.
+    /// Stable identifier used for runtime overlay. In a
+    /// [`crate::runtime::RuntimeBuilder`], a later extension with the same name
+    /// shadows the earlier one. The deprecated process-global registry instead
+    /// preserves its historical first-wins behavior.
     fn name(&self) -> &str;
 
-    /// Node specs this extension contributes. Folded into
-    /// `schema_basic::schema()` in registration order.
+    /// Node specs this extension contributes. Folded into each
+    /// [`crate::runtime::EditorRuntime`] in extension order.
     fn nodes(&self) -> Vec<NodeSpec> {
+        Vec::new()
+    }
+
+    /// Typed semantic node descriptors contributed by this extension.
+    ///
+    /// Unlike [`Self::nodes`], each entry retains the exact Rust semantic
+    /// marker identity, closed serde attr-key set, wire version, and migration
+    /// metadata. Component-backed external nodes should use this lane so a
+    /// later node-view registration can be checked against the semantic type
+    /// rather than matching only a user-authored string.
+    fn typed_nodes(&self) -> Vec<TypedNodeSpec> {
+        Vec::new()
+    }
+
+    /// Deterministic native/fallback DOM views for typed semantic nodes.
+    fn dom_views(&self) -> Vec<NodeDomSpec> {
+        Vec::new()
+    }
+
+    /// Complete persistence/output policies for exact typed semantic nodes.
+    ///
+    /// Every entry returned by [`Self::typed_nodes`] must have exactly one
+    /// matching declaration. Each output lane is explicit: supported with a
+    /// closed policy, or [`Unsupported`](crate::serialization::MarkdownPolicy::Unsupported)
+    /// where the format cannot preserve the node. Runtime construction rejects
+    /// missing, duplicate, type-mismatched, or incomplete declarations.
+    fn node_serialization(&self) -> Vec<NodeSerializationSpec> {
         Vec::new()
     }
 
@@ -106,7 +116,7 @@ pub trait RichTextExtension: 'static + Send + Sync {
         Vec::new()
     }
 
-    /// Keystroke bindings contributed to the default keymap.
+    /// Keystroke bindings contributed to the runtime's merged keymap.
     fn key_bindings(&self) -> KeyBindings {
         Vec::new()
     }
@@ -114,11 +124,6 @@ pub trait RichTextExtension: 'static + Send + Sync {
     /// Named commands reachable via `pine:richtext:command`'s
     /// `Custom { name, args }` variant.
     fn commands(&self) -> Vec<(String, NamedCommand)> {
-        Vec::new()
-    }
-
-    /// Per-node-type custom-element bindings.
-    fn node_views(&self) -> Vec<ExtensionNodeView> {
         Vec::new()
     }
 
@@ -156,7 +161,7 @@ pub trait RichTextExtension: 'static + Send + Sync {
     /// Smart-typography rules (em-dash, ellipsis, smart quotes) ship
     /// in `crate::extensions::SmartTypographyExtension`; markdown
     /// block shortcuts (`# `, `* `, `> `, etc.) ship in
-    /// `crate::extensions::MarkdownShortcutsExtension` (Phase 5 C3).
+    /// `crate::extensions::MarkdownShortcutsExtension`.
     fn input_rules(&self) -> Vec<crate::inputrules::InputRule> {
         Vec::new()
     }

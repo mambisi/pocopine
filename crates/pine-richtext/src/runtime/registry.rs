@@ -14,8 +14,7 @@
 //! [`RuntimeBuilder::new()`] — the kitchen-sink set of
 //! `default_extensions()` plus any extensions the app registered via
 //! the soft-deprecated `extension::register` path. Once realized,
-//! further changes to the default runtime are disallowed in the same
-//! way `schema_basic::schema()` seals the global registry today.
+//! further changes to that legacy default overlay are disallowed.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,9 +99,8 @@ pub fn register(name: impl Into<String>, runtime: Arc<EditorRuntime>) {
 /// **Side effect:** every `resolve` call (named or default) seals the
 /// legacy `extension::registry` so further `extension::register(...)`
 /// calls panic. Without this seal, a page that mounts only
-/// named-runtime editors would leave the global registry mutable, and
-/// a late `extension::register` could change behavior C2's reconciler
-/// / commands still read from globals.
+/// named-runtime editors would otherwise leave the legacy default overlay
+/// mutable even though runtime composition has already begun.
 pub fn resolve(name: Option<&str>) -> Arc<EditorRuntime> {
     if let Some(name) = name.filter(|s| !s.is_empty()) {
         if let Some(rt) = runtimes()
@@ -130,11 +128,9 @@ pub fn resolve(name: Option<&str>) -> Arc<EditorRuntime> {
 /// a runtime so the panic contract holds regardless of which
 /// surface mounts first.
 ///
-/// **Phase 4b C5:** the old `install_base_extensions` call is gone.
-/// The legacy `BASE` table was deleted alongside it; consumers like
-/// `commands::is_list_item_type` now read through the legacy
-/// registry's adapters which delegate to the default runtime
-/// directly. The seal is now just an atomic store.
+/// The legacy registry stores only pending default-runtime extensions; all
+/// adapter reads resolve the immutable default runtime. The seal is therefore
+/// just the one-way atomic flag preventing late writes to that pending overlay.
 fn seal_legacy_registry() {
     crate::extension::registry::mark_schema_realized();
 }
@@ -146,11 +142,10 @@ fn seal_legacy_registry() {
 /// Built lazily on first read: the kitchen-sink default extensions
 /// (folded by `RuntimeBuilder::new`) **overlaid with any user
 /// extensions registered via the legacy `extension::registry::register`
-/// path**. This bridge lets the demo's
-/// `extension::register(TaskListExtension::with_node_view::<C>())`
-/// flow through the runtime without code changes — the user's
-/// extension wins by name over the base `TaskListExtension::new()` via
-/// the builder's overlay semantics.
+/// path**. The user's extension wins by name over the corresponding base
+/// extension via the builder's overlay semantics. Typed component views use an
+/// explicit [`RuntimeBuilder::with_view`] composition; register that runtime by
+/// name only when DOM lookup by `runtime="..."` is desired.
 ///
 /// As a side-effect of folding the user extensions, this call also
 /// flips `extension::registry::SCHEMA_REALIZED` so further
@@ -175,8 +170,7 @@ pub fn default() -> Arc<EditorRuntime> {
         .clone()
 }
 
-/// Has the default runtime been materialized yet? Used in commit 5 to
-/// gate the soft-deprecated `extension::register` panic message.
+/// Has the immutable default runtime been materialized yet?
 pub fn default_realized() -> bool {
     DEFAULT.get().is_some()
 }

@@ -13,8 +13,9 @@
 //! by name); `view::input::default_keymap` and
 //! `view::root::default_plugins` read merged commands / key bindings /
 //! plugins from `extension::registry`. The demo in `examples/richtext`
-//! registers a `TaskListExtension::with_node_view::<PineTaskItem>()`
-//! to thread its custom-element node-view through the same contract.
+//! builds a named runtime with
+//! `TaskListExtension::with_typed_node_view::<PineTaskItem>()` to pair the
+//! typed task-item schema with its editable component view.
 
 pub mod core_inline;
 pub mod core_marks;
@@ -35,7 +36,7 @@ pub use history::HistoryExtension;
 pub use lists::ListsExtension;
 pub use markdown_shortcuts::MarkdownShortcutsExtension;
 pub use smart_typography::SmartTypographyExtension;
-pub use task_list::TaskListExtension;
+pub use task_list::{TaskItemAttrs, TaskItemNode, TaskListExtension};
 
 use crate::extension::RichTextExtension;
 

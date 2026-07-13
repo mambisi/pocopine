@@ -1,0 +1,82 @@
+<root class="pine-richtext-table-view"
+      pp-ref="root"
+      :data-state="state"
+      data-selection="none"
+      :data-editable="editable"
+      :data-focused="focused"
+      :data-error="error_code">
+  <div class="pine-richtext-table-toolbar"
+       role="toolbar"
+       aria-label="Table selection controls"
+       contenteditable="false">
+    <button class="pine-richtext-table-select-table"
+            pp-ref="table_selector"
+            type="button"
+            aria-label="Select entire table"
+            aria-pressed="false"
+            @mousedown.prevent
+            @click="select_table">
+      Table
+    </button>
+    <div class="pine-richtext-table-column-selectors"
+         pp-ref="column_selectors"
+         role="group"
+         aria-label="Select table columns">
+      <template pp-for="selector in columns" pp-key="selector.key">
+        <button class="pine-richtext-table-column-selector"
+                type="button"
+                :data-column="selector.index"
+                :aria-label="selector.label"
+                aria-pressed="false"
+                @mousedown.prevent
+                @click="select_column(selector.index)">
+          <span pp-text="selector.short_label"></span>
+        </button>
+      </template>
+    </div>
+  </div>
+
+  <div class="pine-richtext-table-layout">
+    <div class="pine-richtext-table-row-selectors"
+         pp-ref="row_selectors"
+         role="group"
+         aria-label="Select table rows"
+         contenteditable="false">
+      <template pp-for="selector in rows" pp-key="selector.key">
+        <button class="pine-richtext-table-row-selector"
+                type="button"
+                :data-row="selector.index"
+                :aria-label="selector.label"
+                aria-pressed="false"
+                @mousedown.prevent
+                @click="select_row(selector.index)">
+          <span pp-text="selector.short_label"></span>
+        </button>
+      </template>
+    </div>
+
+    <div class="pine-richtext-table-viewport">
+      <table class="pine-richtext-table"
+             pp-ref="table"
+             role="grid"
+             :aria-rowcount="row_count"
+             :aria-colcount="column_count"
+             :aria-readonly="editable ? 'false' : 'true'"
+             @pointerdown="on_pointer_down"
+             @pointermove="on_pointer_move"
+             @pointerup="on_pointer_up"
+             @pointercancel="on_pointer_cancel">
+        <tbody class="pine-richtext-table-body"
+               pp-ref="body"
+               pp-owned-content
+               role="rowgroup"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="pine-richtext-table-error"
+     pp-show="error != ''"
+     role="status"
+     contenteditable="false"
+     pp-text="error"></p>
+</root>

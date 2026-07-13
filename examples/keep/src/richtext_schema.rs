@@ -23,9 +23,42 @@ use pine_richtext::markdown::pulldown_cmark::{
     Event as MdEvent, HeadingLevel, Tag as MdTag, TagEnd as MdTagEnd,
 };
 use pine_richtext::model::{MarkPolicy, NodeSpec, Whitespace};
+use pine_richtext::render::NodeDomSpec;
+use pine_richtext::serialization::{
+    ClipboardPolicy, MarkdownPolicy, NodeSerializationSpec, PlainTextPolicy, SemanticHtmlPolicy,
+    TextProjection,
+};
+use pine_richtext::{RichTextNodeAttrs, RichTextNodeType, TypedNodeSpec};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub struct KeepNoteSchemaExtension;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, RichTextNodeAttrs)]
+pub struct KeepTitleAttrs {}
+
+pub struct KeepTitleNode;
+
+impl RichTextNodeType for KeepTitleNode {
+    const NAME: &'static str = "title";
+    const VERSION: u32 = 1;
+    type Attrs = KeepTitleAttrs;
+
+    fn spec() -> NodeSpec {
+        // Own group (NOT `block`) keeps title nodes out of the document body.
+        NodeSpec::new(Self::NAME)
+            .group("title")
+            .content("inline*")
+            .marks(MarkPolicy::None)
+            .defining()
+    }
+}
+
+fn title_dom() -> NodeDomSpec {
+    NodeDomSpec::content::<KeepTitleNode>("h1")
+        .class("keep-note-title")
+        .attr("data-type", KeepTitleNode::NAME)
+}
 
 impl RichTextExtension for KeepNoteSchemaExtension {
     fn name(&self) -> &str {
@@ -55,17 +88,6 @@ impl RichTextExtension for KeepNoteSchemaExtension {
             // first-child `data-type='heading'` to render the same
             // way.
             NodeSpec::new("doc").content("(title | heading) block*"),
-            // title: own group (NOT "block") so it can't appear
-            // mid-document — only at the top. Inline content,
-            // defining boundary so split/join treat it like a
-            // standalone textblock. No marks — titles stay
-            // plain text so list cards can render them directly
-            // without a markdown pass.
-            NodeSpec::new("title")
-                .group("title")
-                .content("inline*")
-                .marks(MarkPolicy::None)
-                .defining(),
             // Rest of the default `core_nodes` set, verbatim.
             NodeSpec::new("paragraph").group("block").content("inline*"),
             NodeSpec::new("blockquote")
@@ -85,6 +107,24 @@ impl RichTextExtension for KeepNoteSchemaExtension {
                 .code()
                 .whitespace(Whitespace::Pre)
                 .defining(),
+        ]
+    }
+
+    fn typed_nodes(&self) -> Vec<TypedNodeSpec> {
+        vec![TypedNodeSpec::of::<KeepTitleNode>()]
+    }
+
+    fn dom_views(&self) -> Vec<NodeDomSpec> {
+        vec![title_dom()]
+    }
+
+    fn node_serialization(&self) -> Vec<NodeSerializationSpec> {
+        vec![
+            NodeSerializationSpec::for_node::<KeepTitleNode>()
+                .markdown(MarkdownPolicy::Supported)
+                .html(SemanticHtmlPolicy::dom(title_dom()))
+                .plain_text(PlainTextPolicy::projected(TextProjection::content()))
+                .clipboard(ClipboardPolicy::Semantic),
         ]
     }
 
@@ -155,6 +195,21 @@ mod tests {
             matches!(first.type_name(), "title" | "heading"),
             "leading slot of default doc is title or heading, got `{}`",
             first.type_name()
+        );
+        if first.type_name() == KeepTitleNode::NAME {
+            assert_eq!(
+                serde_json::to_value(first).unwrap()["version"],
+                json!(KeepTitleNode::VERSION),
+                "Keep's semantic title is versioned on the wire",
+            );
+        }
+        assert!(runtime.typed_node::<KeepTitleNode>().is_some());
+        assert_eq!(
+            runtime
+                .lookup_dom_view(KeepTitleNode::NAME)
+                .expect("Keep title owns a native DOM projection")
+                .root_tag(),
+            "h1",
         );
     }
 

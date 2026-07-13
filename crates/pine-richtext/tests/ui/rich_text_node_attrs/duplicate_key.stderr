@@ -1,0 +1,11 @@
+error: duplicate serde wire key `label` in RichTextNodeAttrs
+ --> tests/ui/rich_text_node_attrs/duplicate_key.rs:7:5
+  |
+7 |     label: String,
+  |     ^^^^^
+
+error: the same wire key was declared here
+ --> tests/ui/rich_text_node_attrs/duplicate_key.rs:6:5
+  |
+6 |     first: String,
+  |     ^^^^^

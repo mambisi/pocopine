@@ -2,7 +2,7 @@
 //!
 //! An [`EditorRuntime`] is an immutable bundle of everything an editor
 //! mount needs: a [`Schema`], the chain of [`RichTextExtension`]s that
-//! produced it, a [`NodeViewRegistry`] for custom-element tags, a
+//! produced it, typed semantic/view registries, a
 //! command table, a key-binding factory list, a plugin set, and a
 //! list-item-type table. It's wrapped in `Arc` so multiple mounts of
 //! the same configuration share one fold without re-building.
@@ -27,6 +27,7 @@
 //! See `docs/extensions.md` for the migration story and a worked
 //! two-editor example.
 
+use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -37,17 +38,20 @@ use crate::markdown::{
     ParseMatch as MarkdownParseMatch,
 };
 use crate::model::Schema;
+use crate::render::NodeDomSpec;
+use crate::serialization::NodeSerializationSpec;
 use crate::state::Plugin;
+use crate::typed_nodes::{RichTextNodeType, TypedNodeSpec};
+#[cfg(feature = "view")]
+use crate::view::typed_node_views::{NodeViewSpec as TypedNodeViewSpec, TypedNodeViewRegistry};
 
 pub mod builder;
-pub mod node_views;
 pub mod registry;
 
 #[cfg(test)]
 mod tests;
 
-pub use builder::RuntimeBuilder;
-pub use node_views::{NodeViewRegistry, NodeViewSpec};
+pub use builder::{RuntimeBuildError, RuntimeBuilder};
 
 /// Immutable per-instance editor configuration.
 ///
@@ -59,7 +63,6 @@ pub struct EditorRuntime {
     pub(crate) name: Option<String>,
     pub(crate) schema: Schema,
     pub(crate) extensions: Vec<Arc<dyn RichTextExtension>>,
-    pub(crate) node_views: NodeViewRegistry,
     pub(crate) commands: HashMap<String, NamedCommand>,
     pub(crate) key_bindings: Vec<(String, KeyBindingFactory)>,
     pub(crate) plugins: Vec<Plugin>,
@@ -68,6 +71,13 @@ pub struct EditorRuntime {
     pub(crate) markdown_node_emitters: HashMap<String, MarkdownNodeEmitter>,
     pub(crate) markdown_mark_emitters: HashMap<String, MarkdownMarkEmitter>,
     pub(crate) markdown_parse_rules: HashMap<MarkdownParseMatch, Arc<MarkdownParseRule>>,
+    pub(crate) typed_nodes: HashMap<String, TypedNodeSpec>,
+    pub(crate) node_serialization: HashMap<TypeId, NodeSerializationSpec>,
+    pub(crate) dom_views: HashMap<String, NodeDomSpec>,
+    pub(crate) wire_descriptor: serde_json::Value,
+    pub(crate) wire_fingerprint: String,
+    #[cfg(feature = "view")]
+    pub(crate) typed_node_views: TypedNodeViewRegistry,
 }
 
 impl EditorRuntime {
@@ -89,25 +99,64 @@ impl EditorRuntime {
         &self.schema
     }
 
+    /// Canonical semantic schema/encoding descriptor used for collaboration
+    /// compatibility negotiation.
+    pub fn wire_descriptor(&self) -> &serde_json::Value {
+        &self.wire_descriptor
+    }
+
+    /// SHA-256 of [`Self::wire_descriptor`]. Presentation-only changes are
+    /// excluded, so component/CSS/DOM revisions do not split compatible rooms.
+    pub fn wire_fingerprint(&self) -> &str {
+        &self.wire_fingerprint
+    }
+
     /// Snapshot of the extension chain in fold order. Cheap; intended
     /// for diagnostics.
     pub fn extensions(&self) -> &[Arc<dyn RichTextExtension>] {
         &self.extensions
     }
 
-    /// Resolve the node-view binding for `node_type` in this runtime.
-    /// `None` means "render with the default tag." See
-    /// [`NodeViewRegistry`] for the data shape.
-    pub fn lookup_node_view(&self, node_type: &str) -> Option<&NodeViewSpec> {
-        self.node_views.lookup(node_type)
+    /// Resolve a typed semantic descriptor by its persisted node name.
+    pub fn lookup_typed_node(&self, node_type: &str) -> Option<&TypedNodeSpec> {
+        self.typed_nodes.get(node_type)
     }
 
-    /// Process-globally-registered custom-element tags this runtime
-    /// uses. The browser view mounts these after every `innerHTML`
-    /// patch so dynamically-rendered node-view hosts behave like
-    /// app-authored components.
-    pub fn registered_tags(&self) -> Vec<String> {
-        self.node_views.registered_tags()
+    /// Resolve a typed semantic descriptor and prove it is the exact Rust
+    /// marker `N`, not merely another descriptor sharing `N::NAME`.
+    pub fn typed_node<N: RichTextNodeType>(&self) -> Option<&TypedNodeSpec> {
+        self.typed_nodes
+            .get(N::NAME)
+            .filter(|spec| spec.semantic_type_id() == std::any::TypeId::of::<N>())
+    }
+
+    /// Resolve the complete output policy for an exact typed semantic marker.
+    pub fn node_serialization<N: RichTextNodeType>(&self) -> Option<&NodeSerializationSpec> {
+        self.node_serialization.get(&TypeId::of::<N>())
+    }
+
+    /// Resolve output policy from a persisted name only after that name has
+    /// been resolved to the runtime's exact semantic `TypeId`.
+    pub fn lookup_node_serialization(&self, node_type: &str) -> Option<&NodeSerializationSpec> {
+        let typed = self.typed_nodes.get(node_type)?;
+        self.node_serialization.get(&typed.semantic_type_id())
+    }
+
+    /// Resolve the validated native/fallback DOM view for a semantic node.
+    pub fn lookup_dom_view(&self, node_type: &str) -> Option<&NodeDomSpec> {
+        self.dom_views.get(node_type)
+    }
+
+    /// Resolve the typed component view paired with a semantic node in this
+    /// runtime.
+    #[cfg(feature = "view")]
+    pub fn lookup_typed_node_view(&self, node_type: &str) -> Option<&TypedNodeViewSpec> {
+        self.typed_node_views.get(node_type)
+    }
+
+    #[cfg(feature = "view")]
+    pub fn typed_node_view_count(&self) -> usize {
+        self.typed_node_views.len()
     }
 
     /// Look up a named command. Used by the
@@ -119,7 +168,7 @@ impl EditorRuntime {
     /// Snapshot of every key-binding factory contributed by this
     /// runtime's extensions. The view's `default_keymap()` reads from
     /// this list and merges on top of the base 4 keymap entries
-    /// (`Backspace`, `Delete`, `Enter`, `Mod-a`).
+    /// (`Backspace`, `Delete`, `Enter`, `ArrowLeft`, `ArrowRight`, `Mod-a`).
     pub fn merged_keymap_factories(&self) -> &[(String, KeyBindingFactory)] {
         &self.key_bindings
     }
@@ -207,13 +256,19 @@ impl EditorRuntime {
 
 impl std::fmt::Debug for EditorRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EditorRuntime")
+        let mut debug = f.debug_struct("EditorRuntime");
+        debug
             .field("name", &self.name)
             .field(
                 "extensions",
                 &self.extensions.iter().map(|e| e.name()).collect::<Vec<_>>(),
             )
-            .field("node_view_count", &self.node_views.len())
+            .field("typed_node_count", &self.typed_nodes.len());
+        debug.field("wire_fingerprint", &self.wire_fingerprint);
+        debug.field("dom_view_count", &self.dom_views.len());
+        #[cfg(feature = "view")]
+        debug.field("typed_node_view_count", &self.typed_node_view_count());
+        debug
             .field("command_count", &self.commands.len())
             .field("key_binding_count", &self.key_bindings.len())
             .field("plugin_count", &self.plugins.len())

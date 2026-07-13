@@ -1,0 +1,11 @@
+error: serde `try_from` is not supported by RichTextNodeAttrs because it changes the object-map wire shape
+ --> tests/ui/rich_text_node_attrs/container_conversions.rs:4:9
+  |
+4 | #[serde(try_from = "LegacyAttrs")]
+  |         ^^^^^^^^
+
+error: serde `into` is not supported by RichTextNodeAttrs because it changes the object-map wire shape
+  --> tests/ui/rich_text_node_attrs/container_conversions.rs:10:9
+   |
+10 | #[serde(into = "LegacyAttrs")]
+   |         ^^^^

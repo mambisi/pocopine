@@ -28,8 +28,11 @@ use crate::state::{EditorState, EditorStateConfig, Plugin, Selection, Transactio
 use crate::transform::{AttrStep, Step};
 
 use super::input::{default_keymap, install_listeners, read_dom_selection};
-use super::reconciler::{ReconcileOutcome, reconcile_surface_with_outcome};
+use super::node_view_handle::{NodeViewEditorBinding, TransactionDispatch};
+use super::node_view_manager::NodeViewManager;
+use super::reconciler::{ReconcileOutcome, reconcile_surface_with_manager};
 use super::selection::model_pos_to_dom;
+use super::selection_observer::SelectionChangeSubscription;
 
 const DEBUG_LOG_VERSION: &str = concat!(
     env!("CARGO_PKG_NAME"),
@@ -64,6 +67,18 @@ pub const EXPORT_STATE_REQUEST_EVENT: &str = "pine:richtext:export-state";
 /// payload, or `null` when the state is unavailable
 /// (uninitialized surface, serializer failure).
 pub const EXPORT_STATE_RESULT_EVENT: &str = "pine:richtext:export-state-result";
+
+/// Fired when initial content, an external replacement, or a bound seed cannot
+/// be migrated/materialized against the selected runtime. The event bubbles;
+/// `detail` contains `runtime`, `error`, and the untouched `input` value.
+pub const LOAD_ERROR_EVENT: &str = "pine:richtext:load-error";
+
+/// Internal request event used by [`super::Editor::selection_snapshot`]. The
+/// response carries only selection context, not serialized document content.
+pub(crate) const SELECTION_SNAPSHOT_REQUEST_EVENT: &str = "pine:richtext:selection-snapshot";
+
+/// Internal response event paired with [`SELECTION_SNAPSHOT_REQUEST_EVENT`].
+pub(crate) const SELECTION_SNAPSHOT_RESULT_EVENT: &str = "pine:richtext:selection-snapshot-result";
 
 /// CustomEvent the surface dispatches after every committed
 /// transaction. The `detail` is a JS object carrying the
@@ -370,6 +385,7 @@ impl PineRichTextRoot {
         };
         let handle = this::<Self>();
         let runtime = self.resolve_runtime();
+        let node_view_manager = Rc::new(RefCell::new(NodeViewManager::new(runtime.clone())));
 
         // Materialize the seed state once up front. The cache is
         // the canonical source-of-truth for the live doc; the
@@ -378,13 +394,15 @@ impl PineRichTextRoot {
         // ReplaceState handler rebuilds it. Built before the
         // initial paint and the initial-doc watcher because both
         // need it.
+        let initial_input = self.doc.clone();
+        let initial_state = EditorState::from_json(
+            runtime.schema().clone(),
+            runtime_plugins(&runtime),
+            initial_input.clone(),
+        );
+        let initial_error = initial_state.as_ref().err().map(ToString::to_string);
         let commit_slot: Rc<RefCell<CommitSlot>> = Rc::new(RefCell::new(CommitSlot {
-            state: EditorState::from_json(
-                runtime.schema().clone(),
-                runtime_plugins(&runtime),
-                self.doc.clone(),
-            )
-            .ok(),
+            state: initial_state.ok(),
             generation: 0,
         }));
         let last_watch_gen: Rc<Cell<u64>> = Rc::new(Cell::new(0));
@@ -400,19 +418,33 @@ impl PineRichTextRoot {
             let handle_for_seed = handle.clone();
             let runtime_for_seed = runtime.clone();
             let commit_slot_for_seed = commit_slot.clone();
+            let surface_for_seed = surface_el.clone();
             watch_scope_field_scoped::<Value, _>(scope, "initial_doc", move |seed, _| {
                 if seed.is_null() {
                     return;
                 }
                 let seed = seed.clone();
-                let runtime_for_seed = runtime_for_seed.clone();
-                let commit_slot_for_seed = commit_slot_for_seed.clone();
-                handle_for_seed.update(move |root: &mut PineRichTextRoot| {
-                    if !(root.doc.is_null()
-                        || root.doc == empty_seed_state_json(&runtime_for_seed).unwrap_or_default())
-                    {
+                let eligible = handle_for_seed.with(|root| {
+                    root.doc.is_null()
+                        || root.doc == empty_seed_state_json(&runtime_for_seed).unwrap_or_default()
+                });
+                if !eligible {
+                    return;
+                }
+                let rebuilt = match EditorState::from_json(
+                    runtime_for_seed.schema().clone(),
+                    runtime_plugins(&runtime_for_seed),
+                    seed.clone(),
+                ) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        report_load_error(&surface_for_seed, &runtime_for_seed, &seed, &error);
                         return;
                     }
+                };
+                clear_load_error(&surface_for_seed);
+                let commit_slot_for_seed = commit_slot_for_seed.clone();
+                handle_for_seed.update(move |root: &mut PineRichTextRoot| {
                     root.doc = seed.clone();
                     // The reactive doc watcher fires on
                     // `doc_generation` now, so the bump must
@@ -422,15 +454,9 @@ impl PineRichTextRoot {
                     // state. Initial-doc rebinds are rare
                     // (parent-side `pp-bind` updates) so the
                     // `from_json` cost is fine.
-                    if let Ok(rebuilt) = EditorState::from_json(
-                        runtime_for_seed.schema().clone(),
-                        runtime_plugins(&runtime_for_seed),
-                        seed,
-                    ) {
-                        let mut slot = commit_slot_for_seed.borrow_mut();
-                        slot.state = Some(rebuilt);
-                        slot.generation = slot.generation.wrapping_add(1);
-                    }
+                    let mut slot = commit_slot_for_seed.borrow_mut();
+                    slot.state = Some(rebuilt);
+                    slot.generation = slot.generation.wrapping_add(1);
                     root.doc_generation = root.doc_generation.wrapping_add(1);
                 });
             });
@@ -442,7 +468,11 @@ impl PineRichTextRoot {
         // state so we don't re-parse `self.doc` here.
         let empty_doc = empty_doc_for_runtime(&runtime).expect("runtime schema supports empty doc");
         paint_initial(&surface_el, &empty_doc, &self.doc, &runtime);
-        mount_registered_node_views(&surface_el, &runtime);
+        if let Some(error) = initial_error {
+            report_load_error_message(&surface_el, &runtime, &initial_input, &error);
+        } else {
+            clear_load_error(&surface_el);
+        }
         if let Some(state) = commit_slot.borrow().state.as_ref() {
             sync_cursor_from_state(&surface_el, state);
         }
@@ -500,7 +530,10 @@ impl PineRichTextRoot {
                 // inside the surface (e.g., the user clicked outside), keep
                 // the model's stored selection.
                 let selection_started_at = perf_now_ms();
-                if live_selection && let Some(live) = read_dom_selection(&surface_for_provider) {
+                if live_selection
+                    && !state.selection().is_cells()
+                    && let Some(live) = read_dom_selection(&surface_for_provider)
+                {
                     let live = normalize_live_selection(&state, live);
                     // `with_selection` substitutes the selection without
                     // running the plugin state-field loop or the
@@ -562,183 +595,208 @@ impl PineRichTextRoot {
         let runtime_for_dispatch = runtime.clone();
         let surface_for_dispatch = surface_el.clone();
         let commit_slot_for_dispatch = commit_slot.clone();
-        let dispatch = move |state: EditorState, tr: Transaction, sync_flush: bool| {
-            let dispatch_started_at = perf_now_ms();
-            let runtime_for_inner = runtime_for_dispatch.clone();
-            let surface_for_inner = surface_for_dispatch.clone();
-            let runtime_name = runtime_for_dispatch.name().map(str::to_string);
-            let commit_slot_inner = commit_slot_for_dispatch.clone();
-            // Tag the transaction with a wall-clock timestamp
-            // so the history plugin can merge close-in-time
-            // typing events into the same undo step. Callers
-            // that set their own `commit_ms` (e.g. tests) keep
-            // theirs.
-            let mut tr = tr;
-            if tr.meta(crate::history::HISTORY_COMMIT_MS_META).is_none() {
-                tr.set_meta(
-                    crate::history::HISTORY_COMMIT_MS_META,
-                    json!(perf_now_ms() as u64),
-                );
-            }
-            handle_for_dispatch.update(move |root: &mut PineRichTextRoot| {
-                let update_started_at = perf_now_ms();
-                let from_json_started_at = perf_now_ms();
-                // Fast path: read the current state out of the cache
-                // instead of re-parsing root.doc every keystroke. The
-                // cache was populated by the previous commit (or by
-                // `on_ready`'s seed step); it can only miss if some
-                // external writer cleared it. Fall back to from_json
-                // in that case.
-                let mut current_cache_hit = true;
-                let current = match commit_slot_inner.borrow().state.clone() {
-                    Some(state) => state,
-                    None => {
-                        current_cache_hit = false;
-                        let Ok(state) = EditorState::from_json(
-                            runtime_for_inner.schema().clone(),
-                            runtime_plugins(&runtime_for_inner),
-                            root.doc.clone(),
-                        ) else {
-                            return;
-                        };
-                        state
+        let dispatch: Rc<TransactionDispatch> = Rc::new(
+            move |state: EditorState, tr: Transaction, sync_flush: bool| {
+                let dispatch_started_at = perf_now_ms();
+                let runtime_for_inner = runtime_for_dispatch.clone();
+                let surface_for_inner = surface_for_dispatch.clone();
+                let runtime_name = runtime_for_dispatch.name().map(str::to_string);
+                let commit_slot_inner = commit_slot_for_dispatch.clone();
+                // Tag the transaction with a wall-clock timestamp
+                // so the history plugin can merge close-in-time
+                // typing events into the same undo step. Callers
+                // that set their own `commit_ms` (e.g. tests) keep
+                // theirs.
+                let mut tr = tr;
+                if tr.meta(crate::history::HISTORY_COMMIT_MS_META).is_none() {
+                    tr.set_meta(
+                        crate::history::HISTORY_COMMIT_MS_META,
+                        json!(perf_now_ms() as u64),
+                    );
+                }
+                handle_for_dispatch.update(move |root: &mut PineRichTextRoot| {
+                    let update_started_at = perf_now_ms();
+                    let from_json_started_at = perf_now_ms();
+                    // Fast path: read the current state out of the cache
+                    // instead of re-parsing root.doc every keystroke. The
+                    // cache was populated by the previous commit (or by
+                    // `on_ready`'s seed step); it can only miss if some
+                    // external writer cleared it. Fall back to from_json
+                    // in that case.
+                    let mut current_cache_hit = true;
+                    let current = match commit_slot_inner.borrow().state.clone() {
+                        Some(state) => state,
+                        None => {
+                            current_cache_hit = false;
+                            let Ok(state) = EditorState::from_json(
+                                runtime_for_inner.schema().clone(),
+                                runtime_plugins(&runtime_for_inner),
+                                root.doc.clone(),
+                            ) else {
+                                return;
+                            };
+                            state
+                        }
+                    };
+                    let from_json_ms = perf_now_ms() - from_json_started_at;
+                    // Capture the transaction's steps (serialized) BEFORE `apply` moves
+                    // `tr`, so the doc-changed event can carry them — a collab binding
+                    // turns them into a fine-grained CRDT write (see
+                    // `Editor::on_update_steps`).
+                    let steps_json: Vec<Value> =
+                        tr.transform().steps().iter().map(|s| s.to_json()).collect();
+                    let step_count = steps_json.len();
+                    if current.doc() != state.doc() {
+                        log_debug_json(debug_json, "dispatch.stale_doc", || {
+                            json!({
+                                "current": state_debug_json(&current),
+                                "transaction": transaction_debug_json(&tr),
+                                "transaction_state": state_debug_json(&state),
+                            })
+                        });
+                        return;
                     }
-                };
-                let from_json_ms = perf_now_ms() - from_json_started_at;
-                // Capture the transaction's steps (serialized) BEFORE `apply` moves
-                // `tr`, so the doc-changed event can carry them — a collab binding
-                // turns them into a fine-grained CRDT write (see
-                // `Editor::on_update_steps`).
-                let steps_json: Vec<Value> =
-                    tr.transform().steps().iter().map(|s| s.to_json()).collect();
-                let step_count = steps_json.len();
-                if current.doc() != state.doc() {
-                    log_debug_json(debug_json, "dispatch.stale_doc", || {
+                    let transaction = if debug_json {
+                        Some(transaction_debug_json(&tr))
+                    } else {
+                        None
+                    };
+                    let before = if debug_json {
+                        Some(state_debug_json(&state))
+                    } else {
+                        None
+                    };
+                    let apply_started_at = perf_now_ms();
+                    let Ok(next) = state.apply(tr) else { return };
+                    let apply_ms = perf_now_ms() - apply_started_at;
+                    // Populate the cache BEFORE writing root.doc so the
+                    // reactive watcher (which fires after the JSON write)
+                    // sees a fresh cache and can skip materialize_doc.
+                    {
+                        let mut slot = commit_slot_inner.borrow_mut();
+                        slot.state = Some(next.clone());
+                        slot.generation = slot.generation.wrapping_add(1);
+                    }
+                    log_debug_json(debug_json, "dispatch.apply", || {
                         json!({
-                            "current": state_debug_json(&current),
-                            "transaction": transaction_debug_json(&tr),
-                            "transaction_state": state_debug_json(&state),
+                            "before": before,
+                            "transaction": transaction,
+                            "after": state_debug_json(&next),
                         })
                     });
-                    return;
-                }
-                let transaction = if debug_json {
-                    Some(transaction_debug_json(&tr))
+                    // Hot-path generation bump. The reactive watcher
+                    // used to fire on `root.doc` — a full state JSON
+                    // value — so every keystroke queued a multi-KB
+                    // value mutation and the reactive scheduler paid
+                    // the propagation cost for the whole subtree.
+                    // Now we bump a `u64` that everyone subscribes
+                    // to instead, and the reconciler pulls the doc
+                    // out of the in-memory cache via the same
+                    // `commit_slot.generation` it already tracks.
+                    let assign_started_at = perf_now_ms();
+                    root.doc_generation = root.doc_generation.wrapping_add(1);
+                    let assign_ms = perf_now_ms() - assign_started_at;
+                    // Notify external subscribers that the doc
+                    // changed. The slim payload carries `doc +
+                    // selection + stored_marks` — no
+                    // `plugin_state` so per-keystroke
+                    // serde_wasm_bindgen stays bounded by doc size,
+                    // not history length. Subscribers reconstruct
+                    // an EditorState via
+                    // [`view::Editor::on_update`].
+                    let event_started_at = perf_now_ms();
+                    let doc_changed_event = !root.suppress_doc_changed;
+                    if doc_changed_event {
+                        let slim = doc_changed_event_payload(&next, steps_json);
+                        dispatch_doc_changed_event(&surface_for_inner, &slim);
+                    }
+                    // Lightweight change signal — dispatched on EVERY commit, even
+                    // when the heavy doc-changed event above is suppressed. Cheap
+                    // fields only (generation / empty / caret prefix), so a
+                    // placeholder or `@`-mention picker can react per keystroke at
+                    // O(block) cost instead of re-serializing the whole document.
+                    let change = change_event_payload(&next, root.doc_generation);
+                    dispatch_change_event(&surface_for_inner, &change);
+                    let event_ms = perf_now_ms() - event_started_at;
+                    log_perf(debug_perf, "dispatch.commit", || {
+                        json!({
+                            "runtime": runtime_for_inner.name(),
+                            "steps": step_count,
+                            "cache_hit": current_cache_hit,
+                            "doc_size_before": state.doc().content_size(),
+                            "doc_size_after": next.doc().content_size(),
+                            "top_level_children": next.doc().child_count(),
+                            "from_json_ms": round_ms(from_json_ms),
+                            "apply_ms": round_ms(apply_ms),
+                            // `to_json_ms` is now structurally zero —
+                            // the hot path no longer serializes the
+                            // full state JSON every commit. Kept in
+                            // the schema so old perf dashboards
+                            // don't break.
+                            "to_json_ms": 0.0_f64,
+                            "assign_ms": round_ms(assign_ms),
+                            "doc_changed_event": doc_changed_event,
+                            "event_ms": round_ms(event_ms),
+                            "total_ms": round_ms(perf_now_ms() - update_started_at),
+                            "update_ms": round_ms(perf_now_ms() - update_started_at),
+                        })
+                    });
+                });
+                if sync_flush {
+                    // Force the reactive queue to drain before command dispatch returns.
+                    // This is required for external commands triggered from inside a
+                    // parent `pp-on:click` handler: the inner `dispatch_event` call
+                    // returns synchronously into a still-active outer `scope.invoke`.
+                    let flush_started_at = perf_now_ms();
+                    pocopine_core::flush_sync();
+                    log_perf(debug_perf, "dispatch.flush_sync", || {
+                        json!({
+                            "runtime": runtime_name,
+                            "flush_ms": round_ms(perf_now_ms() - flush_started_at),
+                            "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
+                        })
+                    });
                 } else {
-                    None
-                };
-                let before = if debug_json {
-                    Some(state_debug_json(&state))
-                } else {
-                    None
-                };
-                let apply_started_at = perf_now_ms();
-                let Ok(next) = state.apply(tr) else { return };
-                let apply_ms = perf_now_ms() - apply_started_at;
-                // Populate the cache BEFORE writing root.doc so the
-                // reactive watcher (which fires after the JSON write)
-                // sees a fresh cache and can skip materialize_doc.
-                {
-                    let mut slot = commit_slot_inner.borrow_mut();
-                    slot.state = Some(next.clone());
-                    slot.generation = slot.generation.wrapping_add(1);
+                    log_perf(debug_perf, "dispatch.flush_deferred", || {
+                        json!({
+                            "runtime": runtime_name,
+                            "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
+                        })
+                    });
                 }
-                log_debug_json(debug_json, "dispatch.apply", || {
-                    json!({
-                        "before": before,
-                        "transaction": transaction,
-                        "after": state_debug_json(&next),
-                    })
-                });
-                // Hot-path generation bump. The reactive watcher
-                // used to fire on `root.doc` — a full state JSON
-                // value — so every keystroke queued a multi-KB
-                // value mutation and the reactive scheduler paid
-                // the propagation cost for the whole subtree.
-                // Now we bump a `u64` that everyone subscribes
-                // to instead, and the reconciler pulls the doc
-                // out of the in-memory cache via the same
-                // `commit_slot.generation` it already tracks.
-                let assign_started_at = perf_now_ms();
-                root.doc_generation = root.doc_generation.wrapping_add(1);
-                let assign_ms = perf_now_ms() - assign_started_at;
-                // Notify external subscribers that the doc
-                // changed. The slim payload carries `doc +
-                // selection + stored_marks` — no
-                // `plugin_state` so per-keystroke
-                // serde_wasm_bindgen stays bounded by doc size,
-                // not history length. Subscribers reconstruct
-                // an EditorState via
-                // [`view::Editor::on_update`].
-                let event_started_at = perf_now_ms();
-                let doc_changed_event = !root.suppress_doc_changed;
-                if doc_changed_event {
-                    let slim = doc_changed_event_payload(&next, steps_json);
-                    dispatch_doc_changed_event(&surface_for_inner, &slim);
-                }
-                // Lightweight change signal — dispatched on EVERY commit, even
-                // when the heavy doc-changed event above is suppressed. Cheap
-                // fields only (generation / empty / caret prefix), so a
-                // placeholder or `@`-mention picker can react per keystroke at
-                // O(block) cost instead of re-serializing the whole document.
-                let change = change_event_payload(&next, root.doc_generation);
-                dispatch_change_event(&surface_for_inner, &change);
-                let event_ms = perf_now_ms() - event_started_at;
-                log_perf(debug_perf, "dispatch.commit", || {
-                    json!({
-                        "runtime": runtime_for_inner.name(),
-                        "steps": step_count,
-                        "cache_hit": current_cache_hit,
-                        "doc_size_before": state.doc().content_size(),
-                        "doc_size_after": next.doc().content_size(),
-                        "top_level_children": next.doc().child_count(),
-                        "from_json_ms": round_ms(from_json_ms),
-                        "apply_ms": round_ms(apply_ms),
-                        // `to_json_ms` is now structurally zero —
-                        // the hot path no longer serializes the
-                        // full state JSON every commit. Kept in
-                        // the schema so old perf dashboards
-                        // don't break.
-                        "to_json_ms": 0.0_f64,
-                        "assign_ms": round_ms(assign_ms),
-                        "doc_changed_event": doc_changed_event,
-                        "event_ms": round_ms(event_ms),
-                        "total_ms": round_ms(perf_now_ms() - update_started_at),
-                        "update_ms": round_ms(perf_now_ms() - update_started_at),
-                    })
-                });
-            });
-            if sync_flush {
-                // Force the reactive queue to drain before command dispatch returns.
-                // This is required for external commands triggered from inside a
-                // parent `pp-on:click` handler: the inner `dispatch_event` call
-                // returns synchronously into a still-active outer `scope.invoke`.
-                let flush_started_at = perf_now_ms();
-                pocopine_core::flush_sync();
-                log_perf(debug_perf, "dispatch.flush_sync", || {
-                    json!({
-                        "runtime": runtime_name,
-                        "flush_ms": round_ms(perf_now_ms() - flush_started_at),
-                        "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
-                    })
-                });
-            } else {
-                log_perf(debug_perf, "dispatch.flush_deferred", || {
-                    json!({
-                        "runtime": runtime_name,
-                        "total_ms": round_ms(perf_now_ms() - dispatch_started_at),
-                    })
-                });
-            }
-        };
+            },
+        );
 
+        let node_view_binding = NodeViewEditorBinding::new(
+            runtime.clone(),
+            surface_el.clone(),
+            state_provider.clone(),
+            dispatch.clone(),
+        );
+        node_view_manager
+            .borrow_mut()
+            .set_binding(node_view_binding.clone());
+        if let Some(state) = commit_slot.borrow().state.as_ref() {
+            node_view_manager.borrow_mut().sync_tree(
+                &surface_el,
+                state.doc(),
+                state.selection(),
+                surface_is_editable(&surface_el),
+                surface_is_focused(&surface_el),
+            );
+        }
+
+        let dispatch_for_listeners = dispatch.clone();
         let closures = install_listeners(
             surface_el.clone(),
             runtime.clone(),
             state_provider.clone(),
+            node_view_manager.clone(),
             keymap,
             debug_perf,
-            dispatch.clone(),
+            move |state, transaction, sync_flush| {
+                dispatch_for_listeners(state, transaction, sync_flush);
+            },
         );
         // Keep the listener Closures alive for the component's lifetime;
         // drop them on unmount.
@@ -768,6 +826,7 @@ impl PineRichTextRoot {
             let handle_for_replace = handle.clone();
             let runtime_for_listener = runtime.clone();
             let commit_slot_for_replace = commit_slot.clone();
+            let surface_for_replace = surface_el.clone();
             let cb = Closure::wrap(Box::new(move |event: Event| {
                 let Ok(custom) = event.dyn_into::<CustomEvent>() else {
                     return;
@@ -781,17 +840,27 @@ impl PineRichTextRoot {
                     // generation-gated read finds the new state,
                     // and bump root.doc_generation so the
                     // watcher actually fires.
-                    let rebuilt = EditorState::from_json(
+                    let rebuilt = match EditorState::from_json(
                         runtime_for_listener.schema().clone(),
                         runtime_plugins(&runtime_for_listener),
                         doc.clone(),
-                    )
-                    .ok();
-                    if let Some(state) = rebuilt {
-                        let mut slot = commit_slot_for_replace.borrow_mut();
-                        slot.state = Some(state);
-                        slot.generation = slot.generation.wrapping_add(1);
-                    }
+                    ) {
+                        Ok(state) => state,
+                        Err(error) => {
+                            report_load_error(
+                                &surface_for_replace,
+                                &runtime_for_listener,
+                                &doc,
+                                &error,
+                            );
+                            return;
+                        }
+                    };
+                    clear_load_error(&surface_for_replace);
+                    let mut slot = commit_slot_for_replace.borrow_mut();
+                    slot.state = Some(rebuilt);
+                    slot.generation = slot.generation.wrapping_add(1);
+                    drop(slot);
                     handle_for_replace.update(|root: &mut PineRichTextRoot| {
                         root.doc = doc;
                         root.doc_generation = root.doc_generation.wrapping_add(1);
@@ -855,6 +924,80 @@ impl PineRichTextRoot {
             slot.borrow_mut().push(cb);
         }
 
+        // Lightweight selection-context bridge. Unlike the full state export
+        // above, this does not serialize or reconstruct the document. It reads
+        // the cached state with the live DOM selection injected and returns the
+        // compact snapshot used by external bubble menus and toolbars.
+        {
+            let state_provider = state_provider.clone();
+            let surface_for_snapshot = surface_el.clone();
+            let host_for_response = host_el.clone();
+            let cb = Closure::wrap(Box::new(move |_event: Event| {
+                let snapshot = state_provider(true)
+                    .map(|state| super::selection_observer::capture(&state, &surface_for_snapshot));
+                let detail = snapshot
+                    .as_ref()
+                    .and_then(|value| serde_wasm_bindgen::to_value(value).ok())
+                    .unwrap_or(wasm_bindgen::JsValue::NULL);
+                let init = web_sys::CustomEventInit::new();
+                init.set_bubbles(true);
+                init.set_detail(&detail);
+                let Ok(response) =
+                    CustomEvent::new_with_event_init_dict(SELECTION_SNAPSHOT_RESULT_EVENT, &init)
+                else {
+                    return;
+                };
+                let _ = host_for_response.dispatch_event(&response);
+            }) as Box<dyn FnMut(Event)>);
+            let _ = host_el.add_event_listener_with_callback(
+                SELECTION_SNAPSHOT_REQUEST_EVENT,
+                cb.as_ref().unchecked_ref(),
+            );
+            slot.borrow_mut().push(cb);
+        }
+
+        // Keep typed node-view selection/focus snapshots current even when the
+        // browser changes its live selection without an editor transaction
+        // (drag-select, focus entering/leaving component chrome, or a native
+        // selectionchange). The shared observer coalesces those noisy DOM
+        // events to one animation-frame read. `sync_selection` then resolves
+        // only the old/new affected positions through the manager's index;
+        // focus/editability transitions intentionally update every view.
+        let selection_subscription = {
+            let state_provider = state_provider.clone();
+            let surface_for_read = surface_el.clone();
+            let node_view_manager = node_view_manager.clone();
+            let commit_slot = commit_slot.clone();
+            SelectionChangeSubscription::subscribe(
+                host_el.clone(),
+                Some(surface_el.clone()),
+                move || {
+                    state_provider(true)
+                        .map(|state| super::selection_observer::capture(&state, &surface_for_read))
+                },
+                move |snapshot| {
+                    let state = commit_slot.borrow().state.clone();
+                    let Some(state) = state else {
+                        return;
+                    };
+                    node_view_manager.borrow_mut().sync_selection(
+                        state.doc(),
+                        &snapshot.selection,
+                        snapshot.editable,
+                        snapshot.focused,
+                    );
+                },
+            )
+        };
+        pocopine::on_scope_unmount(move || drop(selection_subscription));
+
+        let node_view_manager_for_release = node_view_manager.clone();
+        let node_view_binding_for_release = node_view_binding;
+        pocopine::on_before_subtree_release(&surface_el, move || {
+            node_view_binding_for_release.invalidate();
+            node_view_manager_for_release.borrow_mut().drain();
+        });
+
         let slot_for_drop = slot.clone();
         pocopine::on_scope_unmount(move || {
             slot_for_drop.borrow_mut().clear();
@@ -902,8 +1045,10 @@ impl PineRichTextRoot {
         let last_selection_for_watch: Rc<RefCell<Option<crate::state::Selection>>> =
             Rc::new(RefCell::new(None));
         let runtime_for_watch = runtime;
+        let node_view_manager_for_watch = node_view_manager;
         let commit_slot_for_watch = commit_slot.clone();
         let last_watch_gen_for_watch = last_watch_gen.clone();
+        let reconcile_pending = Rc::new(Cell::new(false));
         // Watch the `u64` generation counter instead of the
         // full state JSON. Every dispatch / replacement path
         // refreshes the cache first and bumps
@@ -915,78 +1060,112 @@ impl PineRichTextRoot {
         // multi-KB `Value` mutation on every keystroke; this
         // shape propagates a 8-byte integer.
         watch_scope_field_scoped::<u64, _>(scope, "doc_generation", move |_gen, _| {
-            let watch_started_at = perf_now_ms();
-            let materialize_started_at = perf_now_ms();
-            let (new_doc, cached_state) = {
-                let slot = commit_slot_for_watch.borrow();
-                let Some(state) = slot.state.as_ref() else {
-                    return;
+            if reconcile_pending.replace(true) {
+                return;
+            }
+            let reconcile_pending = reconcile_pending.clone();
+            let surface_for_watch = surface_for_watch.clone();
+            let last_doc_for_watch = last_doc_for_watch.clone();
+            let last_selection_for_watch = last_selection_for_watch.clone();
+            let runtime_for_watch = runtime_for_watch.clone();
+            let node_view_manager_for_watch = node_view_manager_for_watch.clone();
+            let commit_slot_for_watch = commit_slot_for_watch.clone();
+            let last_watch_gen_for_watch = last_watch_gen_for_watch.clone();
+            pocopine::defer_component_callback_for(scope, move || {
+                reconcile_pending.set(false);
+                let watch_started_at = perf_now_ms();
+                let materialize_started_at = perf_now_ms();
+                let (new_doc, cached_state) = {
+                    let slot = commit_slot_for_watch.borrow();
+                    let Some(state) = slot.state.as_ref() else {
+                        return;
+                    };
+                    last_watch_gen_for_watch.set(slot.generation);
+                    (state.doc().clone(), state.clone())
                 };
-                last_watch_gen_for_watch.set(slot.generation);
-                (state.doc().clone(), state.clone())
-            };
-            let materialize_ms = perf_now_ms() - materialize_started_at;
-            let reconcile_started_at = perf_now_ms();
-            let reconcile_outcome = {
-                let old = last_doc_for_watch.borrow();
-                reconcile_surface_with_outcome(
-                    &runtime_for_watch,
-                    &surface_for_watch,
-                    &old,
-                    &new_doc,
-                )
-            };
-            let reconcile_ms = perf_now_ms() - reconcile_started_at;
-            let new_top_level_children = new_doc.child_count();
-            let new_doc_size = new_doc.content_size();
-            *last_doc_for_watch.borrow_mut() = new_doc;
-            log_debug_json(debug_json, "watch.doc", || {
-                json!({
-                    "dom_changed": reconcile_outcome.dom_changed(),
-                    "patch": reconcile_outcome.as_str(),
-                    "state": state_debug_json(&cached_state),
-                })
-            });
-            let mount_started_at = perf_now_ms();
-            if reconcile_outcome.should_mount_node_views() {
-                mount_registered_node_views(&surface_for_watch, &runtime_for_watch);
-            }
-            let mount_ms = perf_now_ms() - mount_started_at;
-            let cursor_started_at = perf_now_ms();
-            let selection_changed = {
-                let mut slot = last_selection_for_watch.borrow_mut();
-                let new_sel = cached_state.selection().clone();
-                let changed = slot.as_ref() != Some(&new_sel);
-                *slot = Some(new_sel);
-                changed
-            };
-            let should_sync_cursor = reconcile_outcome.should_sync_cursor()
-                || (matches!(reconcile_outcome, ReconcileOutcome::Unchanged) && selection_changed);
-            if should_sync_cursor {
-                // Use the cached state directly — saves the
-                // `from_json` re-parse that
-                // `sync_cursor_from_doc` would do.
-                sync_cursor_from_state(&surface_for_watch, &cached_state);
-            }
-            let cursor_ms = perf_now_ms() - cursor_started_at;
-            log_perf(debug_perf, "watch.doc", || {
-                json!({
-                    "runtime": runtime_for_watch.name(),
-                    "patch": reconcile_outcome.as_str(),
-                    "dom_changed": reconcile_outcome.dom_changed(),
-                    // `cache_hit` is now structurally always
-                    // true — the watcher only triggers on
-                    // generation bumps, and every bumper
-                    // refreshes the cache first.
-                    "cache_hit": true,
-                    "doc_size": new_doc_size,
-                    "top_level_children": new_top_level_children,
-                    "materialize_ms": round_ms(materialize_ms),
-                    "reconcile_ms": round_ms(reconcile_ms),
-                    "mount_ms": round_ms(mount_ms),
-                    "cursor_ms": round_ms(cursor_ms),
-                    "total_ms": round_ms(perf_now_ms() - watch_started_at),
-                })
+                let materialize_ms = perf_now_ms() - materialize_started_at;
+                let reconcile_started_at = perf_now_ms();
+                let (reconcile_outcome, document_changed) = {
+                    let old = last_doc_for_watch.borrow();
+                    (
+                        reconcile_surface_with_manager(
+                            &runtime_for_watch,
+                            &node_view_manager_for_watch,
+                            &surface_for_watch,
+                            &old,
+                            &new_doc,
+                        ),
+                        *old != new_doc,
+                    )
+                };
+                let reconcile_ms = perf_now_ms() - reconcile_started_at;
+                let new_top_level_children = new_doc.child_count();
+                let new_doc_size = new_doc.content_size();
+                log_debug_json(debug_json, "watch.doc", || {
+                    json!({
+                        "dom_changed": reconcile_outcome.dom_changed(),
+                        "patch": reconcile_outcome.as_str(),
+                        "state": state_debug_json(&cached_state),
+                    })
+                });
+                let mount_started_at = perf_now_ms();
+                let editable = surface_is_editable(&surface_for_watch);
+                let focused = surface_is_focused(&surface_for_watch);
+                if document_changed {
+                    node_view_manager_for_watch.borrow_mut().sync_tree(
+                        &surface_for_watch,
+                        &new_doc,
+                        cached_state.selection(),
+                        editable,
+                        focused,
+                    );
+                } else {
+                    node_view_manager_for_watch.borrow_mut().sync_selection(
+                        &new_doc,
+                        cached_state.selection(),
+                        editable,
+                        focused,
+                    );
+                }
+                *last_doc_for_watch.borrow_mut() = new_doc;
+                let mount_ms = perf_now_ms() - mount_started_at;
+                let cursor_started_at = perf_now_ms();
+                let selection_changed = {
+                    let mut slot = last_selection_for_watch.borrow_mut();
+                    let new_sel = cached_state.selection().clone();
+                    let changed = slot.as_ref() != Some(&new_sel);
+                    *slot = Some(new_sel);
+                    changed
+                };
+                let should_sync_cursor = reconcile_outcome.should_sync_cursor()
+                    || (matches!(reconcile_outcome, ReconcileOutcome::Unchanged)
+                        && selection_changed);
+                if should_sync_cursor {
+                    // Use the cached state directly — saves the
+                    // `from_json` re-parse that
+                    // `sync_cursor_from_doc` would do.
+                    sync_cursor_from_state(&surface_for_watch, &cached_state);
+                }
+                let cursor_ms = perf_now_ms() - cursor_started_at;
+                log_perf(debug_perf, "watch.doc", || {
+                    json!({
+                        "runtime": runtime_for_watch.name(),
+                        "patch": reconcile_outcome.as_str(),
+                        "dom_changed": reconcile_outcome.dom_changed(),
+                        // `cache_hit` is now structurally always
+                        // true — the watcher only triggers on
+                        // generation bumps, and every bumper
+                        // refreshes the cache first.
+                        "cache_hit": true,
+                        "doc_size": new_doc_size,
+                        "top_level_children": new_top_level_children,
+                        "materialize_ms": round_ms(materialize_ms),
+                        "reconcile_ms": round_ms(reconcile_ms),
+                        "mount_ms": round_ms(mount_ms),
+                        "cursor_ms": round_ms(cursor_ms),
+                        "total_ms": round_ms(perf_now_ms() - watch_started_at),
+                    })
+                });
             });
         });
     }
@@ -1023,9 +1202,95 @@ fn materialize_doc(doc_json: &Value, runtime: &EditorRuntime) -> Option<Node> {
     .map(|s| s.doc().clone())
 }
 
+fn report_load_error(
+    surface: &Element,
+    runtime: &EditorRuntime,
+    input: &Value,
+    error: &impl std::fmt::Display,
+) {
+    report_load_error_message(surface, runtime, input, &error.to_string());
+}
+
+fn report_load_error_message(
+    surface: &Element,
+    runtime: &EditorRuntime,
+    input: &Value,
+    message: &str,
+) {
+    clear_load_error(surface);
+    let _ = surface.set_attribute("data-pine-richtext-load-error", "true");
+    let _ = surface.set_attribute("aria-invalid", "true");
+
+    if let Some(document) = surface.owner_document()
+        && let Ok(plan) = crate::render::dom_output::DomElementSpec::element("div")
+            .and_then(|plan| plan.attr("class", "pine-richtext-load-error"))
+            .and_then(|plan| plan.attr("data-pine-richtext-load-error-message", "true"))
+            .and_then(|plan| plan.attr("role", "alert"))
+            .and_then(|plan| {
+                plan.text(format!(
+                    "This document could not be loaded with runtime `{}`: {message}",
+                    runtime.name().unwrap_or("<default>")
+                ))
+            })
+        && let Ok(alert) = plan.materialize(&document)
+        && let Some(parent) = surface.parent_node()
+    {
+        let _ = parent.insert_before(alert.as_ref(), surface.next_sibling().as_ref());
+    }
+
+    let detail = json!({
+        "runtime": runtime.name(),
+        "wire_fingerprint": runtime.wire_fingerprint(),
+        "error": message,
+        "input": input,
+    });
+    if let Ok(detail) = serde_wasm_bindgen::to_value(&detail) {
+        let init = web_sys::CustomEventInit::new();
+        init.set_bubbles(true);
+        init.set_detail(&detail);
+        if let Ok(event) = CustomEvent::new_with_event_init_dict(LOAD_ERROR_EVENT, &init) {
+            let _ = surface.dispatch_event(&event);
+        }
+    }
+}
+
+fn clear_load_error(surface: &Element) {
+    let _ = surface.remove_attribute("data-pine-richtext-load-error");
+    let _ = surface.remove_attribute("aria-invalid");
+    if let Some(next) = surface.next_element_sibling()
+        && next.has_attribute("data-pine-richtext-load-error-message")
+    {
+        next.remove();
+    }
+}
+
 fn normalize_live_selection(state: &EditorState, selection: Selection) -> Selection {
     match selection {
         Selection::Text { anchor, head } => {
+            // A DOM Range that covers exactly one selectable atom is Pine's
+            // browser representation of a node selection. Recover the typed
+            // selection here so the next ArrowLeft/ArrowRight command sees
+            // `Selection::Node` rather than overwriting it with a text range.
+            let (from, to) = if anchor <= head {
+                (anchor, head)
+            } else {
+                (head, anchor)
+            };
+            if from != to
+                && let Some(node) = state
+                    .doc()
+                    .resolve(from)
+                    .ok()
+                    .and_then(|pos| pos.node_after())
+                && from.saturating_add(node.node_size()) == to
+                && !node.is_text()
+                && state
+                    .schema()
+                    .node_type(node.type_name())
+                    .is_ok_and(|node_type| node_type.is_atom() && node_type.is_selectable())
+            {
+                return Selection::node(from);
+            }
             Selection::text_between_near(state.doc(), state.schema(), anchor, head, None)
                 .unwrap_or(Selection::Text { anchor, head })
         }
@@ -1033,28 +1298,18 @@ fn normalize_live_selection(state: &EditorState, selection: Selection) -> Select
     }
 }
 
-fn mount_registered_node_views(surface: &Element, runtime: &EditorRuntime) {
-    // C3: rendering is now runtime-scoped (`crate::render::Renderer` +
-    // `crate::view::reconciler::Reconciler` both read
-    // `runtime.lookup_node_view`), so the mount loop walks the runtime's
-    // tag map. Two surfaces with different runtimes can register
-    // different custom-element tags for the same node-type without
-    // colliding.
-    for tag in runtime.registered_tags() {
-        let Ok(matches) = surface.query_selector_all(&tag) else {
-            continue;
-        };
-        for i in 0..matches.length() {
-            let Some(node) = matches.item(i) else {
-                continue;
-            };
-            let Ok(host) = node.dyn_into::<Element>() else {
-                continue;
-            };
-            pocopine::__private::mount_child_component(&host, &tag);
-            pocopine::__private::finalize_compiled_subtree(&host);
-        }
-    }
+fn surface_is_editable(surface: &Element) -> bool {
+    surface.get_attribute("contenteditable").as_deref() != Some("false")
+}
+
+fn surface_is_focused(surface: &Element) -> bool {
+    let Some(document) = surface.owner_document() else {
+        return false;
+    };
+    let Some(active) = document.active_element() else {
+        return false;
+    };
+    active == *surface || surface.contains(Some(active.as_ref()))
 }
 
 /// Push the model selection into `window.getSelection()` so the visible
@@ -1065,7 +1320,27 @@ fn mount_registered_node_views(surface: &Element, runtime: &EditorRuntime) {
 fn sync_cursor_from_state(surface: &Element, state: &EditorState) {
     let (anchor, head) = match state.selection() {
         crate::state::Selection::Text { anchor, head } => (*anchor, *head),
-        crate::state::Selection::Node { anchor } => (*anchor, *anchor),
+        crate::state::Selection::Node { anchor } => {
+            let head = state
+                .doc()
+                .resolve(*anchor)
+                .ok()
+                .and_then(|pos| pos.node_after())
+                .map(|node| anchor.saturating_add(node.node_size()))
+                .unwrap_or(*anchor);
+            (*anchor, head)
+        }
+        crate::state::Selection::Cells { .. } => {
+            // A rectangular table selection has no faithful single DOM Range.
+            // Clear the browser caret; table view code paints selected cells
+            // from the semantic model selection.
+            if let Some(selection) =
+                web_sys::window().and_then(|window| window.get_selection().ok().flatten())
+            {
+                let _ = selection.remove_all_ranges();
+            }
+            return;
+        }
         crate::state::Selection::All => (0, state.doc().content_size()),
     };
     let Some(window) = web_sys::window() else {

@@ -44,7 +44,7 @@ use crate::protocol::{
 use super::error::WsError;
 use super::fanout::TopicStream;
 use super::gateway::{GatewayConfig, WsGateway};
-use super::handler::InboundData;
+use super::handler::{InboundData, OutboundGate};
 
 type SharedAuthProvider = Arc<dyn AuthProvider>;
 
@@ -186,6 +186,7 @@ struct TopicEntry {
     /// The sub-protocol this topic was joined under (to notify the right
     /// handler on the topic's active/idle lifecycle).
     subprotocol_id: u64,
+    outbound_gate: OutboundGate,
     pump: JoinHandle<()>,
 }
 
@@ -375,6 +376,9 @@ impl Session {
         if let Some(entry) = self.topics.remove(&frame.topic_ref) {
             entry.pump.abort();
             self.topic_by_name.remove(&entry.name);
+            if let Some(handler) = self.gateway.handler(entry.subprotocol_id) {
+                handler.on_subscription_closed(&self.session_id, &entry.topic);
+            }
             self.gateway
                 .topic_unsubscribed(&entry.topic, entry.subprotocol_id);
             self.send(&Control::Unsubscribed { topic: entry.name });
@@ -383,8 +387,12 @@ impl Session {
     }
 
     async fn handle_data(&mut self, frame: &Frame) -> Result<(), WsError> {
-        let (topic, name) = match self.topics.get(&frame.topic_ref) {
-            Some(entry) => (entry.topic.clone(), entry.name.clone()),
+        let (topic, name, outbound_gate) = match self.topics.get(&frame.topic_ref) {
+            Some(entry) => (
+                entry.topic.clone(),
+                entry.name.clone(),
+                entry.outbound_gate.clone(),
+            ),
             None => {
                 return Err(WsError::protocol(format!(
                     "data for unknown topic_ref {}",
@@ -408,12 +416,16 @@ impl Session {
             let principal = self.ctx.principal();
             let reaction = handler
                 .on_data(InboundData {
+                    session_id: &self.session_id,
+                    outbound_gate: &outbound_gate,
                     topic: &topic,
                     payload: &frame.payload,
                     can_write,
                     principal: &principal,
                 })
                 .await?;
+            let open_outbound = reaction.open_outbound;
+            let mut replies_queued = true;
             for payload in reaction.replies {
                 // Out-of-band reply to THIS connection only (seq 0; the
                 // per-subscription seq is reserved for fanned-out Data frames).
@@ -421,8 +433,12 @@ impl Session {
                 let reply = Frame::data(frame.subprotocol_id, frame.topic_ref, 0, payload);
                 if self.out.try_send(Message::Binary(reply.encode())).is_err() {
                     self.should_close = true;
+                    replies_queued = false;
                     break;
                 }
+            }
+            if open_outbound && replies_queued {
+                outbound_gate.open();
             }
             for payload in reaction.broadcasts {
                 self.gateway.fanout().publish(&topic, payload).await?;
@@ -503,6 +519,9 @@ impl Session {
             && let Some(entry) = self.topics.remove(&old_ref)
         {
             entry.pump.abort();
+            if let Some(handler) = self.gateway.handler(entry.subprotocol_id) {
+                handler.on_subscription_closed(&self.session_id, &entry.topic);
+            }
             Some(entry.subprotocol_id)
         } else {
             None
@@ -524,12 +543,19 @@ impl Session {
         let topic_ref = self.next_topic_ref;
         self.next_topic_ref += 1;
 
+        let handler = self.gateway.handler(subprotocol_id).cloned();
+        let outbound_gate = OutboundGate::new(
+            handler
+                .as_ref()
+                .is_none_or(|handler| !handler.outbound_starts_paused()),
+        );
         let pump = tokio::spawn(pump_topic(
             stream,
             self.out.clone(),
             subprotocol_id,
             topic_ref,
             topic_name.to_string(),
+            outbound_gate.clone(),
         ));
         self.topics.insert(
             topic_ref,
@@ -537,6 +563,7 @@ impl Session {
                 topic,
                 name: topic_name.to_string(),
                 subprotocol_id,
+                outbound_gate,
                 pump,
             },
         );
@@ -558,6 +585,9 @@ impl Session {
     fn shutdown(&mut self) {
         for (_, entry) in self.topics.drain() {
             entry.pump.abort();
+            if let Some(handler) = self.gateway.handler(entry.subprotocol_id) {
+                handler.on_subscription_closed(&self.session_id, &entry.topic);
+            }
             self.gateway
                 .topic_unsubscribed(&entry.topic, entry.subprotocol_id);
         }
@@ -573,10 +603,16 @@ async fn pump_topic(
     subprotocol_id: u64,
     topic_ref: u64,
     topic_name: String,
+    outbound_gate: OutboundGate,
 ) {
     loop {
+        outbound_gate.wait_until_open().await;
         match stream.next().await {
             Ok(Some((seq, payload))) => {
+                // The gate may have closed while the stream was awaiting its
+                // next entry (a repeated negotiation). Hold this entry rather
+                // than leaking it or draining replay while paused.
+                outbound_gate.wait_until_open().await;
                 let frame = Frame::data(subprotocol_id, topic_ref, seq, payload);
                 if out.send(Message::Binary(frame.encode())).await.is_err() {
                     break; // connection closed

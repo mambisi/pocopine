@@ -24,6 +24,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,6 +39,7 @@ use crate::model::{Node, Slice};
 use crate::runtime::EditorRuntime;
 use crate::state::{EditorState, Selection, Transaction};
 
+use super::node_view_manager::NodeViewManager;
 use super::selection::dom_pos_to_model;
 
 const INPUT_DEBUG_LOG_VERSION: &str = concat!(
@@ -46,6 +48,8 @@ const INPUT_DEBUG_LOG_VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     ":debug-json-v1"
 );
+
+const PINE_SLICE_MIME: &str = "application/x-pine-richtext-slice+json";
 
 /// Lookup table from key combo (e.g. `"Mod-b"`, `"Enter"`, `"Backspace"`)
 /// to a boxed command. Built by [`default_keymap`] and consulted on
@@ -81,12 +85,12 @@ impl Default for KeyMap {
 }
 
 /// PM-style default keymap for the given runtime. Covers the keys
-/// most editors need: Backspace / Delete / Enter, plus Mod-A for
-/// select-all.
+/// most editors need: Backspace / Delete / Enter, horizontal selectable-inline
+/// atom navigation, plus Mod-A for select-all.
 ///
 /// Extensions can contribute extra bindings through
 /// [`crate::extension::RichTextExtension::key_bindings`]; those are
-/// merged in *after* the base 4 entries below so the base remains
+/// merged in *after* the base 6 entries below so the base remains
 /// inviolable (`KeyMap::lookup` is first-wins). The runtime's
 /// extension chain determines which bindings appear — two surfaces
 /// with different runtimes can have different keymaps.
@@ -98,7 +102,7 @@ pub fn default_keymap(runtime: &crate::runtime::EditorRuntime) -> KeyMap {
     km
 }
 
-/// The 4 hardcoded bindings the framework always installs. Separated
+/// The 6 hardcoded bindings the framework always installs. Separated
 /// from [`default_keymap`] so tests can assert the base set
 /// independently of any extension contributions.
 fn base_keymap() -> KeyMap {
@@ -136,6 +140,20 @@ fn base_keymap() -> KeyMap {
                 commands::lift_empty_block(),
                 commands::split_list_item(&["list_item", "task_item"]),
                 commands::split_block(),
+            ]),
+        )
+        .bind(
+            "ArrowLeft",
+            commands::chain_commands(vec![
+                commands::leave_selected_inline_atom_backward(),
+                commands::select_inline_atom_backward(),
+            ]),
+        )
+        .bind(
+            "ArrowRight",
+            commands::chain_commands(vec![
+                commands::leave_selected_inline_atom_forward(),
+                commands::select_inline_atom_forward(),
             ]),
         )
         .bind("Mod-a", commands::select_all())
@@ -220,10 +238,11 @@ fn simple_text_delete_defer_reason(
 /// The returned vector holds the live `Closure`s — the caller MUST keep
 /// it alive (typically by stashing it in the component's state) or the
 /// closures get dropped and the listeners stop firing.
-pub fn install_listeners<F>(
+pub(crate) fn install_listeners<F>(
     surface: Element,
     runtime: Arc<EditorRuntime>,
     state_provider: Rc<dyn Fn(bool) -> Option<EditorState>>,
+    node_view_manager: Rc<RefCell<NodeViewManager>>,
     keymap: Rc<KeyMap>,
     debug_perf: bool,
     dispatch: F,
@@ -236,6 +255,37 @@ where
 
     let mut closures: Vec<Closure<dyn FnMut(Event)>> = Vec::new();
 
+    // An unconsumed press on component shell chrome selects the semantic
+    // node. Form controls and the exact owned editable outlet keep their
+    // browser/component behavior. `mousedown` is deliberate: existing view
+    // controls use `@mousedown.prevent`, so Pine observes that consumption
+    // before adding a selection default.
+    {
+        let state_provider = state_provider.clone();
+        let dispatch = dispatch.clone();
+        let manager = node_view_manager.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            let boundary = manager.borrow().event_boundary(&event);
+            let Some(position) = boundary.pointer_selection(event.default_prevented()) else {
+                return;
+            };
+            let Some(state) = state_provider(false) else {
+                return;
+            };
+            let mut transaction = state.tr();
+            if transaction
+                .set_selection(Selection::node(position))
+                .is_err()
+            {
+                return;
+            }
+            event.prevent_default();
+            dispatch(state, transaction, true);
+        }) as Box<dyn FnMut(Event)>);
+        let _ = surface.add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+        closures.push(cb);
+    }
+
     // keydown — keymap lookup.
     {
         let state_provider = state_provider.clone();
@@ -243,7 +293,11 @@ where
         let dispatch = dispatch.clone();
         let runtime_for_log = runtime_name.clone();
         let surface_for_keydown = surface.clone();
+        let manager = node_view_manager.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
             let started_at = perf_now_ms();
             let Ok(ev) = event.clone().dyn_into::<KeyboardEvent>() else {
                 return;
@@ -288,12 +342,26 @@ where
             };
             let command_started_at = perf_now_ms();
             let Some(tr) = cmd.apply(&state) else {
+                // Pine owns this contenteditable surface. If none of the
+                // semantic delete commands can represent an edit at a text
+                // boundary, consuming the key is the only safe no-op. Letting
+                // the browser continue would mutate component/table DOM while
+                // leaving the document model unchanged.
+                let consumed_boundary_delete =
+                    matches!(delete_defer_reason, "at_text_start" | "at_text_end");
+                if consumed_boundary_delete {
+                    ev.prevent_default();
+                }
                 log_input_perf(debug_perf, "input.keydown", || {
                     json!({
                         "runtime": runtime_for_log,
                         "combo": combo,
-                        "handled": false,
-                        "reason": "command_none",
+                        "handled": consumed_boundary_delete,
+                        "reason": if consumed_boundary_delete {
+                            "unmodeled_boundary_delete_consumed"
+                        } else {
+                            "command_none"
+                        },
                         "delete_defer_reason": delete_defer_reason_value,
                         "state_ms": round_ms(command_started_at - state_started_at),
                         "command_ms": round_ms(perf_now_ms() - command_started_at),
@@ -357,7 +425,11 @@ where
         let dispatch = dispatch.clone();
         let runtime_for_input = runtime.clone();
         let runtime_for_log = runtime_name.clone();
+        let manager = node_view_manager.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
             let started_at = perf_now_ms();
             let Ok(ev) = event.clone().dyn_into::<InputEvent>() else {
                 return;
@@ -421,7 +493,8 @@ where
                     let cursor_from = state.selection().from(state.doc());
                     let cursor_to = state.selection().to(state.doc());
                     let rules = runtime_for_input.input_rules();
-                    if !rules.is_empty()
+                    if !state.selection().is_cells()
+                        && !rules.is_empty()
                         && let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
                     {
                         let mut tr = fire.transaction;
@@ -542,12 +615,19 @@ where
                 | "deleteContent"
                 | "deleteByCut"
                 | "deleteByDrag" => {
+                    // Never let native deletion mutate this controlled DOM.
+                    // Every recognized delete is either committed through a
+                    // model transaction below or deliberately remains a no-op.
+                    // This also protects non-keyboard deletion when a browser
+                    // target range crosses an isolating node boundary.
+                    ev.prevent_default();
                     let range_started_at = perf_now_ms();
                     let target_range = target_range_only_to_model(&surface_for_input, &ev);
                     let target_range_found = target_range.is_some();
+                    let mut target_range_applied = false;
                     let target_range_ms = perf_now_ms() - range_started_at;
                     let state_started_at = perf_now_ms();
-                    let Some(state) = state_provider(!target_range_found) else {
+                    let Some(mut state) = state_provider(!target_range_found) else {
                         log_input_perf(debug_perf, "input.beforeinput", || {
                             json!({
                                 "runtime": runtime_for_log.clone(),
@@ -562,6 +642,44 @@ where
                         });
                         return;
                     };
+                    // `getTargetRanges()` tells us both what the browser would
+                    // delete and where its live selection is. When that range
+                    // is available we intentionally skipped the slower DOM
+                    // selection read above, so install it on the transient
+                    // state before building the transaction. Otherwise the
+                    // delete step maps whatever stale selection the cache last
+                    // held (often the document start), and the subsequent DOM
+                    // cursor sync visibly jumps there.
+                    if let Some((from, to)) = target_range {
+                        if let Some(next) = state_with_text_selection(state, from, to) {
+                            state = next;
+                            target_range_applied = true;
+                        } else if let Some(live_state) = state_provider(true) {
+                            state = live_state;
+                        } else {
+                            log_input_perf(debug_perf, "input.beforeinput", || {
+                                json!({
+                                    "runtime": runtime_for_log.clone(),
+                                    "input_type": input_type.clone(),
+                                    "handled": false,
+                                    "reason": "target_selection_error",
+                                    "target_range": true,
+                                    "range_ms": round_ms(target_range_ms),
+                                    "state_ms": round_ms(perf_now_ms() - state_started_at),
+                                    "total_ms": round_ms(perf_now_ms() - started_at),
+                                })
+                            });
+                            return;
+                        }
+                    }
+                    if !target_range_found && state.selection().is_cells() {
+                        let mut tr = state.tr();
+                        if tr.delete_selection().is_err() {
+                            return;
+                        }
+                        dispatch(state, tr, false);
+                        return;
+                    }
                     let fallback_range_started_at = perf_now_ms();
                     let range = target_range.or_else(|| delete_fallback_range(&state, &input_type));
                     let range_ms = target_range_ms + (perf_now_ms() - fallback_range_started_at);
@@ -615,7 +733,6 @@ where
                         });
                         return;
                     }
-                    ev.prevent_default();
                     log_input_perf(debug_perf, "input.beforeinput", || {
                         json!({
                             "runtime": runtime_for_log.clone(),
@@ -625,6 +742,7 @@ where
                             "to": to,
                             "deleted_units": to.saturating_sub(from),
                             "target_range": target_range_found,
+                            "target_range_applied": target_range_applied,
                             "state_ms": round_ms(fallback_range_started_at - state_started_at),
                             "range_ms": round_ms(range_ms),
                             "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
@@ -661,6 +779,46 @@ where
         closures.push(cb);
     }
 
+    // Always serialize clipboard output from the semantic model. Letting the
+    // browser clone the live selection would leak typed component chrome,
+    // resize handles, and other node-view DOM into `text/html`. Cell
+    // selections use the same path; their `Selection::content` is rectangular.
+    for (event_name, cut) in [("copy", false), ("cut", true)] {
+        let state_provider = state_provider.clone();
+        let dispatch = dispatch.clone();
+        let runtime_for_clipboard = runtime.clone();
+        let manager = node_view_manager.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
+            let Ok(ev) = event.clone().dyn_into::<ClipboardEvent>() else {
+                return;
+            };
+            let Some(state) = state_provider(false) else {
+                return;
+            };
+            if state.selection().is_empty(state.doc()) {
+                return;
+            }
+            let Some(clipboard) = ev.clipboard_data() else {
+                return;
+            };
+            if !write_selection_clipboard(&state, &runtime_for_clipboard, &clipboard) {
+                return;
+            }
+            ev.prevent_default();
+            if cut {
+                let mut tr = state.tr();
+                if tr.delete_selection().is_ok() {
+                    dispatch(state, tr, false);
+                }
+            }
+        }) as Box<dyn FnMut(Event)>);
+        let _ = surface.add_event_listener_with_callback(event_name, cb.as_ref().unchecked_ref());
+        closures.push(cb);
+    }
+
     // preventDefault is critical: the browser's default paste mutates
     // the contentEditable DOM directly, leaving the model stale and
     // silently losing pasted content on the next save.
@@ -669,7 +827,11 @@ where
         let dispatch = dispatch.clone();
         let runtime_for_paste = runtime.clone();
         let runtime_for_log = runtime_name.clone();
+        let manager = node_view_manager.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
             let started_at = perf_now_ms();
             let Ok(ev) = event.clone().dyn_into::<ClipboardEvent>() else {
                 return;
@@ -677,8 +839,9 @@ where
             let Some(clipboard) = ev.clipboard_data() else {
                 return;
             };
+            let encoded_slice = clipboard.get_data(PINE_SLICE_MIME).unwrap_or_default();
             let text = clipboard.get_data("text/plain").unwrap_or_default();
-            if text.is_empty() {
+            if encoded_slice.is_empty() && text.is_empty() {
                 return;
             }
             ev.prevent_default();
@@ -694,22 +857,34 @@ where
                 return;
             };
             let parse_started_at = perf_now_ms();
-            let parser = runtime_for_paste.markdown_parser();
-            let parsed = parser.parse(&text, state.schema());
-            let parse_ms = perf_now_ms() - parse_started_at;
-            let (tr_opt, mode) = match parsed {
-                Ok(doc) => match paste_transaction_from_doc(&state, &doc) {
-                    Some(tr) => (Some(tr), "markdown"),
-                    None => (
+            let custom = (!encoded_slice.is_empty())
+                .then(|| runtime_for_paste.import_clipboard_json(&encoded_slice).ok())
+                .flatten()
+                .and_then(|slice| {
+                    let mut tr = state.tr();
+                    tr.replace_selection(slice).ok()?;
+                    Some(tr)
+                });
+            let (tr_opt, mode) = if let Some(transaction) = custom {
+                (Some(transaction), "pine_slice")
+            } else {
+                let parser = runtime_for_paste.markdown_parser();
+                let parsed = parser.parse(&text, state.schema());
+                match parsed {
+                    Ok(doc) => match paste_transaction_from_doc(&state, &doc) {
+                        Some(tr) => (Some(tr), "markdown"),
+                        None => (
+                            insert_text_transaction(&state, text.clone()),
+                            "plain_fallback",
+                        ),
+                    },
+                    Err(_) => (
                         insert_text_transaction(&state, text.clone()),
                         "plain_fallback",
                     ),
-                },
-                Err(_) => (
-                    insert_text_transaction(&state, text.clone()),
-                    "plain_fallback",
-                ),
+                }
             };
+            let parse_ms = perf_now_ms() - parse_started_at;
             let Some(tr) = tr_opt else {
                 log_input_perf(debug_perf, "input.paste", || {
                     json!({
@@ -756,6 +931,29 @@ where
     let _ = surface; // keep `surface` named even after we drop the
     // selectionchange listener that used it.
     closures
+}
+
+fn editor_owns_event(event: &Event, manager: &Rc<RefCell<NodeViewManager>>) -> bool {
+    manager
+        .borrow()
+        .event_boundary(event)
+        .editor_handles(event.default_prevented())
+}
+
+fn write_selection_clipboard(
+    state: &EditorState,
+    runtime: &EditorRuntime,
+    clipboard: &web_sys::DataTransfer,
+) -> bool {
+    let Ok(slice) = state.selection().content(state.doc(), state.schema()) else {
+        return false;
+    };
+    let Ok(export) = runtime.export_clipboard(&slice) else {
+        return false;
+    };
+    clipboard.set_data(PINE_SLICE_MIME, &export.json).is_ok()
+        && clipboard.set_data("text/html", &export.html).is_ok()
+        && clipboard.set_data("text/plain", &export.plain_text).is_ok()
 }
 
 /// Build a paste transaction from a markdown-parsed document.
@@ -865,6 +1063,9 @@ fn delete_fallback_range(state: &EditorState, input_type: &str) -> Option<(usize
     // (older WebKit on `deleteWordBackward`, e.g.) or when the range
     // pointed outside the surface.
     let sel = state.selection();
+    if sel.is_cells() {
+        return None;
+    }
     let from = sel.from(state.doc());
     let to = sel.to(state.doc());
     if from != to {

@@ -55,7 +55,7 @@ function collectPerfEvents(page) {
 async function caretAtEndOfFirstParagraph(page) {
   await page.evaluate(() => {
     const p = document.querySelector(
-      'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+      'pine-rich-text-root[runtime="document"] p[data-pos="0"]',
     );
     if (!p?.firstChild) throw new Error('first paragraph missing');
     const text = p.firstChild;
@@ -117,7 +117,7 @@ function writePerfReport(scenario, payload) {
 async function bootBenchPage(page, query) {
   const events = collectPerfEvents(page);
   await page.goto(`/?${query}`);
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
   return events;
 }
 
@@ -223,12 +223,12 @@ test.describe('pine-richtext typing latency', () => {
   });
 
   test('type 200 chars in leading paragraph of 500-task-item doc', async ({ page }, testInfo) => {
-    // Custom-element scenario: the doc contains 500 `<pine-task-item>`
-    // node-views below a leading paragraph. Typing happens in the
+    // Typed-view scenario: the doc contains 500 native task-item hosts
+    // with retained components below a leading paragraph. Typing happens in the
     // leading paragraph (where caret-placement is straightforward),
     // but the reconciler still has to skip the entire task-list
     // subtree on every commit — so this isolates "doc with many
-    // custom elements" cost from "typing inside a custom element"
+    // typed components" cost from "typing inside a typed component"
     // cost (a separate scenario below).
     testInfo.setTimeout(60_000);
     const errors = [];
@@ -281,7 +281,7 @@ test.describe('pine-richtext typing latency', () => {
     for (let i = 0; i < presses; i += 1) {
       // Click the i-th checkbox. Selector matches the node-view chrome.
       await page
-        .locator('pine-rich-text-root:not([runtime]) pine-task-item .pine-task-item-check')
+        .locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"] .pine-task-item-check')
         .nth(i)
         .click();
     }

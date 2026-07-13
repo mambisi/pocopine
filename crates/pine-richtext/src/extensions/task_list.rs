@@ -1,72 +1,89 @@
 //! Checklist nodes (`task_list`, `task_item`) + commands that wrap
 //! content into them and toggle their `checked` attribute.
 //!
-//! Optional custom-element binding via [`TaskListExtension::with_node_view`]
-//! lets apps replace the default `<li>` rendering with a pocopine
-//! component (e.g. `PineTaskItem`). The builder method is gated behind
-//! the `view` feature because the `pocopine::Component` trait it uses
-//! to derive the tag name is itself view-only.
+//! [`TaskItemNode`] owns the persisted `task_item` schema while a
+//! [`crate::render::NodeDomSpec`] declares its native `<li>` fallback. Browser
+//! apps can pair that semantic type with a Pocopine component through
+//! [`TaskListExtension::with_typed_node_view`], without naming either a wire
+//! node or a custom-element tag as a string.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::{BoxedCommand, wrap_in_list};
-use crate::extension::{ExtensionNodeView, NamedCommand, RichTextExtension};
+use crate::extension::{NamedCommand, RichTextExtension};
 use crate::markdown::{EventSink, NodeEmitter};
 use crate::model::{Attrs, NodeSpec};
+use crate::render::{DomAttrBinding, NodeDomSpec};
+use crate::serialization::{
+    ClipboardPolicy, MarkdownPolicy, NodeSerializationSpec, PlainTextPolicy, SemanticHtmlPolicy,
+    TextProjection,
+};
 use crate::state::{EditorState, Transaction};
 use crate::transform::{AttrStep, Step};
+use crate::{RichTextNodeAttrs, RichTextNodeType, TypedNodeSpec};
 use pulldown_cmark::{Event as MdEvent, Tag as MdTag, TagEnd as MdTagEnd};
 
-/// Default custom-element selector identifying where pocopine should
-/// inject content children inside a node-view component. Apps that
-/// register their own task-item component should use the same
-/// `data-pine-richtext-content` attribute on the host's content slot.
-pub const DEFAULT_TASK_ITEM_CONTENT_SELECTOR: &str = "[data-pine-richtext-content]";
-
-#[derive(Default)]
-pub struct TaskListExtension {
-    node_view: Option<ExtensionNodeView>,
+/// Closed persisted attributes for one checklist item.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, RichTextNodeAttrs)]
+pub struct TaskItemAttrs {
+    #[serde(default)]
+    pub checked: bool,
 }
 
-impl TaskListExtension {
+/// Typed semantic identity for the built-in `task_item` node.
+pub struct TaskItemNode;
+
+impl RichTextNodeType for TaskItemNode {
+    const NAME: &'static str = "task_item";
+    const VERSION: u32 = 1;
+    type Attrs = TaskItemAttrs;
+
+    fn spec() -> NodeSpec {
+        NodeSpec::new(Self::NAME)
+            .content("paragraph block*")
+            .defining()
+            .attr("checked", json!(false))
+    }
+}
+
+/// Checklist model contribution, optionally paired with one typed component
+/// view. `View = ()` means model/native-DOM only.
+pub struct TaskListExtension<View = ()> {
+    _view: PhantomData<fn() -> View>,
+}
+
+impl<View> Default for TaskListExtension<View> {
+    fn default() -> Self {
+        Self { _view: PhantomData }
+    }
+}
+
+impl TaskListExtension<()> {
     /// Build the extension without a custom node view (default
     /// `<li class="task-item">` rendering).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Bind a pocopine component as the custom element rendered for
-    /// every `task_item` node. The component's
-    /// [`pocopine_core::app::Component::NAME`] becomes the tag.
-    /// Requires the `view` feature.
+    /// Pair [`TaskItemNode`] with a typed editable Pocopine component.
+    ///
+    /// `C` must implement the exact semantic node-view contract and expose one
+    /// compile-time-proven `pp-owned-content` outlet. No node-name, component
+    /// tag, content selector, or document position crosses the app boundary.
     #[cfg(feature = "view")]
-    pub fn with_node_view<C: pocopine_core::app::Component>(mut self) -> Self {
-        self.node_view = Some(ExtensionNodeView {
-            node_type: "task_item".into(),
-            tag: C::NAME.into(),
-            content_selector: Some(DEFAULT_TASK_ITEM_CONTENT_SELECTOR.into()),
-        });
-        self
+    pub fn with_typed_node_view<C>(self) -> TaskListExtension<C>
+    where
+        C: crate::view::RichTextNodeView<TaskItemNode> + pocopine::OwnedContentOutletComponent,
+    {
+        TaskListExtension { _view: PhantomData }
     }
+}
 
-    /// Bind a custom element by tag name directly. Lower-level than
-    /// [`Self::with_node_view`]; useful for non-view callers and tests
-    /// that don't have a pocopine component to thread.
-    pub fn with_node_view_tag(
-        mut self,
-        tag: impl Into<String>,
-        content_selector: Option<impl Into<String>>,
-    ) -> Self {
-        self.node_view = Some(ExtensionNodeView {
-            node_type: "task_item".into(),
-            tag: tag.into(),
-            content_selector: content_selector.map(Into::into),
-        });
-        self
-    }
-
+impl<View> TaskListExtension<View> {
     fn wrap_command() -> NamedCommand {
         Arc::new(|args: Value| -> Option<BoxedCommand> {
             let attrs = args
@@ -98,7 +115,7 @@ impl TaskListExtension {
     }
 }
 
-impl RichTextExtension for TaskListExtension {
+impl<View: 'static> RichTextExtension for TaskListExtension<View> {
     fn name(&self) -> &str {
         "task_list"
     }
@@ -108,10 +125,35 @@ impl RichTextExtension for TaskListExtension {
             NodeSpec::new("task_list")
                 .group("block")
                 .content("task_item+"),
-            NodeSpec::new("task_item")
-                .content("paragraph block*")
-                .defining()
-                .attr("checked", json!(false)),
+        ]
+    }
+
+    fn typed_nodes(&self) -> Vec<TypedNodeSpec> {
+        vec![TypedNodeSpec::of::<TaskItemNode>()]
+    }
+
+    fn dom_views(&self) -> Vec<NodeDomSpec> {
+        vec![
+            NodeDomSpec::content::<TaskItemNode>("li")
+                .class("task-item")
+                .bind_attr(DomAttrBinding::boolean("data-checked", "checked")),
+        ]
+    }
+
+    fn node_serialization(&self) -> Vec<NodeSerializationSpec> {
+        vec![
+            NodeSerializationSpec::for_node::<TaskItemNode>()
+                .markdown(MarkdownPolicy::Supported)
+                .html(SemanticHtmlPolicy::dom(
+                    NodeDomSpec::content::<TaskItemNode>("li")
+                        .class("task-item")
+                        .bind_attr(DomAttrBinding::boolean("data-checked", "checked")),
+                ))
+                .plain_text(PlainTextPolicy::projected(TextProjection::sequence([
+                    TextProjection::boolean("checked", "[x] ", "[ ] "),
+                    TextProjection::content_separated("\n"),
+                ])))
+                .clipboard(ClipboardPolicy::Semantic),
         ]
     }
 
@@ -120,19 +162,6 @@ impl RichTextExtension for TaskListExtension {
             ("wrap_in_task_list".into(), Self::wrap_command()),
             ("set_task_checked".into(), Self::set_checked_command()),
         ]
-    }
-
-    fn node_views(&self) -> Vec<ExtensionNodeView> {
-        self.node_view
-            .as_ref()
-            .map(|nv| {
-                vec![ExtensionNodeView {
-                    node_type: nv.node_type.clone(),
-                    tag: nv.tag.clone(),
-                    content_selector: nv.content_selector.clone(),
-                }]
-            })
-            .unwrap_or_default()
     }
 
     fn list_item_types(&self) -> &'static [&'static str] {
@@ -169,5 +198,15 @@ impl RichTextExtension for TaskListExtension {
                 }),
             ),
         ]
+    }
+}
+
+#[cfg(feature = "view")]
+impl<C> crate::view::RichTextViewExtension for TaskListExtension<C>
+where
+    C: crate::view::RichTextNodeView<TaskItemNode> + pocopine::OwnedContentOutletComponent,
+{
+    fn typed_node_views(&self) -> Vec<crate::view::NodeViewSpec> {
+        vec![crate::view::NodeViewSpec::editable_component::<TaskItemNode, C>().native_host()]
     }
 }

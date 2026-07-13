@@ -120,6 +120,21 @@ impl CollabEditor {
         decode_doc(&self.doc.transact(), &self.root, &self.schema)
     }
 
+    /// The current semantic document, or `None` while the yrs root has not
+    /// received its first block. An empty CRDT root is a valid transient during
+    /// hello negotiation even though it is not a valid Pine `doc` (`block+`).
+    /// Every non-empty root still decodes strictly; malformed remote structure
+    /// is never collapsed into `None`.
+    pub(crate) fn document_if_initialized(&self) -> Result<Option<Node>, BindError> {
+        let txn = self.doc.transact();
+        if self.root.len(&txn) == 0 {
+            return Ok(None);
+        }
+        decode_doc(&txn, &self.root, &self.schema)
+            .map(Some)
+            .map_err(BindError::from)
+    }
+
     /// Replace the document with a locally-edited one (the coarse v1 write).
     /// Returns the yrs update to broadcast — the diff since the prior state.
     pub fn set_document(&mut self, doc: &Node) -> RichTextResult<Vec<u8>> {
@@ -214,13 +229,27 @@ impl CollabEditor {
 
     /// Apply an inbound network update; returns the new document.
     pub fn apply_remote(&mut self, update: &[u8]) -> Result<Node, BindError> {
+        self.apply_remote_if_initialized(update)?.ok_or_else(|| {
+            BindError::Model(RichTextError::InvalidContent(
+                "collab document has not received an initial semantic block".to_string(),
+            ))
+        })
+    }
+
+    /// Apply an inbound update while allowing the canonical empty-root
+    /// handshake state. Used by the sync driver so an empty SyncStep2 is a
+    /// semantic no-op, not a fabricated invalid document or a dropped error.
+    pub(crate) fn apply_remote_if_initialized(
+        &mut self,
+        update: &[u8],
+    ) -> Result<Option<Node>, BindError> {
         let update = Update::decode_v1(update).map_err(|err| BindError::Crdt(err.to_string()))?;
         {
             let mut txn = self.doc.transact_mut_with(ORIGIN_REMOTE.to_string());
             txn.apply_update(update)
                 .map_err(|err| BindError::Crdt(err.to_string()))?;
         }
-        self.document().map_err(BindError::from)
+        self.document_if_initialized()
     }
 
     /// A full-state update that bootstraps another editor onto this document

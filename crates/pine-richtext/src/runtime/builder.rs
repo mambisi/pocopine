@@ -9,7 +9,9 @@
 //! fold position, preserving node-insertion rank for content-match
 //! resolution.
 
+use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::Arc;
 
 use crate::extension::{KeyBindings, NamedCommand, RichTextExtension};
@@ -20,12 +22,509 @@ use crate::markdown::{
     ParseMatch as MarkdownParseMatch,
 };
 use crate::model::Schema;
+use crate::serialization::{MarkdownPolicy, NodeSerializationSpec};
 use crate::state::Plugin;
+use crate::typed_nodes::TypedNodeSpec;
+#[cfg(feature = "view")]
+use crate::view::typed_node_views::{
+    NodeViewHost as TypedNodeViewHost, NodeViewKind as TypedNodeViewKind,
+    NodeViewSpec as TypedNodeViewSpec, RichTextViewExtension, TypedNodeViewRegistry,
+};
 
 use super::EditorRuntime;
-use super::node_views::{NodeViewRegistry, NodeViewSpec};
 
 type ExtChain = Vec<Arc<dyn RichTextExtension>>;
+
+#[cfg(feature = "view")]
+struct ViewContribution {
+    extension_index: usize,
+    extension: String,
+    specs: Vec<TypedNodeViewSpec>,
+}
+
+/// Failure while folding an extension chain into an [`EditorRuntime`].
+///
+/// Runtime construction used to panic (or silently let a later node-view
+/// binding replace an earlier one). External node views are loaded from
+/// independently-authored crates, so those failure modes are not actionable
+/// enough: callers need the runtime, extension, semantic node, and offending
+/// component/tag before an editor is mounted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeBuildError {
+    /// The composed node/mark schema is invalid.
+    InvalidSchema {
+        runtime: Option<String>,
+        error: String,
+    },
+    /// A typed semantic descriptor's Rust name and `NodeSpec` disagree.
+    TypedNodeNameMismatch {
+        runtime: Option<String>,
+        extension: String,
+        semantic_rust_type: String,
+        typed_name: String,
+        spec_name: String,
+    },
+    /// Typed semantic nodes start at wire version 1.
+    InvalidTypedNodeVersion {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        version: u32,
+    },
+    /// The closed serde key set and model attribute schema differ.
+    TypedNodeAttrKeysMismatch {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        typed_keys: Vec<String>,
+        spec_keys: Vec<String>,
+    },
+    /// `$pine_` is reserved for framework wire metadata.
+    ReservedTypedNodeAttr {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        key: String,
+    },
+    /// A typed node's migration chain is incomplete or non-adjacent.
+    InvalidTypedNodeMigration {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        expected_from: u32,
+        found: Option<(u32, u32)>,
+    },
+    /// Two effective contributions use the same persisted semantic name.
+    DuplicateSemanticNode {
+        runtime: Option<String>,
+        node_type: String,
+        first_extension: String,
+        second_extension: String,
+    },
+    /// A native DOM view references no typed semantic descriptor.
+    UnknownDomViewNode {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        semantic_rust_type: String,
+    },
+    /// A DOM view used a different Rust marker sharing the same wire name.
+    DomViewTypeMismatch {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        schema_semantic_rust_type: String,
+        view_semantic_rust_type: String,
+    },
+    /// Two effective extensions claim one semantic native DOM view.
+    DuplicateDomView {
+        runtime: Option<String>,
+        node_type: String,
+        first_extension: String,
+        second_extension: String,
+    },
+    /// A declarative DOM output violates the safe structural contract.
+    InvalidDomView {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        error: String,
+    },
+    /// A serialization policy references no typed semantic descriptor.
+    UnknownNodeSerialization {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        semantic_rust_type: String,
+    },
+    /// A policy used a different Rust marker sharing the same wire name.
+    NodeSerializationTypeMismatch {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        schema_semantic_rust_type: String,
+        policy_semantic_rust_type: String,
+    },
+    /// Two effective extensions claim one exact typed-node output contract.
+    DuplicateNodeSerialization {
+        runtime: Option<String>,
+        node_type: String,
+        first_extension: String,
+        second_extension: String,
+    },
+    /// A typed node omitted one or more required output lanes.
+    IncompleteNodeSerialization {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        missing: Vec<String>,
+    },
+    /// A typed node has no output contract at all.
+    MissingNodeSerialization {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        semantic_rust_type: String,
+    },
+    /// A closed HTML/text policy violates its typed semantic contract.
+    InvalidNodeSerialization {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        error: String,
+    },
+    /// `MarkdownPolicy::Supported` requires an actual semantic emitter.
+    MissingTypedMarkdownEmitter {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+    },
+    /// A typed component view references a semantic marker absent from this
+    /// runtime.
+    #[cfg(feature = "view")]
+    UnknownTypedNodeView {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        semantic_rust_type: String,
+    },
+    /// A view used a different Rust marker that merely shares the same wire
+    /// name.
+    #[cfg(feature = "view")]
+    TypedNodeViewTypeMismatch {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        schema_semantic_rust_type: String,
+        view_semantic_rust_type: String,
+    },
+    /// Two view extensions claim the same semantic node.
+    #[cfg(feature = "view")]
+    DuplicateTypedNodeView {
+        runtime: Option<String>,
+        node_type: String,
+        first_extension: String,
+        second_extension: String,
+    },
+    /// Atom/editable component ownership disagrees with the semantic schema.
+    #[cfg(feature = "view")]
+    TypedNodeViewKindMismatch {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        kind: TypedNodeViewKind,
+        atom: bool,
+        content: String,
+    },
+    /// The component's compiled content outlet disagrees with atom/editable
+    /// ownership.
+    #[cfg(feature = "view")]
+    TypedNodeViewOwnershipMismatch {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        component: String,
+        kind: TypedNodeViewKind,
+        outlet_path: Option<Vec<u16>>,
+    },
+    /// A component requested the semantic native host without contributing a
+    /// native DOM spec whose root can supply it.
+    #[cfg(feature = "view")]
+    TypedNodeViewNativeHostMissing {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        component: String,
+    },
+    /// The component could not be registered through its typed mount ABI.
+    #[cfg(feature = "view")]
+    TypedNodeViewRegistration {
+        runtime: Option<String>,
+        extension: String,
+        node_type: String,
+        component: String,
+        error: String,
+    },
+}
+
+impl fmt::Display for RuntimeBuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSchema {
+                runtime: name,
+                error,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` has an invalid composed schema: {error}",
+                runtime_label(name)
+            ),
+            Self::TypedNodeNameMismatch {
+                runtime: name,
+                extension,
+                semantic_rust_type,
+                typed_name,
+                spec_name,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{semantic_rust_type}` declares NAME `{typed_name}` but its NodeSpec is `{spec_name}`",
+                runtime_label(name)
+            ),
+            Self::InvalidTypedNodeVersion {
+                runtime: name,
+                extension,
+                node_type,
+                version,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` has invalid version {version}; typed nodes start at version 1",
+                runtime_label(name)
+            ),
+            Self::TypedNodeAttrKeysMismatch {
+                runtime: name,
+                extension,
+                node_type,
+                typed_keys,
+                spec_keys,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` has serde keys {typed_keys:?}, but its NodeSpec declares {spec_keys:?}",
+                runtime_label(name)
+            ),
+            Self::ReservedTypedNodeAttr {
+                runtime: name,
+                extension,
+                node_type,
+                key,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` uses reserved attr `{key}`; `$pine_` keys are framework metadata",
+                runtime_label(name)
+            ),
+            Self::InvalidTypedNodeMigration {
+                runtime: name,
+                extension,
+                node_type,
+                expected_from,
+                found,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` requires migration {expected_from}->{}, found {found:?}",
+                runtime_label(name),
+                expected_from + 1
+            ),
+            Self::DuplicateSemanticNode {
+                runtime: name,
+                node_type,
+                first_extension,
+                second_extension,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` defines semantic node `{node_type}` more than once (extensions `{first_extension}` and `{second_extension}`)",
+                runtime_label(name)
+            ),
+            Self::UnknownDomViewNode {
+                runtime: name,
+                extension,
+                node_type,
+                semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` registers native DOM view `{semantic_rust_type}` for unknown typed node `{node_type}`",
+                runtime_label(name)
+            ),
+            Self::DomViewTypeMismatch {
+                runtime: name,
+                extension,
+                node_type,
+                schema_semantic_rust_type,
+                view_semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` native DOM view for `{node_type}` uses Rust marker `{view_semantic_rust_type}`, but schema registered `{schema_semantic_rust_type}`",
+                runtime_label(name)
+            ),
+            Self::DuplicateDomView {
+                runtime: name,
+                node_type,
+                first_extension,
+                second_extension,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` has duplicate native DOM views for `{node_type}` (extensions `{first_extension}` and `{second_extension}`)",
+                runtime_label(name)
+            ),
+            Self::InvalidDomView {
+                runtime: name,
+                extension,
+                node_type,
+                error,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` has invalid native DOM view for `{node_type}`: {error}",
+                runtime_label(name)
+            ),
+            Self::UnknownNodeSerialization {
+                runtime: name,
+                extension,
+                node_type,
+                semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` registers serialization policy `{semantic_rust_type}` for unknown typed node `{node_type}`",
+                runtime_label(name)
+            ),
+            Self::NodeSerializationTypeMismatch {
+                runtime: name,
+                extension,
+                node_type,
+                schema_semantic_rust_type,
+                policy_semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` serialization policy for `{node_type}` uses Rust marker `{policy_semantic_rust_type}`, but schema registered `{schema_semantic_rust_type}`",
+                runtime_label(name)
+            ),
+            Self::DuplicateNodeSerialization {
+                runtime: name,
+                node_type,
+                first_extension,
+                second_extension,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` has duplicate serialization policies for `{node_type}` (extensions `{first_extension}` and `{second_extension}`)",
+                runtime_label(name)
+            ),
+            Self::IncompleteNodeSerialization {
+                runtime: name,
+                extension,
+                node_type,
+                missing,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` has incomplete serialization policy; missing {missing:?}",
+                runtime_label(name)
+            ),
+            Self::MissingNodeSerialization {
+                runtime: name,
+                extension,
+                node_type,
+                semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` (`{semantic_rust_type}`) has no explicit serialization policy",
+                runtime_label(name)
+            ),
+            Self::InvalidNodeSerialization {
+                runtime: name,
+                extension,
+                node_type,
+                error,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` typed node `{node_type}` has invalid serialization policy: {error}",
+                runtime_label(name)
+            ),
+            Self::MissingTypedMarkdownEmitter {
+                runtime: name,
+                extension,
+                node_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` declares Markdown support for typed node `{node_type}` but contributes no node emitter",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::UnknownTypedNodeView {
+                runtime: name,
+                extension,
+                node_type,
+                semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` registers component view `{semantic_rust_type}` for unknown typed semantic node `{node_type}`",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::TypedNodeViewTypeMismatch {
+                runtime: name,
+                extension,
+                node_type,
+                schema_semantic_rust_type,
+                view_semantic_rust_type,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` component view for `{node_type}` uses Rust marker `{view_semantic_rust_type}`, but the schema registered `{schema_semantic_rust_type}`",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::DuplicateTypedNodeView {
+                runtime: name,
+                node_type,
+                first_extension,
+                second_extension,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` has duplicate typed component views for `{node_type}` (extensions `{first_extension}` and `{second_extension}`)",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::TypedNodeViewKindMismatch {
+                runtime: name,
+                extension,
+                node_type,
+                kind,
+                atom,
+                content,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` registers {kind:?} component ownership for `{node_type}`, but the semantic schema has atom={atom} and content `{content}`",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::TypedNodeViewOwnershipMismatch {
+                runtime: name,
+                extension,
+                node_type,
+                component,
+                kind,
+                outlet_path,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` registers {kind:?} component `{component}` for `{node_type}` with owned-content path {outlet_path:?}",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::TypedNodeViewNativeHostMissing {
+                runtime: name,
+                extension,
+                node_type,
+                component,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` component `{component}` requests the native host for `{node_type}`, but no typed native DOM view is registered",
+                runtime_label(name)
+            ),
+            #[cfg(feature = "view")]
+            Self::TypedNodeViewRegistration {
+                runtime: name,
+                extension,
+                node_type,
+                component,
+                error,
+            } => write!(
+                f,
+                "pine-richtext: runtime `{}` extension `{extension}` could not register component `{component}` for typed node `{node_type}`: {error}",
+                runtime_label(name)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeBuildError {}
+
+fn runtime_label(name: &Option<String>) -> &str {
+    name.as_deref().unwrap_or("<default>")
+}
 
 /// Fluent builder for [`EditorRuntime`]. Created via
 /// [`EditorRuntime::builder`] or [`RuntimeBuilder::new`].
@@ -43,6 +542,8 @@ pub struct RuntimeBuilder {
     name: Option<String>,
     include_defaults: bool,
     extensions: Vec<Arc<dyn RichTextExtension>>,
+    #[cfg(feature = "view")]
+    view_contributions: Vec<ViewContribution>,
 }
 
 impl Default for RuntimeBuilder {
@@ -57,6 +558,8 @@ impl RuntimeBuilder {
             name: None,
             include_defaults: true,
             extensions: Vec::new(),
+            #[cfg(feature = "view")]
+            view_contributions: Vec::new(),
         }
     }
 
@@ -72,6 +575,26 @@ impl RuntimeBuilder {
     pub fn with<E: RichTextExtension>(mut self, ext: E) -> Self {
         self.extensions
             .push(Arc::new(ext) as Arc<dyn RichTextExtension>);
+        self
+    }
+
+    /// Add both the target-independent model contract and its typed browser
+    /// views from one extension value.
+    #[cfg(feature = "view")]
+    pub fn with_view<E>(mut self, ext: E) -> Self
+    where
+        E: RichTextExtension + RichTextViewExtension,
+    {
+        let extension_index = self.extensions.len();
+        let extension = ext.name().to_string();
+        let specs = ext.typed_node_views();
+        self.extensions
+            .push(Arc::new(ext) as Arc<dyn RichTextExtension>);
+        self.view_contributions.push(ViewContribution {
+            extension_index,
+            extension,
+            specs,
+        });
         self
     }
 
@@ -111,11 +634,22 @@ impl RuntimeBuilder {
         explicit_base: Vec<Arc<dyn RichTextExtension>>,
     ) -> Arc<EditorRuntime> {
         self.build_inner(Some(explicit_base))
+            .expect("explicit test runtime is valid")
     }
 
     /// Fold the extension chain into an immutable [`EditorRuntime`].
     /// Wraps in `Arc` so multiple mounts can share one fold.
     pub fn build(self) -> Arc<EditorRuntime> {
+        self.try_build()
+            .expect("pine-richtext runtime construction failed")
+    }
+
+    /// Fallibly fold the extension chain into an immutable runtime.
+    ///
+    /// Prefer this for plugin/external-block runtimes: unlike [`Self::build`],
+    /// it reports schema and node-view registration problems before any editor
+    /// DOM is mounted.
+    pub fn try_build(self) -> Result<Arc<EditorRuntime>, RuntimeBuildError> {
         self.build_inner(None)
     }
 
@@ -125,11 +659,13 @@ impl RuntimeBuilder {
     fn build_inner(
         self,
         explicit_base: Option<Vec<Arc<dyn RichTextExtension>>>,
-    ) -> Arc<EditorRuntime> {
+    ) -> Result<Arc<EditorRuntime>, RuntimeBuildError> {
         let RuntimeBuilder {
             name: runtime_name,
             include_defaults,
             extensions: raw_user,
+            #[cfg(feature = "view")]
+            view_contributions,
         } = self;
 
         // Step 1: dedup the user list first-wins by name, matching
@@ -138,9 +674,11 @@ impl RuntimeBuilder {
         // the second, instead of folding both into the schema and
         // crashing `Schema::builder().finish()` on duplicate node-types.
         let mut seen_user_names: HashSet<String> = HashSet::new();
+        let mut kept_user_indices = HashSet::new();
         let user: ExtChain = raw_user
             .into_iter()
-            .filter_map(|arc| {
+            .enumerate()
+            .filter_map(|(index, arc)| {
                 if !seen_user_names.insert(arc.name().to_string()) {
                     tracing::warn!(
                         target: "pocopine.log",
@@ -149,6 +687,7 @@ impl RuntimeBuilder {
                     );
                     return None;
                 }
+                kept_user_indices.insert(index);
                 Some(arc)
             })
             .collect();
@@ -186,20 +725,170 @@ impl RuntimeBuilder {
         };
 
         // Step 3: fold node + mark specs into a schema using the overlay
-        // order. Node-insertion rank matches `schema_basic::schema()` for
-        // the default-runtime case.
+        // order. Typed semantic nodes travel through the same model schema,
+        // but retain their Rust TypeId/version/decoder in a parallel runtime
+        // registry after their closed-map contract is validated.
+        let mut typed_nodes: HashMap<String, TypedNodeSpec> = HashMap::new();
+        let mut typed_node_owners: HashMap<TypeId, String> = HashMap::new();
+        let mut semantic_node_owners: HashMap<String, String> = HashMap::new();
         let schema = {
             let mut builder = Schema::builder();
             for ext in &effective {
                 for spec in ext.nodes() {
+                    if let Some(first_extension) =
+                        semantic_node_owners.insert(spec.name().to_string(), ext.name().to_string())
+                    {
+                        return Err(RuntimeBuildError::DuplicateSemanticNode {
+                            runtime: runtime_name.clone(),
+                            node_type: spec.name().to_string(),
+                            first_extension,
+                            second_extension: ext.name().to_string(),
+                        });
+                    }
                     builder = builder.node(spec);
+                }
+                for typed in ext.typed_nodes() {
+                    validate_typed_node(&runtime_name, ext.name(), &typed)?;
+                    let node_type = typed.name().to_string();
+                    if let Some(first_extension) =
+                        semantic_node_owners.insert(node_type.clone(), ext.name().to_string())
+                    {
+                        return Err(RuntimeBuildError::DuplicateSemanticNode {
+                            runtime: runtime_name.clone(),
+                            node_type,
+                            first_extension,
+                            second_extension: ext.name().to_string(),
+                        });
+                    }
+                    builder = builder.typed_node(typed.clone());
+                    typed_node_owners.insert(typed.semantic_type_id(), ext.name().to_string());
+                    typed_nodes.insert(typed.name().to_string(), typed);
                 }
                 for spec in ext.marks() {
                     builder = builder.mark(spec);
                 }
             }
-            builder.finish().expect("composed runtime schema is valid")
+            builder
+                .finish()
+                .map_err(|error| RuntimeBuildError::InvalidSchema {
+                    runtime: runtime_name.clone(),
+                    error: error.to_string(),
+                })?
         };
+
+        // Fold one complete serialization contract per exact semantic
+        // `TypeId`. Nothing is inferred from the legacy Markdown/native-DOM
+        // contribution tables: typed nodes must opt every format in or out.
+        let mut node_serialization: HashMap<TypeId, NodeSerializationSpec> = HashMap::new();
+        let mut serialization_owners: HashMap<TypeId, String> = HashMap::new();
+        for ext in &effective {
+            for policy in ext.node_serialization() {
+                let node_type = policy.node_type().to_string();
+                let Some(typed) = typed_nodes.get(&node_type) else {
+                    return Err(RuntimeBuildError::UnknownNodeSerialization {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type,
+                        semantic_rust_type: policy.semantic_rust_type().to_string(),
+                    });
+                };
+                if typed.semantic_type_id() != policy.semantic_type_id() {
+                    return Err(RuntimeBuildError::NodeSerializationTypeMismatch {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type,
+                        schema_semantic_rust_type: typed.semantic_rust_type().to_string(),
+                        policy_semantic_rust_type: policy.semantic_rust_type().to_string(),
+                    });
+                }
+                let missing = policy.missing_policies();
+                if !missing.is_empty() {
+                    return Err(RuntimeBuildError::IncompleteNodeSerialization {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type,
+                        missing: missing.into_iter().map(str::to_string).collect(),
+                    });
+                }
+                policy
+                    .validate(typed.attr_keys(), typed.spec().is_atom())
+                    .map_err(|error| RuntimeBuildError::InvalidNodeSerialization {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type: node_type.clone(),
+                        error: error.to_string(),
+                    })?;
+                if let Some(first_extension) =
+                    serialization_owners.insert(policy.semantic_type_id(), ext.name().to_string())
+                {
+                    return Err(RuntimeBuildError::DuplicateNodeSerialization {
+                        runtime: runtime_name.clone(),
+                        node_type,
+                        first_extension,
+                        second_extension: ext.name().to_string(),
+                    });
+                }
+                node_serialization.insert(policy.semantic_type_id(), policy);
+            }
+        }
+        for typed in typed_nodes.values() {
+            if !node_serialization.contains_key(&typed.semantic_type_id()) {
+                return Err(RuntimeBuildError::MissingNodeSerialization {
+                    runtime: runtime_name.clone(),
+                    extension: typed_node_owners
+                        .get(&typed.semantic_type_id())
+                        .cloned()
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    node_type: typed.name().to_string(),
+                    semantic_rust_type: typed.semantic_rust_type().to_string(),
+                });
+            }
+        }
+
+        // Fold deterministic native/fallback DOM views. These are paired by
+        // exact semantic TypeId and validated before rendering can begin.
+        let mut dom_views = HashMap::new();
+        let mut dom_view_owners: HashMap<String, String> = HashMap::new();
+        for ext in &effective {
+            for view in ext.dom_views() {
+                let node_type = view.node_type().to_string();
+                let Some(typed) = typed_nodes.get(&node_type) else {
+                    return Err(RuntimeBuildError::UnknownDomViewNode {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type,
+                        semantic_rust_type: view.semantic_rust_type().to_string(),
+                    });
+                };
+                if typed.semantic_type_id() != view.semantic_type_id() {
+                    return Err(RuntimeBuildError::DomViewTypeMismatch {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type,
+                        schema_semantic_rust_type: typed.semantic_rust_type().to_string(),
+                        view_semantic_rust_type: view.semantic_rust_type().to_string(),
+                    });
+                }
+                view.validate(typed.attr_keys(), typed.spec().is_atom())
+                    .map_err(|error| RuntimeBuildError::InvalidDomView {
+                        runtime: runtime_name.clone(),
+                        extension: ext.name().to_string(),
+                        node_type: node_type.clone(),
+                        error: error.to_string(),
+                    })?;
+                if let Some(first_extension) =
+                    dom_view_owners.insert(node_type.clone(), ext.name().to_string())
+                {
+                    return Err(RuntimeBuildError::DuplicateDomView {
+                        runtime: runtime_name.clone(),
+                        node_type,
+                        first_extension,
+                        second_extension: ext.name().to_string(),
+                    });
+                }
+                dom_views.insert(node_type, view);
+            }
+        }
 
         // Step 4: fold runtime tables. Each table has its own precedence
         // rule, mirroring the legacy `extension::registry::*` contracts:
@@ -212,18 +901,9 @@ impl RuntimeBuilder {
         //     their state field from accidental user shadowing.
         //     Matches `merged_plugins`'s documented contract.
         //   * list-item types — union (`HashSet`).
-        //   * node-views — **user only**, later-wins among user
-        //     extensions (matches `render::node_views::register`'s
-        //     replace-on-insert semantics, which the legacy eager-forward
-        //     in `extension::registry::register` relies on). Base
-        //     extensions don't contribute node-view bindings — the
-        //     legacy `install_base_extensions` ignored `node_views()`
-        //     and only the user-registered path mirrored bindings into
-        //     `render::node_views`.
         let mut commands: HashMap<String, NamedCommand> = HashMap::new();
         let mut key_bindings: KeyBindings = Vec::new();
         let mut list_item_types: HashSet<String> = HashSet::new();
-        let mut node_views = NodeViewRegistry::new();
         let mut input_rules: Vec<InputRule> = Vec::new();
         let mut markdown_node_emitters: HashMap<String, MarkdownNodeEmitter> = HashMap::new();
         let mut markdown_mark_emitters: HashMap<String, MarkdownMarkEmitter> = HashMap::new();
@@ -277,16 +957,110 @@ impl RuntimeBuilder {
             }
         }
 
-        // Node-views: user-only, later-wins via `BTreeMap::insert`.
-        for ext in &user {
-            for nv in ext.node_views() {
-                node_views.insert(
-                    nv.node_type,
-                    NodeViewSpec {
-                        tag: nv.tag,
-                        content_selector: nv.content_selector,
-                    },
-                );
+        for policy in node_serialization.values() {
+            if policy.markdown_policy() == Some(MarkdownPolicy::Supported)
+                && !markdown_node_emitters.contains_key(policy.node_type())
+            {
+                return Err(RuntimeBuildError::MissingTypedMarkdownEmitter {
+                    runtime: runtime_name.clone(),
+                    extension: serialization_owners
+                        .get(&policy.semantic_type_id())
+                        .cloned()
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    node_type: policy.node_type().to_string(),
+                });
+            }
+        }
+
+        #[cfg(feature = "view")]
+        let mut node_view_owners: HashMap<String, String> = HashMap::new();
+
+        // Typed component views prove the exact semantic marker, ownership
+        // kind, and component mount ABI before an editor host exists.
+        #[cfg(feature = "view")]
+        let mut typed_node_views = TypedNodeViewRegistry::default();
+        #[cfg(feature = "view")]
+        for contribution in view_contributions
+            .into_iter()
+            .filter(|contribution| kept_user_indices.contains(&contribution.extension_index))
+        {
+            for spec in contribution.specs {
+                let node_type = spec.node_type().to_string();
+                let Some(typed) = typed_nodes.get(&node_type) else {
+                    return Err(RuntimeBuildError::UnknownTypedNodeView {
+                        runtime: runtime_name.clone(),
+                        extension: contribution.extension.clone(),
+                        node_type,
+                        semantic_rust_type: spec.semantic_rust_type().to_string(),
+                    });
+                };
+                if typed.semantic_type_id() != spec.semantic_type_id() {
+                    return Err(RuntimeBuildError::TypedNodeViewTypeMismatch {
+                        runtime: runtime_name.clone(),
+                        extension: contribution.extension.clone(),
+                        node_type,
+                        schema_semantic_rust_type: typed.semantic_rust_type().to_string(),
+                        view_semantic_rust_type: spec.semantic_rust_type().to_string(),
+                    });
+                }
+                let atom = typed.spec().is_atom();
+                let content = typed.spec().content_expression();
+                let kind_matches = match spec.kind() {
+                    TypedNodeViewKind::Atom => atom,
+                    TypedNodeViewKind::Editable => !atom && !content.trim().is_empty(),
+                };
+                if !kind_matches {
+                    return Err(RuntimeBuildError::TypedNodeViewKindMismatch {
+                        runtime: runtime_name.clone(),
+                        extension: contribution.extension.clone(),
+                        node_type,
+                        kind: spec.kind(),
+                        atom,
+                        content: content.to_string(),
+                    });
+                }
+                let outlet_matches = match spec.kind() {
+                    TypedNodeViewKind::Atom => spec.owned_content_path().is_none(),
+                    TypedNodeViewKind::Editable => spec.owned_content_path().is_some(),
+                };
+                if !outlet_matches {
+                    return Err(RuntimeBuildError::TypedNodeViewOwnershipMismatch {
+                        runtime: runtime_name.clone(),
+                        extension: contribution.extension.clone(),
+                        node_type,
+                        component: spec.component_name().to_string(),
+                        kind: spec.kind(),
+                        outlet_path: spec.owned_content_path().map(<[u16]>::to_vec),
+                    });
+                }
+                if spec.host() == TypedNodeViewHost::Native && !dom_views.contains_key(&node_type) {
+                    return Err(RuntimeBuildError::TypedNodeViewNativeHostMissing {
+                        runtime: runtime_name.clone(),
+                        extension: contribution.extension.clone(),
+                        node_type,
+                        component: spec.component_name().to_string(),
+                    });
+                }
+                if let Some(first_extension) =
+                    node_view_owners.insert(node_type.clone(), contribution.extension.clone())
+                {
+                    return Err(RuntimeBuildError::DuplicateTypedNodeView {
+                        runtime: runtime_name.clone(),
+                        node_type,
+                        first_extension,
+                        second_extension: contribution.extension.clone(),
+                    });
+                }
+                spec.register_component().map_err(|error| {
+                    RuntimeBuildError::TypedNodeViewRegistration {
+                        runtime: runtime_name.clone(),
+                        extension: contribution.extension.clone(),
+                        node_type: node_type.clone(),
+                        component: spec.component_name().to_string(),
+                        error: error.to_string(),
+                    }
+                })?;
+                typed_node_views.insert(spec);
             }
         }
 
@@ -318,11 +1092,16 @@ impl RuntimeBuilder {
             }
         }
 
-        Arc::new(EditorRuntime {
+        let wire_descriptor = schema.wire_descriptor();
+        let wire_fingerprint = pocopine_crypto::sha256_hex(
+            &serde_json::to_vec(&wire_descriptor)
+                .expect("wire-schema descriptor contains only serializable values"),
+        );
+
+        Ok(Arc::new(EditorRuntime {
             name: runtime_name,
             schema,
             extensions: effective,
-            node_views,
             commands,
             key_bindings,
             plugins,
@@ -331,6 +1110,97 @@ impl RuntimeBuilder {
             markdown_node_emitters,
             markdown_mark_emitters,
             markdown_parse_rules,
-        })
+            typed_nodes,
+            node_serialization,
+            dom_views,
+            wire_descriptor,
+            wire_fingerprint,
+            #[cfg(feature = "view")]
+            typed_node_views,
+        }))
     }
+}
+
+fn validate_typed_node(
+    runtime: &Option<String>,
+    extension: &str,
+    typed: &TypedNodeSpec,
+) -> Result<(), RuntimeBuildError> {
+    if typed.name() != typed.spec().name() {
+        return Err(RuntimeBuildError::TypedNodeNameMismatch {
+            runtime: runtime.clone(),
+            extension: extension.to_string(),
+            semantic_rust_type: typed.semantic_rust_type().to_string(),
+            typed_name: typed.name().to_string(),
+            spec_name: typed.spec().name().to_string(),
+        });
+    }
+    if typed.version() == 0 {
+        return Err(RuntimeBuildError::InvalidTypedNodeVersion {
+            runtime: runtime.clone(),
+            extension: extension.to_string(),
+            node_type: typed.name().to_string(),
+            version: typed.version(),
+        });
+    }
+
+    let mut typed_keys = typed
+        .attr_keys()
+        .iter()
+        .map(|key| (*key).to_string())
+        .collect::<Vec<_>>();
+    typed_keys.sort();
+    let spec_keys = typed.spec().attrs().keys().cloned().collect::<Vec<_>>();
+    if typed_keys != spec_keys {
+        return Err(RuntimeBuildError::TypedNodeAttrKeysMismatch {
+            runtime: runtime.clone(),
+            extension: extension.to_string(),
+            node_type: typed.name().to_string(),
+            typed_keys,
+            spec_keys,
+        });
+    }
+    if let Some(key) = typed
+        .attr_keys()
+        .iter()
+        .find(|key| key.starts_with("$pine_"))
+    {
+        return Err(RuntimeBuildError::ReservedTypedNodeAttr {
+            runtime: runtime.clone(),
+            extension: extension.to_string(),
+            node_type: typed.name().to_string(),
+            key: (*key).to_string(),
+        });
+    }
+
+    let migrations = typed.migrations();
+    for expected_from in 1..typed.version() {
+        let found = migrations
+            .get((expected_from - 1) as usize)
+            .map(|migration| (migration.from, migration.to));
+        if found != Some((expected_from, expected_from + 1)) {
+            return Err(RuntimeBuildError::InvalidTypedNodeMigration {
+                runtime: runtime.clone(),
+                extension: extension.to_string(),
+                node_type: typed.name().to_string(),
+                expected_from,
+                found,
+            });
+        }
+    }
+    if migrations.len() != typed.version().saturating_sub(1) as usize {
+        let expected_from = typed.version();
+        let found = migrations
+            .get(expected_from.saturating_sub(1) as usize)
+            .map(|migration| (migration.from, migration.to));
+        return Err(RuntimeBuildError::InvalidTypedNodeMigration {
+            runtime: runtime.clone(),
+            extension: extension.to_string(),
+            node_type: typed.name().to_string(),
+            expected_from,
+            found,
+        });
+    }
+
+    Ok(())
 }

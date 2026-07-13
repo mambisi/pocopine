@@ -6,7 +6,7 @@
 //! presence/broadcast sub-protocol needs.
 //!
 //! A CRDT sub-protocol needs more: the *server* must answer a peer's
-//! `SyncStep1` with a computed diff (a reply to that one connection), while
+//! compatibility hello with a computed diff (a reply to that connection), while
 //! document updates still broadcast to everyone. Registering a
 //! [`SubprotocolHandler`] on the gateway for a `subprotocol_id` replaces the
 //! relay for that sub-protocol with stateful server logic. The handler reacts
@@ -18,8 +18,65 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pocopine_auth::Principal;
 use pocopine_events::Topic;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::Notify;
 
 use super::error::WsError;
+
+/// Per-connection, per-topic gate in front of the fan-out pump.
+///
+/// Stateful protocols that require negotiation start this gate closed through
+/// [`SubprotocolHandler::outbound_starts_paused`], then open it from
+/// [`SubprotocolHandler::on_data`] only after accepting the peer. While closed,
+/// the pump does not consume replay or live fan-out entries, so opaque protocol
+/// bytes cannot leak before compatibility/authentication completes.
+#[derive(Clone, Debug)]
+pub struct OutboundGate {
+    inner: Arc<OutboundGateInner>,
+}
+
+#[derive(Debug)]
+struct OutboundGateInner {
+    open: AtomicBool,
+    changed: Notify,
+}
+
+impl OutboundGate {
+    /// Construct a gate in the requested initial state. Gateway subscriptions
+    /// normally create this from the handler's pause policy; public primarily
+    /// so stateful handlers can be exercised without a live socket.
+    pub fn new(open: bool) -> Self {
+        Self {
+            inner: Arc::new(OutboundGateInner {
+                open: AtomicBool::new(open),
+                changed: Notify::new(),
+            }),
+        }
+    }
+
+    /// Pause fan-out delivery immediately. Already queued protocol replies are
+    /// unaffected; subsequent pump entries remain unread until [`Self::open`].
+    pub fn close(&self) {
+        self.inner.open.store(false, Ordering::Release);
+    }
+
+    /// Allow this subscription's fan-out pump to consume and emit entries.
+    pub fn open(&self) {
+        self.inner.open.store(true, Ordering::Release);
+        self.inner.changed.notify_waiters();
+    }
+
+    pub(crate) async fn wait_until_open(&self) {
+        loop {
+            let changed = self.inner.changed.notified();
+            if self.inner.open.load(Ordering::Acquire) {
+                return;
+            }
+            changed.await;
+        }
+    }
+}
 
 /// One inbound Data frame, handed to a [`SubprotocolHandler`].
 ///
@@ -27,6 +84,13 @@ use super::error::WsError;
 /// so the handler only sees frames on topics it may read. The payload is the
 /// opaque sub-protocol body (the frame envelope has been stripped).
 pub struct InboundData<'a> {
+    /// Stable id of the WebSocket session that sent this frame. Stateful
+    /// handlers use it to keep negotiation state per connection rather than
+    /// accidentally authorizing every subscriber sharing a topic/principal.
+    pub session_id: &'a str,
+    /// Gate controlling fan-out/replay delivery to this exact subscription.
+    /// Negotiating handlers open it only after accepting their hello.
+    pub outbound_gate: &'a OutboundGate,
     /// The resolved topic the frame targets.
     pub topic: &'a Topic,
     /// The opaque sub-protocol payload (the Data frame body).
@@ -46,9 +110,9 @@ pub struct InboundData<'a> {
 /// frame: direct replies to the originating connection and/or broadcasts to the
 /// whole topic.
 ///
-/// Replies and broadcasts are independent: a CRDT `SyncStep1` produces only
-/// replies (the catch-up diff), a document update produces only a broadcast,
-/// and the server's own `SyncStep1` rides along as a reply during the initial
+/// Replies and broadcasts are independent: a CRDT hello produces only replies
+/// (server identity + catch-up diff), a document update produces only a broadcast,
+/// and the server's own hello rides along as a reply during the initial
 /// handshake. Order between a reply and a concurrently-pumped broadcast is not
 /// guaranteed — CRDT merges are commutative and idempotent, so it does not need
 /// to be.
@@ -56,6 +120,7 @@ pub struct InboundData<'a> {
 pub struct Reaction {
     pub(crate) replies: Vec<Bytes>,
     pub(crate) broadcasts: Vec<Bytes>,
+    pub(crate) open_outbound: bool,
 }
 
 impl Reaction {
@@ -76,6 +141,15 @@ impl Reaction {
     /// updates that must converge everywhere.
     pub fn broadcast(&mut self, payload: impl Into<Bytes>) -> &mut Self {
         self.broadcasts.push(payload.into());
+        self
+    }
+
+    /// Open this subscription's paused fan-out pump after every direct reply in
+    /// this reaction has been queued. This ordering lets a negotiation handler
+    /// guarantee its acceptance hello reaches the connection before replay or
+    /// live protocol bytes.
+    pub fn open_outbound(&mut self) -> &mut Self {
+        self.open_outbound = true;
         self
     }
 
@@ -104,6 +178,13 @@ impl Reaction {
 /// interior synchronization.
 #[async_trait]
 pub trait SubprotocolHandler: Send + Sync + 'static {
+    /// Whether a new subscription's fan-out pump must wait for this handler to
+    /// explicitly open [`InboundData::outbound_gate`]. Default protocols relay
+    /// immediately; compatibility/authentication handshakes opt in.
+    fn outbound_starts_paused(&self) -> bool {
+        false
+    }
+
     /// React to one inbound Data frame. Returning `Err` rejects the frame (the
     /// gateway logs it and sends the peer a `bad_frame` control error) without
     /// tearing down the connection.
@@ -121,4 +202,9 @@ pub trait SubprotocolHandler: Send + Sync + 'static {
     /// the apply loop and drops the document (which reloads from the store on
     /// the next subscriber). Default: no-op.
     fn on_topic_idle(&self, _topic: &Topic) {}
+
+    /// One connection released its subscription to `topic` (explicit
+    /// unsubscribe, re-subscribe replacement, or socket shutdown). Stateful
+    /// handlers clear per-connection negotiation state here.
+    fn on_subscription_closed(&self, _session_id: &str, _topic: &Topic) {}
 }

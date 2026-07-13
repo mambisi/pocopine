@@ -1,12 +1,37 @@
-//! Snapshot tests asserting the folded default-extension schema matches
-//! today's hand-rolled `schema_basic::schema()` exactly. C3 will rewire
-//! `schema()` to fold extensions — these tests prove the folding side
-//! has no behavioural drift before we flip the switch.
+//! Tests for the built-in extension fold and its current per-runtime typed
+//! semantic/native/component-view associations. The `schema_basic` comparison
+//! guards the legacy helper's parity with a freshly built default runtime.
 
-use crate::extension::{ExtensionNodeView, RichTextExtension};
-use crate::extensions::{TaskListExtension, default_extensions};
+#[cfg(feature = "view")]
+use crate::extensions::TaskListExtension;
+use crate::extensions::default_extensions;
 use crate::model::Schema;
 use crate::schema_basic;
+
+#[cfg(feature = "view")]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[pocopine::component(
+    name = "typed-task-item-extension-fixture",
+    template_inline = r#"<div class="typed-task-item-fixture" pp-owned-content></div>"#
+)]
+struct TypedTaskItemFixture {
+    checked: bool,
+}
+
+#[cfg(feature = "view")]
+#[pocopine::handlers]
+impl TypedTaskItemFixture {}
+
+#[cfg(feature = "view")]
+impl crate::view::RichTextNodeView<crate::extensions::TaskItemNode> for TypedTaskItemFixture {
+    fn sync_node(
+        &mut self,
+        update: crate::view::NodeViewUpdate<crate::extensions::TaskItemAttrs>,
+    ) -> Result<(), crate::view::NodeViewError> {
+        self.checked = update.attrs.checked;
+        Ok(())
+    }
+}
 
 /// Fold a fresh `Schema` from the extensions' contributions, in the
 /// exact order `default_extensions()` returns them. Used by snapshot
@@ -17,6 +42,9 @@ fn fold_extensions_into_schema() -> Schema {
         for spec in ext.nodes() {
             builder = builder.node(spec);
         }
+        for spec in ext.typed_nodes() {
+            builder = builder.typed_node(spec);
+        }
         for spec in ext.marks() {
             builder = builder.mark(spec);
         }
@@ -26,8 +54,8 @@ fn fold_extensions_into_schema() -> Schema {
 
 /// The seed doc the demo uses (rich initial doc with paragraphs + a
 /// checklist) renders to byte-identical HTML through both the
-/// hand-rolled `schema_basic::schema()` and the folded extension
-/// schema. Different ranks across the two schemas would surface here.
+/// legacy `schema_basic::schema()` helper and a fresh extension fold. Different
+/// ranks across the two schemas would surface here.
 #[test]
 fn folded_default_extensions_produce_same_node_order_as_schema_basic() {
     let folded = fold_extensions_into_schema();
@@ -35,7 +63,7 @@ fn folded_default_extensions_produce_same_node_order_as_schema_basic() {
 
     // `node_type_names` returns names sorted by insertion rank — what
     // content-match resolution actually consumes. Any reorder would
-    // surface here before C3 flips the switch.
+    // surface here as runtime/schema_basic compatibility drift.
     assert_eq!(
         folded.node_type_names(),
         basic.node_type_names(),
@@ -51,29 +79,63 @@ fn folded_default_extensions_produce_same_node_order_as_schema_basic() {
 }
 
 #[test]
-fn task_list_extension_with_node_view_tag_emits_binding() {
-    let ext = TaskListExtension::new().with_node_view_tag("pine-task-item", Some("[data-content]"));
-    let bindings: Vec<ExtensionNodeView> = ext.node_views();
-    assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].node_type, "task_item");
-    assert_eq!(bindings[0].tag, "pine-task-item");
+fn task_item_uses_typed_schema_and_native_list_item_dom() {
+    use crate::extensions::{TaskItemAttrs, TaskItemNode};
+    use crate::{RichTextNodeAttrs, RichTextNodeType};
+
+    let runtime = crate::runtime::RuntimeBuilder::new().build();
+    let typed = runtime
+        .lookup_typed_node(TaskItemNode::NAME)
+        .expect("default runtime retains the typed task-item descriptor");
+    let dom = runtime
+        .lookup_dom_view(TaskItemNode::NAME)
+        .expect("typed task items declare a native DOM view");
+
     assert_eq!(
-        bindings[0].content_selector.as_deref(),
-        Some("[data-content]")
+        typed.semantic_type_id(),
+        std::any::TypeId::of::<TaskItemNode>()
     );
+    assert_eq!(typed.version(), 1);
+    assert_eq!(TaskItemAttrs::KEYS, &["checked"]);
+    assert_eq!(
+        dom.semantic_type_id(),
+        std::any::TypeId::of::<TaskItemNode>()
+    );
+    assert_eq!(dom.root_tag(), "li");
 }
 
+#[cfg(feature = "view")]
 #[test]
-fn task_list_extension_default_has_no_node_view() {
-    let bindings = TaskListExtension::new().node_views();
-    assert!(bindings.is_empty());
+fn typed_task_item_builder_pairs_the_exact_component_and_owned_outlet() {
+    use crate::extensions::TaskItemNode;
+    use crate::view::{NodeViewHost, NodeViewKind, RichTextViewExtension};
+
+    let extension = TaskListExtension::new().with_typed_node_view::<TypedTaskItemFixture>();
+    let views = extension.typed_node_views();
+
+    assert_eq!(views.len(), 1);
+    assert_eq!(
+        views[0].semantic_type_id(),
+        std::any::TypeId::of::<TaskItemNode>()
+    );
+    assert_eq!(
+        views[0].component_type_id(),
+        std::any::TypeId::of::<TypedTaskItemFixture>()
+    );
+    assert_eq!(views[0].node_type(), "task_item");
+    assert_eq!(
+        views[0].component_name(),
+        "typed-task-item-extension-fixture"
+    );
+    assert_eq!(views[0].kind(), NodeViewKind::Editable);
+    assert_eq!(views[0].host(), NodeViewHost::Native);
+    assert_eq!(views[0].owned_content_path(), Some(&[][..]));
 }
 
 #[test]
 fn folded_schema_can_render_demo_seed_doc() {
-    // The demo seeds with paragraph + paragraph + task_list. After C3
-    // the schema is folded from extensions; if the fold produced a
-    // schema with different content-match resolution behavior, this
+    // The demo seeds with paragraph + paragraph + task_list. If the current
+    // runtime fold produced different content-match behavior, this
     // assemble-and-render path would fail.
     use crate::render::render_doc_to_html;
     use crate::schema_basic::{doc, em, paragraph, strong, task_item, task_list, text};
@@ -106,21 +168,4 @@ fn folded_schema_can_render_demo_seed_doc() {
     assert!(html.contains("<strong>Bold</strong>"));
     assert!(html.contains("<em>italic</em>"));
     assert!(html.contains(r#"data-checked="true""#));
-}
-
-#[cfg(feature = "view")]
-#[test]
-fn task_list_extension_with_node_view_uses_component_tag_name() {
-    use pocopine_core::app::Component;
-
-    struct DummyComponent;
-    impl Component for DummyComponent {
-        const NAME: &'static str = "dummy-task-item";
-        fn register() {}
-    }
-
-    let ext = TaskListExtension::new().with_node_view::<DummyComponent>();
-    let bindings = ext.node_views();
-    assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].tag, "dummy-task-item");
 }

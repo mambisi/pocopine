@@ -28,6 +28,8 @@ pub enum RichTextError {
     Plugin(String),
     /// JSON serialization or deserialization failed.
     Json(serde_json::Error),
+    /// A versioned/typed wire node failed migration or materialization.
+    WireNode { path: String, message: String },
 }
 
 impl fmt::Display for RichTextError {
@@ -46,6 +48,9 @@ impl fmt::Display for RichTextError {
             Self::Selection(msg) => write!(f, "invalid selection: {msg}"),
             Self::Plugin(msg) => write!(f, "plugin failed: {msg}"),
             Self::Json(err) => write!(f, "json error: {err}"),
+            Self::WireNode { path, message } => {
+                write!(f, "invalid rich-text node at {path}: {message}")
+            }
         }
     }
 }

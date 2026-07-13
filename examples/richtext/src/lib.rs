@@ -15,10 +15,10 @@
 use std::sync::Arc;
 
 use pine_richtext::commands::BoxedCommand;
-use pine_richtext::extension;
 use pine_richtext::extension::{NamedCommand, RichTextExtension};
 use pine_richtext::extensions::{
-    CoreMarksExtension, MarkdownShortcutsExtension, SmartTypographyExtension, TaskListExtension,
+    CoreMarksExtension, MarkdownShortcutsExtension, SmartTypographyExtension, TaskItemAttrs,
+    TaskItemNode, TaskListExtension,
 };
 use pine_richtext::history::history_plugin;
 use pine_richtext::model::{Attrs, MarkPolicy, NodeSpec};
@@ -26,14 +26,15 @@ use pine_richtext::runtime::{self, RuntimeBuilder};
 use pine_richtext::schema_basic;
 use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection, Transaction};
 use pine_richtext::view::root::CommandRequest;
-use pine_richtext::view::{Editor as RichTextHandle, Markdown, PineRichTextRoot};
+use pine_richtext::view::{
+    Editor as RichTextHandle, Markdown, NodeViewError, NodeViewHandle, NodeViewUpdate,
+    PineRichTextRoot, RichTextNodeView,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::wasm_bindgen;
-use web_sys::{CustomEvent, CustomEventInit, Element, Event};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component]
@@ -46,10 +47,8 @@ pub struct Editor {
     pub initial_doc: Value,
     /// Latest markdown export. Rendered into the demo's "Exported
     /// markdown" `<pre>` block whenever the user clicks Export MD.
-    /// Updated by the `pine:richtext:export-markdown-result`
-    /// listener installed in `on_ready` — the surface owns the
-    /// serialization (it has the live state) so the Editor never
-    /// has to mirror the doc.
+    /// Read synchronously through the surface's typed editor handle, so the
+    /// parent never has to mirror the live document.
     pub exported_markdown: String,
     /// Whether to forward debug-json to the surface. Always on for
     /// the regular demo (the smoke tests subscribe to
@@ -78,14 +77,6 @@ impl Editor {
         // Smoke tests need debug-json; perf tests don't. Default on
         // for the kitchen-sink demo, off when bench mode is active.
         self.emit_debug_json = bench_spec.is_none();
-    }
-
-    fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = refs.get("root") else {
-            return;
-        };
-        let handle = this::<Editor>();
-        install_task_toggle_listener(root, handle);
     }
 
     /// Toggle strong (Bold) on the currently selected text.
@@ -260,49 +251,6 @@ impl Editor {
             })
         });
     }
-
-    /// Flip the `checked` attribute on the `task_item` at `pos`. Called
-    /// from the `pine:task-toggle` custom event dispatched by the
-    /// `<pine-task-item>` node-view component.
-    fn toggle_task_checked(&mut self, pos: usize, checked: bool) {
-        self.with_editor(|e| {
-            e.dispatch(CommandRequest::SetNodeAttr {
-                pos,
-                attr: "checked".into(),
-                value: json!(checked),
-            })
-        });
-    }
-}
-
-/// Listen for the `pine:task-toggle` custom event bubbled up from
-/// `<pine-task-item>` node-view components and dispatch the
-/// corresponding model update.
-fn install_task_toggle_listener(event_target: Element, handle: pocopine::Handle<Editor>) {
-    let cb = Closure::wrap(Box::new(move |event: Event| {
-        let Ok(custom) = event.dyn_into::<CustomEvent>() else {
-            return;
-        };
-        let detail = custom.detail();
-        let Ok(payload) = serde_wasm_bindgen::from_value::<TaskTogglePayload>(detail) else {
-            return;
-        };
-        let handle = handle.clone();
-        pocopine::tick::next(move || {
-            handle.update(move |editor: &mut Editor| {
-                editor.toggle_task_checked(payload.pos, payload.checked);
-            });
-        });
-    }) as Box<dyn FnMut(Event)>);
-    let _ = event_target
-        .add_event_listener_with_callback("pine:task-toggle", cb.as_ref().unchecked_ref());
-    cb.forget();
-}
-
-#[derive(Deserialize, Serialize)]
-struct TaskTogglePayload {
-    pos: usize,
-    checked: bool,
 }
 
 /// Bench config parsed out of `window.location.search`. The harness
@@ -310,8 +258,8 @@ struct TaskTogglePayload {
 /// single demo binary supports many doc sizes without recompiling.
 ///
 /// The `shape` axis selects the block layout the seed doc generates
-/// — plain paragraphs by default, or task items (custom-element
-/// node-views) for the `tasks` preset. Different shapes exercise
+/// — plain paragraphs by default, or typed task-item node views for
+/// the `tasks` preset. Different shapes exercise
 /// different reconciler paths and let us isolate custom-component
 /// cost from plain-paragraph cost.
 #[derive(Clone, Copy)]
@@ -360,8 +308,8 @@ fn bench_spec_from_url() -> Option<BenchSpec> {
         "medium" => (100, 40, BenchShape::Paragraphs),
         "large" => (500, 80, BenchShape::Paragraphs),
         "xl" => (2000, 80, BenchShape::Paragraphs),
-        // `tasks` seeds many `<pine-task-item>` node-views, which
-        // exercise the custom-element render path the plain-paragraph
+        // `tasks` seeds many typed task-item component views, which
+        // exercise the retained component path the plain-paragraph
         // presets skip. Default count matches `large` so cross-shape
         // comparisons are like-for-like.
         "tasks" => (500, 8, BenchShape::TaskItems),
@@ -427,7 +375,7 @@ fn bench_doc_json(spec: &BenchSpec) -> Value {
             // patches both get exercised across the run.
             let leading = schema_basic::paragraph(vec![schema_basic::text(
                 format!(
-                    "Bench doc ({} task items × {} words). Type into me to measure custom-element keystroke latency.",
+                    "Bench doc ({} task items × {} words). Type into me to measure typed-view keystroke latency.",
                     spec.blocks, spec.words_per_block
                 ),
                 Vec::new(),
@@ -520,59 +468,30 @@ fn demo_plugins() -> Vec<Plugin> {
 #[allow(unused_imports)]
 use pine_richtext::commands::Command as _;
 
-/// Node-view component for `task_item`. The renderer emits
-/// `<pine-task-item data-pos="N" data-checked="true|false">…inline
-/// content…</pine-task-item>`; the component layers a checkbox button
-/// over the inline content via a slot, and on click dispatches a
-/// bubbling `pine:task-toggle` CustomEvent carrying the position and
-/// the new checked value. The parent `<Editor>` listens at the surface
-/// for that event and updates the model.
-///
-/// This is pocopine's analogue of Tiptap's React NodeView: the
-/// component owns its wrapper chrome (checkbox, future drag handle,
-/// future delete button) while pine-richtext keeps owning the inline
-/// content under `[data-pine-richtext-content]`. Keep the component
-/// template free of literal whitespace between chrome children and at
-/// EOF; those text nodes become cursor targets and line boxes in the
-/// contenteditable surface.
+/// Typed editable view for [`TaskItemNode`]. Pine retains the native `<li>`
+/// host and the semantic descendants. This component owns only the checkbox
+/// shell around its compile-time-proven `pp-owned-content` outlet.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTaskItem.poco", role = "scope", display = "list-item")]
 pub struct PineTaskItem {
-    /// Mirrors the model `task_item`'s `checked` attribute via the
-    /// `data-checked` HTML attribute emitted by the renderer.
-    #[prop]
     pub checked: bool,
+    pub error: String,
+}
+
+impl RichTextNodeView<TaskItemNode> for PineTaskItem {
+    fn sync_node(&mut self, update: NodeViewUpdate<TaskItemAttrs>) -> Result<(), NodeViewError> {
+        self.checked = update.attrs.checked;
+        self.error.clear();
+        Ok(())
+    }
 }
 
 #[handlers]
 impl PineTaskItem {
-    pub fn toggle(&mut self) {
-        let Some(scope) = pocopine::current_scope_id() else {
-            return;
-        };
-        let Some(host) = pocopine::refs::get_on(scope, "root") else {
-            return;
-        };
-        let node_view_host = host.parent_element().unwrap_or_else(|| host.clone());
-        let current = node_view_host.get_attribute("data-checked").as_deref() == Some("true");
-        let next = !current;
-        let Some(pos) = node_view_host
-            .get_attribute("data-pos")
-            .and_then(|s: String| s.parse::<usize>().ok())
-        else {
-            return;
-        };
-        let Ok(detail) = serde_wasm_bindgen::to_value(&TaskTogglePayload { pos, checked: next })
-        else {
-            return;
-        };
-        let init = CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&detail);
-        let Ok(event) = CustomEvent::new_with_event_init_dict("pine:task-toggle", &init) else {
-            return;
-        };
-        let _ = host.dispatch_event(&event);
+    pub fn toggle(&mut self, #[context] node: NodeViewHandle<TaskItemNode>) {
+        if let Err(error) = node.update_attrs(|attrs| attrs.checked = !attrs.checked) {
+            self.error = error.to_string();
+        }
     }
 }
 
@@ -629,30 +548,17 @@ impl RichTextExtension for CommentRuntimeExtension {
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    // The "default" runtime — the full kitchen-sink doc editor. The
-    // `extension::register(...)` path is the only way to customize the
-    // *default* runtime's extension list (named runtimes use
-    // `runtime::registry::register`). Soft-deprecated since Phase 4b
-    // C5; the deprecation warning is suppressed at this single
-    // call-site because no replacement API exists yet for
-    // "customize the default runtime."
-    #[allow(deprecated)]
-    extension::register(Box::new(
-        TaskListExtension::new().with_node_view::<PineTaskItem>(),
-    ));
-
-    // Phase 5 C3 — register the predefined input-rule extensions
-    // for the doc editor. `SmartTypographyExtension` adds em-dash,
-    // ellipsis, and the four smart-quote variants;
-    // `MarkdownShortcutsExtension` adds `# ` → heading, `* ` →
-    // bullet list, `> ` → blockquote, ``` ``` ``` → code block, and
-    // `1. ` → ordered list. The comment runtime intentionally does
-    // NOT register markdown shortcuts (its minimal schema rejects
-    // headings/lists anyway) but DOES get smart typography below.
-    #[allow(deprecated)]
-    extension::register(Box::new(SmartTypographyExtension));
-    #[allow(deprecated)]
-    extension::register(Box::new(MarkdownShortcutsExtension));
+    // Full document runtime. The typed builder pairs the exact semantic task
+    // node with its component and validates the owned-content outlet before
+    // any editor mounts. It also registers the component mount ABI, so the
+    // app does not separately register `PineTaskItem`.
+    let document = RuntimeBuilder::new()
+        .name("document")
+        .with_view(TaskListExtension::new().with_typed_node_view::<PineTaskItem>())
+        .with(SmartTypographyExtension)
+        .with(MarkdownShortcutsExtension)
+        .build();
+    runtime::registry::register("document", document);
 
     // The "comment" runtime — TRULY minimal: only `doc`, `paragraph`,
     // and `text` plus the standard marks. No headings, blockquotes,
@@ -677,7 +583,6 @@ pub fn main() {
     App::new()
         .register::<Editor>()
         .register::<PineRichTextRoot>()
-        .register::<PineTaskItem>()
         .run();
 }
 

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Pine rich text external blocks editor" />
+  <title>External blocks · Pine rich text</title>
+  <link rel="icon" href="data:," />
+  <style>
+    html { background: #f7f7f5; }
+    body { margin: 0; min-width: 20rem; }
+  </style>
+</head>
+<body>
+  <div pp-app>
+    <external-blocks-demo></external-blocks-demo>
+  </div>
+  <script type="module">
+    import init from "/pkg/richtext_external_blocks.js";
+    init();
+  </script>
+</body>
+</html>

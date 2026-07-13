@@ -1,0 +1,5 @@
+error: serde `transparent` is not supported by RichTextNodeAttrs because it changes the object-map wire shape
+ --> tests/ui/rich_text_node_attrs/transparent.rs:4:9
+  |
+4 | #[serde(transparent)]
+  |         ^^^^^^^^^^^

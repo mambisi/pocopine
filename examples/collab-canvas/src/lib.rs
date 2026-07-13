@@ -11,7 +11,8 @@
 //! see `docs/internal/collab-live-blocks-schema.md`.)
 //!
 //! Everything below the schema is reused, untouched: the `RealtimeClient`
-//! transport, the `CollabMessage` sync handshake (SyncStep1/2/Update), and the
+//! transport, the compatibility-bearing `CollabMessage` hello/SyncStep2/update
+//! handshake, and the
 //! `CollabSync` server. Only the schema and the (imperative) rendering are
 //! app-specific — a canvas is a custom surface, not reactive document DOM.
 //!
@@ -23,13 +24,13 @@
 //! whose coarse whole-doc re-encode needs explicit change-detection. Fine-grained
 //! Map updates are naturally clean.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use pocopine_collab::{COLLAB_SUBPROTOCOL, CollabMessage, Presence};
+use pocopine_collab::{COLLAB_SUBPROTOCOL, CollabHello, CollabMessage, Presence};
 use pocopine_realtime::client::{ConnectionStatus, RealtimeClient, SessionEvent};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -39,8 +40,8 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{Any, Doc, Map, MapRef, Observable, Out, ReadTxn, StateVector, Transact, Update};
 
-/// The shared room every session joins.
-const TOPIC: &str = "canvas:demo";
+mod compatibility;
+
 /// The root yrs Map name: shape-id → `{x, y}`.
 const POSITIONS: &str = "positions";
 
@@ -79,6 +80,8 @@ struct Room {
     doc: Doc,
     positions: MapRef,
     client: Rc<RealtimeClient>,
+    topic: String,
+    peer_compatible: Cell<bool>,
     board: HtmlElement,
     divs: RefCell<HashMap<String, HtmlElement>>,
     drag: RefCell<Option<Drag>>,
@@ -120,11 +123,13 @@ impl Room {
                 .insert(&mut txn, id, Any::Map(Arc::new(entry)));
         } // commit → the observer fires → render
         let update = self.doc.transact().encode_state_as_update_v1(&before);
-        self.client.send_data(
-            TOPIC,
-            COLLAB_SUBPROTOCOL,
-            CollabMessage::Update(Bytes::from(update)).encode(),
-        );
+        if self.peer_compatible.get() {
+            self.client.send_data(
+                &self.topic,
+                COLLAB_SUBPROTOCOL,
+                CollabMessage::Update(Bytes::from(update)).encode(),
+            );
+        }
     }
 
     /// Publish this session's pointer position as presence (an ephemeral
@@ -135,9 +140,11 @@ impl Room {
             y,
             color: self.cursor_color.clone(),
         };
-        if let Ok(body) = self.presence.borrow_mut().announce(cursor) {
+        if let Ok(body) = self.presence.borrow_mut().announce(cursor)
+            && self.peer_compatible.get()
+        {
             self.client.send_data(
-                TOPIC,
+                &self.topic,
                 COLLAB_SUBPROTOCOL,
                 CollabMessage::Awareness(body).encode(),
             );
@@ -146,9 +153,11 @@ impl Room {
 
     /// Stop publishing our cursor (pointer left the board) so peers clear it.
     fn clear_local_cursor(&self) {
-        if let Ok(body) = self.presence.borrow_mut().clear_local() {
+        if let Ok(body) = self.presence.borrow_mut().clear_local()
+            && self.peer_compatible.get()
+        {
             self.client.send_data(
-                TOPIC,
+                &self.topic,
                 COLLAB_SUBPROTOCOL,
                 CollabMessage::Awareness(body).encode(),
             );
@@ -304,54 +313,80 @@ fn make_cursor_el(document: &web_sys::Document, board: &HtmlElement) -> HtmlElem
 
 /// Wire the collab sync handshake to the transport.
 fn install_handshake(room: &Rc<Room>) {
-    // On subscribe-ack, announce our state (SyncStep1) so the server sends back
-    // whatever we are missing.
+    // On subscribe-ack, restart compatibility negotiation and announce our
+    // state vector. Local edits made before the reply remain in yrs and are
+    // uploaded by the requested SyncStep2 rather than sent pre-hello.
     {
         let weak = Rc::downgrade(room);
+        let subscribed_topic = room.topic.clone();
         room.client.on_event(move |event| {
             if let SessionEvent::Subscribed { topic, .. } = event
-                && topic == TOPIC
+                && topic == &subscribed_topic
                 && let Some(room) = weak.upgrade()
             {
+                room.peer_compatible.set(false);
                 let sv = room.doc.transact().state_vector().encode_v1();
                 room.client.send_data(
-                    TOPIC,
+                    &room.topic,
                     COLLAB_SUBPROTOCOL,
-                    CollabMessage::SyncStep1(Bytes::from(sv)).encode(),
+                    CollabMessage::Hello(CollabHello::new(
+                        compatibility::identity(),
+                        Bytes::from(sv),
+                        true,
+                    ))
+                    .encode(),
                 );
             }
         });
     }
 
-    // Inbound messages: answer a peer's SyncStep1 with the diff it lacks, and
-    // apply catch-up / live updates (the observer then repaints).
+    // Validate the server hello before answering it or applying any yrs bytes.
     {
         let weak = Rc::downgrade(room);
+        let topic = room.topic.clone();
         room.client
-            .subscribe(TOPIC, COLLAB_SUBPROTOCOL, move |payload| {
+            .subscribe(&topic, COLLAB_SUBPROTOCOL, move |payload| {
                 let Some(room) = weak.upgrade() else { return };
-                let Ok(message) = CollabMessage::decode(&payload) else {
-                    return;
+                let message = match CollabMessage::decode(&payload) {
+                    Ok(message) => message,
+                    Err(_) => {
+                        room.peer_compatible.set(false);
+                        return;
+                    }
                 };
                 match message {
-                    CollabMessage::SyncStep1(state_vector) => {
-                        let Ok(sv) = StateVector::decode_v1(&state_vector) else {
+                    CollabMessage::Hello(hello) => {
+                        room.peer_compatible.set(false);
+                        if hello.compatibility() != &compatibility::identity() {
+                            return;
+                        }
+                        let Ok(sv) = StateVector::decode_v1(hello.state_vector()) else {
                             return;
                         };
                         let diff = room.doc.transact().encode_state_as_update_v1(&sv);
-                        room.client.send_data(
-                            TOPIC,
-                            COLLAB_SUBPROTOCOL,
-                            CollabMessage::SyncStep2(Bytes::from(diff)).encode(),
-                        );
+                        room.peer_compatible.set(true);
+                        if hello.requests_sync_step2() {
+                            room.client.send_data(
+                                &room.topic,
+                                COLLAB_SUBPROTOCOL,
+                                CollabMessage::SyncStep2(Bytes::from(diff)).encode(),
+                            );
+                        }
                     }
                     CollabMessage::SyncStep2(update) | CollabMessage::Update(update) => {
+                        if !room.peer_compatible.get() {
+                            return;
+                        }
                         if let Ok(update) = Update::decode_v1(&update) {
                             let mut txn = room.doc.transact_mut();
                             let _ = txn.apply_update(update);
                         }
                     }
-                    CollabMessage::Awareness(body) => room.apply_awareness(&body),
+                    CollabMessage::Awareness(body) => {
+                        if room.peer_compatible.get() {
+                            room.apply_awareness(&body);
+                        }
+                    }
                 }
             });
     }
@@ -493,6 +528,8 @@ pub fn start() -> Result<(), JsValue> {
         doc,
         positions,
         client,
+        topic: compatibility::topic(),
+        peer_compatible: Cell::new(false),
         board,
         divs: RefCell::new(HashMap::new()),
         drag: RefCell::new(None),

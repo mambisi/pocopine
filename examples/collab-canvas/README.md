@@ -32,7 +32,7 @@ a custom renderer, not reactive document DOM.
 **Resilience is in the transport, not here.** If the socket drops — leave a tab
 backgrounded long enough and the server reaps the idle connection — the
 `RealtimeClient` reconnects with backoff and re-subscribes on its own. Because
-this app re-runs its `SyncStep1` handshake on every `Subscribed` event, the
+this app re-runs its compatibility hello on every `Subscribed` event, the
 canvas re-converges automatically; the `#status` pill (top-right) shows
 `reconnecting…` then `live`. No reconnection logic lives in this example.
 
@@ -76,5 +76,5 @@ on `/` work too.)
                                                └─ Map observer fires → repaint B's div
 ```
 
-A late joiner runs the SyncStep1/SyncStep2 handshake on connect and catches up
+A late joiner runs the Hello/SyncStep2 handshake on connect and catches up
 to the current positions before the first live update arrives.

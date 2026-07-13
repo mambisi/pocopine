@@ -1,0 +1,25 @@
+[package]
+name = "richtext-external-blocks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pine-richtext = { path = "../../crates/pine-richtext", features = ["view"] }
+pine-richtext-extensions = { path = "../../crates/pine-richtext-extensions", features = ["bubble-menu", "table-view", "tags"] }
+pocopine = { path = "../../crates/pocopine" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "EventTarget",
+    "HtmlInputElement",
+    "InputEvent",
+]

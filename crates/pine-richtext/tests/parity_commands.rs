@@ -15,10 +15,11 @@ mod support;
 
 use pine_richtext::commands::{
     self, Command, chain_commands, delete_selection, join_backward, join_down, join_forward,
-    join_textblock_backward, join_textblock_forward, join_up, lift, lift_empty_block, select_all,
-    select_node_backward, select_node_forward, select_parent_node, select_textblock_end,
-    select_textblock_start, set_block_type, split_block, split_list_item, toggle_mark, wrap_in,
-    wrap_in_list,
+    join_textblock_backward, join_textblock_forward, join_up, leave_selected_inline_atom_backward,
+    leave_selected_inline_atom_forward, lift, lift_empty_block, select_all,
+    select_inline_atom_backward, select_inline_atom_forward, select_node_backward,
+    select_node_forward, select_parent_node, select_textblock_end, select_textblock_start,
+    set_block_type, split_block, split_list_item, toggle_mark, wrap_in, wrap_in_list,
 };
 use pine_richtext::model::Attrs;
 use pine_richtext::schema_basic;
@@ -632,6 +633,42 @@ fn commands_select_node_forward_selects_following_atom() {
         Selection::Node { anchor } => assert_eq!(*anchor, 5), // after p("foo")
         other => panic!("expected node selection of hr after p, got {other:?}"),
     }
+}
+
+#[test]
+fn commands_horizontal_navigation_selects_then_crosses_an_inline_atom() {
+    let document = doc(vec![paragraph(vec![
+        text("a"),
+        image("chip.png"),
+        text("b"),
+    ])]);
+    let state = state_with_doc(document);
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(2)).unwrap();
+    let before = state.apply(tr).unwrap();
+
+    let selected = run(&*select_inline_atom_forward(), before);
+    assert_eq!(selected.selection(), &Selection::node(2));
+
+    let after = run(&*leave_selected_inline_atom_forward(), selected);
+    assert_eq!(after.selection(), &Selection::text(3));
+
+    let selected = run(&*select_inline_atom_backward(), after);
+    assert_eq!(selected.selection(), &Selection::node(2));
+
+    let before = run(&*leave_selected_inline_atom_backward(), selected);
+    assert_eq!(before.selection(), &Selection::text(2));
+}
+
+#[test]
+fn commands_horizontal_atom_navigation_ignores_plain_inline_text() {
+    let state = state_with_doc(doc(vec![paragraph_text("ab")]));
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(2)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    assert!(select_inline_atom_backward().apply(&state).is_none());
+    assert!(select_inline_atom_forward().apply(&state).is_none());
 }
 
 // ─── #243 — inline-atom delete keeps the parent paragraph ──────────

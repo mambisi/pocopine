@@ -44,19 +44,17 @@
   overflow-wrap: break-word;
 }
 
-/* Title node — seamless top-of-doc heading. pine-richtext's
-   default renderer emits `<span data-pos="0" data-type="title">`
-   for the `title` node type; turn that into a block-styled title
-   with CSS.
+/* Title node — seamless top-of-doc heading. Keep owns a typed native
+   `<h1 class="keep-note-title" data-type="title">` DOM plan; no generic
+   unknown-node fallback or CSS display conversion is involved.
    The leading `h1:first-child` selector covers the loaded-doc
    path: `editor.set::<Markdown>(saved_body)` re-parses `# Title`
    as a `heading` (the markdown vocabulary has no separate title),
    so the first child is a `<h1 data-type="heading">` instead of
-   `<span data-type="title">`. The schema accepts either as the
+   typed title element. The schema accepts either as the
    doc's leading slot; both render identically here. */
-:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > span[data-type='title'],
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > h1[data-type='title'],
 :is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > h1:first-child {
-  display: block;
   font-size: 18px;
   font-weight: 600;
   margin: 0 0 8px;
@@ -67,7 +65,7 @@
 /* Empty-state placeholder mirroring the textarea's "Title" hint.
    Applies to both the freshly-typed title node and the loaded
    heading-1 in the title slot. */
-:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > span[data-type='title']:empty::before,
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > h1[data-type='title']:empty::before,
 :is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > h1:first-child:empty::before {
   content: 'Title';
   color: var(--fg-3);
