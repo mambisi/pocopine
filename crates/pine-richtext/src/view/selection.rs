@@ -243,6 +243,16 @@ fn rendered_leaf_node(el: &Element) -> bool {
         return true;
     }
 
+    // Typed atom hosts gain component chrome after mount, but that chrome is
+    // not editor-model content. `contenteditable=false` is stamped on every
+    // typed atom host, so it must continue to count as one model position even
+    // when its component renders labels, icons, or buttons inside the host.
+    if el.has_attribute("data-pine-node-view")
+        && el.get_attribute("contenteditable").as_deref() == Some("false")
+    {
+        return true;
+    }
+
     // Unknown schema nodes render as `<span data-type="...">`, so
     // even when empty they are still wrappers with open/close model
     // tokens. A custom atom rendered as an empty custom element has no
@@ -252,7 +262,11 @@ fn rendered_leaf_node(el: &Element) -> bool {
 }
 
 fn next_sibling_data_pos(el: &Element) -> Option<usize> {
-    let sibling = el.next_element_sibling()?;
+    // The gap optimization is valid only for an immediately adjacent model
+    // element. `next_element_sibling()` skips text and made the first chip at
+    // 86 borrow the next chip's position 92, so it appeared six positions wide.
+    let sibling = el.next_sibling()?;
+    let sibling = sibling.dyn_into::<Element>().ok()?;
     data_pos_of(&sibling)
 }
 
@@ -285,34 +299,31 @@ fn walk_node(
         return None;
     }
 
-    if target == content_start {
-        return Some((dom_el.unchecked_into::<DomNode>(), 0));
-    }
-
     let mut pos = content_start;
     let mut child_dom_index = 0u32;
     for child in model_node.content().iter() {
         let child_size = child.node_size();
         let child_end = pos + child_size;
 
+        // Prefer a real adjacent text-node boundary over a parent child offset.
+        // Chrome can stick on or skip across parent offsets next to a nested
+        // contenteditable=false atom, whereas text-end/text-start is stable.
+        if child.is_text() && target >= pos && target <= child_end {
+            let chars_in = target - pos;
+            let text_node = dom_text_node_at(&dom_el, child_dom_index as usize)?;
+            let text = text_node.text_content().unwrap_or_default();
+            let utf16_offset = char_offset_to_utf16(&text, chars_in);
+            return Some((text_node, utf16_offset));
+        }
+
         if target == pos {
             return Some((dom_el.unchecked_into::<DomNode>(), child_dom_index));
         }
 
-        if target < child_end {
-            if child.is_text() {
-                let chars_in = target - pos;
-                let text_node = dom_text_node_at(&dom_el, child_dom_index as usize)?;
-                // Browser [`web_sys::Range::set_start`] takes a UTF-16
-                // code-unit offset; pine's model counts text in
-                // `char`s. Translate before handing the offset back.
-                let text = text_node.text_content().unwrap_or_default();
-                let utf16_offset = char_offset_to_utf16(&text, chars_in);
-                return Some((text_node, utf16_offset));
-            }
-            if let Some(found) = walk_node(surface, child, Some(pos), target) {
-                return Some(found);
-            }
+        if target < child_end
+            && let Some(found) = walk_node(surface, child, Some(pos), target)
+        {
+            return Some(found);
         }
 
         pos = child_end;

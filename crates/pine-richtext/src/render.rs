@@ -20,7 +20,7 @@
 //! - `bullet_list` / `ordered_list` → `<ul>` / `<ol>`.
 //! - `list_item` → `<li>`.
 //! - `code_block` → `<pre><code>` (one wrapper carries `data-pos`).
-//! - `horizontal_rule` → `<hr/>`, `image` → `<img/>`, `hard_break` → `<br/>`.
+//! - `horizontal_rule` → `<hr>`, `image` → `<img>`, `hard_break` → `<br>`.
 //! - `text` → escaped text content, marks wrap outside-in.
 //!
 //! Unknown node types fall back to `<span data-type="{name}">…</span>`
@@ -29,62 +29,57 @@
 
 use crate::model::{Mark, Node};
 
-pub mod node_views {
-    //! Node-view spec type.
-    //!
-    //! **Phase 4b C5 cleanup:** the legacy process-global registry
-    //! (`register`, `register_with_content`, `lookup`,
-    //! `registered_tags`, `unregister`) has been **deleted**. Node-
-    //! view bindings now live exclusively on the per-mount
-    //! [`crate::runtime::EditorRuntime`] (via
-    //! [`crate::runtime::NodeViewRegistry`]). Extensions contribute
-    //! bindings through
-    //! [`crate::extension::RichTextExtension::node_views`]; the
-    //! runtime fold collects them at `RuntimeBuilder::build` time;
-    //! the renderer / reconciler consult
-    //! `runtime.lookup_node_view(node_type)` per render.
-    //!
-    //! This module is kept solely for the `NodeViewSpec` data type,
-    //! which is re-exported from `runtime::node_views` for backward
-    //! compatibility.
+pub mod dom_output;
+pub mod dom_views;
 
-    /// What to emit when a registered node type is rendered.
-    #[derive(Clone, Debug)]
-    pub struct NodeViewSpec {
-        /// Custom-element tag the renderer emits in place of the
-        /// default. Must be valid HTML (lowercase, contains a hyphen).
-        pub tag: String,
-        /// Optional selector, relative to the custom-element host, for
-        /// the element that contains model-owned children after the
-        /// component mounts. Components with wrapper chrome should set
-        /// this; components that leave children directly under the host
-        /// leave this `None`.
-        pub content_selector: Option<String>,
-    }
-}
-
-use node_views::NodeViewSpec;
+pub use dom_output::{DomElementSpec, DomFragmentSpec, DomNodeSpec, DomOutputError};
+pub use dom_views::{DomAttrBinding, DomOutputSpec, NodeDomSpec, NodeDomSpecError, UrlPolicy};
 
 use crate::runtime::EditorRuntime;
 
-pub(crate) fn attr_value_to_string(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Null => String::new(),
-        other => other.to_string(),
+/// Build the validated native host plan for a typed component view.
+#[cfg(feature = "view")]
+pub(crate) fn typed_node_view_host_spec(
+    runtime: &EditorRuntime,
+    node: &Node,
+    outer_pos: usize,
+) -> Option<dom_output::DomElementSpec> {
+    let spec = runtime.lookup_typed_node_view(node.type_name())?;
+    let mut host = if spec.host() == crate::view::NodeViewHost::Native {
+        let native = runtime
+            .lookup_dom_view(node.type_name())
+            .expect("runtime validates native-host component views");
+        native
+            .root_element_spec(node)
+            .expect("validated typed attrs project to the native host")
+    } else {
+        let inline = runtime
+            .lookup_typed_node(node.type_name())
+            .is_some_and(|typed| typed.spec().is_inline());
+        dom_output::DomElementSpec::element(if inline { "span" } else { "div" })
+            .expect("framework-selected typed host tag is valid")
+    };
+    host = host
+        .attr("data-pos", outer_pos.to_string())
+        .expect("framework data-pos attr is valid")
+        .attr("data-pine-node-type", spec.node_type())
+        .expect("framework semantic-type attr is valid")
+        .attr("data-pine-node-view", "typed")
+        .expect("framework node-view attr is valid");
+    if matches!(spec.kind(), crate::view::NodeViewKind::Atom) {
+        host = host
+            .attr("contenteditable", "false")
+            .expect("framework contenteditable attr is valid");
     }
+    Some(host)
 }
 
 /// Stateless renderer scoped to a single [`EditorRuntime`]. The runtime
-/// supplies the per-instance node-view registry — two surfaces with
-/// different runtimes may produce different HTML for the same `Node`
-/// because each one resolves `task_item -> <custom-tag>` against its
-/// own [`crate::runtime::NodeViewRegistry`].
+/// supplies per-runtime typed semantic DOM and component-view registries.
+/// Component identity never comes from document data or a raw tag map.
 ///
 /// All internal `render_*` helpers are methods on `Renderer` so they
-/// share one source of truth for node-view bindings without threading
+/// share one source of truth for runtime bindings without threading
 /// the runtime through every parameter list.
 pub struct Renderer<'a> {
     runtime: &'a EditorRuntime,
@@ -100,13 +95,7 @@ impl<'a> Renderer<'a> {
     /// can set the result on a surface's `innerHTML`. The surface
     /// element implicitly represents the doc and "owns" position 0.
     pub fn doc(&self, doc: &Node) -> String {
-        let mut out = String::new();
-        let mut pos = 0usize;
-        for child in doc.content().iter() {
-            self.render_node(child, pos, &mut out);
-            pos += child.node_size();
-        }
-        out
+        self.compile(self.positioned_children(doc, 0, false))
     }
 
     /// Render the CHILDREN of `node` (no wrapper for `node` itself) at
@@ -114,26 +103,47 @@ impl<'a> Renderer<'a> {
     /// located the DOM element for `node` and need to refresh just its
     /// inner contents.
     pub fn children(&self, node: &Node, content_start: usize) -> String {
-        let mut out = String::new();
-        if node.content().size() == 0 && !node.is_text() && !node.is_leaf() {
-            out.push_str("<br/>");
-            return out;
-        }
-        let mut pos = content_start;
-        for child in node.content().iter() {
-            self.render_node(child, pos, &mut out);
-            pos += child.node_size();
-        }
-        out
+        self.compile(self.positioned_children(node, content_start, true))
     }
 
     /// Render a single node (with its wrapper) at the given outer
     /// position. Used by reconcilers that want to swap one element out
     /// of a parent without re-rendering the parent's other children.
     pub fn one_node(&self, node: &Node, outer_pos: usize) -> String {
-        let mut out = String::new();
-        self.render_node(node, outer_pos, &mut out);
-        out
+        self.compile(vec![self.one_node_plan(node, outer_pos)])
+    }
+
+    /// Build one validated structural node for direct browser materialization.
+    pub(crate) fn one_node_plan(&self, node: &Node, outer_pos: usize) -> DomNodeSpec {
+        self.node_plan(node, outer_pos)
+    }
+
+    fn compile(&self, nodes: Vec<DomNodeSpec>) -> String {
+        let plan = DomFragmentSpec::new().extend(nodes);
+        let mut output = String::new();
+        plan.compile_into(&mut output)
+            .expect("validated editor DOM plan serializes");
+        output
+    }
+
+    fn positioned_children(
+        &self,
+        node: &Node,
+        content_start: usize,
+        empty_placeholder: bool,
+    ) -> Vec<DomNodeSpec> {
+        if empty_placeholder && node.content().is_empty() && !node.is_text() && !node.is_leaf() {
+            return vec![element("br").into()];
+        }
+        let mut position = content_start;
+        node.content()
+            .iter()
+            .map(|child| {
+                let plan = self.node_plan(child, position);
+                position = position.saturating_add(child.node_size());
+                plan
+            })
+            .collect()
     }
 
     /// `outer_pos` is the model position right BEFORE `node` in its
@@ -141,30 +151,35 @@ impl<'a> Renderer<'a> {
     /// that; callers (the selection bridge) treat content-start as
     /// `outer_pos + 1` for non-leaf nodes, or treat the leaf as a
     /// single position.
-    fn render_node(&self, node: &Node, outer_pos: usize, out: &mut String) {
+    fn node_plan(&self, node: &Node, outer_pos: usize) -> DomNodeSpec {
         if node.is_text() {
-            let text = node.text().unwrap_or("");
-            render_text(text, node.marks(), out);
-            return;
+            return text_plan(node.text().unwrap_or(""), node.marks());
         }
 
-        // If a node view is registered for this node type IN THIS
-        // RUNTIME, render it as the custom element instead of the
-        // default tag. Two runtimes can disagree on which node_type
-        // maps to which tag without colliding.
-        if let Some(spec) = self.runtime.lookup_node_view(node.type_name()) {
-            self.render_node_view(node, spec, outer_pos, out);
-            return;
+        // Typed component views always start from an empty, stable native
+        // host. The per-editor manager mounts the shell onto that exact host;
+        // atom descendants belong to the component, while editable children
+        // are rendered later into the compiled owned-content outlet.
+        #[cfg(feature = "view")]
+        if let Some(host) = typed_node_view_host_spec(self.runtime, node, outer_pos) {
+            return host.into();
+        }
+
+        if let Some(spec) = self.runtime.lookup_dom_view(node.type_name()) {
+            let content = self.positioned_children(node, outer_pos.saturating_add(1), true);
+            return spec
+                .editor_node(node, outer_pos, &content)
+                .expect("runtime validated native DOM view");
         }
 
         match node.type_name() {
-            "paragraph" => self.render_block(node, "p", outer_pos, out),
-            "blockquote" => self.render_block(node, "blockquote", outer_pos, out),
-            "bullet_list" => self.render_block(node, "ul", outer_pos, out),
-            "ordered_list" => self.render_ordered_list(node, outer_pos, out),
-            "list_item" => self.render_block(node, "li", outer_pos, out),
-            "task_list" => self.render_task_list(node, outer_pos, out),
-            "task_item" => self.render_task_item(node, outer_pos, out),
+            "paragraph" => self.block_plan(node, "p", outer_pos),
+            "blockquote" => self.block_plan(node, "blockquote", outer_pos),
+            "bullet_list" => self.block_plan(node, "ul", outer_pos),
+            "ordered_list" => self.ordered_list_plan(node, outer_pos),
+            "list_item" => self.block_plan(node, "li", outer_pos),
+            "task_list" => self.task_list_plan(node, outer_pos),
+            "task_item" => self.task_item_plan(node, outer_pos),
             "heading" => {
                 let level = node
                     .attrs()
@@ -172,28 +187,26 @@ impl<'a> Renderer<'a> {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(1)
                     .clamp(1, 6);
-                let tag = format!("h{level}");
-                self.render_block(node, &tag, outer_pos, out);
+                let tag = ["h1", "h2", "h3", "h4", "h5", "h6"][level as usize - 1];
+                self.block_plan(node, tag, outer_pos)
             }
             "code_block" => {
-                out.push_str("<pre data-pos=\"");
-                out.push_str(&outer_pos.to_string());
-                out.push_str("\"><code>");
-                for child in node.content().iter() {
-                    self.render_node(child, outer_pos + 1, out);
-                }
-                out.push_str("</code></pre>");
+                let code = element("code")
+                    .extend_nodes(self.positioned_children(
+                        node,
+                        outer_pos.saturating_add(1),
+                        false,
+                    ))
+                    .expect("structural child append is infallible");
+                element("pre")
+                    .attr("data-pos", outer_pos.to_string())
+                    .expect("framework data-pos attr is valid")
+                    .child(code)
+                    .expect("structural child append is infallible")
+                    .into()
             }
-            "horizontal_rule" => {
-                out.push_str("<hr data-pos=\"");
-                out.push_str(&outer_pos.to_string());
-                out.push_str("\"/>");
-            }
-            "hard_break" => {
-                out.push_str("<br data-pos=\"");
-                out.push_str(&outer_pos.to_string());
-                out.push_str("\"/>");
-            }
+            "horizontal_rule" => positioned_element("hr", outer_pos).into(),
+            "hard_break" => positioned_element("br", outer_pos).into(),
             "image" => {
                 let src = node
                     .attrs()
@@ -206,166 +219,78 @@ impl<'a> Renderer<'a> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let title = node.attrs().get("title").and_then(|v| v.as_str());
-                out.push_str("<img data-pos=\"");
-                out.push_str(&outer_pos.to_string());
-                out.push_str("\" src=\"");
-                out.push_str(&escape_attr(src));
-                out.push_str("\" alt=\"");
-                out.push_str(&escape_attr(alt));
-                out.push('"');
+                let mut image = positioned_element("img", outer_pos)
+                    .attr("src", src)
+                    .expect("framework image src attr is valid")
+                    .attr("alt", alt)
+                    .expect("framework image alt attr is valid");
                 if let Some(title) = title {
-                    out.push_str(" title=\"");
-                    out.push_str(&escape_attr(title));
-                    out.push('"');
+                    image = image
+                        .attr("title", title)
+                        .expect("framework image title attr is valid");
                 }
-                out.push_str("/>");
+                image.into()
             }
-            other => {
-                out.push_str("<span data-pos=\"");
-                out.push_str(&outer_pos.to_string());
-                out.push_str("\" data-type=\"");
-                out.push_str(&escape_attr(other));
-                out.push_str("\">");
-                let mut child_pos = outer_pos + 1;
-                for child in node.content().iter() {
-                    self.render_node(child, child_pos, out);
-                    child_pos += child.node_size();
-                }
-                out.push_str("</span>");
-            }
+            other => positioned_element("span", outer_pos)
+                .attr("data-type", other)
+                .expect("framework data-type attr is valid")
+                .extend_nodes(self.positioned_children(node, outer_pos.saturating_add(1), false))
+                .expect("structural child append is infallible")
+                .into(),
         }
     }
 
-    /// Emit a node as the custom element registered in this runtime's
-    /// node-view registry. Every model attribute is mirrored onto the
-    /// element as `data-<attr>=<json>` so the component can read it
-    /// from the DOM. Children are rendered inline as content — the
-    /// component is expected to lay them out (typically by just
-    /// letting them render where they sit in its template / Shadow
-    /// DOM).
-    fn render_node_view(
-        &self,
-        node: &Node,
-        spec: &NodeViewSpec,
-        outer_pos: usize,
-        out: &mut String,
-    ) {
-        out.push('<');
-        out.push_str(&spec.tag);
-        out.push_str(" data-pos=\"");
-        out.push_str(&outer_pos.to_string());
-        out.push('"');
-        for (key, value) in node.attrs() {
-            out.push_str(" data-");
-            out.push_str(&escape_attr(key));
-            out.push_str("=\"");
-            out.push_str(&escape_attr(&attr_value_to_string(value)));
-            out.push('"');
-        }
-        out.push('>');
-        if node.content().size() == 0 && !node.is_leaf() {
-            out.push_str("<br/>");
-        } else {
-            let mut child_pos = outer_pos + 1;
-            for child in node.content().iter() {
-                self.render_node(child, child_pos, out);
-                child_pos += child.node_size();
-            }
-        }
-        out.push_str("</");
-        out.push_str(&spec.tag);
-        out.push('>');
-    }
-
-    fn render_ordered_list(&self, node: &Node, outer_pos: usize, out: &mut String) {
-        out.push_str("<ol data-pos=\"");
-        out.push_str(&outer_pos.to_string());
-        out.push('"');
+    fn ordered_list_plan(&self, node: &Node, outer_pos: usize) -> DomNodeSpec {
+        let mut list = positioned_element("ol", outer_pos);
         if let Some(order) = node.attrs().get("order").and_then(|v| v.as_i64())
             && order != 1
         {
-            out.push_str(" start=\"");
-            out.push_str(&order.to_string());
-            out.push('"');
+            list = list
+                .attr("start", order.to_string())
+                .expect("framework ordered-list start attr is valid");
         }
-        out.push('>');
-        if node.content().size() == 0 {
-            out.push_str("<br/>");
-        } else {
-            let mut child_pos = outer_pos + 1;
-            for child in node.content().iter() {
-                self.render_node(child, child_pos, out);
-                child_pos += child.node_size();
-            }
-        }
-        out.push_str("</ol>");
+        list.extend_nodes(self.positioned_children(node, outer_pos.saturating_add(1), true))
+            .expect("structural child append is infallible")
+            .into()
     }
 
     /// `task_list` is just a `<ul>` with a marker class. CSS hides the
     /// default bullet and styles items with a leading checkbox.
-    fn render_task_list(&self, node: &Node, outer_pos: usize, out: &mut String) {
-        out.push_str("<ul class=\"task-list\" data-pos=\"");
-        out.push_str(&outer_pos.to_string());
-        out.push_str("\">");
-        if node.content().size() == 0 {
-            out.push_str("<br/>");
-        } else {
-            let mut child_pos = outer_pos + 1;
-            for child in node.content().iter() {
-                self.render_node(child, child_pos, out);
-                child_pos += child.node_size();
-            }
-        }
-        out.push_str("</ul>");
+    fn task_list_plan(&self, node: &Node, outer_pos: usize) -> DomNodeSpec {
+        positioned_element("ul", outer_pos)
+            .attr("class", "task-list")
+            .expect("framework task-list class attr is valid")
+            .extend_nodes(self.positioned_children(node, outer_pos.saturating_add(1), true))
+            .expect("structural child append is infallible")
+            .into()
     }
 
     /// `task_item` is a `<li class="task-item">` with a `data-checked`
     /// attribute mirroring the model's `checked` attr.
-    fn render_task_item(&self, node: &Node, outer_pos: usize, out: &mut String) {
+    fn task_item_plan(&self, node: &Node, outer_pos: usize) -> DomNodeSpec {
         let checked = node
             .attrs()
             .get("checked")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        out.push_str("<li class=\"task-item\" data-pos=\"");
-        out.push_str(&outer_pos.to_string());
-        out.push_str("\" data-checked=\"");
-        out.push_str(if checked { "true" } else { "false" });
-        out.push_str("\">");
-        if node.content().size() == 0 {
-            out.push_str("<br/>");
-        } else {
-            let mut child_pos = outer_pos + 1;
-            for child in node.content().iter() {
-                self.render_node(child, child_pos, out);
-                child_pos += child.node_size();
-            }
-        }
-        out.push_str("</li>");
+        positioned_element("li", outer_pos)
+            .attr("class", "task-item")
+            .expect("framework task-item class attr is valid")
+            .attr("data-checked", if checked { "true" } else { "false" })
+            .expect("framework task-item checked attr is valid")
+            .extend_nodes(self.positioned_children(node, outer_pos.saturating_add(1), true))
+            .expect("structural child append is infallible")
+            .into()
     }
 
-    fn render_block(&self, node: &Node, tag: &str, outer_pos: usize, out: &mut String) {
-        out.push('<');
-        out.push_str(tag);
-        out.push_str(" data-pos=\"");
-        out.push_str(&outer_pos.to_string());
-        out.push_str("\">");
-        if node.content().size() == 0 {
-            // Empty blocks need a placeholder child so contentEditable
-            // renders a clickable line. `<br/>` doesn't carry a `data-
-            // pos` — the bridge treats it as if the cursor is at the
-            // parent's content start (position `outer_pos + 1`).
-            out.push_str("<br/>");
-        } else {
-            let mut child_pos = outer_pos + 1;
-            for child in node.content().iter() {
-                self.render_node(child, child_pos, out);
-                child_pos += child.node_size();
-            }
-        }
-        out.push_str("</");
-        out.push_str(tag);
-        out.push('>');
+    fn block_plan(&self, node: &Node, tag: &str, outer_pos: usize) -> DomNodeSpec {
+        // Empty blocks retain a structural `<br>` placeholder so the editable
+        // surface renders a clickable line. It has no `data-pos`; the bridge
+        // treats it as the parent's content start.
+        positioned_element(tag, outer_pos)
+            .extend_nodes(self.positioned_children(node, outer_pos.saturating_add(1), true))
+            .expect("structural child append is infallible")
+            .into()
     }
 }
 
@@ -388,12 +313,33 @@ pub fn render_one_node_to_html(runtime: &EditorRuntime, node: &Node, outer_pos: 
     Renderer::new(runtime).one_node(node, outer_pos)
 }
 
-fn render_text(text: &str, marks: &[Mark], out: &mut String) {
-    for mark in marks {
-        match mark.type_name() {
-            "em" => out.push_str("<em>"),
-            "strong" => out.push_str("<strong>"),
-            "code" => out.push_str("<code>"),
+/// Build one node without crossing a serialized HTML boundary.
+#[cfg(feature = "view")]
+pub(crate) fn render_one_node_plan(
+    runtime: &EditorRuntime,
+    node: &Node,
+    outer_pos: usize,
+) -> DomNodeSpec {
+    Renderer::new(runtime).one_node_plan(node, outer_pos)
+}
+
+fn element(tag: &str) -> DomElementSpec {
+    DomElementSpec::element(tag).expect("framework-selected editor tag is valid")
+}
+
+fn positioned_element(tag: &str, outer_pos: usize) -> DomElementSpec {
+    element(tag)
+        .attr("data-pos", outer_pos.to_string())
+        .expect("framework data-pos attr is valid")
+}
+
+fn text_plan(text: &str, marks: &[Mark]) -> DomNodeSpec {
+    let mut output = DomNodeSpec::text(text);
+    for mark in marks.iter().rev() {
+        let mut wrapper = match mark.type_name() {
+            "em" => element("em"),
+            "strong" => element("strong"),
+            "code" => element("code"),
             "link" => {
                 let href = mark
                     .attrs()
@@ -401,63 +347,26 @@ fn render_text(text: &str, marks: &[Mark], out: &mut String) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let title = mark.attrs().get("title").and_then(|v| v.as_str());
-                out.push_str("<a href=\"");
-                out.push_str(&escape_attr(href));
-                out.push('"');
+                let mut link = element("a")
+                    .attr("href", href)
+                    .expect("framework link href attr is valid");
                 if let Some(title) = title {
-                    out.push_str(" title=\"");
-                    out.push_str(&escape_attr(title));
-                    out.push('"');
+                    link = link
+                        .attr("title", title)
+                        .expect("framework link title attr is valid");
                 }
-                out.push('>');
+                link
             }
-            other => {
-                out.push_str("<span data-mark=\"");
-                out.push_str(&escape_attr(other));
-                out.push_str("\">");
-            }
-        }
-    }
-    out.push_str(&escape_text(text));
-    for mark in marks.iter().rev() {
-        let tag = match mark.type_name() {
-            "em" => "em",
-            "strong" => "strong",
-            "code" => "code",
-            "link" => "a",
-            _ => "span",
+            other => element("span")
+                .attr("data-mark", other)
+                .expect("framework data-mark attr is valid"),
         };
-        out.push_str("</");
-        out.push_str(tag);
-        out.push('>');
+        wrapper = wrapper
+            .node(output)
+            .expect("structural child append is infallible");
+        output = wrapper.into();
     }
-}
-
-fn escape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-    out
+    output
 }
 
 #[cfg(test)]
@@ -531,7 +440,7 @@ mod tests {
     fn empty_paragraph_renders_with_br_placeholder() {
         let p = schema_basic::paragraph(Vec::new()).unwrap();
         let doc = schema_basic::doc(vec![p]).unwrap();
-        assert_eq!(render(&doc), r#"<p data-pos="0"><br/></p>"#,);
+        assert_eq!(render(&doc), r#"<p data-pos="0"><br></p>"#,);
     }
 
     #[test]
@@ -580,104 +489,10 @@ mod tests {
             concat!(
                 r#"<p data-pos="0"><a href="https://example.test?a=1&amp;b=2" "#,
                 r#"title="A &quot;title&quot;">go</a>"#,
-                r#"<img data-pos="3" src="img&quot;&lt;&amp;.png" "#,
-                r#"alt="Alt &amp; text" title="Title &lt;x&gt;"/></p>"#
+                r#"<img alt="Alt &amp; text" data-pos="3" "#,
+                r#"src="img&quot;<&amp;.png" title="Title <x>"></p>"#
             ),
         );
-    }
-
-    #[test]
-    fn runtime_node_view_overrides_default_tag() {
-        use crate::extension::{ExtensionNodeView, RichTextExtension};
-        use crate::runtime::RuntimeBuilder;
-
-        struct TaskItemView;
-        impl RichTextExtension for TaskItemView {
-            fn name(&self) -> &str {
-                "test-task-item-view"
-            }
-            fn node_views(&self) -> Vec<ExtensionNodeView> {
-                vec![ExtensionNodeView {
-                    node_type: "task_item".into(),
-                    tag: "pine-task-item".into(),
-                    content_selector: None,
-                }]
-            }
-        }
-
-        let runtime = RuntimeBuilder::new().with(TaskItemView).build();
-        let item = schema_basic::task_item(
-            true,
-            vec![
-                schema_basic::paragraph(vec![schema_basic::text("a", Vec::new()).unwrap()])
-                    .unwrap(),
-            ],
-        )
-        .unwrap();
-        let list = schema_basic::task_list(vec![item]).unwrap();
-        let doc = schema_basic::doc(vec![list]).unwrap();
-        let html = render_doc_to_html(&runtime, &doc);
-        assert!(
-            html.contains(r#"<pine-task-item data-pos="1" data-checked="true">"#),
-            "expected the custom element with reflected attrs, got: {html}"
-        );
-        assert!(html.contains("</pine-task-item>"));
-    }
-
-    #[test]
-    fn two_runtimes_render_same_doc_with_different_node_view_tags() {
-        use crate::extension::{ExtensionNodeView, RichTextExtension};
-        use crate::runtime::RuntimeBuilder;
-
-        struct TaskItemViewA;
-        impl RichTextExtension for TaskItemViewA {
-            fn name(&self) -> &str {
-                "view-a"
-            }
-            fn node_views(&self) -> Vec<ExtensionNodeView> {
-                vec![ExtensionNodeView {
-                    node_type: "task_item".into(),
-                    tag: "tag-a-item".into(),
-                    content_selector: None,
-                }]
-            }
-        }
-        struct TaskItemViewB;
-        impl RichTextExtension for TaskItemViewB {
-            fn name(&self) -> &str {
-                "view-b"
-            }
-            fn node_views(&self) -> Vec<ExtensionNodeView> {
-                vec![ExtensionNodeView {
-                    node_type: "task_item".into(),
-                    tag: "tag-b-item".into(),
-                    content_selector: None,
-                }]
-            }
-        }
-
-        let item = schema_basic::task_item(
-            false,
-            vec![
-                schema_basic::paragraph(vec![schema_basic::text("hi", Vec::new()).unwrap()])
-                    .unwrap(),
-            ],
-        )
-        .unwrap();
-        let list = schema_basic::task_list(vec![item]).unwrap();
-        let doc = schema_basic::doc(vec![list]).unwrap();
-
-        let rt_a = RuntimeBuilder::new().with(TaskItemViewA).build();
-        let rt_b = RuntimeBuilder::new().with(TaskItemViewB).build();
-
-        let html_a = render_doc_to_html(&rt_a, &doc);
-        let html_b = render_doc_to_html(&rt_b, &doc);
-
-        assert!(html_a.contains("<tag-a-item"), "A: {html_a}");
-        assert!(html_a.contains("</tag-a-item>"));
-        assert!(html_b.contains("<tag-b-item"), "B: {html_b}");
-        assert!(html_b.contains("</tag-b-item>"));
-        assert_ne!(html_a, html_b);
     }
 
     #[test]
@@ -704,8 +519,8 @@ mod tests {
             render(&doc),
             concat!(
                 r#"<ul class="task-list" data-pos="0">"#,
-                r#"<li class="task-item" data-pos="1" data-checked="true"><p data-pos="2">done</p></li>"#,
-                r#"<li class="task-item" data-pos="9" data-checked="false"><p data-pos="10">todo</p></li>"#,
+                r#"<li class="task-item" data-checked="true" data-pos="1"><p data-pos="2">done</p></li>"#,
+                r#"<li class="task-item" data-checked="false" data-pos="9"><p data-pos="10">todo</p></li>"#,
                 "</ul>"
             ),
         );

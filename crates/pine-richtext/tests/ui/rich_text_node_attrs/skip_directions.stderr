@@ -1,0 +1,11 @@
+error: serde `skip_serializing` is not supported by RichTextNodeAttrs because it makes the accepted and emitted key maps asymmetric or unknowable
+ --> tests/ui/rich_text_node_attrs/skip_directions.rs:5:13
+  |
+5 |     #[serde(skip_serializing)]
+  |             ^^^^^^^^^^^^^^^^
+
+error: serde `skip_deserializing` is not supported by RichTextNodeAttrs because it makes the accepted and emitted key maps asymmetric or unknowable
+  --> tests/ui/rich_text_node_attrs/skip_directions.rs:11:13
+   |
+11 |     #[serde(skip_deserializing)]
+   |             ^^^^^^^^^^^^^^^^^^

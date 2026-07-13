@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! open(url, topic) ─ connect ─ subscribe(topic, COLLAB_SUBPROTOCOL)
-//!   on Subscribed  ─► send SyncStep1 (hello)
+//!   on Subscribed  ─► send compatibility Hello
 //!   on Data        ─► driver.on_payload ─► send reply + on_change(new doc)
 //!   push_local     ─► driver.push_local ─► send Update
 //! ```
@@ -16,12 +16,13 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use pine_richtext::model::{Node, Schema};
+use pine_richtext::model::Node;
+use pine_richtext::runtime::EditorRuntime;
 use pocopine_collab::COLLAB_SUBPROTOCOL;
 use pocopine_realtime::client::{RealtimeClient, SessionEvent};
 
 use super::sync::CollabSyncClient;
-use crate::BindError;
+use crate::{BindError, runtime_compatibility};
 
 /// `Rc` so the data callback can clone the handler out and release the borrow
 /// before invoking it (the handler may re-enter the connection).
@@ -67,18 +68,18 @@ impl CollabConnection {
     /// [`CollabEditor::new`](crate::CollabEditor::new)).
     pub fn open(
         url: &str,
-        topic: impl Into<String>,
+        document_key: impl AsRef<str>,
         client_id: u64,
-        schema: Schema,
+        runtime: &EditorRuntime,
     ) -> Result<Self, BindError> {
-        let topic = topic.into();
+        let topic = runtime_compatibility(runtime).namespace_topic(document_key.as_ref());
         let client = Rc::new(
             RealtimeClient::connect(url).map_err(|err| BindError::Connect(format!("{err:?}")))?,
         );
-        let driver = Rc::new(RefCell::new(CollabSyncClient::new(client_id, schema)));
+        let driver = Rc::new(RefCell::new(CollabSyncClient::new(client_id, runtime)));
         let on_change: ChangeHandler = Rc::new(RefCell::new(None));
 
-        // Once our subscribe is acked (the topic_ref is bound), send SyncStep1.
+        // Once our subscribe is acked, send a fresh compatibility hello.
         {
             let weak: Weak<RealtimeClient> = Rc::downgrade(&client);
             let driver = driver.clone();
@@ -87,7 +88,7 @@ impl CollabConnection {
                 if let SessionEvent::Subscribed { topic, .. } = event
                     && topic == &topic_ev
                 {
-                    let hello = driver.borrow().hello();
+                    let hello = driver.borrow_mut().hello();
                     if let Some(client) = weak.upgrade() {
                         client.send_data(&topic_ev, COLLAB_SUBPROTOCOL, hello.encode());
                     }
@@ -171,9 +172,10 @@ impl CollabConnection {
         new_doc: &Node,
         steps: &[pine_richtext::transform::Step],
     ) -> Result<(), BindError> {
-        let update = self.driver.borrow_mut().push_local_steps(new_doc, steps)?;
-        self.client
-            .send_data(&self.topic, COLLAB_SUBPROTOCOL, update.encode());
+        if let Some(update) = self.driver.borrow_mut().push_local_steps(new_doc, steps)? {
+            self.client
+                .send_data(&self.topic, COLLAB_SUBPROTOCOL, update.encode());
+        }
         Ok(())
     }
 
@@ -257,22 +259,25 @@ mod tests {
 
     // Smoke test of the web_sys glue (the protocol logic is host-tested via the
     // driver). The socket never reaches OPEN against an unreachable URL, so this
-    // exercises the readiness queue + Drop path: open must not throw, push_local
-    // must queue (not drop) and return Ok, on_change must register, and Drop must
-    // clear handlers without panicking. Run with `wasm-pack test --node`.
+    // exercises construction + Drop: open must not throw, a pre-hello local
+    // edit must stay in the local yrs doc (for handshake upload), on_change must
+    // register, and Drop must clear handlers without panicking.
     #[wasm_bindgen_test]
     fn open_queues_without_throwing_and_drops_cleanly() {
-        let conn = CollabConnection::open(
-            "ws://127.0.0.1:1/__pocopine/ws/v1",
-            "collab:smoke",
-            1,
-            schema_basic::schema(),
-        )
-        .expect("open constructs while the socket is CONNECTING");
+        let runtime = pine_richtext::runtime::RuntimeBuilder::new().build();
+        let conn =
+            CollabConnection::open("ws://127.0.0.1:1/__pocopine/ws/v1", "smoke", 1, &runtime)
+                .expect("open constructs while the socket is CONNECTING");
 
-        // A pre-OPEN edit is queued (not dropped) and reported Ok.
+        assert_eq!(
+            conn.topic,
+            runtime_compatibility(&runtime).namespace_topic("smoke")
+        );
+
+        // A pre-hello edit is retained locally and reported Ok; no yrs update is
+        // sent until the server's compatible hello arrives.
         conn.push_local(&schema_basic::doc(vec![para("hi")]).unwrap())
-            .expect("push_local queues without error");
+            .expect("push_local retains the edit without error");
 
         // The first change handler registers; a second is refused (one editor
         // per connection).

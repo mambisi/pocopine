@@ -1,11 +1,13 @@
 //! Document identity and access.
 //!
 //! A [`CollabDoc`] hashes to a stable `doc_hash` (via `pocopine-crypto`) used
-//! for the `collab:{doc_hash}` topic on the `pocopine-realtime` gateway and for
-//! the per-document Redis keys. The hash input is length-prefixed so distinct
+//! for a compatibility-namespaced topic on the `pocopine-realtime` gateway and
+//! for the per-document Redis keys. The hash input is length-prefixed so distinct
 //! field tuples can never collide.
 
 use pocopine_crypto::sha256_hex;
+
+use crate::CompatibilityIdentity;
 
 /// A collaborative document's identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -50,9 +52,12 @@ impl CollabDoc {
         sha256_hex(&self.canonical_bytes())
     }
 
-    /// The `pocopine-realtime` topic a client subscribes to for this document.
-    pub fn topic(&self) -> String {
-        format!("collab:{}", self.doc_hash())
+    /// The compatibility-namespaced `pocopine-realtime` topic for this document.
+    ///
+    /// Fan-out rooms and [`crate::CollabStore`] keys both use this exact value,
+    /// so incompatible protocol/schema identities never share update history.
+    pub fn topic(&self, compatibility: &CompatibilityIdentity) -> String {
+        compatibility.namespace_topic(&self.doc_hash())
     }
 }
 
@@ -88,6 +93,11 @@ mod tests {
     #[test]
     fn doc_hash_is_stable_and_64_hex_chars() {
         let d = CollabDoc::new("app", "docs", "readme", "main");
+        let compatibility = CompatibilityIdentity::new(
+            1,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
         let h = d.doc_hash();
         assert_eq!(h.len(), 64);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
@@ -95,7 +105,10 @@ mod tests {
             h,
             CollabDoc::new("app", "docs", "readme", "main").doc_hash()
         );
-        assert_eq!(d.topic(), format!("collab:{h}"));
+        assert_eq!(
+            d.topic(&compatibility),
+            format!("collab:v1:{}:{h}", compatibility.fingerprint())
+        );
     }
 
     #[test]

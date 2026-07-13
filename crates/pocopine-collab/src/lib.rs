@@ -13,25 +13,27 @@
 //! the Option-A design the browser runs `yrs` in Rust (via `pine-richtext-collab`),
 //! not Yjs in JS — so both ends speak the same handshake from the same code:
 //!
-//! - [`protocol`] — the [`CollabMessage`] wire envelope + [`COLLAB_SUBPROTOCOL`].
+//! - [`protocol`] — compatibility hello + [`CollabMessage`] wire envelope.
 //! - [`sync`] — [`CollabDocument`], the `yrs` sync engine (state vector / diff /
 //!   apply / full update).
-//! - [`doc`] — [`CollabDoc`] document identity → the `collab:{doc_hash}` topic.
+//! - [`doc`] — document identity → compatibility-namespaced collab topic.
 //! - [`error`] — [`CollabError`].
 //!
 //! The host-only half lives behind a single `cfg` gate in [`server`]: the
 //! realtime [`CollabSync`] handler and the [`CollabStore`] persistence.
 
 pub mod awareness;
+pub mod compatibility;
 pub mod doc;
 pub mod error;
 pub mod protocol;
 pub mod sync;
 
 pub use awareness::Presence;
+pub use compatibility::{CompatibilityIdentity, FINGERPRINT_HEX_LEN};
 pub use doc::{CollabAccess, CollabDoc};
 pub use error::{CollabError, CollabResult};
-pub use protocol::{COLLAB_SUBPROTOCOL, CollabMessage};
+pub use protocol::{COLLAB_SUBPROTOCOL, CollabHello, CollabMessage};
 pub use sync::CollabDocument;
 
 #[cfg(not(target_arch = "wasm32"))]

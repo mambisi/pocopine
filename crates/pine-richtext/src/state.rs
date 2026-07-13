@@ -7,7 +7,12 @@ use serde_json::{Value, json};
 
 use crate::model::{Attrs, Fragment, Mark, Node, Schema, Slice};
 use crate::transform::{Mapping, StepMap, Transform};
+use crate::typed_nodes::WireNode;
 use crate::{RichTextError, RichTextResult};
+
+mod cell_selection;
+
+pub use cell_selection::CellSelectionRect;
 
 /// Meta key set on transactions that originated from a plugin's
 /// `append_transaction` hook. Matches upstream's `appendedTransaction` key.
@@ -21,6 +26,16 @@ pub enum Selection {
     Text { anchor: usize, head: usize },
     /// Node selection anchored at the position before a node.
     Node { anchor: usize },
+    /// Rectangular selection between two semantic table cells.
+    ///
+    /// Both positions point immediately before a node whose schema declares
+    /// [`crate::model::TableRole::Cell`]. The cells must belong to the same
+    /// rectangular semantic table. The rectangle is derived from the table
+    /// structure rather than represented as a misleading linear text range.
+    Cells {
+        anchor_cell: usize,
+        head_cell: usize,
+    },
     /// Selection covering the full document.
     All,
 }
@@ -190,11 +205,30 @@ impl Selection {
         Self::Node { anchor }
     }
 
+    /// Rectangular semantic table-cell selection.
+    pub fn cells(anchor_cell: usize, head_cell: usize) -> Self {
+        Self::Cells {
+            anchor_cell,
+            head_cell,
+        }
+    }
+
+    /// Whether this is a rectangular table-cell selection.
+    pub fn is_cells(&self) -> bool {
+        matches!(self, Self::Cells { .. })
+    }
+
     /// Selection start.
     pub fn from(&self, doc: &Node) -> usize {
         match self {
             Self::Text { anchor, head } => (*anchor).min(*head),
             Self::Node { anchor } => *anchor,
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => cell_selection::structural_bounds(doc, *anchor_cell, *head_cell)
+                .map(|(from, _)| from)
+                .unwrap_or((*anchor_cell).min(*head_cell)),
             Self::All => 0,
         }
         .min(doc.content_size())
@@ -208,13 +242,20 @@ impl Selection {
                 .map(|node| anchor + node.node_size())
                 .unwrap_or(*anchor)
                 .min(doc.content_size()),
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => cell_selection::structural_bounds(doc, *anchor_cell, *head_cell)
+                .map(|(_, to)| to)
+                .unwrap_or((*anchor_cell).max(*head_cell))
+                .min(doc.content_size()),
             Self::All => doc.content_size(),
         }
     }
 
     /// Whether this selection is empty.
     pub fn is_empty(&self, doc: &Node) -> bool {
-        self.from(doc) == self.to(doc)
+        !self.is_cells() && self.from(doc) == self.to(doc)
     }
 
     /// Map this selection through a transform mapping.
@@ -231,6 +272,13 @@ impl Selection {
             Self::Node { anchor } => Self::Node {
                 anchor: Mapping::map_through_maps(maps, *anchor, 1),
             },
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Self::Cells {
+                anchor_cell: Mapping::map_through_maps(maps, *anchor_cell, 1),
+                head_cell: Mapping::map_through_maps(maps, *head_cell, 1),
+            },
             Self::All => Self::All,
         }
     }
@@ -246,16 +294,41 @@ impl Selection {
             Self::Node { anchor } => Self::Node {
                 anchor: (*anchor).min(size.saturating_sub(1)),
             },
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Self::Cells {
+                anchor_cell: (*anchor_cell).min(size.saturating_sub(1)),
+                head_cell: (*head_cell).min(size.saturating_sub(1)),
+            },
             Self::All => Self::All,
         }
     }
 
     /// Validate this selection against a document.
-    pub fn validate(&self, doc: &Node) -> RichTextResult<()> {
+    pub fn validate(&self, doc: &Node, schema: &Schema) -> RichTextResult<()> {
         let size = doc.content_size();
         match self {
             Self::Text { anchor, head } if *anchor <= size && *head <= size => Ok(()),
-            Self::Node { anchor } if *anchor < size && node_after(doc, *anchor).is_some() => Ok(()),
+            Self::Node { anchor } if *anchor < size => {
+                let Some(node) = node_after(doc, *anchor) else {
+                    return Err(RichTextError::Selection(format!(
+                        "node selection at {anchor} does not point to a node boundary"
+                    )));
+                };
+                let node_type = schema.node_type(node.type_name())?;
+                if node.is_text() || !node_type.is_selectable() {
+                    return Err(RichTextError::Selection(format!(
+                        "node selection at {anchor} targets node type `{}` which is not selectable",
+                        node.type_name()
+                    )));
+                }
+                Ok(())
+            }
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => cell_selection::resolve(doc, schema, *anchor_cell, *head_cell).map(|_| ()),
             Self::All => Ok(()),
             Self::Text { anchor, head } => Err(RichTextError::Selection(format!(
                 "text selection {anchor}..{head} exceeds document size {size}"
@@ -263,6 +336,64 @@ impl Selection {
             Self::Node { anchor } => Err(RichTextError::Selection(format!(
                 "node selection at {anchor} exceeds document size {size}"
             ))),
+        }
+    }
+
+    /// Normalized model ranges covered by this selection.
+    ///
+    /// A cell selection returns one content range per selected cell in
+    /// row-major order. It never pretends a selected column is one linear
+    /// range that also contains the unselected cells between its endpoints.
+    pub fn ranges(&self, doc: &Node, schema: &Schema) -> RichTextResult<Vec<SelectionRange>> {
+        match self {
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Ok(cell_selection::resolve(doc, schema, *anchor_cell, *head_cell)?.ranges()),
+            _ => Ok(vec![SelectionRange::new(self.from(doc), self.to(doc))]),
+        }
+    }
+
+    /// Derived rectangle for a cell selection, or `None` for other kinds.
+    pub fn cell_rect(
+        &self,
+        doc: &Node,
+        schema: &Schema,
+    ) -> RichTextResult<Option<CellSelectionRect>> {
+        match self {
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Ok(Some(
+                cell_selection::resolve(doc, schema, *anchor_cell, *head_cell)?.rect(),
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Absolute positions immediately before every selected cell, row-major.
+    pub fn cell_positions(&self, doc: &Node, schema: &Schema) -> RichTextResult<Vec<usize>> {
+        match self {
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Ok(cell_selection::resolve(doc, schema, *anchor_cell, *head_cell)?.positions()),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Copyable model content selected by this selection.
+    ///
+    /// Cell selections produce a closed table slice containing only the
+    /// selected rectangle, with the original table, row, and cell attributes
+    /// preserved.
+    pub fn content(&self, doc: &Node, schema: &Schema) -> RichTextResult<Slice> {
+        match self {
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => cell_selection::resolve(doc, schema, *anchor_cell, *head_cell)?.slice(),
+            _ => doc.slice(self.from(doc), self.to(doc)),
         }
     }
 
@@ -274,6 +405,13 @@ impl Selection {
                 head: *head,
             },
             Self::Node { anchor } => SelectionBookmark::Node { anchor: *anchor },
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => SelectionBookmark::Cells {
+                anchor_cell: *anchor_cell,
+                head_cell: *head_cell,
+            },
             Self::All => SelectionBookmark::All,
         }
     }
@@ -306,6 +444,11 @@ pub enum SelectionBookmark {
     Text { anchor: usize, head: usize },
     /// Node bookmark.
     Node { anchor: usize },
+    /// Semantic table-cell bookmark.
+    Cells {
+        anchor_cell: usize,
+        head_cell: usize,
+    },
     /// All-selection bookmark.
     All,
 }
@@ -325,27 +468,70 @@ impl SelectionBookmark {
             Self::Node { anchor } => Self::Node {
                 anchor: Mapping::map_through_maps(maps, *anchor, 1),
             },
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Self::Cells {
+                anchor_cell: Mapping::map_through_maps(maps, *anchor_cell, 1),
+                head_cell: Mapping::map_through_maps(maps, *head_cell, 1),
+            },
             Self::All => Self::All,
         }
     }
 
     /// Resolve a bookmark to a selection.
-    pub fn resolve(&self, doc: &Node) -> RichTextResult<Selection> {
+    pub fn resolve(&self, doc: &Node, schema: &Schema) -> RichTextResult<Selection> {
         let selection = match self {
             Self::Text { anchor, head } => Selection::Text {
                 anchor: *anchor,
                 head: *head,
             },
             Self::Node { anchor } => Selection::Node { anchor: *anchor },
+            Self::Cells {
+                anchor_cell,
+                head_cell,
+            } => Selection::Cells {
+                anchor_cell: *anchor_cell,
+                head_cell: *head_cell,
+            },
             Self::All => Selection::All,
         };
-        selection.validate(doc)?;
+        selection.validate(doc, schema)?;
         Ok(selection)
     }
 }
 
 fn node_after(doc: &Node, pos: usize) -> Option<Node> {
     doc.resolve(pos).ok()?.node_after()
+}
+
+fn resolve_mapped_selection(
+    mapped: Selection,
+    doc: &Node,
+    schema: &Schema,
+) -> RichTextResult<Selection> {
+    match mapped.validate(doc, schema) {
+        Ok(()) => Ok(mapped),
+        Err(_) if matches!(&mapped, Selection::Node { .. }) => {
+            let anchor = match mapped {
+                Selection::Node { anchor } => anchor,
+                _ => unreachable!("guard proves this is a node selection"),
+            };
+            Selection::near(doc, schema, anchor.min(doc.content_size()), 1)
+        }
+        Err(_) if mapped.is_cells() => {
+            let head = match mapped {
+                Selection::Cells { head_cell, .. } => head_cell,
+                _ => unreachable!("guard proves this is a cell selection"),
+            };
+            // If a transform removed a selected cell or its table, keeping a
+            // stale rectangular selection is worse than collapsing. Resolve
+            // near the mapped head so later commands always receive a valid
+            // model selection.
+            Selection::near(doc, schema, head.min(doc.content_size()), 1)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn normalize_dir(dir: i8) -> i8 {
@@ -367,6 +553,13 @@ fn node_is_atom(schema: &Schema, node: &Node) -> bool {
         || schema
             .node_type(node.type_name())
             .is_ok_and(|node_type| node_type.is_atom())
+}
+
+fn node_is_selectable(schema: &Schema, node: &Node) -> bool {
+    !node.is_text()
+        && schema
+            .node_type(node.type_name())
+            .is_ok_and(|node_type| node_type.is_selectable())
 }
 
 fn find_selection_in(
@@ -391,7 +584,7 @@ fn find_selection_in(
                 {
                     return Some(selection);
                 }
-            } else if !text_only && !child.is_text() {
+            } else if !text_only && node_is_selectable(schema, child) {
                 return Some(Selection::node(pos));
             }
             pos += child.node_size();
@@ -411,7 +604,7 @@ fn find_selection_in(
                 ) {
                     return Some(selection);
                 }
-            } else if !text_only && !child.is_text() {
+            } else if !text_only && node_is_selectable(schema, child) {
                 return Some(Selection::node(pos.saturating_sub(child.node_size())));
             }
             pos = pos.saturating_sub(child.node_size());
@@ -491,7 +684,7 @@ impl Transaction {
 
     /// Set selection.
     pub fn set_selection(&mut self, selection: Selection) -> RichTextResult<&mut Self> {
-        selection.validate(self.doc())?;
+        selection.validate(self.doc(), self.transform.schema())?;
         if let Selection::Node { anchor } = &selection
             && let Some(node) = node_after(self.doc(), *anchor)
             && !self
@@ -546,8 +739,50 @@ impl Transaction {
     /// Delete the current selection.
     pub fn delete_selection(&mut self) -> RichTextResult<&mut Self> {
         let selection = self.selection.clone().unwrap_or_else(|| Selection::text(0));
+        if let Selection::Cells {
+            anchor_cell,
+            head_cell,
+        } = &selection
+        {
+            let ranges = cell_selection::resolve(
+                self.doc(),
+                self.transform.schema(),
+                *anchor_cell,
+                *head_cell,
+            )?
+            .ranges();
+            // Work backwards so each not-yet-cleared cell keeps its original
+            // coordinates. Every replace maps the explicit cell selection,
+            // preserving it as semantic cell positions.
+            for range in ranges.into_iter().rev() {
+                if range.from == range.to {
+                    continue;
+                }
+                let cell =
+                    node_after(self.doc(), range.from.saturating_sub(1)).ok_or_else(|| {
+                        RichTextError::Selection(
+                            "selected cell disappeared while clearing its content".to_string(),
+                        )
+                    })?;
+                let empty = self
+                    .transform
+                    .schema()
+                    .node_type(cell.type_name())?
+                    .content_expr()
+                    .fill_before(self.transform.schema(), &Fragment::empty(), true)
+                    .ok_or_else(|| {
+                        RichTextError::Selection(format!(
+                            "cell type `{}` has no valid empty/default content",
+                            cell.type_name()
+                        ))
+                    })?;
+                self.replace_with(range.from, range.to, empty)?;
+            }
+            return Ok(self);
+        }
         let from = selection.from(self.doc());
         let to = selection.to(self.doc());
+        let collapse_deleted_node = matches!(selection, Selection::Node { .. });
         let preserved_marks = if matches!(selection, Selection::Text { .. }) && from < to {
             let from_pos = self.doc().resolve(from)?;
             let to_pos = self.doc().resolve(to)?;
@@ -557,6 +792,18 @@ impl Transaction {
         };
 
         self.delete(from, to)?;
+        if collapse_deleted_node {
+            // Mapping a Node selection through deletion can leave it anchored
+            // on the text/atom that shifted into the removed node's position.
+            // Deleting the selected node instead collapses to the nearest real
+            // caret at its former boundary.
+            self.set_selection(Selection::near(
+                self.doc(),
+                self.transform.schema(),
+                from.min(self.doc().content_size()),
+                1,
+            )?)?;
+        }
         if let Some(marks) = preserved_marks {
             self.set_stored_marks(marks);
         }
@@ -566,6 +813,9 @@ impl Transaction {
     /// Replace the current selection with a slice.
     pub fn replace_selection(&mut self, slice: Slice) -> RichTextResult<&mut Self> {
         let selection = self.selection.clone().unwrap_or_else(|| Selection::text(0));
+        if selection.is_cells() {
+            return self.replace_cell_selection(slice);
+        }
         let from = selection.from(self.doc());
         let to = selection.to(self.doc());
         let bias = slice_insertion_bias(&slice, self.transform.schema());
@@ -730,8 +980,11 @@ impl Transaction {
             let mapped = selection
                 .map_through_maps(&self.transform.maps()[map_start..])
                 .clamped(self.doc());
-            mapped.validate(self.doc())?;
-            self.selection = Some(mapped);
+            self.selection = Some(resolve_mapped_selection(
+                mapped,
+                self.doc(),
+                self.transform.schema(),
+            )?);
         }
         Ok(())
     }
@@ -762,6 +1015,9 @@ impl Transaction {
     }
 
     fn marks_for_selection(&self, selection: &Selection) -> RichTextResult<Vec<Mark>> {
+        if selection.is_cells() {
+            return Ok(Vec::new());
+        }
         if let Some(marks) = &self.stored_marks {
             return Ok(marks.clone());
         }
@@ -776,6 +1032,51 @@ impl Transaction {
                 .marks_across(&self.doc().resolve(to)?, self.transform.schema())
                 .unwrap_or_default())
         }
+    }
+
+    fn replace_cell_selection(&mut self, slice: Slice) -> RichTextResult<&mut Self> {
+        let (anchor_cell, head_cell) = match self.selection.as_ref() {
+            Some(Selection::Cells {
+                anchor_cell,
+                head_cell,
+            }) => (*anchor_cell, *head_cell),
+            _ => {
+                return Err(RichTextError::Selection(
+                    "rectangular replacement requires a cell selection".to_string(),
+                ));
+            }
+        };
+        let selected =
+            cell_selection::resolve(self.doc(), self.transform.schema(), anchor_cell, head_cell)?;
+        if let Some(replacements) =
+            selected.rectangular_replacements(&slice, self.transform.schema())?
+        {
+            for (range, content) in replacements.into_iter().rev() {
+                self.replace_with(range.from, range.to, content)?;
+            }
+            return Ok(self);
+        }
+
+        self.delete_selection()?;
+        let insertion = match self.selection.as_ref() {
+            Some(Selection::Cells { anchor_cell, .. }) => *anchor_cell + 1,
+            _ => {
+                return Err(RichTextError::Selection(
+                    "cell selection was lost while preparing replacement".to_string(),
+                ));
+            }
+        };
+        self.set_selection(Selection::text(insertion))?;
+        if slice.size() == 0 {
+            return Ok(self);
+        }
+
+        let bias = slice_insertion_bias(&slice, self.transform.schema());
+        let map_start = self.transform.maps().len();
+        self.transform.replace_range(insertion, insertion, slice)?;
+        self.map_selection_from(map_start)?;
+        self.selection_to_insertion_end(map_start, bias)?;
+        Ok(self)
     }
 }
 
@@ -874,7 +1175,7 @@ impl EditorState {
         let selection = config
             .selection
             .unwrap_or_else(|| Selection::at_start(&config.doc, &config.schema));
-        selection.validate(&config.doc)?;
+        selection.validate(&config.doc, &config.schema)?;
 
         let mut state = Self {
             schema: config.schema,
@@ -945,7 +1246,7 @@ impl EditorState {
     /// and the prior remove-then-reinsert dance still touches every
     /// entry).
     pub fn with_selection(&self, selection: Selection) -> RichTextResult<Self> {
-        selection.validate(&self.doc)?;
+        selection.validate(&self.doc, &self.schema)?;
         let stores_marks = matches!(&selection, Selection::Text { anchor, head } if anchor == head);
         let mut next = self.clone();
         next.selection = selection;
@@ -1003,7 +1304,7 @@ impl EditorState {
     pub fn from_json(schema: Schema, plugins: Vec<Plugin>, value: Value) -> RichTextResult<Self> {
         #[derive(Deserialize)]
         struct StateJson {
-            doc: Node,
+            doc: WireNode,
             selection: Option<Selection>,
             stored_marks: Option<Vec<Mark>>,
             #[serde(default)]
@@ -1011,9 +1312,10 @@ impl EditorState {
         }
 
         let decoded: StateJson = serde_json::from_value(value)?;
+        let doc = schema.materialize_wire_node(decoded.doc)?;
         let mut state = Self::create(EditorStateConfig {
             schema,
-            doc: decoded.doc,
+            doc,
             selection: decoded.selection,
             stored_marks: decoded.stored_marks,
             plugins,
@@ -1079,12 +1381,16 @@ impl EditorState {
             ));
         }
 
-        let selection = transaction.selection.clone().unwrap_or_else(|| {
-            self.selection
+        let selection = if let Some(selection) = transaction.selection.clone() {
+            selection
+        } else {
+            let mapped = self
+                .selection
                 .map_through_maps(transaction.transform().maps())
-                .clamped(transaction.doc())
-        });
-        selection.validate(transaction.doc())?;
+                .clamped(transaction.doc());
+            resolve_mapped_selection(mapped, transaction.doc(), &self.schema)?
+        };
+        selection.validate(transaction.doc(), &self.schema)?;
 
         let stores_marks = matches!(&selection, Selection::Text { anchor, head } if anchor == head);
         let mut next = Self {
@@ -1496,7 +1802,7 @@ mod tests {
     fn node_selection_covers_the_selected_node_size() {
         let state = state();
         let selection = Selection::node(0);
-        selection.validate(state.doc()).unwrap();
+        selection.validate(state.doc(), state.schema()).unwrap();
 
         assert_eq!(selection.from(state.doc()), 0);
         assert_eq!(selection.to(state.doc()), 7);

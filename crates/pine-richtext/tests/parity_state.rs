@@ -60,6 +60,14 @@ fn state_selection_rejects_non_selectable_node_type() {
 }
 
 #[test]
+fn state_selection_rejects_a_node_anchor_inside_text() {
+    let state = state_with_doc(doc(vec![paragraph_text("text")]));
+    let mut transaction = state.tr();
+
+    assert!(transaction.set_selection(Selection::node(2)).is_err());
+}
+
+#[test]
 fn state_json_preserves_selection_stored_marks_and_plugin_state() {
     let counter = Plugin::builder("count")
         .state_field(
@@ -576,6 +584,23 @@ fn state_node_selection_can_be_replaced_with_inline_or_block_nodes() {
         ])
     );
     assert_eq!(state.selection().from(state.doc()), 9);
+}
+
+#[test]
+fn state_deleting_an_inline_node_selection_collapses_to_its_former_boundary() {
+    let state = state_with_doc(doc(vec![paragraph(vec![
+        text("foo"),
+        image("chip.png"),
+        text("bar"),
+    ])]));
+
+    let mut tr = state.tr();
+    tr.set_selection(Selection::node(4)).unwrap();
+    tr.delete_selection().unwrap();
+    let state = state.apply(tr).unwrap();
+
+    assert_eq!(state.doc(), &doc(vec![paragraph_text("foobar")]));
+    assert_eq!(state.selection(), &Selection::text(4));
 }
 
 #[test]

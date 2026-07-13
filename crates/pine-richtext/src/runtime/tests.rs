@@ -9,14 +9,14 @@
 
 use serde_json::json;
 
-use crate::extension::{ExtensionNodeView, KeyBindings, NamedCommand, RichTextExtension};
+use crate::extension::{KeyBindings, NamedCommand, RichTextExtension};
 use crate::extensions::CoreNodesExtension;
 use crate::model::{Attrs, Fragment, Node};
 use crate::render::render_doc_to_html;
 use crate::{schema_basic, state::Plugin};
 
 use super::registry::lock_tests;
-use super::{EditorRuntime, NodeViewSpec, RuntimeBuilder, registry};
+use super::{EditorRuntime, RuntimeBuilder, registry};
 
 fn seed_doc(schema: &crate::model::Schema) -> Node {
     let title = schema
@@ -222,8 +222,8 @@ fn named_runtime_resolve_seals_legacy_extension_register() {
 
     // Page that mounts only named-runtime editors. resolve(Some(...))
     // must seal the legacy `extension::register` path so a late
-    // mount-time extension can't sneak into the global registry the
-    // reconciler / commands still read in C2.
+    // mount-time extension can't mutate the pending default-runtime overlay
+    // after runtime composition has started.
     let comment = RuntimeBuilder::new().name("comment").build();
     registry::register("comment", comment);
     let _ = registry::resolve(Some("comment"));
@@ -253,66 +253,6 @@ fn duplicate_runtime_name_drops_second_registration() {
     assert!(
         std::sync::Arc::ptr_eq(&resolved, &a),
         "first-wins on duplicate registration"
-    );
-}
-
-#[test]
-fn two_runtimes_carry_independent_node_view_tags() {
-    let _g = lock_tests();
-
-    struct TaggedExt {
-        name: &'static str,
-        bindings: Vec<ExtensionNodeView>,
-    }
-    impl RichTextExtension for TaggedExt {
-        fn name(&self) -> &str {
-            self.name
-        }
-        fn node_views(&self) -> Vec<ExtensionNodeView> {
-            self.bindings
-                .iter()
-                .map(|nv| ExtensionNodeView {
-                    node_type: nv.node_type.clone(),
-                    tag: nv.tag.clone(),
-                    content_selector: nv.content_selector.clone(),
-                })
-                .collect()
-        }
-    }
-
-    let a = RuntimeBuilder::new()
-        .without_defaults()
-        .with(CoreNodesExtension)
-        .with(TaggedExt {
-            name: "rt-a",
-            bindings: vec![ExtensionNodeView {
-                node_type: "paragraph".into(),
-                tag: "pine-paragraph-a".into(),
-                content_selector: None,
-            }],
-        })
-        .build();
-
-    let b = RuntimeBuilder::new()
-        .without_defaults()
-        .with(CoreNodesExtension)
-        .with(TaggedExt {
-            name: "rt-b",
-            bindings: vec![ExtensionNodeView {
-                node_type: "paragraph".into(),
-                tag: "pine-paragraph-b".into(),
-                content_selector: None,
-            }],
-        })
-        .build();
-
-    assert_eq!(
-        a.lookup_node_view("paragraph").map(|s| s.tag.as_str()),
-        Some("pine-paragraph-a")
-    );
-    assert_eq!(
-        b.lookup_node_view("paragraph").map(|s| s.tag.as_str()),
-        Some("pine-paragraph-b")
     );
 }
 
@@ -540,84 +480,6 @@ fn duplicate_user_extension_name_first_wins() {
 }
 
 #[test]
-fn user_node_view_binding_shadows_base_via_different_name() {
-    let _g = lock_tests();
-
-    struct ShadowTaskView;
-    impl RichTextExtension for ShadowTaskView {
-        fn name(&self) -> &str {
-            "user-task-view-overlay"
-        }
-        fn node_views(&self) -> Vec<ExtensionNodeView> {
-            vec![ExtensionNodeView {
-                node_type: "task_item".into(),
-                tag: "user-task-item".into(),
-                content_selector: None,
-            }]
-        }
-    }
-
-    // User-first fold means a user node-view binding for `task_item`
-    // wins over any base binding for the same node_type. (Base
-    // `TaskListExtension::new()` ships with no node-view binding today,
-    // but the contract must hold even if a future base extension adds
-    // one.)
-    let rt = RuntimeBuilder::new().with(ShadowTaskView).build();
-    assert_eq!(
-        rt.lookup_node_view("task_item").map(|s| s.tag.as_str()),
-        Some("user-task-item"),
-        "user node-view binding must take precedence over any base binding"
-    );
-}
-
-#[test]
-fn later_user_node_view_replaces_earlier_for_same_node_type() {
-    let _g = lock_tests();
-
-    struct PBindA;
-    impl RichTextExtension for PBindA {
-        fn name(&self) -> &str {
-            "p-bind-a"
-        }
-        fn node_views(&self) -> Vec<ExtensionNodeView> {
-            vec![ExtensionNodeView {
-                node_type: "paragraph".into(),
-                tag: "pine-paragraph-a".into(),
-                content_selector: None,
-            }]
-        }
-    }
-    struct PBindB;
-    impl RichTextExtension for PBindB {
-        fn name(&self) -> &str {
-            "p-bind-b"
-        }
-        fn node_views(&self) -> Vec<ExtensionNodeView> {
-            vec![ExtensionNodeView {
-                node_type: "paragraph".into(),
-                tag: "pine-paragraph-b".into(),
-                content_selector: None,
-            }]
-        }
-    }
-
-    // `.with(PBindA).with(PBindB)` — later registration must override
-    // earlier for the same node_type, matching
-    // `render::node_views::register`'s replace-on-insert semantics.
-    let rt = RuntimeBuilder::new()
-        .without_defaults()
-        .with(CoreNodesExtension)
-        .with(PBindA)
-        .with(PBindB)
-        .build();
-    assert_eq!(
-        rt.lookup_node_view("paragraph").map(|s| s.tag.as_str()),
-        Some("pine-paragraph-b"),
-        "later node-view registration must replace earlier for same node_type"
-    );
-}
-
-#[test]
 fn base_plugin_protected_from_user_same_key_shadowing() {
     let _g = lock_tests();
 
@@ -650,38 +512,6 @@ fn base_plugin_protected_from_user_same_key_shadowing() {
         rt.named_command("undo").is_some(),
         "base HistoryExtension command should still be resolvable"
     );
-}
-
-#[test]
-fn node_view_spec_through_runtime_carries_content_selector() {
-    let _g = lock_tests();
-
-    struct WithContent;
-    impl RichTextExtension for WithContent {
-        fn name(&self) -> &str {
-            "with-content"
-        }
-        fn node_views(&self) -> Vec<ExtensionNodeView> {
-            vec![ExtensionNodeView {
-                node_type: "paragraph".into(),
-                tag: "pine-p".into(),
-                content_selector: Some("[data-content]".into()),
-            }]
-        }
-    }
-
-    let rt = RuntimeBuilder::new()
-        .without_defaults()
-        .with(CoreNodesExtension)
-        .with(WithContent)
-        .build();
-
-    let spec: NodeViewSpec = rt
-        .lookup_node_view("paragraph")
-        .cloned()
-        .expect("node view bound");
-    assert_eq!(spec.tag, "pine-p");
-    assert_eq!(spec.content_selector.as_deref(), Some("[data-content]"));
 }
 
 #[test]

@@ -111,19 +111,19 @@
     }
     pine-rich-text-root li > p { margin: 0; }
 
-    /* Checklist: `<pine-task-item>` is registered as the node-view for
-       the `task_item` model node. It renders a checkbox button + a
-       `<slot>` for the inline content. The list itself hides the
-       default bullet and leaves room for the checkbox. */
+    /* Checklist: the typed `task_item` model owns a native `<li>` host.
+       `PineTaskItem` renders checkbox chrome around the editor-owned
+       content outlet. The list hides its default bullet and leaves room
+       for the checkbox. */
     pine-rich-text-root ul.task-list {
       list-style: none;
       padding-left: 1.75em;
     }
-    pine-rich-text-root pine-task-item {
+    pine-rich-text-root [data-pine-node-type="task_item"] {
       display: block;
       margin: 0;
     }
-    pine-rich-text-root pine-task-item .pine-task-item {
+    pine-rich-text-root [data-pine-node-type="task_item"] .pine-task-item {
       display: grid;
       grid-template-columns: 16px minmax(0, 1fr);
       column-gap: 8px;
@@ -145,7 +145,7 @@
     }
     pine-rich-text-root .pine-task-item-content { min-width: 0; }
     pine-rich-text-root .pine-task-item-content > p { margin: 0; }
-    pine-rich-text-root pine-task-item[data-checked="true"] .pine-task-item-check {
+    pine-rich-text-root [data-pine-node-type="task_item"][data-checked="true"] .pine-task-item-check {
       background: #4a90e2;
       border-color: #4a90e2;
       background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M3 8.5l3 3 7-7'/></svg>");
@@ -153,8 +153,8 @@
       background-repeat: no-repeat;
       background-position: center;
     }
-    pine-rich-text-root pine-task-item[data-checked="true"] .pine-task-item-content,
-    pine-rich-text-root pine-task-item[data-checked="true"] p {
+    pine-rich-text-root [data-pine-node-type="task_item"][data-checked="true"] .pine-task-item-content,
+    pine-rich-text-root [data-pine-node-type="task_item"][data-checked="true"] p {
       color: #999;
       text-decoration: line-through;
     }

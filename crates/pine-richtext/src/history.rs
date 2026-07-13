@@ -337,7 +337,7 @@ impl Command for UndoRedo {
 
         // Restore the selection if one was recorded.
         if let Some(bookmark) = &event.selection {
-            let resolved = bookmark.resolve(tr.doc()).ok()?;
+            let resolved = bookmark.resolve(tr.doc(), state.schema()).ok()?;
             tr.set_selection(resolved).ok()?;
         }
 

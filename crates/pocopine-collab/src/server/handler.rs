@@ -4,9 +4,10 @@
 //! [`CollabSync`] holds one authoritative [`CollabDocument`] per topic and
 //! reacts to each inbound collab message:
 //!
-//! - **SyncStep1** (a peer's state vector) → reply to that peer with the diff it
-//!   is missing (SyncStep2) *and* the server's own state vector (SyncStep1), so
-//!   the peer sends back what the server lacks. This is the two-way handshake.
+//! - **Hello** (protocol/schema identity + state vector) → validate before any
+//!   yrs exchange, then reply with the server hello followed by the diff the
+//!   peer is missing (SyncStep2). A writer answers the server hello with what
+//!   the server lacks.
 //! - **SyncStep2 / Update** (state the server was missing / a live edit) → apply
 //!   it to the authoritative document and broadcast it as an Update so every
 //!   other subscriber — including peers on other processes — converges.
@@ -16,9 +17,9 @@
 //! applying its own echoed Update is a no-op.
 //!
 //! Write access is enforced via the gateway's write policy
-//! ([`InboundData::can_write`]): a read-only connection may run SyncStep1 (read
-//! down) but its Update / SyncStep2 messages are refused, and it is never
-//! prompted with the server's SyncStep1. This is the realtime-layer counterpart
+//! ([`InboundData::can_write`]): a read-only connection may negotiate and sync
+//! down but its Update / SyncStep2 messages are refused, and the server hello
+//! does not request an upload. This is the realtime-layer counterpart
 //! of [`CollabAccess`](crate::doc::CollabAccess).
 //!
 //! Every process **self-subscribes** to each topic's fan-out and folds peer
@@ -33,7 +34,7 @@
 //! to the fan-out (and so, durably, toward the store). If the process crashes in
 //! that window — after the optimistic apply, before the gateway publishes — the
 //! edit reached neither the fan-out nor the store. It is not lost outright: the
-//! originating client re-runs the sync handshake on reconnect (its SyncStep1
+//! originating client re-runs the sync handshake on reconnect (its Hello
 //! re-uploads exactly what the server lacks), so the edit returns as long as
 //! that client reconnects. The server is thus at-least-once *through the client*,
 //! not server-durable the instant it acks; the gap is only real if the client
@@ -41,7 +42,7 @@
 //! publish to the fan-out itself before acking (a realtime↔collab contract
 //! change deferred as its own piece).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,7 +55,8 @@ use pocopine_realtime::{Fanout, InboundData, Reaction, SubprotocolHandler, Topic
 use tokio::task::JoinHandle;
 
 use super::store::{CollabSnapshot, CollabStore};
-use crate::protocol::CollabMessage;
+use crate::compatibility::CompatibilityIdentity;
+use crate::protocol::{CollabHello, CollabMessage, TAG_HELLO};
 use crate::sync::CollabDocument;
 
 /// Save a checkpoint snapshot once this many fan-out updates have been folded
@@ -89,10 +91,28 @@ const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
 /// process restart and fan-out retention eviction.
 pub struct CollabSync {
     fanout: Arc<dyn Fanout>,
+    compatibility: CompatibilityIdentity,
     store: Option<Arc<dyn CollabStore>>,
     checkpoint_every: u64,
     max_update_bytes: usize,
     topics: Mutex<HashMap<Topic, Arc<TopicState>>>,
+    verified_subscriptions: Mutex<HashSet<SubscriptionKey>>,
+}
+
+/// One socket's compatibility negotiation for one subscribed document.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SubscriptionKey {
+    session_id: String,
+    topic: Topic,
+}
+
+impl SubscriptionKey {
+    fn new(session_id: &str, topic: &Topic) -> Self {
+        Self {
+            session_id: session_id.to_owned(),
+            topic: topic.clone(),
+        }
+    }
 }
 
 /// Per-topic state: the document and the apply loop keeping it converged.
@@ -123,13 +143,15 @@ impl Drop for TopicState {
 impl CollabSync {
     /// Build a handler over the fan-out the gateway also publishes to. They MUST
     /// be the same [`Fanout`] instance, or peer updates will not converge.
-    pub fn new(fanout: Arc<dyn Fanout>) -> Self {
+    pub fn new(fanout: Arc<dyn Fanout>, compatibility: CompatibilityIdentity) -> Self {
         Self {
             fanout,
+            compatibility,
             store: None,
             checkpoint_every: CHECKPOINT_EVERY,
             max_update_bytes: MAX_UPDATE_BYTES,
             topics: Mutex::new(HashMap::new()),
+            verified_subscriptions: Mutex::new(HashSet::new()),
         }
     }
 
@@ -183,19 +205,125 @@ impl CollabSync {
         topics.insert(topic.clone(), state.clone());
         Ok(state)
     }
+
+    fn ensure_compatible_topic(&self, topic: &Topic) -> Result<(), WsError> {
+        if self.compatibility.accepts_topic(topic.as_str()) {
+            Ok(())
+        } else {
+            Err(WsError::protocol(format!(
+                "collab topic `{topic}` is outside server compatibility namespace v{}:{}",
+                self.compatibility.protocol_version(),
+                self.compatibility.fingerprint()
+            )))
+        }
+    }
+
+    fn revoke_subscription(&self, session_id: &str, topic: &Topic) -> Result<(), WsError> {
+        self.verified_subscriptions
+            .lock()
+            .map_err(|_| WsError::backend("collab compatibility map poisoned"))?
+            .remove(&SubscriptionKey::new(session_id, topic));
+        Ok(())
+    }
+
+    fn verify_subscription(&self, session_id: &str, topic: &Topic) -> Result<(), WsError> {
+        self.verified_subscriptions
+            .lock()
+            .map_err(|_| WsError::backend("collab compatibility map poisoned"))?
+            .insert(SubscriptionKey::new(session_id, topic));
+        Ok(())
+    }
+
+    fn ensure_verified(&self, session_id: &str, topic: &Topic) -> Result<(), WsError> {
+        let verified = self
+            .verified_subscriptions
+            .lock()
+            .map_err(|_| WsError::backend("collab compatibility map poisoned"))?
+            .contains(&SubscriptionKey::new(session_id, topic));
+        if verified {
+            Ok(())
+        } else {
+            Err(WsError::protocol(
+                "collab message received before a compatible hello",
+            ))
+        }
+    }
 }
 
 #[async_trait]
 impl SubprotocolHandler for CollabSync {
-    async fn on_data(&self, inbound: InboundData<'_>) -> Result<Reaction, WsError> {
-        let message = CollabMessage::decode(inbound.payload)
-            .map_err(|err| WsError::protocol(err.to_string()))?;
+    fn outbound_starts_paused(&self) -> bool {
+        true
+    }
 
-        // Ephemeral awareness (presence/cursors) never touches the document: relay
-        // it to peers verbatim without taking the doc lock. It is high-frequency (a
-        // cursor move per keystroke), so keeping it off the lock avoids contending
-        // the convergence apply loop; and it is allowed from read-only peers — a
-        // viewer's cursor is presence, not a mutation.
+    async fn on_data(&self, inbound: InboundData<'_>) -> Result<Reaction, WsError> {
+        self.ensure_compatible_topic(inbound.topic)?;
+
+        let message = match CollabMessage::decode(inbound.payload) {
+            Ok(message) => message,
+            Err(err) => {
+                // A malformed repeated hello must not leave an earlier verified
+                // state live. Fresh malformed hellos are already absent.
+                if inbound.payload.first().copied() == Some(TAG_HELLO) {
+                    inbound.outbound_gate.close();
+                    self.revoke_subscription(inbound.session_id, inbound.topic)?;
+                }
+                return Err(WsError::protocol(err.to_string()));
+            }
+        };
+
+        if let CollabMessage::Hello(hello) = message {
+            // A repeated hello starts a fresh negotiation. Revoke first so any
+            // mismatch or malformed yrs state vector fails closed.
+            inbound.outbound_gate.close();
+            self.revoke_subscription(inbound.session_id, inbound.topic)?;
+            if hello.compatibility() != &self.compatibility {
+                return Err(WsError::protocol(format!(
+                    "collab compatibility mismatch: peer v{}:{}, server v{}:{}",
+                    hello.compatibility().protocol_version(),
+                    hello.compatibility().fingerprint(),
+                    self.compatibility.protocol_version(),
+                    self.compatibility.fingerprint()
+                )));
+            }
+
+            let state = self.topic_state(inbound.topic)?;
+            let doc = state
+                .doc
+                .lock()
+                .map_err(|_| WsError::backend("collab document mutex poisoned"))?;
+
+            // Decoding the state vector is part of accepting the hello even when
+            // the peer did not request a catch-up. No verified state is recorded
+            // until every compatibility/yrs check above has succeeded.
+            let diff = doc
+                .diff(hello.state_vector())
+                .map_err(|err| WsError::protocol(err.to_string()))?;
+            let server_hello = CollabHello::new(
+                self.compatibility.clone(),
+                Bytes::from(doc.state_vector()),
+                inbound.can_write,
+            );
+
+            let mut reaction = Reaction::new();
+            // The peer sees and validates this identity before the following
+            // SyncStep2 can be delivered/applied.
+            reaction.reply(CollabMessage::Hello(server_hello).encode());
+            if hello.requests_sync_step2() {
+                reaction.reply(CollabMessage::SyncStep2(Bytes::from(diff)).encode());
+            }
+            reaction.open_outbound();
+            self.verify_subscription(inbound.session_id, inbound.topic)?;
+            return Ok(reaction);
+        }
+
+        // Every other message is invalid until this exact session+topic has
+        // completed a compatible hello. This includes awareness: otherwise a
+        // pre-hello frame would still cross schema/protocol room boundaries.
+        self.ensure_verified(inbound.session_id, inbound.topic)?;
+
+        // Awareness never touches the document and remains available to a
+        // verified read-only peer.
         if let CollabMessage::Awareness(_) = message {
             let mut reaction = Reaction::new();
             reaction.broadcast(inbound.payload.clone());
@@ -210,36 +338,20 @@ impl SubprotocolHandler for CollabSync {
 
         let mut reaction = Reaction::new();
         match message {
-            CollabMessage::SyncStep1(state_vector) => {
-                // Reply with what this peer is missing (read access is enough).
-                let diff = doc
-                    .diff(&state_vector)
-                    .map_err(|err| WsError::protocol(err.to_string()))?;
-                reaction.reply(CollabMessage::SyncStep2(Bytes::from(diff)).encode());
-                // Only writers are asked for what WE lack: prompting a read-only
-                // peer with our state vector would invite a write it cannot make.
-                if inbound.can_write {
-                    reaction
-                        .reply(CollabMessage::SyncStep1(Bytes::from(doc.state_vector())).encode());
-                }
-            }
             CollabMessage::SyncStep2(update) => {
                 ensure_writable(&inbound)?;
                 ensure_within_cap(&update, self.max_update_bytes)?;
                 apply_update(&doc, &update)?;
-                // Relabel a handshake SyncStep2 as a live Update for peers.
                 reaction.broadcast(CollabMessage::Update(update).encode());
             }
             CollabMessage::Update(update) => {
                 ensure_writable(&inbound)?;
                 ensure_within_cap(&update, self.max_update_bytes)?;
                 apply_update(&doc, &update)?;
-                // Already a tagged Update on the wire — forward the original
-                // payload verbatim (a cheap `Bytes` refcount bump, no re-encode).
                 reaction.broadcast(inbound.payload.clone());
             }
-            // Relayed before the doc lock above; never reaches here.
-            CollabMessage::Awareness(_) => unreachable!("awareness is relayed pre-lock"),
+            CollabMessage::Hello(_) => unreachable!("hello returned before update matching"),
+            CollabMessage::Awareness(_) => unreachable!("awareness returned before doc lock"),
         }
         Ok(reaction)
     }
@@ -249,7 +361,9 @@ impl SubprotocolHandler for CollabSync {
     fn on_topic_active(&self, topic: &Topic) {
         // Creating the state spawns the apply loop. Errors only on a poisoned
         // lock, where the next `on_data` will surface it.
-        let _ = self.topic_state(topic);
+        if self.compatibility.accepts_topic(topic.as_str()) {
+            let _ = self.topic_state(topic);
+        }
     }
 
     /// Last local subscriber left: free the topic's document and stop its apply
@@ -258,6 +372,9 @@ impl SubprotocolHandler for CollabSync {
     /// updates folded since the last periodic checkpoint, so we flush a final
     /// checkpoint first.
     fn on_topic_idle(&self, topic: &Topic) {
+        if let Ok(mut verified) = self.verified_subscriptions.lock() {
+            verified.retain(|key| &key.topic != topic);
+        }
         let evicted = self
             .topics
             .lock()
@@ -281,6 +398,10 @@ impl SubprotocolHandler for CollabSync {
             });
         }
         state.apply_loop.abort();
+    }
+
+    fn on_subscription_closed(&self, session_id: &str, topic: &Topic) {
+        let _ = self.revoke_subscription(session_id, topic);
     }
 }
 
@@ -547,14 +668,32 @@ mod tests {
 
     use super::*;
 
+    const FINGERPRINT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn compatibility() -> CompatibilityIdentity {
+        CompatibilityIdentity::new(1, FINGERPRINT).unwrap()
+    }
+
+    fn topic(document_key: &str) -> Topic {
+        Topic::new(compatibility().namespace_topic(document_key)).unwrap()
+    }
+
     /// A handler over a fresh in-process fan-out (no peers).
     fn sync() -> CollabSync {
-        CollabSync::new(Arc::new(LocalFanout::new()))
+        CollabSync::new(Arc::new(LocalFanout::new()), compatibility())
     }
 
     /// Decode one collab message from raw frame bytes.
     fn decode(bytes: &Bytes) -> CollabMessage {
         CollabMessage::decode(bytes).expect("decode collab message")
+    }
+
+    fn hello(doc: &CollabDocument, request_sync_step2: bool) -> CollabMessage {
+        CollabMessage::Hello(CollabHello::new(
+            compatibility(),
+            doc.state_vector(),
+            request_sync_step2,
+        ))
     }
 
     /// Feed one inbound collab message from a writer and return its reaction.
@@ -572,10 +711,38 @@ mod tests {
         message: CollabMessage,
         can_write: bool,
     ) -> Result<Reaction, WsError> {
+        if !matches!(&message, CollabMessage::Hello(_)) {
+            let opener = CollabDocument::new();
+            raw_feed_as(
+                server,
+                topic,
+                CollabMessage::Hello(CollabHello::new(
+                    compatibility(),
+                    opener.state_vector(),
+                    true,
+                )),
+                can_write,
+                "test-session",
+            )
+            .await?;
+        }
+        raw_feed_as(server, topic, message, can_write, "test-session").await
+    }
+
+    async fn raw_feed_as(
+        server: &CollabSync,
+        topic: &Topic,
+        message: CollabMessage,
+        can_write: bool,
+        session_id: &str,
+    ) -> Result<Reaction, WsError> {
         let payload = message.encode();
         let principal = pocopine_realtime::Principal::anonymous();
+        let outbound_gate = pocopine_realtime::OutboundGate::new(false);
         server
             .on_data(InboundData {
+                session_id,
+                outbound_gate: &outbound_gate,
                 topic,
                 payload: &payload,
                 can_write,
@@ -587,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn an_update_is_applied_and_broadcast() {
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         let edit = CollabDocument::new();
         edit.insert_text("body", 0, "hello");
@@ -610,7 +777,7 @@ mod tests {
     #[tokio::test]
     async fn awareness_is_relayed_verbatim_and_never_applied() {
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         let presence = Bytes::from_static(b"cursor@42");
         let reaction = feed(&server, &topic, CollabMessage::Awareness(presence.clone())).await;
@@ -629,7 +796,7 @@ mod tests {
         // A viewer's cursor is presence, not a mutation — read-only peers may
         // publish awareness even though their Update/SyncStep2 are refused.
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         let reaction = feed_as(
             &server,
@@ -649,7 +816,7 @@ mod tests {
         // guard" silently dropped every deletion from the fan-out. It must be
         // fanned out like any other edit.
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         // Seed "hello" on the server.
         let base = CollabDocument::new();
@@ -686,7 +853,7 @@ mod tests {
         // is buffered by yrs as pending and does NOT advance the state vector,
         // so the old guard dropped it — yet it is a real edit peers need.
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         // Build U2 ("def" at index 3) that causally depends on U1 ("abc"),
         // which the server is NOT given — U2 will buffer pending on apply.
@@ -707,7 +874,7 @@ mod tests {
     #[tokio::test]
     async fn handshake_converges_server_and_client_both_ways() {
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         // Seed the server with prior shared state (an earlier peer's edit).
         let seed = CollabDocument::new();
@@ -723,24 +890,19 @@ mod tests {
         let client = CollabDocument::new();
         client.insert_text("body", 0, "local ");
 
-        // Client → SyncStep1(client_sv); server replies SyncStep2 + SyncStep1.
-        let reaction = feed(
-            &server,
-            &topic,
-            CollabMessage::SyncStep1(Bytes::from(client.state_vector())),
-        )
-        .await;
+        // Client hello; server answers with its hello first, then SyncStep2.
+        let reaction = feed(&server, &topic, hello(&client, true)).await;
         assert!(reaction.broadcasts().is_empty());
         assert_eq!(reaction.replies().len(), 2);
 
         // Apply the server's catch-up; the client now holds the shared state.
-        let catch_up = match decode(&reaction.replies()[0]) {
+        let catch_up = match decode(&reaction.replies()[1]) {
             CollabMessage::SyncStep2(update) => update,
             other => panic!("expected SyncStep2, got {other:?}"),
         };
-        let server_sv = match decode(&reaction.replies()[1]) {
-            CollabMessage::SyncStep1(sv) => sv,
-            other => panic!("expected SyncStep1, got {other:?}"),
+        let server_sv = match decode(&reaction.replies()[0]) {
+            CollabMessage::Hello(hello) => hello.state_vector().clone(),
+            other => panic!("expected Hello, got {other:?}"),
         };
         client.apply_update(&catch_up).unwrap();
         assert!(client.text("body").contains("shared"));
@@ -759,13 +921,8 @@ mod tests {
         // The authoritative server doc now holds BOTH edits — prove it by
         // syncing a brand-new peer from scratch.
         let fresh = CollabDocument::new();
-        let reaction = feed(
-            &server,
-            &topic,
-            CollabMessage::SyncStep1(Bytes::from(fresh.state_vector())),
-        )
-        .await;
-        let full = match decode(&reaction.replies()[0]) {
+        let reaction = feed(&server, &topic, hello(&fresh, true)).await;
+        let full = match decode(&reaction.replies()[1]) {
             CollabMessage::SyncStep2(update) => update,
             other => panic!("expected SyncStep2, got {other:?}"),
         };
@@ -780,8 +937,8 @@ mod tests {
     #[tokio::test]
     async fn topics_are_isolated() {
         let server = sync();
-        let a = Topic::new("collab:a").unwrap();
-        let b = Topic::new("collab:b").unwrap();
+        let a = topic("a");
+        let b = topic("b");
 
         let edit = CollabDocument::new();
         edit.insert_text("body", 0, "in-a");
@@ -794,13 +951,8 @@ mod tests {
 
         // Topic b is untouched: a fresh peer there catches up to an empty doc.
         let fresh = CollabDocument::new();
-        let reaction = feed(
-            &server,
-            &b,
-            CollabMessage::SyncStep1(Bytes::from(fresh.state_vector())),
-        )
-        .await;
-        let full = match decode(&reaction.replies()[0]) {
+        let reaction = feed(&server, &b, hello(&fresh, true)).await;
+        let full = match decode(&reaction.replies()[1]) {
             CollabMessage::SyncStep2(update) => update,
             other => panic!("expected SyncStep2, got {other:?}"),
         };
@@ -811,11 +963,14 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_malformed_payload() {
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
         let empty = Bytes::new();
         let principal = pocopine_realtime::Principal::anonymous();
+        let outbound_gate = pocopine_realtime::OutboundGate::new(false);
         let err = server
             .on_data(InboundData {
+                session_id: "malformed-session",
+                outbound_gate: &outbound_gate,
                 topic: &topic,
                 payload: &empty,
                 can_write: true,
@@ -827,9 +982,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mismatched_and_pre_hello_peers_exchange_no_yrs_updates() {
+        let server = sync();
+        let topic = topic("doc");
+
+        let peer = CollabDocument::new();
+        peer.insert_text("body", 0, "must-not-apply");
+        let update = Bytes::from(peer.full_update());
+
+        // Neither live updates nor handshake diffs are accepted before hello.
+        for message in [
+            CollabMessage::Update(update.clone()),
+            CollabMessage::SyncStep2(update.clone()),
+        ] {
+            let err = raw_feed_as(&server, &topic, message, true, "peer-a")
+                .await
+                .unwrap_err();
+            assert!(matches!(err, WsError::Protocol(_)));
+        }
+
+        let mismatch = CompatibilityIdentity::new(
+            compatibility().protocol_version(),
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .unwrap();
+        let err = raw_feed_as(
+            &server,
+            &topic,
+            CollabMessage::Hello(CollabHello::new(mismatch, peer.state_vector(), true)),
+            true,
+            "peer-a",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, WsError::Protocol(_)));
+
+        // The rejected hello did not authorize a later valid yrs update.
+        let err = raw_feed_as(
+            &server,
+            &topic,
+            CollabMessage::Update(update.clone()),
+            true,
+            "peer-a",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, WsError::Protocol(_)));
+
+        // A compatible probe sees an empty authoritative document: none of the
+        // valid yrs bytes above crossed the compatibility boundary.
+        let probe = CollabDocument::new();
+        let reaction = raw_feed_as(&server, &topic, hello(&probe, true), true, "probe")
+            .await
+            .unwrap();
+        assert_eq!(reaction.replies().len(), 2);
+        let CollabMessage::SyncStep2(catch_up) = decode(&reaction.replies()[1]) else {
+            panic!("compatible hello must receive catch-up")
+        };
+        probe.apply_update(&catch_up).unwrap();
+        assert_eq!(probe.text("body"), "");
+    }
+
+    #[tokio::test]
+    async fn hello_is_scoped_to_the_exact_session_and_subscription() {
+        let server = sync();
+        let topic = topic("doc");
+        let opener = CollabDocument::new();
+        raw_feed_as(&server, &topic, hello(&opener, true), true, "peer-a")
+            .await
+            .unwrap();
+
+        let edit = CollabDocument::new();
+        edit.insert_text("body", 0, "other socket");
+        let err = raw_feed_as(
+            &server,
+            &topic,
+            CollabMessage::Update(edit.full_update().into()),
+            true,
+            "peer-b",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, WsError::Protocol(_)));
+
+        server.on_subscription_closed("peer-a", &topic);
+        let err = raw_feed_as(
+            &server,
+            &topic,
+            CollabMessage::Update(edit.full_update().into()),
+            true,
+            "peer-a",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, WsError::Protocol(_)));
+    }
+
+    #[tokio::test]
     async fn read_only_connection_can_sync_down_but_not_write() {
         let server = sync();
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         // Seed the server with some state (via a writer).
         let seed = CollabDocument::new();
@@ -841,22 +1093,21 @@ mod tests {
         )
         .await;
 
-        // A read-only peer's SyncStep1 is honored (it may catch up) but it is
-        // NOT prompted with the server's SyncStep1 (no write is invited).
+        // A read-only peer catches up, but the server hello does not invite a
+        // SyncStep2 upload.
         let viewer = CollabDocument::new();
-        let reaction = feed_as(
-            &server,
-            &topic,
-            CollabMessage::SyncStep1(Bytes::from(viewer.state_vector())),
-            false,
-        )
-        .await
-        .expect("read is allowed");
-        assert_eq!(reaction.replies().len(), 1, "only the catch-up SyncStep2");
+        let reaction = feed_as(&server, &topic, hello(&viewer, true), false)
+            .await
+            .expect("read is allowed");
+        assert_eq!(reaction.replies().len(), 2, "hello then catch-up SyncStep2");
         assert!(matches!(
-            decode(&reaction.replies()[0]),
+            decode(&reaction.replies()[1]),
             CollabMessage::SyncStep2(_)
         ));
+        let CollabMessage::Hello(server_hello) = decode(&reaction.replies()[0]) else {
+            panic!("server must identify itself before catch-up")
+        };
+        assert!(!server_hello.requests_sync_step2());
 
         // A read-only peer attempting to write is refused.
         let edit = CollabDocument::new();
@@ -872,17 +1123,12 @@ mod tests {
         assert!(matches!(err, WsError::Forbidden(_)));
     }
 
-    /// Read a handler's current document text by running a fresh SyncStep1
+    /// Read a handler's current document text by running a fresh hello
     /// against it (the same way a brand-new client would catch up).
     async fn handler_text(server: &CollabSync, topic: &Topic, field: &str) -> String {
         let probe = CollabDocument::new();
-        let reaction = feed(
-            server,
-            topic,
-            CollabMessage::SyncStep1(Bytes::from(probe.state_vector())),
-        )
-        .await;
-        if let CollabMessage::SyncStep2(update) = decode(&reaction.replies()[0]) {
+        let reaction = feed(server, topic, hello(&probe, true)).await;
+        if let CollabMessage::SyncStep2(update) = decode(&reaction.replies()[1]) {
             probe.apply_update(&update).unwrap();
         }
         probe.text(field)
@@ -893,9 +1139,9 @@ mod tests {
         // Two handlers sharing ONE fan-out simulate two web processes on one
         // Redis bus (the gateway publishes each Reaction.broadcast to it).
         let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-        let process_a = CollabSync::new(fanout.clone());
-        let process_b = CollabSync::new(fanout.clone());
-        let topic = Topic::new("collab:doc").unwrap();
+        let process_a = CollabSync::new(fanout.clone(), compatibility());
+        let process_b = CollabSync::new(fanout.clone(), compatibility());
+        let topic = topic("doc");
 
         // A client edits on process A; the gateway publishes A's broadcast.
         let edit = CollabDocument::new();
@@ -934,11 +1180,11 @@ mod tests {
         use super::super::store::{CollabStore, MemoryCollabStore};
 
         let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         // Process 1 checkpoints on every folded update.
         let fanout1: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-        let p1 = CollabSync::new(fanout1.clone())
+        let p1 = CollabSync::new(fanout1.clone(), compatibility())
             .with_store(store.clone())
             .with_checkpoint_every(1);
 
@@ -967,7 +1213,7 @@ mod tests {
         // Process 2 starts on a DIFFERENT (empty) fan-out — a restart — and must
         // recover the document from the durable store, not the stream.
         let fanout2: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-        let p2 = CollabSync::new(fanout2).with_store(store.clone());
+        let p2 = CollabSync::new(fanout2, compatibility()).with_store(store.clone());
         let mut reloaded = false;
         for _ in 0..200 {
             if handler_text(&p2, &topic, "body").await.contains("durable") {
@@ -988,10 +1234,10 @@ mod tests {
 
         let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
         let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-        let server = CollabSync::new(fanout.clone())
+        let server = CollabSync::new(fanout.clone(), compatibility())
             .with_store(store.clone())
             .with_checkpoint_every(1);
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
 
         // First subscriber activates the topic; an edit is folded + checkpointed.
         server.on_topic_active(&topic);
@@ -1037,8 +1283,9 @@ mod tests {
     async fn an_oversized_update_is_refused_before_apply() {
         // RFC 073 §12: update size caps are mandatory, enforced in the handler
         // (not only at the transport frame boundary) and BEFORE decode/apply.
-        let server = CollabSync::new(Arc::new(LocalFanout::new())).with_max_update_bytes(16);
-        let topic = Topic::new("collab:doc").unwrap();
+        let server = CollabSync::new(Arc::new(LocalFanout::new()), compatibility())
+            .with_max_update_bytes(16);
+        let topic = topic("doc");
 
         let oversized = CollabMessage::Update(Bytes::from(vec![0u8; 64]));
         let err = feed_as(&server, &topic, oversized, true).await.unwrap_err();
@@ -1093,10 +1340,10 @@ mod tests {
             trims: trims.clone(),
         });
         let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
-        let server = CollabSync::new(fanout.clone())
+        let server = CollabSync::new(fanout.clone(), compatibility())
             .with_store(store)
             .with_checkpoint_every(1);
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
         server.on_topic_active(&topic);
 
         let edit = CollabDocument::new();
@@ -1135,10 +1382,10 @@ mod tests {
         // data-loss path — an idle eviction must not strand folded updates.
         let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
         let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-        let server = CollabSync::new(fanout.clone())
+        let server = CollabSync::new(fanout.clone(), compatibility())
             .with_store(store.clone())
             .with_checkpoint_every(1_000_000);
-        let topic = Topic::new("collab:doc").unwrap();
+        let topic = topic("doc");
         server.on_topic_active(&topic);
 
         let edit = CollabDocument::new();
@@ -1174,7 +1421,7 @@ mod tests {
 
         // A fresh process reloads exactly that flushed state.
         let fanout2: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-        let p2 = CollabSync::new(fanout2).with_store(store.clone());
+        let p2 = CollabSync::new(fanout2, compatibility()).with_store(store.clone());
         let mut reloaded = false;
         for _ in 0..200 {
             if handler_text(&p2, &topic, "body")

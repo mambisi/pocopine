@@ -1,0 +1,5 @@
+error: RichTextNodeAttrs can only be derived for a struct with named fields; tuple structs do not have a closed string-key map
+ --> tests/ui/rich_text_node_attrs/tuple.rs:4:8
+  |
+4 | struct Attrs(String);
+  |        ^^^^^

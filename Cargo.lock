@@ -6982,9 +6982,12 @@ name = "pine-richtext"
 version = "0.1.1"
 dependencies = [
  "criterion",
+ "html5ever 0.27.0",
  "js-sys",
+ "pine-richtext-macros",
  "pocopine",
  "pocopine-core",
+ "pocopine-crypto",
  "pulldown-cmark",
  "pulldown-cmark-to-cmark",
  "regex",
@@ -6992,7 +6995,10 @@ dependencies = [
  "serde-wasm-bindgen 0.6.5",
  "serde_json",
  "tracing",
+ "trybuild",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 
@@ -7010,6 +7016,33 @@ dependencies = [
  "tracing",
  "wasm-bindgen-test",
  "yrs",
+]
+
+[[package]]
+name = "pine-richtext-extensions"
+version = "0.1.1"
+dependencies = [
+ "js-sys",
+ "pine-richtext",
+ "pocopine",
+ "pocopine-core",
+ "serde",
+ "serde-wasm-bindgen 0.6.5",
+ "serde_json",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "pine-richtext-macros"
+version = "0.1.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -8722,7 +8755,19 @@ dependencies = [
  "pine-richtext",
  "pocopine",
  "serde",
- "serde-wasm-bindgen 0.6.5",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "richtext-external-blocks"
+version = "0.1.1"
+dependencies = [
+ "pine-richtext",
+ "pine-richtext-extensions",
+ "pocopine",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "web-sys",

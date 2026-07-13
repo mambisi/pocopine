@@ -1,0 +1,5 @@
+error: serde `alias` is not supported by RichTextNodeAttrs because it makes the accepted and emitted key maps asymmetric or unknowable
+ --> tests/ui/rich_text_node_attrs/alias.rs:5:13
+  |
+5 |     #[serde(alias = "old-label")]
+  |             ^^^^^

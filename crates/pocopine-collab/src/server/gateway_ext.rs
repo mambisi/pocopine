@@ -8,7 +8,7 @@
 //! ```ignore
 //! // easy to get wrong — two different fan-outs, no compile-time link:
 //! let gateway = WsGateway::new(fanout.clone())
-//!     .with_handler(COLLAB_SUBPROTOCOL, Arc::new(CollabSync::new(other_fanout)));
+//!     .with_handler(COLLAB_SUBPROTOCOL, Arc::new(CollabSync::new(other_fanout, compatibility)));
 //! ```
 //!
 //! These helpers take the handler's fan-out from the gateway itself, so the two
@@ -16,7 +16,9 @@
 //!
 //! ```ignore
 //! use pocopine_collab::WsGatewayCollabExt;
-//! let gateway = WsGateway::new(fanout).allow_all_topics().with_collab_store(store);
+//! let gateway = WsGateway::new(fanout)
+//!     .allow_all_topics()
+//!     .with_collab_store(compatibility, store);
 //! ```
 
 use std::sync::Arc;
@@ -25,6 +27,7 @@ use pocopine_realtime::WsGateway;
 
 use super::handler::CollabSync;
 use super::store::CollabStore;
+use crate::CompatibilityIdentity;
 use crate::protocol::COLLAB_SUBPROTOCOL;
 
 /// Register a [`CollabSync`] handler under [`COLLAB_SUBPROTOCOL`] using the
@@ -33,11 +36,15 @@ use crate::protocol::COLLAB_SUBPROTOCOL;
 pub trait WsGatewayCollabExt {
     /// Wire collaboration with default settings and no durable store
     /// (single-process / dev: state lives only in memory and the fan-out).
-    fn with_collab(self) -> Self;
+    fn with_collab(self, compatibility: CompatibilityIdentity) -> Self;
 
     /// Wire collaboration backed by `store`, so documents survive process
     /// restart and fan-out retention eviction. The canonical production wiring.
-    fn with_collab_store(self, store: Arc<dyn CollabStore>) -> Self;
+    fn with_collab_store(
+        self,
+        compatibility: CompatibilityIdentity,
+        store: Arc<dyn CollabStore>,
+    ) -> Self;
 
     /// Wire collaboration, customizing the handler via `configure`. The closure
     /// receives a [`CollabSync`] already bound to the gateway's fan-out — chain
@@ -45,22 +52,34 @@ pub trait WsGatewayCollabExt {
     /// [`CollabSync::with_max_update_bytes`] on it. Use this instead of
     /// constructing the handler yourself, which would lose the shared-fan-out
     /// guarantee.
-    fn with_collab_configured(self, configure: impl FnOnce(CollabSync) -> CollabSync) -> Self;
+    fn with_collab_configured(
+        self,
+        compatibility: CompatibilityIdentity,
+        configure: impl FnOnce(CollabSync) -> CollabSync,
+    ) -> Self;
 }
 
 impl WsGatewayCollabExt for WsGateway {
-    fn with_collab(self) -> Self {
-        self.with_collab_configured(|handler| handler)
+    fn with_collab(self, compatibility: CompatibilityIdentity) -> Self {
+        self.with_collab_configured(compatibility, |handler| handler)
     }
 
-    fn with_collab_store(self, store: Arc<dyn CollabStore>) -> Self {
-        self.with_collab_configured(move |handler| handler.with_store(store))
+    fn with_collab_store(
+        self,
+        compatibility: CompatibilityIdentity,
+        store: Arc<dyn CollabStore>,
+    ) -> Self {
+        self.with_collab_configured(compatibility, move |handler| handler.with_store(store))
     }
 
-    fn with_collab_configured(self, configure: impl FnOnce(CollabSync) -> CollabSync) -> Self {
+    fn with_collab_configured(
+        self,
+        compatibility: CompatibilityIdentity,
+        configure: impl FnOnce(CollabSync) -> CollabSync,
+    ) -> Self {
         // The handler folds the gateway's OWN fan-out: this is the single line
         // that makes the shared-instance requirement impossible to get wrong.
-        let handler = configure(CollabSync::new(self.fanout().clone()));
+        let handler = configure(CollabSync::new(self.fanout().clone(), compatibility));
         self.with_handler(COLLAB_SUBPROTOCOL, Arc::new(handler))
     }
 }
@@ -70,21 +89,33 @@ mod tests {
     use super::*;
     use crate::server::store::MemoryCollabStore;
 
+    fn compatibility() -> CompatibilityIdentity {
+        CompatibilityIdentity::new(
+            1,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap()
+    }
+
     #[test]
     fn helpers_build_a_gateway_for_each_variant() {
         // The wiring is correct-by-construction (the handler takes the gateway's
         // own fan-out); here we just prove every entry point composes into a
         // usable gateway. End-to-end convergence through the helper is covered by
         // the `two_replicas_*` integration test in `tests/gateway.rs`.
-        let _ = WsGateway::local().allow_all_topics().with_collab();
+        let _ = WsGateway::local()
+            .allow_all_topics()
+            .with_collab(compatibility());
 
         let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
         let _ = WsGateway::local()
             .allow_all_topics()
-            .with_collab_store(store.clone());
+            .with_collab_store(compatibility(), store.clone());
 
         let _ = WsGateway::local()
             .allow_all_topics()
-            .with_collab_configured(move |h| h.with_store(store).with_checkpoint_every(8));
+            .with_collab_configured(compatibility(), move |h| {
+                h.with_store(store).with_checkpoint_every(8)
+            });
     }
 }

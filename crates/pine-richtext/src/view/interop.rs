@@ -28,8 +28,10 @@ use web_sys::{CustomEvent, CustomEventInit, Element, Event};
 use super::content::{ContentError, ContentFormat, Markdown};
 use super::root::{
     CHANGE_EVENT, COMMAND_EVENT, CommandRequest, DOC_CHANGED_EVENT, EXPORT_STATE_REQUEST_EVENT,
-    EXPORT_STATE_RESULT_EVENT, runtime_plugins_view, state_json_from_doc,
+    EXPORT_STATE_RESULT_EVENT, SELECTION_SNAPSHOT_REQUEST_EVENT, SELECTION_SNAPSHOT_RESULT_EVENT,
+    runtime_plugins_view, state_json_from_doc,
 };
+use super::selection_observer::{SelectionChangeSubscription, SelectionSnapshot};
 use crate::runtime::{self, EditorRuntime};
 use crate::state::EditorState;
 use crate::transform::Step;
@@ -250,6 +252,35 @@ impl Editor {
         runtime::registry::resolve(name.as_deref().filter(|n| !n.is_empty()))
     }
 
+    /// Resolve the custom-element host used by the synchronous event bridges.
+    /// An `Editor` may wrap either that host or its inner editable element.
+    fn bridge_target(&self) -> Element {
+        if self.surface.matches(SURFACE_SELECTOR).unwrap_or(false) {
+            return self.surface.clone();
+        }
+        self.surface
+            .closest(SURFACE_SELECTOR)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.surface.clone())
+    }
+
+    /// Resolve the actual contentEditable element used for DOM-selection and
+    /// focus filtering.
+    fn editable_surface(&self) -> Option<Element> {
+        if self
+            .surface
+            .matches(INNER_SURFACE_SELECTOR)
+            .unwrap_or(false)
+        {
+            return Some(self.surface.clone());
+        }
+        self.surface
+            .query_selector(INNER_SURFACE_SELECTOR)
+            .ok()
+            .flatten()
+    }
+
     /// Replace the surface's doc with `value`, parsed via the
     /// given [`ContentFormat`] `F`.
     ///
@@ -345,6 +376,80 @@ impl Editor {
         let state = self.snapshot_state(&runtime)?;
         let owned = F::serialize(&state, &runtime)?;
         Ok(owned)
+    }
+
+    /// Read the current model selection together with browser geometry and
+    /// formatting context for an external toolbar or bubble menu.
+    ///
+    /// This is a synchronous, read-only request to the mounted surface. It does
+    /// not dispatch an editor command, create a transaction, or reconcile DOM.
+    /// The model selection is overlaid with the live browser `Selection`, so an
+    /// ordinary pointer drag is visible without writing a transaction for every
+    /// `selectionchange` event.
+    pub fn selection_snapshot(&self) -> Result<SelectionSnapshot, EditorError> {
+        let target = self.bridge_target();
+        let captured: Rc<RefCell<Option<SelectionSnapshot>>> = Rc::new(RefCell::new(None));
+        let captured_for_cb = captured.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            let Ok(custom) = event.dyn_into::<CustomEvent>() else {
+                return;
+            };
+            if let Ok(snapshot) =
+                serde_wasm_bindgen::from_value::<SelectionSnapshot>(custom.detail())
+            {
+                *captured_for_cb.borrow_mut() = Some(snapshot);
+            }
+        }) as Box<dyn FnMut(Event)>);
+
+        target
+            .add_event_listener_with_callback(
+                SELECTION_SNAPSHOT_RESULT_EVENT,
+                cb.as_ref().unchecked_ref(),
+            )
+            .map_err(|err| EditorError::Encoding(format!("{err:?}")))?;
+
+        let init = CustomEventInit::new();
+        init.set_bubbles(true);
+        if let Ok(request) =
+            CustomEvent::new_with_event_init_dict(SELECTION_SNAPSHOT_REQUEST_EVENT, &init)
+        {
+            let _ = target.dispatch_event(&request);
+        }
+
+        let _ = target.remove_event_listener_with_callback(
+            SELECTION_SNAPSHOT_RESULT_EVENT,
+            cb.as_ref().unchecked_ref(),
+        );
+        drop(cb);
+
+        let snapshot = captured.borrow_mut().take();
+        snapshot.ok_or(EditorError::SurfaceUnavailable)
+    }
+
+    /// Subscribe to read-only selection-context changes.
+    ///
+    /// The observer listens for `selectionchange`, `focus`, and `blur` at the
+    /// document boundary, filters them to this editor, and coalesces drag-time
+    /// events to one callback per animation frame. A final snapshot is emitted
+    /// when the selection leaves the editor so anchored UI can hide itself.
+    /// Committed editor changes also refresh the snapshot because active marks
+    /// can change without moving the DOM selection.
+    ///
+    /// No initial value is emitted; call
+    /// [`selection_snapshot`](Self::selection_snapshot) when installing UI that
+    /// needs an immediate state. Drop the returned guard to remove all listeners
+    /// and cancel a queued frame.
+    pub fn on_selection_change<Callback>(&self, callback: Callback) -> SelectionChangeSubscription
+    where
+        Callback: FnMut(SelectionSnapshot) + 'static,
+    {
+        let editor = self.clone();
+        SelectionChangeSubscription::subscribe(
+            self.bridge_target(),
+            self.editable_surface(),
+            move || editor.selection_snapshot().ok(),
+            callback,
+        )
     }
 
     /// Subscribe to per-transaction doc changes. The

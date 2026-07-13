@@ -7,6 +7,10 @@
 //! rect moved in one session converges in the other.
 
 #[cfg(pocopine_host)]
+#[path = "../compatibility.rs"]
+mod compatibility;
+
+#[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use pocopine_collab::WsGatewayCollabExt;
@@ -16,7 +20,9 @@ async fn main() -> std::io::Result<()> {
     // `with_collab` registers the CollabSync handler on the gateway's OWN
     // fan-out, so the handler and gateway share one instance by construction (a
     // single-process demo, so no durable store — `with_collab_store` adds one).
-    let gateway = WsGateway::local().allow_all_topics().with_collab();
+    let gateway = WsGateway::local()
+        .allow_all_topics()
+        .with_collab(compatibility::identity());
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let router = Router::new()

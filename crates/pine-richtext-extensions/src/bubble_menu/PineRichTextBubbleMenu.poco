@@ -1,0 +1,11 @@
+<root class="pine-richtext-bubble-menu"
+      pp-ref="menu"
+      role="toolbar"
+      hidden
+      :data-state="open ? 'open' : 'closed'"
+      :data-plugin-key="plugin_key"
+      :data-anchor-kind="anchor_kind"
+      :data-placement="resolved_placement"
+      :aria-hidden="open ? 'false' : 'true'">
+  <slot></slot>
+</root>

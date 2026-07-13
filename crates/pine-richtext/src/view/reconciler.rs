@@ -7,11 +7,12 @@
 //! parent, and node-view hosts keep their component chrome while pine
 //! updates host attrs and model-owned content.
 
-use crate::model::{Attrs, Node as RichNode};
-use crate::render::{
-    attr_value_to_string, render_children_to_html, render_doc_to_html, render_one_node_to_html,
-};
+use std::cell::RefCell;
+
+use crate::model::Node as RichNode;
+use crate::render::{render_children_to_html, render_doc_to_html, render_one_node_plan};
 use crate::runtime::EditorRuntime;
+use crate::view::node_view_manager::NodeViewManager;
 
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement, Node as DomNode};
@@ -47,10 +48,6 @@ impl ReconcileOutcome {
 
     /// Whether newly-rendered DOM may contain custom node-view tags
     /// that need mounting.
-    pub fn should_mount_node_views(self) -> bool {
-        matches!(self, Self::Reconciled | Self::Full)
-    }
-
     /// Stable string used by JSON debug logging.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -100,16 +97,16 @@ impl ReconcileStats {
     }
 }
 
-/// Reconcile a surface element against a model doc, scoped to a runtime.
-/// Returns the outcome class so callers can decide whether to also sync
-/// the visible selection / mount registered node views.
-pub fn reconcile_surface_with_outcome(
+/// Reconcile while synchronously notifying the per-editor typed view manager
+/// before any owned host leaves the DOM.
+pub(crate) fn reconcile_surface_with_manager(
     runtime: &EditorRuntime,
+    manager: &RefCell<NodeViewManager>,
     surface: &Element,
     old_doc: &RichNode,
     new_doc: &RichNode,
 ) -> ReconcileOutcome {
-    Reconciler::new(runtime).reconcile_surface(surface, old_doc, new_doc)
+    Reconciler::with_manager(runtime, manager).reconcile_surface(surface, old_doc, new_doc)
 }
 
 /// Stateless reconciler scoped to a single [`EditorRuntime`]. The
@@ -118,11 +115,26 @@ pub fn reconcile_surface_with_outcome(
 /// [`crate::render::Renderer`].
 pub struct Reconciler<'a> {
     runtime: &'a EditorRuntime,
+    manager: Option<&'a RefCell<NodeViewManager>>,
 }
 
 impl<'a> Reconciler<'a> {
+    #[cfg(test)]
     pub fn new(runtime: &'a EditorRuntime) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            manager: None,
+        }
+    }
+
+    pub(crate) fn with_manager(
+        runtime: &'a EditorRuntime,
+        manager: &'a RefCell<NodeViewManager>,
+    ) -> Self {
+        Self {
+            runtime,
+            manager: Some(manager),
+        }
     }
 
     pub fn reconcile_surface(
@@ -146,6 +158,7 @@ impl<'a> Reconciler<'a> {
 
     fn full_render(&self, surface: &Element, new_doc: &RichNode) -> ReconcileOutcome {
         let html = render_doc_to_html(self.runtime, new_doc);
+        self.will_remove_subtree(surface);
         if set_inner_html(surface, &html) {
             ReconcileOutcome::Full
         } else {
@@ -162,35 +175,57 @@ impl<'a> Reconciler<'a> {
         new_pos: usize,
         stats: &mut ReconcileStats,
     ) -> Result<(), ()> {
-        if old_node == new_node && old_pos == new_pos {
-            return Ok(());
-        }
-
         if !self.dom_matches_node(dom, old_node) || !self.wrapper_compatible(old_node, new_node) {
             self.replace_element(dom, new_node, new_pos)?;
             stats.record_structural();
             return Ok(());
         }
 
+        if old_node == new_node {
+            // A change before this subtree shifts every model position by the
+            // same delta. Preserve the entire live subtree (including mounted
+            // inline components) and update only its position markers.
+            if self
+                .shift_node_positions(dom, old_node, old_pos, new_pos)
+                .is_err()
+            {
+                // If external DOM mutation made this subtree impossible to
+                // address, replace only its nearest model wrapper.
+                self.replace_element(dom, new_node, new_pos)?;
+                stats.record_structural();
+            }
+            return Ok(());
+        }
+
         update_data_pos(dom, new_pos)?;
         if self.attrs_patchable(new_node) && old_node.attrs() != new_node.attrs() {
-            patch_reflected_attrs(dom, old_node.attrs(), new_node.attrs())?;
             stats.record_attrs(new_pos);
         }
 
-        if old_node == new_node {
-            self.refresh_descendant_positions(dom, new_node, new_pos)?;
+        if let Some(spec) = self.runtime.lookup_typed_node_view(new_node.type_name())
+            && matches!(spec.kind(), crate::view::NodeViewKind::Atom)
+        {
+            // The manager receives the new semantic snapshot after this DOM
+            // pass. Atom descendants are component-owned and opaque here.
             return Ok(());
         }
 
         if self.renders_inline_children(new_node) {
-            if self.patch_plain_text_inline_children(dom, old_node, new_node)? {
-                stats.record_text();
-                return Ok(());
+            let content_root = self.content_root_for_node(dom, new_node)?;
+            if self
+                .reconcile_inline_children(&content_root, old_node, new_node, new_pos + 1, stats)
+                .is_err()
+            {
+                // Recover a corrupt/mutated textblock at that content root;
+                // never bubble a local inline mismatch into a full-surface
+                // editor reconstruction.
+                let html = render_children_to_html(self.runtime, new_node, new_pos + 1);
+                self.will_remove_subtree(&content_root);
+                set_inner_html(&content_root, &html)
+                    .then_some(())
+                    .ok_or(())?;
+                stats.record_structural();
             }
-            let html = render_children_to_html(self.runtime, new_node, new_pos + 1);
-            set_inner_html(dom, &html).then_some(()).ok_or(())?;
-            stats.record_structural();
             return Ok(());
         }
 
@@ -201,7 +236,17 @@ impl<'a> Reconciler<'a> {
         }
 
         let content_root = self.content_root_for_node(dom, new_node)?;
-        self.reconcile_children(&content_root, old_node, new_node, new_pos + 1, stats)
+        if self
+            .reconcile_children(&content_root, old_node, new_node, new_pos + 1, stats)
+            .is_err()
+        {
+            // A mismatch below this node should not escalate into replacing
+            // the whole editor surface. Recover at the nearest model-owned
+            // wrapper and leave unrelated siblings and node views intact.
+            self.replace_element(dom, new_node, new_pos)?;
+            stats.record_structural();
+        }
+        Ok(())
     }
 
     fn reconcile_children(
@@ -218,6 +263,7 @@ impl<'a> Reconciler<'a> {
 
         if old_parent.child_count() == 0 || new_parent.child_count() == 0 {
             let html = render_children_to_html(self.runtime, new_parent, content_start);
+            self.will_remove_subtree(content_root);
             set_inner_html(content_root, &html)
                 .then_some(())
                 .ok_or(())?;
@@ -312,6 +358,276 @@ impl<'a> Reconciler<'a> {
         Ok(())
     }
 
+    /// Reconcile one textblock's direct inline children without replacing the
+    /// textblock's `innerHTML`. A model inline node always renders as exactly
+    /// one direct DOM node: plain text as `Text`, marked text as its outer mark
+    /// element, and inline atoms/views as their stable host element.
+    fn reconcile_inline_children(
+        &self,
+        content_root: &Element,
+        old_parent: &RichNode,
+        new_parent: &RichNode,
+        content_start: usize,
+        stats: &mut ReconcileStats,
+    ) -> Result<(), ()> {
+        if old_parent.content() == new_parent.content() {
+            return Ok(());
+        }
+
+        // Empty textblocks use a structural `<br>` placeholder. Crossing the
+        // empty boundary is uncommon and necessarily changes that one content
+        // root, but never the parent block or editor surface.
+        if old_parent.child_count() == 0 || new_parent.child_count() == 0 {
+            let html = render_children_to_html(self.runtime, new_parent, content_start);
+            self.will_remove_subtree(content_root);
+            set_inner_html(content_root, &html)
+                .then_some(())
+                .ok_or(())?;
+            stats.record_structural();
+            return Ok(());
+        }
+
+        let dom_children = direct_inline_children(content_root)?;
+        if dom_children.len() != old_parent.child_count() {
+            return Err(());
+        }
+
+        let old_len = old_parent.child_count();
+        let new_len = new_parent.child_count();
+        let old_positions = child_positions(old_parent, content_start);
+        let new_positions = child_positions(new_parent, content_start);
+
+        let mut prefix = 0;
+        while prefix < old_len && prefix < new_len {
+            let old_child = old_parent.child(prefix).ok_or(())?;
+            let new_child = new_parent.child(prefix).ok_or(())?;
+            if old_child != new_child {
+                break;
+            }
+            self.sync_unchanged_inline_position(
+                &dom_children[prefix],
+                old_child,
+                old_positions[prefix],
+                new_positions[prefix],
+            )?;
+            prefix += 1;
+        }
+
+        let mut suffix = 0;
+        while suffix < old_len.saturating_sub(prefix) && suffix < new_len.saturating_sub(prefix) {
+            let old_index = old_len - suffix - 1;
+            let new_index = new_len - suffix - 1;
+            if old_parent.child(old_index).ok_or(())? != new_parent.child(new_index).ok_or(())? {
+                break;
+            }
+            suffix += 1;
+        }
+
+        let old_mid_end = old_len - suffix;
+        let new_mid_end = new_len - suffix;
+        if old_mid_end - prefix == new_mid_end - prefix {
+            for offset in 0..(old_mid_end - prefix) {
+                let old_index = prefix + offset;
+                let new_index = prefix + offset;
+                self.reconcile_inline_node(
+                    content_root,
+                    &dom_children[old_index],
+                    old_parent.child(old_index).ok_or(())?,
+                    old_positions[old_index],
+                    new_parent.child(new_index).ok_or(())?,
+                    new_positions[new_index],
+                    stats,
+                )?;
+            }
+        } else {
+            self.replace_inline_child_range(
+                content_root,
+                new_parent,
+                &dom_children,
+                &new_positions,
+                prefix,
+                old_mid_end,
+                new_mid_end,
+            )?;
+            stats.record_structural();
+        }
+
+        for offset in 0..suffix {
+            let old_index = old_len - suffix + offset;
+            let new_index = new_len - suffix + offset;
+            self.sync_unchanged_inline_position(
+                &dom_children[old_index],
+                old_parent.child(old_index).ok_or(())?,
+                old_positions[old_index],
+                new_positions[new_index],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Shift framework position markers for an unchanged model subtree while
+    /// preserving every DOM node. Traversal follows the model-owned content
+    /// outlet instead of querying arbitrary `[data-pos]` descendants, so
+    /// component chrome or a nested editor can never be rewritten by accident.
+    fn shift_node_positions(
+        &self,
+        dom: &Element,
+        node: &RichNode,
+        old_pos: usize,
+        new_pos: usize,
+    ) -> Result<(), ()> {
+        update_data_pos(dom, new_pos)?;
+        if old_pos == new_pos || node.child_count() == 0 || node.type_name() == "code_block" {
+            return Ok(());
+        }
+        if self
+            .runtime
+            .lookup_typed_node_view(node.type_name())
+            .is_some_and(|view| matches!(view.kind(), crate::view::NodeViewKind::Atom))
+        {
+            return Ok(());
+        }
+
+        let content_root = self.content_root_for_node(dom, node)?;
+        let old_positions = child_positions(node, old_pos + 1);
+        let new_positions = child_positions(node, new_pos + 1);
+        if self.renders_inline_children(node) {
+            let children = direct_inline_children(&content_root)?;
+            if children.len() != node.child_count() {
+                return Err(());
+            }
+            for (index, child_dom) in children.iter().enumerate() {
+                let child = node.child(index).ok_or(())?;
+                if child.is_text() {
+                    continue;
+                }
+                let child_dom = child_dom.dyn_ref::<Element>().ok_or(())?;
+                self.shift_node_positions(
+                    child_dom,
+                    child,
+                    old_positions[index],
+                    new_positions[index],
+                )?;
+            }
+            return Ok(());
+        }
+
+        let children = direct_model_children(&content_root)?;
+        if children.len() != node.child_count() {
+            return Err(());
+        }
+        for (index, child_dom) in children.iter().enumerate() {
+            self.shift_node_positions(
+                child_dom,
+                node.child(index).ok_or(())?,
+                old_positions[index],
+                new_positions[index],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconcile_inline_node(
+        &self,
+        content_root: &Element,
+        dom: &DomNode,
+        old_node: &RichNode,
+        old_pos: usize,
+        new_node: &RichNode,
+        new_pos: usize,
+        stats: &mut ReconcileStats,
+    ) -> Result<(), ()> {
+        if old_node.is_text() && new_node.is_text() && old_node.marks() == new_node.marks() {
+            let old_text = old_node.text().ok_or(())?;
+            let new_text = new_node.text().ok_or(())?;
+            if old_text != new_text {
+                patch_inline_text(dom, old_text, new_text)?;
+                stats.record_text();
+            }
+            return Ok(());
+        }
+
+        if !old_node.is_text()
+            && !new_node.is_text()
+            && let Some(element) = dom.dyn_ref::<Element>()
+        {
+            return self.reconcile_node(element, old_node, old_pos, new_node, new_pos, stats);
+        }
+
+        self.replace_inline_dom_node(content_root, dom, new_node, new_pos)?;
+        stats.record_structural();
+        Ok(())
+    }
+
+    fn sync_unchanged_inline_position(
+        &self,
+        dom: &DomNode,
+        node: &RichNode,
+        old_pos: usize,
+        new_pos: usize,
+    ) -> Result<(), ()> {
+        if node.is_text() || old_pos == new_pos {
+            return Ok(());
+        }
+        let element = dom.dyn_ref::<Element>().ok_or(())?;
+        self.shift_node_positions(element, node, old_pos, new_pos)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replace_inline_child_range(
+        &self,
+        content_root: &Element,
+        new_parent: &RichNode,
+        dom_children: &[DomNode],
+        new_positions: &[usize],
+        start: usize,
+        old_end: usize,
+        new_end: usize,
+    ) -> Result<(), ()> {
+        let reference = dom_children.get(old_end);
+        for child in dom_children.iter().take(old_end).skip(start) {
+            if let Some(element) = child.dyn_ref::<Element>() {
+                self.will_remove_subtree(element);
+            }
+            content_root.remove_child(child).map_err(|_| ())?;
+        }
+        for (new_index, new_pos) in new_positions
+            .iter()
+            .copied()
+            .enumerate()
+            .take(new_end)
+            .skip(start)
+        {
+            let child = new_parent.child(new_index).ok_or(())?;
+            for node in self.dom_nodes_for_model_node(content_root, child, new_pos)? {
+                content_root
+                    .insert_before(node.as_ref(), reference)
+                    .map_err(|_| ())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn replace_inline_dom_node(
+        &self,
+        content_root: &Element,
+        dom: &DomNode,
+        new_node: &RichNode,
+        new_pos: usize,
+    ) -> Result<(), ()> {
+        for node in self.dom_nodes_for_model_node(content_root, new_node, new_pos)? {
+            content_root
+                .insert_before(node.as_ref(), Some(dom))
+                .map_err(|_| ())?;
+        }
+        if let Some(element) = dom.dyn_ref::<Element>() {
+            self.will_remove_subtree(element);
+        }
+        content_root.remove_child(dom).map_err(|_| ())?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn replace_child_range(
         &self,
@@ -327,6 +643,7 @@ impl<'a> Reconciler<'a> {
         for old_index in start..old_end {
             let child = dom_children.get(old_index).ok_or(())?;
             let parent = child.parent_node().ok_or(())?;
+            self.will_remove_subtree(child);
             parent.remove_child(child.as_ref()).map_err(|_| ())?;
         }
 
@@ -334,7 +651,6 @@ impl<'a> Reconciler<'a> {
             return Ok(());
         }
 
-        let mut html = String::new();
         for (new_index, new_pos) in new_positions
             .iter()
             .copied()
@@ -343,43 +659,11 @@ impl<'a> Reconciler<'a> {
             .skip(start)
         {
             let child = new_parent.child(new_index).ok_or(())?;
-            html.push_str(&render_one_node_to_html(self.runtime, child, new_pos));
-        }
-        insert_html_before(content_root, reference, &html)
-    }
-
-    fn refresh_descendant_positions(
-        &self,
-        dom: &Element,
-        node: &RichNode,
-        outer_pos: usize,
-    ) -> Result<(), ()> {
-        update_data_pos(dom, outer_pos)?;
-        if node.child_count() == 0 || self.renders_inline_children(node) {
-            if self.renders_inline_children(node)
-                && node.content().iter().any(|child| !child.is_text())
-            {
-                let html = render_children_to_html(self.runtime, node, outer_pos + 1);
-                set_inner_html(dom, &html).then_some(()).ok_or(())?;
+            for node in self.dom_nodes_for_model_node(content_root, child, new_pos)? {
+                content_root
+                    .insert_before(node.as_ref(), reference)
+                    .map_err(|_| ())?;
             }
-            return Ok(());
-        }
-        if node.type_name() == "code_block" {
-            return Ok(());
-        }
-
-        let content_root = self.content_root_for_node(dom, node)?;
-        let dom_children = direct_model_children(&content_root)?;
-        if dom_children.len() != node.child_count() {
-            return Err(());
-        }
-        let positions = child_positions(node, outer_pos + 1);
-        for (index, child_dom) in dom_children.iter().enumerate() {
-            self.refresh_descendant_positions(
-                child_dom,
-                node.child(index).ok_or(())?,
-                positions[index],
-            )?;
         }
         Ok(())
     }
@@ -391,81 +675,74 @@ impl<'a> Reconciler<'a> {
         new_pos: usize,
     ) -> Result<(), ()> {
         let parent = dom.parent_node().ok_or(())?;
-        let html = render_one_node_to_html(self.runtime, new_node, new_pos);
-        let nodes = parse_html_nodes(dom, &html)?;
+        let nodes = self.dom_nodes_for_model_node(dom, new_node, new_pos)?;
         for node in nodes {
             parent
                 .insert_before(&node, Some(dom.as_ref()))
                 .map_err(|_| ())?;
         }
+        self.will_remove_subtree(dom);
         parent.remove_child(dom.as_ref()).map_err(|_| ())?;
         Ok(())
     }
 
+    fn dom_nodes_for_model_node(
+        &self,
+        context: &Element,
+        node: &RichNode,
+        position: usize,
+    ) -> Result<Vec<DomNode>, ()> {
+        let document = context.owner_document().ok_or(())?;
+        let plan = render_one_node_plan(self.runtime, node, position);
+        let node = plan.materialize(&document).map_err(|_| ())?;
+        Ok(vec![node])
+    }
+
+    fn will_remove_subtree(&self, root: &Element) {
+        if let Some(manager) = self.manager {
+            manager.borrow_mut().will_remove_subtree(root);
+        }
+    }
+
     fn content_root_for_node(&self, dom: &Element, node: &RichNode) -> Result<Element, ()> {
-        if let Some(spec) = self.runtime.lookup_node_view(node.type_name())
-            && let Some(selector) = &spec.content_selector
+        if self
+            .runtime
+            .lookup_typed_node_view(node.type_name())
+            .is_some()
         {
-            return dom.query_selector(selector).map_err(|_| ())?.ok_or(());
+            return self
+                .manager
+                .and_then(|manager| manager.borrow().content_outlet(dom))
+                .ok_or(());
+        }
+        if let Some(spec) = self.runtime.lookup_dom_view(node.type_name()) {
+            let mut current = dom.clone();
+            if let Some(path) = spec.content_hole_path() {
+                for index in path {
+                    current = current.children().item(u32::from(index)).ok_or(())?;
+                }
+            }
+            return Ok(current);
         }
         Ok(dom.clone())
     }
 
     fn attrs_patchable(&self, node: &RichNode) -> bool {
         !node.is_text()
-            && (node.type_name() == "task_item"
-                || self.runtime.lookup_node_view(node.type_name()).is_some())
+            && self
+                .runtime
+                .lookup_typed_node_view(node.type_name())
+                .is_some()
     }
 
     fn renders_inline_children(&self, node: &RichNode) -> bool {
         !node.is_text()
             && node.type_name() != "code_block"
-            && self.runtime.lookup_node_view(node.type_name()).is_none()
             && self
                 .runtime
                 .schema()
                 .node_type(node.type_name())
                 .is_ok_and(|node_type| node_type.inline_content(self.runtime.schema()))
-    }
-
-    fn patch_plain_text_inline_children(
-        &self,
-        dom: &Element,
-        old_node: &RichNode,
-        new_node: &RichNode,
-    ) -> Result<bool, ()> {
-        let Some(old_text) = single_unmarked_text_child(old_node) else {
-            return Ok(false);
-        };
-        let Some(new_text) = single_unmarked_text_child(new_node) else {
-            return Ok(false);
-        };
-        let children = dom.child_nodes();
-        if children.length() != 1 {
-            return Ok(false);
-        }
-        let Some(child) = children.item(0) else {
-            return Ok(false);
-        };
-        if child.node_type() != DomNode::TEXT_NODE {
-            return Ok(false);
-        }
-        if old_text == new_text {
-            return Ok(true);
-        }
-        // Splice only the changed span instead of rewriting the whole text node.
-        // A keystroke in a large paragraph is then O(edit) DOM work, not
-        // O(paragraph). `text_splice` diffs on chars, so a surrogate pair is
-        // never split (see `crate::text_diff`).
-        if let Some(cd) = child.dyn_ref::<web_sys::CharacterData>() {
-            let (offset, count, replacement) = crate::text_diff::text_splice(old_text, new_text);
-            if cd.replace_data(offset, count, &replacement).is_ok() {
-                return Ok(true);
-            }
-        }
-        // Fallback: whole-node write (non-CharacterData, or replace_data failed).
-        child.set_node_value(Some(new_text));
-        Ok(true)
     }
 
     fn wrapper_compatible(&self, old_node: &RichNode, new_node: &RichNode) -> bool {
@@ -477,11 +754,16 @@ impl<'a> Reconciler<'a> {
             return false;
         }
 
-        if let Some(new_spec) = self.runtime.lookup_node_view(new_node.type_name()) {
-            let Some(old_spec) = self.runtime.lookup_node_view(old_node.type_name()) else {
+        if let Some(new_spec) = self.runtime.lookup_typed_node_view(new_node.type_name()) {
+            let Some(old_spec) = self.runtime.lookup_typed_node_view(old_node.type_name()) else {
                 return false;
             };
-            return old_spec.tag == new_spec.tag;
+            return old_spec.component_type_id() == new_spec.component_type_id()
+                && old_spec.kind() == new_spec.kind();
+        }
+
+        if self.runtime.lookup_dom_view(new_node.type_name()).is_some() {
+            return old_node.attrs() == new_node.attrs();
         }
 
         match new_node.type_name() {
@@ -500,8 +782,21 @@ impl<'a> Reconciler<'a> {
         if node.is_text() {
             return None;
         }
-        if let Some(spec) = self.runtime.lookup_node_view(node.type_name()) {
-            return Some(spec.tag.clone());
+        if let Some(view) = self.runtime.lookup_typed_node_view(node.type_name()) {
+            if view.host() == crate::view::NodeViewHost::Native {
+                return self
+                    .runtime
+                    .lookup_dom_view(node.type_name())
+                    .map(|spec| spec.root_tag().to_string());
+            }
+            let inline = self
+                .runtime
+                .lookup_typed_node(node.type_name())
+                .is_some_and(|typed| typed.spec().is_inline());
+            return Some(if inline { "span" } else { "div" }.to_string());
+        }
+        if let Some(spec) = self.runtime.lookup_dom_view(node.type_name()) {
+            return Some(spec.root_tag().to_string());
         }
         Some(match node.type_name() {
             "paragraph" => "p".to_string(),
@@ -519,27 +814,17 @@ impl<'a> Reconciler<'a> {
     }
 }
 
-fn insert_html_before(
-    context: &Element,
-    reference: Option<&DomNode>,
-    html: &str,
-) -> Result<(), ()> {
-    let parent: &DomNode = context.as_ref();
-    let nodes = parse_html_nodes(context, html)?;
-    for node in nodes {
-        parent.insert_before(&node, reference).map_err(|_| ())?;
-    }
-    Ok(())
-}
-
-fn parse_html_nodes(context: &Element, html: &str) -> Result<Vec<DomNode>, ()> {
+pub(crate) fn parse_html_nodes(context: &Element, html: &str) -> Result<Vec<DomNode>, ()> {
     let document = context.owner_document().ok_or(())?;
-    let container = document.create_element("div").map_err(|_| ())?;
-    set_inner_html(&container, html).then_some(()).ok_or(())?;
-    let container_node: &DomNode = container.as_ref();
+    let range = document.create_range().map_err(|_| ())?;
+    range
+        .select_node_contents(context.as_ref())
+        .map_err(|_| ())?;
+    let fragment = range.create_contextual_fragment(html).map_err(|_| ())?;
+    let fragment_node: &DomNode = fragment.as_ref();
     let mut nodes = Vec::new();
-    while let Some(child) = container_node.first_child() {
-        container_node.remove_child(&child).map_err(|_| ())?;
+    while let Some(child) = fragment_node.first_child() {
+        fragment_node.remove_child(&child).map_err(|_| ())?;
         nodes.push(child);
     }
     Ok(nodes)
@@ -585,6 +870,50 @@ fn direct_model_children(root: &Element) -> Result<Vec<Element>, ()> {
     Ok(out)
 }
 
+fn direct_inline_children(root: &Element) -> Result<Vec<DomNode>, ()> {
+    let children = root.child_nodes();
+    let mut out = Vec::new();
+    for index in 0..children.length() {
+        let child = children.item(index).ok_or(())?;
+        match child.node_type() {
+            DomNode::TEXT_NODE | DomNode::ELEMENT_NODE => out.push(child),
+            DomNode::COMMENT_NODE => {}
+            _ => return Err(()),
+        }
+    }
+    Ok(out)
+}
+
+/// Patch the sole text leaf represented by one model text node. Marked text
+/// has a one-child wrapper chain (`<em><strong>text</strong></em>`), while
+/// unmarked text starts at the `Text` node itself.
+fn patch_inline_text(dom: &DomNode, old_text: &str, new_text: &str) -> Result<(), ()> {
+    let mut leaf = dom.clone();
+    loop {
+        if leaf.node_type() == DomNode::TEXT_NODE {
+            break;
+        }
+        if leaf.node_type() != DomNode::ELEMENT_NODE || leaf.child_nodes().length() != 1 {
+            return Err(());
+        }
+        leaf = leaf.first_child().ok_or(())?;
+    }
+
+    // Splice only the changed span instead of rewriting the whole text node.
+    // `text_splice` operates on chars, so surrogate pairs are never split.
+    if let Some(character_data) = leaf.dyn_ref::<web_sys::CharacterData>() {
+        let (offset, count, replacement) = crate::text_diff::text_splice(old_text, new_text);
+        if character_data
+            .replace_data(offset, count, &replacement)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    leaf.set_node_value(Some(new_text));
+    Ok(())
+}
+
 fn child_positions(parent: &RichNode, content_start: usize) -> Vec<usize> {
     let mut pos = content_start;
     let mut positions = Vec::with_capacity(parent.child_count());
@@ -595,6 +924,7 @@ fn child_positions(parent: &RichNode, content_start: usize) -> Vec<usize> {
     positions
 }
 
+#[cfg(test)]
 fn single_unmarked_text_child(node: &RichNode) -> Option<&str> {
     if node.child_count() != 1 {
         return None;
@@ -623,26 +953,12 @@ fn update_data_pos(dom: &Element, pos: usize) -> Result<(), ()> {
     dom.set_attribute("data-pos", &value).map_err(|_| ())
 }
 
-fn patch_reflected_attrs(dom: &Element, old_attrs: &Attrs, new_attrs: &Attrs) -> Result<(), ()> {
-    for key in old_attrs.keys() {
-        if !new_attrs.contains_key(key) {
-            dom.remove_attribute(&format!("data-{key}"))
-                .map_err(|_| ())?;
-        }
-    }
-    for (key, value) in new_attrs {
-        dom.set_attribute(&format!("data-{key}"), &attr_value_to_string(value))
-            .map_err(|_| ())?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::{Command, split_block, toggle_mark};
     use crate::extension::RichTextExtension;
-    use crate::model::{Fragment, MarkPolicy, NodeSpec};
+    use crate::model::{Attrs, Fragment, MarkPolicy, NodeSpec};
     use crate::runtime::RuntimeBuilder;
     use crate::schema_basic;
     use crate::state::{EditorState, EditorStateConfig, Selection};
@@ -704,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn task_item_attr_toggle_is_attr_only() {
+    fn task_item_native_dom_attr_toggle_reconciles_its_wrapper() {
         let state = state_with_doc(task_doc(false));
         let mut tr = state.tr();
         tr.step(Step::Attr(AttrStep {
@@ -720,7 +1036,11 @@ mod tests {
         let mut stats = ReconcileStats::default();
         reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
-        assert_eq!(stats.outcome(), ReconcileOutcome::NodeAttrs { pos: 1 },);
+        // The model-only runtime owns a native `<li data-checked>` projection,
+        // so changing an attr may replace that one structural wrapper. A
+        // component-backed task runtime takes the retained NodeAttrs path and
+        // delivers the new typed attrs through `sync_node`.
+        assert_eq!(stats.outcome(), ReconcileOutcome::Reconciled);
     }
 
     #[test]

@@ -1,0 +1,5 @@
+error: serde `skip_serializing_if` is not supported by RichTextNodeAttrs because it makes the accepted and emitted key maps asymmetric or unknowable
+ --> tests/ui/rich_text_node_attrs/skip_serializing_if.rs:5:13
+  |
+5 |     #[serde(skip_serializing_if = "Option::is_none")]
+  |             ^^^^^^^^^^^^^^^^^^^

@@ -31,9 +31,12 @@ view = [
 ]
 
 [dependencies]
+pine-richtext-macros = { workspace = true }
+pocopine-crypto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+html5ever = { workspace = true }
 # `regex` powers the input-rules typing-time matchers. Default
 # features off, `std` + `perf` + `unicode-perl` on. `unicode-perl` is
 # the smallest feature that gives us Unicode-aware `\s` / `\d` / `\w`
@@ -62,6 +65,8 @@ features = [
     "DataTransfer",
     "Document",
     "DocumentFragment",
+    "DomRect",
+    "DomRectList",
     "Element",
     "Event",
     "EventTarget",
@@ -73,11 +78,17 @@ features = [
     "Range",
     "Selection",
     "StaticRange",
+    "Text",
     "Window",
 ]
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+trybuild = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = "0.3"
 
 [[bench]]
 name = "transform_hot_paths"

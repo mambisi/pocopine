@@ -1,0 +1,5 @@
+error: RichTextNodeAttrs cannot be derived for enums; node attrs must serialize as one closed object map
+ --> tests/ui/rich_text_node_attrs/enum.rs:4:6
+  |
+4 | enum Attrs {
+  |      ^^^^^

@@ -6,8 +6,7 @@
 //! 1. `register` writes into the default runtime's extension list
 //!    (until the runtime is sealed).
 //! 2. `register` after seal panics, preserving the
-//!    `mark_schema_realized` contract that the Phase 4 registry
-//!    enforced via `SCHEMA_REALIZED`.
+//!    one-way `mark_schema_realized` contract.
 //!
 //! Test isolation is best-effort: all tests share a process-global
 //! `DEFAULT` cache in `runtime::registry`. Tests that exercise the
@@ -16,7 +15,7 @@
 //! `RuntimeBuilder` and doesn't depend on the shared cache.
 
 #[allow(deprecated)]
-use crate::extension::{ExtensionNodeView, KeyBindings, NamedCommand, RichTextExtension, registry};
+use crate::extension::{KeyBindings, NamedCommand, RichTextExtension, registry};
 use crate::runtime::registry::lock_tests;
 
 #[derive(Default)]
@@ -24,7 +23,6 @@ struct StubExtension {
     name: &'static str,
     commands: Vec<(String, NamedCommand)>,
     key_bindings: KeyBindings,
-    node_views: Vec<ExtensionNodeView>,
 }
 
 impl StubExtension {
@@ -33,7 +31,6 @@ impl StubExtension {
             name,
             commands: Vec::new(),
             key_bindings: Vec::new(),
-            node_views: Vec::new(),
         }
     }
 }
@@ -47,16 +44,6 @@ impl RichTextExtension for StubExtension {
     }
     fn key_bindings(&self) -> KeyBindings {
         self.key_bindings.clone()
-    }
-    fn node_views(&self) -> Vec<ExtensionNodeView> {
-        self.node_views
-            .iter()
-            .map(|nv| ExtensionNodeView {
-                node_type: nv.node_type.clone(),
-                tag: nv.tag.clone(),
-                content_selector: nv.content_selector.clone(),
-            })
-            .collect()
     }
 }
 

@@ -5,6 +5,9 @@
     "build:richtext": "wasm-pack build examples/richtext --target web --out-dir pkg",
     "test:richtext-smoke": "npm run build:richtext && playwright test richtext.spec.mjs",
     "test:richtext-perf": "npm run build:richtext && playwright test richtext.perf.spec.mjs",
+    "build:richtext-external-blocks": "wasm-pack build examples/richtext-external-blocks --target web --out-dir pkg",
+    "check:richtext-external-blocks-cli": "cargo run -p pocopine-cli -- build --path examples/richtext-external-blocks",
+    "test:richtext-external-blocks": "npm run build:richtext-external-blocks && PLAYWRIGHT_SERVE_DIR=examples/richtext-external-blocks playwright test richtext-external-blocks.spec.mjs",
     "build:sync-external": "wasm-pack build examples/sync-external-e2e --target web --out-dir pkg",
     "test:sync-external": "npm run build:sync-external && PLAYWRIGHT_SERVE_DIR=examples/sync-external-e2e playwright test sync-external.spec.mjs",
     "test:storage-tus-e2e": "cargo test -p pocopine-storage --test tus_js_client_e2e -- --ignored --nocapture"

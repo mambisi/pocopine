@@ -1,0 +1,5 @@
+error: directional serde rename_all is not supported by RichTextNodeAttrs; serialization and deserialization must use one identical wire key
+ --> tests/ui/rich_text_node_attrs/directional_rename.rs:4:9
+  |
+4 | #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+  |         ^^^^^^^^^^

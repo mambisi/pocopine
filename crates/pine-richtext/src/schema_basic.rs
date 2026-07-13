@@ -16,11 +16,10 @@ use crate::model::{Attrs, Fragment, Mark, Node, Schema};
 /// base. The first call to this function seals the registry:
 /// subsequent `register(…)` calls panic.
 ///
-/// **User-name-wins semantics**: an app that calls
-/// `extension::register(TaskListExtension::with_node_view::<C>())`
-/// effectively replaces the default `TaskListExtension::new()` in the
-/// fold position, preserving today's schema-rank order while letting
-/// the user override node-view bindings, commands, or key bindings.
+/// **User-name-wins semantics**: a same-named user extension replaces the
+/// default extension in fold position, preserving schema-rank order while
+/// allowing model, command, key-binding, and serialization customization.
+/// Typed component views are configured explicitly on [`crate::RuntimeBuilder`].
 pub fn schema() -> Schema {
     static SCHEMA: OnceLock<Schema> = OnceLock::new();
     SCHEMA
@@ -62,6 +61,9 @@ pub fn schema() -> Schema {
             for ext in &effective {
                 for spec in ext.nodes() {
                     builder = builder.node(spec);
+                }
+                for spec in ext.typed_nodes() {
+                    builder = builder.typed_node(spec);
                 }
                 for spec in ext.marks() {
                     builder = builder.mark(spec);

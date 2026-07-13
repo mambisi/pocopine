@@ -1,0 +1,103 @@
+.pine-richtext-tag {
+  --pine-richtext-tag-background: color-mix(in srgb, currentColor 10%, transparent);
+  --pine-richtext-tag-color: inherit;
+  --pine-richtext-tag-border-color: color-mix(in srgb, currentColor 22%, transparent);
+  --pine-richtext-tag-border-radius: 999px;
+  --pine-richtext-tag-font-size: 0.875em;
+  --pine-richtext-tag-font-weight: 600;
+  --pine-richtext-tag-gap: 0.2em;
+  --pine-richtext-tag-padding-block: 0.1em;
+  --pine-richtext-tag-padding-inline: 0.45em;
+  --pine-richtext-tag-selected-ring: 0 0 0 2px color-mix(in srgb, currentColor 38%, transparent);
+  --pine-richtext-tag-remove-display: none;
+
+  align-items: center;
+  background: var(--pine-richtext-tag-background);
+  border: 1px solid var(--pine-richtext-tag-border-color);
+  border-radius: var(--pine-richtext-tag-border-radius);
+  color: var(--pine-richtext-tag-color);
+  display: inline-flex;
+  font-size: var(--pine-richtext-tag-font-size);
+  font-weight: var(--pine-richtext-tag-font-weight);
+  gap: var(--pine-richtext-tag-gap);
+  line-height: 1.25;
+  padding-block: var(--pine-richtext-tag-padding-block);
+  padding-inline: var(--pine-richtext-tag-padding-inline);
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.pine-richtext-tag[data-selection="node"],
+.pine-richtext-tag[data-selection="within-range"],
+.pine-richtext-tag[data-selection="crosses-boundary"] {
+  box-shadow: var(--pine-richtext-tag-selected-ring);
+}
+
+.pine-richtext-tag[data-kind="info"] {
+  --pine-richtext-tag-background: color-mix(in srgb, #2563eb 14%, transparent);
+  --pine-richtext-tag-color: #1d4ed8;
+}
+
+.pine-richtext-tag[data-kind="success"] {
+  --pine-richtext-tag-background: color-mix(in srgb, #16a34a 14%, transparent);
+  --pine-richtext-tag-color: #15803d;
+}
+
+.pine-richtext-tag[data-kind="warning"] {
+  --pine-richtext-tag-background: color-mix(in srgb, #d97706 16%, transparent);
+  --pine-richtext-tag-color: #a16207;
+}
+
+.pine-richtext-tag[data-kind="danger"] {
+  --pine-richtext-tag-background: color-mix(in srgb, #dc2626 14%, transparent);
+  --pine-richtext-tag-color: #b91c1c;
+}
+
+.pine-richtext-tag__prefix {
+  opacity: 0.65;
+}
+
+.pine-richtext-tag__remove {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  display: var(--pine-richtext-tag-remove-display);
+  font: inherit;
+  height: 1.15em;
+  justify-content: center;
+  line-height: 1;
+  margin: 0 -0.2em 0 0;
+  padding: 0;
+  width: 1.15em;
+}
+
+.pine-richtext-tag__remove:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.pine-richtext-tag__remove::before {
+  content: "×";
+}
+
+@media (prefers-color-scheme: dark) {
+  .pine-richtext-tag[data-kind="info"] {
+    --pine-richtext-tag-color: #93c5fd;
+  }
+
+  .pine-richtext-tag[data-kind="success"] {
+    --pine-richtext-tag-color: #86efac;
+  }
+
+  .pine-richtext-tag[data-kind="warning"] {
+    --pine-richtext-tag-color: #fcd34d;
+  }
+
+  .pine-richtext-tag[data-kind="danger"] {
+    --pine-richtext-tag-color: #fca5a5;
+  }
+}

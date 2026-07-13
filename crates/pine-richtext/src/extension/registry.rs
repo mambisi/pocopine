@@ -1,11 +1,8 @@
 //! Legacy process-global extension registry.
 //!
-//! **Phase 4b C5 cleanup:** this module is now a thin adapter shim
-//! over [`crate::runtime::registry`]. The four parallel `OnceLock`
-//! tables (`COMMANDS`, `KEY_BINDINGS`, `BASE`, plus the
-//! list-item-type set) are gone — every read function delegates to
-//! [`crate::runtime::registry::default`], which folds the same data
-//! out of `EXTENSIONS` + `default_extensions()` at first read.
+//! This module is a thin compatibility shim over the current per-runtime
+//! architecture. It does not own schema, command, keymap, plugin, or node-view
+//! tables: adapter reads delegate to [`crate::runtime::registry::default`].
 //!
 //! What stays:
 //!
@@ -15,6 +12,10 @@
 //!   runtime fold caches them.
 //! * [`SCHEMA_REALIZED`] flips when the default (or any named)
 //!   runtime is first resolved; subsequent [`register`] calls panic.
+//! * Typed component views are intentionally absent. The erased
+//!   [`RichTextExtension`] stored here contains model contributions only;
+//!   browser views are paired and validated by
+//!   [`crate::runtime::RuntimeBuilder::with_view`] on an explicit runtime.
 //!
 //! Apps that want per-instance scoping should call
 //! [`crate::runtime::registry::register`] with a
@@ -52,12 +53,13 @@ pub(crate) fn read_extensions()
 /// (default or named); the first resolve seals this registry and
 /// further `register` calls panic.
 ///
-/// **Soft-deprecated.** Apps targeting per-instance scoping should
+/// **Deprecated.** Apps targeting per-instance scoping should
 /// build a [`crate::runtime::EditorRuntime`] explicitly via
 /// [`crate::runtime::RuntimeBuilder`] and register it through
 /// [`crate::runtime::registry::register`]. This function continues
-/// to write into the default runtime's extension list for backward
-/// compatibility with Phase 4 apps.
+/// to append model contributions to the one-time default-runtime fold. It
+/// cannot contribute typed component views and never mutates an already-built
+/// runtime.
 ///
 /// Duplicate `name()` is dropped first-wins with a `tracing::warn!`.
 #[deprecated(
@@ -101,7 +103,7 @@ pub fn named_command(name: &str) -> Option<NamedCommand> {
 
 /// Adapter: snapshot every key-binding factory contributed by the
 /// default runtime's extensions, deduped first-wins. Preserves the
-/// pre-C5 legacy contract that callers of this API get a merged view
+/// legacy contract that callers of this API get a merged view
 /// (not the raw stored list, which can contain same-combo
 /// duplicates).
 pub fn merged_keymap_factories() -> Vec<(String, KeyBindingFactory)> {
@@ -125,9 +127,8 @@ pub fn is_schema_realized() -> bool {
     SCHEMA_REALIZED.load(Ordering::Acquire)
 }
 
-/// Flip the one-way "schema realized" switch. Called by
-/// [`crate::runtime::registry::seal_legacy_registry`]; further
-/// [`register`] calls panic afterwards.
+/// Flip the one-way "schema realized" switch when runtime resolution seals the
+/// legacy default overlay; further [`register`] calls panic afterwards.
 pub fn mark_schema_realized() {
     SCHEMA_REALIZED.store(true, Ordering::Release);
 }

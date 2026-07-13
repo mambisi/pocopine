@@ -27,7 +27,7 @@ function collectRichTextDebug(page) {
 
 async function selectText(page, needle) {
   await page.evaluate((text) => {
-    const root = document.querySelector('pine-rich-text-root:not([runtime])');
+    const root = document.querySelector('pine-rich-text-root[runtime="document"]');
     if (!root) throw new Error('missing richtext root');
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -52,8 +52,8 @@ async function selectText(page, needle) {
 async function selectFirstTwoTopLevelParagraphs(page) {
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const paragraphs = [...surface.querySelectorAll(':scope > p')];
     const p1 = paragraphs[0];
     const p2 = paragraphs[1];
@@ -114,8 +114,19 @@ async function expectTaskItemChromeHasNoTextNodes(taskItem) {
 }
 
 async function expectTaskItemContentEditableBoundary(taskItem) {
-  await expect(taskItem.locator('.pine-task-item')).toHaveAttribute('contenteditable', 'false');
-  await expect(taskItem.locator('.pine-task-item-content')).toHaveAttribute('contenteditable', 'true');
+  await expect(taskItem.locator('.pine-task-item-check')).toHaveAttribute(
+    'contenteditable',
+    'false',
+  );
+  await expect(taskItem).not.toHaveAttribute('contenteditable', 'false');
+  await expect(taskItem.locator('.pine-task-item')).not.toHaveAttribute(
+    'contenteditable',
+    'false',
+  );
+  await expect(taskItem.locator('.pine-task-item-content')).not.toHaveAttribute(
+    'contenteditable',
+    'false',
+  );
 }
 
 async function expectTaskItemsTight(taskItems) {
@@ -135,12 +146,12 @@ test('materializes task item checkboxes and toggles checked state', async ({ pag
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  await expect(page.locator('pine-rich-text-root:not([runtime])')).toBeVisible();
+  await expect(page.locator('pine-rich-text-root[runtime="document"]')).toBeVisible();
   await expect
     .poll(() => events.some((event) => event.debug_version === 'pine-richtext@0.1.0:debug-json-v1'))
     .toBe(true);
 
-  const taskItems = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
+  const taskItems = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
   await expect(taskItems).toHaveCount(2);
   await expect(taskItems.nth(0)).toHaveAttribute('data-checked', 'true');
   await expect(taskItems.nth(1)).toHaveAttribute('data-checked', 'false');
@@ -202,7 +213,7 @@ test('materializes task item checkboxes and toggles checked state', async ({ pag
 
 test('typed text survives an immediate format toolbar click', async ({ page }) => {
   // Repro for the parent-doc-staleness bug: pp-model propagation from
-  // <pine-rich-text-root:not([runtime])> back to <Editor> is deferred to tick::next.
+  // <pine-rich-text-root[runtime="document"]> back to <Editor> is deferred to tick::next.
   // If the toolbar reads self.doc between a keystroke and the flush,
   // its dispatch overwrites the just-typed character. The test types a
   // recognizable marker into the first paragraph, immediately clicks
@@ -212,11 +223,11 @@ test('typed text survives an immediate format toolbar click', async ({ page }) =
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos]');
 
   // Place the caret at the end of the first paragraph.
   await page.evaluate(() => {
-    const p = document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+    const p = document.querySelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
     const text = p.firstChild;
     const range = document.createRange();
     range.setStart(text, text.textContent.length);
@@ -231,7 +242,7 @@ test('typed text survives an immediate format toolbar click', async ({ page }) =
   // Select the just-typed "XYZ" range so toggle_mark has a non-empty
   // selection to operate on.
   await page.evaluate(() => {
-    const p = document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+    const p = document.querySelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
     const text = p.firstChild;
     const range = document.createRange();
     const len = text.textContent.length;
@@ -247,7 +258,7 @@ test('typed text survives an immediate format toolbar click', async ({ page }) =
   // After the toolbar click, "XYZ" must still be in the doc and must
   // carry a <strong> wrapper (or otherwise be marked as strong).
   const firstParagraphHTML = await page.evaluate(() => {
-    return document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]')?.innerHTML ?? '';
+    return document.querySelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]')?.innerHTML ?? '';
   });
   expect(firstParagraphHTML).toContain('XYZ');
   expect(firstParagraphHTML).toMatch(/<strong>[^<]*XYZ/);
@@ -263,18 +274,18 @@ test('Enter at end of paragraph creates a visible new paragraph', async ({ page 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
-  await page.locator('pine-rich-text-root:not([runtime]) p[data-pos]').nth(1).evaluate((paragraph) => {
+  await page.locator('pine-rich-text-root[runtime="document"] p[data-pos]').nth(1).evaluate((paragraph) => {
     paragraph.__pineSmokeParagraphToken = 'preserve-suffix';
   });
 
   const paragraphCountBefore = await page.locator(
-    'pine-rich-text-root:not([runtime]) > p, pine-rich-text-root:not([runtime]) .pine-rich-text > p',
+    'pine-rich-text-root[runtime="document"] > p, pine-rich-text-root[runtime="document"] .pine-rich-text > p',
   ).count();
 
   await page.evaluate(() => {
-    const p = document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+    const p = document.querySelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
     const text = p.firstChild;
     const range = document.createRange();
     range.setStart(text, text.textContent.length);
@@ -290,8 +301,8 @@ test('Enter at end of paragraph creates a visible new paragraph', async ({ page 
 
   const paragraphHTMLs = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     return [...surface.querySelectorAll(':scope > p')].map((el) => el.outerHTML);
   });
   expect(paragraphHTMLs.length).toBeGreaterThanOrEqual(paragraphCountBefore + 1);
@@ -300,8 +311,8 @@ test('Enter at end of paragraph creates a visible new paragraph', async ({ page 
     .poll(() =>
       page.evaluate(() => {
         const surface =
-          document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-          document.querySelector('pine-rich-text-root:not([runtime])');
+          document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+          document.querySelector('pine-rich-text-root[runtime="document"]');
         return [...surface.querySelectorAll(':scope > p')]
           .find((paragraph) =>
             paragraph.textContent.includes('Select some text and use the toolbar:'),
@@ -322,7 +333,7 @@ test('toolbar bullet list creates one list item per selected paragraph', async (
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await selectFirstTwoTopLevelParagraphs(page);
   // Bulleted list is the 7th toolbar button in the current layout
@@ -331,8 +342,8 @@ test('toolbar bullet list creates one list item per selected paragraph', async (
 
   const listItems = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const list = [...surface.querySelectorAll(':scope > ul')]
       .find((ul) => !ul.classList.contains('task-list'));
     if (!list) return null;
@@ -358,14 +369,14 @@ test('toolbar ordered and checklist lists also create one item per selected para
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^1\. List$/ }).click();
 
   const orderedItems = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const list = surface.querySelector(':scope > ol');
     if (!list) return null;
     return {
@@ -390,19 +401,19 @@ test('toolbar ordered and checklist lists also create one item per selected para
   });
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^☑ List$/ }).click();
 
-  const taskList = page.locator('pine-rich-text-root:not([runtime]) ul.task-list').first();
-  await expect(taskList.locator('pine-task-item')).toHaveCount(2);
-  await expect(taskList.locator('pine-task-item').nth(0)).toHaveAttribute('data-checked', 'false');
-  await expect(taskList.locator('pine-task-item').nth(1)).toHaveAttribute('data-checked', 'false');
+  const taskList = page.locator('pine-rich-text-root[runtime="document"] ul.task-list').first();
+  await expect(taskList.locator('[data-pine-node-type="task_item"]')).toHaveCount(2);
+  await expect(taskList.locator('[data-pine-node-type="task_item"]').nth(0)).toHaveAttribute('data-checked', 'false');
+  await expect(taskList.locator('[data-pine-node-type="task_item"]').nth(1)).toHaveAttribute('data-checked', 'false');
   await expect(taskList.locator('.pine-task-item-check').nth(0)).toBeVisible();
   await expect(taskList.locator('.pine-task-item-check').nth(1)).toBeVisible();
-  await expectTaskItemChromeHasNoTextNodes(taskList.locator('pine-task-item').nth(0));
-  await expectTaskItemChromeHasNoTextNodes(taskList.locator('pine-task-item').nth(1));
-  const taskTexts = await taskList.locator('pine-task-item').evaluateAll((items) =>
+  await expectTaskItemChromeHasNoTextNodes(taskList.locator('[data-pine-node-type="task_item"]').nth(0));
+  await expectTaskItemChromeHasNoTextNodes(taskList.locator('[data-pine-node-type="task_item"]').nth(1));
+  const taskTexts = await taskList.locator('[data-pine-node-type="task_item"]').evaluateAll((items) =>
     items.map((item) => item.textContent.trim()),
   );
   expect(taskTexts[0]).toBe('Hello, pine-richtext.');
@@ -415,14 +426,14 @@ test('toolbar paragraph converts selected list items back into paragraphs', asyn
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
 
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const items = [...surface.querySelectorAll(':scope > ul:not(.task-list) > li')];
     if (items.length < 2) throw new Error('expected two bullet items');
     const first = items[0].querySelector('p').firstChild;
@@ -439,8 +450,8 @@ test('toolbar paragraph converts selected list items back into paragraphs', asyn
 
   const result = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     return {
       topParagraphs: [...surface.querySelectorAll(':scope > p')].map((p) => p.textContent),
       bulletLists: [...surface.querySelectorAll(':scope > ul')]
@@ -462,14 +473,14 @@ test('Backspace at the first bullet unwraps that item without deleting the rest 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
 
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const paragraph = surface.querySelector(':scope > ul:not(.task-list) > li:first-child p');
     if (!paragraph?.firstChild) throw new Error('missing first bullet paragraph');
     const range = document.createRange();
@@ -484,14 +495,14 @@ test('Backspace at the first bullet unwraps that item without deleting the rest 
 
   const result = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const bullet = [...surface.querySelectorAll(':scope > ul')]
       .find((ul) => !ul.classList.contains('task-list'));
     return {
       topParagraphs: [...surface.querySelectorAll(':scope > p')].map((p) => p.textContent),
       bulletItems: bullet ? [...bullet.children].map((li) => li.textContent.trim()) : [],
-      taskItems: [...surface.querySelectorAll(':scope > ul.task-list > pine-task-item')].map(
+      taskItems: [...surface.querySelectorAll(':scope > ul.task-list > [data-pine-node-type="task_item"]')].map(
         (item) => item.textContent.trim(),
       ),
     };
@@ -510,7 +521,7 @@ test('italic mark toggle reconciles one subtree and preserves task checkboxes', 
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  const taskItems = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
+  const taskItems = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
   await expect(taskItems).toHaveCount(2);
   await expect(taskItems.nth(0).locator('.pine-task-item-check')).toBeVisible();
   await taskItems.nth(0).locator('.pine-task-item-check').evaluate((check) => {
@@ -544,7 +555,7 @@ test('typing inside a task item preserves node-view chrome', async ({ page }) =>
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  const taskItems = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
+  const taskItems = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
   await expect(taskItems).toHaveCount(2);
   await taskItems.nth(1).evaluate((item) => {
     item.__pineSmokeHostToken = 'preserve-host';
@@ -591,13 +602,13 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos]');
 
   // Select the same two-paragraph span the closed-variant test uses.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const paragraphs = [...surface.querySelectorAll(':scope > p')];
     const p1 = paragraphs[0];
     const p2 = paragraphs[1];
@@ -616,8 +627,8 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
   // dispatches on the surface itself or a descendant.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const event = new CustomEvent('pine:richtext:command', {
       bubbles: true,
       composed: true,
@@ -633,8 +644,8 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
 
   const ulHTML = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     return [...surface.querySelectorAll(':scope > ul')]
       .map((ul) => ul.outerHTML)
       .filter((html) => !html.includes('class="task-list"'))[0];
@@ -644,27 +655,28 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
   expect(errors).toEqual([]);
 });
 
-test('TaskListExtension::with_node_view renders custom task-item element', async ({ page }) => {
-  // Phase 4 C4: the demo registers `TaskListExtension::with_node_view::<PineTaskItem>()`,
-  // which forwards the `pine-task-item` tag + `data-pine-richtext-content`
-  // selector eagerly into the render::node_views registry. The
-  // reconciler picks that up when rendering `task_item` nodes.
-  // Asserting the seed doc's custom-element layout closes the
-  // extension contract.
+test('typed TaskListExtension mounts PineTaskItem on native task-item hosts', async ({ page }) => {
+  // The named document runtime composes
+  // `TaskListExtension::with_typed_node_view::<PineTaskItem>()`. The
+  // semantic `TaskItemNode` supplies the native `<li>` host while the
+  // component supplies chrome around its compiled owned-content outlet.
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) pine-task-item');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
 
-  const items = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
+  const items = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
   await expect(items).toHaveCount(2);
-  // Every custom-element host must carry data-pos (so the reconciler
-  // and selection bridge can find them) and the inner content host
-  // (so the reconciler knows where to render inline content).
+  // Every stable native host carries the semantic type and position; the
+  // mounted component exposes its editor-owned child outlet without a
+  // runtime selector marker.
   for (let i = 0; i < 2; i += 1) {
+    await expect(items.nth(i)).toHaveJSProperty('tagName', 'LI');
     await expect(items.nth(i)).toHaveAttribute('data-pos', /\d+/);
-    await expect(items.nth(i).locator('[data-pine-richtext-content]')).toBeVisible();
+    await expect(items.nth(i)).toHaveAttribute('data-pine-node-view', 'typed');
+    await expect(items.nth(i).locator('.pine-task-item-content')).toBeVisible();
+    await expect(items.nth(i).locator('[pp-owned-content]')).toHaveCount(0);
   }
   expect(errors).toEqual([]);
 });
@@ -678,7 +690,7 @@ test('clicking ordered list inside a bullet list converts in place without freez
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
@@ -687,8 +699,8 @@ test('clicking ordered list inside a bullet list converts in place without freez
   // known cursor.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const li = surface.querySelector(':scope > ul > li');
     const p = li.querySelector('p');
     const range = document.createRange();
@@ -706,8 +718,8 @@ test('clicking ordered list inside a bullet list converts in place without freez
 
   const result = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const list = [...surface.querySelectorAll(':scope > ol, :scope > ul')]
       .find((el) => !el.classList.contains('task-list'));
     return {
@@ -736,7 +748,7 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
   await page.waitForTimeout(150);
@@ -744,8 +756,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   // Drop cursor into the first new bullet item.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const li = surface.querySelector(':scope > ul > li');
     const p = li.querySelector('p');
     const range = document.createRange();
@@ -763,12 +775,12 @@ test('bullet → task → bullet round-trips through the conversion contract', a
 
   const afterTask = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const taskLists = [...surface.querySelectorAll(':scope > ul.task-list')];
     return taskLists.map((ul) => ({
-      itemCount: ul.querySelectorAll(':scope > pine-task-item').length,
-      texts: [...ul.querySelectorAll(':scope > pine-task-item')].map((item) =>
+      itemCount: ul.querySelectorAll(':scope > [data-pine-node-type="task_item"]').length,
+      texts: [...ul.querySelectorAll(':scope > [data-pine-node-type="task_item"]')].map((item) =>
         item.textContent.trim(),
       ),
     }));
@@ -783,12 +795,12 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   // Cursor inside the freshly-converted task list.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const taskList = [...surface.querySelectorAll(':scope > ul.task-list')].find((ul) =>
       ul.textContent.includes('Hello, pine-richtext'),
     );
-    const para = taskList.querySelector('pine-task-item p');
+    const para = taskList.querySelector('[data-pine-node-type="task_item"] p');
     const range = document.createRange();
     range.setStart(para.firstChild, 0);
     range.setEnd(para.firstChild, 2);
@@ -804,8 +816,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
 
   const afterBullet = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const bullet = [...surface.querySelectorAll(':scope > ul')].find(
       (ul) => !ul.classList.contains('task-list'),
     );
@@ -831,12 +843,12 @@ test('two editors on one page carry different schemas (Phase 4b C4)', async ({ p
   // commands forbidden by the comment runtime's schema (e.g. wrap_in_task_list) are silent
   // no-ops there — proving per-instance schema scoping end-to-end.
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
   await page.waitForSelector('pine-rich-text-root[runtime="comment"] p[data-pos="0"]');
 
   // Doc editor: has the seeded paragraphs + a `ul.task-list`.
   const docHasTaskList = await page.evaluate(() => {
-    const doc = document.querySelector('pine-rich-text-root:not([runtime])');
+    const doc = document.querySelector('pine-rich-text-root[runtime="document"]');
     return !!doc.querySelector('ul.task-list');
   });
   expect(docHasTaskList).toBe(true);
@@ -899,16 +911,16 @@ test('runtime-scoped custom command only fires on its own editor (Phase 4b C4)',
   // editor (inserts text) but is a silent no-op against the doc editor (no such
   // named command in its runtime's table). Proves per-instance command scoping.
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
   await page.waitForSelector('pine-rich-text-root[runtime="comment"] p[data-pos="0"]');
 
   // Snapshot the doc editor's HTML so we can confirm it doesn't change.
-  const docHtmlBefore = await page.locator('pine-rich-text-root:not([runtime])').innerHTML();
+  const docHtmlBefore = await page.locator('pine-rich-text-root[runtime="document"]').innerHTML();
 
   // Dispatch against the doc editor's inner surface — no `comment_submit` command in its runtime.
   await page.evaluate(() => {
     const docSurface = document.querySelector(
-      'pine-rich-text-root:not([runtime]) .pine-rich-text',
+      'pine-rich-text-root[runtime="document"] .pine-rich-text',
     );
     docSurface.dispatchEvent(
       new CustomEvent('pine:richtext:command', {
@@ -918,7 +930,7 @@ test('runtime-scoped custom command only fires on its own editor (Phase 4b C4)',
     );
   });
   await page.waitForTimeout(120);
-  const docHtmlAfter = await page.locator('pine-rich-text-root:not([runtime])').innerHTML();
+  const docHtmlAfter = await page.locator('pine-rich-text-root[runtime="document"]').innerHTML();
   expect(docHtmlAfter).toBe(docHtmlBefore);
 
   // Dispatch against the comment editor's inner surface — its runtime has the
@@ -953,7 +965,7 @@ test('runtime-scoped custom command only fires on its own editor (Phase 4b C4)',
 async function caretAtEndOfFirstParagraph(page) {
   await page.evaluate(() => {
     const p = document.querySelector(
-      'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+      'pine-rich-text-root[runtime="document"] p[data-pos="0"]',
     );
     const text = p.firstChild;
     const range = document.createRange();
@@ -986,7 +998,7 @@ test('typing `--` triggers the em-dash smart-typography rule', async ({ page }) 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await caretAtEndOfFirstParagraph(page);
   await page.keyboard.type('--');
@@ -994,7 +1006,7 @@ test('typing `--` triggers the em-dash smart-typography rule', async ({ page }) 
   const firstParagraphText = await page.evaluate(
     () =>
       document.querySelector(
-        'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+        'pine-rich-text-root[runtime="document"] p[data-pos="0"]',
       )?.textContent ?? '',
   );
   expect(firstParagraphText).toContain('—');
@@ -1012,7 +1024,7 @@ test('typing `"hello"` triggers smart-quote rules in both directions', async ({ 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await caretAtEndOfFirstParagraph(page);
   // The end of the seeded paragraph is wordy — to exercise open-quote,
@@ -1022,7 +1034,7 @@ test('typing `"hello"` triggers smart-quote rules in both directions', async ({ 
   const firstParagraphText = await page.evaluate(
     () =>
       document.querySelector(
-        'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+        'pine-rich-text-root[runtime="document"] p[data-pos="0"]',
       )?.textContent ?? '',
   );
   expect(firstParagraphText).toContain('“hello”');
@@ -1039,7 +1051,7 @@ test('typing `# ` at start of an empty paragraph converts it to an H1', async ({
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await caretAtStartOfFreshParagraphAfterFirst(page);
   await page.keyboard.type('# Heading');
@@ -1049,8 +1061,8 @@ test('typing `# ` at start of an empty paragraph converts it to an H1', async ({
       page.evaluate(() => {
         const surface =
           document.querySelector(
-            'pine-rich-text-root:not([runtime]) .pine-rich-text',
-          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+            'pine-rich-text-root[runtime="document"] .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root[runtime="document"]');
         return [...surface.querySelectorAll(':scope > h1')].map(
           (el) => el.textContent,
         );
@@ -1068,7 +1080,7 @@ test('typing `* ` at start of an empty paragraph wraps it in a bullet list', asy
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await caretAtStartOfFreshParagraphAfterFirst(page);
   await page.keyboard.type('* item one');
@@ -1078,8 +1090,8 @@ test('typing `* ` at start of an empty paragraph wraps it in a bullet list', asy
       page.evaluate(() => {
         const surface =
           document.querySelector(
-            'pine-rich-text-root:not([runtime]) .pine-rich-text',
-          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+            'pine-rich-text-root[runtime="document"] .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root[runtime="document"]');
         const bullets = [
           ...surface.querySelectorAll(':scope > ul:not(.task-list)'),
         ];
@@ -1100,7 +1112,7 @@ test('typing `> ` at start of an empty paragraph wraps it in a blockquote', asyn
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await caretAtStartOfFreshParagraphAfterFirst(page);
   await page.keyboard.type('> a quote');
@@ -1110,8 +1122,8 @@ test('typing `> ` at start of an empty paragraph wraps it in a blockquote', asyn
       page.evaluate(() => {
         const surface =
           document.querySelector(
-            'pine-rich-text-root:not([runtime]) .pine-rich-text',
-          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+            'pine-rich-text-root[runtime="document"] .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root[runtime="document"]');
         return [...surface.querySelectorAll(':scope > blockquote')].map(
           (el) => el.textContent,
         );
@@ -1135,7 +1147,7 @@ test('Export MD button serializes the current doc to markdown', async ({ page })
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await page.locator('[data-test="export-md"]').click();
 
@@ -1163,7 +1175,7 @@ test('Export MD captures live edits made before clicking', async ({ page }) => {
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   await caretAtEndOfFirstParagraph(page);
   await page.keyboard.type(' LIVE-EDIT-MARKER');
@@ -1187,7 +1199,7 @@ test('Import MD button parses markdown into the surface doc', async ({ page }) =
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   const md = [
     '# Imported heading',
@@ -1213,8 +1225,8 @@ test('Import MD button parses markdown into the surface doc', async ({ page }) =
       page.evaluate(() => {
         const surface =
           document.querySelector(
-            'pine-rich-text-root:not([runtime]) .pine-rich-text',
-          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+            'pine-rich-text-root[runtime="document"] .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root[runtime="document"]');
         return [...surface.querySelectorAll(':scope > h1')].map(
           (el) => el.textContent,
         );
@@ -1224,7 +1236,7 @@ test('Import MD button parses markdown into the surface doc', async ({ page }) =
 
   // Paragraph text survives.
   const html = await page
-    .locator('pine-rich-text-root:not([runtime]) .pine-rich-text')
+    .locator('pine-rich-text-root[runtime="document"] .pine-rich-text')
     .innerHTML();
   expect(html).toContain('A paragraph from markdown.');
 
@@ -1232,8 +1244,8 @@ test('Import MD button parses markdown into the surface doc', async ({ page }) =
   const bulletItems = await page.evaluate(() => {
     const surface =
       document.querySelector(
-        'pine-rich-text-root:not([runtime]) .pine-rich-text',
-      ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+        'pine-rich-text-root[runtime="document"] .pine-rich-text',
+      ) ?? document.querySelector('pine-rich-text-root[runtime="document"]');
     const ul = surface.querySelector(':scope > ul:not(.task-list)');
     if (!ul) return [];
     return [...ul.querySelectorAll(':scope > li')].map((li) => li.textContent);
@@ -1252,7 +1264,7 @@ test('Import then Export round-trips through model', async ({ page }) => {
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   const md = '- [x] task one\n- [ ] task two\n';
 
@@ -1268,8 +1280,8 @@ test('Import then Export round-trips through model', async ({ page }) => {
       page.evaluate(() => {
         const surface =
           document.querySelector(
-            'pine-rich-text-root:not([runtime]) .pine-rich-text',
-          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+            'pine-rich-text-root[runtime="document"] .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root[runtime="document"]');
         return surface.querySelector(':scope > ul.task-list') !== null;
       }),
     )
@@ -1287,6 +1299,54 @@ test('Import then Export round-trips through model', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('invalid state replacement fails loudly and preserves the live document', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await page.goto('/');
+  const host = page.locator('pine-rich-text-root[runtime="document"]');
+  const surface = host.locator('.pine-rich-text');
+  await expect(surface.locator(':scope > p').first()).toContainText('Hello, pine-richtext.');
+
+  const textBefore = await surface.textContent();
+  await page.evaluate(() => {
+    const host = document.querySelector('pine-rich-text-root[runtime="document"]');
+    window.__pineLoadErrors = [];
+    host.addEventListener('pine:richtext:load-error', (event) => {
+      window.__pineLoadErrors.push(event.detail);
+    });
+    host.dispatchEvent(
+      new CustomEvent('pine:richtext:command', {
+        bubbles: true,
+        detail: {
+          kind: 'replace_state',
+          doc: {
+            doc: { type: 'not_a_registered_node', content: [] },
+            selection: null,
+            stored_marks: null,
+            plugin_state: {},
+          },
+        },
+      }),
+    );
+  });
+
+  await expect(surface).toHaveAttribute('data-pine-richtext-load-error', 'true');
+  const alert = host.locator('.pine-richtext-load-error');
+  await expect(alert).toBeVisible();
+  await expect(alert).toHaveAttribute('role', 'alert');
+  await expect(alert).toContainText('not_a_registered_node');
+
+  expect(await surface.textContent()).toBe(textBefore);
+  const details = await page.evaluate(() => window.__pineLoadErrors);
+  expect(details).toHaveLength(1);
+  expect(details[0].runtime).toBe('document');
+  expect(details[0].wire_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  expect(details[0].error).toContain('not_a_registered_node');
+  expect(details[0].input.doc.type).toBe('not_a_registered_node');
+  expect(pageErrors).toEqual([]);
+});
+
 test('Mod+a selects the entire surface (selection-only commit syncs DOM caret)', async ({ page }) => {
   // Regression: select_all sets `Selection::All` without touching
   // the doc, so the reconciler short-circuits as `Unchanged`. The
@@ -1298,14 +1358,14 @@ test('Mod+a selects the entire surface (selection-only commit syncs DOM caret)',
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   // Park the caret somewhere inside the surface so the "before"
   // selection is collapsed and clearly not equal to "all".
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     surface.focus();
     const firstText = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT).nextNode();
     if (!firstText) throw new Error('no text node to seed caret');
@@ -1325,8 +1385,8 @@ test('Mod+a selects the entire surface (selection-only commit syncs DOM caret)',
 
   const selectionInfo = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     const sel = window.getSelection();
     const range = sel.rangeCount ? sel.getRangeAt(0) : null;
     if (!range) return { covered: false };
@@ -1353,7 +1413,7 @@ test('pasting multi-block markdown preserves heading and list structure', async 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] p[data-pos="0"]');
 
   const md = '## What I should *not* do\n\n- Don\'t start in TypeScript\n- Docker-only is the scope\n';
 
@@ -1363,8 +1423,8 @@ test('pasting multi-block markdown preserves heading and list structure', async 
   // installs and the only path the handler listens on.
   await page.evaluate((markdown) => {
     const surface =
-      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root:not([runtime])');
+      document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root[runtime="document"]');
     surface.focus();
     const firstText = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT).nextNode();
     if (firstText) {
@@ -1391,8 +1451,8 @@ test('pasting multi-block markdown preserves heading and list structure', async 
     .poll(async () =>
       page.evaluate(() => {
         const surface =
-          document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
-          document.querySelector('pine-rich-text-root:not([runtime])');
+          document.querySelector('pine-rich-text-root[runtime="document"] .pine-rich-text') ??
+          document.querySelector('pine-rich-text-root[runtime="document"]');
         return {
           hasHeading: surface.querySelector('h1, h2, h3, h4, h5, h6') !== null,
           hasList: surface.querySelector('ul, ol') !== null,

@@ -78,6 +78,11 @@ pub fn select_all() -> BoxedCommand {
 pub fn select_parent_node() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if let Some(rect) = sel.cell_rect(state.doc(), state.schema()).ok().flatten() {
+            let mut tr = state.tr();
+            tr.set_selection(Selection::node(rect.table_pos)).ok()?;
+            return Some(tr);
+        }
         let from = sel.from(state.doc());
         let to = sel.to(state.doc());
         let resolved = state.doc().resolve(from).ok()?;
@@ -98,6 +103,9 @@ pub fn select_parent_node() -> BoxedCommand {
 pub fn select_textblock_start() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let pos = sel.from(state.doc());
         let resolved = state.doc().resolve(pos).ok()?;
         let mut depth = resolved.depth();
@@ -123,6 +131,9 @@ pub fn select_textblock_start() -> BoxedCommand {
 pub fn select_textblock_end() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let pos = sel.to(state.doc());
         let resolved = state.doc().resolve(pos).ok()?;
         let mut depth = resolved.depth();
@@ -148,6 +159,9 @@ pub fn select_textblock_end() -> BoxedCommand {
 // ====================================================================
 
 fn block_range_for_selection(state: &EditorState) -> Option<NodeRange> {
+    if state.selection().is_cells() {
+        return None;
+    }
     let from = state
         .doc()
         .resolve(state.selection().from(state.doc()))
@@ -206,6 +220,9 @@ fn enclosing_list_ancestor(doc: &Node, pos: usize) -> Option<(usize, usize, Node
 }
 
 fn list_range_for_selection(state: &EditorState) -> Option<NodeRange> {
+    if state.selection().is_cells() {
+        return None;
+    }
     let from = state
         .doc()
         .resolve(state.selection().from(state.doc()))
@@ -304,6 +321,9 @@ pub fn lift() -> BoxedCommand {
 pub fn lift_empty_block() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let from = sel.from(state.doc());
         let to = sel.to(state.doc());
         if from != to {
@@ -328,6 +348,9 @@ pub fn lift_empty_block() -> BoxedCommand {
 pub fn join_up() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let from = sel.from(state.doc());
         let point = match sel {
             Selection::Node { anchor } => {
@@ -354,6 +377,9 @@ pub fn join_up() -> BoxedCommand {
 pub fn join_down() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let to = sel.to(state.doc());
         let point = match sel {
             Selection::Node { .. } => {
@@ -379,6 +405,9 @@ pub fn join_down() -> BoxedCommand {
 pub fn split_block() -> BoxedCommand {
     boxed(|state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let from = sel.from(state.doc());
         let to = sel.to(state.doc());
         let resolved = state.doc().resolve(from).ok()?;
@@ -444,6 +473,9 @@ pub fn split_list_item(item_types: &[&str]) -> BoxedCommand {
     let names: Vec<String> = item_types.iter().map(|s| (*s).to_string()).collect();
     boxed(move |state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let from = sel.from(state.doc());
         let to = sel.to(state.doc());
         let resolved = state.doc().resolve(from).ok()?;
@@ -802,6 +834,72 @@ pub fn delete_node_forward() -> BoxedCommand {
     })
 }
 
+/// Select a selectable inline atom immediately before a collapsed caret.
+/// Horizontal keyboard navigation uses this as the first step when moving
+/// across chips, mentions, inline images, and other atomic inline nodes.
+pub fn select_inline_atom_backward() -> BoxedCommand {
+    boxed(|state| {
+        let cursor = collapsed_cursor(state)?;
+        let before = cursor.node_before()?;
+        let before_type = state.schema().node_type(before.type_name()).ok()?;
+        if !before_type.is_inline() || !before_type.is_atom() || !before_type.is_selectable() {
+            return None;
+        }
+        let mut tr = state.tr();
+        tr.set_selection(Selection::node(
+            cursor.pos().saturating_sub(before.node_size()),
+        ))
+        .ok()?;
+        Some(tr)
+    })
+}
+
+/// Select a selectable inline atom immediately after a collapsed caret.
+pub fn select_inline_atom_forward() -> BoxedCommand {
+    boxed(|state| {
+        let cursor = collapsed_cursor(state)?;
+        let after = cursor.node_after()?;
+        let after_type = state.schema().node_type(after.type_name()).ok()?;
+        if !after_type.is_inline() || !after_type.is_atom() || !after_type.is_selectable() {
+            return None;
+        }
+        let mut tr = state.tr();
+        tr.set_selection(Selection::node(cursor.pos())).ok()?;
+        Some(tr)
+    })
+}
+
+fn leave_selected_inline_atom(direction: i8) -> BoxedCommand {
+    boxed(move |state| {
+        let Selection::Node { anchor } = state.selection() else {
+            return None;
+        };
+        let node = state.doc().node_at(*anchor).ok()??;
+        let node_type = state.schema().node_type(node.type_name()).ok()?;
+        if !node_type.is_inline() || !node_type.is_atom() {
+            return None;
+        }
+        let position = if direction < 0 {
+            *anchor
+        } else {
+            anchor.saturating_add(node.node_size())
+        };
+        let mut tr = state.tr();
+        tr.set_selection(Selection::text(position)).ok()?;
+        Some(tr)
+    })
+}
+
+/// Leave a selected inline atom at its left text boundary.
+pub fn leave_selected_inline_atom_backward() -> BoxedCommand {
+    leave_selected_inline_atom(-1)
+}
+
+/// Leave a selected inline atom at its right text boundary.
+pub fn leave_selected_inline_atom_forward() -> BoxedCommand {
+    leave_selected_inline_atom(1)
+}
+
 /// The resolved position of a collapsed caret, or `None` when the
 /// selection is a range. Shared by the inline-atom delete commands.
 fn collapsed_cursor(state: &EditorState) -> Option<ResolvedPos> {
@@ -935,6 +1033,9 @@ pub fn set_block_type(node_type: impl Into<String>, attrs: Attrs) -> BoxedComman
     let node_type = node_type.into();
     boxed(move |state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            return None;
+        }
         let from = sel.from(state.doc());
         let to = sel.to(state.doc());
         let mut tr = state.tr();
@@ -955,6 +1056,32 @@ pub fn set_block_type(node_type: impl Into<String>, attrs: Attrs) -> BoxedComman
 pub fn toggle_mark(mark: Mark) -> BoxedCommand {
     boxed(move |state| {
         let sel = state.selection();
+        if sel.is_cells() {
+            let ranges = sel.ranges(state.doc(), state.schema()).ok()?;
+            let non_empty = ranges
+                .iter()
+                .filter(|range| range.from < range.to)
+                .copied()
+                .collect::<Vec<_>>();
+            if non_empty.is_empty() {
+                return None;
+            }
+            let remove = non_empty.iter().all(|range| {
+                state
+                    .doc()
+                    .range_has_mark(range.from, range.to, &mark)
+                    .unwrap_or(false)
+            });
+            let mut tr = state.tr();
+            for range in non_empty {
+                if remove {
+                    tr.remove_mark(range.from, range.to, mark.clone()).ok()?;
+                } else {
+                    tr.add_mark(range.from, range.to, mark.clone()).ok()?;
+                }
+            }
+            return (!tr.transform().steps().is_empty()).then_some(tr);
+        }
         let from = sel.from(state.doc());
         let to = sel.to(state.doc());
         if from == to {

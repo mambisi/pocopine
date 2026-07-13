@@ -1,0 +1,32 @@
+<root
+  class="showcase-task-item"
+  :data-checked="checked"
+  :data-sync-count="sync_count"
+  :data-error="error"
+><button
+    class="showcase-task-item__check"
+    type="button"
+    contenteditable="false"
+    tabindex="-1"
+    :aria-pressed="checked ? 'true' : 'false'"
+    :aria-label="checked ? 'Mark task incomplete' : 'Mark task complete'"
+    @mousedown.prevent
+    @click="toggle"
+  ></button><div
+    class="showcase-task-item__content"
+    pp-owned-content
+  ></div><span
+    class="showcase-task-item__sync"
+    contenteditable="false"
+    aria-hidden="true"
+  >sync <span pp-text="sync_count"></span></span><button
+    class="showcase-task-item__delete"
+    type="button"
+    contenteditable="false"
+    tabindex="-1"
+    aria-label="Delete this task through its typed node-view handle"
+    title="Delete this task from its component handler"
+    @mousedown.prevent
+    @click="delete_self"
+    data-test="delete-task-self"
+  >Delete</button></root>

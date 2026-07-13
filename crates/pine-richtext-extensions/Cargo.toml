@@ -1,0 +1,59 @@
+[package]
+name = "pine-richtext-extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Optional target-independent semantic extensions for pine-richtext."
+
+[features]
+default = []
+tables = []
+tags = []
+view = [
+    "pine-richtext/view",
+    "dep:pocopine",
+    "dep:pocopine-core",
+    "dep:tracing",
+    "dep:wasm-bindgen",
+    "dep:web-sys",
+]
+bubble-menu = ["view"]
+table-view = ["tables", "view"]
+
+[dependencies]
+pine-richtext = { workspace = true }
+pocopine = { path = "../pocopine", optional = true }
+pocopine-core = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+
+[dependencies.web-sys]
+version = "0.3"
+optional = true
+features = [
+    "CssStyleDeclaration",
+    "CustomEvent",
+    "CustomEventInit",
+    "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlElement",
+    "KeyboardEvent",
+    "KeyboardEventInit",
+    "Node",
+    "Performance",
+    "PointerEvent",
+    "PointerEventInit",
+    "Window",
+]
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = { workspace = true }
+serde-wasm-bindgen = "0.6"
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = "0.3"

@@ -12,6 +12,7 @@
 //! `prosemirror-schema-basic`. See `NOTICE.prosemirror.md` for attribution.
 
 mod error;
+mod typed_nodes;
 
 pub mod commands;
 pub mod extension;
@@ -23,6 +24,7 @@ pub mod model;
 pub mod render;
 pub mod runtime;
 pub mod schema_basic;
+pub mod serialization;
 pub mod state;
 pub mod transform;
 
@@ -44,3 +46,18 @@ mod text_diff;
 pub mod view;
 
 pub use error::{RichTextError, RichTextResult};
+pub use pine_richtext_macros::RichTextNodeAttrs;
+pub use typed_nodes::{
+    NodeMigration, NodeMigrationError, RichTextNodeAttrs, RichTextNodeType, TypedNodeAttrsError,
+    TypedNodeSpec, WireNode,
+};
+
+/// Implementation details used by proc-macro expansions. Not a stable API.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}
+
+// Let derives emitted inside this crate use the same absolute path as derives
+// emitted for downstream crates.
+extern crate self as pine_richtext;

@@ -125,8 +125,7 @@ impl ContentFormat for Markdown {
 
     fn serialize(state: &EditorState, runtime: &EditorRuntime) -> Result<String, ContentError> {
         runtime
-            .markdown_serializer()
-            .serialize(state.doc())
+            .export_markdown(state.doc())
             .map_err(|err| ContentError::Serialize(err.to_string()))
     }
 }

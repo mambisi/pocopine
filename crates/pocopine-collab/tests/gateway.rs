@@ -10,23 +10,37 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, Stream, StreamExt};
 use pocopine_collab::{
-    COLLAB_SUBPROTOCOL, CollabDocument, CollabMessage, CollabStore, MemoryCollabStore,
-    WsGatewayCollabExt,
+    COLLAB_SUBPROTOCOL, CollabDocument, CollabHello, CollabMessage, CollabStore,
+    CompatibilityIdentity, MemoryCollabStore, WsGatewayCollabExt,
 };
 use pocopine_realtime::{Control, Fanout, Frame, FrameKind, LocalFanout, WsGateway, routes};
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error as TungError, Message as WsMessage};
 
 /// Quiet window after which the handshake/broadcast chatter is considered drained.
 const IDLE: Duration = Duration::from_millis(400);
+const FINGERPRINT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn compatibility() -> CompatibilityIdentity {
+    CompatibilityIdentity::new(1, FINGERPRINT).unwrap()
+}
+
+fn topic(document_key: &str) -> String {
+    compatibility().namespace_topic(document_key)
+}
 
 /// Boot a single collab-enabled gateway on a fresh in-process fan-out; return
 /// its ws:// URL. Wired via the `with_collab` helper (the handler shares the
 /// gateway's own fan-out by construction).
 async fn spawn() -> String {
     let fanout: Arc<dyn Fanout> = Arc::new(LocalFanout::new());
-    serve_gateway(WsGateway::new(fanout).allow_all_topics().with_collab()).await
+    serve_gateway(
+        WsGateway::new(fanout)
+            .allow_all_topics()
+            .with_collab(compatibility()),
+    )
+    .await
 }
 
 /// Boot a collab-enabled gateway on a CALLER-PROVIDED fan-out and store, so two
@@ -36,7 +50,7 @@ async fn spawn_replica(fanout: Arc<dyn Fanout>, store: Arc<dyn CollabStore>) -> 
     serve_gateway(
         WsGateway::new(fanout)
             .allow_all_topics()
-            .with_collab_store(store),
+            .with_collab_store(compatibility(), store),
     )
     .await
 }
@@ -98,9 +112,9 @@ async fn join(ws: &mut Ws, topic: &str) -> u64 {
     }
 }
 
-/// Send the opening SyncStep1 (this peer's state vector).
+/// Send the opening compatibility hello (including this peer's state vector).
 async fn open_sync(ws: &mut Ws, topic_ref: u64, doc: &CollabDocument) {
-    let msg = CollabMessage::SyncStep1(doc.state_vector().into());
+    let msg = CollabMessage::Hello(CollabHello::new(compatibility(), doc.state_vector(), true));
     ws.send(send(Frame::data(
         COLLAB_SUBPROTOCOL,
         topic_ref,
@@ -112,7 +126,7 @@ async fn open_sync(ws: &mut Ws, topic_ref: u64, doc: &CollabDocument) {
 }
 
 /// Process every inbound collab Data frame — exactly as a real client would —
-/// until the connection is quiet for [`IDLE`]: reply to the server's SyncStep1
+/// until the connection is quiet for [`IDLE`]: validate/reply to the server hello
 /// with the diff it is missing, and apply SyncStep2/Update messages locally.
 /// CRDT idempotency makes the replayed/echoed duplicates harmless.
 async fn drive(ws: &mut Ws, topic_ref: u64, doc: &CollabDocument) {
@@ -121,17 +135,20 @@ async fn drive(ws: &mut Ws, topic_ref: u64, doc: &CollabDocument) {
             continue;
         }
         match CollabMessage::decode(&frame.payload).unwrap() {
-            CollabMessage::SyncStep1(sv) => {
-                let diff = doc.diff(&sv).unwrap();
-                let reply = CollabMessage::SyncStep2(diff.into());
-                ws.send(send(Frame::data(
-                    COLLAB_SUBPROTOCOL,
-                    topic_ref,
-                    0,
-                    reply.encode(),
-                )))
-                .await
-                .unwrap();
+            CollabMessage::Hello(hello) => {
+                assert_eq!(hello.compatibility(), &compatibility());
+                if hello.requests_sync_step2() {
+                    let diff = doc.diff(hello.state_vector()).unwrap();
+                    let reply = CollabMessage::SyncStep2(diff.into());
+                    ws.send(send(Frame::data(
+                        COLLAB_SUBPROTOCOL,
+                        topic_ref,
+                        0,
+                        reply.encode(),
+                    )))
+                    .await
+                    .unwrap();
+                }
             }
             CollabMessage::SyncStep2(update) | CollabMessage::Update(update) => {
                 doc.apply_update(&update).unwrap();
@@ -142,14 +159,33 @@ async fn drive(ws: &mut Ws, topic_ref: u64, doc: &CollabDocument) {
     }
 }
 
+/// Assert that no document Data frame crosses the socket during one quiet
+/// window. Control errors/heartbeats are allowed and ignored.
+async fn assert_no_document_frame(ws: &mut Ws) {
+    let deadline = Instant::now() + IDLE;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        match timeout(deadline - now, next_frame(ws)).await {
+            Err(_) => return,
+            Ok(frame) if frame.kind == FrameKind::Data => {
+                panic!("unnegotiated subscription received collab Data: {frame:?}")
+            }
+            Ok(_) => {}
+        }
+    }
+}
+
 #[tokio::test]
 async fn two_clients_converge_over_the_gateway() {
     let url = spawn().await;
-    let topic = "collab:doc1";
+    let topic = topic("doc1");
 
     // Client A joins with a local edit and syncs it up to the server.
     let (mut a, _) = connect_async(&url).await.unwrap();
-    let a_ref = join(&mut a, topic).await;
+    let a_ref = join(&mut a, &topic).await;
     let doc_a = CollabDocument::new();
     doc_a.insert_text("body", 0, "alpha ");
     open_sync(&mut a, a_ref, &doc_a).await;
@@ -157,7 +193,7 @@ async fn two_clients_converge_over_the_gateway() {
 
     // Client B joins fresh; the handshake catches it up to A's edit.
     let (mut b, _) = connect_async(&url).await.unwrap();
-    let b_ref = join(&mut b, topic).await;
+    let b_ref = join(&mut b, &topic).await;
     let doc_b = CollabDocument::new();
     open_sync(&mut b, b_ref, &doc_b).await;
     drive(&mut b, b_ref, &doc_b).await;
@@ -190,6 +226,75 @@ async fn two_clients_converge_over_the_gateway() {
 }
 
 #[tokio::test]
+async fn pre_hello_and_mismatched_subscribers_receive_no_document_frames() {
+    let url = spawn().await;
+    let topic = topic("outbound-gate");
+
+    // Establish one compatible writer so the room has real live updates.
+    let (mut writer, _) = connect_async(&url).await.unwrap();
+    let writer_ref = join(&mut writer, &topic).await;
+    let writer_doc = CollabDocument::new();
+    open_sync(&mut writer, writer_ref, &writer_doc).await;
+    drive(&mut writer, writer_ref, &writer_doc).await;
+
+    // This socket subscribes to the *correct* namespaced topic but deliberately
+    // withholds hello. Its fan-out pump must remain paused.
+    let (mut blocked, _) = connect_async(&url).await.unwrap();
+    let blocked_ref = join(&mut blocked, &topic).await;
+
+    let before = writer_doc.state_vector();
+    writer_doc.insert_text("body", 0, "before-hello");
+    let update = writer_doc.diff(&before).unwrap();
+    writer
+        .send(send(Frame::data(
+            COLLAB_SUBPROTOCOL,
+            writer_ref,
+            0,
+            CollabMessage::Update(update.into()).encode(),
+        )))
+        .await
+        .unwrap();
+    assert_no_document_frame(&mut blocked).await;
+
+    // A mismatched hello on that correct topic is rejected and must leave the
+    // same pump closed; another real room update still cannot cross it.
+    let mismatched = CompatibilityIdentity::new(
+        compatibility().protocol_version(),
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    .unwrap();
+    let mismatch_hello = CollabMessage::Hello(CollabHello::new(
+        mismatched,
+        CollabDocument::new().state_vector(),
+        true,
+    ));
+    blocked
+        .send(send(Frame::data(
+            COLLAB_SUBPROTOCOL,
+            blocked_ref,
+            0,
+            mismatch_hello.encode(),
+        )))
+        .await
+        .unwrap();
+
+    let before = writer_doc.state_vector();
+    let end = writer_doc.text("body").chars().count() as u32;
+    writer_doc.insert_text("body", end, "-after-mismatch");
+    let update = writer_doc.diff(&before).unwrap();
+    writer
+        .send(send(Frame::data(
+            COLLAB_SUBPROTOCOL,
+            writer_ref,
+            0,
+            CollabMessage::Update(update.into()).encode(),
+        )))
+        .await
+        .unwrap();
+    assert_no_document_frame(&mut blocked).await;
+}
+
+#[tokio::test]
 async fn two_replicas_converge_through_a_shared_fanout() {
     // The multi-process guarantee the C-series exists for: two gateways (two web
     // replicas) on ONE shared fan-out + store — exactly how `with_collab_store`
@@ -199,12 +304,12 @@ async fn two_replicas_converge_through_a_shared_fanout() {
     let store: Arc<dyn CollabStore> = Arc::new(MemoryCollabStore::new());
     let url1 = spawn_replica(fanout.clone(), store.clone()).await;
     let url2 = spawn_replica(fanout.clone(), store.clone()).await;
-    let topic = "collab:replicated";
+    let topic = topic("replicated");
 
     // A on replica 1 authors an edit and syncs it up; replica 1 publishes it to
     // the shared fan-out, where replica 2's apply loop folds it in.
     let (mut a, _) = connect_async(&url1).await.unwrap();
-    let a_ref = join(&mut a, topic).await;
+    let a_ref = join(&mut a, &topic).await;
     let doc_a = CollabDocument::new();
     doc_a.insert_text("body", 0, "shared-state");
     open_sync(&mut a, a_ref, &doc_a).await;
@@ -214,7 +319,7 @@ async fn two_replicas_converge_through_a_shared_fanout() {
     // subscribes, so poll the handshake a few times until its apply loop has
     // caught replica 2 up across the process boundary.
     let (mut b, _) = connect_async(&url2).await.unwrap();
-    let b_ref = join(&mut b, topic).await;
+    let b_ref = join(&mut b, &topic).await;
     let doc_b = CollabDocument::new();
     let mut converged = false;
     for _ in 0..20 {

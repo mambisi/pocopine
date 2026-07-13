@@ -1,0 +1,132 @@
+<root class="external-blocks-demo" pp-ref="root" role="main">
+  <div class="demo-shell">
+    <header class="demo-header">
+      <div>
+        <p class="demo-kicker">Pine rich text</p>
+        <h1>External blocks</h1>
+      </div>
+      <span class="demo-status" data-test="status" pp-text="status"></span>
+    </header>
+
+    <section class="demo-command-bar" aria-label="Editor commands" contenteditable="false">
+      <div class="demo-command-group" aria-label="Text marks">
+        <button type="button" @mousedown.prevent @click="toggle_bold" data-test="bold"><strong>B</strong></button>
+        <button type="button" @mousedown.prevent @click="toggle_italic"><em>I</em></button>
+      </div>
+      <span class="demo-command-separator"></span>
+      <div class="demo-command-group" aria-label="Tags">
+        <button type="button" @mousedown.prevent @click="insert_info_tag" data-test="insert-tag">+ Tag</button>
+        <button type="button" @mousedown.prevent @click="insert_success_tag">+ Verified</button>
+        <button type="button" @mousedown.prevent @click="select_tag">Select tag</button>
+        <button type="button" @mousedown.prevent @click="delete_tag">Delete tag</button>
+      </div>
+      <span class="demo-command-separator"></span>
+      <div class="demo-command-group" aria-label="Table">
+        <button type="button" @mousedown.prevent @click="insert_table">+ Table</button>
+        <button type="button" @mousedown.prevent @click="widen_column" data-test="table-width">Width 260</button>
+        <button type="button" @mousedown.prevent @click="heighten_row" data-test="table-height">Height 58</button>
+      </div>
+      <span class="demo-command-separator"></span>
+      <div class="demo-command-group demo-command-group--history" aria-label="History">
+        <button type="button" @mousedown.prevent @click="undo" data-test="undo">Undo</button>
+        <button type="button" @mousedown.prevent @click="redo" data-test="redo">Redo</button>
+      </div>
+      <span class="demo-command-separator"></span>
+      <div class="demo-command-group" aria-label="Demo document">
+        <button type="button" @click="unmount_tasks" data-test="unmount-tasks">Remove tasks</button>
+        <button type="button" @click="restore_demo" data-test="restore-demo">Restore</button>
+        <button type="button" @click="demo_stale_search" data-test="stale-search">Test search</button>
+      </div>
+    </section>
+
+    <div class="demo-workspace">
+      <section class="demo-document" aria-label="Interactive editor">
+        <div id="external-blocks-editor" data-test="editor">
+          <pine-rich-text-root
+            runtime="external-blocks"
+            pp-bind:initial-doc="initial_state"
+          ></pine-rich-text-root>
+        </div>
+
+        <div
+          class="demo-bubble-menu"
+          pp-ref="bubble_menu"
+          role="toolbar"
+          aria-label="Selection commands"
+          hidden
+          data-test="bubble-menu"
+        >
+          <button type="button" @mousedown.prevent @click="toggle_bold" aria-label="Bold selection"><strong>B</strong></button>
+          <button type="button" @mousedown.prevent @click="toggle_italic" aria-label="Italicize selection"><em>I</em></button>
+          <button type="button" @mousedown.prevent @click="insert_info_tag" aria-label="Insert typed tag">#</button>
+          <span class="demo-bubble-divider"></span>
+          <div class="demo-bubble-search">
+            <input
+              type="search"
+              placeholder="Search commands…"
+              autocomplete="off"
+              spellcheck="false"
+              pp-on:input="on_search_input"
+              :value="search_query"
+              data-test="bubble-search"
+            />
+            <div class="demo-search-results" role="listbox" pp-show="search_query != ''">
+              <template pp-for="result in search_results" pp-key="result.key">
+                <button
+                  type="button"
+                  role="option"
+                  @mousedown.prevent
+                  @click="run_search_result(result.action)"
+                >
+                  <span pp-text="result.label"></span>
+                  <small pp-text="result.hint"></small>
+                </button>
+              </template>
+              <p pp-show="search_results.length == 0">No command matches.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="demo-code" aria-label="Document output">
+        <div class="demo-code-header" contenteditable="false">
+          <div class="demo-code-tabs" role="tablist" aria-label="Output format">
+            <button
+              type="button"
+              role="tab"
+              :class="code_tab == 'markdown' ? 'is-active' : ''"
+              @click="show_markdown"
+            >Markdown</button>
+            <button
+              type="button"
+              role="tab"
+              :class="code_tab == 'json' ? 'is-active' : ''"
+              @click="show_json"
+            >JSON</button>
+          </div>
+          <span class="demo-code-note">Live</span>
+        </div>
+
+        <pre data-test="markdown" pp-show="code_tab == 'markdown'" pp-text="markdown"></pre>
+        <pre data-test="semantic-json" pp-show="code_tab == 'json'" pp-text="semantic_json"></pre>
+
+        <details class="demo-developer" contenteditable="false">
+          <summary>Developer details</summary>
+          <dl class="demo-metrics">
+            <div><dt>Task mounts</dt><dd data-test="task-mounts" pp-text="task_mounts"></dd></div>
+            <div><dt>Task syncs</dt><dd data-test="task-syncs" pp-text="task_syncs"></dd></div>
+            <div><dt>Task unmounts</dt><dd data-test="task-unmounts" pp-text="task_unmounts"></dd></div>
+            <div><dt>Active views</dt><dd data-test="task-active" pp-text="task_active"></dd></div>
+          </dl>
+          <dl class="demo-observations">
+            <div><dt>Selection</dt><dd data-test="selection-status" pp-text="selection_status"></dd></div>
+            <div><dt>Bubble menu</dt><dd><span pp-text="bubble_status"></span> · <span pp-text="bubble_anchor"></span></dd></div>
+            <div><dt>Bubble key</dt><dd pp-text="bubble_key"></dd></div>
+            <div><dt>Search</dt><dd data-test="search-status" pp-text="search_status"></dd></div>
+          </dl>
+          <p class="demo-error" pp-show="error != ''" role="alert" pp-text="error"></p>
+        </details>
+      </aside>
+    </div>
+  </div>
+</root>
