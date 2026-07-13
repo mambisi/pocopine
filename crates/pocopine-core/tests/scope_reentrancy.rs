@@ -3,11 +3,11 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::Array;
-use pocopine_core::{ComponentState, Scope};
+use pocopine_core::{ComponentState, Scope, ScopeId, defer_component_callback};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::HtmlElement;
@@ -19,6 +19,39 @@ struct FocusState {
     order: Rc<RefCell<Vec<&'static str>>>,
     focused: bool,
     assigned: bool,
+}
+
+struct CrossScopeState {
+    outer: bool,
+    target: Rc<Cell<Option<ScopeId>>>,
+    order: Rc<RefCell<Vec<&'static str>>>,
+}
+
+impl ComponentState for CrossScopeState {
+    fn get(&self, _key: &str) -> JsValue {
+        JsValue::UNDEFINED
+    }
+
+    fn set(&mut self, _key: &str, _value: JsValue) {}
+
+    fn keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn invoke(&mut self, key: &str, _args: &Array) -> JsValue {
+        if self.outer && key == "run" {
+            self.order.borrow_mut().push("outer:start");
+            let target = self.target.get().expect("nested scope id");
+            pocopine_core::scope::invoke_handler(target, "run", &Array::new());
+            self.order.borrow_mut().push("outer:end");
+        } else if !self.outer && key == "run" {
+            self.order.borrow_mut().push("inner:start");
+            let order = Rc::clone(&self.order);
+            defer_component_callback(move || order.borrow_mut().push("deferred"));
+            self.order.borrow_mut().push("inner:end");
+        }
+        JsValue::UNDEFINED
+    }
 }
 
 impl ComponentState for FocusState {
@@ -104,4 +137,37 @@ fn focus_event_waits_for_the_active_handler_borrow_to_end() {
 
     Scope::remove(scope.id);
     element.remove();
+}
+
+#[wasm_bindgen_test]
+fn nested_cross_scope_handlers_share_one_outer_fifo_safe_point() {
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let target = Rc::new(Cell::new(None));
+    let outer = Scope::new(Rc::new(RefCell::new(CrossScopeState {
+        outer: true,
+        target: Rc::clone(&target),
+        order: Rc::clone(&order),
+    })));
+    let inner = Scope::new(Rc::new(RefCell::new(CrossScopeState {
+        outer: false,
+        target: Rc::clone(&target),
+        order: Rc::clone(&order),
+    })));
+    target.set(Some(inner.id));
+
+    outer.invoke("run", &Array::new());
+
+    assert_eq!(
+        order.borrow().as_slice(),
+        [
+            "outer:start",
+            "inner:start",
+            "inner:end",
+            "outer:end",
+            "deferred",
+        ],
+        "the nested scope stays synchronous but cannot drain work through the outer scope",
+    );
+    Scope::remove(inner.id);
+    Scope::remove(outer.id);
 }

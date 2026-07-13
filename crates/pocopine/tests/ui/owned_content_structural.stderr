@@ -1,0 +1,15 @@
+error: pocopine: template plan error in component `owned-content-structural`
+        --> tests/ui/owned_content_structural.poco
+         |
+         |       <div pp-owned-content></div>
+         |       ^^^^^^^^^^^^^^^^^^^^^^ `pp-owned-content` must be unconditional and cannot appear on or inside `pp-if`, `pp-for`, `pp-match`/`pp-case`, or `pp-teleport`; move the outlet outside the structural branch
+         |
+ --> tests/ui/owned_content_structural.rs:5:1
+  |
+5 | / #[component(
+6 | |     name = "owned-content-structural",
+7 | |     template = "owned_content_structural.poco"
+8 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

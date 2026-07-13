@@ -82,6 +82,10 @@ impl<T: 'static> Handle<T> {
     /// invoked from an async task outside any `Scope::invoke` chain.
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let sid = self.scope_id;
+        // Keep the safe-point frame alive through the dirty sweep and
+        // reactive trigger. Any renderer reconciliation requested by `f`
+        // therefore runs only after this handle's `RefMut` has been dropped.
+        let _frame = crate::ComponentCallbackFrame::for_scope(sid);
         let origin = crate::model_runtime::current_write_origin();
         let total_start = crate::profiler::state_sync::start();
         // RFC-095 W2 — fingerprint observed fields before the
@@ -116,6 +120,20 @@ impl<T: 'static> Handle<T> {
         crate::profiler::state_sync::record_trigger(trigger_start);
         crate::profiler::state_sync::record_total(total_start);
         out
+    }
+
+    /// Mutate `T` at the current component-callback safe point.
+    ///
+    /// Use this from `on_ready(&self)` and other callbacks that may still hold
+    /// a borrow of this component. While the component is active, the mutation
+    /// joins the callback FIFO and runs after the active borrow is released.
+    /// Outside a component callback it runs immediately.
+    ///
+    /// Unlike [`Self::update`], this deliberately returns no value: queued
+    /// work cannot produce a synchronous result.
+    pub fn defer_update(&self, f: impl FnOnce(&mut T) + 'static) {
+        let handle = self.clone();
+        crate::defer_component_callback_for(self.scope_id, move || handle.update(f));
     }
 
     /// Lower-level borrow. Does not trigger reactivity.

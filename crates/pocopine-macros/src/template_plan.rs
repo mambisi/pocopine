@@ -87,6 +87,11 @@ pub(crate) struct EmittedTemplatePlan {
     /// `#[deprecated]`-const trick (RFC 045 §9.4) — non-fatal
     /// authoring notes such as the JS-equality desugar.
     pub warnings: Vec<String>,
+    /// RFC-113 — element-child path from the rendered template root to the
+    /// unique unconditional native element marked `pp-owned-content`.
+    /// `None` means the template declares no outlet or outlet validation
+    /// emitted a compile diagnostic.
+    pub owned_content_outlet_path: Option<Vec<u16>>,
 }
 
 #[derive(Clone)]
@@ -181,6 +186,7 @@ pub(crate) fn analyze_template_plan(
         role: role.clone(),
         ..Emissions::default()
     };
+    let owned_content_outlet_path = analyze_owned_content_outlet(ast, &mut ctx);
     let mut path: Vec<u16> = Vec::new();
     for node in &ast.roots {
         if let Node::Element(el) = node {
@@ -224,7 +230,10 @@ pub(crate) fn analyze_template_plan(
             out.extend(quote! { ::core::compile_error!(#lit); });
             out
         });
-    if !ctx.has_any_entry() && row_plan_assignments.is_empty() {
+    if !ctx.has_any_entry()
+        && row_plan_assignments.is_empty()
+        && owned_content_outlet_path.is_none()
+    {
         return EmittedTemplatePlan {
             plan_tokens: None,
             cleaned_html: None,
@@ -234,6 +243,7 @@ pub(crate) fn analyze_template_plan(
             diagnostics,
             ref_names: ctx.ref_names_dedup(),
             warnings: ctx.warnings.clone(),
+            owned_content_outlet_path,
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
@@ -259,6 +269,7 @@ pub(crate) fn analyze_template_plan(
         diagnostics,
         ref_names,
         warnings: ctx.warnings.clone(),
+        owned_content_outlet_path,
     }
 }
 
@@ -1738,6 +1749,228 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
 
 // ─── walk + classification ───────────────────────────────────────
 
+#[derive(Clone)]
+struct OwnedContentMarker {
+    path: Vec<u16>,
+    opening_tag_range: std::ops::Range<usize>,
+    invalid_reason: Option<String>,
+}
+
+/// Compile the generic `pp-owned-content` marker before normal directive
+/// lifting starts.
+///
+/// This is deliberately a whole-template pass. Normal template-plan walking
+/// hands structural bodies and projected slot fragments to isolated analysis
+/// contexts, but an owned-content outlet must be proven relative to the
+/// component's one stable rendered root. Seeing it only inside a lifted
+/// context would therefore be too late and could accidentally emit metadata
+/// for a node that is absent, moved, or owned by another component at runtime.
+fn analyze_owned_content_outlet(ast: &TemplateAst, ctx: &mut AnalysisCtx) -> Option<Vec<u16>> {
+    let mut markers = Vec::new();
+    if let Some(root) = ast.element_roots().next() {
+        scan_owned_content_outlet(root, &mut Vec::new(), None, ctx, &mut markers);
+    }
+
+    if markers.len() > 1 {
+        let first = &markers[0];
+        for duplicate in markers.iter().skip(1) {
+            let message = "duplicate `pp-owned-content` marker — a component template may expose exactly one owned-content outlet; remove this marker or the earlier one";
+            if source_range_is_usable(ast, &duplicate.opening_tag_range)
+                && source_range_is_usable(ast, &first.opening_tag_range)
+            {
+                ctx.diagnostics.push_at_with_context(
+                    message,
+                    duplicate.opening_tag_range.clone(),
+                    "first `pp-owned-content` marker is here",
+                    first.opening_tag_range.clone(),
+                );
+            } else if source_range_is_usable(ast, &duplicate.opening_tag_range) {
+                ctx.diagnostics
+                    .push_at(message, duplicate.opening_tag_range.clone());
+            } else {
+                ctx.diagnostics.push(message);
+            }
+        }
+        return None;
+    }
+
+    let marker = markers.pop()?;
+    if let Some(reason) = marker.invalid_reason {
+        if source_range_is_usable(ast, &marker.opening_tag_range) {
+            ctx.diagnostics
+                .push_at(reason, marker.opening_tag_range.clone());
+        } else {
+            ctx.diagnostics.push(reason);
+        }
+        return None;
+    }
+
+    Some(marker.path)
+}
+
+fn source_range_is_usable(ast: &TemplateAst, range: &std::ops::Range<usize>) -> bool {
+    range.start < range.end && range.end <= ast.source.len()
+}
+
+fn scan_owned_content_outlet(
+    el: &Element,
+    path: &mut Vec<u16>,
+    inherited_invalid_reason: Option<String>,
+    ctx: &mut AnalysisCtx,
+    markers: &mut Vec<OwnedContentMarker>,
+) {
+    let marker_value = el
+        .attrs
+        .iter()
+        .find(|(name, _)| name == "pp-owned-content")
+        .map(|(_, value)| value.as_str());
+
+    if let Some(marker_value) = marker_value {
+        // Compile-only marker: it must never survive into registered HTML,
+        // including diagnostics-only expansions.
+        ctx.stripped.push(StrippedAttr {
+            node_path: path.clone(),
+            name: "pp-owned-content".to_string(),
+        });
+
+        let invalid_reason =
+            owned_content_invalid_reason(el, marker_value, inherited_invalid_reason.as_deref());
+        markers.push(OwnedContentMarker {
+            path: path.clone(),
+            opening_tag_range: el.opening_tag_range.clone(),
+            invalid_reason,
+        });
+    }
+
+    let descendant_invalid_reason = owned_content_descendant_boundary(el)
+        .or(inherited_invalid_reason.as_deref())
+        .map(str::to_string);
+
+    for (source_index, child) in el.children.iter().enumerate() {
+        let Node::Element(child_el) = child else {
+            continue;
+        };
+        let element_index = el
+            .children
+            .iter()
+            .take(source_index)
+            .filter(|node| matches!(node, Node::Element(_)))
+            .count() as u16;
+        path.push(element_index);
+        scan_owned_content_outlet(
+            child_el,
+            path,
+            descendant_invalid_reason.clone(),
+            ctx,
+            markers,
+        );
+        path.pop();
+    }
+}
+
+fn owned_content_invalid_reason(
+    el: &Element,
+    marker_value: &str,
+    inherited_invalid_reason: Option<&str>,
+) -> Option<String> {
+    if !marker_value.trim().is_empty() {
+        return Some(
+            "`pp-owned-content` is a valueless compile-time marker; write `pp-owned-content` without an expression or attribute value"
+                .to_string(),
+        );
+    }
+    if !is_plan_native(&el.tag) {
+        if el.tag == "pp-component" {
+            return Some(
+                "`pp-owned-content` cannot be placed on `<pp-component>` because its child type and DOM are dynamic; mark one unconditional native element in the owning component shell"
+                    .to_string(),
+            );
+        }
+        return Some(format!(
+            "`pp-owned-content` cannot be placed on component tag `<{}>`; mark one unconditional native element inside the owning component template",
+            el.tag
+        ));
+    }
+    if el.tag == "slot" {
+        return Some(
+            "`pp-owned-content` cannot be placed on `<slot>` because slot materialization replaces that node; mark an unconditional native element outside the slot"
+                .to_string(),
+        );
+    }
+    if let Some(reason) = owned_content_local_boundary(el) {
+        return Some(reason.to_string());
+    }
+    if el.tag == "template" {
+        return Some(
+            "`pp-owned-content` cannot be placed on `<template>` because template contents are not a stable live element; mark one unconditional native element in the mounted shell"
+                .to_string(),
+        );
+    }
+    if is_void_element(&el.tag) {
+        return Some(format!(
+            "`pp-owned-content` cannot be placed on void element `<{}>` because it cannot own child DOM; use a non-void native container",
+            el.tag
+        ));
+    }
+    inherited_invalid_reason.map(str::to_string)
+}
+
+fn owned_content_descendant_boundary(el: &Element) -> Option<&'static str> {
+    if !is_plan_native(&el.tag) {
+        return if el.tag == "pp-component" {
+            Some(
+                "`pp-owned-content` cannot appear inside `<pp-component>` content because the selected component owns that dynamic subtree; move the outlet into the owning component's unconditional native shell",
+            )
+        } else {
+            Some(
+                "`pp-owned-content` cannot appear in projected component content because the child component owns and may replace that subtree; move the outlet into this component's own unconditional native shell",
+            )
+        };
+    }
+    if let Some(reason) = owned_content_local_boundary(el) {
+        return Some(reason);
+    }
+    if el.tag == "slot" {
+        return Some(
+            "`pp-owned-content` cannot appear in slot fallback/projected content because slot materialization does not preserve a stable root-relative path; move the outlet outside the slot",
+        );
+    }
+    if el.tag == "template" {
+        return Some(
+            "`pp-owned-content` cannot appear inside a `<template>` because its contents are detached, cloned, or conditionally materialized; move the outlet into the unconditional mounted shell",
+        );
+    }
+    None
+}
+
+fn owned_content_local_boundary(el: &Element) -> Option<&'static str> {
+    if el.attrs.iter().any(|(name, _)| name == "pp-as") {
+        return Some(
+            "`pp-owned-content` cannot appear on or below `pp-as` because the rendered root is dynamically hoisted; move the outlet into an unconditional native shell without `pp-as`",
+        );
+    }
+    if el.attrs.iter().any(|(name, _)| {
+        matches!(
+            name.as_str(),
+            "pp-if" | "pp-else-if" | "pp-else" | "pp-for" | "pp-match" | "pp-case" | "pp-teleport"
+        )
+    }) {
+        return Some(
+            "`pp-owned-content` must be unconditional and cannot appear on or inside `pp-if`, `pp-for`, `pp-match`/`pp-case`, or `pp-teleport`; move the outlet outside the structural branch",
+        );
+    }
+    if el
+        .attrs
+        .iter()
+        .any(|(name, _)| matches!(name.as_str(), "pp-text" | "pp-html"))
+    {
+        return Some(
+            "`pp-owned-content` cannot appear on or below `pp-text`/`pp-html` because that directive replaces child DOM; move the outlet outside the replacing directive",
+        );
+    }
+    None
+}
+
 fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &mut Vec<u16>) {
     if el.synthetic {
         // Synthetic elements (html5ever auto-inserted) confuse
@@ -3059,6 +3292,13 @@ fn classify_attr(
     host_tag: &str,
     host_is_native: bool,
 ) -> ClassifyOutcome {
+    // The whole-template owned-content analysis validates and strips this
+    // compile-time marker before normal directive classification. Treat it as
+    // consumed here so the unknown-directive backstop does not report a second,
+    // contradictory diagnostic.
+    if name == "pp-owned-content" {
+        return ClassifyOutcome::Stripped;
+    }
     // RFC-020 listener shorthand: `@event[.mod]`.
     if let Some(rest) = name.strip_prefix('@') {
         return classify_listener(rest, value, path, ctx);
@@ -3517,6 +3757,12 @@ fn classify_child_host_attr(
     value: &str,
     ctx: &mut AnalysisCtx,
 ) -> ChildHostAttrOutcome {
+    // `analyze_owned_content_outlet` already rejects component-host markers
+    // and strips them from emitted HTML. Do not reinterpret that compiler-only
+    // marker as an unknown runtime directive here.
+    if name == "pp-owned-content" {
+        return ChildHostAttrOutcome::Preserved;
+    }
     if let Some(rest) = name.strip_prefix('@') {
         return classify_child_host_listener(rest, value, ctx);
     }
@@ -4237,6 +4483,103 @@ mod tests {
         let plan = valid.plan_tokens.unwrap().to_string();
         assert!(plan.contains("pp-component"), "{plan}");
         assert!(plan.contains("active"), "{plan}");
+    }
+
+    #[test]
+    fn owned_content_marker_compiles_to_a_stable_element_child_path() {
+        let emitted = analyze(
+            "<section><header>chrome</header><main><div pp-owned-content></div></main></section>",
+        );
+        assert_eq!(emitted.owned_content_outlet_path, Some(vec![1, 0]));
+        assert!(
+            !diagnostics(&emitted).contains("compile_error"),
+            "{}",
+            diagnostics(&emitted)
+        );
+        let cleaned = emitted
+            .cleaned_html
+            .as_deref()
+            .expect("the compile-only marker requires cleaned HTML");
+        assert!(!cleaned.contains("pp-owned-content"), "{cleaned}");
+        assert!(
+            emitted.plan_tokens.is_none(),
+            "metadata-only markers do not need a runtime directive plan"
+        );
+
+        let root = analyze("<main pp-owned-content></main>");
+        assert_eq!(root.owned_content_outlet_path, Some(Vec::new()));
+    }
+
+    #[test]
+    fn owned_content_marker_rejects_every_unstable_ownership_boundary() {
+        let cases = [
+            (
+                "<div><template pp-if=\"open\"><main pp-owned-content></main></template></div>",
+                "must be unconditional",
+            ),
+            (
+                "<div><template pp-for=\"item in items\"><main pp-owned-content></main></template></div>",
+                "must be unconditional",
+            ),
+            (
+                "<div><template pp-teleport=\"#target\"><main pp-owned-content></main></template></div>",
+                "must be unconditional",
+            ),
+            (
+                "<div><x-child><main pp-owned-content></main></x-child></div>",
+                "projected component content",
+            ),
+            (
+                "<div><slot><main pp-owned-content></main></slot></div>",
+                "slot fallback/projected content",
+            ),
+            (
+                "<div><pp-component :is=\"active\"><main pp-owned-content></main></pp-component></div>",
+                "inside `<pp-component>`",
+            ),
+            (
+                "<div pp-as><main pp-owned-content></main></div>",
+                "on or below `pp-as`",
+            ),
+            (
+                "<div pp-html=\"html\"><main pp-owned-content></main></div>",
+                "replaces child DOM",
+            ),
+        ];
+
+        for (template, expected) in cases {
+            let emitted = analyze(template);
+            let errors = diagnostics(&emitted);
+            assert!(errors.contains("compile_error"), "{template}: {errors}");
+            assert!(errors.contains(expected), "{template}: {errors}");
+            assert_eq!(emitted.owned_content_outlet_path, None, "{template}");
+        }
+    }
+
+    #[test]
+    fn owned_content_marker_rejects_component_void_and_duplicate_targets() {
+        let component = analyze("<div><x-child pp-owned-content></x-child></div>");
+        assert!(
+            diagnostics(&component).contains("cannot be placed on component tag `<x-child>`"),
+            "{}",
+            diagnostics(&component)
+        );
+
+        let void = analyze("<div><input pp-owned-content></div>");
+        assert!(
+            diagnostics(&void).contains("cannot be placed on void element `<input>`"),
+            "{}",
+            diagnostics(&void)
+        );
+
+        let duplicate =
+            analyze("<div><main pp-owned-content></main><aside pp-owned-content></aside></div>");
+        assert!(
+            diagnostics(&duplicate).contains("duplicate `pp-owned-content` marker"),
+            "{}",
+            diagnostics(&duplicate)
+        );
+        assert_eq!(duplicate.owned_content_outlet_path, None);
     }
 
     #[test]

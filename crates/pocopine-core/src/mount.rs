@@ -68,6 +68,7 @@ const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const HOST_CHILD_SCOPE_ID_KEY: &str = "__pp_host_child_scope_id";
 const EFFECTS_KEY: &str = "__pp_effects";
 const LISTENERS_KEY: &str = "__pp_listeners";
+const BEFORE_SUBTREE_RELEASE_KEY: &str = "__pp_before_subtree_release";
 const WALKED_KEY: &str = "__pp_walked";
 const MOUNT_START_MS_KEY: &str = "__pp_mount_start_ms";
 const COMPONENT_MOUNT_EVENT_FIRED_KEY: &str = "__pp_component_mount_event_fired";
@@ -114,6 +115,71 @@ thread_local! {
     /// that otherwise-ownerless scope a deterministic teardown point.
     static SLOT_SCOPE_ROOTS: RefCell<HashMap<ScopeId, usize>> =
         RefCell::new(HashMap::new());
+}
+
+type BeforeSubtreeRelease = Box<dyn FnOnce()>;
+
+thread_local! {
+    /// Hooks owned by one element that must run before `release_subtree`
+    /// descends into that element's children. This is intentionally separate
+    /// from component `on_unmount`: an owner of opaque child receipts must
+    /// release those receipts while the descendant scopes are still live.
+    static BEFORE_SUBTREE_RELEASE_NEXT_ID: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(1) };
+    static BEFORE_SUBTREE_RELEASE: RefCell<HashMap<u64, Vec<BeforeSubtreeRelease>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn before_subtree_release_slot_for(el: &Element) -> u64 {
+    if let Some(value) =
+        get_private(el, BEFORE_SUBTREE_RELEASE_KEY).and_then(|value| value.as_f64())
+    {
+        return value as u64;
+    }
+    let id = BEFORE_SUBTREE_RELEASE_NEXT_ID.with(|next| {
+        let id = next.get();
+        next.set(id.wrapping_add(1).max(1));
+        id
+    });
+    set_private(
+        el,
+        BEFORE_SUBTREE_RELEASE_KEY,
+        &JsValue::from_f64(id as f64),
+    );
+    id
+}
+
+/// Run `callback` once immediately before subtree teardown descends into
+/// `owner`'s children.
+///
+/// This is the ownership boundary for systems that mount opaque child
+/// subtrees and retain their own receipts. Component `on_unmount` is too late
+/// for that job because normal teardown is post-order. Callbacks are removed
+/// from the side table before invocation, so recursive teardown is idempotent
+/// and no callback-side borrow is held.
+pub fn on_before_subtree_release(owner: &Element, callback: impl FnOnce() + 'static) {
+    let slot = before_subtree_release_slot_for(owner);
+    BEFORE_SUBTREE_RELEASE.with(|hooks| {
+        hooks
+            .borrow_mut()
+            .entry(slot)
+            .or_default()
+            .push(Box::new(callback));
+    });
+}
+
+fn run_before_subtree_release(el: &Element) {
+    let Some(slot) = get_private(el, BEFORE_SUBTREE_RELEASE_KEY).and_then(|value| value.as_f64())
+    else {
+        return;
+    };
+    set_private(el, BEFORE_SUBTREE_RELEASE_KEY, &JsValue::UNDEFINED);
+    let callbacks = BEFORE_SUBTREE_RELEASE.with(|hooks| hooks.borrow_mut().remove(&(slot as u64)));
+    if let Some(callbacks) = callbacks {
+        for callback in callbacks {
+            callback();
+        }
+    }
 }
 
 fn bind_slot_scope_owners(scope_id: ScopeId, roots: &[Node]) {
@@ -303,6 +369,7 @@ pub fn fire_mount_post_order(el: &Element, scope_id: ScopeId) {
     };
     let has_mount = scope.state.borrow().has_on_mount();
     if has_mount {
+        let _frame = crate::ComponentCallbackFrame::for_scope(scope_id);
         let ctx = crate::lifecycle::LifecycleContext::__new(
             el,
             scope_id,
@@ -362,6 +429,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
         let Some(scope) = Scope::find(scope_id) else {
             return;
         };
+        let _frame = crate::ComponentCallbackFrame::for_scope(scope_id);
         if has_plugin_ready {
             crate::plugin::emit(crate::plugin::ComponentReady {
                 component: component_name_for(scope_id),
@@ -391,41 +459,81 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
 ///  * forward fallthrough attrs onto the template root (RFC-010),
 ///  * apply the registered template plan against the freshly
 ///    stamped subtree.
-fn mount_component(
+fn rollback_component_scope(host: &Element, scope: &Scope, clear_dom: bool) {
+    Scope::remove(scope.id);
+    if clear_dom {
+        host.set_inner_html("");
+    }
+    clear_component_host_stamps(host);
+}
+
+type MountInitializer<'a> = dyn FnMut(&Scope) -> Result<(), crate::app::MountError> + 'a;
+
+fn mount_component_result(
     el: &Element,
     tag: &str,
     supplied_slots: Option<(crate::slot_fragment::SlotSet, ScopeId, JsValue)>,
-) {
+    mut initializer: Option<&mut MountInitializer<'_>>,
+) -> Result<Option<Scope>, crate::app::MountError> {
+    let typed_mount = initializer.is_some();
     if get_private(el, "__pp_mounted").is_some() {
-        return;
+        return if typed_mount {
+            Err(crate::app::MountError::AlreadyMounted {
+                component: tag.to_string(),
+            })
+        } else {
+            Ok(None)
+        };
     }
 
     // RFC-112 — framework mount sentinels share the custom-tag entry emitted
     // by the template compiler, but they are not registered user components.
     // Install their controller directly before registry instantiation.
     if tag == "pp-component" {
+        if typed_mount {
+            return Err(crate::app::MountError::UnsupportedHostMode {
+                component: tag.to_string(),
+                mode: "framework-sentinel",
+            });
+        }
         crate::dynamic_component::install(el);
         set_private(el, "__pp_mounted", &JsValue::TRUE);
-        return;
+        return Ok(None);
     }
     if tag == "pp-outlet" {
+        if typed_mount {
+            return Err(crate::app::MountError::UnsupportedHostMode {
+                component: tag.to_string(),
+                mode: "framework-sentinel",
+            });
+        }
         crate::router::register_outlet(el.clone());
         set_private(el, "__pp_mounted", &JsValue::TRUE);
-        return;
+        return Ok(None);
     }
 
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
     // engages when all the structural constraints hold; otherwise
     // falls through to the normal mount path.
-    if el.has_attribute("pp-as") && try_mount_component_as(el, tag) {
-        return;
+    if el.has_attribute("pp-as") {
+        if typed_mount {
+            return Err(crate::app::MountError::UnsupportedHostMode {
+                component: tag.to_string(),
+                mode: "pp-as",
+            });
+        }
+        if try_mount_component_as(el, tag) {
+            return Ok(None);
+        }
     }
     let plugin_hooks = crate::plugin::component_hook_activity();
     let mount_start_ms = plugin_hooks.needs_mount_start.then(js_sys::Date::now);
 
     let Some(scope) = instantiate(tag) else {
-        return;
+        return Err(crate::app::MountError::ConstructionFailed {
+            component: tag.to_string(),
+        });
     };
     // Record the parent scope for RFC-027 `inject` chain-walks.
     // Prefer the explicit `CTX_PARENT_KEY` stamp — set by slot
@@ -447,11 +555,25 @@ fn mount_component(
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
     apply_static_props(el, &scope);
+
+    // RFC-113 N1 — typed initializer seam. This runs with the new scope
+    // current after static props, but before plugin/user setup. The closure
+    // performs the concrete-state downcast and drops its `RefMut` before this
+    // function continues into lifecycle hooks.
+    if let Some(initialize) = initializer.as_mut() {
+        let _frame = crate::ComponentCallbackFrame::for_scope(scope.id);
+        if let Err(error) = crate::scope::with_current_scope_id(scope.id, || initialize(&scope)) {
+            rollback_component_scope(el, &scope, false);
+            return Err(error);
+        }
+    }
+
     fire_component_setup_plugin_hooks(tag, scope.id);
     // RFC-030: fire `on_setup` — the component's pre-children-walk
     // hook where fields can be initialised from injected context.
     // Runs with CURRENT_SCOPE_ID bound so `inject` / `this` resolve.
     if scope.state.borrow().has_setup() {
+        let _frame = crate::ComponentCallbackFrame::for_scope(scope.id);
         let setup_ctx = crate::lifecycle::LifecycleContext::__new(
             el,
             scope.id,
@@ -504,14 +626,29 @@ fn mount_component(
     // cached `<template>` element, every mount clones the `.content`
     // `DocumentFragment`) over re-parsing the HTML string per mount.
     let Some(fragment) = crate::templates::template_clone_for(tag) else {
-        return;
+        rollback_component_scope(el, &scope, false);
+        return Err(crate::app::MountError::TemplateMissing {
+            component: tag.to_string(),
+        });
     };
     el.set_inner_html("");
-    let _ = el.append_child(fragment.as_ref());
+    if el.append_child(fragment.as_ref()).is_err() {
+        rollback_component_scope(el, &scope, true);
+        return Err(crate::app::MountError::DomOperation {
+            component: tag.to_string(),
+            operation: "append-template",
+        });
+    }
 
     // Bind scope to the template's root element and strip
     // data-pp-scope-id so nothing later tries to re-instantiate it.
-    if let Some(root) = first_element_child(el) {
+    let Some(root) = first_element_child(el) else {
+        rollback_component_scope(el, &scope, true);
+        return Err(crate::app::MountError::TemplateRootMissing {
+            component: tag.to_string(),
+        });
+    };
+    {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         if needs_proxy {
             set_private(&root, SCOPE_PROXY_KEY, &proxy);
@@ -573,6 +710,13 @@ fn mount_component(
         // lifted fragments.
         if let Some(mount_template) = crate::registry::mount_template_for(tag) {
             mount_template(&root, scope.id, &proxy);
+        } else if typed_mount {
+            release_compiled_subtree(el);
+            el.set_inner_html("");
+            clear_component_host_stamps(el);
+            return Err(crate::app::MountError::MissingMountMetadata {
+                component: tag.to_string(),
+            });
         }
     }
 
@@ -580,6 +724,94 @@ fn mount_component(
     // compiled root discovery after a parent already mounted it
     // via `child_mounts`) short-circuits.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
+    Ok(Some(scope))
+}
+
+fn mount_component(
+    el: &Element,
+    tag: &str,
+    supplied_slots: Option<(crate::slot_fragment::SlotSet, ScopeId, JsValue)>,
+) {
+    // The legacy/name-driven mount surface intentionally preserves its
+    // fire-and-forget behavior. The typed owned path below consumes the same
+    // structured result instead of silently accepting a partial mount.
+    let _ = mount_component_result(el, tag, supplied_slots, None);
+}
+
+/// Typed owned-mount entry used by [`crate::app::App::mount_subtree_with`].
+///
+/// The registry constructor remains the source of the scope, then this seam
+/// verifies its concrete state before exposing `&mut C` to the initializer.
+/// The borrow is always dropped before `mount_component_result` proceeds into
+/// `on_setup`, template mounting, or any other lifecycle callback.
+pub(crate) fn mount_typed_component<C, F>(
+    host: &Element,
+    initialize: F,
+) -> Result<crate::handle::Handle<C>, crate::app::MountError>
+where
+    C: crate::app::MountableComponent,
+    F: FnOnce(&mut C, &mut crate::app::MountSetup) -> Result<(), crate::app::MountInitError>,
+{
+    let mut typed_state: Option<Rc<RefCell<C>>> = None;
+    let scope = {
+        let mut initialize = Some(initialize);
+        let mut erased = |scope: &Scope| -> Result<(), crate::app::MountError> {
+            let actual = scope
+                .state
+                .try_borrow()
+                .map(|state| state.type_name())
+                .unwrap_or("<borrowed>");
+            let typed =
+                scope
+                    .typed::<C>()
+                    .ok_or_else(|| crate::app::MountError::StateTypeMismatch {
+                        component: C::NAME.to_string(),
+                        expected: std::any::type_name::<C>(),
+                        actual,
+                    })?;
+            let initializer = initialize
+                .take()
+                .expect("typed mount initializer called more than once");
+            let mut setup = crate::app::MountSetup::new(scope.id);
+            let result = crate::model_runtime::with_scope_write(
+                scope.id,
+                crate::model_runtime::WriteOrigin::SetupSeed,
+                || {
+                    let mut state = typed.try_borrow_mut().map_err(|_| {
+                        crate::app::MountError::StateAlreadyBorrowed {
+                            component: C::NAME.to_string(),
+                        }
+                    })?;
+                    initializer(&mut state, &mut setup).map_err(|source| {
+                        crate::app::MountError::Initialization {
+                            component: C::NAME.to_string(),
+                            source,
+                        }
+                    })
+                },
+            );
+            if result.is_ok() {
+                typed_state = Some(typed);
+            }
+            result
+        };
+
+        mount_component_result(host, C::NAME, None, Some(&mut erased))?.ok_or_else(|| {
+            crate::app::MountError::ConstructionFailed {
+                component: C::NAME.to_string(),
+            }
+        })?
+    };
+    let typed = typed_state.ok_or_else(|| crate::app::MountError::StateTypeMismatch {
+        component: C::NAME.to_string(),
+        expected: std::any::type_name::<C>(),
+        actual: scope
+            .state
+            .try_borrow()
+            .map(|state| state.type_name())
+            .unwrap_or("<borrowed>"),
+    })?;
+    Ok(crate::handle::Handle::new(typed, scope.id))
 }
 
 /// Mount the registered component named `name` onto `host_el`.
@@ -651,6 +883,7 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     apply_static_props(el, &scope);
     fire_component_setup_plugin_hooks(tag, scope.id);
     if scope.state.borrow().has_setup() {
+        let _frame = crate::ComponentCallbackFrame::for_scope(scope.id);
         let setup_ctx = crate::lifecycle::LifecycleContext::__new(
             el,
             scope.id,
@@ -1748,6 +1981,7 @@ pub fn release_compiled_subtree(el: &Element) {
 
 fn release_subtree_inner(node: &Node) {
     if let Ok(el) = node.clone().dyn_into::<Element>() {
+        run_before_subtree_release(&el);
         // RFC 054 bulk-clear short-circuit. When the row was torn
         // down synchronously by `for_::run_keyed`'s bulk path, the
         // row root carries `RELEASE_SKIP_KEY`. The entire subtree's
@@ -1782,6 +2016,11 @@ fn release_subtree_inner(node: &Node) {
                 .unwrap_or(false);
             if !borrowed {
                 let scope_id = ScopeId(id as u64);
+                // Hold teardown inside the same callback frame as the user
+                // unmount hook. Scope-owned work queued by that hook is then
+                // skipped after `Scope::remove`; unscoped renderer work runs
+                // only once the component borrow and teardown have finished.
+                let _frame = crate::ComponentCallbackFrame::for_scope(scope_id);
                 if let Some(scope) = Scope::find(scope_id) {
                     let unmount_ctx = crate::lifecycle::LifecycleContext::__new(
                         &el,
@@ -1838,6 +2077,7 @@ pub(crate) fn clear_component_host_stamps(host: &Element) {
         WALKED_KEY,
         EFFECTS_KEY,
         LISTENERS_KEY,
+        BEFORE_SUBTREE_RELEASE_KEY,
         MOUNT_HOOK_FIRED_KEY,
         COMPONENT_MOUNT_EVENT_FIRED_KEY,
         MOUNT_START_MS_KEY,

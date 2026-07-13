@@ -1,0 +1,17 @@
+error: pocopine: template plan error in component `owned-content-duplicate`
+        --> tests/ui/owned_content_duplicate.poco
+         |
+         |   <section pp-owned-content></section>
+         |   -------------------------- info: first `pp-owned-content` marker is here
+         |   <aside pp-owned-content></aside>
+         |   ^^^^^^^^^^^^^^^^^^^^^^^^ duplicate `pp-owned-content` marker — a component template may expose exactly one owned-content outlet; remove this marker or the earlier one
+         |
+ --> tests/ui/owned_content_duplicate.rs:5:1
+  |
+5 | / #[component(
+6 | |     name = "owned-content-duplicate",
+7 | |     template = "owned_content_duplicate.poco"
+8 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

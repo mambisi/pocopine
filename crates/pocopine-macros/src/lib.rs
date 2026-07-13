@@ -3044,6 +3044,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             diagnostics: proc_macro2::TokenStream::new(),
             ref_names: Vec::new(),
             warnings: Vec::new(),
+            owned_content_outlet_path: None,
         });
 
     // Build the literal to feed into `compile_template`:
@@ -3156,6 +3157,22 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .map(|w| build_warning_tokens(w))
         .collect::<proc_macro2::TokenStream>();
+    let (mountable_owned_content_metadata_tokens, owned_content_outlet_impl_tokens) =
+        match template_plan.owned_content_outlet_path.as_deref() {
+            Some(path) => {
+                let indices = path.iter().copied();
+                (
+                    quote! {
+                        const OWNED_CONTENT_OUTLET_PATH: ::core::option::Option<&'static [u16]> =
+                            ::core::option::Option::Some(&[#(#indices),*]);
+                    },
+                    quote! {
+                        impl ::pocopine::__private::OwnedContentOutletComponent for #struct_ident {}
+                    },
+                )
+            }
+            None => (quote! {}, quote! {}),
+        };
     let template_plan_item_tokens = match template_plan.plan_tokens.clone() {
         Some(plan_tokens) => {
             let slot_fns = template_plan.slot_fragment_fns;
@@ -3861,10 +3878,34 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
+        impl ::pocopine::__private::MountableComponent for #struct_ident {
+            const OWNER: &'static str =
+                concat!(module_path!(), "::", stringify!(#struct_ident));
+
+            #mountable_owned_content_metadata_tokens
+        }
+
+        #owned_content_outlet_impl_tokens
+
         #dynamic_component_contract_tokens
     };
 
     out.into()
+}
+
+/// One typed parameter in a macro-generated handler dispatch arm.
+///
+/// Keeping the two sources explicit is important: context projections do not
+/// advance the JavaScript argument cursor.
+struct HandlerParameter {
+    binding: syn::Ident,
+    ty: syn::Type,
+    source: HandlerParameterSource,
+}
+
+enum HandlerParameterSource {
+    Argument { slot: u32 },
+    Context { parameter: LitStr },
 }
 
 #[proc_macro_attribute]
@@ -4109,6 +4150,96 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    // Normalize the explicit handler-context lane while the user impl is
+    // still mutable. Rust does not otherwise know the parameter-level
+    // `#[context]` helper attribute, so it must be consumed here rather than
+    // copied into the expanded inherent method.
+    //
+    // The map is indexed by (impl-item position, signature-input position).
+    // Positions are stable for the rest of this expansion and, unlike method
+    // names, remain unambiguous for cfg-split methods with the same name.
+    let mut context_parameters: std::collections::HashMap<(usize, usize), LitStr> =
+        std::collections::HashMap::new();
+    for (item_index, impl_item) in input.items.iter_mut().enumerate() {
+        let ImplItem::Fn(method) = impl_item else {
+            continue;
+        };
+        let method_name = method.sig.ident.to_string();
+        let is_lifecycle = matches!(
+            method_name.as_str(),
+            "on_setup" | "on_mount" | "on_ready" | "on_unmount"
+        );
+        let is_dispatchable = method.sig.receiver().is_some()
+            && !is_lifecycle
+            && !methods_to_skip_in_arms.contains(&method_name);
+
+        if let Some(attribute) = method.sig.receiver().and_then(|receiver| {
+            receiver
+                .attrs
+                .iter()
+                .find(|attr| attr.path().is_ident("context"))
+        }) {
+            return syn::Error::new_spanned(
+                attribute,
+                "#[context] belongs on a typed handler parameter, not the self receiver",
+            )
+            .to_compile_error()
+            .into();
+        }
+
+        for (input_index, input) in method.sig.inputs.iter_mut().enumerate() {
+            let FnArg::Typed(parameter) = input else {
+                continue;
+            };
+            let context_attrs: Vec<_> = parameter
+                .attrs
+                .iter()
+                .filter(|attr| attr.path().is_ident("context"))
+                .cloned()
+                .collect();
+            if context_attrs.is_empty() {
+                continue;
+            }
+            if context_attrs.len() > 1 {
+                return syn::Error::new_spanned(
+                    &parameter.pat,
+                    "a handler parameter may have at most one #[context] attribute",
+                )
+                .to_compile_error()
+                .into();
+            }
+            if !matches!(&context_attrs[0].meta, Meta::Path(_)) {
+                return syn::Error::new_spanned(
+                    &context_attrs[0],
+                    "#[context] does not accept arguments",
+                )
+                .to_compile_error()
+                .into();
+            }
+            if !is_dispatchable {
+                return syn::Error::new_spanned(
+                    &context_attrs[0],
+                    "#[context] is only supported on ordinary #[handlers] methods",
+                )
+                .to_compile_error()
+                .into();
+            }
+            let Pat::Ident(pattern) = parameter.pat.as_ref() else {
+                return syn::Error::new_spanned(
+                    &parameter.pat,
+                    "#[context] parameters must use a simple identifier pattern",
+                )
+                .to_compile_error()
+                .into();
+            };
+            let parameter_name = LitStr::new(&pattern.ident.to_string(), pattern.ident.span());
+            parameter
+                .attrs
+                .retain(|attr| !attr.path().is_ident("context"));
+            context_parameters.insert((item_index, input_index), parameter_name);
+        }
+    }
+
     let computed_names: std::collections::HashSet<String> = computed_methods
         .iter()
         .map(|entry| entry.field_name.clone())
@@ -4159,7 +4290,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    for item in &input.items {
+    for (item_index, item) in input.items.iter().enumerate() {
         let ImplItem::Fn(method) = item else { continue };
         let Some(receiver) = method.sig.receiver() else {
             // A lifecycle-named associated fn would fall out here before
@@ -4221,34 +4352,77 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         }
 
-        // Collect typed arg positions after `&mut self`. Per RFC-008,
-        // each arg's type must implement `FromHandlerArg`; the macro
-        // emits the per-arg conversion call.
-        let typed_args: Vec<(syn::Ident, syn::Type)> = method
+        // Build the two parameter lanes in source order. Ordinary parameters
+        // consume sequential JavaScript argument slots. An explicit
+        // `#[context]` parameter is resolved from the active scope and leaves
+        // that cursor untouched, regardless of where it appears in the Rust
+        // signature.
+        let mut next_argument_slot = 0_u32;
+        let parameters: Vec<HandlerParameter> = method
             .sig
             .inputs
             .iter()
             .enumerate()
-            .filter_map(|(i, arg)| match arg {
+            .filter_map(|(input_index, arg)| match arg {
                 FnArg::Typed(PatType { ty, .. }) => {
-                    let ident = format_ident!("_arg{}", i);
-                    Some((ident, (**ty).clone()))
+                    let binding = format_ident!("_arg{}", input_index);
+                    let source = match context_parameters.get(&(item_index, input_index)) {
+                        Some(parameter) => HandlerParameterSource::Context {
+                            parameter: parameter.clone(),
+                        },
+                        None => {
+                            let slot = next_argument_slot;
+                            next_argument_slot += 1;
+                            HandlerParameterSource::Argument { slot }
+                        }
+                    };
+                    Some(HandlerParameter {
+                        binding,
+                        ty: (**ty).clone(),
+                        source,
+                    })
                 }
                 _ => None,
             })
             .collect();
-        let conversions = typed_args.iter().enumerate().map(|(i, (bind, ty))| {
-            let idx = i as u32;
+        let has_context_parameter = parameters
+            .iter()
+            .any(|parameter| matches!(&parameter.source, HandlerParameterSource::Context { .. }));
+        let context_setup = has_context_parameter.then(|| {
             quote! {
-                let #bind: #ty = match <#ty as ::pocopine::__private::FromHandlerArg>::from_handler_arg(
-                    _args.get(#idx),
-                ) {
-                    Some(v) => v,
-                    None => return ::pocopine::__private::JsValue::UNDEFINED,
-                };
+                let __poc_handler_context =
+                    ::pocopine::__private::HandlerContext::current::<Self>(#name);
             }
         });
-        let bindings = typed_args.iter().map(|(bind, _)| quote!(#bind));
+        let conversions = parameters.iter().map(|parameter| {
+            let bind = &parameter.binding;
+            let ty = &parameter.ty;
+            match &parameter.source {
+                HandlerParameterSource::Argument { slot } => quote! {
+                    let #bind: #ty = match <#ty as ::pocopine::__private::FromHandlerArg>::from_handler_arg(
+                        _args.get(#slot),
+                    ) {
+                        Some(v) => v,
+                        None => return ::pocopine::__private::JsValue::UNDEFINED,
+                    };
+                },
+                HandlerParameterSource::Context { parameter } => quote! {
+                    let #bind: #ty = match <#ty as ::pocopine::__private::FromHandlerContext>::from_handler_context(
+                        &__poc_handler_context,
+                    ) {
+                        ::core::result::Result::Ok(value) => value,
+                        ::core::result::Result::Err(error) => {
+                            let error = error.at_parameter::<#ty>(#parameter);
+                            return ::pocopine::__private::report_handler_extract_error(error);
+                        }
+                    };
+                },
+            }
+        });
+        let bindings = parameters.iter().map(|parameter| {
+            let bind = &parameter.binding;
+            quote!(#bind)
+        });
         // Forward conditional-compilation attributes from the method
         // onto the emitted dispatch arm. Without this, a method
         // annotated `#[cfg(target_arch = "wasm32")]` would compile
@@ -4264,6 +4438,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         arms.push(quote! {
             #(#cfg_attrs)*
             #name => {
+                #context_setup
                 #(#conversions)*
                 Self::#ident(self #(, #bindings)*);
                 ::pocopine::__private::JsValue::UNDEFINED
