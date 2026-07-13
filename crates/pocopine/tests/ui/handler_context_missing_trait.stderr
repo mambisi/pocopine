@@ -1,0 +1,19 @@
+error[E0277]: the trait bound `NotAContextExtractor: FromHandlerContext` is not satisfied
+  --> tests/ui/handler_context_missing_trait.rs:15:45
+   |
+15 |     fn broken(&mut self, #[context] _value: NotAContextExtractor) {}
+   |                                             ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `FromHandlerContext` is not implemented for `NotAContextExtractor`
+  --> tests/ui/handler_context_missing_trait.rs:4:1
+   |
+ 4 | struct NotAContextExtractor;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `FromHandlerContext`
+  --> $WORKSPACE/crates/pocopine-core/src/handler.rs
+   |
+   | impl FromHandlerContext for HandlerContext {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HandlerContext`
+...
+   | impl FromHandlerContext for ScopeId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ScopeId`

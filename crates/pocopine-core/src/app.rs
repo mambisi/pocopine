@@ -69,6 +69,287 @@ pub trait Component {
     }
 }
 
+/// Macro-emitted proof that a component has the complete typed mount ABI.
+///
+/// [`Component`] can be implemented manually and only promises a tag name plus
+/// registration entry point. A typed owned mount additionally needs the
+/// generated [`crate::scope::ComponentState`] implementation and must be able
+/// to prove that the registry entry for its tag still belongs to this Rust
+/// type. The `#[component]` macro emits this trait; manual implementations are
+/// unsupported and are still checked by a runtime state downcast before an
+/// initializer receives `&mut Self`.
+#[doc(hidden)]
+pub trait MountableComponent: Component + crate::scope::ComponentState {
+    /// Macro-generated provenance label used by the component registry.
+    const OWNER: &'static str;
+
+    /// Optional compile-time-owned child-DOM outlet.
+    ///
+    /// Every macro-emitted component exposes this metadata so generic tooling
+    /// can reject an owned outlet even when it only has a
+    /// `C: MountableComponent` bound (for example, an atom renderer must not
+    /// silently accept an editable-content shell). Components with one valid
+    /// `pp-owned-content` marker override this with `Some(path)`; all others
+    /// keep `None`.
+    const OWNED_CONTENT_OUTLET_PATH: Option<&'static [u16]> = None;
+
+    /// Register and validate this component's typed mount entry.
+    ///
+    /// Registration remains idempotent for the same component. A missing
+    /// entry, tag collision, or component without a compiled mount function is
+    /// returned as a structured error instead of falling through to an inert
+    /// host.
+    fn register_mountable() -> Result<(), MountError> {
+        Self::register();
+
+        if let Some(error) = crate::registry::registry_errors()
+            .into_iter()
+            .find(|error| error.tag == Self::NAME)
+        {
+            return Err(MountError::RegistrationConflict {
+                component: Self::NAME.to_string(),
+                kind: error.kind,
+                first_owner: error.first_owner,
+                second_owner: error.second_owner,
+            });
+        }
+
+        let entry = crate::registry::registered_component(Self::NAME).ok_or(
+            MountError::RegistrationMissing {
+                component: Self::NAME.to_string(),
+            },
+        )?;
+        if entry.owner != Self::OWNER {
+            return Err(MountError::RegistrationOwnerMismatch {
+                component: Self::NAME.to_string(),
+                expected_owner: Self::OWNER,
+                registered_owner: entry.owner,
+            });
+        }
+        if entry.mount_template.is_none() {
+            return Err(MountError::MissingMountMetadata {
+                component: Self::NAME.to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Error returned by a caller-provided typed mount initializer.
+///
+/// The initializer runs after construction and static-prop application but
+/// before `on_setup`. Returning this error rolls back the partial scope and
+/// leaves lifecycle hooks uncalled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountInitError {
+    message: String,
+}
+
+impl MountInitError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl From<&str> for MountInitError {
+    fn from(message: &str) -> Self {
+        Self::new(message)
+    }
+}
+
+impl From<String> for MountInitError {
+    fn from(message: String) -> Self {
+        Self::new(message)
+    }
+}
+
+impl fmt::Display for MountInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MountInitError {}
+
+/// Stage-specific failure from [`App::mount_subtree_with`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MountError {
+    RegistrationMissing {
+        component: String,
+    },
+    RegistrationConflict {
+        component: String,
+        kind: crate::registry::RegistryErrorKind,
+        first_owner: &'static str,
+        second_owner: &'static str,
+    },
+    RegistrationOwnerMismatch {
+        component: String,
+        expected_owner: &'static str,
+        registered_owner: &'static str,
+    },
+    MissingMountMetadata {
+        component: String,
+    },
+    AlreadyMounted {
+        component: String,
+    },
+    UnsupportedHostMode {
+        component: String,
+        mode: &'static str,
+    },
+    ConstructionFailed {
+        component: String,
+    },
+    StateTypeMismatch {
+        component: String,
+        expected: &'static str,
+        actual: &'static str,
+    },
+    StateAlreadyBorrowed {
+        component: String,
+    },
+    Initialization {
+        component: String,
+        source: MountInitError,
+    },
+    TemplateMissing {
+        component: String,
+    },
+    TemplateRootMissing {
+        component: String,
+    },
+    DomOperation {
+        component: String,
+        operation: &'static str,
+    },
+}
+
+impl fmt::Display for MountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RegistrationMissing { component } => {
+                write!(
+                    f,
+                    "pocopine: component `{component}` did not register a mount entry"
+                )
+            }
+            Self::RegistrationConflict {
+                component,
+                kind,
+                first_owner,
+                second_owner,
+            } => write!(
+                f,
+                "pocopine: component `{component}` has a registry conflict ({kind:?}) between `{first_owner}` and `{second_owner}`"
+            ),
+            Self::RegistrationOwnerMismatch {
+                component,
+                expected_owner,
+                registered_owner,
+            } => write!(
+                f,
+                "pocopine: component `{component}` registered owner `{registered_owner}`, expected `{expected_owner}`"
+            ),
+            Self::MissingMountMetadata { component } => write!(
+                f,
+                "pocopine: component `{component}` has no compiled typed mount metadata"
+            ),
+            Self::AlreadyMounted { component } => {
+                write!(
+                    f,
+                    "pocopine: mount host for `{component}` is already mounted"
+                )
+            }
+            Self::UnsupportedHostMode { component, mode } => write!(
+                f,
+                "pocopine: typed mount for `{component}` does not support host mode `{mode}`"
+            ),
+            Self::ConstructionFailed { component } => {
+                write!(
+                    f,
+                    "pocopine: component `{component}` could not be constructed"
+                )
+            }
+            Self::StateTypeMismatch {
+                component,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "pocopine: component `{component}` constructed state `{actual}`, expected `{expected}`"
+            ),
+            Self::StateAlreadyBorrowed { component } => write!(
+                f,
+                "pocopine: component `{component}` state was already borrowed during initialization"
+            ),
+            Self::Initialization { component, source } => {
+                write!(
+                    f,
+                    "pocopine: component `{component}` initialization failed: {source}"
+                )
+            }
+            Self::TemplateMissing { component } => {
+                write!(
+                    f,
+                    "pocopine: component `{component}` has no registered template"
+                )
+            }
+            Self::TemplateRootMissing { component } => write!(
+                f,
+                "pocopine: component `{component}` template has no root element"
+            ),
+            Self::DomOperation {
+                component,
+                operation,
+            } => write!(
+                f,
+                "pocopine: component `{component}` DOM operation `{operation}` failed"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MountError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Initialization { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Setup capabilities available to a typed mount initializer.
+///
+/// Values provided here are installed on the new component scope before
+/// `on_setup`, so the component and every child mounted from its template can
+/// inject them normally.
+pub struct MountSetup {
+    scope_id: crate::reactive::ScopeId,
+}
+
+impl MountSetup {
+    pub(crate) fn new(scope_id: crate::reactive::ScopeId) -> Self {
+        Self { scope_id }
+    }
+
+    pub fn scope_id(&self) -> crate::reactive::ScopeId {
+        self.scope_id
+    }
+
+    pub fn provide<T: Any + 'static>(&mut self, key: &crate::context::ContextKey<T>, value: T) {
+        crate::scope::with_current_scope_id(self.scope_id, || {
+            crate::context::provide(key, value);
+        });
+    }
+}
+
 /// Runtime view of a component host's macro-checked `uses = [...]` list.
 ///
 /// This is used only by the explicitly data-driven
@@ -2540,6 +2821,32 @@ impl App {
             active: true,
         }
     }
+
+    /// Mount a macro-emitted component with typed initialization and owned
+    /// teardown.
+    ///
+    /// `initialize` runs after the registry constructor and static host props
+    /// have populated `C`, but before `on_setup`. The new scope is current for
+    /// the callback, and [`MountSetup::provide`] can seed context that setup and
+    /// nested template children observe. Any failure rolls back the partial
+    /// scope and returns a [`MountError`].
+    pub fn mount_subtree_with<C, F>(
+        host: &Element,
+        initialize: F,
+    ) -> Result<MountedSubtree<C>, MountError>
+    where
+        C: MountableComponent,
+        F: FnOnce(&mut C, &mut MountSetup) -> Result<(), MountInitError>,
+    {
+        C::register_mountable()?;
+        let handle = mount::mount_typed_component::<C, F>(host, initialize)?;
+        mount::finalize_compiled_subtree(host);
+        Ok(MountedSubtree {
+            host: host.clone(),
+            handle,
+            active: true,
+        })
+    }
 }
 
 /// Parse a compile-time expression source with `pocopine_expr` and
@@ -2756,6 +3063,57 @@ impl SubtreeHandle {
 }
 
 impl Drop for SubtreeHandle {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// Typed receipt for one component subtree mounted by
+/// [`App::mount_subtree_with`].
+///
+/// The receipt owns deterministic cleanup and a typed component handle. If an
+/// ancestor teardown removes the scope first, `is_active` becomes false and a
+/// later explicit unmount or drop is a no-op, so lifecycle hooks never fire
+/// twice and an old receipt cannot tear down a newer mount reusing the host.
+#[must_use = "drop or call `.unmount()` to clean up the mounted subtree"]
+pub struct MountedSubtree<C: MountableComponent> {
+    host: Element,
+    handle: crate::handle::Handle<C>,
+    active: bool,
+}
+
+impl<C: MountableComponent> MountedSubtree<C> {
+    pub fn handle(&self) -> crate::handle::Handle<C> {
+        self.handle.clone()
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+            && crate::scope::Scope::find(self.handle.scope_id()).is_some()
+            && mount::host_child_scope_id_of(&self.host) == Some(self.handle.scope_id())
+    }
+
+    fn release(&mut self) {
+        if !self.active {
+            return;
+        }
+        let scope_id = self.handle.scope_id();
+        let still_owns_host = crate::scope::Scope::find(scope_id).is_some()
+            && mount::host_child_scope_id_of(&self.host) == Some(scope_id);
+        if still_owns_host {
+            mount::release_compiled_subtree(&self.host);
+            self.host.set_inner_html("");
+            mount::clear_component_host_stamps(&self.host);
+        }
+        self.active = false;
+    }
+
+    pub fn unmount(mut self) {
+        self.release();
+    }
+}
+
+impl<C: MountableComponent> Drop for MountedSubtree<C> {
     fn drop(&mut self) {
         self.release();
     }

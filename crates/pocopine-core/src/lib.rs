@@ -16,6 +16,7 @@ pub mod app;
 // RFC-100 — content-addressed asset URLs.
 pub mod assets;
 pub mod client_module;
+pub mod component_callback;
 pub mod component_computed;
 pub mod computed;
 pub mod context;
@@ -39,6 +40,7 @@ pub mod magics;
 pub mod model_runtime;
 pub mod mount;
 pub mod mutation_channel;
+pub mod owned_content;
 pub mod path;
 pub mod payload_scope;
 pub mod plugin;
@@ -71,8 +73,9 @@ pub mod web;
 pub use app::{
     App, AppPlugin, Component, ComponentRef, ComponentUses, ComputedTypeWitness,
     DynamicComponentHost, DynamicComponentSelection, IntoRouteTarget, Loader, LoaderContext,
-    LoaderError, PageLink, PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger,
-    RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision,
+    LoaderError, MountError, MountInitError, MountSetup, MountableComponent, MountedSubtree,
+    PageLink, PageMeta, PageMetaContext, PageMetaTag, Prefetch, PrefetchTrigger, RouteComponent,
+    RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision,
     RouteLayoutBuilder, RouteLoader, RouteLoaderFuture, RouteMeta, RouteMetaKey, RouteName,
     RouteQuery, RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
     RouteTarget, RouteTargetBuilder, RouteTargetError, RouteUrl, SubtreeHandle,
@@ -80,6 +83,10 @@ pub use app::{
     encode_route_fragment, encode_route_path_segment, encode_route_query_part,
 };
 pub use client_module::{ClientModule, ClientModuleError};
+pub use component_callback::{
+    ComponentCallbackFrame, component_callback_active, defer_component_callback,
+    defer_component_callback_for,
+};
 pub use computed::{Computed, computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
@@ -95,12 +102,20 @@ pub use events::{DomEventName, ListenerHandle, on_scope_unmount, on_scope_unmoun
 pub use expr::{StaticBinOp, StaticExpr, StaticLiteral};
 pub use extractors::{Inject, NearestParent, Parent};
 pub use handle::{FieldHandle, Handle, this};
-pub use handler::{FromHandlerArg, HandlerDispatch};
+pub use handler::{
+    FromHandlerArg, FromHandlerContext, HandlerContext, HandlerDispatch, HandlerExtractError,
+    report_handler_extract_error,
+};
 pub use lifecycle::{
     Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, LifecyclePhase, MountEpoch,
     ParentId, Refs, ScopePath, TagName, TeleportHost, TypedEl, Win,
 };
 pub use model_runtime::{WriteOrigin, with_write_origin};
+pub use mount::on_before_subtree_release;
+pub use owned_content::{
+    OwnedContentOutletComponent, OwnedContentOutletError, resolve_owned_content_outlet,
+    resolve_owned_content_outlet_from_root,
+};
 pub use plugin::{
     AppBootCompleted, AppBootFailed, AppBootStarted, ComponentEvent, ComponentMounted,
     ComponentPluginExt, ComponentReady, ComponentSetup, ComponentUnmounted, ForComponent, Hook,
@@ -120,8 +135,8 @@ pub use registry::{
     ComponentCtor, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
     RegistryErrorKind, assert_registry_clean, canonical_component_name, mark_registered,
     register_component, register_component_as, register_component_prefixed,
-    register_component_with_mount, registered_component_names, registry_errors, render_boot_error,
-    verify_registry,
+    register_component_with_mount, registered_component, registered_component_names,
+    registry_errors, render_boot_error, verify_registry,
 };
 pub use router::{
     MatchedRoute, MatchedRouteChain, NavigationFailure, NavigationResult, PrefetchResult,

@@ -2,11 +2,10 @@
 //! macros use to coordinate. `#[component]` emits a `ComponentState::invoke`
 //! that delegates here; `#[handlers]` emits the actual match-by-name body.
 //!
-//! [`FromHandlerArg`] bridges `JsValue` → typed handler parameters.
-//! Per RFC-008; the `#[handlers]` macro emits a conversion call per
-//! arg using this trait, so method authors can write
-//! `(&mut self, ev: InputEvent)` or `(&mut self, value: String)`
-//! directly.
+//! [`FromHandlerArg`] bridges JavaScript arguments into ordinary typed handler
+//! parameters. [`FromHandlerContext`] is the separate, explicit lane for
+//! parameters annotated `#[context]`: those values are projected from the
+//! active component scope and do not consume a JavaScript argument slot.
 
 use js_sys::Array;
 use wasm_bindgen::{JsCast, JsValue};
@@ -14,6 +13,9 @@ use web_sys::{
     ClipboardEvent, CustomEvent, DragEvent, Event, FocusEvent, InputEvent, KeyboardEvent,
     MouseEvent, PointerEvent, SubmitEvent, TouchEvent, UiEvent, WheelEvent,
 };
+
+use crate::reactive::ScopeId;
+use crate::scope::current_scope_id;
 
 pub trait HandlerDispatch {
     fn invoke_handler(&mut self, key: &str, args: &Array) -> JsValue;
@@ -57,7 +59,7 @@ pub trait HandlerDispatch {
     /// Takes `&self` so proxy-reading helpers (`watch_field`, refs,
     /// `$event`) called from inside don't clash with an active
     /// `borrow_mut`. Mutation in on_ready goes via
-    /// `pocopine::this::<Self>().update(...)`. See RFC-026 / RFC-029.
+    /// `pocopine::this::<Self>().defer_update(...)`. See RFC-026 / RFC-029.
     /// RFC-032: receives a `LifecycleContext` — same story as
     /// `mount`.
     fn on_ready(&self, ctx: crate::lifecycle::LifecycleContext<'_>) {
@@ -132,6 +134,236 @@ pub trait HandlerDispatch {
     fn computed_get(&self, key: &str) -> Option<JsValue> {
         let _ = key;
         None
+    }
+}
+
+/// Immutable metadata for one macro-generated handler dispatch.
+///
+/// A `#[context]` extractor receives this value instead of a raw JavaScript
+/// event argument. The component name is the fully-qualified Rust type name;
+/// unlike a custom-element tag it is also available to stores and other
+/// `#[handlers]` users that do not implement [`crate::Component`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HandlerContext {
+    component: &'static str,
+    scope_id: Option<ScopeId>,
+    handler: &'static str,
+}
+
+impl HandlerContext {
+    /// Capture the active dispatch metadata for component state `C`.
+    ///
+    /// This is public only for code emitted by `#[handlers]`; application code
+    /// normally receives a clone through `#[context] context: HandlerContext`.
+    #[doc(hidden)]
+    pub fn current<C: ?Sized>(handler: &'static str) -> Self {
+        Self {
+            component: std::any::type_name::<C>(),
+            scope_id: current_scope_id(),
+            handler,
+        }
+    }
+
+    /// Fully-qualified Rust component/state type being dispatched.
+    pub fn component(&self) -> &'static str {
+        self.component
+    }
+
+    /// Active Pocopine scope, or `None` when dispatch was invoked outside a
+    /// mounted scope (for example, by a direct test call).
+    pub fn scope_id(&self) -> Option<ScopeId> {
+        self.scope_id
+    }
+
+    /// Handler method name selected by the dispatcher.
+    pub fn handler(&self) -> &str {
+        self.handler
+    }
+
+    /// Build an extraction error tied to this dispatch.
+    ///
+    /// The `#[handlers]` expansion adds the parameter name and concrete
+    /// requested type before reporting it.
+    pub fn extraction_error(&self, reason: impl Into<String>) -> HandlerExtractError {
+        HandlerExtractError {
+            context: *self,
+            parameter: None,
+            requested_type: None,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// Structured failure returned by a [`FromHandlerContext`] implementation.
+///
+/// Unlike a failed [`FromHandlerArg`] conversion, a context extraction error
+/// is never silently treated as an absent handler. Macro-generated dispatch
+/// enriches it with the parameter/type site, logs a structured JavaScript
+/// diagnostic, and returns that diagnostic to the caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HandlerExtractError {
+    context: HandlerContext,
+    parameter: Option<&'static str>,
+    requested_type: Option<&'static str>,
+    reason: String,
+}
+
+impl HandlerExtractError {
+    /// Create an error attached to the current handler dispatch.
+    pub fn new(context: &HandlerContext, reason: impl Into<String>) -> Self {
+        context.extraction_error(reason)
+    }
+
+    /// Dispatch metadata captured at the extraction site.
+    pub fn context(&self) -> &HandlerContext {
+        &self.context
+    }
+
+    /// Fully-qualified Rust component/state type being dispatched.
+    pub fn component(&self) -> &'static str {
+        self.context.component()
+    }
+
+    /// Active scope at the extraction site.
+    pub fn scope_id(&self) -> Option<ScopeId> {
+        self.context.scope_id()
+    }
+
+    /// Handler method name selected by the dispatcher.
+    pub fn handler(&self) -> &str {
+        self.context.handler()
+    }
+
+    /// Source parameter carrying `#[context]`, once enriched by the macro.
+    pub fn parameter(&self) -> Option<&'static str> {
+        self.parameter
+    }
+
+    /// Concrete type requested by the annotated parameter.
+    pub fn requested_type(&self) -> Option<&'static str> {
+        self.requested_type
+    }
+
+    /// Extractor-provided explanation of why resolution failed.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// Attach the source-level parameter and type to an extractor error.
+    #[doc(hidden)]
+    pub fn at_parameter<T: ?Sized>(mut self, parameter: &'static str) -> HandlerExtractError {
+        self.parameter = Some(parameter);
+        self.requested_type = Some(std::any::type_name::<T>());
+        self
+    }
+
+    /// Materialize the diagnostic as a JavaScript object.
+    ///
+    /// The stable fields make browser errors inspectable without parsing the
+    /// human-readable [`std::fmt::Display`] message.
+    #[cfg(target_arch = "wasm32")]
+    pub fn to_js_diagnostic(&self) -> JsValue {
+        use js_sys::{Object, Reflect};
+
+        let diagnostic = Object::new();
+        let set = |key: &str, value: &JsValue| {
+            // A fresh extensible plain object cannot reject these properties.
+            let _ = Reflect::set(&diagnostic, &JsValue::from_str(key), value);
+        };
+        set(
+            "kind",
+            &JsValue::from_str("pocopine.handler_context_extraction_failed"),
+        );
+        set("message", &JsValue::from_str(&self.to_string()));
+        set("component", &JsValue::from_str(self.component()));
+        set("handler", &JsValue::from_str(self.handler()));
+        set("reason", &JsValue::from_str(self.reason()));
+        set(
+            "scope_id",
+            &self
+                .scope_id()
+                .map(|scope| JsValue::from_f64(scope.0 as f64))
+                .unwrap_or(JsValue::NULL),
+        );
+        set(
+            "parameter",
+            &self
+                .parameter()
+                .map(JsValue::from_str)
+                .unwrap_or(JsValue::NULL),
+        );
+        set(
+            "requested_type",
+            &self
+                .requested_type()
+                .map(JsValue::from_str)
+                .unwrap_or(JsValue::NULL),
+        );
+        diagnostic.into()
+    }
+}
+
+impl std::fmt::Display for HandlerExtractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "pocopine: failed to extract handler context for component `{}` handler `{}`",
+            self.component(),
+            self.handler(),
+        )?;
+        match self.scope_id() {
+            Some(scope) => write!(f, " scope {}", scope.0)?,
+            None => f.write_str(" scope <none>")?,
+        }
+        if let Some(parameter) = self.parameter() {
+            write!(f, " parameter `{parameter}`")?;
+        }
+        if let Some(requested_type) = self.requested_type() {
+            write!(f, " requested `{requested_type}`")?;
+        }
+        write!(f, ": {}", self.reason())
+    }
+}
+
+impl std::error::Error for HandlerExtractError {}
+
+/// Extract a typed value from the active component handler context.
+///
+/// Parameters use this lane only when explicitly annotated `#[context]`.
+/// Implementations should return `context.extraction_error(...)` when the
+/// required capability is not available in the current scope.
+pub trait FromHandlerContext: Sized {
+    fn from_handler_context(context: &HandlerContext) -> Result<Self, HandlerExtractError>;
+}
+
+impl FromHandlerContext for HandlerContext {
+    fn from_handler_context(context: &HandlerContext) -> Result<Self, HandlerExtractError> {
+        Ok(*context)
+    }
+}
+
+impl FromHandlerContext for ScopeId {
+    fn from_handler_context(context: &HandlerContext) -> Result<Self, HandlerExtractError> {
+        context.scope_id().ok_or_else(|| {
+            context.extraction_error("handler dispatch has no active Pocopine scope")
+        })
+    }
+}
+
+/// Report one failed `#[context]` extraction and return the same diagnostic to
+/// the handler-expression caller.
+#[doc(hidden)]
+pub fn report_handler_extract_error(error: HandlerExtractError) -> JsValue {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let diagnostic = error.to_js_diagnostic();
+        web_sys::console::error_1(&diagnostic);
+        diagnostic
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{error}");
+        JsValue::UNDEFINED
     }
 }
 
@@ -239,3 +471,34 @@ impl_event_handler_arg!(
     SubmitEvent,
     ClipboardEvent
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{HandlerContext, HandlerExtractError};
+
+    struct ContextOwner;
+    struct RequestedCapability;
+
+    #[test]
+    fn extraction_error_keeps_dispatch_and_parameter_diagnostics() {
+        let context = HandlerContext::current::<ContextOwner>("toggle");
+        let error = HandlerExtractError::new(&context, "capability is absent")
+            .at_parameter::<RequestedCapability>("node");
+
+        assert!(error.component().ends_with("ContextOwner"));
+        assert_eq!(error.scope_id(), None);
+        assert_eq!(error.handler(), "toggle");
+        assert_eq!(error.parameter(), Some("node"));
+        assert!(
+            error
+                .requested_type()
+                .is_some_and(|name| name.ends_with("RequestedCapability")),
+        );
+        assert_eq!(error.reason(), "capability is absent");
+
+        let message = error.to_string();
+        assert!(message.contains("scope <none>"));
+        assert!(message.contains("parameter `node`"));
+        assert!(message.contains("requested `"));
+    }
+}

@@ -1,0 +1,7 @@
+<main class="shell">
+  <template pp-if="open">
+    <section>
+      <div pp-owned-content></div>
+    </section>
+  </template>
+</main>

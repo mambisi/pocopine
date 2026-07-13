@@ -331,6 +331,21 @@ pub fn instantiate(name: &str) -> Option<Scope> {
     })
 }
 
+/// Resolve a registered component entry by canonical name or alias.
+///
+/// Typed owned mounting uses this to verify that a macro-emitted component's
+/// provenance still owns the tag before invoking the registry constructor.
+pub fn registered_component(name: &str) -> Option<RegisteredComponent> {
+    REGISTRY.with(|r| {
+        let reg = r.borrow();
+        if let Some(entry) = reg.canonical.get(name) {
+            return Some(*entry);
+        }
+        let &(canonical, _) = reg.aliases.get(name)?;
+        reg.canonical.get(canonical).copied()
+    })
+}
+
 pub fn mount_template_for(name: &str) -> Option<ComponentMountFn> {
     REGISTRY.with(|r| {
         let reg = r.borrow();

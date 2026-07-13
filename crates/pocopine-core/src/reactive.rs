@@ -341,6 +341,11 @@ fn effect_with_dyn(f: EffectFn, opts: EffectOptions) -> EffectId {
 }
 
 fn run_effect(id: EffectId, f: &EffectFn) {
+    // Watchers and effects are user callback frames too. Keep their deferred
+    // component work behind cleanup, dependency re-tracking, and restoration
+    // of CURRENT_EFFECT so reconciliation cannot accidentally subscribe to
+    // the effect that requested it.
+    let _frame = crate::ComponentCallbackFrame::enter();
     // Tear down the previous run's cleanups before we rebuild deps — a
     // cleanup registered on iteration N belongs to iteration N, not N+1.
     run_cleanups(id);

@@ -140,7 +140,7 @@ impl<'a> From<LifecycleContext<'a>> for ScopeId {
 /// Extracting a `Handle<T>` directly is the RFC-032 replacement
 /// for `this::<Self>()` inside hooks — write
 /// `fn on_ready(&self, handle: Handle<Self>)` and call
-/// `handle.update(|s| …)` straight through, no wrapper newtype
+/// `handle.defer_update(|s| …)`, no wrapper newtype
 /// to unpack.
 ///
 /// Blanket `From` impl: any `T: 'static` that matches this
