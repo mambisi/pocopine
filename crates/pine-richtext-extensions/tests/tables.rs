@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use pine_richtext::commands::BoxedCommand;
-use pine_richtext::history::{history_plugin, undo};
+use pine_richtext::history::{history_plugin, redo, undo};
 use pine_richtext::model::{Attrs, Fragment, Node, Schema};
 use pine_richtext::runtime::{EditorRuntime, RuntimeBuilder};
 use pine_richtext::state::{EditorState, EditorStateConfig, Selection, Transaction};
@@ -12,11 +12,11 @@ use pine_richtext_extensions::tables::{
     MAX_COLUMN_WIDTH, MAX_ROW_HEIGHT, MIN_COLUMN_WIDTH, MIN_ROW_HEIGHT, TableAlignment,
     TableCellAttrs, TableHeaderCellAttrs, TableMap, TableMapError, TableRowAttrs, TablesExtension,
     delete_column, delete_row, go_to_next_cell, go_to_previous_cell, insert_column_after,
-    insert_column_before, insert_row_after, insert_row_before, insert_table, set_cell_alignment_at,
-    set_column_width_at, set_row_height_at,
+    insert_column_before, insert_row_after, insert_row_before, insert_table, move_column, move_row,
+    set_cell_alignment_at, set_column_width_at, set_row_height_at,
 };
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn runtime() -> Arc<EditorRuntime> {
     RuntimeBuilder::new().with(TablesExtension).build()
@@ -275,6 +275,146 @@ fn structural_commands_keep_the_table_rectangular_and_header_canonical() {
 }
 
 #[test]
+fn move_row_reorders_body_rows_while_the_header_stays_pinned() {
+    let runtime = runtime();
+    let schema = runtime.schema();
+    let state = state_at(schema, labeled_table_doc(schema, 4, 3), 2, 2);
+    let (state, _) = run(&state, set_row_height_at(1, 72));
+    let original = state.doc().clone();
+
+    for command in [
+        move_row(0, 2),
+        move_row(1, 0),
+        move_row(1, 1),
+        move_row(1, 4),
+        move_row(4, 1),
+    ] {
+        assert!(command.apply(&state).is_none());
+    }
+
+    let (moved, transaction) = run(&state, move_row(1, 3));
+    assert_eq!(transaction.transform().steps().len(), 1);
+    let (_, table) = first_table(moved.doc());
+    assert_eq!(
+        table.child(0).unwrap().child(0).unwrap().text_content(),
+        "0,0"
+    );
+    assert_eq!(
+        table.child(1).unwrap().child(0).unwrap().text_content(),
+        "2,0"
+    );
+    assert_eq!(
+        table.child(2).unwrap().child(0).unwrap().text_content(),
+        "3,0"
+    );
+    assert_eq!(
+        table.child(3).unwrap().child(0).unwrap().text_content(),
+        "1,0"
+    );
+    assert!(
+        table
+            .child(0)
+            .unwrap()
+            .content()
+            .iter()
+            .all(|cell| cell.type_name() == "table_header_cell")
+    );
+    assert!(table.content().iter().skip(1).all(|row| {
+        row.content()
+            .iter()
+            .all(|cell| cell.type_name() == "table_cell")
+    }));
+    let moved_attrs: TableRowAttrs = decoded(table.child(3).unwrap());
+    assert_eq!(moved_attrs.height, Some(72));
+    let moved_map = map(moved.doc());
+    assert_eq!(
+        moved.selection(),
+        &Selection::text(moved_map.cell(3, 2).unwrap().pos + 1)
+    );
+
+    let (restored, _) = run(&moved, move_row(3, 1));
+    assert_eq!(restored.doc(), &original);
+}
+
+#[test]
+fn move_column_reorders_every_row_and_column_width_metadata() {
+    let runtime = runtime();
+    let schema = runtime.schema();
+    let state = state_at(schema, labeled_table_doc(schema, 3, 3), 2, 1);
+    let (state, _) = run(&state, set_column_width_at(0, 80));
+    let (state, _) = run(&state, set_column_width_at(1, 96));
+    let (state, _) = run(&state, set_column_width_at(2, 120));
+    let state = state_at(schema, state.doc().clone(), 2, 1);
+    let original = state.doc().clone();
+
+    for command in [move_column(0, 0), move_column(0, 3), move_column(3, 0)] {
+        assert!(command.apply(&state).is_none());
+    }
+
+    let (moved, transaction) = run(&state, move_column(0, 2));
+    assert_eq!(transaction.transform().steps().len(), 1);
+    let (_, table) = first_table(moved.doc());
+    for (row_index, row) in table.content().iter().enumerate() {
+        assert_eq!(
+            row.child(0).unwrap().text_content(),
+            format!("{row_index},1")
+        );
+        assert_eq!(
+            row.child(1).unwrap().text_content(),
+            format!("{row_index},2")
+        );
+        assert_eq!(
+            row.child(2).unwrap().text_content(),
+            format!("{row_index},0")
+        );
+    }
+    let widths = table
+        .attrs()
+        .get("column_widths")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<Option<u32>>>(value).ok())
+        .expect("column widths");
+    assert_eq!(widths, vec![Some(96), Some(120), Some(80)]);
+    let moved_map = map(moved.doc());
+    assert_eq!(
+        moved.selection(),
+        &Selection::text(moved_map.cell(2, 2).unwrap().pos + 1)
+    );
+
+    let (restored, _) = run(&moved, move_column(2, 0));
+    assert_eq!(restored.doc(), &original);
+}
+
+#[test]
+fn row_and_column_moves_are_undoable_and_redoable() {
+    let runtime = runtime();
+    let schema = runtime.schema();
+
+    for command in [move_row(1, 3), move_column(0, 2)] {
+        let doc = labeled_table_doc(schema, 4, 3);
+        let original = doc.clone();
+        let table_map = map(&doc);
+        let state = EditorState::create(
+            EditorStateConfig::new(schema.clone(), doc)
+                .selection(Selection::text(table_map.cell(2, 1).unwrap().pos + 1))
+                .plugins(vec![history_plugin()]),
+        )
+        .expect("history state");
+        let (moved, _) = run(&state, command);
+        assert_ne!(moved.doc(), &original);
+        let moved_doc = moved.doc().clone();
+
+        let undo_transaction = undo().apply(&moved).expect("move is undoable");
+        let restored = moved.apply(undo_transaction).expect("apply move undo");
+        assert_eq!(restored.doc(), &original);
+
+        let redo_transaction = redo().apply(&restored).expect("move is redoable");
+        let redone = restored.apply(redo_transaction).expect("apply move redo");
+        assert_eq!(redone.doc(), &moved_doc);
+    }
+}
+
+#[test]
 fn dimensions_clamp_alignment_targets_and_markdown_drops_pixel_metadata() {
     let runtime = runtime();
     let schema = runtime.schema();
@@ -421,8 +561,10 @@ fn insert_table_and_runtime_contributions_are_available_without_a_view() {
         "insert_table",
         "insert_row_above",
         "insert_row_below",
+        "move_row",
         "insert_column_left",
         "insert_column_right",
+        "move_column",
         "delete_table",
         "set_cell_alignment",
         "set_column_width",
@@ -430,6 +572,14 @@ fn insert_table_and_runtime_contributions_are_available_without_a_view() {
     ] {
         assert!(runtime.named_command(name).is_some(), "missing `{name}`");
     }
+    assert!(
+        runtime.named_command("move_row").unwrap()(json!({ "source": 1, "target": 2 })).is_some()
+    );
+    assert!(
+        runtime.named_command("move_column").unwrap()(json!({ "source": 0, "target": 2 }))
+            .is_some()
+    );
+    assert!(runtime.named_command("move_row").unwrap()(json!({ "source": 1 })).is_none());
     let keys = runtime
         .merged_keymap_factories()
         .iter()
@@ -638,6 +788,77 @@ fn cell_selection_rejects_non_cells_ragged_tables_and_cross_table_endpoints() {
         Selection::cells(first_cell_pos, first_cell_pos)
             .validate(&ragged_doc, schema)
             .is_err()
+    );
+}
+
+#[test]
+fn text_deletion_at_inner_cell_edges_never_removes_table_structure() {
+    let runtime = runtime();
+    let schema = runtime.schema();
+    let table = labeled_table_doc(schema, 2, 3)
+        .child(0)
+        .expect("labeled table")
+        .clone();
+    let prefix = schema
+        .node(
+            "paragraph",
+            Attrs::new(),
+            Fragment::from(schema.text("prefix", Vec::new()).unwrap()),
+        )
+        .unwrap();
+    let suffix = schema
+        .node(
+            "paragraph",
+            Attrs::new(),
+            Fragment::from(schema.text("suffix", Vec::new()).unwrap()),
+        )
+        .unwrap();
+    let document = schema
+        .node(
+            "doc",
+            Attrs::new(),
+            Fragment::from(vec![prefix, table, suffix]),
+        )
+        .unwrap();
+    let table_map = map(&document);
+    let first = table_map.cell(0, 0).expect("first cell");
+    let inner = table_map.cell(1, 0).expect("inner body cell");
+    let last = table_map.cell(1, 2).expect("last cell");
+    let cell_start = |cell: pine_richtext_extensions::tables::CellRect| cell.pos + 1;
+    let cell_end = |cell: pine_richtext_extensions::tables::CellRect| {
+        cell.pos
+            + 1
+            + document
+                .node_at(cell.pos)
+                .unwrap()
+                .expect("cell node")
+                .content_size()
+    };
+
+    // Ending at a complete inner cell edge is not permission to remove that
+    // cell. The model schema allows `cell+`, so accepting this as a structural
+    // replace would create a ragged table that only TableMap notices.
+    let mut outside_to_inner =
+        pine_richtext::transform::Transform::new(schema.clone(), document.clone());
+    assert!(outside_to_inner.delete_range(1, cell_end(inner)).is_err());
+    assert_eq!(outside_to_inner.doc(), &document);
+
+    // A linear TextSelection across cells is likewise not a structural table
+    // deletion. Rectangular clearing belongs to Selection::Cells.
+    let mut across_cells =
+        pine_richtext::transform::Transform::new(schema.clone(), document.clone());
+    assert!(
+        across_cells
+            .delete_range(cell_start(first), cell_end(last))
+            .is_err()
+    );
+    assert_eq!(across_cells.doc(), &document);
+    assert_eq!(
+        (
+            map(across_cells.doc()).height(),
+            map(across_cells.doc()).width()
+        ),
+        (2, 3)
     );
 }
 

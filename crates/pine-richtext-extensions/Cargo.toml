@@ -19,9 +19,10 @@ view = [
     "dep:web-sys",
 ]
 bubble-menu = ["view"]
-table-view = ["tables", "view"]
+table-view = ["tables", "view", "dep:pine-icons"]
 
 [dependencies]
+pine-icons = { path = "../pine-icons", optional = true }
 pine-richtext = { workspace = true }
 pocopine = { path = "../pocopine", optional = true }
 pocopine-core = { workspace = true, optional = true }

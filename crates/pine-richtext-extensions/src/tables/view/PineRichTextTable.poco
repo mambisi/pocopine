@@ -4,74 +4,108 @@
       data-selection="none"
       :data-editable="editable"
       :data-focused="focused"
-      :data-error="error_code">
-  <div class="pine-richtext-table-toolbar"
-       role="toolbar"
-       aria-label="Table selection controls"
-       contenteditable="false">
-    <button class="pine-richtext-table-select-table"
-            pp-ref="table_selector"
-            type="button"
-            aria-label="Select entire table"
-            aria-pressed="false"
-            @mousedown.prevent
-            @click="select_table">
-      Table
-    </button>
-    <div class="pine-richtext-table-column-selectors"
-         pp-ref="column_selectors"
-         role="group"
-         aria-label="Select table columns">
-      <template pp-for="selector in columns" pp-key="selector.key">
-        <button class="pine-richtext-table-column-selector"
-                type="button"
-                :data-column="selector.index"
-                :aria-label="selector.label"
-                aria-pressed="false"
-                @mousedown.prevent
-                @click="select_column(selector.index)">
-          <span pp-text="selector.short_label"></span>
-        </button>
-      </template>
-    </div>
-  </div>
-
-  <div class="pine-richtext-table-layout">
-    <div class="pine-richtext-table-row-selectors"
-         pp-ref="row_selectors"
-         role="group"
-         aria-label="Select table rows"
-         contenteditable="false">
-      <template pp-for="selector in rows" pp-key="selector.key">
-        <button class="pine-richtext-table-row-selector"
-                type="button"
-                :data-row="selector.index"
-                :aria-label="selector.label"
-                aria-pressed="false"
-                @mousedown.prevent
-                @click="select_row(selector.index)">
-          <span pp-text="selector.short_label"></span>
-        </button>
-      </template>
-    </div>
-
-    <div class="pine-richtext-table-viewport">
+      :data-error="error_code"
+      pp-resize.border-box="on_table_resize"
+      @pointerdown.outside="dismiss_selection"
+      @pointermove="on_pointer_move"
+      @pointerup="on_pointer_up"
+      @pointercancel="on_pointer_cancel">
+  <div class="pine-richtext-table-viewport"
+       @scroll="on_viewport_scroll">
+    <div class="pine-richtext-table-surface">
       <table class="pine-richtext-table"
              pp-ref="table"
              role="grid"
              :aria-rowcount="row_count"
              :aria-colcount="column_count"
              :aria-readonly="editable ? 'false' : 'true'"
-             @pointerdown="on_pointer_down"
-             @pointermove="on_pointer_move"
-             @pointerup="on_pointer_up"
-             @pointercancel="on_pointer_cancel">
+             @pointerdown="on_pointer_down">
         <tbody class="pine-richtext-table-body"
                pp-ref="body"
                pp-owned-content
                role="rowgroup"></tbody>
       </table>
     </div>
+  </div>
+
+  <div class="pine-richtext-table-toolbar"
+       role="toolbar"
+       aria-label="Table column selection and reorder controls"
+       contenteditable="false">
+    <div class="pine-richtext-table-column-selectors"
+         pp-ref="column_selectors"
+         role="group"
+         aria-label="Select or reorder table columns">
+      <template pp-for="selector in columns" pp-key="selector.key">
+        <button class="pine-richtext-table-column-selector"
+                type="button"
+                :data-column="selector.index"
+                :data-draggable="selector.draggable"
+                :aria-label="selector.label"
+                aria-pressed="false"
+                @pointerdown="on_column_handle_pointer_down($event, selector.index)"
+                @click="select_column($event, selector.index)">
+          <span class="pine-richtext-table-handle-glyph"
+                aria-hidden="true"
+                pp-html="handle_icon"></span>
+        </button>
+      </template>
+    </div>
+  </div>
+
+  <button class="pine-richtext-table-select-table"
+          pp-ref="table_selector"
+          type="button"
+          contenteditable="false"
+          aria-label="Select entire table"
+          aria-pressed="false"
+          @click="select_table">
+    <span class="pine-richtext-table-handle-glyph"
+          aria-hidden="true"
+          pp-html="handle_icon"></span>
+  </button>
+
+  <div class="pine-richtext-table-row-selectors"
+       pp-ref="row_selectors"
+       role="group"
+       aria-label="Select or reorder table rows"
+       contenteditable="false">
+    <template pp-for="selector in rows" pp-key="selector.key">
+      <button class="pine-richtext-table-row-selector"
+              type="button"
+              :data-row="selector.index"
+              :data-draggable="selector.draggable"
+              :aria-label="selector.label"
+              aria-pressed="false"
+              @pointerdown="on_row_handle_pointer_down($event, selector.index)"
+              @click="select_row($event, selector.index)">
+        <span class="pine-richtext-table-handle-glyph"
+              aria-hidden="true"
+              pp-html="handle_icon"></span>
+      </button>
+    </template>
+  </div>
+
+  <div class="pine-richtext-table-reorder-actions"
+       pp-ref="reorder_actions"
+       role="group"
+       aria-label="Reorder selected table item"
+       contenteditable="false"
+       hidden>
+    <button class="pine-richtext-table-reorder-action"
+            pp-ref="reorder_backward"
+            type="button"
+            aria-label="Move selected item backward"
+            @click="move_selection_backward">
+      <span aria-hidden="true">←</span>
+    </button>
+    <button class="pine-richtext-table-reorder-action"
+            pp-ref="reorder_forward"
+            type="button"
+            aria-label="Move selected item forward"
+            @click="move_selection_forward">
+      <span aria-hidden="true">→</span>
+    </button>
   </div>
 
   <p class="pine-richtext-table-error"

@@ -715,7 +715,7 @@ where
                     }
                     let transaction_started_at = perf_now_ms();
                     let mut tr = state.tr();
-                    if tr.delete(from, to).is_err() {
+                    if tr.delete_range(from, to).is_err() {
                         log_input_perf(debug_perf, "input.beforeinput", || {
                             json!({
                                 "runtime": runtime_for_log.clone(),

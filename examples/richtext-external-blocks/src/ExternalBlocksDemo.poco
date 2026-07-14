@@ -1,46 +1,115 @@
-<root class="external-blocks-demo" pp-ref="root" role="main">
-  <div class="demo-shell">
-    <header class="demo-header">
-      <div>
-        <p class="demo-kicker">Pine rich text</p>
-        <h1>External blocks</h1>
-      </div>
-      <span class="demo-status" data-test="status" pp-text="status"></span>
-    </header>
+<root class="external-blocks-demo"
+      pp-ref="root"
+      :data-error="error != ''"
+      @keydown.escape="close_more_tools_on_escape">
+  <header class="demo-topbar" contenteditable="false">
+    <div class="demo-breadcrumb" aria-label="Demo location">
+      <span class="demo-brand-mark" aria-hidden="true">P</span>
+      <span class="demo-brand">Pine</span>
+      <span class="demo-breadcrumb-separator" aria-hidden="true">/</span>
+      <span>Rich text</span>
+    </div>
+    <div class="demo-save-state">
+      <span class="demo-save-dot" aria-hidden="true"></span>
+      <span class="demo-status" data-test="status" pp-show="error == ''" pp-text="status"></span>
+      <span class="demo-status demo-status--error" pp-show="error != ''" role="alert" pp-text="error"></span>
+    </div>
+  </header>
 
-    <section class="demo-command-bar" aria-label="Editor commands" contenteditable="false">
-      <div class="demo-command-group" aria-label="Text marks">
-        <button type="button" @mousedown.prevent @click="toggle_bold" data-test="bold"><strong>B</strong></button>
-        <button type="button" @mousedown.prevent @click="toggle_italic"><em>I</em></button>
-      </div>
-      <span class="demo-command-separator"></span>
-      <div class="demo-command-group" aria-label="Tags">
-        <button type="button" @mousedown.prevent @click="insert_info_tag" data-test="insert-tag">+ Tag</button>
-        <button type="button" @mousedown.prevent @click="insert_success_tag">+ Verified</button>
-        <button type="button" @mousedown.prevent @click="select_tag">Select tag</button>
-        <button type="button" @mousedown.prevent @click="delete_tag">Delete tag</button>
-      </div>
-      <span class="demo-command-separator"></span>
-      <div class="demo-command-group" aria-label="Table">
-        <button type="button" @mousedown.prevent @click="insert_table">+ Table</button>
-        <button type="button" @mousedown.prevent @click="widen_column" data-test="table-width">Width 260</button>
-        <button type="button" @mousedown.prevent @click="heighten_row" data-test="table-height">Height 58</button>
-      </div>
-      <span class="demo-command-separator"></span>
-      <div class="demo-command-group demo-command-group--history" aria-label="History">
-        <button type="button" @mousedown.prevent @click="undo" data-test="undo">Undo</button>
-        <button type="button" @mousedown.prevent @click="redo" data-test="redo">Redo</button>
-      </div>
-      <span class="demo-command-separator"></span>
-      <div class="demo-command-group" aria-label="Demo document">
-        <button type="button" @click="unmount_tasks" data-test="unmount-tasks">Remove tasks</button>
-        <button type="button" @click="restore_demo" data-test="restore-demo">Restore</button>
-        <button type="button" @click="demo_stale_search" data-test="stale-search">Test search</button>
-      </div>
-    </section>
+  <main class="demo-canvas">
+    <article class="demo-document" aria-label="Interactive rich-text document">
+      <header class="demo-document-header">
+        <p class="demo-kicker">Interactive example · RFC 113</p>
+        <h1>External blocks, native editing</h1>
+        <p class="demo-summary">
+          Components can own their interface while Pine keeps the document semantic,
+          portable, and editable.
+        </p>
+      </header>
 
-    <div class="demo-workspace">
-      <section class="demo-document" aria-label="Interactive editor">
+      <section class="demo-command-bar" aria-label="Editor commands" contenteditable="false">
+        <div class="demo-command-group" aria-label="Text formatting">
+          <button
+            class="demo-icon-button"
+            type="button"
+            title="Bold"
+            aria-label="Bold"
+            @mousedown.prevent
+            @click="toggle_bold"
+            data-test="bold"
+          ><strong>B</strong></button>
+          <button
+            class="demo-icon-button"
+            type="button"
+            title="Italic"
+            aria-label="Italic"
+            @mousedown.prevent
+            @click="toggle_italic"
+          ><em>I</em></button>
+        </div>
+        <span class="demo-command-separator" aria-hidden="true"></span>
+        <div class="demo-command-group" aria-label="Insert content">
+          <button type="button" @mousedown.prevent @click="insert_info_tag" data-test="insert-tag">Tag</button>
+          <button type="button" @mousedown.prevent @click="insert_table">Table</button>
+        </div>
+        <span class="demo-command-spacer"></span>
+        <div class="demo-command-group" aria-label="History">
+          <button
+            class="demo-icon-button"
+            type="button"
+            title="Undo"
+            aria-label="Undo"
+            @mousedown.prevent
+            @click="undo"
+            data-test="undo"
+          >↶</button>
+          <button
+            class="demo-icon-button"
+            type="button"
+            title="Redo"
+            aria-label="Redo"
+            @mousedown.prevent
+            @click="redo"
+            data-test="redo"
+          >↷</button>
+        </div>
+
+        <details
+          class="demo-more-tools"
+          pp-ref="more_tools"
+          @click.outside="close_more_tools"
+        >
+          <summary
+            class="demo-icon-button"
+            pp-ref="more_tools_trigger"
+            title="More demo tools"
+            aria-label="More demo tools"
+            data-test="more-tools"
+            @mousedown.prevent
+          ><span aria-hidden="true">•••</span></summary>
+          <div class="demo-more-menu" @click="close_more_tools">
+            <div class="demo-more-section">
+              <p>Tags</p>
+              <button type="button" @mousedown.prevent @click="insert_success_tag">Insert verified tag</button>
+              <button type="button" @mousedown.prevent @click="select_tag">Select adjacent tag</button>
+              <button type="button" @mousedown.prevent @click="delete_tag">Delete selected tag</button>
+            </div>
+            <div class="demo-more-section">
+              <p>Table</p>
+              <button type="button" @mousedown.prevent @click="widen_column" data-test="table-width">Set first column to 260 px</button>
+              <button type="button" @mousedown.prevent @click="heighten_row" data-test="table-height">Set first row to 58 px</button>
+            </div>
+            <div class="demo-more-section">
+              <p>Reference state</p>
+              <button type="button" @click="unmount_tasks" data-test="unmount-tasks">Remove task blocks</button>
+              <button type="button" @click="restore_demo" data-test="restore-demo">Restore document</button>
+              <button type="button" @mousedown.prevent @click="demo_stale_search" data-test="stale-search">Run stale-search proof</button>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section class="demo-editor" aria-label="Document content">
         <div id="external-blocks-editor" data-test="editor">
           <pine-rich-text-root
             runtime="external-blocks"
@@ -88,45 +157,51 @@
         </div>
       </section>
 
-      <aside class="demo-code" aria-label="Document output">
-        <div class="demo-code-header" contenteditable="false">
-          <div class="demo-code-tabs" role="tablist" aria-label="Output format">
-            <button
-              type="button"
-              role="tab"
-              :class="code_tab == 'markdown' ? 'is-active' : ''"
-              @click="show_markdown"
-            >Markdown</button>
-            <button
-              type="button"
-              role="tab"
-              :class="code_tab == 'json' ? 'is-active' : ''"
-              @click="show_json"
-            >JSON</button>
+      <details class="demo-inspector" contenteditable="false">
+        <summary>
+          <span>Developer output</span>
+          <small>Semantic state and node-view lifecycle</small>
+        </summary>
+        <section class="demo-code" aria-label="Document output">
+          <div class="demo-code-header">
+            <div class="demo-code-tabs" role="group" aria-label="Output format">
+              <button
+                type="button"
+                :aria-pressed="code_tab == 'markdown' ? 'true' : 'false'"
+                :class="code_tab == 'markdown' ? 'is-active' : ''"
+                @click="show_markdown"
+              >Markdown</button>
+              <button
+                type="button"
+                :aria-pressed="code_tab == 'json' ? 'true' : 'false'"
+                :class="code_tab == 'json' ? 'is-active' : ''"
+                @click="show_json"
+              >JSON</button>
+            </div>
+            <span class="demo-code-note">Live</span>
           </div>
-          <span class="demo-code-note">Live</span>
-        </div>
 
-        <pre data-test="markdown" pp-show="code_tab == 'markdown'" pp-text="markdown"></pre>
-        <pre data-test="semantic-json" pp-show="code_tab == 'json'" pp-text="semantic_json"></pre>
+          <pre id="demo-markdown-output" aria-label="Markdown output" data-test="markdown" pp-show="code_tab == 'markdown'" pp-text="markdown"></pre>
+          <pre id="demo-json-output" aria-label="JSON output" data-test="semantic-json" pp-show="code_tab == 'json'" pp-text="semantic_json"></pre>
 
-        <details class="demo-developer" contenteditable="false">
-          <summary>Developer details</summary>
-          <dl class="demo-metrics">
-            <div><dt>Task mounts</dt><dd data-test="task-mounts" pp-text="task_mounts"></dd></div>
-            <div><dt>Task syncs</dt><dd data-test="task-syncs" pp-text="task_syncs"></dd></div>
-            <div><dt>Task unmounts</dt><dd data-test="task-unmounts" pp-text="task_unmounts"></dd></div>
-            <div><dt>Active views</dt><dd data-test="task-active" pp-text="task_active"></dd></div>
-          </dl>
-          <dl class="demo-observations">
-            <div><dt>Selection</dt><dd data-test="selection-status" pp-text="selection_status"></dd></div>
-            <div><dt>Bubble menu</dt><dd><span pp-text="bubble_status"></span> · <span pp-text="bubble_anchor"></span></dd></div>
-            <div><dt>Bubble key</dt><dd pp-text="bubble_key"></dd></div>
-            <div><dt>Search</dt><dd data-test="search-status" pp-text="search_status"></dd></div>
-          </dl>
-          <p class="demo-error" pp-show="error != ''" role="alert" pp-text="error"></p>
-        </details>
-      </aside>
-    </div>
-  </div>
+          <details class="demo-developer">
+            <summary>Runtime details</summary>
+            <dl class="demo-metrics">
+              <div><dt>Task mounts</dt><dd data-test="task-mounts" pp-text="task_mounts"></dd></div>
+              <div><dt>Task syncs</dt><dd data-test="task-syncs" pp-text="task_syncs"></dd></div>
+              <div><dt>Task unmounts</dt><dd data-test="task-unmounts" pp-text="task_unmounts"></dd></div>
+              <div><dt>Active views</dt><dd data-test="task-active" pp-text="task_active"></dd></div>
+            </dl>
+            <dl class="demo-observations">
+              <div><dt>Selection</dt><dd data-test="selection-status" pp-text="selection_status"></dd></div>
+              <div><dt>Bubble menu</dt><dd><span pp-text="bubble_status"></span> · <span pp-text="bubble_anchor"></span></dd></div>
+              <div><dt>Bubble key</dt><dd pp-text="bubble_key"></dd></div>
+              <div><dt>Search</dt><dd data-test="search-status" pp-text="search_status"></dd></div>
+            </dl>
+            <p class="demo-error" pp-show="error != ''" role="alert" pp-text="error"></p>
+          </details>
+        </section>
+      </details>
+    </article>
+  </main>
 </root>

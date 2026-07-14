@@ -1,4 +1,5 @@
-//! Browser-independent state machines for table selection and resizing.
+//! Browser-independent state machines for table selection, resizing, and
+//! reordering.
 //!
 //! Pointer handlers translate DOM coordinates into these types. The state
 //! machines deliberately return semantic actions instead of dispatching while
@@ -30,6 +31,13 @@ pub enum ResizeAxis {
     Row,
 }
 
+/// Axis controlled by a row or column reorder gesture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveAxis {
+    Column,
+    Row,
+}
+
 /// One semantic resize committed after a completed pointer gesture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResizeCommit {
@@ -49,11 +57,21 @@ pub struct CellSelectionCommit {
     pub head_column: usize,
 }
 
+/// One semantic move committed after a completed handle drag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveCommit {
+    pub anchor: TableViewAnchor,
+    pub axis: MoveAxis,
+    pub source: usize,
+    pub target: usize,
+}
+
 /// Semantic action produced by the table view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TableViewAction {
     Resize(ResizeCommit),
     Select(CellSelectionCommit),
+    Move(MoveCommit),
 }
 
 /// Narrow adapter between the extension-owned controller and Pine's typed
@@ -248,6 +266,95 @@ fn clamp_size(axis: ResizeAxis, size: i64) -> u32 {
     size.clamp(minimum as i64, maximum as i64) as u32
 }
 
+/// Local preview for a row or column handle drag.
+///
+/// A small movement threshold keeps an ordinary handle click a selection
+/// action. Once crossed, pointer-up is consumed even if the pointer returns to
+/// the source, but only a changed target produces an editor transaction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoveDrag {
+    anchor: TableViewAnchor,
+    pointer_id: i32,
+    axis: MoveAxis,
+    source: usize,
+    target: usize,
+    start_coordinate: f64,
+    active: bool,
+}
+
+impl MoveDrag {
+    pub const ACTIVATION_DISTANCE_PX: f64 = 4.0;
+
+    pub fn begin(
+        anchor: TableViewAnchor,
+        pointer_id: i32,
+        axis: MoveAxis,
+        source: usize,
+        start_coordinate: f64,
+    ) -> Option<Self> {
+        if !start_coordinate.is_finite() || (axis == MoveAxis::Row && source == 0) {
+            return None;
+        }
+        Some(Self {
+            anchor,
+            pointer_id,
+            axis,
+            source,
+            target: source,
+            start_coordinate,
+            active: false,
+        })
+    }
+
+    pub fn pointer_id(self) -> i32 {
+        self.pointer_id
+    }
+
+    pub fn axis(self) -> MoveAxis {
+        self.axis
+    }
+
+    pub fn source(self) -> usize {
+        self.source
+    }
+
+    pub fn target(self) -> usize {
+        self.target
+    }
+
+    pub fn is_active(self) -> bool {
+        self.active
+    }
+
+    /// Update the preview target. Events from another pointer are ignored.
+    pub fn update(&mut self, pointer_id: i32, coordinate: f64, target: usize) -> bool {
+        if pointer_id != self.pointer_id || !coordinate.is_finite() {
+            return false;
+        }
+        if (coordinate - self.start_coordinate).abs() >= Self::ACTIVATION_DISTANCE_PX {
+            self.active = true;
+        }
+        self.target = if self.axis == MoveAxis::Row {
+            target.max(1)
+        } else {
+            target
+        };
+        true
+    }
+
+    /// Finish the gesture. A click or a return to the source is transaction-free.
+    pub fn finish(self, pointer_id: i32) -> Option<MoveCommit> {
+        (pointer_id == self.pointer_id && self.active && self.target != self.source).then_some(
+            MoveCommit {
+                anchor: self.anchor,
+                axis: self.axis,
+                source: self.source,
+                target: self.target,
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +426,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(drag.finish(7), None);
+    }
+
+    #[test]
+    fn move_drag_distinguishes_click_from_one_pointer_up_commit() {
+        let mut drag = MoveDrag::begin(ANCHOR, 11, MoveAxis::Column, 0, 20.0).unwrap();
+        assert!(drag.update(11, 22.0, 1));
+        assert!(!drag.is_active());
+        assert_eq!(drag.finish(11), None);
+
+        let mut drag = MoveDrag::begin(ANCHOR, 12, MoveAxis::Column, 0, 20.0).unwrap();
+        assert!(!drag.update(99, 80.0, 2));
+        assert!(drag.update(12, 80.0, 2));
+        assert_eq!(
+            drag.finish(12),
+            Some(MoveCommit {
+                anchor: ANCHOR,
+                axis: MoveAxis::Column,
+                source: 0,
+                target: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn header_row_is_not_a_move_source_or_target() {
+        assert!(MoveDrag::begin(ANCHOR, 13, MoveAxis::Row, 0, 20.0).is_none());
+        let mut drag = MoveDrag::begin(ANCHOR, 13, MoveAxis::Row, 2, 20.0).unwrap();
+        assert!(drag.update(13, 0.0, 0));
+        assert_eq!(drag.target(), 1);
+        assert_eq!(
+            drag.finish(13),
+            Some(MoveCommit {
+                anchor: ANCHOR,
+                axis: MoveAxis::Row,
+                source: 2,
+                target: 1,
+            })
+        );
     }
 }

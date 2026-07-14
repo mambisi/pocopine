@@ -24,6 +24,83 @@ async function selectText(page, needle) {
   }, needle);
 }
 
+async function openMoreTools(page) {
+  const tools = page.locator('.demo-more-tools');
+  if (await tools.getAttribute('open') === null) {
+    await tools.locator(':scope > summary').click();
+  }
+  await expect(tools).toHaveAttribute('open', '');
+  return tools;
+}
+
+async function visibleTableRows(tableView) {
+  return tableView.locator('.pine-richtext-table-row').evaluateAll((rows) =>
+    rows.map((row) =>
+      [...row.querySelectorAll(':scope > [data-pine-table-cell="true"]')].map((cell) =>
+        cell.textContent.trim(),
+      ),
+    ),
+  );
+}
+
+async function semanticTable(page) {
+  const document = JSON.parse(
+    await page.locator('[data-test="semantic-json"]').textContent(),
+  );
+  const pending = [document];
+  while (pending.length > 0) {
+    const node = pending.shift();
+    if (node?.type === 'table') {
+      return node;
+    }
+    if (Array.isArray(node?.content)) {
+      pending.push(...node.content);
+    }
+  }
+  throw new Error('semantic output has no table node');
+}
+
+async function dragTableHandle(page, source, target) {
+  await source.hover();
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error('table drag handle has no layout box');
+  }
+  await page.mouse.move(
+    sourceBox.x + sourceBox.width / 2,
+    sourceBox.y + sourceBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + targetBox.height / 2,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+}
+
+async function columnHandleCenterDelta(tableView, index) {
+  const handle = tableView.locator(
+    `.pine-richtext-table-column-selector[data-column="${index}"]`,
+  );
+  const header = tableView
+    .locator('.pine-richtext-table-row')
+    .first()
+    .locator(':scope > [data-pine-table-cell="true"]')
+    .nth(index);
+  const [handleBox, headerBox] = await Promise.all([
+    handle.boundingBox(),
+    header.boundingBox(),
+  ]);
+  if (!handleBox || !headerBox) {
+    throw new Error('table header or handle has no layout box');
+  }
+  return Math.abs(
+    handleBox.x + handleBox.width / 2 - (headerBox.x + headerBox.width / 2),
+  );
+}
+
 async function placeCaretInText(page, needle, offset) {
   await page.evaluate(({ text, caretOffset }) => {
     const editor = document.querySelector('#external-blocks-editor .pine-rich-text');
@@ -158,6 +235,277 @@ async function expectStableEditorDom(page) {
   });
 }
 
+test('contextual table handles reorder body rows and columns', async ({ page }) => {
+  await page.goto('/');
+  const editorSurface = page.locator('#external-blocks-editor .pine-rich-text');
+  await expect(editorSurface).toHaveAttribute('data-pine-richtext-ready', 'true');
+
+  const tableView = page.locator('.pine-richtext-table-view');
+  const reorderActions = tableView.locator('.pine-richtext-table-reorder-actions');
+  const bodyRowHandle = tableView.locator(
+    '.pine-richtext-table-row-selector[data-row="1"]',
+  );
+  await expect(tableView).toHaveAttribute('data-selection', 'none');
+  await expect(bodyRowHandle).toHaveCSS('opacity', '0');
+
+  await tableView.hover();
+  await expect
+    .poll(() =>
+      bodyRowHandle.evaluate((node) => {
+        const style = getComputedStyle(node);
+        const opacity = Number(style.opacity);
+        const idleOpacity = Number(
+          style.getPropertyValue('--pine-richtext-table-handle-idle-opacity'),
+        );
+        return Math.abs(opacity - idleOpacity);
+      }),
+    )
+    .toBeLessThan(0.01);
+  const idleOpacity = Number(
+    await bodyRowHandle.evaluate((node) => getComputedStyle(node).opacity),
+  );
+  expect(idleOpacity).toBeGreaterThan(0);
+  expect(idleOpacity).toBeLessThan(0.6);
+  await expect(bodyRowHandle).toHaveCSS('pointer-events', 'auto');
+  await expect(
+    bodyRowHandle.locator('.pine-richtext-table-handle-glyph > svg'),
+  ).toHaveCount(1);
+  await expect(
+    bodyRowHandle.locator('.pine-richtext-table-handle-glyph > svg > path'),
+  ).toHaveCount(6);
+  await expect(bodyRowHandle).toHaveCSS('box-shadow', 'none');
+  await expect(
+    tableView.locator('.pine-richtext-table-row-selector[data-row="0"]'),
+  ).not.toHaveAttribute('data-draggable', 'true');
+  await expect(bodyRowHandle).toHaveAttribute('data-draggable', 'true');
+
+  const idleHandleBox = await bodyRowHandle.boundingBox();
+  if (!idleHandleBox) {
+    throw new Error('idle table row handle has no layout box');
+  }
+  const selectedCells = tableView.locator(
+    '[data-pine-table-cell="true"][data-selected="true"]',
+  );
+  await bodyRowHandle.click();
+  await expect(tableView).toHaveAttribute('data-selection', 'row');
+  await expect(bodyRowHandle).toHaveAttribute('aria-pressed', 'true');
+  await expect(bodyRowHandle).toHaveCSS('opacity', '1');
+  await expect.poll(
+    () => bodyRowHandle.evaluate((node) => getComputedStyle(node).boxShadow),
+  ).not.toBe('none');
+  await expect(selectedCells).toHaveCount(3);
+  await expect(
+    tableView.locator('.pine-richtext-table-row-selector[data-row="2"]'),
+  ).toHaveCSS('box-shadow', 'none');
+  const raisedHandleBox = await bodyRowHandle.boundingBox();
+  if (!raisedHandleBox) {
+    throw new Error('selected table row handle has no layout box');
+  }
+  for (const coordinate of ['x', 'y', 'width', 'height']) {
+    expect(Math.abs(raisedHandleBox[coordinate] - idleHandleBox[coordinate])).toBeLessThan(0.1);
+  }
+
+  // The Cells commit clears the old DOM range. Let selection observers run
+  // before proving that a later, real browser caret dismisses the table chrome.
+  await page.evaluate(
+    () => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  await expect(tableView).toHaveAttribute('data-selection', 'row');
+  await editorSurface.locator(':scope > p').first().click();
+  await expect(tableView).toHaveAttribute('data-selection', 'none');
+  await expect(bodyRowHandle).toHaveAttribute('aria-pressed', 'false');
+  await expect(bodyRowHandle).toHaveCSS('box-shadow', 'none');
+  await expect(selectedCells).toHaveCount(0);
+  await expect(reorderActions).toBeHidden();
+  await expect(page.locator('[data-test="selection-status"]')).toHaveText(/^caret at /);
+
+  // A page-level click has no replacement editor caret. The table still
+  // dismisses its painted selection and controls when editor focus leaves.
+  await tableView.hover();
+  await bodyRowHandle.click();
+  await expect(tableView).toHaveAttribute('data-selection', 'row');
+  await page.locator('.demo-document-header h1').click();
+  await expect(tableView).toHaveAttribute('data-selection', 'none');
+  await expect(bodyRowHandle).toHaveAttribute('aria-pressed', 'false');
+  await expect(selectedCells).toHaveCount(0);
+  await expect(reorderActions).toBeHidden();
+
+  // Page-level dismissal is paint-only so pointer-preserving editor toolbar
+  // commands can still act on the semantic cell rectangle.
+  const dismissedRow = tableView.locator('.pine-richtext-table-row').nth(1);
+  await page.locator('[data-test="bold"]').click();
+  await expect(dismissedRow.locator('strong')).toHaveCount(3);
+  await expect(tableView).toHaveAttribute('data-selection', 'none');
+  await page.locator('[data-test="bold"]').click();
+  await expect(dismissedRow.locator('strong')).toHaveCount(0);
+
+  await tableView.hover();
+  await bodyRowHandle.click();
+  await expect(tableView).toHaveAttribute('data-selection', 'row');
+
+  await expect.poll(() => columnHandleCenterDelta(tableView, 0)).toBeLessThan(1.5);
+  await page.setViewportSize({ width: 720, height: 900 });
+  await tableView.scrollIntoViewIfNeeded();
+  await tableView.hover();
+  await expect.poll(() => columnHandleCenterDelta(tableView, 0)).toBeLessThan(1.5);
+
+  const beforeRowMove = await visibleTableRows(tableView);
+  expect(beforeRowMove).toHaveLength(3);
+  await dragTableHandle(
+    page,
+    bodyRowHandle,
+    tableView.locator('.pine-richtext-table-row-selector[data-row="2"]'),
+  );
+  const afterRowMove = [beforeRowMove[0], beforeRowMove[2], beforeRowMove[1]];
+  await expect.poll(() => visibleTableRows(tableView)).toEqual(afterRowMove);
+  await expect(
+    tableView.locator('.pine-richtext-table-row').first().locator(
+      ':scope > .pine-richtext-table-header-cell',
+    ),
+  ).toHaveCount(beforeRowMove[0].length);
+
+  const beforeColumnMove = await visibleTableRows(tableView);
+  await dragTableHandle(
+    page,
+    tableView.locator('.pine-richtext-table-column-selector[data-column="0"]'),
+    tableView.locator('.pine-richtext-table-column-selector[data-column="2"]'),
+  );
+  const afterColumnMove = beforeColumnMove.map((row) => [row[1], row[2], row[0]]);
+  await expect.poll(() => visibleTableRows(tableView)).toEqual(afterColumnMove);
+
+  const selectedColumn = tableView.locator(
+    '.pine-richtext-table-column-selector[data-column="1"]',
+  );
+  await selectedColumn.click();
+  await expect(reorderActions).toBeVisible();
+  await reorderActions
+    .getByRole('button', { name: 'Move selected column to its previous position' })
+    .click();
+  const afterClickMove = afterColumnMove.map((row) => [row[1], row[0], row[2]]);
+  await expect.poll(() => visibleTableRows(tableView)).toEqual(afterClickMove);
+  await expect(reorderActions).toBeVisible();
+  const moveColumnForward = reorderActions.getByRole('button', {
+    name: 'Move selected column to its next position',
+  });
+  await moveColumnForward.focus();
+  await moveColumnForward.press('Enter');
+  await expect.poll(() => visibleTableRows(tableView)).toEqual(afterColumnMove);
+  await expect(reorderActions).toBeVisible();
+  await expect(moveColumnForward).toBeFocused();
+
+  await tableView.locator('.pine-richtext-table-row-selector[data-row="1"]').click();
+  const moveRowDown = reorderActions.getByRole('button', {
+    name: 'Move selected row down',
+  });
+  await moveRowDown.focus();
+  await moveRowDown.press('Enter');
+  const afterKeyboardMove = [afterColumnMove[0], afterColumnMove[2], afterColumnMove[1]];
+  await expect.poll(() => visibleTableRows(tableView)).toEqual(afterKeyboardMove);
+  await expect(reorderActions).toBeVisible();
+  await expect(
+    reorderActions.getByRole('button', { name: 'Move selected row up' }),
+  ).toBeFocused();
+});
+
+test('Backspace expands a backward cross-block selection through the whole table', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const editorSurface = page.locator('#external-blocks-editor .pine-rich-text');
+  await expect(editorSurface).toHaveAttribute('data-pine-richtext-ready', 'true');
+
+  const domSelection = await page.evaluate(() => {
+    const surface = document.querySelector('#external-blocks-editor .pine-rich-text');
+    const findText = (root, needle) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        if (node.textContent.includes(needle)) return node;
+        node = walker.nextNode();
+      }
+      throw new Error(`missing text: ${needle}`);
+    };
+
+    const focusNode = findText(surface.children[0], 'are real inline atoms');
+    const cells = [...surface.querySelectorAll(
+      '[data-pine-node-type="table"] [data-pine-table-cell="true"]',
+    )];
+    const anchorNode = findText(cells.at(-1), 'Editable');
+    const focusOffset = focusNode.textContent.indexOf('around them.');
+    const anchorOffset = anchorNode.textContent.indexOf('Editable') + 'Editable'.length;
+
+    surface.focus();
+    const selection = window.getSelection();
+    selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+    document.dispatchEvent(new Event('selectionchange'));
+    return {
+      anchorAtEnd: selection.anchorOffset === selection.anchorNode.textContent.length,
+      focusBeforePhrase: selection.focusNode.textContent
+        .slice(selection.focusOffset)
+        .startsWith('around them.'),
+      collapsed: selection.isCollapsed,
+    };
+  });
+
+  expect(domSelection).toEqual({
+    anchorAtEnd: true,
+    focusBeforePhrase: true,
+    collapsed: false,
+  });
+  await expect.poll(async () => {
+    const model = (await editorSelection(page)).model;
+    return model.type === 'text' && model.anchor > model.head;
+  }).toBe(true);
+  const beforeDelete = await editorSelection(page);
+  expect(beforeDelete.model.anchor).toBeGreaterThan(beforeDelete.model.head);
+  const collapsePos = beforeDelete.model.head;
+
+  await page.keyboard.press('Backspace');
+
+  await expect(page.locator('.pine-rich-text > [data-pine-node-type="table"]')).toHaveCount(0);
+  await expect(editorSurface.locator('ul.task-list')).toHaveCount(0);
+  await expect(editorSurface).not.toContainText('Select this sentence to open the BubbleMenu');
+  await expect(editorSurface).not.toContainText('Table playground');
+  await expect(editorSurface).not.toContainText('around them.');
+  await expect(editorSurface).toContainText(
+    'Typed external blocks keep semantic data in the document and UI state in components.',
+  );
+  await expect(editorSurface).toContainText(
+    'Every edit updates the portable output in the developer inspector.',
+  );
+
+  const semantic = JSON.parse(
+    await page.locator('[data-test="semantic-json"]').textContent(),
+  );
+  expect(semantic.content.map((node) => node.type)).toEqual([
+    'paragraph',
+    'paragraph',
+  ]);
+  expect(semantic.content[0].content.at(-1)).toEqual({
+    type: 'text',
+    text: ' are real inline atoms — use ArrowLeft/ArrowRight and Delete ',
+  });
+  expect(semantic.content[1].content[0].text).toBe(
+    'Every edit updates the portable output in the developer inspector. ',
+  );
+  expect(await editorSelection(page)).toEqual({
+    model: {
+      type: 'text',
+      anchor: collapsePos,
+      head: collapsePos,
+    },
+    domCollapsed: true,
+  });
+
+  await page.locator('[data-test="undo"]').click();
+  await expect(editorSurface.locator('ul.task-list')).toHaveCount(1);
+  await expect(editorSurface.locator('li[data-pine-node-type="task_item"]')).toHaveCount(2);
+  await expect(page.locator('.pine-rich-text > [data-pine-node-type="table"]')).toHaveCount(1);
+  await expect(editorSurface).toContainText('around them.');
+  await expect(editorSurface).toContainText('Table playground');
+});
+
 test('typed external-block showcase exercises lifecycle, search, tables, tags, and outputs', async ({
   page,
 }) => {
@@ -184,7 +532,9 @@ test('typed external-block showcase exercises lifecycle, search, tables, tags, a
   );
   const taskViews = page.locator('ul.task-list > li[data-pine-node-type="task_item"]');
   const tableHosts = page.locator('.pine-rich-text > [data-pine-node-type="table"]');
-  const tagViews = page.locator('.pine-rich-text p > [data-pine-node-type="tag"]');
+  const tagViews = page.locator(
+    '.pine-rich-text [data-pine-node-type="tag"]:not(.pine-richtext-tag)',
+  );
   await expect(taskViews).toHaveCount(2);
   await expect(taskViews.first()).toHaveJSProperty(
     'tagName',
@@ -463,13 +813,21 @@ test('typed external-block showcase exercises lifecycle, search, tables, tags, a
   await expect(page.locator('.pine-richtext-tag[data-selection="node"]')).toHaveCount(0);
   await page.locator('[data-test="undo"]').click();
   await expect(architectureTag).toHaveCount(1);
+  await expect(page.locator('[data-test="semantic-json"]')).toContainText('"id": "architecture"');
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
 
   const tableView = page.locator('.pine-richtext-table-view');
   const selectedCells = tableView.locator('[data-pine-table-cell="true"][data-selected="true"]');
 
   const semanticJson = page.locator('[data-test="semantic-json"]');
   const firstCell = tableView.locator('[data-pine-table-cell="true"]').first();
-  await firstCell.scrollIntoViewIfNeeded();
+  // Let Playwright finish any viewport movement before sampling geometry.
+  // A raw scrollIntoViewIfNeeded followed by boundingBox can observe an
+  // intermediate frame while the document is still settling around the
+  // sticky command bar.
+  await firstCell.hover();
   const initialCellBox = await firstCell.boundingBox();
   if (!initialCellBox) {
     throw new Error('first table cell has no layout box');
@@ -481,12 +839,17 @@ test('typed external-block showcase exercises lifecycle, search, tables, tags, a
     initialCellBox.y + initialCellBox.height / 2,
   );
   await page.mouse.down();
+  await expect(tableView).toHaveAttribute('data-state', 'resizing');
   await page.mouse.move(
     initialCellBox.x + initialCellBox.width + 24,
     initialCellBox.y + initialCellBox.height / 2,
   );
   await page.mouse.up();
-  await expect.poll(() => semanticJson.textContent()).not.toBe(beforeColumnResize);
+  const expectedColumnWidth = Math.round(initialCellBox.width + 26);
+  await expect
+    .poll(async () => (await semanticTable(page)).attrs.column_widths[0])
+    .toBe(expectedColumnWidth);
+  expect(await semanticJson.textContent()).not.toBe(beforeColumnResize);
   await expect(tableView).toHaveAttribute('data-state', 'ready');
 
   const resizedCellBox = await firstCell.boundingBox();
@@ -499,14 +862,22 @@ test('typed external-block showcase exercises lifecycle, search, tables, tags, a
     resizedCellBox.y + resizedCellBox.height - 2,
   );
   await page.mouse.down();
+  await expect(tableView).toHaveAttribute('data-state', 'resizing');
   await page.mouse.move(
     resizedCellBox.x + resizedCellBox.width / 2,
     resizedCellBox.y + resizedCellBox.height + 12,
   );
   await page.mouse.up();
-  await expect.poll(() => semanticJson.textContent()).not.toBe(beforeRowResize);
+  const expectedRowHeight = Math.round(resizedCellBox.height + 14);
+  await expect
+    .poll(async () => (await semanticTable(page)).content[0].attrs.height)
+    .toBe(expectedRowHeight);
+  expect(await semanticJson.textContent()).not.toBe(beforeRowResize);
   await expect(tableView).toHaveAttribute('data-state', 'ready');
 
+  // The selectors are intentionally dormant when the table is neither
+  // hovered nor selected; mirror the user's reveal gesture before clicking.
+  await tableView.hover();
   await tableView.locator('.pine-richtext-table-column-selector[data-column="1"]').click();
   await expect(tableView).toHaveAttribute('data-selection', 'column');
   await expect(selectedCells).toHaveCount(3);
@@ -523,8 +894,15 @@ test('typed external-block showcase exercises lifecycle, search, tables, tags, a
   await expect(tableView).toHaveAttribute('data-selection', 'cells');
   await expect(selectedCells).toHaveCount(1);
 
+  const moreTools = await openMoreTools(page);
+  await page.keyboard.press('Escape');
+  await expect(moreTools).not.toHaveAttribute('open', '');
+  await expect(page.locator('[data-test="more-tools"]')).toBeFocused();
+  await openMoreTools(page);
   await page.locator('[data-test="table-width"]').click();
   await expect(page.locator('[data-test="semantic-json"]')).toContainText('260');
+  await expect(moreTools).not.toHaveAttribute('open', '');
+  await openMoreTools(page);
   await page.locator('[data-test="table-height"]').click();
   await expect(page.locator('[data-test="semantic-json"]')).toContainText('58');
 
@@ -547,28 +925,43 @@ test('typed external-block showcase exercises lifecycle, search, tables, tags, a
 
   await selectText(page, 'open the BubbleMenu');
   await expect(page.locator('[data-test="bubble-menu"]')).toHaveAttribute('data-state', 'open');
+  await openMoreTools(page);
   await page.locator('[data-test="stale-search"]').click();
   await expect(page.locator('[data-test="search-status"]')).toContainText('Rejected stale');
 
   const tagsBefore = await tagViews.count();
   await page.locator('[data-test="insert-tag"]').click();
   await expect(tagViews).toHaveCount(tagsBefore + 1);
+  await expect(
+    tableView.locator('.pine-richtext-tag[data-tag-id="typed-api"]'),
+  ).toHaveCount(0);
   await page.locator('[data-test="undo"]').click();
   await expect(tagViews).toHaveCount(tagsBefore);
   await page.locator('[data-test="redo"]').click();
   await expect(tagViews).toHaveCount(tagsBefore + 1);
 
+  await openMoreTools(page);
   await page.locator('[data-test="unmount-tasks"]').click();
   await expect(taskViews).toHaveCount(0);
   await expect
     .poll(async () => Number(await page.locator('[data-test="task-unmounts"]').textContent()))
     .toBeGreaterThanOrEqual(2);
+  await openMoreTools(page);
   await page.locator('[data-test="restore-demo"]').click();
   await expect(taskViews).toHaveCount(2);
 
+  const inspector = page.locator('.demo-inspector');
+  await inspector.locator(':scope > summary').click();
+  await expect(inspector).toHaveAttribute('open', '');
+  const markdownOutput = page.locator('[data-test="markdown"]');
+  await expect(markdownOutput).toBeVisible();
+  await expect(markdownOutput).toContainText('|');
+  await inspector.getByRole('button', { name: 'JSON' }).click();
+  await expect(page.locator('[data-test="semantic-json"]')).toBeVisible();
   await expect(page.locator('[data-test="semantic-json"]')).toContainText('"type": "table"');
   await expect(page.locator('[data-test="semantic-json"]')).toContainText('"version": 1');
-  await expect(page.locator('[data-test="markdown"]')).toContainText('|');
+  await inspector.getByRole('button', { name: 'Markdown' }).click();
+  await expect(markdownOutput).toBeVisible();
   expect(errors).toEqual([]);
   expect(panicLogs).toEqual([]);
 });

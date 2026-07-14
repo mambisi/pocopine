@@ -30,12 +30,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[cfg(feature = "table-view")]
-pub use commands::{ResizeColumn, ResizeRow, SelectCells};
+pub use commands::{MoveColumn, MoveRow, ResizeColumn, ResizeRow, SelectCells};
 pub use commands::{
     delete_column, delete_row, delete_table, go_to_next_cell, go_to_previous_cell,
     insert_column_after, insert_column_before, insert_row_after, insert_row_before, insert_table,
-    set_cell_alignment, set_cell_alignment_at, set_column_width, set_column_width_at,
-    set_row_height, set_row_height_at,
+    move_column, move_row, set_cell_alignment, set_cell_alignment_at, set_column_width,
+    set_column_width_at, set_row_height, set_row_height_at,
 };
 pub use dom::{
     TABLE_CELL_ATTR, TABLE_CELL_CLASS, TABLE_HEADER_CELL_CLASS, TABLE_ROW_ATTR, TABLE_ROW_CLASS,

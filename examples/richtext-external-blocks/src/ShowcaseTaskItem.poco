@@ -7,7 +7,6 @@
     class="showcase-task-item__check"
     type="button"
     contenteditable="false"
-    tabindex="-1"
     :aria-pressed="checked ? 'true' : 'false'"
     :aria-label="checked ? 'Mark task incomplete' : 'Mark task complete'"
     @mousedown.prevent
@@ -19,14 +18,14 @@
     class="showcase-task-item__sync"
     contenteditable="false"
     aria-hidden="true"
-  >sync <span pp-text="sync_count"></span></span><button
+    title="Node-view sync count"
+  >↻ <span pp-text="sync_count"></span></span><button
     class="showcase-task-item__delete"
     type="button"
     contenteditable="false"
-    tabindex="-1"
     aria-label="Delete this task through its typed node-view handle"
     title="Delete this task from its component handler"
     @mousedown.prevent
     @click="delete_self"
     data-test="delete-task-self"
-  >Delete</button></root>
+  ><span aria-hidden="true">×</span></button></root>

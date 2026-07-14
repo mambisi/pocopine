@@ -1246,7 +1246,11 @@ impl Transform {
         to: usize,
         slice: Slice,
     ) -> RichTextResult<&mut Self> {
-        self.replace(from, to, slice)
+        if slice.size() == 0 {
+            self.delete_range(from, to)
+        } else {
+            self.replace(from, to, slice)
+        }
     }
 
     /// Replace a range with a node, fitting it around block boundaries when needed.
@@ -1279,8 +1283,126 @@ impl Transform {
         self.replace(from, to, Slice::empty())
     }
 
-    /// Delete a range using the same fitting path as [`Transform::delete`].
-    pub fn delete_range(&mut self, from: usize, to: usize) -> RichTextResult<&mut Self> {
+    /// Delete a range, expanding over fully covered parent nodes when that
+    /// produces a structurally valid edit.
+    pub fn delete_range(&mut self, mut from: usize, mut to: usize) -> RichTextResult<&mut Self> {
+        let mut from_resolved = self.doc.resolve(from)?;
+        let mut to_resolved = self.doc.resolve(to)?;
+
+        // A DOM selection from the start of one textblock to the start of a
+        // later textblock visually covers the wrappers in between. Back out of
+        // matching start edges before looking for covered depths, unless that
+        // would cross an isolating boundary. This mirrors ProseMirror's
+        // deleteRange start-to-start normalization.
+        let from_is_textblock = self
+            .schema
+            .node_type(from_resolved.parent().type_name())?
+            .inline_content(&self.schema);
+        let to_is_textblock = self
+            .schema
+            .node_type(to_resolved.parent().type_name())?
+            .inline_content(&self.schema);
+        if from_is_textblock
+            && to_is_textblock
+            && from_resolved.start(from_resolved.depth()) != to_resolved.start(to_resolved.depth())
+            && from_resolved.parent_offset() == 0
+            && to_resolved.parent_offset() == 0
+        {
+            let shared = from_resolved.shared_depth(to);
+            let isolated = path_crosses_isolating(
+                &from_resolved,
+                shared,
+                from_resolved.depth(),
+                &self.schema,
+            )? || path_crosses_isolating(
+                &to_resolved,
+                shared,
+                to_resolved.depth(),
+                &self.schema,
+            )?;
+            if !isolated {
+                for depth in (1..=from_resolved.depth()).rev() {
+                    if from_resolved.start(depth) != Some(from) {
+                        break;
+                    }
+                    from = from_resolved.before(depth).unwrap_or(from);
+                }
+                for depth in (1..=to_resolved.depth()).rev() {
+                    if to_resolved.start(depth) != Some(to) {
+                        break;
+                    }
+                    to = to_resolved.before(depth).unwrap_or(to);
+                }
+                from_resolved = self.doc.resolve(from)?;
+                to_resolved = self.doc.resolve(to)?;
+            }
+        }
+
+        let covered = covered_depths(&from_resolved, &to_resolved, &self.schema)?;
+        for (index, depth) in covered.iter().copied().enumerate() {
+            let last = index + 1 == covered.len();
+            let node = from_resolved.node(depth).ok_or_else(|| {
+                RichTextError::Transform("missing covered delete node".to_string())
+            })?;
+            let valid_empty = self
+                .schema
+                .node_type(node.type_name())?
+                .content_expr()
+                .matches_fragment(&self.schema, &Fragment::empty());
+            if (last && depth == 0) || valid_empty {
+                let start = from_resolved.start(depth).unwrap_or(from);
+                let end = to_resolved.end(depth).unwrap_or(to);
+                return self.delete(start, end);
+            }
+            if depth > 0 {
+                let parent = from_resolved.node(depth - 1).ok_or_else(|| {
+                    RichTextError::Transform("missing covered delete parent".to_string())
+                })?;
+                let from_index = from_resolved.index(depth - 1).unwrap_or(0);
+                let to_index = to_resolved.index_after(depth - 1).unwrap_or(from_index);
+                if last
+                    || parent.can_replace(from_index, to_index, &Fragment::empty(), &self.schema)
+                {
+                    let start = from_resolved.before(depth).unwrap_or(from);
+                    let end = to_resolved.after(depth).unwrap_or(to);
+                    return self.delete(start, end);
+                }
+            }
+        }
+
+        // One-sided covered-node expansion from upstream deleteRange. This is
+        // the case where the range starts exactly at a nested node's opening
+        // edge and exits that node, while the far endpoint is not at the same
+        // closing edge.
+        let max_depth = from_resolved.depth().min(to_resolved.depth());
+        for depth in 1..=max_depth {
+            let from_node = from_resolved.node(depth).ok_or_else(|| {
+                RichTextError::Transform("missing one-sided delete node".to_string())
+            })?;
+            // Leave fully covered isolating edges to the replacement fitter.
+            // Expanding here would discard the original edge information that
+            // fitter needs to preserve the opposite inline suffix.
+            if self.schema.node_type(from_node.type_name())?.is_isolating() {
+                continue;
+            }
+            let from_start = from_resolved.start(depth).unwrap_or(from);
+            let to_end = to_resolved.end(depth).unwrap_or(to);
+            if from.saturating_sub(from_start) == from_resolved.depth() - depth
+                && to > from_resolved.end(depth).unwrap_or(to)
+                && to_end.saturating_sub(to) != to_resolved.depth() - depth
+                && from_resolved.start(depth - 1) == to_resolved.start(depth - 1)
+            {
+                let parent = from_resolved.node(depth - 1).ok_or_else(|| {
+                    RichTextError::Transform("missing one-sided delete parent".to_string())
+                })?;
+                let from_index = from_resolved.index(depth - 1).unwrap_or(0);
+                let to_index = to_resolved.index(depth - 1).unwrap_or(from_index);
+                if parent.can_replace(from_index, to_index, &Fragment::empty(), &self.schema) {
+                    return self.delete(from_resolved.before(depth).unwrap_or(from), to);
+                }
+            }
+        }
+
         self.delete(from, to)
     }
 
@@ -2040,6 +2162,52 @@ struct FitOutcome {
     applied_doc: Option<Node>,
 }
 
+/// Return the ancestor depths whose entire content is covered by a range.
+/// Isolating nodes stop the scan: their boundary may only be crossed by the
+/// replacement fitter when the edit reaches a real outer edge.
+fn covered_depths(
+    from: &ResolvedPos,
+    to: &ResolvedPos,
+    schema: &Schema,
+) -> RichTextResult<Vec<usize>> {
+    let mut result = Vec::new();
+    let min_depth = from.depth().min(to.depth());
+    for depth in (0..=min_depth).rev() {
+        let start = from.start(depth).unwrap_or(0);
+        let from_distance = from.depth() - depth;
+        let to_distance = to.depth() - depth;
+        let from_node = from.node(depth).ok_or_else(|| {
+            RichTextError::Transform("missing start node while finding covered depths".to_string())
+        })?;
+        let to_node = to.node(depth).ok_or_else(|| {
+            RichTextError::Transform("missing end node while finding covered depths".to_string())
+        })?;
+        if start < from.pos().saturating_sub(from_distance)
+            || to.end(depth).unwrap_or(to.pos()) > to.pos() + to_distance
+            || schema.node_type(from_node.type_name())?.is_isolating()
+            || schema.node_type(to_node.type_name())?.is_isolating()
+        {
+            break;
+        }
+
+        let same_start = start == to.start(depth).unwrap_or(usize::MAX);
+        let adjacent_inline_parents = depth == from.depth()
+            && depth == to.depth()
+            && depth > 0
+            && schema
+                .node_type(from.parent().type_name())?
+                .inline_content(schema)
+            && schema
+                .node_type(to.parent().type_name())?
+                .inline_content(schema)
+            && to.start(depth - 1) == start.checked_sub(1);
+        if same_start || adjacent_inline_parents {
+            result.push(depth);
+        }
+    }
+    Ok(result)
+}
+
 fn fit_replace(
     doc: &Node,
     from: usize,
@@ -2047,6 +2215,15 @@ fn fit_replace(
     slice: Slice,
     schema: &Schema,
 ) -> RichTextResult<FitOutcome> {
+    let crosses_isolating = if from < to && slice.size() == 0 {
+        let from_resolved = doc.resolve(from)?;
+        let to_resolved = doc.resolve(to)?;
+        let shared = from_resolved.shared_depth(to);
+        path_crosses_isolating(&from_resolved, shared, from_resolved.depth(), schema)?
+            || path_crosses_isolating(&to_resolved, shared, to_resolved.depth(), schema)?
+    } else {
+        false
+    };
     // The defining-context drop must run before the plain replace, otherwise
     // inserting a wrapped slice into an empty paragraph silently keeps the
     // paragraph and unwraps the slice's outer node.
@@ -2073,7 +2250,11 @@ fn fit_replace(
             applied_doc: Some(applied_doc),
         });
     }
-    if let Ok(applied) = replace(doc, from, to, slice.clone(), schema) {
+    // A low-level two-way replace can sometimes join equal-depth textblocks
+    // through an isolating wrapper. That is structurally valid but violates
+    // the editing contract of `isolating`. Let the explicit outer-edge fitter
+    // below decide whether the wrapper is wholly selected and removable.
+    if !crosses_isolating && let Ok(applied) = replace(doc, from, to, slice.clone(), schema) {
         return Ok(FitOutcome {
             from,
             to,
@@ -2115,6 +2296,16 @@ fn fit_replace(
         });
     }
     if let Some((from, to, slice, applied_doc)) =
+        fit_cross_isolating_edge_empty_slice(doc, from, to, &slice, schema)?
+    {
+        return Ok(FitOutcome {
+            from,
+            to,
+            slice,
+            applied_doc: Some(applied_doc),
+        });
+    }
+    if let Some((from, to, slice, applied_doc)) =
         fit_cross_depth_empty_slice(doc, from, to, &slice, schema)?
     {
         return Ok(FitOutcome {
@@ -2123,6 +2314,11 @@ fn fit_replace(
             slice,
             applied_doc: Some(applied_doc),
         });
+    }
+    if crosses_isolating {
+        return Err(RichTextError::Replace(
+            "replacement crosses a partially selected isolating boundary".to_string(),
+        ));
     }
     Ok(FitOutcome {
         from,
@@ -2392,6 +2588,183 @@ fn replace_right_leaf_content(
     let inner = replace_right_leaf_content(last.content(), depth - 1, new_content)?;
     let modified = last.copy_with_content(inner);
     content.replace_child(last_index, modified)
+}
+
+/// Fit an empty replacement whose endpoint reaches the real outer edge of an
+/// isolating node. Isolating boundaries normally (and intentionally) block the
+/// cross-depth merge below. But when the range covers the entire isolating
+/// node, keeping that node is not what the visual selection means: the fitter
+/// may remove it while retaining the unselected inline prefix/suffix on the
+/// opposite side.
+///
+/// This is deliberately role-agnostic. Tables, custom node views, and any
+/// future isolating block all use the same first/last-edge rule.
+fn fit_cross_isolating_edge_empty_slice(
+    doc: &Node,
+    from: usize,
+    to: usize,
+    slice: &Slice,
+    schema: &Schema,
+) -> RichTextResult<Option<(usize, usize, Slice, Node)>> {
+    if from >= to || slice.size() != 0 {
+        return Ok(None);
+    }
+
+    let from_resolved = doc.resolve(from)?;
+    let to_resolved = doc.resolve(to)?;
+    let left_expansions =
+        isolating_edge_expansions(&from_resolved, to, IsolatingEdge::Start, schema)?;
+    let right_expansions =
+        isolating_edge_expansions(&to_resolved, from, IsolatingEdge::End, schema)?;
+
+    // If both endpoints fully cover isolating nodes, removing the closed range
+    // is the least surprising fit. Try outermost candidates first.
+    for new_from in &left_expansions {
+        for new_to in &right_expansions {
+            if new_from >= new_to {
+                continue;
+            }
+            let candidate = Slice::empty();
+            if let Ok(applied) = replace(doc, *new_from, *new_to, candidate.clone(), schema) {
+                return Ok(Some((*new_from, *new_to, candidate, applied)));
+            }
+        }
+    }
+
+    // Right edge expanded: preserve the exact left endpoint and provide the
+    // open node spine required to close it against the boundary after the
+    // fully covered isolating node. For a top-level paragraph this is the same
+    // `paragraph(openStart=1)` slice produced by ProseMirror's fitter.
+    for new_to in right_expansions {
+        let close_depth = from_resolved.shared_depth(new_to);
+        let candidate = open_spine_slice(&from_resolved, close_depth, IsolatingEdge::Start)?;
+        if let Ok(applied) = replace(doc, from, new_to, candidate.clone(), schema) {
+            return Ok(Some((from, new_to, candidate, applied)));
+        }
+    }
+
+    // Symmetric left-edge expansion. Keep the exact right endpoint and close
+    // its suffix through an open-end spine.
+    for new_from in left_expansions {
+        let close_depth = to_resolved.shared_depth(new_from);
+        let candidate = open_spine_slice(&to_resolved, close_depth, IsolatingEdge::End)?;
+        if let Ok(applied) = replace(doc, new_from, to, candidate.clone(), schema) {
+            return Ok(Some((new_from, to, candidate, applied)));
+        }
+    }
+
+    Ok(None)
+}
+
+#[derive(Clone, Copy)]
+enum IsolatingEdge {
+    Start,
+    End,
+}
+
+/// Collect replacement boundaries reached by walking a first- or last-child
+/// edge chain out of a resolved endpoint. A boundary is eligible only after a
+/// wholly covered isolating node has been encountered. Outer non-isolating
+/// wrappers on the same edge chain are included as fallbacks because their
+/// content expression may require deleting the wrapper along with the
+/// isolating child. Results are outermost-first.
+fn isolating_edge_expansions(
+    resolved: &ResolvedPos,
+    opposite: usize,
+    edge: IsolatingEdge,
+    schema: &Schema,
+) -> RichTextResult<Vec<usize>> {
+    let mut cursor = resolved.pos();
+    let mut crossed_isolating = false;
+    let mut inside_table_cell = false;
+    let mut expansions = Vec::new();
+
+    for depth in (1..=resolved.depth()).rev() {
+        let expected = match edge {
+            IsolatingEdge::Start => resolved.start(depth),
+            IsolatingEdge::End => resolved.end(depth),
+        };
+        if expected != Some(cursor) {
+            break;
+        }
+
+        let before = resolved.before(depth).ok_or_else(|| {
+            RichTextError::Transform("missing node start on isolating edge".to_string())
+        })?;
+        let after = resolved.after(depth).ok_or_else(|| {
+            RichTextError::Transform("missing node end on isolating edge".to_string())
+        })?;
+        let fully_covered = match edge {
+            IsolatingEdge::Start => opposite >= after,
+            IsolatingEdge::End => opposite <= before,
+        };
+        if fully_covered {
+            let node = resolved.node(depth).ok_or_else(|| {
+                RichTextError::Transform("missing node on isolating edge".to_string())
+            })?;
+            let node_type = schema.node_type(node.type_name())?;
+            match node_type.table_role() {
+                Some(crate::model::TableRole::Cell) => {
+                    // A cell edge is not a safe structural deletion boundary:
+                    // removing one cell can leave a schema-valid but ragged
+                    // table. Hold the expansion until the edge chain proves
+                    // that the entire semantic table is covered.
+                    expansions.clear();
+                    crossed_isolating = false;
+                    inside_table_cell = true;
+                }
+                Some(crate::model::TableRole::Table) if inside_table_cell => {
+                    inside_table_cell = false;
+                    crossed_isolating = true;
+                }
+                _ if node_type.is_isolating() && !inside_table_cell => {
+                    crossed_isolating = true;
+                }
+                _ => {}
+            }
+            if crossed_isolating && !inside_table_cell {
+                expansions.push(match edge {
+                    IsolatingEdge::Start => before,
+                    IsolatingEdge::End => after,
+                });
+            }
+        }
+
+        cursor = match edge {
+            IsolatingEdge::Start => before,
+            IsolatingEdge::End => after,
+        };
+    }
+
+    expansions.reverse();
+    Ok(expansions)
+}
+
+/// Build the single-child node spine needed to preserve an endpoint while the
+/// opposite endpoint is widened to an ancestor boundary.
+fn open_spine_slice(
+    resolved: &ResolvedPos,
+    close_depth: usize,
+    edge: IsolatingEdge,
+) -> RichTextResult<Slice> {
+    if close_depth >= resolved.depth() {
+        return Ok(Slice::empty());
+    }
+
+    let mut content = Fragment::empty();
+    for depth in (close_depth + 1..=resolved.depth()).rev() {
+        let node = resolved.node(depth).ok_or_else(|| {
+            RichTextError::Transform(
+                "missing node while building open replacement spine".to_string(),
+            )
+        })?;
+        content = Fragment::from(node.copy_with_content(content));
+    }
+    let open = resolved.depth() - close_depth;
+    Ok(match edge {
+        IsolatingEdge::Start => Slice::new(content, open, 0),
+        IsolatingEdge::End => Slice::new(content, 0, open),
+    })
 }
 
 fn fit_cross_depth_empty_slice(

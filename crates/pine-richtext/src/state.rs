@@ -727,6 +727,16 @@ impl Transaction {
         Ok(self)
     }
 
+    /// Delete a range using structural parent expansion and replacement
+    /// fitting, matching [`Transform::delete_range`].
+    pub fn delete_range(&mut self, from: usize, to: usize) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.delete_range(from, to)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
     /// Insert content.
     pub fn insert(&mut self, pos: usize, content: Fragment) -> RichTextResult<&mut Self> {
         let map_start = self.transform.maps().len();
@@ -791,7 +801,7 @@ impl Transaction {
             None
         };
 
-        self.delete(from, to)?;
+        self.delete_range(from, to)?;
         if collapse_deleted_node {
             // Mapping a Node selection through deletion can leave it anchored
             // on the text/atom that shifted into the removed node's position.

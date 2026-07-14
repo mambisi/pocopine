@@ -112,6 +112,95 @@ impl NodeCommand<TableNode> for ResizeRow {
     }
 }
 
+/// Anchored body-row reorder used by the component table view.
+///
+/// Row zero is the canonical header and cannot be moved or used as a target.
+/// `target` is the row's final index after the move.
+#[cfg(feature = "table-view")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveRow {
+    pub expected_table_pos: usize,
+    pub source: usize,
+    pub target: usize,
+}
+
+#[cfg(feature = "table-view")]
+impl NodeCommand<TableNode> for MoveRow {
+    fn apply(
+        self,
+        state: &EditorState,
+        target: NodeCommandTarget<TableNode>,
+    ) -> Result<Option<Transaction>, NodeViewError> {
+        require_target_position(self.expected_table_pos, target.position)?;
+        let map = TableMap::new(&target.node, target.position).map_err(table_command_error)?;
+        if !valid_row_move(map.height(), self.source, self.target) {
+            return Ok(None);
+        }
+        let table = moved_row_table(
+            state.schema(),
+            &target.node,
+            map.height(),
+            self.source,
+            self.target,
+        )
+        .ok_or_else(|| table_command_error("could not rebuild reordered table rows"))?;
+        replace_anchored_table_with_cell_selection(
+            state,
+            target.position,
+            &target.node,
+            table,
+            (self.target, 0),
+            (self.target, map.width() - 1),
+        )
+        .map(Some)
+    }
+}
+
+/// Anchored column reorder used by the component table view.
+///
+/// `target` is the column's final index after the move. Every row and the
+/// table's persisted column-width metadata move together.
+#[cfg(feature = "table-view")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveColumn {
+    pub expected_table_pos: usize,
+    pub source: usize,
+    pub target: usize,
+}
+
+#[cfg(feature = "table-view")]
+impl NodeCommand<TableNode> for MoveColumn {
+    fn apply(
+        self,
+        state: &EditorState,
+        target: NodeCommandTarget<TableNode>,
+    ) -> Result<Option<Transaction>, NodeViewError> {
+        require_target_position(self.expected_table_pos, target.position)?;
+        let map = TableMap::new(&target.node, target.position).map_err(table_command_error)?;
+        if !valid_column_move(map.width(), self.source, self.target) {
+            return Ok(None);
+        }
+        let table = moved_column_table(
+            state.schema(),
+            &target.node,
+            map.width(),
+            target.attrs,
+            self.source,
+            self.target,
+        )
+        .ok_or_else(|| table_command_error("could not rebuild reordered table columns"))?;
+        replace_anchored_table_with_cell_selection(
+            state,
+            target.position,
+            &target.node,
+            table,
+            (0, self.target),
+            (map.height() - 1, self.target),
+        )
+        .map(Some)
+    }
+}
+
 /// Anchored rectangular semantic selection used by cell/row/column/table
 /// selector chrome.
 #[cfg(feature = "table-view")]
@@ -161,6 +250,29 @@ fn replace_anchored_table(
             position.saturating_add(source.node_size()),
             Fragment::from(table),
         )
+        .map_err(table_command_error)?;
+    Ok(transaction)
+}
+
+#[cfg(feature = "table-view")]
+fn replace_anchored_table_with_cell_selection(
+    state: &EditorState,
+    position: usize,
+    source: &Node,
+    table: Node,
+    anchor: (usize, usize),
+    head: (usize, usize),
+) -> Result<Transaction, NodeViewError> {
+    let map = TableMap::new(&table, position).map_err(table_command_error)?;
+    let mut transaction = replace_anchored_table(state, position, source, table)?;
+    let anchor = map.cell(anchor.0, anchor.1).ok_or_else(|| {
+        table_command_error("reordered table selection anchor is outside the table")
+    })?;
+    let head = map.cell(head.0, head.1).ok_or_else(|| {
+        table_command_error("reordered table selection head is outside the table")
+    })?;
+    transaction
+        .set_selection(Selection::cells(anchor.pos, head.pos))
         .map_err(table_command_error)?;
     Ok(transaction)
 }
@@ -267,6 +379,30 @@ pub fn delete_row() -> BoxedCommand {
     })
 }
 
+/// Move a body row to a final body-row index.
+///
+/// Row zero is the canonical header and remains pinned. Moving from or to row
+/// zero, using an out-of-range index, or moving a row to itself is a no-op. On
+/// success, the selection lands in the moved row at its previous column (or
+/// column zero when the table was not selected).
+pub fn move_row(source: usize, target: usize) -> BoxedCommand {
+    Box::new(move |state: &EditorState| {
+        let located = locate_table(state)?;
+        if !valid_row_move(located.map.height(), source, target) {
+            return None;
+        }
+        let selected_column = located.cell.map(|cell| cell.left).unwrap_or(0);
+        let table = moved_row_table(
+            state.schema(),
+            located.table,
+            located.map.height(),
+            source,
+            target,
+        )?;
+        replace_table(state, &located, table, Some((target, selected_column)))
+    })
+}
+
 pub fn insert_column_before() -> BoxedCommand {
     insert_column(ColumnSide::Before)
 }
@@ -339,6 +475,31 @@ pub fn delete_column() -> BoxedCommand {
                 target_column,
             )),
         )
+    })
+}
+
+/// Move a column to a final column index.
+///
+/// Every row's corresponding cell and the persisted column-width entry move
+/// together. Out-of-range indices and moves to the same index are no-ops. On
+/// success, the selection lands in the moved column at its previous row (or
+/// row zero when the table was not selected).
+pub fn move_column(source: usize, target: usize) -> BoxedCommand {
+    Box::new(move |state: &EditorState| {
+        let located = locate_table(state)?;
+        if !valid_column_move(located.map.width(), source, target) {
+            return None;
+        }
+        let selected_row = located.cell.map(|cell| cell.top).unwrap_or(0);
+        let table = moved_column_table(
+            state.schema(),
+            located.table,
+            located.map.width(),
+            table_attrs(located.table)?,
+            source,
+            target,
+        )?;
+        replace_table(state, &located, table, Some((selected_row, target)))
     })
 }
 
@@ -520,11 +681,23 @@ pub(super) fn named_commands() -> Vec<(String, NamedCommand)> {
         named_no_args("insert_row_after", insert_row_after),
         named_no_args("insert_row_below", insert_row_after),
         named_no_args("delete_row", delete_row),
+        named("move_row", |args| {
+            Some(move_row(
+                usize_arg(&args, "source")?,
+                usize_arg(&args, "target")?,
+            ))
+        }),
         named_no_args("insert_column_before", insert_column_before),
         named_no_args("insert_column_left", insert_column_before),
         named_no_args("insert_column_after", insert_column_after),
         named_no_args("insert_column_right", insert_column_after),
         named_no_args("delete_column", delete_column),
+        named("move_column", |args| {
+            Some(move_column(
+                usize_arg(&args, "source")?,
+                usize_arg(&args, "target")?,
+            ))
+        }),
         named_no_args("delete_table", delete_table),
         named("set_cell_alignment", |args| {
             let alignment = match args.get("alignment") {
@@ -749,6 +922,65 @@ fn rebuild_table(
         None => source.attrs().clone(),
     };
     schema.node("table", attrs, Fragment::from(rows)).ok()
+}
+
+fn valid_row_move(height: usize, source: usize, target: usize) -> bool {
+    source > 0 && target > 0 && source < height && target < height && source != target
+}
+
+fn valid_column_move(width: usize, source: usize, target: usize) -> bool {
+    source < width && target < width && source != target
+}
+
+fn moved_row_table(
+    schema: &Schema,
+    table: &Node,
+    height: usize,
+    source: usize,
+    target: usize,
+) -> Option<Node> {
+    if !valid_row_move(height, source, target) {
+        return None;
+    }
+    let mut rows = table.content().iter().cloned().collect::<Vec<_>>();
+    move_item(&mut rows, source, target)?;
+    rebuild_table(schema, table, rows, None)
+}
+
+fn moved_column_table(
+    schema: &Schema,
+    table: &Node,
+    width: usize,
+    mut attrs: TableAttrs,
+    source: usize,
+    target: usize,
+) -> Option<Node> {
+    if !valid_column_move(width, source, target) {
+        return None;
+    }
+    let rows = table
+        .content()
+        .iter()
+        .map(|row| {
+            let mut cells = row.content().iter().cloned().collect::<Vec<_>>();
+            move_item(&mut cells, source, target)?;
+            rebuild_row(schema, row, cells)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if !attrs.column_widths.is_empty() {
+        attrs.column_widths.resize(width, None);
+        move_item(&mut attrs.column_widths, source, target)?;
+    }
+    rebuild_table(schema, table, rows, Some(attrs))
+}
+
+fn move_item<T>(items: &mut Vec<T>, source: usize, target: usize) -> Option<()> {
+    if source >= items.len() || target >= items.len() || source == target {
+        return None;
+    }
+    let item = items.remove(source);
+    items.insert(target, item);
+    Some(())
 }
 
 fn table_attrs(table: &Node) -> Option<TableAttrs> {

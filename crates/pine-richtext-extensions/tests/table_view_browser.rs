@@ -4,8 +4,8 @@ use pine_richtext::model::Fragment;
 use pine_richtext::runtime::RuntimeBuilder;
 use pine_richtext::view::NodeViewSelection;
 use pine_richtext_extensions::tables::view::{
-    HitRect, ResizeAxis, ResizeDrag, ResizeEdge, TableViewAction, TableViewAnchor,
-    TableViewController, TableViewSnapshot, hit_test_resize_edge,
+    HitRect, MoveAxis, MoveCommit, MoveDrag, ResizeAxis, ResizeDrag, ResizeEdge, TableViewAction,
+    TableViewAnchor, TableViewController, TableViewSnapshot, hit_test_resize_edge,
 };
 use pine_richtext_extensions::tables::{
     TABLE_CELL_ATTR, TABLE_CELL_CLASS, TABLE_ROW_ATTR, TABLE_ROW_CLASS, TableAttrs, TableCellAttrs,
@@ -18,10 +18,27 @@ use web_sys::{Element, HtmlElement, window};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
+#[test]
+fn public_move_controller_types_are_nameable() {
+    let anchor = TableViewAnchor { table_pos: 4 };
+    let mut drag = MoveDrag::begin(anchor, 9, MoveAxis::Column, 0, 10.0).unwrap();
+    assert!(drag.update(9, 30.0, 1));
+    assert_eq!(
+        drag.finish(9),
+        Some(MoveCommit {
+            anchor,
+            axis: MoveAxis::Column,
+            source: 0,
+            target: 1,
+        })
+    );
+}
+
 struct Fixture {
     host: Element,
     body: Element,
     table_selector: Element,
+    reorder_actions: Element,
     controller: TableViewController,
     content: Fragment,
 }
@@ -118,9 +135,21 @@ fn fixture() -> Fixture {
             .append_child(document.create_element("button").unwrap().as_ref())
             .unwrap();
     }
+    let reorder_actions = document.create_element("div").unwrap();
+    reorder_actions.set_class_name("pine-richtext-table-reorder-actions");
+    reorder_actions.set_attribute("hidden", "").unwrap();
+    let reorder_backward = document.create_element("button").unwrap();
+    let reorder_forward = document.create_element("button").unwrap();
+    reorder_actions
+        .append_child(reorder_backward.as_ref())
+        .unwrap();
+    reorder_actions
+        .append_child(reorder_forward.as_ref())
+        .unwrap();
     host.append_child(table_selector.as_ref()).unwrap();
     host.append_child(column_selectors.as_ref()).unwrap();
     host.append_child(row_selectors.as_ref()).unwrap();
+    host.append_child(reorder_actions.as_ref()).unwrap();
     host.append_child(table.as_ref()).unwrap();
     document
         .body()
@@ -145,6 +174,9 @@ fn fixture() -> Fixture {
         table_selector.clone(),
         column_selectors,
         row_selectors,
+        reorder_actions.clone(),
+        reorder_backward,
+        reorder_forward,
         snapshot,
     )
     .unwrap();
@@ -152,6 +184,7 @@ fn fixture() -> Fixture {
         host,
         body,
         table_selector,
+        reorder_actions,
         controller,
         content,
     }
@@ -281,6 +314,37 @@ fn sync_retains_dom_identity_and_paints_selection_and_css_hooks() {
             .as_deref(),
         Some("true")
     );
+
+    fixture.controller.dismiss_selection().unwrap();
+    assert_eq!(
+        fixture.host.get_attribute("data-selection").as_deref(),
+        Some("none")
+    );
+    assert_eq!(
+        fixture.host.get_attribute("data-active").as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        fixture
+            .table_selector
+            .get_attribute("aria-pressed")
+            .as_deref(),
+        Some("false")
+    );
+    assert!(fixture.reorder_actions.has_attribute("hidden"));
+
+    fixture.controller.restore_selection().unwrap();
+    assert_eq!(
+        fixture.host.get_attribute("data-selection").as_deref(),
+        Some("table")
+    );
+    assert_eq!(
+        fixture
+            .table_selector
+            .get_attribute("aria-pressed")
+            .as_deref(),
+        Some("true")
+    );
 }
 
 #[wasm_bindgen_test]
@@ -315,4 +379,33 @@ fn drag_math_clamps_commits_once_and_cancel_has_no_action() {
         ResizeDrag::begin(TableViewAnchor { table_pos: 5 }, 10, edge, 100.0, 100.0).unwrap();
     // Cancellation is represented by dropping the preview state. There is no
     // semantic action to dispatch and therefore no history entry.
+}
+
+#[wasm_bindgen_test]
+fn read_only_selection_never_exposes_or_builds_a_move_action() {
+    let mut fixture = fixture();
+    let anchor = fixture.controller.grid().cell(1, 0).unwrap().pos;
+    let head = fixture.controller.grid().cell(1, 2).unwrap().pos;
+    fixture
+        .controller
+        .sync(
+            TableViewAnchor { table_pos: 5 },
+            TableViewSnapshot {
+                attrs: TableAttrs {
+                    column_widths: vec![Some(80), Some(96), None],
+                },
+                content: fixture.content.clone(),
+                selection: NodeViewSelection::Cells {
+                    anchor_cell: anchor,
+                    head_cell: head,
+                },
+                editable: false,
+                focused: true,
+            },
+        )
+        .unwrap();
+
+    assert!(fixture.reorder_actions.has_attribute("hidden"));
+    assert_eq!(fixture.controller.move_selected(false), None);
+    assert_eq!(fixture.controller.move_selected(true), None);
 }
