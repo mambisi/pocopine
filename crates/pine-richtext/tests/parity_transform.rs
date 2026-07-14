@@ -508,6 +508,98 @@ fn transform_cross_depth_replace_bails_at_isolating_boundary() {
     }
 }
 
+fn isolating_textblock_schema() -> Schema {
+    Schema::builder()
+        .node(NodeSpec::new("doc").content("block+"))
+        .node(NodeSpec::new("paragraph").group("block").content("text*"))
+        .node(
+            NodeSpec::new("isolating_block")
+                .group("block")
+                .content("text*")
+                .isolating(),
+        )
+        .node(NodeSpec::new("text").inline())
+        .finish()
+        .unwrap()
+}
+
+fn textblock(schema: &Schema, type_name: &str, value: &str) -> Node {
+    schema
+        .node(
+            type_name,
+            Attrs::new(),
+            Fragment::from(schema.text(value, Vec::new()).unwrap()),
+        )
+        .unwrap()
+}
+
+#[test]
+fn transform_delete_range_through_end_of_isolating_textblock_removes_the_block() {
+    let schema = isolating_textblock_schema();
+    let left = textblock(&schema, "paragraph", "left delete");
+    let isolated = textblock(&schema, "isolating_block", "inside");
+    let suffix = textblock(&schema, "paragraph", "suffix");
+
+    // The range starts after "left " and ends at the last content position
+    // inside the isolating block. The visual selection therefore covers the
+    // rest of the paragraph and the whole isolating block.
+    let from = 1 + "left ".len();
+    let to = left.node_size() + 1 + isolated.content_size();
+    let document = schema
+        .node(
+            "doc",
+            Attrs::new(),
+            Fragment::from(vec![left, isolated, suffix.clone()]),
+        )
+        .unwrap();
+
+    let mut tr = pine_richtext::transform::Transform::new(schema.clone(), document);
+    tr.delete_range(from, to).unwrap();
+
+    let expected = schema
+        .node(
+            "doc",
+            Attrs::new(),
+            Fragment::from(vec![textblock(&schema, "paragraph", "left "), suffix]),
+        )
+        .unwrap();
+    assert_eq!(tr.doc(), &expected);
+}
+
+#[test]
+fn transform_delete_range_from_start_of_isolating_textblock_preserves_right_suffix() {
+    let schema = isolating_textblock_schema();
+    let prefix = textblock(&schema, "paragraph", "prefix");
+    let isolated = textblock(&schema, "isolating_block", "inside");
+    let right = textblock(&schema, "paragraph", "delete right");
+
+    // Start at the first content position inside the isolating block and end
+    // after "delete " in the following paragraph. deleteRange should expand
+    // the covered left edge through the wrapper instead of leaving an empty
+    // isolating node or absorbing the surviving suffix into it.
+    let from = prefix.node_size() + 1;
+    let to = prefix.node_size() + isolated.node_size() + 1 + "delete ".len();
+    let document = schema
+        .node(
+            "doc",
+            Attrs::new(),
+            Fragment::from(vec![prefix.clone(), isolated, right]),
+        )
+        .unwrap();
+
+    let mut tr = pine_richtext::transform::Transform::new(schema.clone(), document);
+    tr.delete_range(from, to).unwrap();
+
+    let expected = schema
+        .node(
+            "doc",
+            Attrs::new(),
+            Fragment::from(vec![prefix, textblock(&schema, "paragraph", "right")]),
+        )
+        .unwrap();
+    assert_eq!(tr.doc(), &expected);
+}
+
 #[test]
 fn transform_changed_range_matches_upstream_cases() {
     fn changed_tuple(tr: &pine_richtext::transform::Transform) -> Option<(usize, usize)> {

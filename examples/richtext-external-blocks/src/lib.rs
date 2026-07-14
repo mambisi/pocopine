@@ -19,7 +19,9 @@ use pine_richtext::view::{
     NodeViewUpdate, PineRichTextRoot, RichTextNodeView, SelectionChangeSubscription,
     SelectionSnapshot,
 };
-use pine_richtext_extensions::bubble_menu::{BubbleMenuController, BubbleMenuOptions};
+use pine_richtext_extensions::bubble_menu::{
+    BubbleAnchorKind, BubbleMenuController, BubbleMenuOptions,
+};
 use pine_richtext_extensions::tables::{
     TableAlignment, TableAttrs, TableCellAttrs, TableCellNode, TableHeaderCellAttrs,
     TableHeaderCellNode, TableNode, TableRowAttrs, TableRowNode, TablesExtension,
@@ -31,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::wasm_bindgen;
-use web_sys::{HtmlInputElement, InputEvent};
+use web_sys::{HtmlElement, HtmlInputElement, InputEvent};
 
 const RUNTIME_NAME: &str = "external-blocks";
 
@@ -168,11 +170,12 @@ impl ExternalBlocksDemo {
         options.viewport_padding = 16.0;
         options.debounce_ms = 8.0;
         let options = options.with_should_show(|context| {
-            !context
-                .snapshot
-                .enclosing_block_types
-                .iter()
-                .any(|name| name == "code_block")
+            context.anchor_kind == BubbleAnchorKind::Text
+                && !context
+                    .snapshot
+                    .enclosing_block_types
+                    .iter()
+                    .any(|name| name == "code_block")
         });
 
         let bubble_handle = handle.clone();
@@ -320,6 +323,33 @@ impl ExternalBlocksDemo {
 
     pub fn show_json(&mut self) {
         self.code_tab = "json".into();
+    }
+
+    pub fn close_more_tools(&mut self) {
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        if let Some(details) = pocopine::refs::get_on(scope, "more_tools") {
+            let _ = details.remove_attribute("open");
+        }
+    }
+
+    pub fn close_more_tools_on_escape(&mut self) {
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(details) = pocopine::refs::get_on(scope, "more_tools") else {
+            return;
+        };
+        if !details.has_attribute("open") {
+            return;
+        }
+        let _ = details.remove_attribute("open");
+        if let Some(trigger) = pocopine::refs::get_on(scope, "more_tools_trigger")
+            && let Ok(trigger) = trigger.dyn_into::<HtmlElement>()
+        {
+            let _ = trigger.focus();
+        }
     }
 
     pub fn unmount_tasks(&mut self) {
@@ -671,7 +701,7 @@ fn seed_document(schema: &Schema, include_tasks: bool) -> Result<Node, String> {
         schema,
         vec![text(
             schema,
-            "Table playground — drag a cell edge to resize; use the A/B/C and 1/2/3 selectors; modifier-drag across cells for a rectangular selection.",
+            "Table playground — hover the grid for subtle handles; drag to reorder, or click an axis for move buttons. Cell edges resize and modifier-drag selects a range.",
         )?],
     )?);
     blocks.push(table(schema)?);
@@ -680,7 +710,7 @@ fn seed_document(schema: &Schema, include_tasks: bool) -> Result<Node, String> {
         vec![
             text(
                 schema,
-                "Every edit updates the semantic JSON and Markdown panels. ",
+                "Every edit updates the portable output in the developer inspector. ",
             )?,
             tag(
                 schema,
@@ -743,31 +773,31 @@ fn table(schema: &Schema) -> Result<Node, String> {
         table_row(
             schema,
             true,
-            Some(44),
+            None,
             [
                 ("Semantic block", Some(TableAlignment::Left)),
-                ("Typed capability", Some(TableAlignment::Center)),
-                ("State", Some(TableAlignment::Center)),
+                ("Typed capability", Some(TableAlignment::Left)),
+                ("State", Some(TableAlignment::Left)),
             ],
         )?,
         table_row(
             schema,
             false,
-            Some(48),
+            None,
             [
                 ("Task item", Some(TableAlignment::Left)),
-                ("Live attrs + lifecycle", Some(TableAlignment::Center)),
-                ("Mounted", Some(TableAlignment::Center)),
+                ("Live attrs + lifecycle", Some(TableAlignment::Left)),
+                ("Mounted", Some(TableAlignment::Left)),
             ],
         )?,
         table_row(
             schema,
             false,
-            Some(48),
+            None,
             [
                 ("Table", Some(TableAlignment::Left)),
-                ("Resize + cell selection", Some(TableAlignment::Center)),
-                ("Editable", Some(TableAlignment::Center)),
+                ("Resize + cell selection", Some(TableAlignment::Left)),
+                ("Editable", Some(TableAlignment::Left)),
             ],
         )?,
     ];

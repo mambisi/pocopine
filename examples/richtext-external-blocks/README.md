@@ -1,7 +1,9 @@
 # Pine rich text — typed external blocks
 
 An isolated, interactive reference page for the RFC-113 typed node-view stack.
-The document contains versioned task items, tables, and inline tags; all UI is
+The example is presented as a quiet, document-first editor; developer controls
+and semantic output stay available without competing with the content. The
+document contains versioned task items, tables, and inline tags; all UI is
 mounted through typed runtime contributions and compile-time-owned content
 outlets. No component tag, content selector, document position, or HTML string
 is authored by the application.
@@ -24,21 +26,24 @@ cargo run -p pocopine-cli -- build --path examples/richtext-external-blocks
 
 ## What to try
 
-- Toggle a task checkbox, then use its local **Delete** control. That component
-  handler dispatches the transaction that removes its own semantic node, which
-  proves callback scheduling reaches a safe point before clean unmount. Use
-  **Unmount tasks** / **Restore document** to watch all lifecycle counts change.
-- Drag table cell edges for column/row resize. Use the table's **A/B/C**,
-  **1/2/3**, and **Table** controls for column, row, and whole-table selection.
-  Hold Shift, Control, or Command while dragging across cells for a rectangular
-  cell selection.
+- Toggle a task checkbox, then hover or focus the row and use its subtle **×**
+  action. That component handler dispatches the transaction that removes its
+  own semantic node, which proves callback scheduling reaches a safe point
+  before clean unmount. Use **Remove task blocks** / **Restore document** from
+  the more-tools menu to watch all lifecycle counts change.
+- Hover or focus the table to reveal its compact row and column handles. Drag
+  a handle to reorder, or click one to select that axis and reveal compact
+  previous/next buttons; the header row stays pinned. Drag cell edges for
+  column/row resize, and hold Shift, Control, or Command while dragging across
+  cells for a rectangular cell selection.
 - Select text to open the BubbleMenu. Search commands or run the stale-result
   proof; a superseded provider token is rejected while the current result keeps
   its mapped selection bookmark.
 - Insert a tag, then use ArrowLeft/ArrowRight to enter and leave the chip.
   Backspace/Delete and the visible remove affordance delete it as one atom.
-- Use Undo/Redo and compare the live semantic JSON with the intentionally
-  loss-aware Markdown output.
+- Use Undo/Redo and expand **Developer output** to compare the live semantic
+  JSON with the intentionally loss-aware Markdown output. Less common demo
+  actions live under the compact more-tools menu.
 
 ## Browser smoke
 

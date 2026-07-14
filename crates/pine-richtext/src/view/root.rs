@@ -530,10 +530,12 @@ impl PineRichTextRoot {
                 // inside the surface (e.g., the user clicked outside), keep
                 // the model's stored selection.
                 let selection_started_at = perf_now_ms();
-                if live_selection
-                    && !state.selection().is_cells()
-                    && let Some(live) = read_dom_selection(&surface_for_provider)
-                {
+                // Cell selections deliberately clear the browser range because
+                // one DOM Range cannot represent a rectangle. Once the user
+                // creates a real DOM caret/range again (for example by clicking
+                // a paragraph outside the table), that live selection must win
+                // just like it does for every other cached selection kind.
+                if live_selection && let Some(live) = read_dom_selection(&surface_for_provider) {
                     let live = normalize_live_selection(&state, live);
                     // `with_selection` substitutes the selection without
                     // running the plugin state-field loop or the
@@ -545,6 +547,16 @@ impl PineRichTextRoot {
                     // mutates. Arc-wrapped values mean the clone is now
                     // O(plugins); skipping the loop saves the rest.
                     if let Ok(next) = state.with_selection(live) {
+                        // Keep the hot in-memory state aligned with a genuine
+                        // browser caret/range. This is not a document commit:
+                        // it adds no history entry, emits no change event, and
+                        // does not bump the document generation. It does ensure
+                        // typed chrome that intentionally reads cached state
+                        // cannot mistake the previous Cells selection for the
+                        // current selection after a click-out.
+                        if next.selection() != state.selection() {
+                            commit_slot_for_provider.borrow_mut().state = Some(next.clone());
+                        }
                         log_debug_json(
                             debug_json,
                             "state_provider.live_selection",
@@ -1034,12 +1046,13 @@ impl PineRichTextRoot {
         // - Structural DOM patch (Text / Reconciled / Full) → sync.
         // - Attr-only patch → skip (node-view chrome clicks must not
         //   move the cursor).
-        // - Unchanged doc → sync ONLY when the selection actually
-        //   changed since the previous watcher fire. Selection-only
-        //   transactions (`select_all`, programmatic
-        //   `set_selection`, etc.) land here; without this we'd
-        //   leave the visible caret pinned at its old position
-        //   while the model thinks the whole doc is selected.
+        // - Unchanged doc → sync when the selection changed since the
+        //   previous watcher fire. Cells also always sync: reselecting the
+        //   same rectangle after a transient browser caret must clear that
+        //   DOM range even though the semantic endpoints match the previous
+        //   watcher value. Selection-only transactions (`select_all`,
+        //   programmatic `set_selection`, etc.) land here; without this we'd
+        //   leave visible browser selection out of step with the model.
         let surface_for_watch = surface_el;
         let last_doc_for_watch = last_doc;
         let last_selection_for_watch: Rc<RefCell<Option<crate::state::Selection>>> =
@@ -1139,7 +1152,7 @@ impl PineRichTextRoot {
                 };
                 let should_sync_cursor = reconcile_outcome.should_sync_cursor()
                     || (matches!(reconcile_outcome, ReconcileOutcome::Unchanged)
-                        && selection_changed);
+                        && (selection_changed || cached_state.selection().is_cells()));
                 if should_sync_cursor {
                     // Use the cached state directly — saves the
                     // `from_json` re-parse that

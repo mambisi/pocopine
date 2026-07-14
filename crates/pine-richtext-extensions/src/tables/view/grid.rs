@@ -88,6 +88,10 @@ impl TableViewGrid {
         self.anchor
     }
 
+    pub(crate) fn set_anchor(&mut self, anchor: TableViewAnchor) {
+        self.anchor = anchor;
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }

@@ -7023,6 +7023,7 @@ name = "pine-richtext-extensions"
 version = "0.1.1"
 dependencies = [
  "js-sys",
+ "pine-icons",
  "pine-richtext",
  "pocopine",
  "pocopine-core",

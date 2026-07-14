@@ -11,9 +11,9 @@ pub use super::{
 };
 pub use component::PineRichTextTable;
 pub use controller::{
-    CellSelectionCommit, HitRect, ResizeAxis, ResizeCommit, ResizeDrag, ResizeEdge,
-    TableViewAction, TableViewAnchor, TableViewDispatch, TableViewDispatchError,
-    hit_test_resize_edge,
+    CellSelectionCommit, HitRect, MoveAxis, MoveCommit, MoveDrag, ResizeAxis, ResizeCommit,
+    ResizeDrag, ResizeEdge, TableViewAction, TableViewAnchor, TableViewDispatch,
+    TableViewDispatchError, hit_test_resize_edge,
 };
 pub use dom_controller::{TableViewController, TableViewControllerError, TableViewSnapshot};
 pub use grid::{TableViewGrid, TableViewGridError, ViewCell, ViewSelectionRect};
