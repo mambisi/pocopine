@@ -105,7 +105,7 @@ impl Hasher {
     /// Create a streaming hasher for `algorithm`.
     pub fn new(algorithm: Algorithm) -> Self {
         let inner = match algorithm {
-            Algorithm::Blake3 => Inner::Blake3(Box::new(blake3::Hasher::new())),
+            Algorithm::Blake3 => Inner::Blake3(Box::default()),
             Algorithm::Sha256 => Inner::Sha256(Sha256::new()),
             Algorithm::Md5 => Inner::Md5(Md5::new()),
             Algorithm::Crc32c => Inner::Crc32c(0),
