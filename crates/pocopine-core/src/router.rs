@@ -832,7 +832,7 @@ fn validate_record(routes: &[Route], route: &Route) {
     }
     if routes
         .iter()
-        .any(|sibling| sibling.parent == route.parent && sibling.is_catch_all())
+        .any(|sibling| sibling.parent == route.parent && catch_all_prefix_overlaps(sibling, route))
     {
         panic!(
             "pocopine router: route `{}` appears after a wildcard child; wildcard routes must be last among siblings",
@@ -855,6 +855,35 @@ fn validate_record(routes: &[Route], route: &Route) {
             );
         }
     }
+}
+
+/// Whether an existing catch-all can match paths in a candidate route's
+/// branch. Catch-alls under disjoint literal prefixes (for example,
+/// `/docs/*slug` and `/blogs/*slug`) are independent root branches and may be
+/// registered in either order.
+fn catch_all_prefix_overlaps(catch_all: &Route, candidate: &Route) -> bool {
+    if !catch_all.is_catch_all() {
+        return false;
+    }
+
+    let prefix = &catch_all.segments[..catch_all.segments.len() - 1];
+    if candidate.segments.len() < prefix.len() {
+        return false;
+    }
+
+    prefix
+        .iter()
+        .zip(&candidate.segments)
+        .all(|(left, right)| match (left, right) {
+            (Segment::Literal(left), Segment::Literal(right)) => left == right,
+            // A parameter can take the literal or parameter value represented
+            // by the other route, so these branches overlap.
+            (Segment::Param(_), Segment::Literal(_) | Segment::Param(_))
+            | (Segment::Literal(_), Segment::Param(_)) => true,
+            // Wildcard/rest segments are already required to be final, and
+            // the catch-all's final segment was removed from `prefix`.
+            _ => false,
+        })
 }
 
 pub(crate) fn set_route_rejection_handlers(handlers: Vec<Rc<dyn RouteRejectionHandler>>) {
@@ -2413,6 +2442,57 @@ mod tests {
         let r = Route::parse("*", "not-found", RouteRuntimeConfig::default());
         assert!(r.match_path("/").is_some());
         assert!(r.match_path("/nope/anywhere").is_some());
+    }
+
+    #[test]
+    fn disjoint_prefixed_rest_routes_are_independent_siblings() {
+        reset_router_for_test();
+        let docs = register_route_with_config("/docs/*slug", "docs", RouteRuntimeConfig::default());
+        let blogs_index =
+            register_route_with_config("/blogs", "blogs-index", RouteRuntimeConfig::default());
+        let blogs =
+            register_route_with_config("/blogs/*slug", "blog", RouteRuntimeConfig::default());
+
+        assert_eq!(
+            match_route("/docs/getting-started", true)
+                .unwrap()
+                .deepest()
+                .route
+                .record_id,
+            docs,
+        );
+        assert_eq!(
+            match_route("/blogs", true)
+                .unwrap()
+                .deepest()
+                .route
+                .record_id,
+            blogs_index,
+        );
+        assert_eq!(
+            match_route("/blogs/launch", true)
+                .unwrap()
+                .deepest()
+                .route
+                .record_id,
+            blogs,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "appears after a wildcard child")]
+    fn overlapping_prefixed_rest_route_must_stay_last() {
+        reset_router_for_test();
+        register_route_with_config(
+            "/docs/*slug",
+            "docs-fallback",
+            RouteRuntimeConfig::default(),
+        );
+        register_route_with_config(
+            "/docs/reference",
+            "docs-reference",
+            RouteRuntimeConfig::default(),
+        );
     }
 
     #[test]
