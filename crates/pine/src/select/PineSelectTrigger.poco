@@ -8,6 +8,7 @@
       :data-disabled="disabled"
       :data-placeholder="value == ''"
       :disabled="disabled"
-      @click="toggle">
+      @pointerdown.stop
+      @click.stop="toggle">
   <slot></slot>
 </root>
