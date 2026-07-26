@@ -2,16 +2,18 @@
 //! workspace.
 //!
 //! The point of this crate is that the rest of the workspace never reaches for
-//! `sha2`, `md-5`, or `crc32c` directly and never re-implements hex encoding or
-//! incremental hashing. Everything goes through one small, algorithm-agnostic
-//! API:
+//! `blake3`, `sha2`, `md-5`, or `crc32c` directly and never re-implements hex
+//! encoding or incremental hashing. Everything goes through one small,
+//! algorithm-agnostic API:
 //!
 //! ```
-//! use pocopine_crypto::{Algorithm, Hasher, digest_hex, sha256_hex};
+//! use pocopine_crypto::{Algorithm, Hasher, blake3_hex, digest_hex, sha256_hex};
 //!
 //! // One-shot.
 //! assert_eq!(sha256_hex(b""),
 //!     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+//! assert_eq!(blake3_hex(b""),
+//!     "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
 //! assert_eq!(digest_hex(Algorithm::Crc32c, b""), "00000000");
 //!
 //! // Streaming (for data that never fits in one buffer).
@@ -25,9 +27,9 @@
 //! [`Hasher::finalize_bytes`] for the streaming case — alongside keyed
 //! [`hmac_sha256`] for request-signing paths (e.g. Azure Shared-Key / SAS).
 //!
-//! The underlying crates are re-exported (`pocopine_crypto::{sha2, md5,
-//! crc32c, hmac}`) for the rare case a caller needs a primitive this API does
-//! not wrap yet — but prefer adding to this API over reaching for them.
+//! The underlying crates are re-exported (`pocopine_crypto::{blake3, sha2,
+//! md5, crc32c, hmac}`) for the rare case a caller needs a primitive this API
+//! does not wrap yet — but prefer adding to this API over reaching for them.
 //!
 //! This crate is `no_std` (it only needs `alloc` for the returned hex
 //! `String` / `Vec`).
@@ -36,10 +38,12 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub use blake3;
 pub use crc32c;
 pub use hmac;
 pub use md5;
@@ -55,6 +59,8 @@ use sha2::{Digest, Sha256};
 /// A digest/checksum algorithm supported across the workspace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Algorithm {
+    /// BLAKE3 — 32-byte cryptographic digest (64 hex chars).
+    Blake3,
     /// SHA-256 — 32-byte cryptographic digest (64 hex chars).
     Sha256,
     /// MD5 — 16-byte digest (32 hex chars). Non-cryptographic; content
@@ -68,6 +74,7 @@ impl Algorithm {
     /// Lowercase canonical name (`"sha256"`, `"md5"`, `"crc32c"`).
     pub fn as_str(self) -> &'static str {
         match self {
+            Algorithm::Blake3 => "blake3",
             Algorithm::Sha256 => "sha256",
             Algorithm::Md5 => "md5",
             Algorithm::Crc32c => "crc32c",
@@ -85,6 +92,10 @@ pub struct Hasher {
 }
 
 enum Inner {
+    // `blake3::Hasher` carries a sizeable CV stack. Keep the public
+    // algorithm-agnostic hasher small instead of inflating every SHA/MD5/CRC
+    // instance to the BLAKE3 variant's size.
+    Blake3(Box<blake3::Hasher>),
     Sha256(Sha256),
     Md5(Md5),
     Crc32c(u32),
@@ -94,6 +105,7 @@ impl Hasher {
     /// Create a streaming hasher for `algorithm`.
     pub fn new(algorithm: Algorithm) -> Self {
         let inner = match algorithm {
+            Algorithm::Blake3 => Inner::Blake3(Box::new(blake3::Hasher::new())),
             Algorithm::Sha256 => Inner::Sha256(Sha256::new()),
             Algorithm::Md5 => Inner::Md5(Md5::new()),
             Algorithm::Crc32c => Inner::Crc32c(0),
@@ -104,6 +116,9 @@ impl Hasher {
     /// Absorb a chunk of bytes.
     pub fn update(&mut self, bytes: &[u8]) {
         match &mut self.inner {
+            Inner::Blake3(h) => {
+                h.update(bytes);
+            }
             Inner::Sha256(h) => h.update(bytes),
             Inner::Md5(h) => h.update(bytes),
             Inner::Crc32c(crc) => *crc = crc32c::crc32c_append(*crc, bytes),
@@ -113,6 +128,7 @@ impl Hasher {
     /// Finish hashing and return the lowercase-hex digest.
     pub fn finalize_hex(self) -> String {
         match self.inner {
+            Inner::Blake3(h) => hex(h.finalize().as_bytes()),
             Inner::Sha256(h) => hex(h.finalize()),
             Inner::Md5(h) => hex(h.finalize()),
             Inner::Crc32c(crc) => format!("{crc:08x}"),
@@ -121,14 +137,15 @@ impl Hasher {
 
     /// Finish hashing and return the raw digest bytes.
     ///
-    /// Length is algorithm-dependent: 32 bytes for SHA-256, 16 for MD5,
-    /// 4 (big-endian) for CRC32C — the same bytes [`finalize_hex`] renders.
-    /// Use this when a downstream API wants the raw digest (e.g. a
+    /// Length is algorithm-dependent: 32 bytes for BLAKE3 and SHA-256, 16 for
+    /// MD5, 4 (big-endian) for CRC32C — the same bytes [`finalize_hex`]
+    /// renders. Use this when a downstream API wants the raw digest (e.g. a
     /// `[u8; 32]` token-hash key) instead of a hex string.
     ///
     /// [`finalize_hex`]: Hasher::finalize_hex
     pub fn finalize_bytes(self) -> Vec<u8> {
         match self.inner {
+            Inner::Blake3(h) => h.finalize().as_bytes().to_vec(),
             Inner::Sha256(h) => h.finalize().to_vec(),
             Inner::Md5(h) => h.finalize().to_vec(),
             Inner::Crc32c(crc) => crc.to_be_bytes().to_vec(),
@@ -139,10 +156,16 @@ impl Hasher {
 /// One-shot lowercase-hex digest of `bytes` under `algorithm`.
 pub fn digest_hex(algorithm: Algorithm, bytes: &[u8]) -> String {
     match algorithm {
+        Algorithm::Blake3 => hex(blake3::hash(bytes).as_bytes()),
         Algorithm::Sha256 => hex(Sha256::digest(bytes)),
         Algorithm::Md5 => hex(Md5::digest(bytes)),
         Algorithm::Crc32c => format!("{:08x}", crc32c::crc32c(bytes)),
     }
+}
+
+/// One-shot BLAKE3 hex digest.
+pub fn blake3_hex(bytes: &[u8]) -> String {
+    digest_hex(Algorithm::Blake3, bytes)
 }
 
 /// One-shot SHA-256 hex digest.
@@ -261,6 +284,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn known_blake3_vectors() {
+        assert_eq!(
+            blake3_hex(b""),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        assert_eq!(
+            blake3_hex(b"abc"),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
+    }
+
+    #[test]
     fn known_sha256_vectors() {
         assert_eq!(
             sha256_hex(b""),
@@ -288,7 +323,12 @@ mod tests {
 
     #[test]
     fn streaming_matches_one_shot() {
-        for alg in [Algorithm::Sha256, Algorithm::Md5, Algorithm::Crc32c] {
+        for alg in [
+            Algorithm::Blake3,
+            Algorithm::Sha256,
+            Algorithm::Md5,
+            Algorithm::Crc32c,
+        ] {
             let mut hasher = Hasher::new(alg);
             hasher.update(b"hello ");
             hasher.update(b"world");
@@ -305,7 +345,12 @@ mod tests {
 
     #[test]
     fn finalize_bytes_matches_finalize_hex() {
-        for alg in [Algorithm::Sha256, Algorithm::Md5, Algorithm::Crc32c] {
+        for alg in [
+            Algorithm::Blake3,
+            Algorithm::Sha256,
+            Algorithm::Md5,
+            Algorithm::Crc32c,
+        ] {
             let mut hasher = Hasher::new(alg);
             hasher.update(b"hello world");
             assert_eq!(

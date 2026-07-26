@@ -60,9 +60,10 @@ pub enum DeployState {
     Unknown,
 }
 
-/// Per-process status entry returned by [`DeployAdapter::status`]. One
-/// per process declared in the spec, in declaration order. Processes
-/// that have never been deployed appear with `deploy_id: None` and
+/// Per-process status entry returned by [`DeployAdapter::status`]. Fullstack
+/// adapters return one per declared process, in declaration order. Static
+/// adapters return one synthetic process named `"static"`. Processes that
+/// have never been deployed appear with `deploy_id: None` and
 /// `state: Unknown`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessStatus {
@@ -142,11 +143,11 @@ pub trait DeployAdapter {
     /// (deployment URL, etc.). The adapter never runs these.
     fn post_deploy_hint(&self, spec: &DeploySpec, outcome: &DeployOutcome) -> Vec<Hint>;
 
-    /// I/O: query the host API for the current deploy state of each
-    /// process declared in `spec`. No build or push. Returns one
-    /// [`ProcessStatus`] per process in declaration order; processes
-    /// that have never been deployed appear with `deploy_id: None` and
-    /// `state: Unknown` rather than as an error.
+    /// I/O: query the host API for the current deploy state. No build or
+    /// push. Fullstack adapters return one [`ProcessStatus`] per process in
+    /// declaration order; static adapters return one synthetic `"static"`
+    /// process. A target that has never been deployed appears with
+    /// `deploy_id: None` and `state: Unknown` rather than as an error.
     fn status(&self, spec: &DeploySpec) -> anyhow::Result<Vec<ProcessStatus>>;
 
     fn source(&self) -> AdapterSource {

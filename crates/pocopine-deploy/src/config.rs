@@ -113,8 +113,8 @@ pub fn list() -> Result<Vec<(String, String, Source)>> {
 /// Convert a host name and field name into the env-var key that wins
 /// over both tiers. Both segments are upper-cased and non-alphanumeric
 /// bytes collapse to `_` — so `(railway, workspace_id)` →
-/// `POCOPINE_RAILWAY_WORKSPACE_ID`, `(cf-pages, project_id)` →
-/// `POCOPINE_CF_PAGES_PROJECT_ID`.
+/// `POCOPINE_RAILWAY_WORKSPACE_ID`, `(cf-pages, account_id)` →
+/// `POCOPINE_CF_PAGES_ACCOUNT_ID`.
 pub fn env_var_name(host: &str, field: &str) -> String {
     let h = normalise(host);
     let f = normalise(field);
@@ -128,12 +128,15 @@ pub fn env_var_name(host: &str, field: &str) -> String {
 /// itself accepts any string; this list is just the inventory for
 /// the `list` command.
 pub const KNOWN_FIELDS: &[&str] = &[
+    "account_id",
+    "branch",
     "environment",
     "image_registry",
     "org",
     "owner_id",
     "plan",
     "primary_region",
+    "production_branch",
     "project",
     "region",
     "registry_username",
@@ -328,8 +331,8 @@ mod tests {
             "POCOPINE_RENDER_OWNER_ID"
         );
         assert_eq!(
-            env_var_name("cf-pages", "project_id"),
-            "POCOPINE_CF_PAGES_PROJECT_ID"
+            env_var_name("cf-pages", "account_id"),
+            "POCOPINE_CF_PAGES_ACCOUNT_ID"
         );
         assert_eq!(
             env_var_name("railway", "workspace_id"),

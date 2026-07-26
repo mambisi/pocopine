@@ -70,6 +70,7 @@ skip_reason() {
     "pocopine-auth-jwt:jwks_resolver_wiremock"
     "pocopine-auth-oauth:flow"
     "pocopine-collab:gateway"
+    "pocopine-deploy-cloudflare-pages:cloudflare_http"
     "pocopine-deploy-railway:railway_http"
     "pocopine-realtime:gateway"
     "pocopine-server:server_plugin"
@@ -228,6 +229,7 @@ run_lib_package pocopine-assets crates/pocopine-assets/tests
 run_lib_package pocopine-auth-jwt crates/pocopine-auth-jwt/tests
 run_lib_package pocopine-auth-oauth crates/pocopine-auth-oauth/tests
 run_lib_package pocopine-collab crates/pocopine-collab/tests
+run_lib_package pocopine-deploy-cloudflare-pages crates/pocopine-deploy-cloudflare-pages/tests
 run_lib_package pocopine-deploy-railway crates/pocopine-deploy-railway/tests
 run_lib_package pocopine-realtime crates/pocopine-realtime/tests
 run_lib_package pocopine-server crates/pocopine-server/tests

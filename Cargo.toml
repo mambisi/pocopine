@@ -35,6 +35,7 @@ members = [
     "crates/pocopine-crypto",
     "crates/pocopine-directives",
     "crates/pocopine-deploy",
+    "crates/pocopine-deploy-cloudflare-pages",
     "crates/pocopine-deploy-railway",
     "crates/pocopine-deploy-render",
     "crates/pocopine-events",
@@ -140,6 +141,7 @@ pocopine-collab = { path = "crates/pocopine-collab", version = "0.1.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.2.0", default-features = false }
 pocopine-crypto = { path = "crates/pocopine-crypto", version = "0.1.0" }
 pocopine-deploy = { path = "crates/pocopine-deploy", version = "0.1.0" }
+pocopine-deploy-cloudflare-pages = { path = "crates/pocopine-deploy-cloudflare-pages", version = "0.1.0" }
 pocopine-deploy-railway = { path = "crates/pocopine-deploy-railway", version = "0.1.0" }
 pocopine-deploy-render = { path = "crates/pocopine-deploy-render", version = "0.1.0" }
 pocopine-events = { path = "crates/pocopine-events", version = "0.1.0" }

@@ -6,6 +6,7 @@
 //!   plus computed values (inferred service requirements, build flags).
 //! - [`DeployAdapter`] — the trait every vendor crate implements (§5.2).
 //! - [`common`] — shared helpers (Dockerfile generation, `.dockerignore`).
+//! - [`build_static_dist`] — host-neutral static artefact assembly.
 //!
 //! Vendor adapters live in their own crates (`pocopine-deploy-railway`,
 //! `pocopine-deploy-render`, …) and depend on this one. Adapters talk
@@ -24,6 +25,7 @@ pub mod credentials;
 pub mod docker;
 pub mod registry;
 pub mod spec;
+pub mod static_dist;
 
 pub use adapter::{
     AdapterMode, AdapterSource, Constraint, DeployAdapter, DeployOutcome, DeployState, Hint,
@@ -35,3 +37,4 @@ pub use registry::{
     resolve_registry_credentials,
 };
 pub use spec::{DeploySpec, EnvSource, EnvValue, Mode, ProcessSpec, Scale, ServiceSpec};
+pub use static_dist::{STATIC_DIST_DIR, build_static_dist, build_static_dist_at, static_dist_path};

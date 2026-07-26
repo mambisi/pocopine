@@ -49,10 +49,10 @@ pub struct DeploySpec {
     /// with `-<env>` so envs deploy to distinct host apps.
     pub environment: Option<String>,
 
-    /// Project path relative to the docker-build context (the cargo
+    /// Project path relative to the artefact-build context (the cargo
     /// workspace root). Empty for standalone repos, `"examples/keep"`
-    /// for workspace members. Static-asset COPYs in the runtime stage
-    /// are prefixed with this.
+    /// for workspace members. Docker COPYs and static-dist assembly use
+    /// this same prefix.
     pub workspace_subpath: String,
 
     /// `true` when `rust-toolchain.toml` exists at the workspace root.
