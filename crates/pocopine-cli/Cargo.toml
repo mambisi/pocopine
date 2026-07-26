@@ -37,6 +37,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "syn
 pocopine-assets = { workspace = true }
 pocopine-crypto = { workspace = true }
 pocopine-deploy = { workspace = true }
+pocopine-deploy-cloudflare-pages = { workspace = true }
 pocopine-deploy-railway = { workspace = true }
 pocopine-deploy-render = { workspace = true }
 serde = { workspace = true }

@@ -7,15 +7,14 @@
 //!      but cargo metadata is what's available today)
 //!   2. infer `app_name` from `[package].name` and `git_sha` from
 //!      `git rev-parse HEAD`
-//!   3. resolve the adapter (`railway`/`render` are built-in; new
-//!      vendors live in their own crates)
+//!   3. resolve the built-in adapter (`cf-pages`, `railway`, or `render`)
 //!   4. run the pipeline: `detect_constraints` → `render_config` →
 //!      flush to disk → `build_artefact` → `deploy` → `post_deploy_hint`
 //!
 //! Non-`run` subcommands:
 //!   * `pocopine deploy auth <host>` / `--list` / `--revoke <host>` —
 //!     manage `~/.pocopine/credentials.toml`.
-//!   * `pocopine deploy doctor` — check docker daemon + configured
+//!   * `pocopine deploy doctor` — check local prerequisites + configured
 //!     tokens for every known host.
 
 use std::io::Write;
@@ -33,7 +32,7 @@ pub fn run(args: &DeployArgs) -> Result<()> {
     match &args.cmd {
         None => run_deploy(args),
         Some(DeployCmd::Auth(a)) => run_auth(a),
-        Some(DeployCmd::Doctor) => run_doctor(),
+        Some(DeployCmd::Doctor) => run_doctor(args.target.as_deref()),
         Some(DeployCmd::Status(s)) => run_status(args, s),
         Some(DeployCmd::Config(c)) => run_config(args, c),
     }
@@ -83,7 +82,7 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
     let deploy_table = deploy_table_from_manifest(&manifest)?;
     let git_sha = short_git_sha(project)?;
 
-    // workspace_root → docker build context; subpath is "" for
+    // workspace_root → artefact build context; subpath is "" for
     // standalone projects, e.g. "examples/keep" for workspace members.
     let workspace_root = discover_workspace_root(project)?;
     let workspace_subpath =
@@ -92,7 +91,7 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
     let target = args
         .target
         .as_deref()
-        .context("--target required (e.g. `--target railway`)")?;
+        .context("--target required (e.g. `--target cf-pages`)")?;
 
     let environment = if args.prod {
         Some("production".to_owned())
@@ -158,7 +157,7 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
         } else {
             eprintln!(
                 "--dry-run: workspace member detected — project `{}` at `{}/` \
-                 (docker build context: workspace root). Would write {} file(s) under `{}`.",
+                 (workspace root build context). Would write {} file(s) under `{}`.",
                 spec.app_name,
                 workspace_subpath,
                 staged.len(),
@@ -169,14 +168,19 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
             println!("\n=== {path} ===");
             println!("{content}");
         }
-        if args.skip_build {
-            eprintln!(
+        match (spec.mode, args.skip_build) {
+            (pocopine_deploy::Mode::Static, true) => eprintln!(
+                "--dry-run: --skip-build is set; would reuse the existing static dist and run the host-API deploy only."
+            ),
+            (pocopine_deploy::Mode::Static, false) => eprintln!(
+                "--dry-run: would then bundle wasm, assemble the static dist, upload missing assets, and create the host deployment."
+            ),
+            (pocopine_deploy::Mode::Fullstack, true) => eprintln!(
                 "--dry-run: --skip-build is set; would reuse the existing pushed image and run the host-API deploy only."
-            );
-        } else {
-            eprintln!(
+            ),
+            (pocopine_deploy::Mode::Fullstack, false) => eprintln!(
                 "--dry-run: would then bundle wasm + run `docker build` + `docker push` + host-API deploy."
-            );
+            ),
         }
         return Ok(());
     }
@@ -195,8 +199,9 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
         flush_one(&dest, content)?;
     }
 
-    // 4. Build the same artefacts as `pocopine build --release` so
-    //    the Dockerfile's COPY picks up fresh wasm + bundles.
+    // 4. Build the same browser artefacts as `pocopine build --release`.
+    //    Fullstack deploys also build configured server binaries; static
+    //    deploys deliberately do not compile a local-only server.
     //    Read config + build configured bins from `project`, not
     //    `args.path` — in workspace mode they're different (`args.path`
     //    is the workspace root or another member) and the wrong path
@@ -205,9 +210,14 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
         let cfg = crate::config::load(project)?;
         crate::build::wasm(project, true)?;
         crate::client_modules::build(project, true)?;
-        crate::build::configured_bins(project, &cfg, true)?;
+        if spec.mode == pocopine_deploy::Mode::Fullstack {
+            crate::build::configured_bins(project, &cfg, true)?;
+        }
         if let Some(tw) = cfg.tailwind.as_ref() {
             crate::tailwind::run_once(project, tw, true)?;
+        }
+        if crate::stylekit::enabled(&cfg, false, false) {
+            crate::stylekit::run_once(project, &cfg, false, true)?;
         }
     }
 
@@ -227,8 +237,8 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
         }
     }
 
-    // 5. `docker build .` runs from the workspace root so workspace
-    //    members' sibling crates (e.g. pocopine-launcher) are visible.
+    // 5. Artefact assembly runs from the workspace root so workspace
+    //    members and their sibling crates are addressable consistently.
     let original_cwd = std::env::current_dir().ok();
     std::env::set_current_dir(&workspace_root)
         .with_context(|| format!("cd {}", workspace_root.display()))?;
@@ -603,7 +613,7 @@ fn run_status(args: &DeployArgs, opts: &StatusArgs) -> Result<()> {
     }
 
     if !had_any_rows {
-        println!("(no processes declared in any deployable member)");
+        println!("(no deploy status rows returned for any deployable member)");
         return Ok(());
     }
     println!("{table}");
@@ -660,7 +670,7 @@ fn targets_for_project(args: &DeployArgs, project: &Path) -> Result<Vec<&'static
 
 /// Adapter names supported by the built-in [`resolve_adapter`]. Source
 /// of truth for `--target`-less status discovery.
-const KNOWN_TARGETS: &[&str] = &["railway", "render"];
+const KNOWN_TARGETS: &[&str] = &["cf-pages", "railway", "render"];
 
 fn status_one_project(
     args: &DeployArgs,
@@ -691,15 +701,19 @@ fn status_one_project(
     Ok((spec.app_name, statuses))
 }
 
-fn run_doctor() -> Result<()> {
+fn run_doctor(target: Option<&str>) -> Result<()> {
     println!("pocopine deploy doctor");
     println!();
 
-    print!("docker: ");
-    let docker = DockerClient::new();
-    match docker.check_available() {
-        Ok(()) => println!("ok"),
-        Err(e) => println!("unavailable\n  {e}"),
+    if target == Some("cf-pages") {
+        println!("docker: not required for cf-pages");
+    } else {
+        print!("docker: ");
+        let docker = DockerClient::new();
+        match docker.check_available() {
+            Ok(()) => println!("ok"),
+            Err(e) => println!("unavailable\n  {e}"),
+        }
     }
     println!();
 
@@ -748,14 +762,18 @@ fn flush_one(dest: &Path, content: &str) -> Result<()> {
 
 fn resolve_adapter(target: &str) -> Result<Box<dyn DeployAdapter>> {
     match target {
+        "cf-pages" => Ok(Box::new(
+            pocopine_deploy_cloudflare_pages::CloudflarePagesAdapter,
+        )),
         "railway" => Ok(Box::new(pocopine_deploy_railway::RailwayAdapter)),
         "render" => Ok(Box::new(pocopine_deploy_render::RenderAdapter)),
-        other => bail!("unknown target `{other}`. Known: railway, render."),
+        other => bail!("unknown target `{other}`. Known: cf-pages, railway, render."),
     }
 }
 
 fn dashboard_url_for(host: &str) -> &'static str {
     match host {
+        "cf-pages" => "https://dash.cloudflare.com/profile/api-tokens",
         "railway" => "https://railway.com/account/tokens",
         "render" => "https://dashboard.render.com/u/settings#api-keys",
         _ => "<host dashboard>",
@@ -1019,6 +1037,7 @@ mod tests {
 
     #[test]
     fn dashboard_url_for_known_hosts() {
+        assert!(dashboard_url_for("cf-pages").contains("cloudflare"));
         assert!(dashboard_url_for("railway").contains("railway"));
         assert!(dashboard_url_for("render").contains("render"));
         assert_eq!(dashboard_url_for("nope"), "<host dashboard>");
@@ -1026,9 +1045,44 @@ mod tests {
 
     #[test]
     fn resolve_adapter_known_target() {
+        assert!(resolve_adapter("cf-pages").is_ok());
         assert!(resolve_adapter("railway").is_ok());
         assert!(resolve_adapter("render").is_ok());
         assert!(resolve_adapter("nope").is_err());
+    }
+
+    #[test]
+    fn target_discovery_finds_cloudflare_pages_block() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
+                [package]
+                name = "site"
+                version = "0.1.0"
+
+                [package.metadata.pocopine.deploy]
+                mode = "static"
+
+                [package.metadata.pocopine.deploy.cf-pages]
+                account_id = "account"
+            "#,
+        )
+        .unwrap();
+        let args = DeployArgs {
+            path: dir.path().to_path_buf(),
+            cmd: None,
+            target: None,
+            dry_run: false,
+            prod: false,
+            skip_build: false,
+            workspace: false,
+        };
+
+        assert_eq!(
+            targets_for_project(&args, dir.path()).unwrap(),
+            vec!["cf-pages"]
+        );
     }
 
     #[test]

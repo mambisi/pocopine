@@ -279,7 +279,7 @@ pub struct DeployArgs {
     #[command(subcommand)]
     pub cmd: Option<DeployCmd>,
 
-    /// Target host adapter (e.g. `railway`).
+    /// Target host adapter (e.g. `cf-pages`, `railway`, or `render`).
     #[arg(long)]
     pub target: Option<String>,
 
@@ -296,10 +296,9 @@ pub struct DeployArgs {
     #[arg(long)]
     pub prod: bool,
 
-    /// Skip the local build + push. Use this when CI (or a previous
-    /// `pocopine deploy`) has already pushed the image; the adapter
-    /// will reuse the deterministic image tag and only run the
-    /// host-API deploy.
+    /// Skip the local build. Use this when CI (or a previous deploy)
+    /// already produced the static dist or pushed the container image;
+    /// the adapter reuses that artefact and only runs the host API.
     #[arg(long)]
     pub skip_build: bool,
 
@@ -315,7 +314,7 @@ pub struct DeployArgs {
 pub enum DeployCmd {
     /// Manage host API tokens (`~/.pocopine/credentials.toml`).
     Auth(AuthArgs),
-    /// Validate config, probe host APIs, check tokens + docker daemon.
+    /// Validate local deploy prerequisites and configured host tokens.
     Doctor,
     /// Show the current deploy state per process on the target host.
     Status(StatusArgs),
@@ -338,9 +337,9 @@ pub enum ConfigCmd {
     /// `~/.pocopine/config.toml`. If `<value>` is omitted, read it
     /// from stdin (so secrets aren't visible in shell history).
     Set {
-        /// Host name (`render`, `railway`, …).
+        /// Host name (`cf-pages`, `render`, `railway`, …).
         host: String,
-        /// Field name (`owner_id`, `workspace_id`, `region`, …).
+        /// Field name (`account_id`, `owner_id`, `workspace_id`, `region`, …).
         field: String,
         /// Value. Omit to read from stdin.
         value: Option<String>,
@@ -366,7 +365,8 @@ pub struct StatusArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct AuthArgs {
-    /// Host name (e.g. `railway`). Required unless `--list` or `--revoke`.
+    /// Host name (e.g. `cf-pages` or `railway`). Required unless
+    /// `--list` or `--revoke`.
     pub host: Option<String>,
 
     /// List configured tokens and their source (file/env).
