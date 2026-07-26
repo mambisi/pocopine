@@ -734,7 +734,8 @@ contract dependency.
 - Both reuse Phase 1's OCI image; the only delta is config generation.
 
 **Phase 3 — Static adapters.**
-- CF Pages, Netlify, GH Pages (Vercel optional).
+- CF Pages is implemented as an API-direct adapter and dogfooded by
+  `examples/website`; Netlify and GH Pages remain (Vercel optional).
 - Static-mode artefact: existing `pocopine build` output to `dist/`.
 - Detection-driven refusal for incompatible projects (per §9).
 

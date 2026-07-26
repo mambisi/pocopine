@@ -15,23 +15,19 @@ endpoint = "https://87f4ebd172bae793c02371ac18760868.r2.cloudflarestorage.com"
 public-base = "https://assets.pocopine.dev"
 
 [package.metadata.pocopine.deploy]
-mode = "fullstack"
-# Everything the server serves out of POCOPINE_DIST. The default is just
+mode = "static"
+# Everything the static deployment ships. The default is just
 # ["index.html", "pkg"]; this site also ships the global stylesheet, the
 # mascot/favicon, and the build-time-rendered docs fragments. Directory
 # entries (pkg, static-docs) are copied recursively.
 static_files = ["index.html", "pkg", "styles.css", "mascot.svg", "static-docs", "icons", "assets", "install.sh"]
 
-[package.metadata.pocopine.deploy.processes.web]
-bin = "server"
-port = 3001
-
-[package.metadata.pocopine.deploy.railway]
-# Defaults: project name = app name ("website"), environment = "production",
-# image_registry derived from the git remote (GitHub → ghcr.io/<owner>).
-# Override here when you need a non-default workspace or region.
-# workspace_id = "ws-..."
-# region = "us-west1"
+[package.metadata.pocopine.deploy.cf-pages]
+# Cloudflare account/project identifiers are non-secret. The API token is
+# loaded from `pocopine deploy auth cf-pages` or POCOPINE_CF_PAGES_TOKEN.
+account_id = "87f4ebd172bae793c02371ac18760868"
+project = "pocopine"
+production_branch = "main"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
