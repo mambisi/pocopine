@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Pocopine Agenkit runtime facade — the unified generative-AI app surface: Agenkit/Ai builders, providers, flows, tools/retrievers/embedders, agents, threads, parallel orchestration, and trace emission. App authors depend on this crate; it re-exports the stable contracts from pocopine-agenkit-core."
 
+[features]
+default = []
+sqlite-session = ["dep:rusqlite"]
+
 [dependencies]
 pocopine-agenkit-core = { workspace = true }
 
@@ -53,9 +57,9 @@ pocopine-crypto = { workspace = true }
 # Durable session store (W7): base64url thread ids + a CSPRNG to mint them.
 pocopine-codec = { workspace = true }
 getrandom = "0.2"
-# The indexed SQLite session store (W7). `bundled` ships SQLite (no system lib);
-# already a workspace dep via pocopine-sync-sqlite, so no new linkage.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# Optional indexed SQLite session store (W7). Applications using another
+# SessionStore should not link SQLite into their host binaries.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # OAuth provider credentials (W6.3): the flow + token-store contract live in this
 # shared crate; agenkit only adapts a stored token to a `ProviderCredential`.
 pocopine-auth-oauth = { workspace = true }

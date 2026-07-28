@@ -17,11 +17,12 @@
 //!   checkpoint, while [`Session::history`] keeps the full log (the checkpoint
 //!   *replaces* in the active context, it does not *duplicate* prior history).
 //!
-//! Three [`SessionStore`] impls ship: [`MemorySessionStore`] (tests/dev),
+//! Two [`SessionStore`] impls always ship: [`MemorySessionStore`] (tests/dev)
+//! and
 //! [`JsonlSessionStore`] (a cat-able JSONL log per thread + a meta sidecar;
-//! `children`/`last_seq` scan files), and [`SqliteSessionStore`] (the indexed
-//! production store — `children`/`last_seq` are indexed queries, `append` is one
-//! transactional `INSERT`). `delete_thread` refuses to orphan a fork (returns
+//! `children`/`last_seq` scan files). The `sqlite-session` feature additionally
+//! provides `SqliteSessionStore` for applications that choose SQLite.
+//! `delete_thread` refuses to orphan a fork (returns
 //! [`SessionError::HasChildren`]); delete the children first.
 //!
 //! [`ExternalizingSessionStore`] wraps any of them to keep large tool outputs
@@ -57,6 +58,7 @@ use serde::{Deserialize, Serialize};
 mod blob;
 mod jsonl;
 mod memory;
+#[cfg(feature = "sqlite-session")]
 mod sqlite;
 
 pub use blob::{
@@ -64,6 +66,7 @@ pub use blob::{
 };
 pub use jsonl::JsonlSessionStore;
 pub use memory::MemorySessionStore;
+#[cfg(feature = "sqlite-session")]
 pub use sqlite::SqliteSessionStore;
 
 /// An error from a session store.

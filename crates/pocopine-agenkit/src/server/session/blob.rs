@@ -13,12 +13,12 @@
 //! # async fn demo() -> pocopine_agenkit::server::session::SessionResult<()> {
 //! use std::sync::Arc;
 //! use pocopine_agenkit::server::session::{
-//!     ExternalizingSessionStore, FsBlobStore, Session, SessionStore, SqliteSessionStore,
+//!     ExternalizingSessionStore, FsBlobStore, JsonlSessionStore, Session, SessionStore,
 //! };
 //!
-//! // The indexed log keeps refs; the blob dir holds the big tool-output bytes.
+//! // The durable log keeps refs; the blob dir holds the big tool-output bytes.
 //! let store: Arc<dyn SessionStore> = Arc::new(ExternalizingSessionStore::new(
-//!     Arc::new(SqliteSessionStore::open("/var/lib/app/threads.db")?),
+//!     Arc::new(JsonlSessionStore::new("/var/lib/app/threads")),
 //!     Arc::new(FsBlobStore::new("/var/lib/app/blobs")),
 //! ));
 //! let chat = Session::create(store, None).await?;
@@ -93,8 +93,8 @@ impl BlobStore for MemoryBlobStore {
 }
 
 /// A filesystem blob store: one content-addressed file `<dir>/<digest>` per blob.
-/// Pairs naturally with [`super::JsonlSessionStore`] / [`super::SqliteSessionStore`]
-/// — the log/db stays small while the bytes live beside it.
+/// Pairs naturally with any durable [`SessionStore`] — the log or database stays
+/// small while the bytes live beside it.
 pub struct FsBlobStore {
     dir: PathBuf,
 }

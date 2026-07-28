@@ -4,10 +4,12 @@
 
 use std::sync::Arc;
 
-use pocopine_agenkit::server::session::{
-    JsonlSessionStore, Session, SessionStore, SqliteSessionStore, ThreadId,
-};
+#[cfg(feature = "sqlite-session")]
+use pocopine_agenkit::server::session::SqliteSessionStore;
+use pocopine_agenkit::server::session::{JsonlSessionStore, Session, SessionStore, ThreadId};
+#[cfg(feature = "sqlite-session")]
 use pocopine_agenkit::server::{AgentThreadStore, AuthUser, Principal, SessionThreadStore};
+#[cfg(feature = "sqlite-session")]
 use pocopine_agenkit_core::{Message, ThreadRetention};
 
 #[tokio::test]
@@ -106,6 +108,7 @@ async fn jsonl_store_persists_forks_and_their_tree() {
     );
 }
 
+#[cfg(feature = "sqlite-session")]
 #[tokio::test]
 async fn sqlite_store_survives_a_reopen_and_persists_a_fork() {
     let dir = tempfile::tempdir().unwrap();
@@ -150,6 +153,7 @@ async fn sqlite_store_survives_a_reopen_and_persists_a_fork() {
     assert_eq!(store.children(&id).await.unwrap().len(), 1);
 }
 
+#[cfg(feature = "sqlite-session")]
 #[tokio::test]
 async fn sqlite_thread_store_keeps_owner_scope_across_a_reopen() {
     let dir = tempfile::tempdir().unwrap();

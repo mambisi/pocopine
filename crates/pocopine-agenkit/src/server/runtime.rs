@@ -1136,7 +1136,7 @@ impl AgentSessionBuilder {
     /// process, but the thread is lost on restart). For across-restart durability,
     /// build the runtime with a durable store, e.g.
     /// `Agenkit::builder().thread_store(SessionThreadStore::new(Arc::new(
-    /// SqliteSessionStore::open(path)?)))`.
+    /// JsonlSessionStore::new(path))))`.
     pub async fn open(self, id: Option<AgentThreadId>) -> AgenkitResult<AgentSession> {
         let store = self.inner.thread_store.clone();
         let owner = ThreadOwner::from_principal(&self.principal);

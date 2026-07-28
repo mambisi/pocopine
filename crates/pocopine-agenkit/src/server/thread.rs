@@ -1161,6 +1161,7 @@ mod tests {
         assert_eq!(audits[0]["patch"]["title"], "First chat");
     }
 
+    #[cfg(feature = "sqlite-session")]
     #[tokio::test]
     async fn list_and_update_attributes_work_on_the_sqlite_backend() {
         // The same owner-scoped listing + mutation through the indexed store.
