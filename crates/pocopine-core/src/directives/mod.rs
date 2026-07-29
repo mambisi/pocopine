@@ -21,6 +21,7 @@ pub mod ref_;
 pub mod resize;
 pub mod roving;
 pub mod show;
+pub(crate) mod style_state;
 pub mod teleport;
 pub mod text;
 pub mod transition;

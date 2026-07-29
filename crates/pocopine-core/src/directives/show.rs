@@ -39,19 +39,18 @@ pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue
     let initial = Cell::new(true);
     let id = effect(move || {
         let truthy = !evaluator(&proxy_owned).is_falsy();
-        let style = html_el.style();
         let first_run = initial.replace(false);
         if truthy {
-            let _ = style.remove_property("display");
+            super::style_state::set_visible(&html_el, true);
             if !first_run {
                 transition::enter_subtree(html_el.as_ref(), || {});
             }
         } else if first_run {
-            let _ = style.set_property("display", "none");
+            super::style_state::set_visible(&html_el, false);
         } else {
-            let style_for_leave = style.clone();
+            let el_for_leave = html_el.clone();
             transition::leave_subtree(html_el.as_ref(), move || {
-                let _ = style_for_leave.set_property("display", "none");
+                super::style_state::set_visible(&el_for_leave, false);
             });
         }
     });

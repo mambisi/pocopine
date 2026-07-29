@@ -440,6 +440,50 @@ impl PlanComponentDirectiveHost {
     }
 }
 
+/// Regression for inline-style ownership shared by `pp-show` and `:style`.
+/// Both authored attribute orders are present because the directive effects
+/// run immediately as the compiled plan installs them.
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "plan-show-style-host",
+    template_inline = r#"<div class="pssh-root">
+        <button class="pssh-toggle" @click="toggle_visible">toggle visibility</button>
+        <button class="pssh-update" @click="update_styles">update styles</button>
+        <div class="pssh-show-first" pp-show="visible" :style="style_value"></div>
+        <div class="pssh-style-first" :style="style_value" pp-show="visible"></div>
+        <div class="pssh-bound-display" pp-show="visible" :style="display_style"></div>
+    </div>"#
+)]
+struct PlanShowStyleHost {
+    visible: bool,
+    alternate: bool,
+    style_value: String,
+    display_style: String,
+}
+
+#[handlers]
+impl PlanShowStyleHost {
+    pub fn on_setup(&mut self) {
+        self.style_value = "color:red".into();
+        self.display_style = "display:flex;color:red".into();
+    }
+
+    pub fn toggle_visible(&mut self) {
+        self.visible = !self.visible;
+    }
+
+    pub fn update_styles(&mut self) {
+        self.alternate = !self.alternate;
+        if self.alternate {
+            self.style_value = "color:blue".into();
+            self.display_style = "display:grid;color:blue".into();
+        } else {
+            self.style_value = "color:red".into();
+            self.display_style = "display:flex;color:red".into();
+        }
+    }
+}
+
 /// Child with a parent-writable prop used by the child-host
 /// directive plan regression.
 #[derive(Default, Serialize, Deserialize)]
@@ -1135,6 +1179,7 @@ fn register_all() {
     PlanIfChildHost::register();
     PlanComponentDirectiveChild::register();
     PlanComponentDirectiveHost::register();
+    PlanShowStyleHost::register();
     PlanHostDirectiveChild::register();
     PlanIfHostDirectiveHost::register();
     PlanModelDirectiveChild::register();
@@ -2369,6 +2414,83 @@ async fn component_hosts_support_pp_if_bodies_and_pp_show() {
         shown.query_selector(".pcdc-button").unwrap().is_some(),
         "pp-show toggles visibility without unmounting the child",
     );
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn pp_show_and_style_binding_preserve_each_others_state() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<plan-show-style-host></plan-show-style-host>");
+    tick().await;
+
+    let show_first = host
+        .query_selector(".pssh-show-first")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    let style_first = host
+        .query_selector(".pssh-style-first")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    let bound_display = host
+        .query_selector(".pssh-bound-display")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    let display = |el: &HtmlElement| el.style().get_property_value("display").unwrap();
+    let color = |el: &HtmlElement| el.style().get_property_value("color").unwrap();
+    let click = |selector: &str| {
+        host.query_selector(selector)
+            .unwrap()
+            .unwrap()
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .click();
+    };
+
+    assert_eq!(display(&show_first), "none");
+    assert_eq!(display(&style_first), "none");
+    assert_eq!(display(&bound_display), "none");
+
+    // A changed :style value must not remove pp-show's hidden overlay.
+    click(".pssh-update");
+    tick().await;
+    assert_eq!(color(&show_first), "blue");
+    assert_eq!(color(&style_first), "blue");
+    assert_eq!(color(&bound_display), "blue");
+    assert_eq!(display(&show_first), "none");
+    assert_eq!(display(&style_first), "none");
+    assert_eq!(display(&bound_display), "none");
+
+    // Showing restores the latest style-owned display value, or removes the
+    // overlay when the binding did not provide one.
+    click(".pssh-toggle");
+    tick().await;
+    assert_eq!(display(&show_first), "");
+    assert_eq!(display(&style_first), "");
+    assert_eq!(display(&bound_display), "grid");
+
+    // A visible style update becomes the new value pp-show restores later.
+    click(".pssh-update");
+    tick().await;
+    assert_eq!(display(&bound_display), "flex");
+    click(".pssh-toggle");
+    tick().await;
+    assert_eq!(display(&bound_display), "none");
+    click(".pssh-update");
+    tick().await;
+    assert_eq!(display(&bound_display), "none");
+    click(".pssh-toggle");
+    tick().await;
+    assert_eq!(display(&bound_display), "grid");
 
     assert_eq!(plan_failure_count(), 0);
     host.remove();

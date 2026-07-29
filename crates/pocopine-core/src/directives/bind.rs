@@ -141,7 +141,11 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
             return;
         }
         *p = None;
-        let _ = el.remove_attribute(dom_attr);
+        if dom_attr == "style" {
+            super::style_state::apply_bound_style(el, None);
+        } else {
+            let _ = el.remove_attribute(dom_attr);
+        }
         if dom_attr != attr {
             let _ = el.remove_attribute(attr);
         }
@@ -174,7 +178,11 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
     if dom_attr != attr {
         let _ = el.remove_attribute(attr);
     }
-    let _ = el.set_attribute(dom_attr, &serialised);
+    if dom_attr == "style" {
+        super::style_state::apply_bound_style(el, Some(&serialised));
+    } else {
+        let _ = el.set_attribute(dom_attr, &serialised);
+    }
     *prev.borrow_mut() = Some(serialised);
 }
 
