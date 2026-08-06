@@ -818,7 +818,10 @@ mod tests {
             cache_control_for("website_bg.0a1b2c3d.wasm"),
             Some(ASSET_CACHE_CONTROL)
         );
-        assert_eq!(cache_control_for("photo.0a1b2c3d.png"), Some(CACHE_NO_CACHE));
+        assert_eq!(
+            cache_control_for("photo.0a1b2c3d.png"),
+            Some(CACHE_NO_CACHE)
+        );
 
         // HTML names the current pair, so it must never be reused blind.
         assert_eq!(cache_control_for("index.html"), Some(CACHE_NO_CACHE));
@@ -831,7 +834,10 @@ mod tests {
 
         // Uppercase hex is not the hash shape, so it is not immutable —
         // treating it as such would pin a file that still changes.
-        assert_eq!(cache_control_for("website.DEADBEEF.js"), Some(CACHE_NO_CACHE));
+        assert_eq!(
+            cache_control_for("website.DEADBEEF.js"),
+            Some(CACHE_NO_CACHE)
+        );
 
         assert_eq!(cache_control_for("styles.css"), Some(CACHE_NO_CACHE));
     }

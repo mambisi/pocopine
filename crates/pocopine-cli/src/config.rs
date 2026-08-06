@@ -18,6 +18,29 @@ pub struct PocopineConfig {
     /// binds whatever it wants; pocopine does not override it.
     #[allow(dead_code)]
     pub port: Option<u16>,
+    /// Cargo profile for the release wasm build, passed to `wasm-pack
+    /// --profile`. Defaults to `release`.
+    ///
+    /// Exists because cargo profiles are workspace-wide while the two
+    /// targets want opposite things. A server wants `opt-level = 3` and
+    /// unwinding panics it can catch per request; a wasm bundle wants
+    /// `opt-level = "z"` and `panic = "abort"`, which costs nothing on
+    /// `wasm32-unknown-unknown` because there is no unwinding there to
+    /// begin with. Without a separate profile, tuning either one
+    /// pessimizes the other.
+    ///
+    /// ```toml
+    /// [package.metadata.pocopine]
+    /// wasm-profile = "wasm-release"
+    ///
+    /// [profile.wasm-release]
+    /// inherits = "release"
+    /// opt-level = "z"
+    /// lto = "fat"
+    /// codegen-units = 1
+    /// panic = "abort"
+    /// ```
+    pub wasm_profile: Option<String>,
     /// Opt into bundled Tailwind. When present, `pocopine-cli` runs
     /// the Tailwind standalone CLI alongside `wasm-pack` - one-shot
     /// on `build`/`run`, watch mode on `dev`.

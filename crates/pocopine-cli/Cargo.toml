@@ -11,6 +11,10 @@ name = "pocopine"
 path = "src/main.rs"
 
 [dependencies]
+# Build-time precompression of the hashed bundle pair (see build::precompress).
+# Both are already in the graph transitively, so this adds no new crates.
+brotli = "8"
+flate2 = "1"
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
 tiny_http = "0.12"

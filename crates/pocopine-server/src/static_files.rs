@@ -54,7 +54,18 @@ pub struct StaticFiles<F = DefaultServeDirFallback> {
 impl StaticFiles {
     pub(crate) fn new(dir: impl AsRef<Path>) -> Self {
         Self {
-            inner: ServeDir::new(&dir),
+            // Serve `<file>.br` / `<file>.gz` when the client accepts that
+            // encoding and the sibling exists — `pocopine build` writes them
+            // for the hashed bundle pair. Compressing at the edge instead
+            // costs CPU on every cold fetch and, on a multi-megabyte wasm
+            // module, becomes the download bottleneck: nginx emits brotli at
+            // roughly 2 MB/s. These files were compressed once, at the
+            // maximum level, so there is nothing left to trade.
+            //
+            // Falls through to the identity file when no sibling is present,
+            // so a checkout that never ran `pocopine build --release` and
+            // every unhashed asset both keep working unchanged.
+            inner: ServeDir::new(&dir).precompressed_br().precompressed_gzip(),
             root: dir.as_ref().to_path_buf(),
         }
     }
@@ -144,6 +155,13 @@ where
 }
 
 fn apply_cache_policy(immutable: bool, res: &mut Response<ServeFileSystemResponseBody>) {
+    // A negotiated response must say what it varied on. This one is served
+    // `public` and, for the bundle, `immutable` — so without `Vary` a shared
+    // cache is entitled to hand the stored brotli body to the next client,
+    // including one that cannot decode it. The bug that produces is a corrupt
+    // download for some fraction of users and nobody else, which is close to
+    // the worst shape a caching bug can take.
+    apply_vary(res);
     if res.headers().contains_key(header::CACHE_CONTROL) {
         return;
     }
@@ -162,6 +180,31 @@ fn apply_cache_policy(immutable: bool, res: &mut Response<ServeFileSystemRespons
     if is_html {
         res.headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+}
+
+/// Add `Vary: Accept-Encoding` to a content-negotiated response.
+///
+/// Only when the response actually carries a `Content-Encoding`: adding it
+/// unconditionally would fragment cache keys for files that were never
+/// negotiated, and `Vary` on an identity response buys nothing.
+fn apply_vary(res: &mut Response<ServeFileSystemResponseBody>) {
+    if !res.headers().contains_key(header::CONTENT_ENCODING) {
+        return;
+    }
+    let already = res
+        .headers()
+        .get_all(header::VARY)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("accept-encoding"))
+        });
+    if !already {
+        res.headers_mut()
+            .append(header::VARY, HeaderValue::from_static("accept-encoding"));
     }
 }
 
@@ -206,6 +249,76 @@ mod tests {
         assert!(!is_content_hashed_path("/pkg/website.0A1B2C3D.js"));
         assert!(!is_content_hashed_path("/pkg/website.abc.js"));
         assert!(!is_content_hashed_path("/img/photo.0a1b2c3d.png"));
+    }
+
+    fn header_value(
+        res: &Response<ServeFileSystemResponseBody>,
+        name: header::HeaderName,
+    ) -> Option<String> {
+        res.headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_string())
+    }
+
+    #[tokio::test]
+    async fn precompressed_sibling_is_served_and_marked_as_negotiated() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("pkg")).unwrap();
+        // `pocopine build` writes the sibling; the identity file stays.
+        std::fs::write(dir.path().join("pkg/app_bg.0a1b2c3d.wasm"), "raw-wasm").unwrap();
+        std::fs::write(
+            dir.path().join("pkg/app_bg.0a1b2c3d.wasm.br"),
+            "brotli-bytes",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("pkg/plain.js"), "identity-only").unwrap();
+
+        let svc = StaticFiles::new(dir.path());
+
+        let brotli = Request::builder()
+            .uri("/pkg/app_bg.0a1b2c3d.wasm")
+            .header(header::ACCEPT_ENCODING, "br")
+            .body(Body::empty())
+            .unwrap();
+        let res = svc.clone().oneshot(brotli).await.unwrap();
+        assert_eq!(
+            header_value(&res, header::CONTENT_ENCODING).as_deref(),
+            Some("br")
+        );
+        // Without this a shared cache may hand the brotli body to a client
+        // that cannot decode it — and the response is `immutable`, so it
+        // would keep doing so.
+        assert_eq!(
+            header_value(&res, header::VARY).as_deref(),
+            Some("accept-encoding")
+        );
+        assert_eq!(
+            cache_control(&res).as_deref(),
+            Some("public,max-age=31536000,immutable")
+        );
+        assert_eq!(body_string(res).await, "brotli-bytes");
+
+        // A client that does not accept brotli gets the identity file, and
+        // that response is not negotiated, so it carries no `Vary`.
+        let plain = Request::builder()
+            .uri("/pkg/app_bg.0a1b2c3d.wasm")
+            .header(header::ACCEPT_ENCODING, "identity")
+            .body(Body::empty())
+            .unwrap();
+        let res = svc.clone().oneshot(plain).await.unwrap();
+        assert_eq!(header_value(&res, header::CONTENT_ENCODING), None);
+        assert_eq!(header_value(&res, header::VARY), None);
+        assert_eq!(body_string(res).await, "raw-wasm");
+
+        // A file with no sibling is unaffected even when brotli is offered.
+        let missing = Request::builder()
+            .uri("/pkg/plain.js")
+            .header(header::ACCEPT_ENCODING, "br")
+            .body(Body::empty())
+            .unwrap();
+        let res = svc.oneshot(missing).await.unwrap();
+        assert_eq!(header_value(&res, header::CONTENT_ENCODING), None);
+        assert_eq!(body_string(res).await, "identity-only");
     }
 
     #[tokio::test]

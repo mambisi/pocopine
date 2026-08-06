@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions, TryLockError};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use anyhow::{Context, Result, bail};
@@ -31,7 +31,17 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
         let mut cmd = project_tools.wasm_pack().command();
         cmd.arg("build").arg("--target").arg("web");
         if release {
-            cmd.arg("--release");
+            // A project may name its own profile so the wasm can be tuned for
+            // size without dragging the server build with it; see
+            // `PocopineConfig::wasm_profile`.
+            match crate::config::load(&path).ok().and_then(|c| c.wasm_profile) {
+                Some(profile) if profile != "release" => {
+                    cmd.arg("--profile").arg(profile);
+                }
+                _ => {
+                    cmd.arg("--release");
+                }
+            }
         } else {
             cmd.arg("--dev");
         }
@@ -176,10 +186,93 @@ fn hash_pkg_bundle(project: &Path) -> Result<()> {
             .with_context(|| format!("rename to pkg/{hashed_wasm}"))?;
 
         println!("✓ hashed bundle pair: pkg/{hashed_js} + pkg/{hashed_wasm}");
+        precompress(&pkg.join(&hashed_wasm))?;
+        precompress(&pkg.join(&hashed_js))?;
         hashed.push((name, hash));
     }
     write_pkg_index_html(project, &hashed)?;
     Ok(())
+}
+
+/// Write `.br` and `.gz` siblings so the server can serve a compressed
+/// bundle without compressing it again on every request.
+///
+/// The alternative — compressing at the edge — costs CPU per cold fetch
+/// and, on a multi-megabyte wasm module, becomes the download bottleneck
+/// itself: nginx emits brotli at roughly 2 MB/s, which caps a client
+/// that could otherwise pull far faster. Doing it here happens once per
+/// build, so the maximum brotli level is free rather than something to
+/// trade away against latency.
+///
+/// Only the hashed pair is compressed. Those two files are immutable
+/// under their URL, so a stale sibling is impossible; compressing the
+/// whole tree would risk one.
+fn precompress(path: &Path) -> Result<()> {
+    use std::io::Write as _;
+
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+
+    // Level 11 with a 24-bit window: the largest ratio brotli offers.
+    // Affordable precisely because this is not on the request path.
+    let mut brotli_out = Vec::new();
+    brotli::BrotliCompress(
+        &mut bytes.as_slice(),
+        &mut brotli_out,
+        &brotli::enc::BrotliEncoderParams {
+            quality: 11,
+            lgwin: 24,
+            size_hint: bytes.len(),
+            ..Default::default()
+        },
+    )
+    .with_context(|| format!("brotli-compress {}", path.display()))?;
+    let brotli_path = append_extension(path, "br");
+    std::fs::write(&brotli_path, &brotli_out)
+        .with_context(|| format!("write {}", brotli_path.display()))?;
+
+    // gzip as well: a client that cannot take brotli — an old browser,
+    // or a proxy that strips the header — should still not be handed
+    // the raw module.
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder
+        .write_all(&bytes)
+        .and_then(|()| encoder.finish())
+        .map(|gzip_out| -> Result<()> {
+            let gzip_path = append_extension(path, "gz");
+            std::fs::write(&gzip_path, &gzip_out)
+                .with_context(|| format!("write {}", gzip_path.display()))?;
+            println!(
+                "✓ precompressed {}: {} → {} br / {} gz",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                human_bytes(bytes.len()),
+                human_bytes(brotli_out.len()),
+                human_bytes(gzip_out.len()),
+            );
+            Ok(())
+        })
+        .with_context(|| format!("gzip-compress {}", path.display()))??;
+    Ok(())
+}
+
+/// `foo.wasm` + `br` → `foo.wasm.br`. `Path::set_extension` would
+/// replace `wasm`, breaking the name the server looks for.
+fn append_extension(path: &Path, extension: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".");
+    name.push(extension);
+    PathBuf::from(name)
+}
+
+fn human_bytes(bytes: usize) -> String {
+    #[expect(clippy::cast_precision_loss, reason = "display only")]
+    let mib = bytes as f64 / (1024.0 * 1024.0);
+    if mib >= 1.0 {
+        format!("{mib:.2} MiB")
+    } else {
+        #[expect(clippy::cast_precision_loss, reason = "display only")]
+        let kib = bytes as f64 / 1024.0;
+        format!("{kib:.0} KiB")
+    }
 }
 
 /// Drop hashed `<name>.<hash8>.js` / `<name>_bg.<hash8>.wasm` leftovers
