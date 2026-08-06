@@ -286,9 +286,11 @@ internally — see [Utilities](./02-utilities.md#scheduling-work-tick).
 ## Async actions — dispatch! and spawn_scoped
 
 The canonical async-handler shape is "do `X`, then apply the result to
-`self`." `dispatch!` captures `this::<Self>()`, spawns the body on the
-microtask executor, and routes the awaited value through `Handle::update`
-so reactivity fires exactly once at the end:
+typed state." With two arguments, `dispatch!` captures `this::<Self>()`.
+Pass a `Handle<T>` as the first argument to target a store or another
+component. Both forms tie the task to the target scope, then route the
+awaited value through `Handle::update` so reactivity fires exactly once
+at the end:
 
 ```rust
 #[handlers]
@@ -310,6 +312,23 @@ impl BlogPost {
 `s` is `&mut Self`, `result` is the awaited value. Set the loading flag
 *before* `dispatch!` (synchronously, in the handler) so the spinner shows
 on the current flush; the result block runs later.
+
+An explicit target uses the same update path:
+
+```rust
+let preferences = store::<Preferences>();
+dispatch!(preferences, load_preferences().await, |store, result| {
+    match result {
+        Ok(loaded) => *store = loaded,
+        Err(error) => store.error = error.to_string(),
+    }
+});
+```
+
+The first argument can be any owned `Handle<T>`: a store handle, an
+injected component handle, or `this::<Self>()`. The future is cancelled
+if that target scope unmounts. `dispatch!` is still one-shot and does not
+make overlapping requests latest-wins.
 
 For an open-ended async loop — polling, an animation driver, a long-lived
 subscription — reach for `spawn_scoped`, which ties the task to the
@@ -351,6 +370,7 @@ for the timer and scheduling primitives these build on.
 | Mutate + notify from Rust | `Handle::update(\|s\| …)` | (via the handle) |
 | Snapshot read from Rust | `Handle::with(\|s\| …)` | (via the handle) |
 | Fetch then update self | `dispatch!(expr.await, \|s, r\| …)` | `pocopine::prelude::*` |
+| Fetch then update a handle/store | `dispatch!(handle, expr.await, \|s, r\| …)` | `pocopine::prelude::*` |
 | Own an async loop tied to the scope | `spawn_scoped(fut)` | `pocopine::prelude::*` |
 | Defer a write off the current borrow | `tick::next(\|\| …)` | `pocopine::tick` |
 

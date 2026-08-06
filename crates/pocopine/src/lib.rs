@@ -235,18 +235,28 @@ pub mod __private {
 
 /// Dispatch an async action and apply a state update when it resolves.
 ///
-/// The canonical shape for any async handler work: "do `X`, then when
-/// the result is back, mutate `self` with it." The macro captures the
-/// typed handle to `Self` via [`this`], spawns the body on the
-/// microtask executor, and routes the awaited value through
-/// [`Handle::update`] so reactivity fires exactly once at the end.
+/// The canonical shape for async state work: "do `X`, then when the
+/// result is back, mutate a typed target with it." Without an explicit
+/// target the macro captures `this::<Self>()`; pass any [`Handle<T>`]
+/// (including [`store::<T>()`](store)) as the first argument to target
+/// a store or another component. The task is tied to the target
+/// scope, so unmounting that scope cancels the future before it can
+/// apply a stale update.
 ///
-/// # Shape
+/// # Shapes
 ///
 /// ```ignore
+/// // Current component.
 /// dispatch!(
 ///     <expr evaluated in async context>,  // any expression, including `.await`s
 ///     |s, result| { /* update block — `s: &mut Self`, `result: T` */ },
+/// );
+///
+/// // Explicit component or store handle.
+/// dispatch!(
+///     store::<AppStore>(),
+///     <expr evaluated in async context>,
+///     |store, result| { /* `store: &mut AppStore` */ },
 /// );
 /// ```
 ///
@@ -272,16 +282,25 @@ pub mod __private {
 /// }
 /// ```
 ///
-/// Must be called inside a `#[handlers]` method — `this::<Self>()`
-/// panics outside an invoke context.
+/// The implicit form must be called inside a `#[handlers]` or lifecycle
+/// method — `this::<Self>()` panics outside an invoke context. The
+/// explicit-handle form can be called anywhere that owns a live
+/// [`Handle<T>`].
 #[macro_export]
 macro_rules! dispatch {
-    ($body:expr, |$s:ident, $result:ident| $update:block $(,)?) => {{
-        let __pocopine_handle = $crate::this::<Self>();
-        $crate::__private::wasm_bindgen_futures::spawn_local(async move {
+    (@target $target:expr, $body:expr, |$s:ident, $result:ident| $update:block) => {{
+        let __pocopine_handle = $target;
+        let __pocopine_scope_id = __pocopine_handle.scope_id();
+        let _ = $crate::spawn_for_scope(__pocopine_scope_id, async move {
             let $result = $body;
             __pocopine_handle.update(|$s| $update);
         });
+    }};
+    ($target:expr, $body:expr, |$s:ident, $result:ident| $update:block $(,)?) => {{
+        $crate::dispatch!(@target $target, $body, |$s, $result| $update);
+    }};
+    ($body:expr, |$s:ident, $result:ident| $update:block $(,)?) => {{
+        $crate::dispatch!(@target $crate::this::<Self>(), $body, |$s, $result| $update);
     }};
 }
 

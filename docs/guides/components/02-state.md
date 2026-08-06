@@ -331,27 +331,38 @@ impl BlogPost {
 }
 ```
 
-What `dispatch!` expands to: it calls `pocopine::this::<Self>()` for
-a typed handle, `spawn_local`s the first expression, and routes the
-awaited value through `Handle::update(|s| ...)` with the second
-closure — so reactivity fires exactly once when the future resolves.
+What `dispatch!` expands to: the implicit form calls
+`pocopine::this::<Self>()` for a typed handle; the three-argument form
+uses the supplied `Handle<T>`. It spawns the first expression as a task
+tied to that handle's scope and routes the awaited value through
+`Handle::update(|s| ...)` with the second closure — so reactivity fires
+exactly once when the future resolves, and an unmounted component
+cancels its pending update.
+
+```rust
+dispatch!(store::<Preferences>(), load_preferences().await, |store, result| {
+    if let Ok(preferences) = result {
+        *store = preferences;
+    }
+});
+```
 
 Key properties:
 
 * **No `JsValue` in user code.** Mutations are plain Rust field
   assignments (`s.title = post.title`); the macro-generated
   `ComponentState` impl handles any JS boundary internally.
-* **No `current_scope_id` plumbing.** `this::<Self>()` inside
-  `dispatch!` picks up the id from the handler context automatically.
+* **No `current_scope_id` plumbing.** The implicit form picks up the
+  current handler scope; the explicit form gets it from the supplied
+  handle.
 * **One trigger per completion.** Every subscriber of any field you
   touch in the closure re-runs on the next microtask — same batching
   as a synchronous handler.
 
-For the lower-level building blocks (when `dispatch!` isn't the right
-shape — e.g. dispatching into a store instead of `Self`, or
-firing-and-forgetting), call `pocopine::this::<T>()` or
+For lower-level shapes — snapshot reads, repeated updates during one
+task, or manual task cancellation — call `pocopine::this::<T>()` or
 `pocopine::store::<T>()` and use `Handle::update` / `Handle::with`
-directly.
+with the task primitives directly.
 
 ### Why struct fields, not reactive cells?
 
