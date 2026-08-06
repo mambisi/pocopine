@@ -583,7 +583,7 @@ fn handle(root: &Path, request: tiny_http::Request) {
                 tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap();
             let mut response = tiny_http::Response::from_data(body).with_header(header);
             let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if let Some(cache) = cache_control_for(name, mime) {
+            if let Some(cache) = cache_control_for(name) {
                 response = response.with_header(cache_control_header(cache));
             }
             let _ = request.respond(response);
@@ -696,15 +696,23 @@ fn cache_control_header(value: &str) -> tiny_http::Header {
 /// (`<name>.<hash8>.js` / `<name>_bg.<hash8>.wasm`, written by
 /// `build::hash_pkg_bundle`) never changes under its URL → immutable;
 /// HTML is the mutable entry point that names the current pair →
-/// revalidate every load. Everything else keeps no explicit header.
-fn cache_control_for(file_name: &str, mime: &str) -> Option<&'static str> {
+/// revalidate every load.
+///
+/// Everything else revalidates too, and that is the difference from
+/// production. `pocopine dev` serves the *unhashed* pair, so every
+/// rebuild changes the bytes behind a URL that did not change. With no
+/// explicit header a browser falls back to heuristic freshness and may
+/// reuse the previous `<name>_bg.wasm` — silently running the last
+/// build, or failing to link against a glue file it no longer matches.
+/// `no-cache` still permits a 304, so the cost is one conditional
+/// request against localhost; serving a stale wasm costs a debugging
+/// session. Production keeps the header off here because after
+/// `pocopine build` every mutable artefact is hash-named anyway.
+fn cache_control_for(file_name: &str) -> Option<&'static str> {
     if is_hashed_bundle_name(file_name) {
         return Some(ASSET_CACHE_CONTROL);
     }
-    if mime.starts_with("text/html") {
-        return Some(CACHE_NO_CACHE);
-    }
-    None
+    Some(CACHE_NO_CACHE)
 }
 
 /// True when the last URL segment has a file extension. Used to decide
@@ -799,33 +807,33 @@ mod tests {
     }
 
     #[test]
-    fn cache_policy_pins_hashed_bundles_and_revalidates_html() {
-        // The hashed pair → immutable.
+    fn cache_policy_pins_hashed_bundles_and_revalidates_everything_else() {
+        // The hashed pair → immutable. Only these two extensions qualify,
+        // so a hash-shaped name on any other file stays revalidating.
         assert_eq!(
-            cache_control_for("website.0a1b2c3d.js", "text/javascript"),
+            cache_control_for("website.0a1b2c3d.js"),
             Some(ASSET_CACHE_CONTROL)
         );
         assert_eq!(
-            cache_control_for("website_bg.0a1b2c3d.wasm", "application/wasm"),
+            cache_control_for("website_bg.0a1b2c3d.wasm"),
             Some(ASSET_CACHE_CONTROL)
         );
-        // HTML always revalidates.
-        assert_eq!(
-            cache_control_for("index.html", "text/html; charset=utf-8"),
-            Some(CACHE_NO_CACHE)
-        );
-        // Unhashed bundle names and other files keep no explicit policy.
-        assert_eq!(cache_control_for("website.js", "text/javascript"), None);
-        assert_eq!(
-            cache_control_for("website_bg.wasm", "application/wasm"),
-            None
-        );
-        assert_eq!(cache_control_for("styles.css", "text/css"), None);
-        assert_eq!(cache_control_for("photo.0a1b2c3d.png", "image/png"), None);
-        assert_eq!(
-            cache_control_for("website.DEADBEEF.js", "text/javascript"),
-            None
-        );
+        assert_eq!(cache_control_for("photo.0a1b2c3d.png"), Some(CACHE_NO_CACHE));
+
+        // HTML names the current pair, so it must never be reused blind.
+        assert_eq!(cache_control_for("index.html"), Some(CACHE_NO_CACHE));
+
+        // The unhashed pair is what `pocopine dev` actually serves: same URL
+        // every build, different bytes. Heuristic freshness on these is the
+        // stale-wasm trap this policy exists to close.
+        assert_eq!(cache_control_for("website.js"), Some(CACHE_NO_CACHE));
+        assert_eq!(cache_control_for("website_bg.wasm"), Some(CACHE_NO_CACHE));
+
+        // Uppercase hex is not the hash shape, so it is not immutable —
+        // treating it as such would pin a file that still changes.
+        assert_eq!(cache_control_for("website.DEADBEEF.js"), Some(CACHE_NO_CACHE));
+
+        assert_eq!(cache_control_for("styles.css"), Some(CACHE_NO_CACHE));
     }
 
     #[test]
