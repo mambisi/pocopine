@@ -1057,10 +1057,28 @@ fn commit_navigation(target: impl IntoRouteTarget, mode: NavigationMode) -> Navi
     };
     result.map_err(|_| NavigationFailure::HistoryRejected)?;
     let location = location_for_url(target.as_str());
-    if let Some(failure) = mount_current() {
+    if let Some(failure) = mount_current_or_defer() {
         return Err(failure);
     }
     Ok(location)
+}
+
+/// Paint the current URL now unless a component callback still owns state.
+///
+/// Programmatic navigation is commonly initiated by a `&mut self` handler.
+/// Mounting synchronously from that handler can tear down the route component
+/// and attempt its `on_unmount` borrow before the handler's `RefMut` has been
+/// released. The callback FIFO drains synchronously when the outermost frame
+/// unwinds, so the deferred branch stays in the same browser turn.
+fn mount_current_or_defer() -> Option<NavigationFailure> {
+    if crate::component_callback_active() {
+        crate::defer_component_callback(|| {
+            let _ = mount_current();
+        });
+        None
+    } else {
+        mount_current()
+    }
 }
 
 /// Explicitly prefetch a route target.
@@ -1383,17 +1401,25 @@ pub fn route_proxy() -> JsValue {
 ///   untouched. A later call to [`reevaluate_current`] after the
 ///   prerequisite completes will either mount the route or take the
 ///   normal redirect/reject path.
-/// - **`Redirect`** / **`Reject`** → the outlet is cleared
-///   synchronously so any PII in the now-rejected component leaves
-///   the DOM **before** the rejection chain paints its outcome,
-///   then the full mount flow re-runs through [`mount_current`] so
-///   handlers, error surface, and `RouteNavigationFailed` events
-///   fire exactly as they would on a fresh navigation.
+/// - **`Redirect`** / **`Reject`** → the outlet is cleared at the current
+///   component-callback safe point so any PII in the now-rejected component
+///   leaves the DOM before control returns to the browser event loop. The full
+///   mount flow then re-runs through [`mount_current`] so handlers, error
+///   surface, and `RouteNavigationFailed` events fire exactly as they would on
+///   a fresh navigation.
 ///
 /// No-op when the current path doesn't match any registered route
 /// (no guards to re-evaluate) or when the platform is unavailable.
 /// See RFC-078 §5.10.6 for the contract.
 pub fn reevaluate_current() {
+    if crate::component_callback_active() {
+        crate::defer_component_callback(reevaluate_current_now);
+    } else {
+        reevaluate_current_now();
+    }
+}
+
+fn reevaluate_current_now() {
     let Some(window) = web_sys::window() else {
         return;
     };

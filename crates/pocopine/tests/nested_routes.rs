@@ -20,6 +20,8 @@ thread_local! {
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static LAYOUT_MOUNTS: Cell<u32> = const { Cell::new(0) };
     static LAYOUT_UNMOUNTS: Cell<u32> = const { Cell::new(0) };
+    static SAFE_NAV_UNMOUNTS: Cell<u32> = const { Cell::new(0) };
+    static SAFE_GUARD_ALLOW: Cell<bool> = const { Cell::new(true) };
 }
 
 fn event(value: impl Into<String>) {
@@ -150,6 +152,126 @@ impl RouteComponent for NestedAdminSettings {
     }
 }
 
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
+#[component(
+    name = "nr-safe-nav-source",
+    template_inline = r#"<div class="nr-safe-nav-source">
+        <button class="nr-safe-navigate" @click="go_navigate">navigate</button>
+        <button class="nr-safe-push" @click="go_push">push</button>
+        <button class="nr-safe-replace" @click="go_replace">replace</button>
+    </div>"#
+)]
+struct SafeNavigationSource {}
+
+#[handlers]
+impl SafeNavigationSource {
+    pub fn go_navigate(&mut self) {
+        event("handler:navigate:start");
+        pocopine::navigate("/nr-safe-nav-navigate");
+        event("handler:navigate:return");
+    }
+
+    pub fn go_push(&mut self) {
+        event("handler:push:start");
+        let result = pocopine::push("/nr-safe-nav-push");
+        event(if result.is_ok() {
+            "handler:push:return"
+        } else {
+            "handler:push:error"
+        });
+    }
+
+    pub fn go_replace(&mut self) {
+        event("handler:replace:start");
+        let result = pocopine::replace("/nr-safe-nav-replace");
+        event(if result.is_ok() {
+            "handler:replace:return"
+        } else {
+            "handler:replace:error"
+        });
+    }
+
+    pub fn on_unmount(&mut self) {
+        event("source:unmount");
+        SAFE_NAV_UNMOUNTS.with(|count| count.set(count.get() + 1));
+    }
+}
+
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
+#[component(
+    name = "nr-safe-nav-navigate-target",
+    template_inline = r#"<div class="nr-safe-nav-navigate-target">navigate target</div>"#
+)]
+struct SafeNavigateTarget {}
+
+#[handlers]
+impl SafeNavigateTarget {
+    pub fn on_setup(&mut self) {
+        event("target:navigate:setup");
+    }
+}
+
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
+#[component(
+    name = "nr-safe-nav-push-target",
+    template_inline = r#"<div class="nr-safe-nav-push-target">push target</div>"#
+)]
+struct SafePushTarget {}
+
+#[handlers]
+impl SafePushTarget {
+    pub fn on_setup(&mut self) {
+        event("target:push:setup");
+    }
+}
+
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
+#[component(
+    name = "nr-safe-nav-replace-target",
+    template_inline = r#"<div class="nr-safe-nav-replace-target">replace target</div>"#
+)]
+struct SafeReplaceTarget {}
+
+#[handlers]
+impl SafeReplaceTarget {
+    pub fn on_setup(&mut self) {
+        event("target:replace:setup");
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "nr-safe-guard-source",
+    template_inline = r#"<button class="nr-safe-guard-reevaluate" @click="reject">reject</button>"#
+)]
+struct SafeGuardSource {}
+
+#[handlers]
+impl SafeGuardSource {
+    pub fn reject(&mut self) {
+        event("handler:guard:start");
+        SAFE_GUARD_ALLOW.with(|allow| allow.set(false));
+        pocopine::router::reevaluate_current();
+        event("handler:guard:return");
+    }
+
+    pub fn on_unmount(&mut self) {
+        event("guard-source:unmount");
+    }
+}
+
+impl RouteComponent for SafeGuardSource {
+    fn config() -> RouteConfig<Self> {
+        RouteConfig::new().guard(|_: &RouteContext<'_>| {
+            if SAFE_GUARD_ALLOW.with(Cell::get) {
+                RouteGuardDecision::Allow
+            } else {
+                RouteGuardDecision::Reject(RouteRejection::Forbidden("safe_point_test"))
+            }
+        })
+    }
+}
+
 fn document() -> web_sys::Document {
     window().unwrap().document().unwrap()
 }
@@ -194,6 +316,18 @@ fn text(root: &Element, selector: &str) -> String {
         .unwrap()
         .text_content()
         .unwrap_or_default()
+}
+
+fn assert_event_before(events: &[String], first: &str, second: &str) {
+    let first = events
+        .iter()
+        .position(|event| event == first)
+        .unwrap_or_else(|| panic!("missing `{first}` in {events:?}"));
+    let second = events
+        .iter()
+        .position(|event| event == second)
+        .unwrap_or_else(|| panic!("missing `{second}` in {events:?}"));
+    assert!(first < second, "expected event order in {events:?}");
 }
 
 #[wasm_bindgen_test(async)]
@@ -269,5 +403,96 @@ async fn nested_routes_mount_in_owned_outlets_and_preserve_the_layout_prefix() {
     assert_eq!(LAYOUT_UNMOUNTS.with(Cell::get), 1);
     host.remove();
     replace_url("/");
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test(async)]
+async fn handler_navigation_defers_route_teardown_until_after_the_state_borrow() {
+    EVENTS.with(|events| events.borrow_mut().clear());
+    SAFE_NAV_UNMOUNTS.with(|count| count.set(0));
+    pocopine::animate::disable_transitions();
+    replace_url("/");
+    let host = app_host();
+
+    App::new()
+        .route_component::<SafeNavigationSource>("/nr-safe-nav-source")
+        .route_component::<SafeNavigateTarget>("/nr-safe-nav-navigate")
+        .route_component::<SafePushTarget>("/nr-safe-nav-push")
+        .route_component::<SafeReplaceTarget>("/nr-safe-nav-replace")
+        .run();
+
+    pocopine::replace("/nr-safe-nav-source").unwrap();
+    EVENTS.with(|events| events.borrow_mut().clear());
+    click(&host, ".nr-safe-navigate");
+    settle().await;
+    let events = EVENTS.with(|events| events.borrow().clone());
+    assert_event_before(&events, "handler:navigate:return", "source:unmount");
+    assert!(
+        host.query_selector(".nr-safe-nav-navigate-target")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(SAFE_NAV_UNMOUNTS.with(Cell::get), 1);
+
+    pocopine::replace("/nr-safe-nav-source").unwrap();
+    EVENTS.with(|events| events.borrow_mut().clear());
+    click(&host, ".nr-safe-push");
+    settle().await;
+    let events = EVENTS.with(|events| events.borrow().clone());
+    assert_event_before(&events, "handler:push:return", "source:unmount");
+    assert!(
+        host.query_selector(".nr-safe-nav-push-target")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(SAFE_NAV_UNMOUNTS.with(Cell::get), 2);
+
+    pocopine::replace("/nr-safe-nav-source").unwrap();
+    EVENTS.with(|events| events.borrow_mut().clear());
+    click(&host, ".nr-safe-replace");
+    settle().await;
+    let events = EVENTS.with(|events| events.borrow().clone());
+    assert_event_before(&events, "handler:replace:return", "source:unmount");
+    assert!(
+        host.query_selector(".nr-safe-nav-replace-target")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(SAFE_NAV_UNMOUNTS.with(Cell::get), 3);
+
+    pocopine::replace("/").unwrap();
+    host.remove();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test(async)]
+async fn guard_reevaluation_defers_rejection_teardown_until_after_the_handler() {
+    EVENTS.with(|events| events.borrow_mut().clear());
+    SAFE_GUARD_ALLOW.with(|allow| allow.set(true));
+    pocopine::animate::disable_transitions();
+    replace_url("/");
+    let host = app_host();
+
+    App::new()
+        .route_component::<SafeGuardSource>("/nr-safe-guard-source")
+        .run();
+    pocopine::replace("/nr-safe-guard-source").unwrap();
+    EVENTS.with(|events| events.borrow_mut().clear());
+
+    click(&host, ".nr-safe-guard-reevaluate");
+    settle().await;
+
+    let events = EVENTS.with(|events| events.borrow().clone());
+    assert_event_before(&events, "handler:guard:return", "guard-source:unmount");
+    assert!(
+        host.query_selector("nr-safe-guard-source")
+            .unwrap()
+            .is_none(),
+        "rejected route component must be removed",
+    );
+
+    SAFE_GUARD_ALLOW.with(|allow| allow.set(true));
+    pocopine::replace("/").unwrap();
+    host.remove();
     pocopine::animate::enable_transitions();
 }
