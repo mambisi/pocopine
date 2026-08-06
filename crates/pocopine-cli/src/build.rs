@@ -295,7 +295,17 @@ fn remove_stale_hashed_pair(pkg: &Path, name: &str) {
 }
 
 /// `website.0a1b2c3d.js` ⊢ (`website.`, `.js`) → true.
+///
+/// Also matches the precompressed siblings — `website.0a1b2c3d.js.br` and
+/// `.gz`. Without that they would survive every rebuild, since each build
+/// produces a new hash and only the pair under the *previous* hash is looked
+/// for: `pkg/` would grow a compressed copy per build forever, and every one
+/// of them would ship in the image.
 fn is_hashed_variant(file: &str, prefix: &str, suffix: &str) -> bool {
+    let file = file
+        .strip_suffix(".br")
+        .or_else(|| file.strip_suffix(".gz"))
+        .unwrap_or(file);
     file.strip_prefix(prefix)
         .and_then(|rest| rest.strip_suffix(suffix))
         .is_some_and(crate::server::is_asset_hash)
@@ -618,6 +628,12 @@ mod tests {
         // including the generated index, which gets regenerated.
         std::fs::write(project.join("pkg/app.deadbeef.js"), "old").unwrap();
         std::fs::write(project.join("pkg/app_bg.deadbeef.wasm"), "old").unwrap();
+        // ...and their precompressed siblings, which would otherwise survive
+        // every build (each one produces a new hash) and accumulate one
+        // compressed copy per build, all of them shipped in the image.
+        std::fs::write(project.join("pkg/app.deadbeef.js.br"), "old").unwrap();
+        std::fs::write(project.join("pkg/app_bg.deadbeef.wasm.br"), "old").unwrap();
+        std::fs::write(project.join("pkg/app_bg.deadbeef.wasm.gz"), "old").unwrap();
         std::fs::write(project.join("pkg/index.html"), "stale generated copy").unwrap();
         let source_html =
             r#"<script type="module">import init from "/pkg/app.js";</script>"#.to_string();
@@ -632,6 +648,14 @@ mod tests {
         assert!(!project.join("pkg/app_bg.wasm").exists());
         assert!(!project.join("pkg/app.deadbeef.js").exists());
         assert!(!project.join("pkg/app_bg.deadbeef.wasm").exists());
+        assert!(!project.join("pkg/app.deadbeef.js.br").exists());
+        assert!(!project.join("pkg/app_bg.deadbeef.wasm.br").exists());
+        assert!(!project.join("pkg/app_bg.deadbeef.wasm.gz").exists());
+
+        // The current pair gets its own siblings, ready to serve.
+        assert!(project.join(format!("pkg/app_bg.{HASH}.wasm.br")).is_file());
+        assert!(project.join(format!("pkg/app_bg.{HASH}.wasm.gz")).is_file());
+        assert!(project.join(format!("pkg/app.{HASH}.js.br")).is_file());
 
         // Glue points at the hashed wasm.
         let glue = std::fs::read_to_string(project.join(format!("pkg/app.{HASH}.js"))).unwrap();
