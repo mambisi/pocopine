@@ -1720,13 +1720,34 @@ mod tests {
 
     #[tokio::test]
     async fn the_prompt_is_persisted_even_when_the_turn_errors() {
-        // The model calls a tool the agent never allow-listed → run_turn errors.
+        // The provider itself fails → run_turn errors.
+        //
+        // This used to provoke the error with a call to a non-allowlisted tool,
+        // which the runtime now recovers from by telling the model rather than
+        // failing the turn (see `tests/tool_allowlist.rs`). The property under
+        // test is unchanged — whatever kills a turn, the question must survive
+        // it — so only the error source moved.
+        struct Broken;
+        impl crate::server::Provider for Broken {
+            fn id(&self) -> &str {
+                "local"
+            }
+            fn generate<'a>(
+                &'a self,
+                _request: crate::server::GenerateRequest,
+                _cx: &'a crate::server::ProviderContext,
+            ) -> crate::server::BoxFuture<'a, AgenkitResult<crate::server::GenerateResponse>>
+            {
+                Box::pin(async {
+                    Err(pocopine_agenkit_core::AgenkitError::internal(
+                        "provider exploded",
+                    ))
+                })
+            }
+        }
+
         let agenkit = Agenkit::builder()
-            .provider(MockProvider::new("local").on_prompt_tool(
-                "go",
-                "ghost",
-                serde_json::json!({}),
-            ))
+            .provider(Broken)
             .default_model(ModelRef::new("local/default"))
             .build()
             .unwrap();

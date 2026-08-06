@@ -218,16 +218,65 @@ where
     ));
 
     for call in &response.tool_calls {
-        // Enforce the explicit tool allowlist (§D5/§D10).
-        if !allowlist.iter().any(|id| id == &call.tool_id) {
-            return Err(AgenkitError::tool_policy(format!(
+        // Enforce the explicit tool allowlist (§D5/§D10), then that the tool
+        // exists. Both refuse to run the call; what differs is whether
+        // refusing should end the run.
+        //
+        // `Propagate` (the typed run) keeps the hard error: a typed agent's
+        // allowlist is written next to its tools, so a call outside it is a
+        // programming error and failing loudly is the point.
+        //
+        // `FeedBack` (the runtime) tells the model instead. A chat model that
+        // names a tool it was not given — because the system prompt mentions
+        // one, or because the profile silently lost its tools — would
+        // otherwise destroy the user's entire turn over a recoverable mistake.
+        // The model can answer without it or say what it would need. The call
+        // is still NOT executed, so the policy guarantee is unchanged; only the
+        // blast radius shrinks. Repetition is bounded by the caller's step
+        // limit.
+        let refusal = if allowlist.iter().any(|id| id == &call.tool_id) {
+            inner
+                .tools
+                .get(&call.tool_id)
+                .is_none()
+                .then(|| format!("tool `{}` is not registered", call.tool_id))
+        } else {
+            Some(format!(
                 "{agent_label} called non-allowlisted tool `{}`",
                 call.tool_id
-            )));
+            ))
+        };
+        if let Some(reason) = refusal {
+            match error_mode {
+                ToolErrorMode::Propagate => return Err(AgenkitError::tool_policy(reason)),
+                ToolErrorMode::FeedBack => {
+                    // Observed, never swallowed: a call outside the allowlist
+                    // can be the visible edge of a prompt injection, so it has
+                    // to stay findable in logs and traces even though the run
+                    // continues.
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        %reason,
+                        "tool call refused by policy"
+                    );
+                    observer.tool_blocked(call, &reason);
+                    out.push(Message::tool_result(
+                        call.id.clone(),
+                        serde_json::json!({
+                            "error": reason,
+                            "hint": "This tool is not available in this conversation. \
+                                     Continue without it.",
+                        })
+                        .to_string(),
+                    ));
+                    continue;
+                }
+            }
         }
-        let tool = inner.tools.get(&call.tool_id).ok_or_else(|| {
-            AgenkitError::tool_policy(format!("tool `{}` is not registered", call.tool_id))
-        })?;
+        // Both checks passed above, so the registry has it.
+        let Some(tool) = inner.tools.get(&call.tool_id) else {
+            continue;
+        };
         let step = observer.tool_started(call);
 
         // `before_tool_call` hook (L3): block (approval/trust gate) or replace the
