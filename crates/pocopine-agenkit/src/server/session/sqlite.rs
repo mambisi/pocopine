@@ -80,14 +80,20 @@ impl SqliteSessionStore {
             .map_err(db_err)?
             .exists([])
             .map_err(db_err)?;
-        if !present {
-            conn.execute(
-                "ALTER TABLE threads ADD COLUMN inherits INTEGER NOT NULL DEFAULT 1",
-                [],
-            )
-            .map_err(db_err)?;
+        if present {
+            return Ok(());
         }
-        Ok(())
+        match conn.execute(
+            "ALTER TABLE threads ADD COLUMN inherits INTEGER NOT NULL DEFAULT 1",
+            [],
+        ) {
+            Ok(_) => Ok(()),
+            // Two processes can both see the column as absent before either
+            // ALTER commits. Losing that race means the column now exists, which
+            // is the outcome we wanted — not a reason to refuse to start.
+            Err(err) if is_duplicate_column(&err) => Ok(()),
+            Err(err) => Err(db_err(err)),
+        }
     }
 
     /// Run `f` against the locked connection.
@@ -110,6 +116,13 @@ impl SqliteSessionStore {
 
 fn db_err(err: rusqlite::Error) -> SessionError {
     SessionError::Backend(err.to_string())
+}
+
+/// Whether a failed `ALTER TABLE ... ADD COLUMN` lost a race to another process
+/// that added the same column. SQLite reports this as a generic error with a
+/// message rather than a distinct code, so the message is what there is to match.
+fn is_duplicate_column(err: &rusqlite::Error) -> bool {
+    err.to_string().contains("duplicate column name")
 }
 
 fn json_err(err: serde_json::Error) -> SessionError {
@@ -538,6 +551,26 @@ mod tests {
             store.delete_thread(branch.id()).await.unwrap_err(),
             SessionError::HasChildren
         ));
+    }
+
+    #[test]
+    fn a_lost_migration_race_is_recognized_rather_than_fatal() {
+        // Pins the message match in `is_duplicate_column` against the real
+        // SQLite error, since there is no distinct code to test for.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, inherits INTEGER NOT NULL DEFAULT 1);",
+        )
+        .unwrap();
+        let err = conn
+            .execute(
+                "ALTER TABLE threads ADD COLUMN inherits INTEGER NOT NULL DEFAULT 1",
+                [],
+            )
+            .unwrap_err();
+        assert!(is_duplicate_column(&err), "unrecognized: {err}");
+        // A migration that lost the race still leaves the store openable.
+        SqliteSessionStore::add_inherits_column(&conn).unwrap();
     }
 
     #[tokio::test]

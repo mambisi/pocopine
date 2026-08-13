@@ -90,9 +90,16 @@ pub enum SessionSourceRef {
 /// decodes to [`SessionEventKind::Unknown`] rather than failing, so an older
 /// reader can still open a log written by a newer one. (`#[serde(other)]` only
 /// applies to internally/adjacently tagged enums, so the fallback is
-/// hand-written below.) Serialization stays derived.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// hand-written below.)
+///
+/// Both halves are hand-written and both go through [`as_str`], so the encoding
+/// is the same snake_case string in every format — including binary ones, where
+/// a derived `Serialize` would have written a variant index that the
+/// string-reading `Deserialize` could not decode. The JSON form is unchanged
+/// from the derived `rename_all = "snake_case"` one.
+///
+/// [`as_str`]: SessionEventKind::as_str
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionEventKind {
     Started,
     AssistantText,
@@ -136,6 +143,19 @@ impl SessionEventKind {
             Self::SubagentFinished => "subagent_finished",
             Self::Unknown => "unknown",
         }
+    }
+}
+
+impl Serialize for SessionEventKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Unconditionally a string — no `is_human_readable` branch — so this
+        // cannot drift from the string-reading `Deserialize`. A derived impl
+        // would emit the variant *index* to a binary format, which that
+        // `Deserialize` could not read back.
+        serializer.serialize_str(self.as_str())
     }
 }
 

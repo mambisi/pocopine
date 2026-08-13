@@ -187,8 +187,15 @@ pub struct ParentLink {
     /// inherit the grandparents' history — so the walk needs to be told to stop,
     /// not merely bounded.
     ///
-    /// Defaults to `true` when absent: every link written before this existed
-    /// was a fork.
+    /// Defaults to `true` when absent: every link written before this field
+    /// existed was a fork.
+    ///
+    /// That default covers **self-describing** encodings (JSON, and so the
+    /// shipped JSONL store); the SQLite store carries its own column default.
+    /// A custom store persisting `ThreadMeta` through a non-self-describing
+    /// format (bincode, postcard) encodes a struct as a bare sequence, where a
+    /// serde default cannot rescue a record written with two fields — such a
+    /// store owns its own migration.
     #[serde(default = "inherits_by_default")]
     pub inherits: bool,
 }
