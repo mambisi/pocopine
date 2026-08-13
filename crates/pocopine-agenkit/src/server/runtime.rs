@@ -826,6 +826,7 @@ impl AgentSession {
             agent_id: "kitty".to_string(),
             hooks: Hooks::default(),
             capture: CapturePolicy::default(),
+            parent: None,
         }
     }
 
@@ -968,21 +969,57 @@ impl AgentSession {
     /// session over a forked thread that inherits the full history; the original
     /// is untouched. `None` if the store can't branch.
     pub async fn fork(&self) -> AgenkitResult<Option<AgentSession>> {
-        Ok(self.thread.fork().await?.map(|thread| AgentSession {
+        Ok(self
+            .thread
+            .fork()
+            .await?
+            .map(|thread| self.branch(thread, self.agent_id.clone(), self.config.clone())))
+    }
+
+    /// Fork the conversation into a branch driven by a **different** agent: the
+    /// child inherits the full history (as [`fork`](AgentSession::fork) does) but
+    /// runs under `agent_id` and `config` — its own system prompt, tool
+    /// allowlist, model and step budget.
+    ///
+    /// This is the delegation case ("different agent, inherited knowledge"),
+    /// where `fork` is the branching case ("same agent, alternate timeline"). A
+    /// subagent host uses it to hand a child the context so far while narrowing
+    /// what the child may do. `None` if the store can't branch.
+    pub async fn fork_as(
+        &self,
+        agent_id: impl Into<String>,
+        config: AgentConfig,
+    ) -> AgenkitResult<Option<AgentSession>> {
+        let agent_id = agent_id.into();
+        Ok(self
+            .thread
+            .fork_as(&agent_id)
+            .await?
+            .map(|thread| self.branch(thread, agent_id, config)))
+    }
+
+    /// Assemble a branched session over `thread`: an independent conversation
+    /// sharing this one's runtime, principal, capture policy and hooks, but with
+    /// a fresh steer queue, abort flag and turn lock.
+    fn branch(
+        &self,
+        thread: AgentThreadHandle,
+        agent_id: String,
+        config: AgentConfig,
+    ) -> AgentSession {
+        AgentSession {
             inner: self.inner.clone(),
             principal: self.principal.clone(),
-            config: self.config.clone(),
+            config,
             thread,
-            agent_id: self.agent_id.clone(),
-            // The branch is an independent conversation: same hooks, fresh
-            // queue + abort + turn lock.
+            agent_id,
             controls: TurnControls {
                 hooks: self.controls.hooks.clone(),
                 ..TurnControls::default()
             },
             busy: Arc::new(AtomicBool::new(false)),
             capture: self.capture,
-        }))
+        }
     }
 
     /// One prompt's work: load history → persist the prompt → run the turn →
@@ -1178,6 +1215,7 @@ pub struct AgentSessionBuilder {
     agent_id: String,
     hooks: Hooks,
     capture: CapturePolicy,
+    parent: Option<AgentThreadId>,
 }
 
 impl AgentSessionBuilder {
@@ -1225,6 +1263,22 @@ impl AgentSessionBuilder {
         self
     }
 
+    /// Record `parent` as the thread that spawned this session — the delegation
+    /// edge a subagent host needs (see [`AgentThreadStore::create_child`]).
+    ///
+    /// The new session still starts with an **empty** history: this is lineage,
+    /// not inheritance (use [`AgentSession::fork`] / [`AgentSession::fork_as`] to
+    /// carry a transcript across). `parent` must be owned by the same principal.
+    ///
+    /// Only meaningful when [`open`](AgentSessionBuilder::open) creates a thread.
+    /// Resuming an existing thread while a parent is set is a **config error**,
+    /// not a silent no-op: a resumed thread's lineage is already fixed, so the
+    /// two intents contradict.
+    pub fn parent(mut self, parent: AgentThreadId) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
     /// Open the session: resume the thread `id` if it exists **and** is owned by
     /// the principal, otherwise create a fresh thread.
     ///
@@ -1240,12 +1294,27 @@ impl AgentSessionBuilder {
         let owner_key = owner.key().map(str::to_string);
 
         let thread_id = match id {
-            Some(id) if store.load(&id, owner).await?.is_some() => id,
-            _ => {
-                store
-                    .create(&self.agent_id, owner, ThreadRetention::Durable)
-                    .await?
+            Some(id) if store.load(&id, owner).await?.is_some() => {
+                if self.parent.is_some() {
+                    return Err(AgenkitError::config(
+                        "AgentSessionBuilder::parent cannot be combined with resuming an \
+                         existing thread — the resumed thread's lineage is already recorded",
+                    ));
+                }
+                id
             }
+            _ => match &self.parent {
+                Some(parent) => {
+                    store
+                        .create_child(&self.agent_id, owner, ThreadRetention::Durable, parent)
+                        .await?
+                }
+                None => {
+                    store
+                        .create(&self.agent_id, owner, ThreadRetention::Durable)
+                        .await?
+                }
+            },
         };
         let thread = AgentThreadHandle {
             id: thread_id,
@@ -2158,5 +2227,95 @@ mod tests {
         // Regression: the derived Default gave max_steps_per_turn = 0 (a no-op turn).
         assert_eq!(AgentConfig::default().max_steps_per_turn, 8);
         assert_eq!(AgentConfig::new().max_steps_per_turn, 8);
+    }
+
+    #[tokio::test]
+    async fn spawned_session_starts_empty_but_records_its_parent() {
+        // The delegation shape: a child session with its own fresh context and a
+        // walkable edge back to the session that spawned it.
+        let agenkit = chat("child answer");
+        let parent = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let _ = parent.prompt("parent work").collect::<Vec<_>>().await;
+
+        let child = AgentSession::builder(&agenkit)
+            .agent_id("researcher")
+            .parent(parent.id().clone())
+            .open(None)
+            .await
+            .unwrap();
+        assert_ne!(child.id(), parent.id());
+        // No inherited transcript — the point of delegating.
+        assert!(child.history().await.unwrap().is_empty());
+
+        let _ = child.prompt("child work").collect::<Vec<_>>().await;
+        // The child's own turn only; the parent's 2 messages never leaked in.
+        assert_eq!(child.history().await.unwrap().len(), 2);
+        assert_eq!(parent.history().await.unwrap().len(), 2);
+
+        // The edge is recorded where the tree walk can see it.
+        let store = agenkit.inner.thread_store.clone();
+        let listed = store.list(ThreadOwner::anonymous()).await.unwrap();
+        let child_meta = listed.iter().find(|m| &m.id == child.id()).unwrap();
+        assert_eq!(child_meta.parent.as_ref(), Some(parent.id()));
+        assert_eq!(child_meta.attributes["agent_id"], "researcher");
+    }
+
+    #[tokio::test]
+    async fn parent_on_a_resumed_session_is_an_error_not_a_silent_drop() {
+        let agenkit = chat("hi");
+        let existing = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let other = AgentSession::builder(&agenkit).open(None).await.unwrap();
+
+        // Resuming a thread whose lineage is already fixed, while also asking for
+        // a new parent, is contradictory — it must not silently pick one.
+        let opened = AgentSession::builder(&agenkit)
+            .parent(other.id().clone())
+            .open(Some(existing.id().clone()))
+            .await;
+        let err = opened.err().expect("resume + parent must be rejected");
+        assert_eq!(err.kind(), "config");
+
+        // Without the parent, the same resume works.
+        let resumed = AgentSession::builder(&agenkit)
+            .open(Some(existing.id().clone()))
+            .await
+            .unwrap();
+        assert_eq!(resumed.id(), existing.id());
+    }
+
+    #[tokio::test]
+    async fn fork_as_carries_history_into_a_differently_configured_agent() {
+        // The other delegation shape: inherited knowledge, own identity.
+        let agenkit = chat("ok");
+        let parent = AgentSession::builder(&agenkit)
+            .agent_id("planner")
+            .config(AgentConfig::new().system("plan carefully").tools(["echo"]))
+            .open(None)
+            .await
+            .unwrap();
+        let _ = parent.prompt("shared context").collect::<Vec<_>>().await;
+
+        let child = parent
+            .fork_as("reviewer", AgentConfig::new().system("review only"))
+            .await
+            .unwrap()
+            .expect("store can branch");
+
+        // History inherited (unlike a spawn)…
+        let history = child.history().await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].content.as_text(), "shared context");
+        // …but the child runs as its own agent with its own config, and the
+        // parent's config is untouched.
+        assert_eq!(child.agent_id, "reviewer");
+        assert_eq!(child.config.system.as_deref(), Some("review only"));
+        assert!(child.config.tool_ids.is_empty());
+        assert_eq!(parent.agent_id, "planner");
+        assert_eq!(parent.config.system.as_deref(), Some("plan carefully"));
+
+        // Independent turn state: a fresh queue/abort/lock, so both can run.
+        let _ = child.prompt("branch work").collect::<Vec<_>>().await;
+        assert_eq!(child.history().await.unwrap().len(), 4);
+        assert_eq!(parent.history().await.unwrap().len(), 2);
     }
 }
