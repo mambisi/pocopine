@@ -166,14 +166,55 @@ pub struct Record {
     pub data: serde_json::Value,
 }
 
-/// A child thread's link to where it forked from its parent.
+/// A child thread's link to its parent.
+///
+/// Two shapes share one edge, distinguished by [`inherits`](ParentLink::inherits):
+/// a **fork** continues the parent's conversation, while a **spawn** only records
+/// where the child came from. Both are children for tree-walking and for the
+/// delete guard; only a fork replays anything.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParentLink {
     /// The parent thread.
     pub parent: ThreadId,
     /// The parent-local seq the fork split at: the child inherits parent records
-    /// `[0, fork_at_seq)`.
+    /// `[0, fork_at_seq)`. Ignored when `inherits` is false.
     pub fork_at_seq: u64,
+    /// Whether the child replays the parent's history.
+    ///
+    /// `false` marks a **spawn**: lineage only, the child starts empty. This
+    /// cannot be encoded as `fork_at_seq: 0`, because a genuine fork of a parent
+    /// that has no local records of its own also splits at 0 and must still
+    /// inherit the grandparents' history — so the walk needs to be told to stop,
+    /// not merely bounded.
+    ///
+    /// Defaults to `true` when absent: every link written before this existed
+    /// was a fork.
+    #[serde(default = "inherits_by_default")]
+    pub inherits: bool,
+}
+
+impl ParentLink {
+    /// A fork edge: the child replays parent records `[0, fork_at_seq)`.
+    pub fn fork(parent: ThreadId, fork_at_seq: u64) -> Self {
+        Self {
+            parent,
+            fork_at_seq,
+            inherits: true,
+        }
+    }
+
+    /// A spawn edge: provenance only, the child starts with an empty history.
+    pub fn spawn(parent: ThreadId) -> Self {
+        Self {
+            parent,
+            fork_at_seq: 0,
+            inherits: false,
+        }
+    }
+}
+
+fn inherits_by_default() -> bool {
+    true
 }
 
 /// A thread's metadata (everything but its records).
@@ -352,10 +393,7 @@ impl Session {
         let child = self
             .store
             .create_thread(
-                Some(ParentLink {
-                    parent: self.id.clone(),
-                    fork_at_seq,
-                }),
+                Some(ParentLink::fork(self.id.clone(), fork_at_seq)),
                 meta.attributes,
             )
             .await?;
@@ -378,6 +416,11 @@ async fn materialize(store: &dyn SessionStore, id: &ThreadId) -> SessionResult<V
         let meta = store.meta(&cur).await?.ok_or(SessionError::NotFound)?;
         chain.push((cur.clone(), limit));
         match meta.parent {
+            // A spawn edge is provenance only: the child's history is its own,
+            // so the chain above it contributes nothing. Bounding the immediate
+            // parent at 0 would not be enough — an ancestor further up could
+            // still splice its records in.
+            Some(p) if !p.inherits => break,
             Some(p) => {
                 cur = p.parent;
                 limit = Some(p.fork_at_seq);

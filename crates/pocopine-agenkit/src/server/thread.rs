@@ -204,16 +204,21 @@ pub trait AgentThreadStore: Send + Sync + 'static {
     /// The owner is still inherited (a fork never changes scope). The agent id
     /// must be set when the thread is created: it is a reserved attribute, so
     /// [`update_attributes`](AgentThreadStore::update_attributes) rejects it and
-    /// there is no post-hoc path. The default delegates to `fork` — a store that
-    /// doesn't record a per-thread agent id loses nothing by branching plainly.
+    /// there is no post-hoc path.
+    ///
+    /// The default is `Ok(None)` — "this store can't swap identity" — rather
+    /// than falling back to [`fork`](AgentThreadStore::fork). A plain fork would
+    /// return a branch still recorded under the *parent's* agent id while the
+    /// caller runs it under the new one, and the reserved attribute makes that
+    /// divergence unrepairable.
     fn fork_as(
         &self,
         id: &AgentThreadId,
         owner: ThreadOwner<'_>,
         agent_id: &str,
     ) -> BoxFuture<'_, AgenkitResult<Option<AgentThreadId>>> {
-        let _ = agent_id;
-        self.fork(id, owner)
+        let _ = (id, owner, agent_id);
+        Box::pin(async move { Ok(None) })
     }
 
     /// The threads owned by `owner`, newest-first (by creation time), with
@@ -438,17 +443,11 @@ impl AgentThreadStore for SessionThreadStore {
             {
                 return Err(AgenkitError::not_found("thread not found"));
             }
-            // `fork_at_seq: 0` inherits the empty prefix `[0, 0)`: the link is
-            // pure provenance, so `children(parent)` finds this thread while its
-            // materialized history stays its own.
+            // A spawn edge: `children(parent)` finds this thread, but its
+            // materialized history stays its own — including when the parent is
+            // itself a fork, since the walk stops at a non-inheriting link.
             let meta = sessions
-                .create_thread(
-                    Some(session::ParentLink {
-                        parent: parent_tid,
-                        fork_at_seq: 0,
-                    }),
-                    attributes,
-                )
+                .create_thread(Some(session::ParentLink::spawn(parent_tid)), attributes)
                 .await
                 .map_err(session_err)?;
             Ok(AgentThreadId::new(meta.id.as_str()))
@@ -612,10 +611,7 @@ impl AgentThreadStore for SessionThreadStore {
             }
             let child = sessions
                 .create_thread(
-                    Some(session::ParentLink {
-                        parent: tid,
-                        fork_at_seq: meta.last_seq,
-                    }),
+                    Some(session::ParentLink::fork(tid, meta.last_seq)),
                     attributes,
                 )
                 .await
@@ -1430,6 +1426,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_child_spawned_below_a_fork_inherits_nothing() {
+        // Regression: `fork_at_seq: 0` only bounds the PARENT's local records.
+        // When the parent is itself a fork, the ancestor walk kept climbing and
+        // the grandparent's transcript reached a supposedly fresh child.
+        let store = SessionThreadStore::in_memory();
+        let alice_p = alice();
+        let alice = ThreadOwner::from_principal(&alice_p);
+
+        let root = store
+            .create("root", alice, ThreadRetention::Session)
+            .await
+            .unwrap();
+        store
+            .append(&root, alice, vec![Message::new(Role::User, "root-secret")])
+            .await
+            .unwrap();
+        // The parent is itself a fork, so it carries an inheriting link.
+        let forked = store.fork(&root, alice).await.unwrap().unwrap();
+        assert_eq!(store.load(&forked, alice).await.unwrap().unwrap().len(), 1);
+
+        let child = store
+            .create_child("child", alice, ThreadRetention::Session, &forked)
+            .await
+            .unwrap();
+        assert!(
+            store.load(&child, alice).await.unwrap().unwrap().is_empty(),
+            "a spawned child must not inherit its grandparent's history"
+        );
+    }
+
+    #[tokio::test]
     async fn create_child_rejects_foreign_or_missing_parent() {
         let store = SessionThreadStore::in_memory();
         let (alice_p, bob_p) = (alice(), bob());
@@ -1508,7 +1535,10 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), "config");
-        // The plain fork default stays permissive (Ok(None) = "can't branch").
+        // fork_as reports "can't swap identity" (Ok(None)) rather than falling
+        // back to a plain fork, which would leave the branch recorded under the
+        // parent's agent id while the caller runs it as another — and agent_id
+        // is reserved, so that divergence could never be repaired.
         assert!(
             BareStore
                 .fork_as(
