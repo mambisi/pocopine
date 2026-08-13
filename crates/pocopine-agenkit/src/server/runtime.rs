@@ -998,6 +998,35 @@ impl AgentSession {
             .map(|thread| self.branch(thread, agent_id, config)))
     }
 
+    /// Replace this session's `before_tool_call` hook, returning it.
+    ///
+    /// A branch made by [`fork`](AgentSession::fork) or
+    /// [`fork_as`](AgentSession::fork_as) inherits the parent's hook, which is
+    /// the wrong default for a delegated child: a child is normally run
+    /// **fail-closed**, with a gate that denies anything needing approval rather
+    /// than inheriting an interactive one that would block an autonomous run.
+    /// The hook is opaque once installed, so this is the only way to swap it.
+    ///
+    /// Only the receiving session is affected — a branch owns its own
+    /// [`TurnControls`], so re-hooking a child never reaches its parent. Call it
+    /// before the first `prompt`.
+    pub fn with_before_tool_call<F>(mut self, hook: F) -> Self
+    where
+        F: for<'a> Fn(&'a ToolCall) -> BoxFuture<'a, ToolDecision> + Send + Sync + 'static,
+    {
+        self.controls.hooks.before_tool_call = Some(Arc::new(hook));
+        self
+    }
+
+    /// Drop this session's `before_tool_call` hook (see
+    /// [`with_before_tool_call`](AgentSession::with_before_tool_call)) so tool
+    /// dispatch runs ungated. Mostly useful to strip an inherited hook from a
+    /// branch before installing the host's own policy.
+    pub fn without_before_tool_call(mut self) -> Self {
+        self.controls.hooks.before_tool_call = None;
+        self
+    }
+
     /// Assemble a branched session over `thread`: an independent conversation
     /// sharing this one's runtime, principal, capture policy and hooks, but with
     /// a fresh steer queue, abort flag and turn lock.
@@ -2317,5 +2346,60 @@ mod tests {
         let _ = child.prompt("branch work").collect::<Vec<_>>().await;
         assert_eq!(child.history().await.unwrap().len(), 4);
         assert_eq!(parent.history().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_branch_can_replace_the_tool_hook_it_inherited() {
+        // A delegated child must run fail-closed. It inherits the parent's hook,
+        // so without a way to swap it an autonomous child would be stuck with
+        // the parent's (possibly interactive) gate.
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("go", "echo", serde_json::json!({ "text": "hi" }))
+                    .default_text("done"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Echo)
+            .build()
+            .unwrap();
+
+        let parent = AgentSession::builder(&agenkit)
+            .config(AgentConfig::new().tools(["echo"]))
+            .before_tool_call(|_| Box::pin(async { ToolDecision::Proceed }))
+            .open(None)
+            .await
+            .unwrap();
+
+        let child = parent
+            .fork_as("child", AgentConfig::new().tools(["echo"]))
+            .await
+            .unwrap()
+            .expect("store can branch")
+            .with_before_tool_call(|_| {
+                Box::pin(async {
+                    ToolDecision::Block {
+                        reason: "children run fail-closed".to_string(),
+                    }
+                })
+            });
+
+        let events: Vec<_> = child.prompt("go").collect().await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolBlocked { reason, .. }
+                    if reason == "children run fail-closed")),
+            "the child's own hook should have run: {events:?}"
+        );
+
+        // The parent's hook is untouched — its tool still runs.
+        let parent_events: Vec<_> = parent.prompt("go").collect().await;
+        assert!(
+            parent_events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolCompleted { tool, .. } if tool == "echo")),
+            "re-hooking the branch must not reach the parent: {parent_events:?}"
+        );
     }
 }

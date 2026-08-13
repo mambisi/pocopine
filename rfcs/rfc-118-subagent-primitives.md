@@ -65,22 +65,36 @@ split: an **empty context** (that is the point of delegating — the child burns
 window, not the parent's) yet a **recorded spawned-by edge** so the host can walk, export,
 and audit the tree.
 
-The encoding already exists for free: `fork_at_seq: 0` inherits `[0, 0)` — nothing — and
-is purely a provenance edge. What's missing is any public way to create a thread with it:
-`AgentThreadStore::create` (`thread.rs:97`) takes no parent, and
-`AgentSessionBuilder::open(None)` bottoms out there. An app's only workaround is stuffing
-a parent id into the free-form `attributes` JSON — a private convention the session
-layer's own tree walk (`children`, materialize, `HasChildren`) never sees.
+There is no public way to create such a thread: `AgentThreadStore::create`
+(`thread.rs:97`) takes no parent, and `AgentSessionBuilder::open(None)` bottoms out
+there. An app's only workaround is stuffing a parent id into the free-form `attributes`
+JSON — a private convention the session layer's own tree walk (`children`, materialize,
+`HasChildren`) never sees.
 
 ```text
       fork() today                          primitive 1 (spawn edge)
 
 P: [m1 m2 m3 m4]                        P: [m1 m2 m3 m4]
-        │ ParentLink{P, fork_at_seq:4}          │ ParentLink{P, fork_at_seq:0}
+        │ ParentLink{P, 4, inherits}            │ ParentLink{P, spawn}
         ▼                                       ▼
 C: (m1 m2 m3 m4 inherited) + own log    C: own log only — empty start,
    "same history, branched"                but children(P) still finds C
 ```
+
+**`fork_at_seq: 0` is not sufficient on its own.** An earlier draft claimed the encoding
+came for free, since inheriting `[0, 0)` is inheriting nothing. That is wrong:
+`materialize` walks the *entire* ancestor chain, and `fork_at_seq` bounds only the
+immediate parent's local records — so under root → fork → spawn, the grandparent's
+transcript still splices into a supposedly fresh child. Nor can `fork_at_seq == 0` serve
+as the marker, because a genuine fork of a parent that holds no local records of its own
+also splits at 0 and *must* keep inheriting from above.
+
+So the link carries an explicit `inherits: bool` (serde-defaulted to `true` — every
+previously written link is a fork; the SQLite store gains the column by additive `ALTER`),
+and `materialize` stops climbing when it meets a non-inheriting link. Both shapes stay
+children for `children()` and for the `HasChildren` delete guard; only a fork replays
+anything. Constructors `ParentLink::fork(parent, at)` and `ParentLink::spawn(parent)` keep
+call sites from having to remember which flag means what.
 
 ### The API
 
@@ -94,7 +108,7 @@ pub trait AgentThreadStore {
                     retention: ThreadRetention, parent: &AgentThreadId)
         -> BoxFuture<'_, AgenkitResult<AgentThreadId>> { /* Err */ }
 }
-// SessionThreadStore overrides it: create_thread(Some(ParentLink{parent, fork_at_seq: 0}),
+// SessionThreadStore overrides it: create_thread(Some(ParentLink::spawn(parent)),
 // attributes {owner, agent_id}) — owner scoping identical to create().
 
 // runtime.rs
@@ -143,15 +157,29 @@ impl AgentSession {
     /// timeline to a different agent identity and config.
     pub async fn fork_as(&self, agent_id: impl Into<String>, config: AgentConfig)
         -> AgenkitResult<Option<AgentSession>>;
+
+    /// Replace (or clear) the inherited before_tool_call hook on this session.
+    pub fn with_before_tool_call<F>(self, hook: F) -> Self where /* … */;
+    pub fn without_before_tool_call(self) -> Self;
 }
 ```
 
 Semantics: thread fork identical to `fork()` (child inherits the full record range;
-parent untouched; owner inherited). The child session gets the given `config`/`agent_id`,
-fresh `TurnControls`/abort/busy state, and the parent's hooks unless the caller replaces
-them. Implementation note: a fork inherits the parent's attributes including `agent_id`,
-and `update_attributes` rightly rejects the reserved key — `fork_as` must therefore set
-the child's `agent_id` attribute at creation time through the store, not post-hoc.
+parent untouched; owner inherited). The child session gets the given `config`/`agent_id`
+and fresh `TurnControls`/abort/busy state. Implementation note: a fork inherits the
+parent's attributes including `agent_id`, and `update_attributes` rightly rejects the
+reserved key — `fork_as` must therefore set the child's `agent_id` attribute at creation
+time through the store, not post-hoc. The store-level default is `Ok(None)`
+("can't swap identity") rather than a fallback to plain `fork`, which would leave the
+branch recorded under the parent's agent id while the caller ran it as another — a
+divergence the reserved attribute makes unrepairable.
+
+A branch also inherits the parent's `before_tool_call` hook, which is the wrong default
+for a delegated child: §"The recipe" requires children to run fail-closed, and an
+inherited *interactive* approval gate would instead stall an autonomous child. The hook is
+opaque once installed, so `with_before_tool_call` / `without_before_tool_call` on the
+session are what let a host swap it. They affect only the receiving session — a branch
+owns its own `TurnControls`, so re-hooking a child never reaches its parent.
 
 `fork()` remains and becomes the trivial case (`fork_as(self.agent_id, self.config)`).
 

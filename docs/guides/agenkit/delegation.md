@@ -65,7 +65,9 @@ let reviewer = parent
         .system("Review the work above. Report problems only.")
         .tools(["fs.read"]))
     .await?
-    .expect("store can branch");
+    .expect("store can branch")
+    // A branch inherits the parent's tool hook. Swap in the child's own gate.
+    .with_before_tool_call(fail_closed_gate);
 ```
 
 The child replays everything the parent has seen, then runs under its own
@@ -104,6 +106,12 @@ that the parent uses, and give the child **no approver** by default so every
 tools that are already allowed outright. This keeps autonomous fan-out from
 stalling on interactive prompts, and makes delegation strictly non-escalating:
 nothing a child does could not have been done directly by its parent.
+
+A spawned child takes its hook from the builder. A **forked** child inherits the
+parent's — including an interactive approval gate an autonomous child would
+block on — so replace it explicitly with `with_before_tool_call`, or clear it
+with `without_before_tool_call` before installing your own. Re-hooking a branch
+never reaches the parent.
 
 Keep the child on the **same principal**. Owner scoping is what stops one
 user's threads from being readable by another; a child that switched principals

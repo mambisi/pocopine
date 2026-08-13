@@ -27,7 +27,8 @@ const SCHEMA: &str = "
         parent      TEXT,
         fork_at_seq INTEGER,
         created_ms  INTEGER NOT NULL,
-        attributes  TEXT NOT NULL DEFAULT 'null'
+        attributes  TEXT NOT NULL DEFAULT 'null',
+        inherits    INTEGER NOT NULL DEFAULT 1
     );
     CREATE INDEX IF NOT EXISTS threads_parent ON threads(parent);
     CREATE TABLE IF NOT EXISTS records (
@@ -63,9 +64,30 @@ impl SqliteSessionStore {
     /// Build from an existing connection, bootstrapping the schema.
     pub fn from_connection(conn: Connection) -> SessionResult<Self> {
         conn.execute_batch(SCHEMA).map_err(db_err)?;
+        Self::add_inherits_column(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// Add the `inherits` column to a database created before spawn edges
+    /// existed. Every link such a database holds is a fork, which is the
+    /// column's default, so no backfill is needed. `CREATE TABLE IF NOT EXISTS`
+    /// leaves an existing table untouched, so this has to be its own statement.
+    fn add_inherits_column(conn: &Connection) -> SessionResult<()> {
+        let present = conn
+            .prepare("SELECT 1 FROM pragma_table_info('threads') WHERE name = 'inherits'")
+            .map_err(db_err)?
+            .exists([])
+            .map_err(db_err)?;
+        if !present {
+            conn.execute(
+                "ALTER TABLE threads ADD COLUMN inherits INTEGER NOT NULL DEFAULT 1",
+                [],
+            )
+            .map_err(db_err)?;
+        }
+        Ok(())
     }
 
     /// Run `f` against the locked connection.
@@ -135,22 +157,24 @@ impl SessionStore for SqliteSessionStore {
             let id = ThreadId::mint()?;
             let created_ms = now_ms();
             let attrs_json = serde_json::to_string(&attributes).map_err(json_err)?;
-            let (parent_id, fork_at) = match &parent {
+            let (parent_id, fork_at, inherits) = match &parent {
                 Some(p) => (
                     Some(p.parent.as_str().to_string()),
                     Some(p.fork_at_seq as i64),
+                    p.inherits,
                 ),
-                None => (None, None),
+                None => (None, None, true),
             };
             conn.execute(
-                "INSERT INTO threads (id, parent, fork_at_seq, created_ms, attributes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO threads (id, parent, fork_at_seq, created_ms, attributes, inherits) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     id.as_str(),
                     parent_id,
                     fork_at,
                     created_ms as i64,
-                    attrs_json
+                    attrs_json,
+                    inherits
                 ],
             )
             .map_err(db_err)?;
@@ -168,7 +192,8 @@ impl SessionStore for SqliteSessionStore {
         Self::ready(self.with_conn(|conn| {
             let row = conn
                 .query_row(
-                    "SELECT parent, fork_at_seq, created_ms, attributes FROM threads WHERE id = ?1",
+                    "SELECT parent, fork_at_seq, created_ms, attributes, inherits \
+                     FROM threads WHERE id = ?1",
                     params![id.as_str()],
                     |r| {
                         Ok((
@@ -176,12 +201,13 @@ impl SessionStore for SqliteSessionStore {
                             r.get::<_, Option<i64>>(1)?,
                             r.get::<_, i64>(2)?,
                             r.get::<_, String>(3)?,
+                            r.get::<_, bool>(4)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(db_err)?;
-            let Some((parent_id, fork_at, created_ms, attrs_json)) = row else {
+            let Some((parent_id, fork_at, created_ms, attrs_json, inherits)) = row else {
                 return Ok(None);
             };
             // Next seq = MAX(seq)+1 (a single index seek on the (thread_id, seq)
@@ -198,6 +224,7 @@ impl SessionStore for SqliteSessionStore {
                 (Some(p), Some(f)) => Some(ParentLink {
                     parent: ThreadId::new(p),
                     fork_at_seq: f as u64,
+                    inherits,
                 }),
                 _ => None,
             };
@@ -219,7 +246,7 @@ impl SessionStore for SqliteSessionStore {
                 .prepare(
                     "SELECT t.id, t.parent, t.fork_at_seq, t.created_ms, t.attributes, \
                             (SELECT COALESCE(MAX(seq), -1) + 1 FROM records r \
-                             WHERE r.thread_id = t.id) \
+                             WHERE r.thread_id = t.id), t.inherits \
                      FROM threads t",
                 )
                 .map_err(db_err)?;
@@ -232,17 +259,19 @@ impl SessionStore for SqliteSessionStore {
                         r.get::<_, i64>(3)?,
                         r.get::<_, String>(4)?,
                         r.get::<_, i64>(5)?,
+                        r.get::<_, bool>(6)?,
                     ))
                 })
                 .map_err(db_err)?;
             let mut out = Vec::new();
             for row in rows {
-                let (id, parent_id, fork_at, created_ms, attrs_json, last_seq) =
+                let (id, parent_id, fork_at, created_ms, attrs_json, last_seq, inherits) =
                     row.map_err(db_err)?;
                 let parent = match (parent_id, fork_at) {
                     (Some(p), Some(f)) => Some(ParentLink {
                         parent: ThreadId::new(p),
                         fork_at_seq: f as u64,
+                        inherits,
                     }),
                     _ => None,
                 };
@@ -440,10 +469,7 @@ mod tests {
         // children() is the indexed parent lookup.
         let child = store
             .create_thread(
-                Some(ParentLink {
-                    parent: root.id.clone(),
-                    fork_at_seq: 1,
-                }),
+                Some(ParentLink::fork(root.id.clone(), 1)),
                 serde_json::json!({ "owner": "alice" }),
             )
             .await
@@ -454,6 +480,7 @@ mod tests {
         let child_meta = store.meta(&child.id).await.unwrap().unwrap();
         assert_eq!(child_meta.parent.as_ref().unwrap().parent, root.id);
         assert_eq!(child_meta.parent.as_ref().unwrap().fork_at_seq, 1);
+        assert!(child_meta.parent.as_ref().unwrap().inherits);
 
         // delete refuses while a fork still points here (would orphan it)...
         assert!(matches!(
@@ -490,6 +517,59 @@ mod tests {
         assert_eq!(bh.len(), 2);
         assert_eq!(bh[0].data, serde_json::json!({ "m": 0 }));
         assert_eq!(bh[1].data, serde_json::json!({ "b": 0 }));
+
+        // A spawn edge under that branch is lineage only: `inherits` survives
+        // the column round-trip, and materialize stops rather than climbing to
+        // the root's records.
+        let spawned = store
+            .create_thread(
+                Some(ParentLink::spawn(branch.id().clone())),
+                serde_json::Value::Null,
+            )
+            .await
+            .unwrap();
+        assert!(!spawned.parent.as_ref().unwrap().inherits);
+        let spawned = Session::open(store.clone(), spawned.id);
+        assert!(spawned.history().await.unwrap().is_empty());
+        // …and it is still a child for the tree walk and the delete guard.
+        let kids = store.children(branch.id()).await.unwrap();
+        assert_eq!(kids.len(), 1);
+        assert!(matches!(
+            store.delete_thread(branch.id()).await.unwrap_err(),
+            SessionError::HasChildren
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_database_written_before_spawn_edges_still_opens() {
+        // The column is added by ALTER on an existing table, and every link such
+        // a database holds is a fork — the column default.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                 id          TEXT PRIMARY KEY,
+                 parent      TEXT,
+                 fork_at_seq INTEGER,
+                 created_ms  INTEGER NOT NULL,
+                 attributes  TEXT NOT NULL DEFAULT 'null'
+             );
+             INSERT INTO threads (id, parent, fork_at_seq, created_ms, attributes)
+             VALUES ('t-old-child', 't-old-root', 3, 1, '{\"owner\":\"alice\"}');",
+        )
+        .unwrap();
+
+        let store = SqliteSessionStore::from_connection(conn).unwrap();
+        let meta = store
+            .meta(&ThreadId::new("t-old-child"))
+            .await
+            .unwrap()
+            .unwrap();
+        let link = meta.parent.unwrap();
+        assert_eq!(link.fork_at_seq, 3);
+        assert!(
+            link.inherits,
+            "a pre-existing link must read back as a fork"
+        );
     }
 
     #[tokio::test]

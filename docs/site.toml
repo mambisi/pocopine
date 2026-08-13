@@ -148,6 +148,7 @@ pages = [
   { title = "Streams & secrets",         path = "guides/agenkit/streaming-and-secrets.md" },
   { title = "Parallel & cancellation",   path = "guides/agenkit/parallel.md" },
   { title = "Agent threads",             path = "guides/agenkit/threads.md" },
+  { title = "Delegation & subagents",    path = "guides/agenkit/delegation.md" },
 ]
 
 [[group]]
