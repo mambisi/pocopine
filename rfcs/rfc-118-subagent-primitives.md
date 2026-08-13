@@ -198,10 +198,22 @@ pub enum SessionEventKind {
     // …existing…
     SubagentStarted,    // payload: child thread id; source_refs: ToolCall + Thread(child)
     SubagentFinished,   // payload: status + usage/cost rollup; source_refs: Thread(child)
-    #[serde(other)]
-    Unknown,            // NEW attribute: future kinds degrade gracefully
+    Unknown,            // now the decode fallback for kinds this build lacks
 }
 ```
+
+`#[serde(other)]` turned out to be inapplicable — it is only allowed on internally or
+adjacently tagged enums, and this is a plain string enum — so `Deserialize` is
+hand-written, with `Serialize` hand-written alongside it through a shared `as_str` so the
+two cannot drift.
+
+**Accepted, documented format change.** Writing the name rather than a derived variant
+index changes the encoding for non-self-describing formats (bincode, postcard). That
+compatibility was not preservable in any case: inserting variants ahead of `Unknown`
+shifts every index above them, so an index-encoded record written earlier would decode as
+the *wrong* variant — a silent corruption, where a name-encoded reader fails loudly
+instead. No shipped store is affected (JSONL is JSON; SQLite uses columns), and the crate
+is pre-1.0.
 
 The inverse edge on the child side needs no new kind — the child's `Started` event
 already carries `SessionSourceRef::Thread { parent }` via the existing provenance
@@ -211,7 +223,7 @@ respectively at the model-visible policy layer).
 
 ## The recipe (normative for app implementors, shipped as a guide)
 
-A short guide — `docs/guides/agenkitty/subagents.md` — documents the canonical safe
+A short guide — `docs/guides/agenkit/delegation.md` — documents the canonical safe
 composition instead of the framework coding it. Checklist:
 
 1. **Attenuation:** `child_tools = (spec ∩ parent ∩ call_args) − subagent-family`;
@@ -240,17 +252,31 @@ composition instead of the framework coding it. Checklist:
 - Per-child workspace/sandbox isolation, agent-to-agent messaging, remote subagents,
   model-facing `session.fork` — unchanged from the prior analysis, all out of scope.
 
-## Phasing
+## Status of the work
 
-| phase | ships | gate |
-|---|---|---|
-| **P1** | primitive 1 (`create_child` + `builder.parent()`), primitive 3 (event kinds + `serde(other)`), the guide | fresh child thread carries `ParentLink{…, 0}`; `children(parent)` finds it; child starts with empty history; unsupported store errs loudly; old persisted logs still decode |
-| **P2** | primitive 2 (`fork_as`) | forked child sees parent history verbatim, runs under its own config/agent_id; parent log untouched; `fork()` behavior unchanged |
+All three primitives and the guide are implemented. Both phases landed together, since
+`fork` and `fork_as` share the store trait, the thread handle and the session-branch
+helper, and splitting them would have left a half-written trait in between.
 
-## Open questions
+Covered by tests: a spawned child starts empty and is found by `children(parent)`,
+including below a forked parent (the regression that review caught); a store that cannot
+record lineage errors rather than returning an orphan; a foreign or missing parent is
+`not_found`; `fork_as` inherits history and owner while taking a new agent id, and its
+store-level default declines rather than diverging; a branch can replace the tool hook it
+inherited without touching its parent; `parent()` on a resume is rejected; every event
+kind round-trips through `Serialize`/`Deserialize`/`as_str`, an unknown kind decodes to
+`Unknown`, a pre-column SQLite database opens, and a lost migration race is survivable.
 
-1. Does the guide live upstream (`docs/guides/agenkitty/`) or in the downstream app repo
-   next to its implementation? Upstream proposed, since the invariants it documents are
-   framework invariants.
-2. Should `builder.parent()` on a resume (`open(Some(id))`) be an error rather than
-   silently ignored? Proposed: error — mixing lineage intent with resume is a bug.
+## Resolved questions
+
+1. **Where the guide lives** — upstream, at `docs/guides/agenkit/delegation.md` and
+   registered in `docs/site.toml`. The invariants it documents are framework invariants,
+   even though the tool family that obeys them is not.
+2. **`parent()` on a resume** — an error, as proposed. A resumed thread's lineage is
+   already recorded, so the two intents contradict and silently honouring one would hide
+   a host bug.
+3. **Inherited hooks on a branch** (surfaced by review) — `fork_as` keeps inheriting the
+   parent's `before_tool_call`, but `AgentSession` now exposes
+   `with_before_tool_call`/`without_before_tool_call` so a host can install the
+   fail-closed child gate the recipe requires. Inheriting silently with no way to override
+   would have made the documented recipe impossible to follow.

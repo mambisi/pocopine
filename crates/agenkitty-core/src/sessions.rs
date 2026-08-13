@@ -98,6 +98,14 @@ pub enum SessionSourceRef {
 /// string-reading `Deserialize` could not decode. The JSON form is unchanged
 /// from the derived `rename_all = "snake_case"` one.
 ///
+/// **Non-self-describing formats changed** (bincode, postcard): they used to get
+/// a variant index and now get the name. This is deliberate, and it is not a
+/// compatibility that could have been kept — adding variants ahead of `Unknown`
+/// already shifts every index above them, so an index-encoded record written
+/// before this would decode as the *wrong* variant. A name has no such ordering
+/// coupling, and an unreadable record now fails loudly instead. No shipped store
+/// is affected: the JSONL store is JSON and the SQLite store uses columns.
+///
 /// [`as_str`]: SessionEventKind::as_str
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionEventKind {
