@@ -224,6 +224,9 @@ let answer: Answer = ctx.agent::<Researcher>().input(question).run().await?;
   `min_success`, timeouts, in-flight cancellation (§D7/§D8).
 - **[Agent threads](./threads.md)** — opaque ids, retention, redacted
   checkpoints, and ownership (§D5).
+- **[Delegation & subagents](./delegation.md)** — spawning a child session with
+  its own fresh context, forking one to a different agent, and the attenuation /
+  fail-closed / budget rules a host applies on top.
 
 The canonical, compiles-on-every-commit example is
 `crates/pocopine-agenkit/examples/summarize.rs`
