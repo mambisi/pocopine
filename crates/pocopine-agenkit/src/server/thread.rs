@@ -101,6 +101,34 @@ pub trait AgentThreadStore: Send + Sync + 'static {
         retention: ThreadRetention,
     ) -> BoxFuture<'_, AgenkitResult<AgentThreadId>>;
 
+    /// Create a thread for `agent_id` owned by `owner` that records `parent` as
+    /// its **lineage** — a provenance edge only: the child starts with an empty
+    /// history and inherits none of the parent's records.
+    ///
+    /// This is the delegation shape ("`parent` spawned me"), as opposed to
+    /// [`fork`](AgentThreadStore::fork)'s branching shape ("I continue from
+    /// `parent`'s history"). A subagent wants exactly that split: its own fresh
+    /// context, plus a walkable link back to the session that started it.
+    ///
+    /// `parent` must exist and be owned by `owner`, else `not_found` (no
+    /// existence oracle). The default **errors**: a store that cannot record
+    /// lineage must say so rather than silently drop the edge and hand back an
+    /// orphan thread that looks correct.
+    fn create_child(
+        &self,
+        agent_id: &str,
+        owner: ThreadOwner<'_>,
+        retention: ThreadRetention,
+        parent: &AgentThreadId,
+    ) -> BoxFuture<'_, AgenkitResult<AgentThreadId>> {
+        let _ = (agent_id, owner, retention, parent);
+        Box::pin(async move {
+            Err(AgenkitError::config(
+                "thread store does not support child threads",
+            ))
+        })
+    }
+
     /// Load a thread's message history if it exists **and** is owned by
     /// `owner`; otherwise `None`.
     fn load(
@@ -166,6 +194,26 @@ pub trait AgentThreadStore: Send + Sync + 'static {
     ) -> BoxFuture<'_, AgenkitResult<Option<AgentThreadId>>> {
         let _ = (id, owner);
         Box::pin(async move { Ok(None) })
+    }
+
+    /// Fork as [`fork`](AgentThreadStore::fork), but record `agent_id` as the
+    /// branch's agent instead of inheriting the parent's — "different agent,
+    /// same history", the delegating counterpart to `fork`'s "same agent,
+    /// alternate timeline".
+    ///
+    /// The owner is still inherited (a fork never changes scope). The agent id
+    /// must be set when the thread is created: it is a reserved attribute, so
+    /// [`update_attributes`](AgentThreadStore::update_attributes) rejects it and
+    /// there is no post-hoc path. The default delegates to `fork` — a store that
+    /// doesn't record a per-thread agent id loses nothing by branching plainly.
+    fn fork_as(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+        agent_id: &str,
+    ) -> BoxFuture<'_, AgenkitResult<Option<AgentThreadId>>> {
+        let _ = agent_id;
+        self.fork(id, owner)
     }
 
     /// The threads owned by `owner`, newest-first (by creation time), with
@@ -370,6 +418,43 @@ impl AgentThreadStore for SessionThreadStore {
         })
     }
 
+    fn create_child(
+        &self,
+        agent_id: &str,
+        owner: ThreadOwner<'_>,
+        _retention: ThreadRetention,
+        parent: &AgentThreadId,
+    ) -> BoxFuture<'_, AgenkitResult<AgentThreadId>> {
+        let sessions = self.sessions.clone();
+        let attributes = serde_json::json!({ "owner": owner.key(), "agent_id": agent_id });
+        let parent_tid = session::ThreadId::new(parent.as_str());
+        let want = owner.key().map(str::to_string);
+        Box::pin(async move {
+            // The caller may only descend from a thread it owns (a foreign or
+            // missing parent is indistinguishable — no existence oracle).
+            if owner_checked_meta(sessions.as_ref(), &parent_tid, want.as_deref())
+                .await?
+                .is_none()
+            {
+                return Err(AgenkitError::not_found("thread not found"));
+            }
+            // `fork_at_seq: 0` inherits the empty prefix `[0, 0)`: the link is
+            // pure provenance, so `children(parent)` finds this thread while its
+            // materialized history stays its own.
+            let meta = sessions
+                .create_thread(
+                    Some(session::ParentLink {
+                        parent: parent_tid,
+                        fork_at_seq: 0,
+                    }),
+                    attributes,
+                )
+                .await
+                .map_err(session_err)?;
+            Ok(AgentThreadId::new(meta.id.as_str()))
+        })
+    }
+
     fn load(
         &self,
         id: &AgentThreadId,
@@ -492,6 +577,50 @@ impl AgentThreadStore for SessionThreadStore {
                 .await
                 .map_err(session_err)?;
             Ok(Some(AgentThreadId::new(child.id().as_str())))
+        })
+    }
+
+    fn fork_as(
+        &self,
+        id: &AgentThreadId,
+        owner: ThreadOwner<'_>,
+        agent_id: &str,
+    ) -> BoxFuture<'_, AgenkitResult<Option<AgentThreadId>>> {
+        let sessions = self.sessions.clone();
+        let tid = session::ThreadId::new(id.as_str());
+        let want = owner.key().map(str::to_string);
+        let agent_id = agent_id.to_string();
+        Box::pin(async move {
+            let Some(meta) = owner_checked_meta(sessions.as_ref(), &tid, want.as_deref()).await?
+            else {
+                return Ok(None);
+            };
+            // Same fork point as `fork` (the current end), but the branch runs as
+            // its own agent. The owner rides along in the inherited attributes so
+            // the scope is preserved; only `agent_id` is replaced, and it must
+            // happen here because it is reserved against `update_attributes`.
+            let mut attributes = meta.attributes;
+            match attributes.as_object_mut() {
+                Some(map) => {
+                    map.insert("agent_id".to_string(), serde_json::Value::String(agent_id));
+                }
+                // A thread stored without an attribute object predates the
+                // convention; rebuild it rather than dropping the owner scope.
+                None => {
+                    attributes = serde_json::json!({ "owner": want, "agent_id": agent_id });
+                }
+            }
+            let child = sessions
+                .create_thread(
+                    Some(session::ParentLink {
+                        parent: tid,
+                        fork_at_seq: meta.last_seq,
+                    }),
+                    attributes,
+                )
+                .await
+                .map_err(session_err)?;
+            Ok(Some(AgentThreadId::new(child.id.as_str())))
         })
     }
 
@@ -693,6 +822,21 @@ impl AgentThreadHandle {
         Ok(self
             .store
             .fork(&self.id, self.owner())
+            .await?
+            .map(|id| AgentThreadHandle {
+                id,
+                store: self.store.clone(),
+                owner,
+            }))
+    }
+
+    /// Fork this thread for a **different** agent — same inherited history, own
+    /// agent id (see [`AgentThreadStore::fork_as`]).
+    pub async fn fork_as(&self, agent_id: &str) -> AgenkitResult<Option<AgentThreadHandle>> {
+        let owner = self.owner.clone();
+        Ok(self
+            .store
+            .fork_as(&self.id, self.owner(), agent_id)
             .await?
             .map(|id| AgentThreadHandle {
                 id,
@@ -1231,5 +1375,190 @@ mod tests {
         assert!(store.load(&branch_id, bob).await.unwrap().is_none());
         // Parent untouched (still 2 messages).
         assert_eq!(store.load(&id, alice).await.unwrap().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_child_links_lineage_without_inheriting_history() {
+        let store = SessionThreadStore::in_memory();
+        let (alice_p, bob_p) = (alice(), bob());
+        let alice = ThreadOwner::from_principal(&alice_p);
+        let bob = ThreadOwner::from_principal(&bob_p);
+
+        let parent = store
+            .create("parent", alice, ThreadRetention::Session)
+            .await
+            .unwrap();
+        store
+            .append(
+                &parent,
+                alice,
+                vec![Message::new(Role::User, "parent-only")],
+            )
+            .await
+            .unwrap();
+
+        let child = store
+            .create_child("child", alice, ThreadRetention::Session, &parent)
+            .await
+            .unwrap();
+        assert_ne!(child, parent);
+
+        // The whole point: lineage without inheritance. A fork would have
+        // carried "parent-only" across; a spawn edge must not.
+        assert!(store.load(&child, alice).await.unwrap().unwrap().is_empty());
+        store
+            .append(&child, alice, vec![Message::new(Role::User, "child-only")])
+            .await
+            .unwrap();
+        let history = store.load(&child, alice).await.unwrap().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content.as_text(), "child-only");
+
+        // The edge is real in the session forest, not a private attribute.
+        let sessions = store.sessions.clone();
+        let children = sessions
+            .children(&session::ThreadId::new(parent.as_str()))
+            .await
+            .unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].as_str(), child.as_str());
+
+        // Owner is inherited, so the scope holds on the child too.
+        assert!(store.load(&child, bob).await.unwrap().is_none());
+        // Parent untouched.
+        assert_eq!(store.load(&parent, alice).await.unwrap().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_child_rejects_foreign_or_missing_parent() {
+        let store = SessionThreadStore::in_memory();
+        let (alice_p, bob_p) = (alice(), bob());
+        let alice = ThreadOwner::from_principal(&alice_p);
+        let bob = ThreadOwner::from_principal(&bob_p);
+
+        let parent = store
+            .create("parent", alice, ThreadRetention::Session)
+            .await
+            .unwrap();
+
+        // Bob cannot descend from Alice's thread...
+        let err = store
+            .create_child("child", bob, ThreadRetention::Session, &parent)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "not_found");
+        // ...and a missing parent is indistinguishable from a foreign one.
+        let err = store
+            .create_child(
+                "child",
+                alice,
+                ThreadRetention::Session,
+                &AgentThreadId::new("t-nope"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "not_found");
+    }
+
+    #[tokio::test]
+    async fn create_child_default_errors_rather_than_dropping_lineage() {
+        // A store that doesn't override `create_child` must refuse loudly: a
+        // silently-orphaned thread would look like a successful spawn.
+        struct BareStore;
+        impl AgentThreadStore for BareStore {
+            fn create(
+                &self,
+                _agent_id: &str,
+                _owner: ThreadOwner<'_>,
+                _retention: ThreadRetention,
+            ) -> BoxFuture<'_, AgenkitResult<AgentThreadId>> {
+                Box::pin(async { Ok(AgentThreadId::new("t-bare")) })
+            }
+            fn load(
+                &self,
+                _id: &AgentThreadId,
+                _owner: ThreadOwner<'_>,
+            ) -> BoxFuture<'_, AgenkitResult<Option<Vec<Message>>>> {
+                Box::pin(async { Ok(Some(Vec::new())) })
+            }
+            fn append(
+                &self,
+                _id: &AgentThreadId,
+                _owner: ThreadOwner<'_>,
+                _messages: Vec<Message>,
+            ) -> BoxFuture<'_, AgenkitResult<()>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn delete(
+                &self,
+                _id: &AgentThreadId,
+                _owner: ThreadOwner<'_>,
+            ) -> BoxFuture<'_, AgenkitResult<()>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let err = BareStore
+            .create_child(
+                "child",
+                ThreadOwner::anonymous(),
+                ThreadRetention::Session,
+                &AgentThreadId::new("t-bare"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        // The plain fork default stays permissive (Ok(None) = "can't branch").
+        assert!(
+            BareStore
+                .fork_as(
+                    &AgentThreadId::new("t-bare"),
+                    ThreadOwner::anonymous(),
+                    "other"
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_as_inherits_history_and_owner_but_takes_a_new_agent_id() {
+        let store = SessionThreadStore::in_memory();
+        let (alice_p, bob_p) = (alice(), bob());
+        let alice = ThreadOwner::from_principal(&alice_p);
+        let bob = ThreadOwner::from_principal(&bob_p);
+
+        let id = store
+            .create("planner", alice, ThreadRetention::Session)
+            .await
+            .unwrap();
+        store
+            .append(&id, alice, vec![Message::new(Role::User, "shared")])
+            .await
+            .unwrap();
+
+        // Bob still can't branch Alice's thread through the new door.
+        assert!(store.fork_as(&id, bob, "reviewer").await.unwrap().is_none());
+
+        let branch_id = store
+            .fork_as(&id, alice, "reviewer")
+            .await
+            .unwrap()
+            .unwrap();
+        // History inherited (this is a fork, not a spawn)...
+        let branch = store.load(&branch_id, alice).await.unwrap().unwrap();
+        assert_eq!(branch.len(), 1);
+        assert_eq!(branch[0].content.as_text(), "shared");
+        // ...owner inherited, so the scope survives...
+        assert!(store.load(&branch_id, bob).await.unwrap().is_none());
+
+        // ...but the branch runs as its own agent, and the parent keeps its own.
+        let listed = store.list(alice).await.unwrap();
+        let branch_meta = listed.iter().find(|m| m.id == branch_id).unwrap();
+        let parent_meta = listed.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(branch_meta.attributes["agent_id"], "reviewer");
+        assert_eq!(parent_meta.attributes["agent_id"], "planner");
+        assert_eq!(branch_meta.parent.as_ref().unwrap(), &id);
     }
 }
