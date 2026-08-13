@@ -115,6 +115,8 @@ pub enum SessionEventKindFilter {
     NoteCreated,
     SummaryCreated,
     CheckpointCreated,
+    SubagentStarted,
+    SubagentFinished,
     Unknown,
 }
 
@@ -133,6 +135,8 @@ impl From<SessionEventKindFilter> for SessionEventKind {
             SessionEventKindFilter::NoteCreated => Self::NoteCreated,
             SessionEventKindFilter::SummaryCreated => Self::SummaryCreated,
             SessionEventKindFilter::CheckpointCreated => Self::CheckpointCreated,
+            SessionEventKindFilter::SubagentStarted => Self::SubagentStarted,
+            SessionEventKindFilter::SubagentFinished => Self::SubagentFinished,
             SessionEventKindFilter::Unknown => Self::Unknown,
         }
     }
@@ -167,7 +171,7 @@ impl From<SessionEvent> for SessionEventView {
         Self {
             seq: event.seq,
             timestamp_ms: event.timestamp_ms,
-            kind: kind_name(event.kind).to_string(),
+            kind: event.kind.as_str().to_string(),
             message: event.message,
             tool: event.tool,
             payload: event.payload,
@@ -195,24 +199,6 @@ pub(super) fn bounded_event_views(
         views.push(view);
     }
     (views, false)
-}
-
-fn kind_name(kind: SessionEventKind) -> &'static str {
-    match kind {
-        SessionEventKind::Started => "started",
-        SessionEventKind::AssistantText => "assistant_text",
-        SessionEventKind::ToolStarted => "tool_started",
-        SessionEventKind::ToolCompleted => "tool_completed",
-        SessionEventKind::ToolFailed => "tool_failed",
-        SessionEventKind::ToolBlocked => "tool_blocked",
-        SessionEventKind::Compacted => "compacted",
-        SessionEventKind::Stopped => "stopped",
-        SessionEventKind::Failed => "failed",
-        SessionEventKind::NoteCreated => "note_created",
-        SessionEventKind::SummaryCreated => "summary_created",
-        SessionEventKind::CheckpointCreated => "checkpoint_created",
-        SessionEventKind::Unknown => "unknown",
-    }
 }
 
 fn policy_name(policy: SessionEventPolicy) -> &'static str {

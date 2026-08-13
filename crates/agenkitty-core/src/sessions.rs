@@ -85,7 +85,13 @@ pub enum SessionSourceRef {
 }
 
 /// Model-safe session event kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deserialization is **forward compatible**: a kind this build doesn't know
+/// decodes to [`SessionEventKind::Unknown`] rather than failing, so an older
+/// reader can still open a log written by a newer one. (`#[serde(other)]` only
+/// applies to internally/adjacently tagged enums, so the fallback is
+/// hand-written below.) Serialization stays derived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionEventKind {
     Started,
@@ -100,7 +106,66 @@ pub enum SessionEventKind {
     NoteCreated,
     SummaryCreated,
     CheckpointCreated,
+    /// A subagent was spawned by this session. Carries the child's thread id as
+    /// a [`SessionSourceRef::Thread`] so the delegation tree is walkable from
+    /// the parent; the child records the inverse edge on its own `Started`.
+    SubagentStarted,
+    /// A subagent this session spawned reached a terminal state (its status and
+    /// usage rollup ride in the payload).
+    SubagentFinished,
     Unknown,
+}
+
+impl SessionEventKind {
+    /// The wire string for this kind (the `rename_all = "snake_case"` form).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::AssistantText => "assistant_text",
+            Self::ToolStarted => "tool_started",
+            Self::ToolCompleted => "tool_completed",
+            Self::ToolFailed => "tool_failed",
+            Self::ToolBlocked => "tool_blocked",
+            Self::Compacted => "compacted",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::NoteCreated => "note_created",
+            Self::SummaryCreated => "summary_created",
+            Self::CheckpointCreated => "checkpoint_created",
+            Self::SubagentStarted => "subagent_started",
+            Self::SubagentFinished => "subagent_finished",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionEventKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Unrecognized kinds degrade to `Unknown` instead of erroring: an event
+        // log is append-only and long-lived, so a reader must survive kinds
+        // added after it was built.
+        let raw = String::deserialize(deserializer)?;
+        Ok(match raw.as_str() {
+            "started" => Self::Started,
+            "assistant_text" => Self::AssistantText,
+            "tool_started" => Self::ToolStarted,
+            "tool_completed" => Self::ToolCompleted,
+            "tool_failed" => Self::ToolFailed,
+            "tool_blocked" => Self::ToolBlocked,
+            "compacted" => Self::Compacted,
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            "note_created" => Self::NoteCreated,
+            "summary_created" => Self::SummaryCreated,
+            "checkpoint_created" => Self::CheckpointCreated,
+            "subagent_started" => Self::SubagentStarted,
+            "subagent_finished" => Self::SubagentFinished,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 /// Coarse classification for model-visible session event policy.
@@ -324,6 +389,57 @@ mod tests {
     fn event_kind_uses_snake_case() {
         let value = serde_json::to_value(SessionEventKind::ToolCompleted).unwrap();
         assert_eq!(value, serde_json::json!("tool_completed"));
+    }
+
+    #[test]
+    fn every_event_kind_round_trips_and_as_str_matches_the_wire() {
+        // `as_str` is hand-written next to a derived Serialize and a hand-written
+        // Deserialize; this pins all three to the same string.
+        for kind in [
+            SessionEventKind::Started,
+            SessionEventKind::AssistantText,
+            SessionEventKind::ToolStarted,
+            SessionEventKind::ToolCompleted,
+            SessionEventKind::ToolFailed,
+            SessionEventKind::ToolBlocked,
+            SessionEventKind::Compacted,
+            SessionEventKind::Stopped,
+            SessionEventKind::Failed,
+            SessionEventKind::NoteCreated,
+            SessionEventKind::SummaryCreated,
+            SessionEventKind::CheckpointCreated,
+            SessionEventKind::SubagentStarted,
+            SessionEventKind::SubagentFinished,
+            SessionEventKind::Unknown,
+        ] {
+            let value = serde_json::to_value(kind).unwrap();
+            assert_eq!(value, serde_json::json!(kind.as_str()), "{kind:?}");
+            let back: SessionEventKind = serde_json::from_value(value).unwrap();
+            assert_eq!(back, kind);
+        }
+        assert_eq!(
+            serde_json::to_value(SessionEventKind::SubagentStarted).unwrap(),
+            serde_json::json!("subagent_started")
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_event_kind_decodes_to_unknown() {
+        // Forward compatibility: an older reader must survive a log written by a
+        // newer build rather than failing the whole record.
+        let kind: SessionEventKind =
+            serde_json::from_value(serde_json::json!("teleported")).unwrap();
+        assert_eq!(kind, SessionEventKind::Unknown);
+
+        let event: SessionEvent = serde_json::from_value(serde_json::json!({
+            "seq": 1,
+            "timestamp_ms": 7,
+            "kind": "invented_in_a_later_release",
+            "message": "still readable",
+        }))
+        .unwrap();
+        assert_eq!(event.kind, SessionEventKind::Unknown);
+        assert_eq!(event.message.as_deref(), Some("still readable"));
     }
 
     #[test]
