@@ -426,6 +426,7 @@ where
         let runtime_for_input = runtime.clone();
         let runtime_for_log = runtime_name.clone();
         let manager = node_view_manager.clone();
+        let keymap_for_input = keymap.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
             if !editor_owns_event(&event, &manager) {
                 return;
@@ -436,9 +437,73 @@ where
             };
             let input_type = ev.input_type();
             match input_type.as_str() {
-                "insertText" => {
-                    let Some(data) = ev.data() else { return };
+                // A soft keyboard's return key frequently produces no `keydown`
+                // at all (or an unidentifiable `keyCode 229` one), so the
+                // keymap never sees it and only this event arrives. Route it to
+                // the same binding the physical key uses — otherwise the floor
+                // arm below would refuse it and Enter would simply stop working
+                // on mobile, which is the one regression this change must not
+                // introduce.
+                "insertParagraph" | "insertLineBreak" => {
+                    ev.prevent_default();
+                    let combo = if input_type == "insertLineBreak" {
+                        "Shift-Enter"
+                    } else {
+                        "Enter"
+                    };
+                    // Fall back to the plain Enter binding: `Shift-Enter` is not
+                    // in the base keymap, so an extension-less runtime would
+                    // otherwise drop a soft line break entirely.
+                    let cmd = keymap_for_input
+                        .lookup(combo)
+                        .or_else(|| keymap_for_input.lookup("Enter"));
+                    let handled = (|| {
+                        let cmd = cmd?;
+                        let state = state_provider(true)?;
+                        let tr = cmd.apply(&state)?;
+                        dispatch(state, tr, true);
+                        Some(())
+                    })()
+                    .is_some();
+                    log_input_perf(debug_perf, "input.beforeinput", || {
+                        json!({
+                            "runtime": runtime_for_log.clone(),
+                            "input_type": input_type.clone(),
+                            "handled": handled,
+                            "combo": combo,
+                            "total_ms": round_ms(perf_now_ms() - started_at),
+                        })
+                    });
+                }
+                // `insertReplacementText` is the same edit as `insertText` with
+                // a non-collapsed target range: the browser hands us the span to
+                // replace via `getTargetRanges()` and the replacement via the
+                // event, which is exactly what the machinery below already does
+                // for a typed character. Autocorrect on a soft keyboard, the
+                // desktop spellcheck menu's "correct to", and iOS predictive
+                // replacement all arrive this way.
+                "insertText" | "insertReplacementText" => {
+                    let is_replacement = input_type == "insertReplacementText";
+                    // A replacement carries its text on `dataTransfer` in some
+                    // engines and on `data` in others; a typed character only
+                    // ever uses `data`.
+                    let data = if is_replacement {
+                        ev.data_transfer()
+                            .and_then(|dt| dt.get_data("text/plain").ok())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| ev.data())
+                    } else {
+                        ev.data()
+                    };
+                    let Some(data) = data else {
+                        // Nothing to insert, but this surface is controlled:
+                        // returning without preventing would hand the edit to
+                        // the browser.
+                        ev.prevent_default();
+                        return;
+                    };
                     if data.is_empty() {
+                        ev.prevent_default();
                         return;
                     }
                     let data_chars = data.chars().count();
@@ -493,7 +558,12 @@ where
                     let cursor_from = state.selection().from(state.doc());
                     let cursor_to = state.selection().to(state.doc());
                     let rules = runtime_for_input.input_rules();
-                    if !state.selection().is_cells()
+                    // Rules are an as-you-type affordance keyed on the character
+                    // the user just pressed. A spellcheck/autocorrect
+                    // replacement is not a keystroke, so firing them here would
+                    // let a correction silently trigger (say) the em-dash rule.
+                    if !is_replacement
+                        && !state.selection().is_cells()
                         && !rules.is_empty()
                         && let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
                     {
@@ -604,6 +674,29 @@ where
                         });
                     }
                 }
+                // Drag-and-drop is not implemented, and it arrives as two
+                // independent events: the source deletion (`deleteByDrag`) and
+                // the destination insertion (`insertFromDrop`). Committing only
+                // the deletion — which is what listing it below used to do —
+                // removed the dragged text from the model while the browser
+                // painted it at a destination the model never learned about.
+                // That is net content loss on a common gesture, worse than
+                // either half alone. Refuse both halves so a drag is inert
+                // until it is implemented for real, which needs a
+                // client-coordinates → model-position mapping this crate does
+                // not have yet (`insertFromDrop` is refused by the floor arm).
+                "deleteByDrag" => {
+                    ev.prevent_default();
+                    log_input_perf(debug_perf, "input.beforeinput", || {
+                        json!({
+                            "runtime": runtime_for_log.clone(),
+                            "input_type": input_type.clone(),
+                            "handled": false,
+                            "reason": "drag_drop_unsupported_refused",
+                            "total_ms": round_ms(perf_now_ms() - started_at),
+                        })
+                    });
+                }
                 "deleteContentBackward"
                 | "deleteContentForward"
                 | "deleteWordBackward"
@@ -613,8 +706,7 @@ where
                 | "deleteHardLineBackward"
                 | "deleteHardLineForward"
                 | "deleteContent"
-                | "deleteByCut"
-                | "deleteByDrag" => {
+                | "deleteByCut" => {
                     // Never let native deletion mutate this controlled DOM.
                     // Every recognized delete is either committed through a
                     // model transaction below or deliberately remains a no-op.
@@ -771,11 +863,79 @@ where
                         started_at,
                     );
                 }
-                _ => {}
+                // Composition is the one exception to the floor below, and it
+                // has to be. An IME owns the DOM for the duration of a
+                // composition — it needs to place, restyle and replace its own
+                // preedit text — so refusing these would not "keep the model
+                // authoritative", it would stop CJK and Android keyboards from
+                // typing at all. We let the browser mutate, suppress the
+                // reconciler so the composing text node survives (see
+                // `composing` below), and reconcile the model at
+                // `compositionend`.
+                "insertCompositionText"
+                | "insertFromComposition"
+                | "deleteByComposition"
+                | "deleteCompositionText" => {
+                    log_input_perf(debug_perf, "input.beforeinput", || {
+                        json!({
+                            "runtime": runtime_for_log.clone(),
+                            "input_type": input_type.clone(),
+                            "handled": false,
+                            "reason": "composition_native_until_compositionend",
+                            "total_ms": round_ms(perf_now_ms() - started_at),
+                        })
+                    });
+                }
+                // Everything else: refuse it. This surface is controlled — the
+                // model is authoritative and the DOM is a projection of it — so
+                // an edit the model never sees is not a missing feature, it is
+                // corruption. The browser can emit input types we don't
+                // implement (`insertReplacementText` from autocorrect,
+                // `historyUndo` from shake-to-undo, `formatBold` from the mobile
+                // selection toolbar, `insertFromDrop`, `insertTranspose`,
+                // `insertFromYank`, and whatever the next spec revision adds),
+                // and letting one through desyncs the model silently: the DOM
+                // gains content the model has no position for, so the next
+                // `getTargetRanges` mapping resolves against a document that no
+                // longer matches and the reconciler eventually repaints the
+                // model over the user's text.
+                //
+                // Refusing turns an unimplemented input type into a visible
+                // no-op instead. That is a *worse* editor and a *correct* one,
+                // and it fails in the direction we can see. Implement the ones
+                // that matter as explicit arms above; this is the floor.
+                other => {
+                    ev.prevent_default();
+                    log_input_perf(debug_perf, "input.beforeinput", || {
+                        json!({
+                            "runtime": runtime_for_log.clone(),
+                            "input_type": other,
+                            "handled": false,
+                            "reason": "unsupported_input_type_refused",
+                            "total_ms": round_ms(perf_now_ms() - started_at),
+                        })
+                    });
+                }
             }
         }) as Box<dyn FnMut(Event)>);
         let _ =
             surface.add_event_listener_with_callback("beforeinput", cb.as_ref().unchecked_ref());
+        closures.push(cb);
+    }
+
+    // `drop` — the belt to the `deleteByDrag`/`insertFromDrop` braces above.
+    // A native drop is not guaranteed to surface as a pair of `beforeinput`
+    // events, so refusing those two is not on its own enough to keep dropped
+    // content out of the controlled DOM. Refuse the drop itself as well.
+    {
+        let manager = node_view_manager.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
+            event.prevent_default();
+        }) as Box<dyn FnMut(Event)>);
+        let _ = surface.add_event_listener_with_callback("drop", cb.as_ref().unchecked_ref());
         closures.push(cb);
     }
 
@@ -839,12 +999,26 @@ where
             let Some(clipboard) = ev.clipboard_data() else {
                 return;
             };
+            // Prevent FIRST, decide after. The editor owns this event either way:
+            // a payload we can't read (an image, or `text/html` from an app that
+            // omits a plain-text flavour) must become a no-op, never a native
+            // paste into the controlled DOM. Returning before preventing let the
+            // browser insert content the model never learned about — and it also
+            // un-suppressed the follow-on `beforeinput: insertFromPaste`.
+            ev.prevent_default();
             let encoded_slice = clipboard.get_data(PINE_SLICE_MIME).unwrap_or_default();
             let text = clipboard.get_data("text/plain").unwrap_or_default();
             if encoded_slice.is_empty() && text.is_empty() {
+                log_input_perf(debug_perf, "input.paste", || {
+                    json!({
+                        "runtime": runtime_for_log.clone(),
+                        "handled": false,
+                        "reason": "no_readable_flavour",
+                        "total_ms": round_ms(perf_now_ms() - started_at),
+                    })
+                });
                 return;
             }
-            ev.prevent_default();
             let Some(state) = state_provider(true) else {
                 log_input_perf(debug_perf, "input.paste", || {
                     json!({
