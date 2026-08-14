@@ -387,10 +387,11 @@ impl Session {
     }
 
     async fn handle_data(&mut self, frame: &Frame) -> Result<(), WsError> {
-        let (topic, name, outbound_gate) = match self.topics.get(&frame.topic_ref) {
+        let (topic, name, subprotocol_id, outbound_gate) = match self.topics.get(&frame.topic_ref) {
             Some(entry) => (
                 entry.topic.clone(),
                 entry.name.clone(),
+                entry.subprotocol_id,
                 entry.outbound_gate.clone(),
             ),
             None => {
@@ -400,6 +401,7 @@ impl Session {
                 )));
             }
         };
+        validate_data_subprotocol(frame.subprotocol_id, subprotocol_id)?;
         // Re-authorize on every inbound frame (RFC 073 §10.1): one decision
         // covers both join (read) and publish (write); read-only connections may
         // join but not write (handlers receive `can_write`, the relay enforces it).
@@ -412,7 +414,7 @@ impl Session {
         // A registered sub-protocol handler (e.g. collab) intercepts the frame
         // and runs stateful server logic; every other sub-protocol is a pure
         // publish-to-fan-out relay.
-        if let Some(handler) = self.gateway.handler(frame.subprotocol_id) {
+        if let Some(handler) = self.gateway.handler(subprotocol_id) {
             let principal = self.ctx.principal();
             let reaction = handler
                 .on_data(InboundData {
@@ -430,7 +432,7 @@ impl Session {
                 // Out-of-band reply to THIS connection only (seq 0; the
                 // per-subscription seq is reserved for fanned-out Data frames).
                 // Non-blocking enqueue keeps the heartbeat watchdog live.
-                let reply = Frame::data(frame.subprotocol_id, frame.topic_ref, 0, payload);
+                let reply = Frame::data(subprotocol_id, frame.topic_ref, 0, payload);
                 if self.out.try_send(Message::Binary(reply.encode())).is_err() {
                     self.should_close = true;
                     replies_queued = false;
@@ -595,6 +597,15 @@ impl Session {
     }
 }
 
+fn validate_data_subprotocol(frame_id: u64, subscribed_id: u64) -> Result<(), WsError> {
+    if frame_id != subscribed_id {
+        return Err(WsError::protocol(format!(
+            "data subprotocol_id {frame_id} does not match subscription subprotocol_id {subscribed_id}"
+        )));
+    }
+    Ok(())
+}
+
 /// Forward one topic's fan-out messages to the connection as Data frames, each
 /// carrying its per-subscription `seq`.
 async fn pump_topic(
@@ -667,5 +678,13 @@ mod tests {
         let scrubbed = uri_without_access_token(&uri).unwrap();
 
         assert_eq!(scrubbed.to_string(), "/__pocopine/ws/v1");
+    }
+
+    #[test]
+    fn data_subprotocol_must_match_the_topic_subscription() {
+        validate_data_subprotocol(7, 7).expect("matching subprotocol");
+
+        let error = validate_data_subprotocol(9, 7).expect_err("mismatch must fail closed");
+        assert!(error.to_string().contains("does not match subscription"));
     }
 }
