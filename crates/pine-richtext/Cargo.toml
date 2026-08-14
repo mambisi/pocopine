@@ -72,6 +72,7 @@ features = [
     "EventTarget",
     "HtmlElement",
     "InputEvent",
+    "InputEventInit",
     "KeyboardEvent",
     "Node",
     "Performance",

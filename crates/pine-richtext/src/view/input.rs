@@ -1487,3 +1487,194 @@ mod tests {
         );
     }
 }
+
+/// Browser tests for the `beforeinput` dispatch itself.
+///
+/// The arms in `install_listeners` were previously unreachable from any test —
+/// nothing in the repo constructed an `InputEvent` — so the whole match was
+/// covered only by whatever a human happened to try by hand. These drive real
+/// events at a real mounted surface and assert on both halves of the contract:
+/// what the model ends up holding, and whether the browser was allowed to touch
+/// the DOM (`default_prevented`).
+#[cfg(all(test, target_arch = "wasm32"))]
+mod input_event_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+    use web_sys::{Element, InputEvent, InputEventInit};
+
+    use super::{KeyMap, base_keymap, install_listeners};
+    use crate::render::render_doc_to_html;
+    use crate::runtime::{EditorRuntime, RuntimeBuilder};
+    use crate::schema_basic;
+    use crate::state::{EditorState, EditorStateConfig, Selection};
+    use crate::view::node_view_manager::NodeViewManager;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn runtime() -> Arc<EditorRuntime> {
+        RuntimeBuilder::new().build()
+    }
+
+    fn state_with(text: &str, cursor: usize) -> EditorState {
+        let schema = schema_basic::schema();
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()]).unwrap(),
+        ])
+        .unwrap();
+        EditorState::create(EditorStateConfig::new(schema, doc).selection(Selection::text(cursor)))
+            .unwrap()
+    }
+
+    /// Mount a surface rendered from `state` and install the real listeners over
+    /// it. Returns the surface, the cell the dispatch writes into, and the
+    /// closures (which must stay alive or the listeners detach).
+    #[allow(clippy::type_complexity)]
+    fn mount(
+        state: EditorState,
+    ) -> (
+        Element,
+        Rc<RefCell<EditorState>>,
+        Vec<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
+    ) {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let surface = document.create_element("div").unwrap();
+        let rt = runtime();
+        surface.set_inner_html(&render_doc_to_html(&rt, state.doc()));
+        document.body().unwrap().append_child(&surface).unwrap();
+
+        let live = Rc::new(RefCell::new(state));
+        let for_provider = live.clone();
+        let for_dispatch = live.clone();
+        let closures = install_listeners(
+            surface.clone(),
+            rt,
+            Rc::new(move |_live_selection: bool| Some(for_provider.borrow().clone())),
+            Rc::new(RefCell::new(NodeViewManager::new(runtime()))),
+            Rc::new(base_keymap()) as Rc<KeyMap>,
+            false,
+            move |state: EditorState, tr, _scroll| {
+                let next = state.apply(tr).expect("transaction applies");
+                *for_dispatch.borrow_mut() = next;
+            },
+        );
+        (surface, live, closures)
+    }
+
+    fn fire_beforeinput(surface: &Element, input_type: &str, data: Option<&str>) -> InputEvent {
+        let init = InputEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_input_type(input_type);
+        if let Some(data) = data {
+            init.set_data(Some(data));
+        }
+        let ev = InputEvent::new_with_event_init_dict("beforeinput", &init).unwrap();
+        surface
+            .dispatch_event(ev.unchecked_ref::<web_sys::Event>())
+            .unwrap();
+        ev
+    }
+
+    fn doc_text(state: &EditorState) -> String {
+        state
+            .doc()
+            .text_between(0, state.doc().content_size(), "\n")
+            .unwrap()
+    }
+
+    #[wasm_bindgen_test]
+    fn an_unsupported_input_type_is_refused_rather_than_left_to_the_browser() {
+        // The regression this whole change exists for: an inputType we do not
+        // implement used to fall through to native DOM mutation, desyncing the
+        // model silently. It must now be refused instead.
+        let (surface, live, _closures) = mount(state_with("hello", 6));
+
+        for input_type in [
+            "historyUndo",
+            "historyRedo",
+            "formatBold",
+            "insertFromDrop",
+            "insertTranspose",
+            "insertFromYank",
+            "insertLink",
+            // Not in any spec — proves the floor covers what we've never heard of.
+            "insertSomethingInventedLater",
+        ] {
+            let ev = fire_beforeinput(&surface, input_type, None);
+            assert!(
+                ev.default_prevented(),
+                "`{input_type}` reached the browser; it must be refused"
+            );
+            assert_eq!(
+                doc_text(&live.borrow()),
+                "hello",
+                "`{input_type}` must not change the model either"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn composition_is_deliberately_left_to_the_browser() {
+        // The one exception: an IME owns the DOM while composing. Refusing these
+        // would stop CJK and Android keyboards typing at all, so they are
+        // allowed through and reconciled at compositionend instead.
+        let (surface, _live, _closures) = mount(state_with("hello", 6));
+
+        for input_type in [
+            "insertCompositionText",
+            "insertFromComposition",
+            "deleteByComposition",
+            "deleteCompositionText",
+        ] {
+            let ev = fire_beforeinput(&surface, input_type, Some("ni"));
+            assert!(
+                !ev.default_prevented(),
+                "`{input_type}` must stay native — refusing it breaks IME input"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn insert_text_still_commits_through_the_model() {
+        // Guards the refactor: the arm that used to be `"insertText"` alone now
+        // also serves insertReplacementText, so prove the plain path is intact.
+        let (surface, live, _closures) = mount(state_with("hello", 6));
+        let ev = fire_beforeinput(&surface, "insertText", Some("!"));
+        assert!(ev.default_prevented());
+        assert_eq!(doc_text(&live.borrow()), "hello!");
+    }
+
+    #[wasm_bindgen_test]
+    fn insert_replacement_text_is_handled_not_refused() {
+        // Autocorrect. Without a target range the browser is telling us to
+        // replace at the caret, so this lands as an insert; the important part
+        // is that it is handled by the model at all rather than falling through
+        // to a native DOM rewrite the model never sees.
+        let (surface, live, _closures) = mount(state_with("hello", 6));
+        let ev = fire_beforeinput(&surface, "insertReplacementText", Some(" there"));
+        assert!(
+            ev.default_prevented(),
+            "a replacement must never reach the browser"
+        );
+        assert_eq!(doc_text(&live.borrow()), "hello there");
+    }
+
+    #[wasm_bindgen_test]
+    fn a_soft_keyboard_return_still_splits_the_block() {
+        // insertParagraph is refused by the floor unless it is routed to the
+        // keymap's Enter binding. A soft keyboard often sends no usable keydown,
+        // so without that routing Enter would simply stop working on mobile.
+        let (surface, live, _closures) = mount(state_with("hello", 6));
+        let ev = fire_beforeinput(&surface, "insertParagraph", None);
+        assert!(ev.default_prevented());
+        assert_eq!(
+            live.borrow().doc().child_count(),
+            2,
+            "Enter should have split the paragraph in two"
+        );
+    }
+}
