@@ -154,6 +154,7 @@ pub struct AgentConfig {
     pub(crate) max_steps_per_turn: u32,
     pub(crate) thinking: ThinkingLevel,
     pub(crate) provider_options: serde_json::Map<String, serde_json::Value>,
+    pub(crate) compaction_provider_options: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for AgentConfig {
@@ -169,6 +170,7 @@ impl Default for AgentConfig {
             max_steps_per_turn: 8,
             thinking: ThinkingLevel::Off,
             provider_options: serde_json::Map::new(),
+            compaction_provider_options: serde_json::Map::new(),
         }
     }
 }
@@ -234,6 +236,23 @@ impl AgentConfig {
         value: impl Into<serde_json::Value>,
     ) -> Self {
         self.provider_options.insert(key.into(), value.into());
+        self
+    }
+
+    /// Attach a provider-specific request field only to the internal
+    /// conversation-compaction call.
+    ///
+    /// Compaction is a separate provider effect, so it does not inherit the
+    /// ordinary turn's provider options implicitly. Hosts can use this narrow
+    /// lane for trusted per-effect authority such as billing or tracing while
+    /// keeping search/thinking options off the summarizer.
+    pub fn compaction_provider_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.compaction_provider_options
+            .insert(key.into(), value.into());
         self
     }
 }
@@ -1064,8 +1083,15 @@ impl AgentSession {
         }
 
         let max_output = self.config.max_tokens.unwrap_or(1024);
-        if let Some((folded, _kept)) =
-            super::agent::compact_thread(&self.thread, &model, &provider, &cx, max_output).await?
+        if let Some((folded, _kept)) = super::agent::compact_thread(
+            &self.thread,
+            &model,
+            &provider,
+            &cx,
+            max_output,
+            &self.config.compaction_provider_options,
+        )
+        .await?
         {
             let _ = events.send(AgentEvent::Compacted { folded });
         }

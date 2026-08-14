@@ -50,6 +50,7 @@ pub struct AiAgentBuilder<A: ?Sized> {
     max_steps: u32,
     thinking: ThinkingLevel,
     provider_options: serde_json::Map<String, serde_json::Value>,
+    compaction_provider_options: serde_json::Map<String, serde_json::Value>,
     _marker: PhantomData<fn() -> A>,
 }
 
@@ -63,6 +64,7 @@ impl<A: ?Sized> Default for AiAgentBuilder<A> {
             max_steps: 4,
             thinking: ThinkingLevel::Off,
             provider_options: serde_json::Map::new(),
+            compaction_provider_options: serde_json::Map::new(),
             _marker: PhantomData,
         }
     }
@@ -127,6 +129,18 @@ impl<A: ?Sized> AiAgentBuilder<A> {
         value: impl Into<serde_json::Value>,
     ) -> Self {
         self.provider_options.insert(key.into(), value.into());
+        self
+    }
+
+    /// Attach a provider-specific request field only to the internal
+    /// conversation-compaction call.
+    pub fn compaction_provider_option(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.compaction_provider_options
+            .insert(key.into(), value.into());
         self
     }
 }
@@ -391,7 +405,16 @@ async fn maybe_compact<A: AiAgent>(
     thread: &AgentThreadHandle,
 ) -> AgenkitResult<()> {
     let max_output = config.max_tokens.unwrap_or(1024);
-    if let Some((folded, kept)) = compact_thread(thread, model, provider, cx, max_output).await? {
+    if let Some((folded, kept)) = compact_thread(
+        thread,
+        model,
+        provider,
+        cx,
+        max_output,
+        &config.compaction_provider_options,
+    )
+    .await?
+    {
         run.emit(
             run.event(
                 events::AI_THREAD_CHECKPOINTED,
@@ -420,6 +443,7 @@ pub(crate) async fn compact_thread(
     provider: &Arc<dyn Provider>,
     cx: &ProviderContext,
     max_output: u32,
+    provider_options: &serde_json::Map<String, serde_json::Value>,
 ) -> AgenkitResult<Option<(u64, u64)>> {
     // Without catalog metadata we can't size the window — skip (degrade, no error).
     let Some(catalog_model) = super::catalog::lookup(model) else {
@@ -460,7 +484,7 @@ pub(crate) async fn compact_thread(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let summary = summarize(transcript, model, provider, cx).await?;
+    let summary = summarize(transcript, model, provider, cx, provider_options).await?;
     let (folded, kept) = (older.len() as u64, recent.len() as u64);
     thread
         .checkpoint(Message::system(summary), recent.to_vec())
@@ -519,8 +543,22 @@ async fn summarize(
     model: &ModelRef,
     provider: &Arc<dyn Provider>,
     cx: &ProviderContext,
+    provider_options: &serde_json::Map<String, serde_json::Value>,
 ) -> AgenkitResult<String> {
-    let request = GenerateRequest {
+    let request = compaction_request(transcript, model, provider_options);
+    Ok(provider
+        .generate(request, cx)
+        .await
+        .map_err(super::generate::reclassify_overflow)?
+        .text_output())
+}
+
+fn compaction_request(
+    transcript: String,
+    model: &ModelRef,
+    provider_options: &serde_json::Map<String, serde_json::Value>,
+) -> GenerateRequest {
+    GenerateRequest {
         model: model.clone(),
         system: Some(
             "You are compacting an agent conversation to fit its context window. \
@@ -533,15 +571,11 @@ async fn summarize(
         json_schema: None,
         max_tokens: Some(1024),
         thinking: Default::default(),
-        // Compaction is an internal summarization call, not an agent turn — it
-        // doesn't inherit the agent's provider options.
-        provider_options: serde_json::Map::new(),
-    };
-    Ok(provider
-        .generate(request, cx)
-        .await
-        .map_err(super::generate::reclassify_overflow)?
-        .text_output())
+        // Compaction is a distinct provider effect. It receives only the
+        // explicitly selected compaction options, never the ordinary turn's
+        // search/thinking escape-hatch fields.
+        provider_options: provider_options.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -574,6 +608,16 @@ mod tests {
         // A boundary that already lands on a non-tool message is unchanged.
         assert_eq!(compaction_split(&history, 1), 3); // tail = [answer]
         assert_eq!(compaction_split(&history, 4), 0); // keep all → start at 0
+    }
+
+    #[test]
+    fn compaction_request_carries_only_explicit_compaction_options() {
+        let options = serde_json::Map::from_iter([(
+            "trace_authority".to_string(),
+            serde_json::json!({"id": "trusted"}),
+        )]);
+        let request = compaction_request("history".into(), &ModelRef::new("mock/model"), &options);
+        assert_eq!(request.provider_options, options);
     }
 
     #[test]
