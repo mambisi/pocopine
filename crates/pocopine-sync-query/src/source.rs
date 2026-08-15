@@ -951,6 +951,14 @@ where
             // can't cheaply disprove an extra row when the source
             // honors the pushed-down limit).
             let has_more = source_overyielded || sync_rows.len() >= cap;
+            // Integrity stamp over the outgoing row set (SPORC P6):
+            // the client recomputes over what it RECEIVED and
+            // refuses to settle on mismatch — catching truncating
+            // proxies, cache mixes, and body-rewriting middleware
+            // between here and there.
+            let digest = pocopine_sync::snapshot_digest(
+                sync_rows.iter().map(|r| (&r.key, r.version.as_ref())),
+            );
             let mut response = pocopine_sync::SyncPullResponse::snapshot(
                 stream,
                 collection,
@@ -958,7 +966,8 @@ where
                 snapshot_cursor,
             )
             .with_tombstones(tombstones)
-            .with_watermark(feed_watermark);
+            .with_watermark(feed_watermark)
+            .with_digest(Some(digest));
             if forced_resync {
                 response = response.with_resync(pocopine_sync::SyncResyncReason::CursorTruncated);
             }

@@ -31,8 +31,8 @@ pub use protocol::{
     SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
     SyncPushResponse, SyncRejectCode, SyncRejectedMutation, SyncResyncReason, SyncRow, SyncScope,
     SyncSessionId, SyncStreamName, SyncStreamSubscription, SyncTombstone,
-    default_schema_version_one, local_stream_key, stream_params_hash, sync_stream_params_tag,
-    sync_stream_tag,
+    default_schema_version_one, local_stream_key, snapshot_digest, stream_params_hash,
+    sync_stream_params_tag, sync_stream_tag,
 };
 pub use state::SyncReason;
 

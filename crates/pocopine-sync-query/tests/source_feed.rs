@@ -265,6 +265,13 @@ async fn cursorless_pull_snapshots_and_stamps_head_cursor() {
     // Head cursor stamped so the NEXT pull upgrades to incremental.
     assert_eq!(response.cursor, Some(SyncCursor::new("2").unwrap()));
     assert!(response.resync.is_none());
+    // Integrity stamp (P6): the digest recomputes over the received
+    // rows — the exact check the client runs before settling.
+    let stamped = response.digest.as_deref().expect("snapshot is stamped");
+    let recomputed = pocopine_sync::snapshot_digest(
+        response.rows.iter().map(|r| (&r.key, r.version.as_ref())),
+    );
+    assert_eq!(stamped, recomputed);
 }
 
 #[tokio::test]

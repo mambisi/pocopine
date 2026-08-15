@@ -1061,6 +1061,39 @@ where
     /// entries so the persist sweep — a bug detector in steady
     /// state — finds nothing.
     fn apply_pull(&self, response: SyncPullResponse<Value>) -> PullSettle {
+        // ── Integrity check (SPORC P6, fail-stop) ───────────────
+        // The server stamped a digest over the row set it SENT;
+        // recompute over what we RECEIVED. A mismatch means the
+        // payload was corrupted in transit (truncating proxy,
+        // cache mix, body-rewriting middleware) — settling it
+        // would wipe this view against corrupt truth, so refuse
+        // loudly and keep the previous state; the next tick
+        // retries. Runs before ANY state mutation.
+        if matches!(response.mode, SyncPullMode::Snapshot)
+            && let Some(expected) = &response.digest
+        {
+            let actual = pocopine_sync::snapshot_digest(
+                response.rows.iter().map(|r| (&r.key, r.version.as_ref())),
+            );
+            if &actual != expected {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = response.stream.as_str(),
+                    expected = %expected,
+                    actual = %actual,
+                    rows = response.rows.len(),
+                    "sync-query: snapshot digest MISMATCH — refusing to \
+                     settle a corrupt response (kept previous state; will \
+                     retry). Something between the server and this client \
+                     is dropping or rewriting rows."
+                );
+                self.mark_error(DriverError::Server(
+                    "snapshot digest mismatch; response not settled".to_string(),
+                ));
+                return PullSettle::default();
+            }
+        }
+
         let Some(sub) = self.subscription.upgrade() else {
             return PullSettle::default();
         };
