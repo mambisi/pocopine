@@ -17,6 +17,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
     server::check_configured_port_available(&cfg, args.port)?;
+    // Ahead of cargo, so unreadable text in an inline template is reported as
+    // that, rather than as a bare `unknown start of token` naming no template.
+    crate::inline_lint::check_project(&project)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
@@ -105,6 +108,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
                 if pending.wasm {
                     println!("↻ rebuilding wasm…");
+                    // On a watch tick this is the common case: the edit that
+                    // just broke the build was typing prose into a template.
+                    if let Err(e) = crate::inline_lint::check_project(&project) {
+                        eprintln!("{e:#}");
+                        continue;
+                    }
                     if let Err(e) = build::wasm(&project, args.release) {
                         eprintln!("build failed: {e:#}");
                         continue;
