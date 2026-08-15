@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
   <button @click="count = count + 1">+</button>
   <button @click="pick(count)">pick</button>
   <span pp-text="$store.prefs.theme"></span>
-  <template pp-for="item in items"><b pp-text="item"></b><i pp-text="$index"></i></template>
+  <template pp-for="item in items"><span><b pp-text="item"></b><i pp-text="$index"></i></span></template>
 </div>}
 )]
 struct TpPass {
