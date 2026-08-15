@@ -27,7 +27,7 @@ use crate::runtime::{self, EditorRuntime};
 use crate::state::{EditorState, EditorStateConfig, Plugin, Selection, Transaction};
 use crate::transform::{AttrStep, Step};
 
-use super::input::{default_keymap, install_listeners, read_dom_selection};
+use super::input::{ListenerSetup, default_keymap, install_listeners, read_dom_selection};
 use super::node_view_handle::{NodeViewEditorBinding, TransactionDispatch};
 use super::node_view_manager::NodeViewManager;
 use super::reconciler::{ReconcileOutcome, reconcile_surface_with_manager};
@@ -799,13 +799,21 @@ impl PineRichTextRoot {
         }
 
         let dispatch_for_listeners = dispatch.clone();
+        // Shared with the reconcile watch below: while an IME is composing, the
+        // DOM belongs to the IME, and repainting destroys the very text node it
+        // is composing into.
+        let composing = Rc::new(Cell::new(false));
+        let composing_for_watch = composing.clone();
         let closures = install_listeners(
-            surface_el.clone(),
-            runtime.clone(),
-            state_provider.clone(),
-            node_view_manager.clone(),
-            keymap,
-            debug_perf,
+            ListenerSetup {
+                surface: surface_el.clone(),
+                runtime: runtime.clone(),
+                state_provider: state_provider.clone(),
+                node_view_manager: node_view_manager.clone(),
+                keymap,
+                composing,
+                debug_perf,
+            },
             move |state, transaction, sync_flush| {
                 dispatch_for_listeners(state, transaction, sync_flush);
             },
@@ -1073,6 +1081,14 @@ impl PineRichTextRoot {
         // multi-KB `Value` mutation on every keystroke; this
         // shape propagates a 8-byte integer.
         watch_scope_field_scoped::<u64, _>(scope, "doc_generation", move |_gen, _| {
+            // An IME owns the DOM until it commits. Repainting now would swap
+            // out the text node it is composing into, which surfaces as
+            // duplicated or reordered characters (and on Android, a dropped
+            // composition). The commit at `compositionend` reconciles the model
+            // and bumps the generation again, so nothing is lost by waiting.
+            if composing_for_watch.get() {
+                return;
+            }
             if reconcile_pending.replace(true) {
                 return;
             }
