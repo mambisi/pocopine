@@ -442,10 +442,29 @@ fn redact_tool_payloads(messages: Vec<Message>) -> Vec<Message> {
 /// readers share one schema: a renamed/missing field is a compile error, not a
 /// silent zero. The `kind` discriminator distinguishes this from any future
 /// state-change payload that also rides `RecordKind::StateChange`.
+/// Which model call a [`UsageRecord`] came from.
+///
+/// Compaction bills the same account as the turn, so it must land in the totals —
+/// but the user never asked for it. Tagging the source keeps it attributable, so
+/// compaction spend can be reported (or later absorbed) on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum UsageSource {
+    /// A turn the user prompted for.
+    #[default]
+    Turn,
+    /// A history-compaction summarization the runtime issued on its own.
+    Compaction,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct UsageRecord {
     /// Discriminator within `RecordKind::StateChange` — always `"usage"` here.
     kind: String,
+    /// Which model call produced this usage. Defaults to `Turn`, so records
+    /// written before compaction was metered still read back correctly.
+    #[serde(default)]
+    source: UsageSource,
     /// The model the turn used.
     model: String,
     /// The turn's aggregate token usage.
@@ -1059,6 +1078,7 @@ impl AgentSession {
         if usage.total() > 0 {
             let record = UsageRecord {
                 kind: UsageRecord::KIND.to_string(),
+                source: UsageSource::Turn,
                 model: model.as_str().to_string(),
                 usage,
                 cost: super::catalog::lookup(&model).map(|m| m.estimate_cost(&usage)),
@@ -1083,17 +1103,68 @@ impl AgentSession {
         }
 
         let max_output = self.config.max_tokens.unwrap_or(1024);
-        if let Some((folded, _kept)) = super::agent::compact_thread(
+        // Compaction runs after the turn closed its own trace run, so give it one.
+        // Without this its model call is untraced and its tokens unrecorded — the
+        // spend still happens and the provider still bills it, so a session's
+        // reported cost silently drifts below what the account was charged, by
+        // more the longer the conversation runs.
+        let seq = self.inner.run_seq.fetch_add(1, Ordering::Relaxed);
+        let compaction_run = RunState::new(
+            self.inner.clone(),
+            RunId::new(format!("run-{seq}")),
+            TraceId::new(format!("trace-{seq}")),
+            self.principal.clone(),
+            None,
+        );
+        let compaction_observer = super::loop_core::TraceObserver {
+            run: &compaction_run,
+            agent_step: compaction_run.next_step_id(),
+        };
+        if let Some(compaction) = super::agent::compact_thread(
             &self.thread,
             &model,
             &provider,
             &cx,
             max_output,
             &self.config.compaction_provider_options,
+            &compaction_observer,
         )
         .await?
         {
-            let _ = events.send(AgentEvent::Compacted { folded });
+            // Its own provenance entry rather than folding into the turn's: the
+            // totals must include it, but compaction is not work the user asked
+            // for, so `source` keeps it attributable — readable separately if the
+            // spend is ever absorbed rather than charged on.
+            if compaction.usage.total() > 0 {
+                let record = UsageRecord {
+                    kind: UsageRecord::KIND.to_string(),
+                    source: UsageSource::Compaction,
+                    model: model.as_str().to_string(),
+                    usage: compaction.usage,
+                    cost: super::catalog::lookup(&model)
+                        .map(|m| m.estimate_cost(&compaction.usage)),
+                };
+                match serde_json::to_value(&record) {
+                    Ok(data) => {
+                        if let Err(error) = self.thread.append_state_change(data).await {
+                            tracing::warn!(
+                                target: "pocopine.log",
+                                thread_id = self.thread.id().as_str(),
+                                error = %error,
+                                "failed to record compaction usage provenance",
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        target: "pocopine.log",
+                        error = %error,
+                        "failed to encode compaction usage provenance",
+                    ),
+                }
+            }
+            let _ = events.send(AgentEvent::Compacted {
+                folded: compaction.folded,
+            });
         }
         Ok(reason)
     }
@@ -1932,6 +2003,64 @@ mod tests {
         assert_eq!(fork_usage.output_tokens, 500);
         // The parent still reports its own single turn.
         assert_eq!(session.usage().await.unwrap().input_tokens, 1_000);
+    }
+
+    #[tokio::test]
+    async fn compaction_usage_lands_in_the_session_totals_and_stays_attributable() {
+        // Compaction is a real model call billed to the same account as the turn.
+        // It used to call the provider directly and drop the response's usage on
+        // the floor, so a session's reported cost drifted below what the account
+        // was actually charged — by more the longer the conversation ran.
+        //
+        // Two 40k-char turns overflow gpt-3.5-turbo's 16385-token window and reach
+        // the four-message floor, so exactly one compaction fires.
+        let huge = "y".repeat(40_000);
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("openai")
+                    .default_text(huge)
+                    .with_usage(pocopine_agenkit_core::Usage::new(1_000, 500)),
+            )
+            .default_model(ModelRef::new("openai/gpt-3.5-turbo"))
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let _ = session.prompt("first").collect::<Vec<_>>().await;
+        let _ = session.prompt("second").collect::<Vec<_>>().await;
+
+        let records = session.usage_records().await.unwrap();
+        let compactions: Vec<_> = records
+            .iter()
+            .filter(|r| r.source == UsageSource::Compaction)
+            .collect();
+        assert_eq!(
+            compactions.len(),
+            1,
+            "the compaction call's usage was not recorded: {records:?}",
+            records = records.iter().map(|r| r.source).collect::<Vec<_>>()
+        );
+        assert_eq!(compactions[0].usage.input_tokens, 1_000);
+        assert!(
+            compactions[0].cost.is_some(),
+            "compaction should carry a catalog cost like any other call"
+        );
+
+        // Two turns plus the compaction — the total is what the provider billed,
+        // not just the part the user asked for.
+        let total = session.usage().await.unwrap();
+        assert_eq!(
+            total.input_tokens, 3_000,
+            "compaction missing from the total"
+        );
+        assert_eq!(total.output_tokens, 1_500);
+
+        // Still attributable: the turns are separable from the overhead.
+        let turn_input: u64 = records
+            .iter()
+            .filter(|r| r.source == UsageSource::Turn)
+            .map(|r| r.usage.input_tokens)
+            .sum();
+        assert_eq!(turn_input, 2_000);
     }
 
     #[tokio::test]
