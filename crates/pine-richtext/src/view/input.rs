@@ -22,7 +22,6 @@
 //! position (`delete_selection`, `toggle_mark`, `insert_text`, etc.)
 //! get the up-to-date DOM selection that way.
 
-#[cfg(target_arch = "wasm32")]
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,6 +37,7 @@ use crate::inputrules::{plugin as inputrules_plugin, run_rules};
 use crate::model::{Node, Slice};
 use crate::runtime::EditorRuntime;
 use crate::state::{EditorState, Selection, Transaction};
+use crate::text_diff::char_splice;
 
 use super::node_view_manager::NodeViewManager;
 use super::selection::dom_pos_to_model;
@@ -238,18 +238,40 @@ fn simple_text_delete_defer_reason(
 /// The returned vector holds the live `Closure`s — the caller MUST keep
 /// it alive (typically by stashing it in the component's state) or the
 /// closures get dropped and the listeners stop firing.
+/// Everything the listeners need to reach besides the dispatch sink.
+///
+/// Grouped rather than passed positionally because the call site reads better
+/// named, and because `composing` is easy to mistake for a plain flag: it is
+/// shared state, and the caller's reconciler must observe the *same* cell.
+pub(crate) struct ListenerSetup {
+    pub surface: Element,
+    pub runtime: Arc<EditorRuntime>,
+    pub state_provider: Rc<dyn Fn(bool) -> Option<EditorState>>,
+    pub node_view_manager: Rc<RefCell<NodeViewManager>>,
+    pub keymap: Rc<KeyMap>,
+    /// Set for the duration of an IME composition. The caller shares this cell
+    /// with its reconciler so a repaint cannot destroy the node the IME is
+    /// composing into (see the `compositionstart`/`compositionend` listeners).
+    pub composing: Rc<Cell<bool>>,
+    pub debug_perf: bool,
+}
+
 pub(crate) fn install_listeners<F>(
-    surface: Element,
-    runtime: Arc<EditorRuntime>,
-    state_provider: Rc<dyn Fn(bool) -> Option<EditorState>>,
-    node_view_manager: Rc<RefCell<NodeViewManager>>,
-    keymap: Rc<KeyMap>,
-    debug_perf: bool,
+    setup: ListenerSetup,
     dispatch: F,
 ) -> Vec<Closure<dyn FnMut(Event)>>
 where
     F: Fn(EditorState, Transaction, bool) + 'static,
 {
+    let ListenerSetup {
+        surface,
+        runtime,
+        state_provider,
+        node_view_manager,
+        keymap,
+        composing,
+        debug_perf,
+    } = setup;
     let dispatch = Rc::new(dispatch);
     let runtime_name = runtime.name().map(str::to_string);
 
@@ -939,6 +961,56 @@ where
         closures.push(cb);
     }
 
+    // compositionstart / compositionend — the IME's turn with the DOM.
+    //
+    // Composition is the one edit this editor cannot intercept: the IME needs
+    // to place and repeatedly rewrite its own preedit text in the DOM, so the
+    // `beforeinput` arm above deliberately lets it through. That leaves the
+    // model stale for the duration, and something has to put it right when the
+    // IME commits — otherwise the composed text is DOM-only, invisible to the
+    // model, and the first reconcile after it repaints the stale model straight
+    // over the user's text.
+    //
+    // `composing` also gates the reconciler (the caller wires it to the same
+    // flag), because repainting mid-composition destroys the very text node the
+    // IME holds a reference to, which on Android shows up as duplicated or
+    // reversed characters.
+    {
+        let composing_start = composing.clone();
+        let cb = Closure::wrap(Box::new(move |_event: Event| {
+            composing_start.set(true);
+        }) as Box<dyn FnMut(Event)>);
+        let _ = surface
+            .add_event_listener_with_callback("compositionstart", cb.as_ref().unchecked_ref());
+        closures.push(cb);
+
+        let surface_for_end = surface.clone();
+        let state_provider = state_provider.clone();
+        let dispatch = dispatch.clone();
+        let runtime_for_log = runtime_name.clone();
+        let composing_end = composing.clone();
+        let manager = node_view_manager.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            composing_end.set(false);
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
+            let started_at = perf_now_ms();
+            let outcome = commit_composition(&surface_for_end, &state_provider, &dispatch);
+            log_input_perf(debug_perf, "input.compositionend", || {
+                json!({
+                    "runtime": runtime_for_log.clone(),
+                    "handled": outcome.handled,
+                    "reason": outcome.reason,
+                    "total_ms": round_ms(perf_now_ms() - started_at),
+                })
+            });
+        }) as Box<dyn FnMut(Event)>);
+        let _ =
+            surface.add_event_listener_with_callback("compositionend", cb.as_ref().unchecked_ref());
+        closures.push(cb);
+    }
+
     // Always serialize clipboard output from the semantic model. Letting the
     // browser clone the live selection would leak typed component chrome,
     // resize handles, and other node-view DOM into `text/html`. Cell
@@ -1182,6 +1254,117 @@ fn try_replace_selection(
     tr.replace_selection(Slice::new(content.clone(), open_start, open_end))
         .ok()?;
     Some(tr)
+}
+
+/// Why a composition commit did or didn't reach the model — logged, and
+/// returned so tests can assert on the reason rather than only the outcome.
+struct CompositionCommit {
+    handled: bool,
+    reason: &'static str,
+}
+
+impl CompositionCommit {
+    fn skipped(reason: &'static str) -> Self {
+        Self {
+            handled: false,
+            reason,
+        }
+    }
+}
+
+/// Read the block the IME just committed into back into the model.
+///
+/// This is the narrow, composition-shaped case of what ProseMirror's DOM
+/// observer does generally: re-read the changed region and diff it against the
+/// model rather than assuming the model is right. It is deliberately *narrow* —
+/// it trusts the DOM for exactly one textblock, at exactly one moment (the
+/// commit), and refuses rather than guesses everywhere else.
+///
+/// The guard that makes it safe is the length check: a textblock whose model
+/// content size equals its DOM text length can only be text and marks, because
+/// an inline atom (an image, a hard break) costs one model position while
+/// contributing no text. Blocks containing atoms therefore bail out instead of
+/// diffing two sequences that were never aligned to begin with — mis-aligning
+/// them would splice the replacement at an offset that means nothing.
+fn commit_composition(
+    surface: &Element,
+    state_provider: &Rc<dyn Fn(bool) -> Option<EditorState>>,
+    dispatch: &Rc<impl Fn(EditorState, Transaction, bool)>,
+) -> CompositionCommit {
+    let Some(sel) = web_sys::window().and_then(|w| w.get_selection().ok().flatten()) else {
+        return CompositionCommit::skipped("no_selection");
+    };
+    let Some(anchor) = sel.anchor_node() else {
+        return CompositionCommit::skipped("no_anchor");
+    };
+    if !surface.contains(Some(&anchor)) {
+        return CompositionCommit::skipped("anchor_outside_surface");
+    }
+    // The composing node is a text node; its block is what we re-read.
+    let Some(block) = anchor
+        .parent_element()
+        .and_then(|el| nearest_block_element(surface, &el))
+    else {
+        return CompositionCommit::skipped("no_block");
+    };
+    let Some(content_start) = dom_pos_to_model(surface, block.as_ref(), 0) else {
+        return CompositionCommit::skipped("block_not_mappable");
+    };
+    let Some(state) = state_provider(false) else {
+        return CompositionCommit::skipped("missing_state");
+    };
+
+    let doc = state.doc();
+    let Ok(resolved) = doc.resolve(content_start) else {
+        return CompositionCommit::skipped("unresolvable_position");
+    };
+    let block_size = resolved.parent().content_size();
+    let Ok(old_text) = doc.text_between(content_start, content_start + block_size, "") else {
+        return CompositionCommit::skipped("unreadable_model_text");
+    };
+    if old_text.chars().count() != block_size {
+        // Inline atoms present — model positions and DOM text don't line up.
+        return CompositionCommit::skipped("block_not_pure_text");
+    }
+    let new_text = block.text_content().unwrap_or_default();
+    if new_text == old_text {
+        return CompositionCommit::skipped("no_change");
+    }
+
+    let (offset, count, replacement) = char_splice(&old_text, &new_text);
+    let from = content_start + offset;
+    let to = from + count;
+    let Some(state) = state_with_text_selection(state, from, to) else {
+        return CompositionCommit::skipped("selection_error");
+    };
+    let Some(tr) = insert_text_transaction(&state, replacement) else {
+        return CompositionCommit::skipped("transaction_error");
+    };
+    dispatch(state, tr, false);
+    CompositionCommit {
+        handled: true,
+        reason: "committed",
+    }
+}
+
+/// The nearest ancestor of `el` (inclusive) that the model addresses as a
+/// block — i.e. one carrying a `data-pos`, which is what the position mapping
+/// keys off.
+fn nearest_block_element(surface: &Element, el: &Element) -> Option<Element> {
+    let mut current = Some(el.clone());
+    while let Some(node) = current {
+        if !surface.contains(Some(node.as_ref())) {
+            return None;
+        }
+        if node.has_attribute("data-pos") {
+            return Some(node);
+        }
+        if &node == surface {
+            return None;
+        }
+        current = node.parent_element();
+    }
+    None
 }
 
 fn insert_text_transaction(state: &EditorState, text: String) -> Option<Transaction> {
@@ -1550,12 +1733,17 @@ mod input_event_tests {
         let for_provider = live.clone();
         let for_dispatch = live.clone();
         let closures = install_listeners(
-            surface.clone(),
-            rt,
-            Rc::new(move |_live_selection: bool| Some(for_provider.borrow().clone())),
-            Rc::new(RefCell::new(NodeViewManager::new(runtime()))),
-            Rc::new(base_keymap()) as Rc<KeyMap>,
-            false,
+            super::ListenerSetup {
+                surface: surface.clone(),
+                runtime: rt,
+                state_provider: Rc::new(move |_live_selection: bool| {
+                    Some(for_provider.borrow().clone())
+                }),
+                node_view_manager: Rc::new(RefCell::new(NodeViewManager::new(runtime()))),
+                keymap: Rc::new(base_keymap()) as Rc<KeyMap>,
+                composing: Rc::new(std::cell::Cell::new(false)),
+                debug_perf: false,
+            },
             move |state: EditorState, tr, _scroll| {
                 let next = state.apply(tr).expect("transaction applies");
                 *for_dispatch.borrow_mut() = next;
@@ -1675,6 +1863,196 @@ mod input_event_tests {
             live.borrow().doc().child_count(),
             2,
             "Enter should have split the paragraph in two"
+        );
+    }
+}
+
+/// Browser tests for the composition commit.
+///
+/// Composition is the one edit the editor lets the browser make, so these
+/// simulate an IME literally: mutate the DOM text node out from under the
+/// model, then fire `compositionend` and assert the model caught up. That is
+/// the only way to cover this path — a synthetic `beforeinput` cannot, because
+/// the whole point is that the composed text arrives *without* one.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod composition_tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+    use web_sys::{CompositionEvent, Element};
+
+    use super::{KeyMap, base_keymap, install_listeners};
+    use crate::render::render_doc_to_html;
+    use crate::runtime::{EditorRuntime, RuntimeBuilder};
+    use crate::schema_basic;
+    use crate::state::{EditorState, EditorStateConfig, Selection};
+    use crate::view::node_view_manager::NodeViewManager;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn runtime() -> Arc<EditorRuntime> {
+        RuntimeBuilder::new().build()
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn mount(
+        doc: crate::model::Node,
+        cursor: usize,
+    ) -> (
+        Element,
+        Rc<RefCell<EditorState>>,
+        Rc<Cell<bool>>,
+        Vec<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
+    ) {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let surface = document.create_element("div").unwrap();
+        let rt = runtime();
+        let schema = schema_basic::schema();
+        let state = EditorState::create(
+            EditorStateConfig::new(schema, doc).selection(Selection::text(cursor)),
+        )
+        .unwrap();
+        surface.set_inner_html(&render_doc_to_html(&rt, state.doc()));
+        document.body().unwrap().append_child(&surface).unwrap();
+
+        let live = Rc::new(RefCell::new(state));
+        let for_provider = live.clone();
+        let for_dispatch = live.clone();
+        let composing = Rc::new(Cell::new(false));
+        let closures = install_listeners(
+            super::ListenerSetup {
+                surface: surface.clone(),
+                runtime: rt,
+                state_provider: Rc::new(move |_live: bool| Some(for_provider.borrow().clone())),
+                node_view_manager: Rc::new(RefCell::new(NodeViewManager::new(runtime()))),
+                keymap: Rc::new(base_keymap()) as Rc<KeyMap>,
+                composing: composing.clone(),
+                debug_perf: false,
+            },
+            move |state: EditorState, tr, _scroll| {
+                let next = state.apply(tr).expect("transaction applies");
+                *for_dispatch.borrow_mut() = next;
+            },
+        );
+        (surface, live, composing, closures)
+    }
+
+    fn paragraph_doc(text: &str) -> crate::model::Node {
+        schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text(text, Vec::new()).unwrap()]).unwrap(),
+        ])
+        .unwrap()
+    }
+
+    fn doc_text(state: &EditorState) -> String {
+        state
+            .doc()
+            .text_between(0, state.doc().content_size(), "\n")
+            .unwrap()
+    }
+
+    /// The first text node under `root`, which is where these tests put the
+    /// caret and what the simulated IME rewrites.
+    fn first_text_node(root: &web_sys::Node) -> Option<web_sys::Node> {
+        if root.node_type() == web_sys::Node::TEXT_NODE {
+            return Some(root.clone());
+        }
+        let children = root.child_nodes();
+        for i in 0..children.length() {
+            let child = children.item(i)?;
+            if let Some(found) = first_text_node(&child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Put the caret inside the surface's first text node, the way an IME
+    /// leaves it when it commits.
+    fn place_caret_in_first_text_node(surface: &Element) {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let text_node = first_text_node(surface.as_ref()).expect("a text node to focus");
+        let range = document.create_range().unwrap();
+        range.set_start(&text_node, 0).unwrap();
+        range.collapse();
+        let sel = web_sys::window().unwrap().get_selection().unwrap().unwrap();
+        sel.remove_all_ranges().unwrap();
+        sel.add_range(&range).unwrap();
+    }
+
+    fn fire_composition(surface: &Element, kind: &str) {
+        let ev = CompositionEvent::new(kind).unwrap();
+        surface
+            .dispatch_event(ev.unchecked_ref::<web_sys::Event>())
+            .unwrap();
+    }
+
+    /// Rewrite the block's text the way an IME does — straight into the DOM,
+    /// with no event the editor can intercept.
+    fn ime_rewrites_dom_text(surface: &Element, new_text: &str) {
+        let text_node = first_text_node(surface.as_ref()).expect("a text node");
+        text_node.set_text_content(Some(new_text));
+    }
+
+    #[wasm_bindgen_test]
+    fn a_committed_composition_reaches_the_model() {
+        let (surface, live, composing, _closures) = mount(paragraph_doc("ni"), 3);
+        fire_composition(&surface, "compositionstart");
+        assert!(composing.get(), "compositionstart should raise the flag");
+
+        // The IME rewrites the DOM directly; the model still says "ni".
+        ime_rewrites_dom_text(&surface, "nihao");
+        assert_eq!(doc_text(&live.borrow()), "ni", "model is stale mid-compose");
+
+        place_caret_in_first_text_node(&surface);
+        fire_composition(&surface, "compositionend");
+        assert!(!composing.get(), "compositionend should clear the flag");
+        assert_eq!(
+            doc_text(&live.borrow()),
+            "nihao",
+            "the committed composition must reach the model"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn a_composition_that_changed_nothing_dispatches_nothing() {
+        let (surface, live, _composing, _closures) = mount(paragraph_doc("hello"), 6);
+        fire_composition(&surface, "compositionstart");
+        place_caret_in_first_text_node(&surface);
+        fire_composition(&surface, "compositionend");
+        assert_eq!(doc_text(&live.borrow()), "hello");
+    }
+
+    #[wasm_bindgen_test]
+    fn a_block_holding_an_inline_atom_is_refused_rather_than_mis_spliced() {
+        // The guard that keeps the readback honest: an inline atom costs a model
+        // position but contributes no text, so model positions and DOM text are
+        // not aligned and a diff between them would splice at a meaningless
+        // offset. Such a block must bail out, leaving the model untouched.
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![
+                schema_basic::text("hi", Vec::new()).unwrap(),
+                schema_basic::hard_break().unwrap(),
+                schema_basic::text("there", Vec::new()).unwrap(),
+            ])
+            .unwrap(),
+        ])
+        .unwrap();
+        let (surface, live, _composing, _closures) = mount(doc, 3);
+        let before = doc_text(&live.borrow());
+
+        fire_composition(&surface, "compositionstart");
+        ime_rewrites_dom_text(&surface, "hiXYZ");
+        place_caret_in_first_text_node(&surface);
+        fire_composition(&surface, "compositionend");
+
+        assert_eq!(
+            doc_text(&live.borrow()),
+            before,
+            "a block with an inline atom must be refused, not mis-spliced"
         );
     }
 }

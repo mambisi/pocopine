@@ -40,9 +40,66 @@ pub(crate) fn text_splice(old: &str, new: &str) -> (u32, u32, String) {
     (offset, count, replacement)
 }
 
+/// The same minimal edit as [`text_splice`], but expressed in **Unicode scalars
+/// (`char`s)** — the unit the document model counts positions in.
+///
+/// [`text_splice`] answers "how do I patch this DOM text node"; this answers
+/// "what model range changed", which is what turning an out-of-band DOM edit
+/// (an IME commit) back into a transaction needs. Same prefix/suffix scan, so
+/// the two can never disagree about *where* an edit is — only about the unit
+/// its offset is counted in.
+pub(crate) fn char_splice(old: &str, new: &str) -> (usize, usize, String) {
+    let old_c: Vec<char> = old.chars().collect();
+    let new_c: Vec<char> = new.chars().collect();
+    let common = old_c.len().min(new_c.len());
+
+    let mut prefix = 0;
+    while prefix < common && old_c[prefix] == new_c[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < common - prefix
+        && old_c[old_c.len() - 1 - suffix] == new_c[new_c.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let count = old_c.len() - suffix - prefix;
+    let replacement: String = new_c[prefix..new_c.len() - suffix].iter().collect();
+    (prefix, count, replacement)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::text_splice;
+    use super::{char_splice, text_splice};
+
+    #[test]
+    fn char_splice_reports_the_edit_in_model_units() {
+        // Appending — the shape a committed composition usually takes.
+        assert_eq!(char_splice("ni", "nihao"), (2, 0, "hao".to_string()));
+        // Replacing in the middle — an autocorrect.
+        assert_eq!(char_splice("teh cat", "the cat"), (1, 2, "he".to_string()));
+        // Deleting.
+        assert_eq!(char_splice("abcd", "ad"), (1, 2, String::new()));
+        // Unchanged text is an empty edit, so a no-op commit dispatches nothing.
+        assert_eq!(char_splice("same", "same"), (4, 0, String::new()));
+    }
+
+    #[test]
+    fn char_splice_counts_an_astral_char_as_one_position() {
+        // The whole reason for a char-based variant: the model counts an emoji
+        // as one position where UTF-16 counts two, so applying a code-unit
+        // offset to a model position would land half a scalar off.
+        let (offset, count, replacement) = char_splice("a😀b", "a😁b");
+        assert_eq!((offset, count), (1, 1));
+        assert_eq!(replacement, "😁");
+        let (u16_offset, u16_count, _) = text_splice("a😀b", "a😁b");
+        assert_eq!(
+            (u16_offset, u16_count),
+            (1, 2),
+            "the UTF-16 view of the same edit spans two units"
+        );
+    }
 
     /// Mirror `CharacterData::replace_data(offset, count, replacement)` over the
     /// UTF-16 units, asserting the result stays valid UTF-16 (no split pair).
