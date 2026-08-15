@@ -240,6 +240,21 @@ impl Backend {
     /// errors, directive validation, `{{expr}}` interpolation, Stylekit class
     /// checks, and symbol-aware (`#[component]` field/handler) checks.
     async fn refresh(&self, uri: Url, text: String) {
+        // RFC-116 — a `.rs` buffer contributes only its `poco!` bodies. The
+        // masked view keeps offsets, lines and columns identical to the file
+        // on disk, so every pass below runs unchanged and still reports real
+        // positions. A `.poco` buffer is already all template.
+        let text = match template_view(&uri, text) {
+            Some(view) => view,
+            None => {
+                // A Rust file with no inline template owns no diagnostics —
+                // clear any it had (the last `poco!` may have just been
+                // deleted) and stop.
+                self.docs.lock().await.remove(&uri);
+                self.client.publish_diagnostics(uri, Vec::new(), None).await;
+                return;
+            }
+        };
         let index = LineIndex::new(&text);
         let (ast, parse_errors) = pocopine_template_parser::parse(&text, "<editor>");
 
@@ -320,6 +335,25 @@ impl Backend {
 }
 
 /// Nearest ancestor directory of `start` that contains a `Cargo.toml` — the
+/// The template content of a document, or `None` if it holds none.
+///
+/// RFC-116 — `.poco` buffers are template all the way through. A `.rs` buffer
+/// is mostly Rust, so it is reduced to just its `poco!` bodies with the
+/// surrounding code blanked out. Masking preserves every byte offset and line
+/// number, which is what lets the rest of the server treat an inline template
+/// exactly like a file one: no position remapping, no separate code paths for
+/// diagnostics, hover or completion.
+fn template_view(uri: &Url, text: String) -> Option<String> {
+    let is_rust = std::path::Path::new(uri.path())
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+    if is_rust {
+        pocopine_template_parser::inline_scan::mask_non_template_text(&text)
+    } else {
+        Some(text)
+    }
+}
+
 /// crate the `.poco` belongs to, which is where its pocopine config lives.
 fn find_project_root(start: &Path) -> Option<PathBuf> {
     start
@@ -1721,5 +1755,56 @@ impl<'a> LineIndex<'a> {
             .map(|&n| n.saturating_sub(1)) // drop the '\n'
             .unwrap_or(self.src.len());
         self.src.get(start..end).unwrap_or("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(path: &str, text: &str) -> Option<String> {
+        let uri = Url::parse(&format!("file:///project/src/{path}")).expect("test uri");
+        template_view(&uri, text.to_string())
+    }
+
+    #[test]
+    fn poco_documents_pass_through_untouched() {
+        let text = "<div class=\"card\">{{ label }}</div>";
+        assert_eq!(view("Card.poco", text).as_deref(), Some(text));
+    }
+
+    #[test]
+    fn rust_documents_are_reduced_to_their_inline_templates() {
+        let masked = view(
+            "lib.rs",
+            "#[component(template = poco! { <div class=\"card\"></div> })]\nstruct Card;",
+        )
+        .expect("one body");
+
+        assert!(masked.contains("<div class=\"card\"></div>"));
+        assert!(!masked.contains("struct"));
+    }
+
+    #[test]
+    fn rust_documents_without_a_template_own_no_diagnostics() {
+        // `None` is what makes `refresh` clear stale diagnostics instead of
+        // reporting parse errors for ordinary Rust.
+        assert!(view("main.rs", "fn main() { println!(\"hi\"); }").is_none());
+    }
+
+    #[test]
+    fn masked_positions_still_address_the_rust_file() {
+        // Hover, completion and diagnostics all convert through `LineIndex`,
+        // so what must survive masking is the LSP position — line and UTF-16
+        // column — not the byte offset. The `ö` is what separates the two:
+        // two UTF-8 bytes, one column.
+        let source = "// nöte\nfn a() { let _ = poco! { <b>x</b> }; }\n";
+        let masked = view("lib.rs", source).expect("one body");
+
+        let position_of = |text: &str| {
+            let at = text.find("<b>").expect("template retained");
+            LineIndex::new(text).position(at)
+        };
+        assert_eq!(position_of(&masked), position_of(source));
     }
 }

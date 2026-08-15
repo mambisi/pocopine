@@ -95,6 +95,11 @@
 
 use std::ops::Range;
 
+// RFC-116 — locate `poco!` bodies inside `.rs` sources so Stylekit and the
+// language server can treat inline templates as first-class.
+#[cfg(feature = "inline-scan")]
+pub mod inline_scan;
+
 use html5ever::driver::ParseOpts;
 use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;

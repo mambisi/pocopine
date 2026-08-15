@@ -169,7 +169,12 @@ fn write_output(project: &Path, scfg: &StylekitConfig, css: &str) -> Result<()> 
     Ok(())
 }
 
-/// Recursively collect `*.poco` files under `dir` (skips hidden dirs).
+/// Recursively collect templates under `dir` (skips hidden dirs).
+///
+/// Two homes, one contract: `*.poco` files, and RFC-116 `poco!` bodies
+/// embedded in `*.rs` sources. A utility class means the same thing in both,
+/// so Stylekit must see both or inline templates would silently lose their
+/// generated CSS.
 fn collect_poco(dir: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
     if !dir.exists() {
         return Ok(());
@@ -183,13 +188,35 @@ fn collect_poco(dir: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
             if !name.starts_with('.') {
                 collect_poco(&path, out)?;
             }
-        } else if path.extension().and_then(|e| e.to_str()) == Some("poco") {
-            let source = std::fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
-            out.push(SourceFile { path, source });
+        } else {
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("poco") => {
+                    let source = std::fs::read_to_string(&path)
+                        .with_context(|| format!("read {}", path.display()))?;
+                    out.push(SourceFile { path, source });
+                }
+                Some("rs") => {
+                    let source = std::fs::read_to_string(&path)
+                        .with_context(|| format!("read {}", path.display()))?;
+                    if let Some(masked) = mask_inline_templates(&source) {
+                        out.push(SourceFile {
+                            path,
+                            source: masked,
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
     }
     Ok(())
+}
+
+/// A Rust file's inline templates, as something the `.poco` pipeline can
+/// read: everything outside a `poco!` body blanked, offsets and line numbers
+/// preserved. `None` when the file holds no inline template.
+fn mask_inline_templates(source: &str) -> Option<String> {
+    pocopine_template_parser::inline_scan::mask_non_template_text(source)
 }
 
 /// `pocopine stylekit` (hidden debug verb): print the catalog/metadata,
@@ -234,6 +261,93 @@ pub fn output_path(project: &Path, cfg: &PocopineConfig) -> PathBuf {
 mod tests {
     use super::*;
     use crate::config::{StylekitConfig, TailwindConfig};
+
+    // ─── RFC-116 inline templates ────────────────────────────────
+
+    #[test]
+    fn rust_without_an_inline_template_is_not_a_source_file() {
+        assert!(mask_inline_templates("fn main() { println!(\"hi\"); }").is_none());
+    }
+
+    #[test]
+    fn masking_keeps_template_text_and_blanks_the_rust_around_it() {
+        let source = r#"
+#[component(template = poco! { <div class="p-4 flex"></div> })]
+struct Card;
+"#;
+        let masked = mask_inline_templates(source).expect("one body");
+
+        // The template survives; the Rust does not.
+        assert!(masked.contains(r#"<div class="p-4 flex"></div>"#));
+        assert!(!masked.contains("struct"));
+        assert!(!masked.contains("component"));
+    }
+
+    #[test]
+    fn masking_preserves_lines_and_columns() {
+        // A diagnostic reported against the masked source has to land on the
+        // real `.rs` position, which holds only if line and column survive —
+        // including on lines carrying multibyte Rust text before the template.
+        let source = "// héllo ünicode\nfn a() { let _ = poco! { <b class=\"x\"></b> }; }\n";
+        let masked = mask_inline_templates(source).expect("one body");
+
+        let coords = |text: &str| {
+            let at = text.find("<b class=").expect("template retained");
+            let line = text[..at].matches('\n').count();
+            let start = text[..at].rfind('\n').map(|nl| nl + 1).unwrap_or(0);
+            (line, text[start..at].encode_utf16().count())
+        };
+        assert_eq!(
+            masked.lines().count(),
+            source.lines().count(),
+            "line numbers must not shift"
+        );
+        assert_eq!(coords(&masked), coords(source), "columns must not shift");
+    }
+
+    #[test]
+    fn class_in_an_inline_template_compiles_to_css() {
+        // The contract users care about: a utility written inside `poco!`
+        // generates the same rule it would from a `.poco` file.
+        let masked =
+            mask_inline_templates(r#"const T: X = poco! { <div class="p-4"></div> };"#).unwrap();
+        let files = vec![SourceFile {
+            path: PathBuf::from("src/lib.rs"),
+            source: masked,
+        }];
+        let out = compile_project("", &files, CompileOptions::default());
+
+        assert!(
+            out.css.contains(".p-4"),
+            "inline utility missing from stylesheet:\n{}",
+            out.css
+        );
+    }
+
+    #[test]
+    fn rust_string_literals_are_not_mistaken_for_class_lists() {
+        // Masking (rather than handing the extractor the whole file) is what
+        // keeps ordinary Rust strings out of the stylesheet.
+        let masked = mask_inline_templates(
+            r#"
+fn a() { let _ = "p-4 flex m-2"; }
+const T: X = poco! { <div class="p-8"></div> };
+"#,
+        )
+        .unwrap();
+        let files = vec![SourceFile {
+            path: PathBuf::from("src/lib.rs"),
+            source: masked,
+        }];
+        let out = compile_project("", &files, CompileOptions::default());
+
+        assert!(out.css.contains(".p-8"), "inline utility should compile");
+        assert!(
+            !out.css.contains(".m-2"),
+            "a Rust string literal must not generate CSS:\n{}",
+            out.css
+        );
+    }
 
     #[test]
     fn default_on_for_bare_project() {
