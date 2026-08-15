@@ -1,4 +1,4 @@
-error: pocopine: template plan error in component `plan-dead-listener-modifier` (`$DIR/tests/ui/plan_dead_listener_modifier.poco`): `@click.prevnt`: modifier `.prevnt` is not a control modifier, and `click` is not a keyboard event, so a `.prevnt` key filter can never match — the listener would never fire — did you mean `.prevent`?
+error: pocopine: template plan error in component `plan-dead-listener-modifier` (`$DIR/tests/ui/plan_dead_listener_modifier.poco`): `@click.prevnt`: `.prevnt` is not a control modifier, and key filters only match keyboard events — on `click` the listener would never fire — did you mean `.prevent`?
   --> tests/ui/plan_dead_listener_modifier.rs:8:1
    |
  8 | / #[component(
