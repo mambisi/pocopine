@@ -1353,3 +1353,103 @@ async fn scope_drift_wipes_the_bare_stream_pending_fallback() {
         })
         .await;
 }
+
+// ─── Test: un-replayable durable pendings die cleanly ──────────────
+//
+// Regression for the immortal-ghost-row bug. A pending persisted
+// WITHOUT the mutator-name envelope (the shape `push_typed` overlays
+// get when a mid-flight persist captures them) can never replay. It
+// used to stick forever: the drop path dequeued under the wrong Row
+// type (silent no-op), so the optimistic row painted every session,
+// and persist_snapshot only ever ADDED durable pendings, so the entry
+// re-hydrated on every boot. Now the hydrated drop rolls the overlay
+// back type-erased, and the post-pull persist sweeps the durable
+// entry the moment memory no longer holds it.
+#[tokio::test]
+async fn unreplayable_hydrated_pending_clears_overlay_and_durable_entry() {
+    use pocopine_sync::{ClientMutation, LocalPendingMutation, RowKey};
+
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    SYNC_PULL_PATH => Ok(json_response(&snapshot_response(vec![]))),
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+
+            // Seed the compartment with a durable pending whose payload
+            // has NO {__mutator, __payload} envelope — exactly what a
+            // `push_typed` overlay looks like when a concurrent pull's
+            // persist captured it mid-flight.
+            let stream = SyncStreamName::new(STREAM).unwrap();
+            let params = {
+                let mut p = StreamParams::new();
+                p.insert("workspace_id".into(), serde_json::json!("W1"));
+                p
+            };
+            let compartment = local_stream_key(&stream, &params);
+            let ghost = Issue {
+                id: "issue_ghost".into(),
+                workspace_id: "W1".into(),
+                title: "immortal?".into(),
+            };
+            let mutation_id = MutationId::uuid();
+            let mut wire = ClientMutation::new(
+                mutation_id.clone(),
+                pocopine_sync::SyncOp::Upsert,
+                serde_json::to_value(&ghost).unwrap(),
+            );
+            wire.key = RowKey::new("issue_ghost").ok();
+            store
+                .enqueue_pending_mutation(
+                    &compartment,
+                    LocalPendingMutation::new(wire).with_optimistic_row(Some(SyncRow {
+                        key: RowKey::new("issue_ghost").unwrap(),
+                        version: None,
+                        value: serde_json::to_value(&ghost).unwrap(),
+                        pending: true,
+                        conflict: false,
+                    })),
+                )
+                .await
+                .unwrap();
+
+            // Boot a session over that store. No mutator registered —
+            // the hydrated replay can only drop the entry.
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle.clone()))
+                .into_client();
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            // Enough ticks for hydrate → open → pull → replay-drop →
+            // next poll's persist sweep (poll every 50ms).
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+
+            assert_eq!(
+                view.state().pending().len(),
+                0,
+                "dropped hydrated replay must roll back its overlay (no ghost row)"
+            );
+            assert!(
+                view.rows().is_empty(),
+                "the ghost's optimistic row must not render"
+            );
+            assert!(
+                store
+                    .pending_mutations(&compartment)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "the persist sweep must remove the durable entry so it cannot re-hydrate"
+            );
+        })
+        .await;
+}

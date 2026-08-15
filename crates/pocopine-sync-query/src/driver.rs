@@ -1562,6 +1562,73 @@ where
                 );
             }
         }
+        // Reconcile the durable pending queue DOWN to the in-memory
+        // set. Because persist can only ADD (above), any path that
+        // clears an overlay in memory without a durable clear —
+        // a `push`/`push_typed` accept racing a mid-flight persist,
+        // a dropped hydrated replay, a rejected replay — strands its
+        // durable entry forever: re-hydrated, re-dropped, and
+        // re-persisted every boot. Sweep whatever the store still
+        // holds for this compartment that memory no longer does.
+        //
+        // Ordering makes this race-free on the single-threaded
+        // client: read the durable set FIRST, then borrow the live
+        // in-memory set. `mutate` installs the overlay before its
+        // durable enqueue, so an id the durable read saw is either
+        // still in memory (kept) or genuinely cleared (swept).
+        let durable_ids = match store.pending_mutations(&compartment).await {
+            Ok(durable) => durable.into_iter().map(|m| m.id).collect::<Vec<_>>(),
+            Err(err) => {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    error = %err,
+                    "sync-query: persist sweep could not read durable pendings; skipping"
+                );
+                return;
+            }
+        };
+        let Some(sub) = self.subscription.upgrade() else {
+            return;
+        };
+        let live_ids: std::collections::HashSet<pocopine_sync::MutationId> = {
+            let state = sub.state().borrow();
+            state
+                .pending()
+                .iter()
+                .map(|o| o.mutation_id.clone())
+                .collect()
+        };
+        let stale: Vec<pocopine_sync::MutationId> = durable_ids
+            .into_iter()
+            .filter(|id| !live_ids.contains(id))
+            .collect();
+        if stale.is_empty() {
+            return;
+        }
+        tracing::debug!(
+            target: "pocopine.log",
+            stream = compartment.as_str(),
+            swept = stale.len(),
+            "sync-query: sweeping durable pendings no longer held in memory"
+        );
+        let result = pocopine_sync::LocalPushResult {
+            stream: compartment.clone(),
+            collection: None,
+            accepted: stale,
+            rejected: Vec::new(),
+            rows: Vec::new(),
+            conflicts: Vec::new(),
+            cursor: None,
+        };
+        if let Err(err) = store.mark_push_result(result).await {
+            tracing::warn!(
+                target: "pocopine.log",
+                stream = compartment.as_str(),
+                error = %err,
+                "sync-query: durable pending sweep failed; will retry on next pull"
+            );
+        }
     }
 
     /// Set the subscription's loading flag without writing to
