@@ -224,7 +224,7 @@ module is documented under [`docs/`](./docs).
 | Crate | What it does |
 |---|---|
 | [`pocopine-cli`](./crates/pocopine-cli) | `pocopine build \| run \| dev \| deploy`. |
-| [`pocopine-deploy`](./crates/pocopine-deploy) | Deploy contract + adapters (RFC 080), with [`-railway`](./crates/pocopine-deploy-railway) and [`-render`](./crates/pocopine-deploy-render). Host-API-direct; no host CLIs. |
+| [`pocopine-deploy`](./crates/pocopine-deploy) | Deploy contract + adapters (RFC 080), with [`-cloudflare-pages`](./crates/pocopine-deploy-cloudflare-pages) (static sites), [`-railway`](./crates/pocopine-deploy-railway), and [`-render`](./crates/pocopine-deploy-render). Host-API-direct; no host CLIs. |
 | [`pocopine-launcher`](./crates/pocopine-launcher) | Procfile-style entrypoint for the production OCI image. |
 
 ### Shared utilities
