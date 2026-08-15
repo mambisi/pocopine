@@ -1,4 +1,4 @@
-use super::{MAX_SYNC_TOKEN_LEN, StreamParams, SyncStreamName};
+use super::{MAX_SYNC_TOKEN_LEN, RowKey, RowVersion, StreamParams, SyncStreamName};
 
 /// Live query tag used to wake clients for a sync stream.
 pub fn sync_stream_tag(stream: &str) -> String {
@@ -150,11 +150,102 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// Domain-separation prefix for [`snapshot_digest`]. Versioned so a
+/// future recipe change can't silently alias with the current one —
+/// a v2 digest never equals a v1 digest of the same rows.
+const SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"pocopine.sync.snapshot.v1\x00";
+
+/// Integrity digest over a snapshot's `(key, version)` pairs — the
+/// value stamped on `SyncPullResponse::digest` by the server and
+/// recomputed by the client over the rows it RECEIVED.
+///
+/// This is a *bug detector*, not an authenticator (the server is the
+/// app's own; there is no signature): equal digests mean the row set
+/// survived the trip intact; a mismatch means something between the
+/// server's serializer and the client's deserializer dropped,
+/// duplicated, or rewrote rows (truncating proxies, cache mixes,
+/// body-rewriting middleware) — and the client must refuse to settle
+/// the response rather than wipe its view against corrupt truth.
+///
+/// Recipe (the cross-language contract — ports must reproduce it
+/// byte-for-byte): SHA-256 over the domain prefix
+/// `"pocopine.sync.snapshot.v1\0"` followed by, for each pair
+/// SORTED by key bytes: `key` + `\0` + `version-or-empty` + `\0`.
+/// Sorting makes the digest order-independent (the wire row order is
+/// not part of the contract); keys are unique within a snapshot so
+/// the sort is total. Rendered as `"sha256:" + lowercase hex`.
+pub fn snapshot_digest<'a, I>(pairs: I) -> String
+where
+    I: IntoIterator<Item = (&'a RowKey, Option<&'a RowVersion>)>,
+{
+    let mut sorted: Vec<(&[u8], &[u8])> = pairs
+        .into_iter()
+        .map(|(key, version)| {
+            (
+                key.as_str().as_bytes(),
+                version.map(|v| v.as_str().as_bytes()).unwrap_or(b""),
+            )
+        })
+        .collect();
+    sorted.sort_unstable();
+    let mut hasher = pocopine_crypto::Hasher::new(pocopine_crypto::Algorithm::Sha256);
+    hasher.update(SNAPSHOT_DIGEST_DOMAIN);
+    for (key, version) in sorted {
+        hasher.update(key);
+        hasher.update(b"\x00");
+        hasher.update(version);
+        hasher.update(b"\x00");
+    }
+    format!("sha256:{}", hasher.finalize_hex())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn snapshot_digest_is_order_independent_and_content_sensitive() {
+        let key_a = RowKey::new("a").unwrap();
+        let key_b = RowKey::new("b").unwrap();
+        let v1 = RowVersion::new("v1").unwrap();
+        let v2 = RowVersion::new("v2").unwrap();
+
+        let forward = snapshot_digest([(&key_a, Some(&v1)), (&key_b, Some(&v2))]);
+        let reverse = snapshot_digest([(&key_b, Some(&v2)), (&key_a, Some(&v1))]);
+        assert_eq!(forward, reverse, "wire row order must not matter");
+        assert!(forward.starts_with("sha256:"));
+
+        // A changed version, a dropped row, and a versionless row
+        // all produce distinct digests.
+        let changed = snapshot_digest([(&key_a, Some(&v2)), (&key_b, Some(&v2))]);
+        assert_ne!(forward, changed);
+        let dropped = snapshot_digest([(&key_a, Some(&v1))]);
+        assert_ne!(forward, dropped);
+        let versionless = snapshot_digest([(&key_a, None), (&key_b, Some(&v2))]);
+        assert_ne!(forward, versionless);
+    }
+
+    #[test]
+    fn snapshot_digest_golden_fixture_for_ports() {
+        // Cross-language pin: Swift / Go / Kotlin clients MUST
+        // reproduce this exact value for the same inputs. Recipe:
+        // sha256("pocopine.sync.snapshot.v1\0" + "post_1\0v3\0" +
+        // "post_2\0\0") with pairs sorted by key bytes.
+        let key_1 = RowKey::new("post_1").unwrap();
+        let key_2 = RowKey::new("post_2").unwrap();
+        let v3 = RowVersion::new("v3").unwrap();
+        let digest = snapshot_digest([(&key_2, None), (&key_1, Some(&v3))]);
+        let expected = {
+            let mut bytes: Vec<u8> = Vec::new();
+            bytes.extend_from_slice(b"pocopine.sync.snapshot.v1\x00");
+            bytes.extend_from_slice(b"post_1\x00v3\x00");
+            bytes.extend_from_slice(b"post_2\x00\x00");
+            format!("sha256:{}", pocopine_crypto::sha256_hex(&bytes))
+        };
+        assert_eq!(digest, expected);
+    }
 
     #[test]
     fn local_stream_key_is_bare_for_empty_params() {

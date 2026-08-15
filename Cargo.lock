@@ -7943,6 +7943,7 @@ dependencies = [
  "js-sys",
  "pocopine",
  "pocopine-core",
+ "pocopine-crypto",
  "pocopine-events",
  "pocopine-live",
  "pocopine-server",
