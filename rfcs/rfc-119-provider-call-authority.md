@@ -107,7 +107,7 @@ impl ProviderContext {
 }
 ```
 
-- The host attaches authority **once**, where it configures the agent.
+- The host attaches authority **once** (see *Where authority enters* below).
 - The runtime constructs every `ProviderContext` from that one value, so an
   internal call inherits by construction rather than by remembering.
 - Decorators read it with a typed accessor instead of a stringly-keyed map.
@@ -117,6 +117,38 @@ impl ProviderContext {
 Type-keyed (à la `http::Extensions`) rather than string-keyed: a host reading
 its own type back cannot collide with another crate's, and the double-underscore
 convention stops being necessary.
+
+`ProviderContext` derives `Debug`, and authority is opaque host-owned data that
+may hold a token — so the extension set must render opaquely (`"<authority>"`,
+or a count), never its contents. §D10 is otherwise breached through a log line,
+which is the same class of leak this RFC exists to close.
+
+## Where authority enters
+
+The carrier is `ProviderContext`; the *source* needs naming, because
+`for_request` has three callers and they do not share a configuration surface:
+
+| resolve site | configured by |
+|---|---|
+| `runtime.rs` (conversational loop) | `AgentConfig` — where AgenKitty's billing context lives today |
+| `agent.rs` (typed `AiAgent` run) | `AiAgentBuilder` |
+| `generate.rs` (`ctx.ai()` in flows) | the `Ai` builder — **no `AgentConfig` exists** |
+
+So "attach it once where you configure the agent" is ambiguous, and the obvious
+reading — put it on `AgentConfig` — silently starves the flow path, reintroducing
+this RFC's own bug one layer over.
+
+**Proposal: source authority the way credentials already are** — a host-supplied
+resolver keyed on the principal, mirroring
+`ProviderCredentials::resolve(provider, principal)`. That is the only surface all
+three sites share, it is a shape already proven in this codebase (W6), and
+`for_request` receives the per-principal resolved credential right next to where
+the authority would sit.
+
+One property holds whichever source is chosen, and is worth stating: because
+this is a **signature** change rather than a map lookup, a resolve site that
+fails to supply authority fails to *compile*. Silent-wrong becomes
+compile-error-wrong — which is the property the whole RFC is arguing for.
 
 `provider_options` and `compaction_provider_options` keep their current meaning
 — provider-specific *wire* fields, per call site — which is what they are good
@@ -154,6 +186,26 @@ time one is added.
 **Make the option maps public so hosts can at least test compliance.** Treats
 the symptom. The host would still have to know each lane exists.
 
+**Carry it on `Principal` / `AuthUser.claims`.** Tempting, and worth dismissing
+explicitly rather than by omission: the principal already reaches every provider
+call through the `CURRENT_PRINCIPAL` task-local, so there is nothing to thread.
+Rejected on two counts. `claims` is a `BTreeMap<String, _>`, so it reinstates
+exactly the stringly-keyed collision problem the double-underscore convention
+exists to work around. And authority is not identity — a tenant, a trace id, or
+a budget handle are metering concerns that do not belong on an auth type, and
+some of them have no principal at all (an anonymous or system-initiated run).
+
+## Relationship to compaction usage recording
+
+Distinct problem, opposite direction, already fixed separately — noted so the
+two are not conflated. This RFC is the **outbound** path: authority reaching the
+provider. Compaction also had a **return**-path defect — `summarize` called
+`provider.generate` directly rather than through `run_model_step`, so its usage
+was discarded and never recorded, leaving `AgentSession::usage()`/`cost()`
+under-reporting by the whole of compaction. That landed on main as `8a335edf`.
+Neither fix subsumes the other: authority can flow outward while spend stays
+unrecorded, and vice versa.
+
 ## Open questions
 
 - Should authority be `Clone` per call or `Arc`-shared for the agent's lifetime?
@@ -162,3 +214,7 @@ the symptom. The host would still have to know each lane exists.
   example, compaction charged under its own capability rather than the turn's).
 - Should `ProviderContext` also carry the deadline and request id its doc
   comment mentions, so the same propagation work is done once?
+- `Extensions` implementation: `http::Extensions` is the reference shape but
+  pulling in `http` for one field is heavy; a hand-rolled
+  `HashMap<TypeId, Arc<dyn Any + Send + Sync>>` is ~30 lines plus the manual
+  `Debug` the §D10 note above requires.
