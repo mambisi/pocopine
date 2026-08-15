@@ -22,9 +22,9 @@ use pocopine_core::fetch::{
 };
 use pocopine_core::server::ServerError;
 use pocopine_sync::{
-    MemoryLocalStore, MutationId, SYNC_OPEN_PATH, SYNC_PULL_PATH, StreamParams, SyncCollectionName,
-    SyncCursor, SyncLocalStore, SyncOpenResponse, SyncOpenStream, SyncPullResponse, SyncResult,
-    SyncRow, SyncStreamName, local_stream_key,
+    MemoryLocalStore, MutationId, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH, StreamParams,
+    SyncCollectionName, SyncCursor, SyncLocalStore, SyncOpenResponse, SyncOpenStream,
+    SyncPullResponse, SyncResult, SyncRow, SyncStreamName, local_stream_key,
 };
 use pocopine_sync_query::{
     Mutator, MutatorRemoteContext, MutatorRemoteFuture, QueryClientConfig, RowChange,
@@ -1449,6 +1449,101 @@ async fn unreplayable_hydrated_pending_clears_overlay_and_durable_entry() {
                     .unwrap()
                     .is_empty(),
                 "the persist sweep must remove the durable entry so it cannot re-hydrate"
+            );
+        })
+        .await;
+}
+
+// ─── The accepted-push echo becomes canonical ───────────────────────
+
+/// An ACCEPTED `/push` response echoes the authoritative row — the server
+/// re-stamps timestamps (and any server-minted fields) on create, so the
+/// echo's version-bearing fields differ from the optimistic draft. The
+/// client must dequeue the optimistic overlay and adopt the echo as
+/// canonical immediately. Before this fix the overlay — which wins the
+/// `rows()` merge — shadowed canonical for the rest of the session
+/// (`/pull` routing never dequeues pendings), so every follow-up
+/// versioned update sent the stale client-stamped version and conflicted
+/// as "base version is stale" until a reload.
+#[tokio::test]
+async fn accepted_push_adopts_the_echoed_authoritative_row() {
+    thread_local! {
+        static PUSHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    fn echoed_issue() -> Issue {
+        Issue {
+            id: "issue_1".into(),
+            workspace_id: "W1".into(),
+            title: "server-stamped".into(),
+        }
+    }
+
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    // Stateful on purpose: pre-push the server has nothing;
+                    // post-push it serves the created row — so the 50ms poll
+                    // can never wipe the echo out from under the assertions.
+                    SYNC_PULL_PATH => {
+                        let rows = if PUSHED.with(|p| p.get()) {
+                            vec![echoed_issue()]
+                        } else {
+                            Vec::new()
+                        };
+                        Ok(json_response(&snapshot_response(rows)))
+                    }
+                    SYNC_PUSH_PATH => {
+                        PUSHED.with(|p| p.set(true));
+                        let mut response: pocopine_sync::SyncPushResponse<Value> =
+                            pocopine_sync::SyncPushResponse::new(
+                                SyncStreamName::new(STREAM).unwrap(),
+                            );
+                        response.accepted.push(MutationId::new("m_create").unwrap());
+                        let echoed = echoed_issue();
+                        response.rows.push(
+                            SyncRow::new(echoed.id.clone(), serde_json::to_value(&echoed).unwrap())
+                                .unwrap(),
+                        );
+                        Ok(json_response(&response))
+                    }
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+
+            let client = query_client_plugin().into_client();
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            settle(2).await;
+
+            let draft = Issue {
+                id: "issue_1".into(),
+                workspace_id: "W1".into(),
+                title: "client-draft".into(),
+            };
+            client
+                .push(
+                    SyncStreamName::new(STREAM).unwrap(),
+                    MutationId::new("m_create").unwrap(),
+                    draft.clone(),
+                    RowChange::Upsert(draft),
+                    SYNC_PUSH_PATH,
+                )
+                .await
+                .expect("push accepted");
+
+            let rows = view.rows();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0].title, "server-stamped",
+                "the view must serve the ECHOED authoritative row, not the optimistic draft"
+            );
+            assert_eq!(
+                view.state().pending().len(),
+                0,
+                "the accepted overlay must be dequeued, not left shadowing canonical"
             );
         })
         .await;

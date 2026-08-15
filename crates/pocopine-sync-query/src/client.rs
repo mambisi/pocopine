@@ -676,7 +676,7 @@ impl QueryClient {
         push_url: &str,
     ) -> pocopine_sync::SyncResult<()>
     where
-        Row: Clone + serde::Serialize + 'static,
+        Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
         Id: serde::Serialize + Clone + 'static,
         Draft: serde::Serialize + Clone + 'static,
     {
@@ -794,7 +794,7 @@ impl QueryClient {
     ) -> pocopine_sync::SyncResult<()>
     where
         P: serde::Serialize,
-        Row: Clone + serde::Serialize + 'static,
+        Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
     {
         let payload_value = serde_json::to_value(&payload)
             .map_err(|e| pocopine_sync::SyncError::client(e.to_string()))?;
@@ -862,8 +862,33 @@ impl QueryClient {
                         .iter()
                         .any(|c| c.mutation_id == mutation_id);
                 if mutation_id_accepted {
-                    // Success — overlay stays in place until the
-                    // next /pull swaps it for canonical.
+                    // Success. The response echoes the authoritative
+                    // rows (server-stamped versions/timestamps) — route
+                    // them exactly like the Mutator path: dequeue the
+                    // optimistic overlay and adopt canonical NOW. The
+                    // old "overlay stays until the next /pull" comment
+                    // was wrong: /pull routing never dequeues pending
+                    // overlays, and pendings win the rows() merge, so
+                    // the client-stamped draft shadowed the server row
+                    // for the rest of the session — every follow-up
+                    // versioned update on a freshly created row then
+                    // conflicted as "stale" until a reload.
+                    let canonical: Vec<RowChange<Row>> = response
+                        .rows
+                        .iter()
+                        .filter_map(|row| {
+                            serde_json::from_value::<Row>(row.value.clone())
+                                .ok()
+                                .map(RowChange::Upsert)
+                        })
+                        .collect();
+                    if !canonical.is_empty() {
+                        self.route_canonical_changes::<Row>(&stream, &mutation_id, &canonical);
+                    }
+                    // No echo (e.g. an accepted delete): keep the
+                    // overlay — dequeuing without a canonical change
+                    // would resurface the not-yet-pulled canonical row;
+                    // the next /pull (or its tombstone) settles it.
                     guard.disarm();
                     Ok(())
                 } else if mutation_id_rejected_or_conflicted {
@@ -2026,7 +2051,7 @@ fn mutation_id_from_value(mutation: &ClientMutation<Value>) -> MutationId {
 
 impl<Row, Id, Draft> crate::write::TypedMutation<Row, Id, Draft>
 where
-    Row: Clone + serde::Serialize + 'static,
+    Row: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
     Id: serde::Serialize + Clone + 'static,
     Draft: serde::Serialize + Clone + 'static,
 {
