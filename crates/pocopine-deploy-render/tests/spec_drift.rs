@@ -26,12 +26,18 @@ use pocopine_crypto::sha256_hex;
 const RENDER_OPENAPI_URL: &str =
     "https://api-docs.render.com/v1.0/openapi/render-public-api-1.json";
 
-/// SHA-256 of the canonicalised live spec, last reconciled 2026-07-11.
+/// SHA-256 of the canonicalised live spec, last reconciled 2026-08-15.
 /// Update this when the drift test reports a new hash for a reviewed,
 /// deliberate upstream change. (2026-07-11: benign content churn —
 /// every `REQUIRED_OPERATIONS` endpoint and method still present, so no
-/// client change.)
-const EXPECTED_SHA256: &str = "f41ec482709bb78a20898db9b91fc26296ed115e9698c42bda04f90f6193d46c";
+/// client change. 2026-08-15: benign again — structural assertions
+/// passed, and every field [`client`] deserializes was verified present
+/// in the live spec: `Service` {id,name,type,url,serviceDetails,
+/// dashboardUrl,region}, `Deploy` {id,status,image,createdAt,finishedAt}
+/// + `DeployImage` {ref,sha}, and `RenderLog` {timestamp,message} —
+/// the last reached through the `/logs` → `/logs/subscribe` 101 `$ref`,
+/// where both are still upstream-`required`. No client change.)
+const EXPECTED_SHA256: &str = "63554873b71d37d2e0a9e4ff4582ef57300c15d2773180d76dde0212199c06c6";
 
 /// Operations `crate::client` calls.
 const REQUIRED_OPERATIONS: &[(&str, &[&str])] = &[
