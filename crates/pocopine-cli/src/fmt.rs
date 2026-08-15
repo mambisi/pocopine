@@ -43,6 +43,10 @@ enum Action {
         body: String,
         edit: Edit,
     },
+    /// Rewrite a `.poco` file with its markup reformatted.
+    FormatFile { path: PathBuf, formatted: String },
+    /// Reformat an inline body in place.
+    FormatInline { edit: Edit },
     /// Nothing to do, but the author should know why.
     Skipped { reason: String },
 }
@@ -118,23 +122,34 @@ fn scan_file(path: &Path, source: &str, cfg: &FmtConfig) -> Vec<Finding> {
                     continue;
                 };
                 let lines = body.lines().count();
-                if lines >= cfg.inline_threshold || cfg.inline_small_templates == FmtLevel::Off {
-                    continue;
-                }
-                let action = match unlexable_reason(&body) {
-                    Some(reason) => Action::Skipped { reason },
-                    None => Action::Inline {
-                        template_file: file,
-                        edit: inline_edit(source, attr_range.clone(), range, &body),
+                // Format first, so a template that moves arrives already
+                // formatted and the two rules never edit the same bytes.
+                let body = formatted_or_original(&body, cfg);
+                let deleted = push_file_template_findings(
+                    &mut out,
+                    FileTemplate {
+                        rust_file: path,
+                        component: &name,
+                        template_file: &file,
+                        body: &body,
+                        lines,
+                        value_range: range,
                     },
-                };
-                out.push(Finding {
-                    file: path.to_path_buf(),
-                    component: name,
-                    rule: "inline_small_templates",
-                    lines,
-                    action,
-                });
+                    source,
+                    attr_range.clone(),
+                    cfg,
+                );
+                // A template being inlined is about to be deleted, so there
+                // is nothing left to reformat on disk.
+                if !deleted && let Some(action) = format_file_action(&file, &body, cfg) {
+                    out.push(Finding {
+                        file: path.to_path_buf(),
+                        component: name,
+                        rule: "format_markup",
+                        lines,
+                        action,
+                    });
+                }
             }
             TemplateArg::Convention => {
                 let file = dir.join(format!("{name}.poco"));
@@ -142,27 +157,49 @@ fn scan_file(path: &Path, source: &str, cfg: &FmtConfig) -> Vec<Finding> {
                     continue;
                 };
                 let lines = body.lines().count();
-                if lines >= cfg.inline_threshold || cfg.inline_small_templates == FmtLevel::Off {
-                    continue;
-                }
-                let action = match unlexable_reason(&body) {
-                    Some(reason) => Action::Skipped { reason },
-                    None => Action::Inline {
-                        template_file: file,
-                        edit: inline_edit(source, attr_range.clone(), None, &body),
+                // Format first, so a template that moves arrives already
+                // formatted and the two rules never edit the same bytes.
+                let body = formatted_or_original(&body, cfg);
+                let deleted = push_file_template_findings(
+                    &mut out,
+                    FileTemplate {
+                        rust_file: path,
+                        component: &name,
+                        template_file: &file,
+                        body: &body,
+                        lines,
+                        value_range: None,
                     },
-                };
-                out.push(Finding {
-                    file: path.to_path_buf(),
-                    component: name,
-                    rule: "inline_small_templates",
-                    lines,
-                    action,
-                });
+                    source,
+                    attr_range.clone(),
+                    cfg,
+                );
+                // A template being inlined is about to be deleted, so there
+                // is nothing left to reformat on disk.
+                if !deleted && let Some(action) = format_file_action(&file, &body, cfg) {
+                    out.push(Finding {
+                        file: path.to_path_buf(),
+                        component: name,
+                        rule: "format_markup",
+                        lines,
+                        action,
+                    });
+                }
             }
             TemplateArg::Inline { body, range } => {
                 let lines = body.lines().count();
                 if lines < cfg.inline_threshold || cfg.extract_large_inline == FmtLevel::Off {
+                    if let Some(action) =
+                        format_inline_action(source, attr_range.clone(), &body, range, cfg)
+                    {
+                        out.push(Finding {
+                            file: path.to_path_buf(),
+                            component: name,
+                            rule: "format_markup",
+                            lines,
+                            action,
+                        });
+                    }
                     continue;
                 }
                 let target = format!("{name}.poco");
@@ -173,7 +210,7 @@ fn scan_file(path: &Path, source: &str, cfg: &FmtConfig) -> Vec<Finding> {
                     lines,
                     action: Action::Extract {
                         path: dir.join(&target),
-                        body: dedent(&body),
+                        body: formatted_or_original(&dedent(&body), cfg),
                         edit: Edit {
                             range,
                             replacement: format!("\"{target}\""),
@@ -349,7 +386,8 @@ fn resolve_conflicts(findings: &mut [Finding]) {
             Action::Extract { path, .. } => {
                 *extract_targets.entry(path.clone()).or_default() += 1;
             }
-            Action::Skipped { .. } => {}
+            // Formatting rewrites content in place, so it cannot collide.
+            Action::FormatFile { .. } | Action::FormatInline { .. } | Action::Skipped { .. } => {}
         }
     }
 
@@ -385,6 +423,123 @@ fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// The pieces of a component whose template lives in a file.
+struct FileTemplate<'a> {
+    rust_file: &'a Path,
+    component: &'a str,
+    template_file: &'a Path,
+    body: &'a str,
+    lines: usize,
+    value_range: Option<std::ops::Range<usize>>,
+}
+
+/// Record the inline-rule outcome for a file template, returning whether the
+/// file is going to be deleted.
+///
+/// A template can be too big to inline, or hold text the lexer rejects. Either
+/// way it stays a file — and still deserves formatting, which is why this
+/// reports the inline decision separately rather than swallowing the file.
+fn push_file_template_findings(
+    out: &mut Vec<Finding>,
+    template: FileTemplate<'_>,
+    source: &str,
+    attr_range: std::ops::Range<usize>,
+    cfg: &FmtConfig,
+) -> bool {
+    let eligible =
+        template.lines < cfg.inline_threshold && cfg.inline_small_templates != FmtLevel::Off;
+    if !eligible {
+        return false;
+    }
+    let (action, deletes) = match unlexable_reason(template.body) {
+        Some(reason) => (Action::Skipped { reason }, false),
+        None => (
+            Action::Inline {
+                template_file: template.template_file.to_path_buf(),
+                edit: inline_edit(source, attr_range, template.value_range, template.body),
+            },
+            true,
+        ),
+    };
+    out.push(Finding {
+        file: template.rust_file.to_path_buf(),
+        component: template.component.to_string(),
+        rule: "inline_small_templates",
+        lines: template.lines,
+        action,
+    });
+    deletes
+}
+
+/// Markup formatted, or the original when the rule is off or the markup does
+/// not parse. Unparseable markup is left for the pre-lint and the compiler to
+/// report; silently rewriting it is the failure mode to avoid.
+fn formatted_or_original(body: &str, cfg: &FmtConfig) -> String {
+    if cfg.format_markup == FmtLevel::Off {
+        return body.to_string();
+    }
+    format_markup(body, cfg.print_width).unwrap_or_else(|_| body.to_string())
+}
+
+/// A `.poco` file that stays a file but whose markup would change.
+fn format_file_action(path: &Path, formatted: &str, cfg: &FmtConfig) -> Option<Action> {
+    if cfg.format_markup == FmtLevel::Off {
+        return None;
+    }
+    let current = std::fs::read_to_string(path).ok()?;
+    (current != formatted).then(|| Action::FormatFile {
+        path: path.to_path_buf(),
+        formatted: formatted.to_string(),
+    })
+}
+
+/// An inline body that stays inline but whose markup would change.
+///
+/// The body is dedented before formatting and re-indented after, so the
+/// formatter sees a template at column zero and wraps against the real width
+/// rather than counting the attribute's indentation twice.
+fn format_inline_action(
+    source: &str,
+    attr_range: std::ops::Range<usize>,
+    body: &str,
+    value_range: std::ops::Range<usize>,
+    cfg: &FmtConfig,
+) -> Option<Action> {
+    if cfg.format_markup == FmtLevel::Off {
+        return None;
+    }
+    let indent = line_indent(source, attr_range.start);
+    let available = cfg.print_width.saturating_sub(indent.len() + 4).max(20);
+    let formatted = format_markup(&dedent(body), available).ok()?;
+    let edit = inline_edit(source, attr_range, Some(value_range), &formatted);
+    (source.get(edit.range.clone()) != Some(edit.replacement.as_str()))
+        .then_some(Action::FormatInline { edit })
+}
+
+/// Reformat template markup.
+///
+/// `markup_fmt` in `Language::Html` treats every attribute as opaque, so
+/// `pp-on:click.debounce.300`, `:title` and `@click` round-trip untouched, and
+/// its whitespace-sensitivity list is a deny-list — unknown tags, custom
+/// elements and `<template>` default to sensitive, which is the conservative
+/// direction for poco templates. `<pre>` and `<textarea>` are verbatim.
+///
+/// The closure would format `<script>` / `<style>` bodies; returning the input
+/// unchanged makes it a no-op, which is what we want since neither belongs in
+/// a `.poco` file.
+///
+/// An error means the markup did not parse. That is returned rather than
+/// swallowed so the caller can leave the file alone and say so — reformatting
+/// something we could not read is how a formatter destroys work.
+fn format_markup(source: &str, print_width: usize) -> Result<String, String> {
+    let mut options = markup_fmt::config::FormatOptions::default();
+    options.layout.print_width = print_width;
+    markup_fmt::format_text(source, markup_fmt::Language::Html, &options, |code, _| {
+        Ok::<_, anyhow::Error>(std::borrow::Cow::Borrowed(code))
+    })
+    .map_err(|error| format!("{error}"))
 }
 
 /// The leading whitespace of the line `offset` sits on.
@@ -467,6 +622,7 @@ fn report_and_apply(
     for finding in findings {
         let level = match finding.rule {
             "inline_small_templates" => cfg.inline_small_templates,
+            "format_markup" => cfg.format_markup,
             _ => cfg.extract_large_inline,
         };
         // `--fix` promotes a warning to a rewrite for this run.
@@ -483,6 +639,26 @@ fn report_and_apply(
             .to_string();
 
         match finding.action {
+            Action::FormatFile { path, formatted } => {
+                pending += 1;
+                let verb = if effective == FmtLevel::Fix && !args.check {
+                    writes.push((path, formatted));
+                    "format"
+                } else {
+                    "would format"
+                };
+                println!("  {verb}  {} ({shown})", finding.component);
+            }
+            Action::FormatInline { edit } => {
+                pending += 1;
+                let verb = if effective == FmtLevel::Fix && !args.check {
+                    edits.push((finding.file.clone(), edit));
+                    "format"
+                } else {
+                    "would format"
+                };
+                println!("  {verb}  {} ({shown}, inline)", finding.component);
+            }
             Action::Skipped { reason } => {
                 skipped += 1;
                 println!(
@@ -514,7 +690,7 @@ fn report_and_apply(
                 pending += 1;
                 let verb = if effective == FmtLevel::Fix && !args.check {
                     edits.push((finding.file.clone(), edit));
-                    writes.push((path, body));
+                    writes.push((path, format!("{}\n", body.trim_end_matches('\n'))));
                     "extract"
                 } else {
                     "would extract"
@@ -536,9 +712,8 @@ fn report_and_apply(
     }
 
     apply_edits(edits)?;
-    for (path, body) in writes {
-        std::fs::write(&path, format!("{body}\n"))
-            .with_context(|| format!("write {}", path.display()))?;
+    for (path, contents) in writes {
+        std::fs::write(&path, &contents).with_context(|| format!("write {}", path.display()))?;
     }
     for path in deletes {
         std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
@@ -590,6 +765,127 @@ mod tests {
 
     fn cfg() -> FmtConfig {
         FmtConfig::default()
+    }
+
+    // ─── RFC-117 rule 3: markup formatting ───────────────────────
+    //
+    // The contract is narrow and absolute: formatting may move whitespace and
+    // nothing else. These pin it with the framework's own parser, because a
+    // formatter that quietly drops an attribute is worse than one that does
+    // nothing at all.
+
+    /// Tags, attribute pairs and collapsed text — everything except layout.
+    fn fingerprint(source: &str) -> Vec<String> {
+        let (ast, _) = pocopine_template_parser::parse(source, "<test>");
+        let mut out = Vec::new();
+        fn walk(node: &pocopine_template_parser::Node, out: &mut Vec<String>) {
+            match node {
+                pocopine_template_parser::Node::Element(element) => {
+                    let mut attrs: Vec<String> = element
+                        .attrs
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect();
+                    attrs.sort();
+                    out.push(format!("<{} {}>", element.tag, attrs.join(" ")));
+                    for child in &element.children {
+                        walk(child, out);
+                    }
+                }
+                pocopine_template_parser::Node::Text(text, _) => {
+                    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    if !collapsed.is_empty() {
+                        out.push(format!("#text {collapsed}"));
+                    }
+                }
+                pocopine_template_parser::Node::Comment(text, _) => {
+                    out.push(format!("#comment {}", text.trim()));
+                }
+            }
+        }
+        for root in &ast.roots {
+            walk(root, &mut out);
+        }
+        out
+    }
+
+    fn formatted(source: &str) -> String {
+        format_markup(source, 120).expect("markup parses")
+    }
+
+    #[test]
+    fn formatting_preserves_structure_directives_and_text() {
+        let source = concat!(
+            "<div class=\"card\" :title=\"label\" @click=\"go\">\n",
+            "<span pp-text=\"count\" pp-on:click.debounce.300=\"bump\"></span>\n",
+            "<p>{{ label }} and &amp; text</p>\n",
+            "<!-- a note -->\n",
+            "<template pp-if=\"ready\"><em>y</em></template>\n",
+            "</div>\n",
+        );
+        let out = formatted(source);
+        assert_eq!(
+            fingerprint(source),
+            fingerprint(&out),
+            "formatting changed more than whitespace:\n{out}"
+        );
+    }
+
+    #[test]
+    fn directive_attributes_survive_verbatim() {
+        // markup_fmt treats attributes as opaque in HTML mode; if that ever
+        // changes, a directive would be rewritten and bind to nothing.
+        let source =
+            "<i pp-on:click.debounce.300=\"g\" :t=\"x\" @c=\"y\" pp-model:value=\"v\"></i>\n";
+        let out = formatted(source);
+        for attr in [
+            "pp-on:click.debounce.300=\"g\"",
+            ":t=\"x\"",
+            "@c=\"y\"",
+            "pp-model:value=\"v\"",
+        ] {
+            assert!(out.contains(attr), "lost `{attr}` in:\n{out}");
+        }
+    }
+
+    #[test]
+    fn interpolation_is_not_rewritten() {
+        let source = "<p>{{ count }} of {{ total }}</p>\n";
+        assert!(formatted(source).contains("{{ count }}"));
+        assert!(formatted(source).contains("{{ total }}"));
+    }
+
+    #[test]
+    fn whitespace_sensitive_blocks_are_left_alone() {
+        let source = "<div>\n<pre>  keep\n   this  </pre>\n</div>\n";
+        let out = formatted(source);
+        assert!(out.contains("<pre>  keep\n   this  </pre>"), "{out}");
+    }
+
+    #[test]
+    fn formatting_is_idempotent() {
+        let source = "<div><p>a</p><span pp-text=\"x\"></span></div>\n";
+        let once = formatted(source);
+        assert_eq!(once, formatted(&once));
+    }
+
+    #[test]
+    fn unparseable_markup_is_returned_unchanged_rather_than_mangled() {
+        // The pre-lint and the compiler own this diagnostic; the formatter's
+        // job is to not make it worse.
+        let broken = "<div><span></div>\n\u{003C}\u{003C}";
+        let config = cfg();
+        assert_eq!(formatted_or_original(broken, &config), broken);
+    }
+
+    #[test]
+    fn the_rule_can_be_turned_off() {
+        let source = "<div><p>a</p></div>";
+        let config = FmtConfig {
+            format_markup: FmtLevel::Off,
+            ..FmtConfig::default()
+        };
+        assert_eq!(formatted_or_original(source, &config), source);
     }
 
     fn findings(source: &str, dir: &Path) -> Vec<Finding> {
@@ -689,10 +985,44 @@ mod tests {
     }
 
     #[test]
-    fn a_small_inline_body_is_already_canonical() {
+    fn a_small_inline_body_is_never_extracted() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = "#[component(template = poco! { <div>x</div> })]\nstruct Card;";
-        assert!(findings(source, dir.path()).is_empty());
+        for finding in findings(source, dir.path()) {
+            assert_ne!(
+                finding.rule, "extract_large_inline",
+                "a body under the threshold belongs inline"
+            );
+        }
+    }
+
+    #[test]
+    fn a_formatted_file_reaches_a_fixed_point() {
+        // The formatter terminates its output with a newline. Adding another
+        // on write made every run differ from the last, so `pocopine fmt`
+        // reported the same file forever and `--check` could never pass.
+        let dir = scratch("Card.poco", "<div><p>a</p></div>\n");
+        let path = dir.path().join("Card.poco");
+        let config = cfg();
+
+        let once = formatted_or_original(&std::fs::read_to_string(&path).unwrap(), &config);
+        std::fs::write(&path, &once).unwrap();
+        assert!(
+            format_file_action(&path, &once, &config).is_none(),
+            "a file already in formatted form must produce no further action"
+        );
+    }
+
+    #[test]
+    fn an_already_formatted_inline_body_is_left_alone() {
+        // Canonical now includes markup layout, so this is what rules out an
+        // endless "would format" on a file that never changes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = "#[component(template = poco! {\n    <div>x</div>\n})]\nstruct Card;";
+        assert!(
+            findings(source, dir.path()).is_empty(),
+            "a formatted body should produce no findings"
+        );
     }
 
     #[test]

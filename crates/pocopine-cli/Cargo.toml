@@ -25,6 +25,9 @@ pocopine-stylekit = { workspace = true }
 # RFC-116 — `inline-scan` locates `poco!` bodies in `.rs` sources for
 # Stylekit extraction and LSP diagnostics.
 pocopine-template-parser = { workspace = true, features = ["inline-scan"] }
+# RFC-117 rule 3 — HTML formatter (MIT). Library-first; the dprint plugin is
+# a separate wrapper. Validated whitespace-only against every .poco in-repo.
+markup_fmt = "0.27"
 pocopine-expr = { workspace = true }
 pocopine-directives = { workspace = true }
 # `pocopine lsp` — editor language server over stdio. tower-lsp brings its own
