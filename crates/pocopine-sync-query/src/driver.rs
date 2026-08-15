@@ -1715,11 +1715,21 @@ where
         if stale.is_empty() {
             return;
         }
-        tracing::debug!(
+        // WARN, not debug: since P2, every lifecycle exit clears its
+        // own durable entries (accepts, rejects, feed echoes, dropped
+        // replays), so in steady state this sweep finds NOTHING. It
+        // firing means some path cleared an overlay in memory without
+        // its durable half — a new leak shape. The sweep still heals
+        // it (self-healing by design), but silently healing is how
+        // issue #292's class stayed invisible for months; say so.
+        tracing::warn!(
             target: "pocopine.log",
             stream = compartment.as_str(),
             swept = stale.len(),
-            "sync-query: sweeping durable pendings no longer held in memory"
+            "sync-query: persist sweep removed durable pendings no longer \
+             held in memory — every lifecycle exit should clear its own \
+             durable entry, so this indicates an unclosed exit path \
+             (healed now, but worth reporting)"
         );
         let result = pocopine_sync::LocalPushResult {
             stream: compartment.clone(),

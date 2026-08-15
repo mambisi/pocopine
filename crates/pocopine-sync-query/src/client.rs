@@ -2085,7 +2085,37 @@ impl QueryClient {
     ) where
         Row: Clone + 'static,
     {
-        for typed in collect_subscriptions_on_stream_inner::<Row>(inner, stream) {
+        let typed_subs = collect_subscriptions_on_stream_inner::<Row>(inner, stream);
+        if typed_subs.is_empty() {
+            // Issue #292 lesson 3: a Row-typed lookup that matches
+            // ZERO subscriptions on a stream that HAS subscriptions
+            // of another type is the exact signature of a
+            // wrong-TypeId rollback — the silent no-op that painted
+            // ghost rows for months. Every legitimate caller of this
+            // typed dequeue knows its Row type from its own call
+            // site; a zero-match here means the type is wrong and
+            // the caller should be using the erased path.
+            let erased_on_stream = inner
+                .registry
+                .borrow()
+                .values()
+                .any(|sub| sub.stream() == stream);
+            if erased_on_stream {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = stream.as_str(),
+                    mutation_id = %mutation_id,
+                    row_type = std::any::type_name::<Row>(),
+                    "sync-query: Row-typed pending dequeue matched ZERO \
+                     subscriptions on a stream that has subscriptions of \
+                     another Row type — a wrong-TypeId rollback would \
+                     silently leak optimistic state (issue #292 defect 1). \
+                     Use the type-erased dequeue on shared paths."
+                );
+            }
+            return;
+        }
+        for typed in typed_subs {
             let removed = {
                 let mut state = typed.state.borrow_mut();
                 let overlays = state.remove_pending(mutation_id);
