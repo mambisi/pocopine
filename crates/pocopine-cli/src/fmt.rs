@@ -139,9 +139,12 @@ fn scan_file(path: &Path, source: &str, cfg: &FmtConfig) -> Vec<Finding> {
                     attr_range.clone(),
                     cfg,
                 );
-                // A template being inlined is about to be deleted, so there
-                // is nothing left to reformat on disk.
-                if !deleted && let Some(action) = format_file_action(&file, &body, cfg) {
+                // Emitted even when the template looks inlinable: a shared
+                // template is refused later by `resolve_conflicts`, and
+                // deciding here would leave it formatted by nobody. The
+                // apply pass drops this if the file really does get deleted.
+                let _ = deleted;
+                if let Some(action) = format_file_action(&file, &body, cfg) {
                     out.push(Finding {
                         file: path.to_path_buf(),
                         component: name,
@@ -613,6 +616,16 @@ fn report_and_apply(
         return Ok(());
     }
 
+    // Paths an inline rule will delete this run: a formatting finding for one
+    // of them is moot, and printing it would contradict the line above it.
+    let doomed: std::collections::HashSet<PathBuf> = findings
+        .iter()
+        .filter_map(|finding| match &finding.action {
+            Action::Inline { template_file, .. } => Some(template_file.clone()),
+            _ => None,
+        })
+        .collect();
+
     let mut edits: Vec<(PathBuf, Edit)> = Vec::new();
     let mut writes: Vec<(PathBuf, String)> = Vec::new();
     let mut deletes: Vec<PathBuf> = Vec::new();
@@ -639,6 +652,7 @@ fn report_and_apply(
             .to_string();
 
         match finding.action {
+            Action::FormatFile { path, .. } if doomed.contains(&path) => {}
             Action::FormatFile { path, formatted } => {
                 pending += 1;
                 let verb = if effective == FmtLevel::Fix && !args.check {
@@ -994,6 +1008,29 @@ mod tests {
                 "a body under the threshold belongs inline"
             );
         }
+    }
+
+    #[test]
+    fn a_shared_template_is_still_formatted_though_it_cannot_be_inlined() {
+        // `resolve_conflicts` refuses to inline a template two components
+        // share. Deciding formatting during the scan — when the template
+        // still looks inlinable — left it formatted by nobody.
+        let dir = scratch("Shared.poco", "<div>\n<p>a</p>\n</div>\n");
+        let source = "#[component(template = \"Shared.poco\")]\nstruct A;\n\
+                      #[component(template = \"Shared.poco\")]\nstruct B;";
+        let mut found = findings(source, dir.path());
+        resolve_conflicts(&mut found);
+
+        assert!(
+            found.iter().any(|f| f.rule == "format_markup"),
+            "the shared template should still be formatted where it sits"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|f| matches!(f.action, Action::Inline { .. })),
+            "and it must not be inlined"
+        );
     }
 
     #[test]
