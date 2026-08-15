@@ -151,6 +151,7 @@ fn local_push_result_preserves_server_outcomes() {
         mutation_id: MutationId::new("device_abc:2").unwrap(),
         key: Some(RowKey::new("post_2").unwrap()),
         reason: "invalid title".to_string(),
+        code: None,
     });
     response.rows.push(row);
     response.cursor = Some(SyncCursor::new("cursor_2").unwrap());
@@ -184,6 +185,7 @@ fn local_batches_preserve_stream_collection_and_cursor() {
         op: SyncOp::Upsert,
         row: Some(row),
         cursor: cursor.clone().unwrap(),
+        origin: None,
     };
     let changes = LocalChangeBatch::new(stream, collection, vec![change], cursor);
 

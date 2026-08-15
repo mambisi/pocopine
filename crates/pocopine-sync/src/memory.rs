@@ -81,6 +81,7 @@ where
             op: SyncOp::Upsert,
             row: Some(row),
             cursor: cursor.clone(),
+            origin: None,
         });
         Ok(cursor)
     }
@@ -99,6 +100,7 @@ where
             op: SyncOp::Delete,
             row: None,
             cursor: cursor.clone(),
+            origin: None,
         });
         Ok(cursor)
     }
@@ -116,6 +118,7 @@ where
             op: SyncOp::Reset,
             row: None,
             cursor: cursor.clone(),
+            origin: None,
         });
         Ok(cursor)
     }
@@ -227,6 +230,7 @@ where
                 mutation_id: mutation.id,
                 key: None,
                 reason: "upsert requires a row key".to_string(),
+                code: None,
             }));
         };
 
@@ -241,6 +245,7 @@ where
                     mutation_id: mutation.id,
                     key: Some(key),
                     reason: format!("invalid mutation payload: {err}"),
+                    code: None,
                 }));
             }
         };
@@ -257,6 +262,10 @@ where
             op: SyncOp::Upsert,
             row: Some(row.clone()),
             cursor: cursor.clone(),
+            // Feed echo: the change carries the client mutation that
+            // produced it, so the originating client can retire its
+            // pending overlay from the feed alone (lost-ack path).
+            origin: Some(mutation.id.clone()),
         });
 
         Ok(MemoryMutationOutcome::Accepted {
@@ -276,6 +285,7 @@ where
                 mutation_id: mutation.id,
                 key: None,
                 reason: "delete requires a row key".to_string(),
+                code: None,
             }));
         };
 
@@ -293,6 +303,7 @@ where
             op: SyncOp::Delete,
             row: None,
             cursor: cursor.clone(),
+            origin: Some(mutation.id.clone()),
         });
 
         Ok(MemoryMutationOutcome::Accepted {
@@ -317,6 +328,7 @@ where
             op: SyncOp::Reset,
             row: None,
             cursor: cursor.clone(),
+            origin: Some(mutation.id.clone()),
         });
 
         Ok(MemoryMutationOutcome::Accepted {
@@ -419,6 +431,7 @@ fn change_to_value<T: Serialize>(change: SyncChange<T>) -> SyncResult<SyncChange
         op: change.op,
         row: change.row.map(row_to_value).transpose()?,
         cursor: change.cursor,
+        origin: change.origin,
     })
 }
 

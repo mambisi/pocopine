@@ -53,6 +53,11 @@ async fn open(
             schema_version: stream.source.schema_version(),
             params: requested.params,
             scope: stream.source.scope(&ctx).await.map_err(server_error)?,
+            // Informational-only at /open: the pull path is where
+            // feed-capable sources stamp their live watermark (the
+            // server decides cursor-vs-watermark ordering, never
+            // the client).
+            watermark: None,
         });
     }
     Ok(SyncOpenResponse::new(streams))
