@@ -23,11 +23,11 @@ rest of an application: a query-centric data layer, auth, object
 storage, live updates, background jobs, observability, and deploy
 adapters.
 
-Templates live in plain HTML files (`.poco`), styles in plain CSS
-files, logic in plain Rust files. No mixed-language SFCs, no virtual
-DOM, and no JavaScript toolchain unless you opt into Pocopine-managed
-typed `.client.ts` modules. One canonical way per decision — the
-framework is opinionated so application code stays small.
+Templates are plain HTML, styles plain CSS, logic plain Rust. No
+mixed-language SFCs, no virtual DOM, and no JavaScript toolchain unless
+you opt into Pocopine-managed typed `.client.ts` modules. One canonical
+way per decision — the framework is opinionated so application code
+stays small.
 
 > Status: **pre-1.0 / experimental.** The API is still moving; every
 > breaking change lands in an RFC under [`rfcs/`](./rfcs/).
@@ -38,7 +38,13 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component]
+#[component(template = poco! {
+    <div>
+      <p><strong pp-text="count"></strong> <span pp-text="label"></span></p>
+      <button pp-on:click="decrement">-</button>
+      <button pp-on:click="increment">+</button>
+    </div>
+})]
 pub struct Counter { pub count: i32, pub label: String }
 
 #[handlers]
@@ -51,14 +57,8 @@ impl Counter {
 pub fn main() { App::new().register::<Counter>().run(); }
 ```
 
-```html
-<!-- examples/counter/src/Counter.poco -->
-<div>
-  <p><strong pp-text="count"></strong> <span pp-text="label"></span></p>
-  <button pp-on:click="decrement">-</button>
-  <button pp-on:click="increment">+</button>
-</div>
-```
+The template is ordinary HTML, parsed and checked at compile time — a
+typo in `pp-text="cuont"` fails the build, not the page.
 
 ```html
 <!-- examples/counter/index.html -->
@@ -113,14 +113,18 @@ and serves it with live reload.
 
 ### 3. Write your first component
 
-A component is a Rust struct plus a sibling `.poco` template.
+A component is a Rust struct plus a template:
 
 ```rust
 // src/lib.rs
 use pocopine::prelude::*;
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "Counter.poco")]
+#[component(template = poco! {
+    <button @click="bump">
+      clicked <strong pp-text="n"></strong> times
+    </button>
+})]
 pub struct Counter { pub n: u32 }
 
 #[handlers]
@@ -132,13 +136,6 @@ impl Counter {
 pub fn main() {
     App::new().register::<Counter>().run();
 }
-```
-
-```html
-<!-- src/Counter.poco -->
-<button @click="bump">
-  clicked <strong pp-text="n"></strong> times
-</button>
 ```
 
 ### 4. Run it
@@ -292,10 +289,10 @@ modules layered on top:
 1. **Runtime** — reactive engine, component scopes, directives, and the
    adopted-DOM bridge for dynamic HTML. No virtual DOM; mutations
    happen in place against real DOM nodes.
-2. **Templates** — `.poco` files are pure HTML with `pp-*` directives.
-   The `#[component]` macro wires them to Rust structs, emits static
-   template metadata, and specializes eligible binding/listener
-   installs at compile time.
+2. **Templates** — pure HTML with `pp-*` directives, written inline or
+   in a `.poco` file. The `#[component]` macro wires them to Rust
+   structs, emits static template metadata, and specializes eligible
+   binding/listener installs at compile time.
 3. **Server functions** — `#[server] async fn` on the backend; the
    client gets a typed stub that POSTs to a generated `/_pocopine/...`
    route and deserializes the response. Bodies can accept host-only

@@ -44,6 +44,11 @@ src/
 * **Template names are `PascalCase`**, one per component. The macro
   defaults `template = "<StructName>.poco"` resolved next to the `.rs`
   file — no explicit path unless overriding.
+* **Small templates can live inline** via
+  `#[component(template = poco! { … })]`, which takes the same HTML a
+  `.poco` file does and is checked just as strictly. Give a template its
+  own file once it is big enough to be worth opening on its own; leaf
+  components and one-element wrappers rarely are.
 * **Stylesheet names are your choice**, but one `.css` per component.
   The stylesheet is **not** auto-discovered; you must pass
   `style = "..."` explicitly (e.g. `#[component(style = "Counter.css")]`).

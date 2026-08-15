@@ -11,6 +11,13 @@ No embedded Rust. No embedded CSS. No `<script>` or `<style>` blocks.
 Rust lives in its own `.rs` file; CSS lives in its own `.css` file.
 Three plain files, one component.
 
+> **Small components can skip the file.** A template can also be written
+> inline with [`poco!`](02-compilation.md#inline-templates-poco), which takes
+> the same HTML this page describes. That is the shorter path for small
+> components; a `.poco` file is the right home once a template grows.
+> Everything below applies identically to both — the format is the same, and
+> so is the compile-time checking. CSS never goes inline: it stays in `.css`.
+
 ## Why
 
 Mixed-section SFCs (`.vue`, `.svelte`) put three languages in one file.

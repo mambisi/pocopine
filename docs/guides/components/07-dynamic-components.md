@@ -15,9 +15,9 @@ Use a `ComponentRef` for selections made in Rust:
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     uses = [ProfilePanel, BillingPanel],
-    template_inline = r#"
+    template = poco! {
         <pp-component :is="active" :account-id="account_id"></pp-component>
-    "#,
+    },
 )]
 struct Settings {
     active: Option<ComponentRef<Settings>>,
