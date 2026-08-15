@@ -1,3 +1,13 @@
+#![cfg(not(target_arch = "wasm32"))]
+
+//! HTTP integration tests for `PagesClient`, against a `wiremock` server
+//! standing in for Cloudflare's API.
+//!
+//! Host-only, like every sibling adapter's HTTP test: the `client` module
+//! and the `wiremock`/`tokio`/`tempfile` dev-dependencies all sit behind
+//! the same `cfg(not(wasm32))`, because tokio's `rt-multi-thread` pulls in
+//! mio, which has no wasm32 backend.
+
 use pocopine_codec::base64_encode;
 use pocopine_crypto::{Algorithm, Hasher, SecretString};
 use pocopine_deploy_cloudflare_pages::client::PagesClient;

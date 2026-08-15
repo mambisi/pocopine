@@ -170,7 +170,7 @@ jobs:
           --exclude pocopine-auth-credentials
           --exclude pocopine-auth-jwt
           --exclude pocopine-deploy
-          --exclude pocopine-deploy-fly
+          --exclude pocopine-deploy-cloudflare-pages
           --exclude pocopine-deploy-railway
           --exclude pocopine-deploy-render
           --exclude pocopine-jobs
@@ -191,7 +191,6 @@ jobs:
           --exclude live-example
           --exclude observability-smoke
           --exclude site
-          --exclude sync-example
           --exclude website
           --target wasm32-unknown-unknown
           --all-targets
