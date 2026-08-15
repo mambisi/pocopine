@@ -74,6 +74,14 @@ pub(crate) trait AnyQuerySubscription: 'static {
     /// The default-method-style cannot work here because `Rc::downcast`
     /// requires the source to be `Rc<dyn Any>`, not `Rc<dyn OtherTrait>`.
     fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any>;
+    /// Type-erased pending rollback: remove the overlay for
+    /// `mutation_id` from THIS subscription and notify its listeners
+    /// if anything was removed. Same conservative-restore semantics
+    /// as [`QueryClient::dequeue_pending_for_stream`], but callable
+    /// without naming the Row type — the replay queue is shared
+    /// across every driver on the client, so the driver that drains
+    /// an entry generally does NOT know the entry's Row type.
+    fn dequeue_pending_erased(&self, mutation_id: &MutationId) -> bool;
 }
 
 /// One live subscription against `(stream, params)`.
@@ -290,6 +298,34 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
 
     fn as_rc_any(self: Rc<Self>) -> Rc<dyn Any> {
         self
+    }
+
+    fn dequeue_pending_erased(&self, mutation_id: &MutationId) -> bool {
+        let removed_any = {
+            let mut state = self.state.borrow_mut();
+            let overlays = state.remove_pending(mutation_id);
+            let removed_any = !overlays.is_empty();
+            // Same conservative-restore rule as the in-flight
+            // mutate() rollback: only re-upsert when canonical
+            // doesn't already hold a (potentially newer) row for
+            // the key — the newer canonical stands and the next
+            // /pull reconciles. (Overlays are consumed by value:
+            // this path must not require `Row: Clone`, or the
+            // blanket `AnyQuerySubscription` impl stops covering
+            // every subscription.)
+            for overlay in overlays {
+                if let Some(restored) = overlay.deleted_row
+                    && !state.canonical_contains(&restored.key)
+                {
+                    state.upsert_canonical(restored);
+                }
+            }
+            removed_any
+        };
+        if removed_any {
+            self.notify_listeners();
+        }
+        removed_any
     }
 }
 
@@ -1811,11 +1847,7 @@ impl QueryClient {
                                 mutation_id = %mutation.id,
                                 "sync-query: hydrated mutation missing mutator name envelope; dropping"
                             );
-                            Self::dequeue_pending_for_stream::<()>(
-                                &client_inner,
-                                &stream,
-                                &mutation.id,
-                            );
+                            Self::dequeue_pending_any(&client_inner, &stream, &mutation.id);
                             return ReplayOutcome::Rejected;
                         }
                     };
@@ -1838,6 +1870,7 @@ impl QueryClient {
                             mutation_id = %mutation.id,
                             "sync-query: no Mutator registered for hydrated pending; dropping"
                         );
+                        Self::dequeue_pending_any(&client_inner, &stream, &mutation.id);
                         return ReplayOutcome::Rejected;
                     };
                     let outcome = entry
@@ -1913,6 +1946,37 @@ impl QueryClient {
             if !removed.is_empty() {
                 typed.notify_listeners();
             }
+        }
+    }
+
+    /// Roll back the optimistic overlay for `mutation_id` across
+    /// EVERY subscription on `stream`, regardless of Row type.
+    ///
+    /// The replay queue is client-level and shared across all
+    /// drivers: whichever driver ticks first drains ALL entries,
+    /// including entries for other streams — so the draining
+    /// driver's own Row type says nothing about the entry's. The
+    /// typed [`Self::dequeue_pending_for_stream`] silently no-ops
+    /// under that mismatch (a registry lookup by the WRONG TypeId
+    /// finds no subscriptions), which left rejected replays'
+    /// optimistic rows painted forever. This erased variant is the
+    /// correct rollback for every replay-queue path.
+    pub(crate) fn dequeue_pending_any(
+        inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
+        mutation_id: &MutationId,
+    ) {
+        // Snapshot matching Rc entries first — no registry borrow is
+        // held across the notify calls inside the erased dequeue.
+        let subs: Vec<Rc<dyn AnyQuerySubscription>> = inner
+            .registry
+            .borrow()
+            .values()
+            .filter(|sub| sub.stream() == stream)
+            .cloned()
+            .collect();
+        for sub in subs {
+            sub.dequeue_pending_erased(mutation_id);
         }
     }
 
@@ -2811,5 +2875,62 @@ mod tests {
         // But our comparator must distinguish them.
         assert_eq!(json_value_cmp(Some(&small), Some(&big)), Ordering::Less);
         assert_eq!(json_value_cmp(Some(&big), Some(&small)), Ordering::Greater);
+    }
+
+    /// Regression for the immortal-optimistic-row bug: the replay
+    /// queue is client-level and shared across every driver, so the
+    /// driver that drains a rejected entry generally does NOT share
+    /// the entry's Row type — and the Row-typed
+    /// `dequeue_pending_for_stream` under the wrong TypeId finds no
+    /// subscriptions and silently leaves the pending overlay painted
+    /// forever. `dequeue_pending_any` must clear it without naming
+    /// the Row type.
+    #[test]
+    fn erased_dequeue_clears_pendings_the_wrong_row_type_misses() {
+        #[derive(Clone, serde::Serialize, serde::Deserialize)]
+        struct ThreadTestRow {
+            id: String,
+        }
+        let client = query_client_plugin().into_client();
+        let stream = SyncStreamName::new("threads").unwrap();
+        let q = Query::<ThreadTestRow>::builder(stream.clone()).build();
+        let handle = client.subscribe::<ThreadTestRow>(q);
+        let mid = MutationId::uuid();
+        handle
+            .shared_state()
+            .borrow_mut()
+            .push_pending(PendingOverlay {
+                mutation_id: mid.clone(),
+                mutation: pocopine_sync::ClientMutation {
+                    id: mid.clone(),
+                    key: RowKey::new("t1").ok(),
+                    op: pocopine_sync::SyncOp::Upsert,
+                    base_version: None,
+                    payload: serde_json::json!({"id": "t1"}),
+                    migration_outcome: None,
+                },
+                optimistic_row: Some(SyncRow {
+                    key: RowKey::new("t1").unwrap(),
+                    version: None,
+                    value: ThreadTestRow { id: "t1".into() },
+                    pending: true,
+                    conflict: false,
+                }),
+                deleted_row: None,
+                evicted_key: None,
+                conflict: false,
+            });
+        assert_eq!(handle.state().pending().len(), 1);
+        // The Row-typed dequeue under a WRONG Row type is a silent
+        // no-op — this is the bug shape, pinned so it stays honest.
+        QueryClient::dequeue_pending_for_stream::<()>(&client.inner, &stream, &mid);
+        assert_eq!(
+            handle.state().pending().len(),
+            1,
+            "wrong-Row typed dequeue must not be what replay relies on"
+        );
+        // The erased dequeue clears it without naming the Row type.
+        QueryClient::dequeue_pending_any(&client.inner, &stream, &mid);
+        assert!(handle.state().pending().is_empty());
     }
 }

@@ -220,8 +220,11 @@ impl<Row> QueryState<Row> {
 
 // `remove_canonical` / `push_pending` / `remove_pending` are entrypoints
 // the (TBD) routing engine will call. Silenced until the engine lands.
+// (No `Row: Clone` bound: the type-erased pending rollback reaches
+// these through `dyn AnyQuerySubscription`, whose blanket impl must
+// stay bound-free so every subscription coerces into it.)
 #[allow(dead_code)]
-impl<Row: Clone> QueryState<Row> {
+impl<Row> QueryState<Row> {
     /// Drop every canonical row + pending overlay; bump the generation
     /// token so any in-flight task that touches this state via
     /// `apply_*` becomes a no-op. Used on schema-drift wipes.

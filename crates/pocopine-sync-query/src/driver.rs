@@ -730,17 +730,19 @@ where
                     // Roll back the pending overlay ACROSS EVERY
                     // subscription on the stream — the original
                     // optimistic apply fanned out to every view
-                    // whose predicate matched at apply_local time,
-                    // and the replay queue is also shared across
-                    // every driver on the stream (any driver may
-                    // dequeue this entry). Cleaning only the
-                    // driver-local subscription leaks stale
-                    // pending rows into every other view that
-                    // received the same optimistic upsert. The
-                    // wire contract says retries of a rejected
-                    // mutation must NOT change the outcome — so
-                    // dropping the queue entry is correct.
-                    QueryClient::dequeue_pending_for_stream::<Row>(
+                    // whose predicate matched at apply_local time.
+                    // The rollback must be TYPE-ERASED: the replay
+                    // queue is shared across every driver on the
+                    // client, so the driver draining this entry may
+                    // sit on a different stream with a different Row
+                    // type — a Row-typed dequeue under the wrong
+                    // TypeId finds no subscriptions and silently
+                    // leaks the optimistic row into every affected
+                    // view, forever. The wire contract says retries
+                    // of a rejected mutation must NOT change the
+                    // outcome — so dropping the queue entry is
+                    // correct.
+                    QueryClient::dequeue_pending_any(
                         &client_inner,
                         &entry.stream,
                         &entry.mutation_id,
