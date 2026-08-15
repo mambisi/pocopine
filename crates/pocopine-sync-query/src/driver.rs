@@ -382,7 +382,16 @@ where
         }
 
         // ── Phase 2: initial /pull ──────────────────────────────
-        let pull_response = match self.send_pull(None).await {
+        // The initial pull carries the HYDRATED cursor (our durable
+        // synced position). Against a feed-capable server that makes
+        // a warm boot an incremental catch-up instead of a full
+        // snapshot — and, crucially, it routes the offline-past-
+        // retention case through the LOUD TooOld → resync path
+        // instead of a plain snapshot whose absences would read as
+        // Unexplained (the exact #292 reboot scenario). A client
+        // with no durable cursor pulls cursor-less as before.
+        let initial_cursor = self.with_state_borrow(|s| s.cursor.clone()).flatten();
+        let pull_response = match self.send_pull(initial_cursor).await {
             Ok(resp) => resp,
             Err(err) => {
                 if !self.epoch.is_current() {
@@ -396,15 +405,20 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        // The initial pull is cursor-less (snapshot), so it can carry
-        // no feed changes and never retires pendings — only the
-        // scope-drift half of the settle matters here.
-        let scope_changed = self.apply_pull(pull_response).scope_drift;
+        let settle = self.apply_pull(pull_response);
         if !self.epoch.is_current() {
             return;
         }
-        if scope_changed {
+        if settle.scope_drift {
             self.refetch_after_scope_drift().await;
+            if !self.epoch.is_current() {
+                return;
+            }
+        } else {
+            // A cursored initial pull can carry feed echoes for
+            // hydrated pendings — clear their durable halves like
+            // any other settle.
+            self.clear_retired_durables(&settle.retired).await;
             if !self.epoch.is_current() {
                 return;
             }
@@ -1002,7 +1016,15 @@ where
         if let Some(scope) = server_scope {
             state.sync_scope = Some(scope);
         }
-        state.cursor = cursor;
+        // The HYDRATED cursor is this client's synced position in the
+        // stream's ordered feed — adopting the server's /open cursor
+        // over it would claim coverage of changes we never applied
+        // (skipping deletes forever). Only adopt the advertised
+        // cursor when we have none of our own; drift wipes above
+        // already cleared ours when the slate was invalidated.
+        if state.cursor.is_none() {
+            state.cursor = cursor;
+        }
         state.error.clear();
         state.last_reason = SyncReason::Initial;
         drop(state);
