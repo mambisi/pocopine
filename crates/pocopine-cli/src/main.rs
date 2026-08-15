@@ -27,6 +27,9 @@ mod deploy;
 mod dev;
 mod doctor;
 mod env;
+// RFC-116 — name the lexer-hostile text in a `poco!` body before cargo
+// reports it as an unexplained tokenizer error.
+mod inline_lint;
 mod lsp;
 mod native;
 mod server;
@@ -175,6 +178,9 @@ fn read_value_from_stdin(key: &str) -> Result<String> {
 fn run_build(args: args::BuildArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
+    // Ahead of cargo, so unreadable text in an inline template is reported as
+    // that, rather than as a bare `unknown start of token` naming no template.
+    inline_lint::check_project(&project)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&args.path, &cfg, args.release)?;
@@ -191,6 +197,7 @@ fn run_project(args: args::ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
     server::check_configured_port_available(&cfg, args.port)?;
+    inline_lint::check_project(&project)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
