@@ -675,6 +675,7 @@ async fn source_provided_mutation_log_skips_auto_default() {
         fn create<'a>(
             &'a self,
             _ctx: (),
+            _meta: pocopine_sync_query::WriteMeta,
             _id: Self::Id,
             _draft: Self::Draft,
         ) -> SourceFuture<'a, pocopine_sync::SyncResult<Self::Row>> {
@@ -683,6 +684,7 @@ async fn source_provided_mutation_log_skips_auto_default() {
         fn update<'a>(
             &'a self,
             _ctx: (),
+            _meta: pocopine_sync_query::WriteMeta,
             _id: Self::Id,
             _draft: Self::Draft,
             _expected: Option<pocopine_sync::RowVersion>,
@@ -692,6 +694,7 @@ async fn source_provided_mutation_log_skips_auto_default() {
         fn delete<'a>(
             &'a self,
             _ctx: (),
+            _meta: pocopine_sync_query::WriteMeta,
             _id: Self::Id,
             _expected: Option<pocopine_sync::RowVersion>,
         ) -> SourceFuture<'a, pocopine_sync::SyncResult<DeleteResult<Self::Row>>> {
@@ -788,6 +791,7 @@ fn tasks_resource_convenience_compiles_with_stub_source() {
         fn create<'a>(
             &'a self,
             _ctx: (),
+            _meta: pocopine_sync_query::WriteMeta,
             _id: Self::Id,
             _draft: Self::Draft,
         ) -> SourceFuture<'a, pocopine_sync::SyncResult<Self::Row>> {
@@ -796,6 +800,7 @@ fn tasks_resource_convenience_compiles_with_stub_source() {
         fn update<'a>(
             &'a self,
             _ctx: (),
+            _meta: pocopine_sync_query::WriteMeta,
             _id: Self::Id,
             _draft: Self::Draft,
             _expected_version: Option<pocopine_sync::RowVersion>,
@@ -805,6 +810,7 @@ fn tasks_resource_convenience_compiles_with_stub_source() {
         fn delete<'a>(
             &'a self,
             _ctx: (),
+            _meta: pocopine_sync_query::WriteMeta,
             _id: Self::Id,
             _expected_version: Option<pocopine_sync::RowVersion>,
         ) -> SourceFuture<'a, pocopine_sync::SyncResult<DeleteResult<Self::Row>>> {

@@ -92,6 +92,7 @@ impl Source for IssuesSource {
     fn create<'a>(
         &'a self,
         _ctx: (),
+        _meta: pocopine_sync_query::WriteMeta,
         id: Self::Id,
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>> {
@@ -108,6 +109,7 @@ impl Source for IssuesSource {
     fn update<'a>(
         &'a self,
         _ctx: (),
+        _meta: pocopine_sync_query::WriteMeta,
         _id: Self::Id,
         _draft: Self::Draft,
         _expected_version: Option<RowVersion>,
@@ -118,6 +120,7 @@ impl Source for IssuesSource {
     fn delete<'a>(
         &'a self,
         _ctx: (),
+        _meta: pocopine_sync_query::WriteMeta,
         _id: Self::Id,
         _expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {

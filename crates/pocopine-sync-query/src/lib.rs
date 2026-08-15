@@ -55,6 +55,10 @@ pub mod selector;
 // query DSL + QueryClient runtime, which live in the modules above.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod source;
+// The ordered change feed (ChangeLog trait + memory impl) is host-only
+// for the same reason: it threads `RequestContext`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod feed;
 pub mod state;
 pub mod wire;
 // RFC 090 Phase 2a — mutation-lifecycle types. Pure-data items
@@ -90,7 +94,16 @@ pub use state::{EvictedRow, EvictionReason, QueryState};
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{
     DEFAULT_SOURCE_SNAPSHOT_ROW_LIMIT, Source, SourceFuture, SourceId, SourceParamsFn,
-    SourceResource, SourceResourceBuilder, SourceVersionFn, query_from_pull_request, source,
+    SourceResource, SourceResourceBuilder, SourceVersionFn, WriteMeta, query_from_pull_request,
+    source,
+};
+
+// The ordered change feed — SPORC-style per-stream log with a
+// truncation watermark. See `feed` module docs.
+#[cfg(not(target_arch = "wasm32"))]
+pub use feed::{
+    ChangeLog, ChangePage, ChangesSince, FeedChangeKind, FeedEntry, MemoryChangeLog,
+    MemoryFeedFilter,
 };
 
 // RFC 090 Phase 2a — mutation lifecycle types at the crate root so
