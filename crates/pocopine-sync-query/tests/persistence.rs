@@ -594,13 +594,12 @@ async fn crud_enveloped_pending_replays_raw_and_clears_durably() {
             )
             .key("ghost_1")
             .unwrap();
-            let pending = pocopine_sync::LocalPendingMutation::new(mutation).with_optimistic_row(
-                Some(
+            let pending =
+                pocopine_sync::LocalPendingMutation::new(mutation).with_optimistic_row(Some(
                     SyncRow::new("ghost_1", serde_json::to_value(&ghost).unwrap())
                         .unwrap()
                         .pending(true),
-                ),
-            );
+                ));
             store
                 .enqueue_pending_mutation(&compartment, pending)
                 .await

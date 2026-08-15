@@ -2238,7 +2238,10 @@ impl QueryClient {
 /// the durable client identity is duplicated or restored from backup.
 /// Retrying cannot succeed; the recovery is a fresh device identity +
 /// wipe-and-resync.
-fn warn_identity_faults(stream: &SyncStreamName, response: &pocopine_sync::SyncPushResponse<Value>) {
+fn warn_identity_faults(
+    stream: &SyncStreamName,
+    response: &pocopine_sync::SyncPushResponse<Value>,
+) {
     for rejected in &response.rejected {
         if rejected.code == Some(pocopine_sync::SyncRejectCode::IdentityFault) {
             tracing::warn!(
