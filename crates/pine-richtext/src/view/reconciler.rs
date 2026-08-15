@@ -389,6 +389,26 @@ impl<'a> Reconciler<'a> {
 
         let dom_children = direct_inline_children(content_root)?;
         if dom_children.len() != old_parent.child_count() {
+            // `old_parent` is what this reconciler last rendered, so a DOM that
+            // no longer matches it means something edited the surface behind the
+            // model's back. That is always a bug, and it used to be completely
+            // silent: the caller escalates to a full repaint, which paints the
+            // model over whatever the user actually typed, and the only trace
+            // was an ordinary "patch: full" line behind a debug flag —
+            // indistinguishable from a legitimate structural repaint.
+            //
+            // Say so unconditionally. Drift is rare, so this does not chatter;
+            // and when it does fire it names the one thing worth knowing, which
+            // is that the DOM and the model have diverged and the user is about
+            // to lose whatever the DOM held.
+            tracing::warn!(
+                target: "pocopine.log",
+                dom_children = dom_children.len(),
+                model_children = old_parent.child_count(),
+                block = old_parent.type_name(),
+                "pine-richtext: DOM diverged from the last rendered model; \
+                 repainting will discard the DOM-only content"
+            );
             return Err(());
         }
 
