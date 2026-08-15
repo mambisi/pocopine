@@ -22,7 +22,9 @@ notify = "6"
 anyhow = "1"
 pocopine-client-codegen = { workspace = true }
 pocopine-stylekit = { workspace = true }
-pocopine-template-parser = { workspace = true }
+# RFC-116 — `inline-scan` locates `poco!` bodies in `.rs` sources for
+# Stylekit extraction and LSP diagnostics.
+pocopine-template-parser = { workspace = true, features = ["inline-scan"] }
 pocopine-expr = { workspace = true }
 pocopine-directives = { workspace = true }
 # `pocopine lsp` — editor language server over stdio. tower-lsp brings its own

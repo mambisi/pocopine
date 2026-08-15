@@ -8016,6 +8016,7 @@ version = "0.1.1"
 dependencies = [
  "html5ever 0.27.0",
  "markup5ever_rcdom",
+ "proc-macro2",
 ]
 
 [[package]]
