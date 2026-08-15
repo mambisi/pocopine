@@ -218,9 +218,16 @@ pub trait Source: Send + Sync + 'static {
     /// Create a row. Server-controlled fields (id, version, created_at)
     /// are filled by the implementation; the `Draft` carries only
     /// client-supplied fields.
+    ///
+    /// `meta` carries the write's identity (the client `MutationId`).
+    /// Feed-capable sources append their [`crate::feed::ChangeLog`]
+    /// entry — with `origin: Some(meta.mutation_id)` — inside the
+    /// same transaction as this write; sources without a feed ignore
+    /// it.
     fn create<'a>(
         &'a self,
         ctx: Self::Context,
+        meta: WriteMeta,
         id: Self::Id,
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>>;
@@ -229,19 +236,25 @@ pub trait Source: Send + Sync + 'static {
     /// concurrency token the client observed before editing. Source
     /// MUST compare it against the stored row's version in the same
     /// DB operation as the write. Return `WriteResult::Conflict` if
-    /// the versions differ.
+    /// the versions differ. Same `meta` contract as [`Self::create`].
     fn update<'a>(
         &'a self,
         ctx: Self::Context,
+        meta: WriteMeta,
         id: Self::Id,
         draft: Self::Draft,
         expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<WriteResult<Self::Row>>>;
 
-    /// Delete an existing row. Same concurrency contract as `update`.
+    /// Delete an existing row. Same concurrency contract as `update`,
+    /// same `meta` contract as [`Self::create`] — for a feed-capable
+    /// source the delete's feed entry IS the tombstone, so skipping
+    /// the append here recreates the absence ambiguity the feed
+    /// exists to kill.
     fn delete<'a>(
         &'a self,
         ctx: Self::Context,
+        meta: WriteMeta,
         id: Self::Id,
         expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>>;
@@ -316,6 +329,34 @@ pub trait Source: Send + Sync + 'static {
     fn mutation_log(&self) -> Option<Arc<dyn MutationLog<Self::Row>>> {
         None
     }
+
+    /// Provide this source's ordered change log (see
+    /// [`crate::feed::ChangeLog`]). Default: `None` — pulls stay
+    /// snapshot-only and deletes travel as tombstones (or, worse,
+    /// absences). Feed-capable sources return `Some(...)`; the
+    /// adapter then serves incremental pulls from client cursors,
+    /// stamps head cursors on snapshots so the NEXT pull upgrades,
+    /// and answers cursors below the watermark with a loud
+    /// `CursorTruncated` full re-sync.
+    ///
+    /// The same-backend rule from [`Self::mutation_log`] applies
+    /// doubly here: appends must commit in the same transaction as
+    /// the row writes (see the module docs on [`crate::feed`]).
+    fn change_log(&self) -> Option<Arc<dyn crate::feed::ChangeLog<Self::Row>>> {
+        None
+    }
+}
+
+/// Identity of one accepted write, handed to
+/// [`Source::create`]/[`Source::update`]/[`Source::delete`] so the
+/// source can append its change-log entry — with the originating
+/// client mutation as `origin` — inside the same transaction as the
+/// row write.
+#[derive(Clone, Debug)]
+pub struct WriteMeta {
+    /// The client mutation being applied. Feed entries recorded for
+    /// this write should carry it as their `origin` (the feed echo).
+    pub mutation_id: pocopine_sync::MutationId,
 }
 
 /// Reconstruct a `Query<Row>` from a wire `SyncPullRequest`. The
@@ -431,6 +472,10 @@ impl<S: Source> SourceResourceBuilder<S> {
                 MutationLogProvenance::AutoDefault,
             ),
         };
+        // Same resolution shape for the change feed, minus the
+        // auto-default: a feed nobody appends to would punch silent
+        // holes in incremental clients' history.
+        let change_log = self.source.change_log();
         SourceResource {
             stream: self.stream,
             collection: self.collection,
@@ -443,6 +488,7 @@ impl<S: Source> SourceResourceBuilder<S> {
             mutation_log,
             mutation_log_provenance,
             mutation_log_default_warned: Arc::new(std::sync::OnceLock::new()),
+            change_log,
         }
     }
 }
@@ -494,6 +540,13 @@ pub struct SourceResource<S: Source, IdOf> {
     /// resource doesn't re-fire; `OnceLock` for thread-safe
     /// single-call semantics.
     mutation_log_default_warned: Arc<std::sync::OnceLock<()>>,
+    /// Ordered change feed (see [`crate::feed::ChangeLog`]).
+    /// Resolved at construction: `.change_log(custom)` (builder)
+    /// wins over `Source::change_log()` (trait method); `None`
+    /// keeps snapshot-only pulls. No auto-default — a feed the
+    /// source doesn't actually append to would be a silent hole
+    /// generator, the opposite of the point.
+    change_log: Option<Arc<dyn crate::feed::ChangeLog<S::Row>>>,
 }
 
 impl<S, IdOf> SourceResource<S, IdOf>
@@ -562,6 +615,19 @@ where
     {
         self.mutation_log = Arc::new(log);
         self.mutation_log_provenance = MutationLogProvenance::BuilderExplicit;
+        self
+    }
+
+    /// Attach the ordered change feed explicitly (wins over
+    /// `Source::change_log()`). Use when the log is hosted by a
+    /// different backend than the source — but remember the
+    /// same-transaction append contract still applies (see
+    /// [`crate::feed`] module docs).
+    pub fn change_log<Log>(mut self, log: Log) -> Self
+    where
+        Log: crate::feed::ChangeLog<S::Row>,
+    {
+        self.change_log = Some(Arc::new(log));
         self
     }
 }
@@ -646,10 +712,16 @@ where
         let stream = self.stream.clone();
         let collection = self.collection.clone();
         let max_snapshot_rows = self.max_snapshot_rows;
+        let change_log = self.change_log.clone();
         Box::pin(async move {
             if request.stream != stream {
                 return Err(SyncError::UnknownStream(request.stream.to_string()));
             }
+
+            // The ChangeLog takes the raw RequestContext (same
+            // scoping boundary as MutationLog); clone it before
+            // `extract_context` consumes the original.
+            let raw_ctx = ctx.clone();
 
             // The whole point of Phase 1: hand the Source a typed
             // Query reconstructed from the wire request. SQLx-style
@@ -667,6 +739,14 @@ where
             // ignore the clamped value, but at least the memory
             // ceiling is now visible from the contract.
             let mut query: Query<S::Row> = query_from_pull_request(&request);
+            // Whether the CLIENT bounded this query (top-N view),
+            // signaled by the reserved `__limit` params key the query
+            // DSL emits for `.limit(n)`. NOT `request.limit` — that
+            // wire field defaults to 500 for every pull, so it says
+            // nothing about the query's shape. Limited queries stay
+            // snapshot-only: an incremental delete below the fold
+            // can't reveal the row that should slide into the view.
+            let client_limited = request.params.contains_key(crate::wire::LIMIT_KEY);
             let effective_limit = query
                 .limit()
                 .map(|l| l.min(max_snapshot_rows as u32))
@@ -677,6 +757,67 @@ where
             // request; downstream calls operate on the strongly-
             // typed value, not on the raw RequestContext.
             let source_ctx = source.extract_context(ctx).await?;
+
+            // ── Ordered-feed decision tree ──────────────────────
+            //
+            //  cursor?   feed?    list_since       → response
+            //  Some      Some     Page             → Incremental
+            //  Some      Some     TooOld           → Snapshot + resync
+            //  None      Some     —                → Snapshot + head cursor
+            //  any       None     —                → Snapshot, cursor None
+            //
+            // Client-limited queries always take the snapshot rows.
+            let mut forced_resync = false;
+            let mut feed_watermark: Option<pocopine_sync::SyncCursor> = None;
+            if let Some(log) = change_log.as_ref()
+                && !client_limited
+                && let Some(client_cursor) = request.cursor.clone()
+            {
+                match log
+                    .list_since(&raw_ctx, &query, &client_cursor, effective_limit)
+                    .await?
+                {
+                    crate::feed::ChangesSince::Page(page) => {
+                        let mut changes = Vec::with_capacity(page.changes.len());
+                        for entry in page.changes {
+                            changes.push(feed_entry_to_change(
+                                entry,
+                                &stream,
+                                &collection,
+                                version_of.as_deref(),
+                            )?);
+                        }
+                        let mut response = pocopine_sync::SyncPullResponse::incremental(
+                            stream,
+                            collection,
+                            changes,
+                            Some(page.cursor),
+                        )
+                        .with_watermark(Some(page.watermark));
+                        response.has_more = page.has_more;
+                        return Ok(response);
+                    }
+                    crate::feed::ChangesSince::TooOld { watermark } => {
+                        // The loud path: fall through to a full
+                        // snapshot, marked as a deliberate re-sync
+                        // so the client classifies its absences
+                        // StaleResync, never Unexplained.
+                        forced_resync = true;
+                        feed_watermark = Some(watermark);
+                    }
+                }
+            }
+
+            // Snapshot path. When a feed exists, read its head
+            // BEFORE listing rows: a write landing between head-read
+            // and row-read is then covered twice (snapshot AND a
+            // later incremental entry — upserts are replay-safe),
+            // never zero times. Reading head AFTER the rows would
+            // let that in-between write vanish forever.
+            let snapshot_cursor: Option<pocopine_sync::SyncCursor> = match change_log.as_ref() {
+                Some(log) => Some(log.head(&raw_ctx, &query).await?),
+                None => None,
+            };
             // T3.2: stream-collect up to max_snapshot_rows. The
             // adapter breaks out of the stream as soon as the cap
             // is reached, so a source that yields lazily (sqlx
@@ -772,9 +913,17 @@ where
             // can't cheaply disprove an extra row when the source
             // honors the pushed-down limit).
             let has_more = source_overyielded || sync_rows.len() >= cap;
-            let mut response =
-                pocopine_sync::SyncPullResponse::snapshot(stream, collection, sync_rows, None)
-                    .with_tombstones(tombstones);
+            let mut response = pocopine_sync::SyncPullResponse::snapshot(
+                stream,
+                collection,
+                sync_rows,
+                snapshot_cursor,
+            )
+            .with_tombstones(tombstones)
+            .with_watermark(feed_watermark);
+            if forced_resync {
+                response = response.with_resync(pocopine_sync::SyncResyncReason::CursorTruncated);
+            }
             response.has_more = has_more;
             Ok(response)
         })
@@ -1006,6 +1155,51 @@ where
     }
 }
 
+/// Translate one typed feed entry into its wire `SyncChange`,
+/// extracting the optimistic-concurrency version for upsert rows the
+/// same way the snapshot path does.
+fn feed_entry_to_change<Row: serde::Serialize>(
+    entry: crate::feed::FeedEntry<Row>,
+    stream: &SyncStreamName,
+    collection: &SyncCollectionName,
+    version_of: Option<&SourceVersionFn<Row>>,
+) -> SyncResult<pocopine_sync::SyncChange<Value>> {
+    match entry.change {
+        crate::feed::FeedChangeKind::Upsert { key, row } => {
+            let version = match version_of {
+                Some(extract) => (extract)(&row)?,
+                None => None,
+            };
+            let value = serde_json::to_value(&row)
+                .map_err(|e| SyncError::backend(format!("feed row failed to serialize: {e}")))?;
+            Ok(pocopine_sync::SyncChange {
+                stream: stream.clone(),
+                collection: collection.clone(),
+                key: Some(key.clone()),
+                op: pocopine_sync::SyncOp::Upsert,
+                row: Some(SyncRow {
+                    key,
+                    version,
+                    value,
+                    pending: false,
+                    conflict: false,
+                }),
+                cursor: entry.cursor,
+                origin: entry.origin,
+            })
+        }
+        crate::feed::FeedChangeKind::Delete { key } => Ok(pocopine_sync::SyncChange {
+            stream: stream.clone(),
+            collection: collection.clone(),
+            key: Some(key),
+            op: pocopine_sync::SyncOp::Delete,
+            row: None,
+            cursor: entry.cursor,
+            origin: entry.origin,
+        }),
+    }
+}
+
 /// Describe which field of an `AlreadyAccepted` prior reservation
 /// differs from the current candidate. Review-of-review finding #12:
 /// the previous error said "different contents" without saying which.
@@ -1058,6 +1252,9 @@ async fn apply_payload<S: Source>(
     base_version: Option<RowVersion>,
     payload: MutationPayload<S::Id, S::Draft>,
 ) -> SyncResult<SourceApplyOutcome<S::Row>> {
+    let meta = WriteMeta {
+        mutation_id: mutation_id.clone(),
+    };
     match payload {
         MutationPayload::Create(p) => {
             if base_version.is_some() {
@@ -1068,7 +1265,7 @@ async fn apply_payload<S: Source>(
                     code: None,
                 }));
             }
-            let row = source.create(ctx, p.id, p.draft).await?;
+            let row = source.create(ctx, meta, p.id, p.draft).await?;
             Ok(SourceApplyOutcome::Accepted {
                 mutation_id,
                 row: Some(row),
@@ -1081,7 +1278,7 @@ async fn apply_payload<S: Source>(
             // the payload wins — it's the typed contract the source
             // understands.
             let version = p.expected_version.clone().or(base_version);
-            let outcome = source.update(ctx, p.id, p.draft, version).await?;
+            let outcome = source.update(ctx, meta, p.id, p.draft, version).await?;
             match outcome {
                 WriteResult::Applied(row) => Ok(SourceApplyOutcome::Accepted {
                     mutation_id,
@@ -1096,7 +1293,7 @@ async fn apply_payload<S: Source>(
         }
         MutationPayload::Delete(p) => {
             let version = p.expected_version.clone().or(base_version);
-            let outcome = source.delete(ctx, p.id, version).await?;
+            let outcome = source.delete(ctx, meta, p.id, version).await?;
             match outcome {
                 DeleteResult::Applied => Ok(SourceApplyOutcome::Accepted {
                     mutation_id,
@@ -1218,6 +1415,7 @@ mod tests {
         fn create<'a>(
             &'a self,
             _ctx: (),
+            _meta: WriteMeta,
             _id: Self::Id,
             _draft: Self::Draft,
         ) -> SourceFuture<'a, SyncResult<Self::Row>> {
@@ -1227,6 +1425,7 @@ mod tests {
         fn update<'a>(
             &'a self,
             _ctx: (),
+            _meta: WriteMeta,
             _id: Self::Id,
             _draft: Self::Draft,
             _expected_version: Option<RowVersion>,
@@ -1237,6 +1436,7 @@ mod tests {
         fn delete<'a>(
             &'a self,
             _ctx: (),
+            _meta: WriteMeta,
             _id: Self::Id,
             _expected_version: Option<RowVersion>,
         ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {
