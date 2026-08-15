@@ -2075,6 +2075,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "css_dataset"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25670139e591f1c2869eb8d0d977028f8d05e859132b4c874ecd02a00d3c9174"
+
+[[package]]
 name = "cssparser"
 version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5725,6 +5731,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "markup_fmt"
+version = "0.27.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83b53ac34c9d6498632dcca4ad4542b1aef7c605d1d19037207910c4efe060a9"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "css_dataset",
+ "itertools 0.14.0",
+ "memchr",
+ "regex",
+ "tiny_pretty",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7446,6 +7467,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "flate2",
+ "markup_fmt",
  "notify",
  "pocopine-assets",
  "pocopine-client-codegen",
@@ -10809,6 +10831,12 @@ dependencies = [
  "httpdate",
  "log",
 ]
+
+[[package]]
+name = "tiny_pretty"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c4c0dd4d9821b02f4a9848656f971304402049d80fb434d64a83890b2ade7d7"
 
 [[package]]
 name = "tinystr"

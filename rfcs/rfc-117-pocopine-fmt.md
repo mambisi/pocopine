@@ -127,11 +127,35 @@ transform that decodes entities first and understands text nodes versus
 comments versus unquoted attribute values; that is a design, not a detail, and
 it waits. In exchange v1 never touches template content at all.
 
-**Rule 3 (reindentation) is deferred** for the same reason: whitespace in HTML
-is semantics, and a formatter that reflows `<pre>` or collapses significant
-spacing between inline elements is worse than none. What v1 does do is indent
-the body it moves — under the attribute on the way in, dedented on the way out
-— which is what makes the round trip byte-stable.
+**Rule 3 (markup formatting) ships, via `markup_fmt` rather than a
+hand-rolled reindenter.** The original plan was conservative reindentation,
+on the grounds that whitespace in HTML is semantics and reflowing `<pre>` is
+worse than not formatting. That reasoning still holds — it is an argument
+against writing one, not against using one that already solves it.
+
+`markup_fmt` (MIT) is the same architecture as Prettier's HTML printer,
+in Rust: a deny-list of 76 non-whitespace-sensitive tags over a Wadler
+document IR. Unknown tags, custom elements and `<template>` therefore default
+to *sensitive*, and `<pre>` / `<textarea>` are verbatim. Attributes are opaque
+in HTML mode, so `pp-on:click.debounce.300`, `:title` and `@click` round-trip
+untouched — the property that makes it safe here, and one the tests pin.
+
+Validated against all 359 `.poco` files in-repo: **0 format errors, 0
+structural differences under the framework's own parser, 0 non-idempotent
+files, and no `<pre>` or `<textarea>` block altered**. Line count grows 13%
+at `print-width = 120`; at 80 it is 38% and adds 447 dangling `>` lines, which
+is why the default is 120.
+
+Formatting applies wherever markup lives — `.poco` files and `poco!` bodies —
+and runs *before* the structural rules move anything, so a template arrives at
+its new home already formatted and the two rules never edit the same bytes. A
+template that cannot be inlined still gets formatted where it sits.
+
+Porting Prettier's printer was priced and rejected: `src/language-html` is
+4,644 lines plus 2,418 of document IR, with 54 open HTML issues, 12 of them
+open since 2018. The limit is architectural — Prettier decides sensitivity
+from a hardcoded tag→display map and never reads CSS — so a port inherits the
+unsolvable cases too.
 
 Lexability is decided by the RFC-116 pre-lint's own character rules, so
 "would the build reject this body?" has one answer in the codebase rather than

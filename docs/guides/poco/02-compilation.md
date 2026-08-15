@@ -120,11 +120,26 @@ Tune it in `Cargo.toml`:
 inline-threshold = 150
 inline-small-templates = "fix"   # off | warn | fix
 extract-large-inline = "warn"
+format-markup = "fix"
+print-width = 120
 ```
 
-`pocopine fmt` never edits template *content*. A template holding text the
-Rust lexer rejects is reported and left alone, because escaping it
-automatically would double-escape any HTML entities already in it.
+It also formats the markup itself — indentation and line wrapping — in `.poco`
+files and `poco!` bodies alike. Attributes are never rewritten, so directives
+survive verbatim, and whitespace-sensitive elements (`<pre>`, `<textarea>`)
+are left exactly as written. Use a `markup-fmt-ignore` comment to opt a
+subtree out:
+
+```poco
+<!-- markup-fmt-ignore -->
+<div>   spacing kept   </div>
+```
+
+Two things `pocopine fmt` will not do. It does not rewrite template *text*: a
+template holding characters the Rust lexer rejects is reported and left alone,
+since escaping automatically would double-escape any HTML entities already
+there. And it never touches markup it could not parse — that belongs to the
+compiler's diagnostics, not the formatter's guesswork.
 
 ## What the macro emits
 
