@@ -232,6 +232,16 @@ impl DriverHandle {
     }
 }
 
+/// What a settled `/pull` told the caller beyond the routed rows:
+/// whether the response revealed a principal change (discard +
+/// re-sync), and which pending overlays the FEED ECHO retired
+/// (their durable entries still need clearing).
+#[derive(Default)]
+struct PullSettle {
+    scope_drift: bool,
+    retired: Vec<pocopine_sync::MutationId>,
+}
+
 /// Per-subscription driver. One spawn per `(TypeId, QueryKey)`.
 pub(crate) struct SubscriptionDriver<Row: 'static> {
     /// Weak ref to the subscription. Upgraded on every tick;
@@ -386,7 +396,10 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        let scope_changed = self.apply_pull(pull_response);
+        // The initial pull is cursor-less (snapshot), so it can carry
+        // no feed changes and never retires pendings — only the
+        // scope-drift half of the settle matters here.
+        let scope_changed = self.apply_pull(pull_response).scope_drift;
         if !self.epoch.is_current() {
             return;
         }
@@ -579,12 +592,21 @@ where
             );
             return;
         }
-        let scope_changed = self.apply_pull(response);
+        let settle = self.apply_pull(response);
         if !self.epoch.is_current() {
             return;
         }
-        if scope_changed {
+        if settle.scope_drift {
             self.refetch_after_scope_drift().await;
+            if !self.epoch.is_current() {
+                return;
+            }
+        } else {
+            // Feed-echo retirements: clear the durable entries for
+            // pendings this settle proved committed, BEFORE the
+            // persist below — so the sweep (a steady-state bug
+            // detector) finds nothing left behind.
+            self.clear_retired_durables(&settle.retired).await;
             if !self.epoch.is_current() {
                 return;
             }
@@ -592,6 +614,28 @@ where
         // Persist after every successful /pull (RFC 088 §A.3) so a
         // reload after the tick observes the latest canonical set.
         self.persist_snapshot().await;
+    }
+
+    /// Durably clear pendings the feed echo retired (see
+    /// [`QueryClient::clear_persisted_pending_any`]).
+    async fn clear_retired_durables(&self, retired: &[pocopine_sync::MutationId]) {
+        if retired.is_empty() {
+            return;
+        }
+        let Some(store) = self.local_store.clone() else {
+            return;
+        };
+        let (Some(client_inner), Some(sub)) = (self.client.upgrade(), self.subscription.upgrade())
+        else {
+            return;
+        };
+        QueryClient::clear_persisted_pending_any(
+            &client_inner,
+            &store,
+            sub.query().stream(),
+            retired,
+        )
+        .await;
     }
 
     /// The re-sync half of a mid-loop scope drift. `apply_pull`
@@ -658,7 +702,7 @@ where
         if !self.epoch.is_current() {
             return;
         }
-        if self.apply_pull(response) {
+        if self.apply_pull(response).scope_drift {
             // Flapped again mid-refetch — wipe the just-adopted
             // scope's durable slate too and let the next tick
             // re-sync.
@@ -982,24 +1026,32 @@ where
     /// full snapshot with no tombstone). See [`EvictionReason`] for
     /// what app policy may do with each.
     ///
-    /// Returns `true` when the response's scope named a DIFFERENT
-    /// principal than the one this subscription settled under
-    /// (session expired mid-loop, user switch). In that case the
-    /// previous principal's local state was cleared — in-memory
-    /// reset, cursor dropped, queued replays discarded, the new
-    /// scope adopted — and the response itself was DISCARDED, not
-    /// settled: it was requested with the old principal's cursor,
-    /// so an `Incremental` body would be a partial delta of the new
-    /// principal's view. The caller must `clear_stream` the durable
-    /// compartment and immediately re-pull WITHOUT a cursor so the
-    /// re-sync settles from a full snapshot (Codex: no cursored
-    /// settles across a principal change).
-    fn apply_pull(&self, response: SyncPullResponse<Value>) -> bool {
+    /// Returns a [`PullSettle`]: `scope_drift` is `true` when the
+    /// response's scope named a DIFFERENT principal than the one
+    /// this subscription settled under (session expired mid-loop,
+    /// user switch). In that case the previous principal's local
+    /// state was cleared — in-memory reset, cursor dropped, queued
+    /// replays discarded, the new scope adopted — and the response
+    /// itself was DISCARDED, not settled: it was requested with the
+    /// old principal's cursor, so an `Incremental` body would be a
+    /// partial delta of the new principal's view. The caller must
+    /// `clear_stream` the durable compartment and immediately
+    /// re-pull WITHOUT a cursor so the re-sync settles from a full
+    /// snapshot (Codex: no cursored settles across a principal
+    /// change).
+    ///
+    /// `retired` carries the mutation ids of pending overlays this
+    /// settle retired via the FEED ECHO (a change whose `origin` is
+    /// one of our own pendings proves the write committed, even if
+    /// the push response was lost). The caller clears their durable
+    /// entries so the persist sweep — a bug detector in steady
+    /// state — finds nothing.
+    fn apply_pull(&self, response: SyncPullResponse<Value>) -> PullSettle {
         let Some(sub) = self.subscription.upgrade() else {
-            return false;
+            return PullSettle::default();
         };
         let Some(client_inner) = self.client.upgrade() else {
-            return false;
+            return PullSettle::default();
         };
 
         // ── Scope drift: clear everything and re-sync ───────────
@@ -1040,7 +1092,10 @@ where
             state.reset();
             state.application_schema_version = schema_version;
             state.sync_scope = response.scope.clone();
-            return true;
+            return PullSettle {
+                scope_drift: true,
+                retired: Vec::new(),
+            };
         }
         if established.is_none() && response.scope.is_some() {
             sub.state().borrow_mut().sync_scope = response.scope.clone();
@@ -1124,6 +1179,31 @@ where
 
         QueryClient::route_canonical_pull::<Row>(&client_inner, &stream, &changes);
 
+        // ── Feed echo (SPORC §3.1 step 6) ───────────────────────
+        // A change whose `origin` names one of OUR pending overlays
+        // proves that mutation committed — even when the push
+        // response that would have said so was lost. Retire it
+        // type-erasedly across every subscription on the stream
+        // (the pending's Row type is unrelated to this driver's).
+        // Runs AFTER routing so the canonical row is in place before
+        // its overlay disappears — no flicker where neither shows.
+        // Foreign origins (other devices' mutations) miss every
+        // pending and fall through as no-ops.
+        let mut retired: Vec<pocopine_sync::MutationId> = Vec::new();
+        for change in &response.changes {
+            if let Some(origin) = &change.origin
+                && QueryClient::dequeue_pending_any(&client_inner, &stream, origin)
+            {
+                tracing::debug!(
+                    target: "pocopine.log",
+                    stream = stream.as_str(),
+                    mutation_id = %origin,
+                    "sync-query: feed echo retired a pending overlay",
+                );
+                retired.push(origin.clone());
+            }
+        }
+
         // Eviction report for the originating subscription. The
         // routing engine records `Deleted` evictions on every view a
         // server delete actually removed a row from — which covers
@@ -1143,6 +1223,18 @@ where
                     .query()
                     .limit()
                     .is_some_and(|limit| response.rows.len() as u64 >= u64::from(limit));
+            // A snapshot the server explicitly marked as a forced
+            // re-sync (our cursor predates its feed's retained
+            // history) makes every absence KNOWN-stale: the row may
+            // have been deleted while we were away, so recovery
+            // policy must never treat it as recoverable. This is
+            // the loud classification that keeps issue #292's
+            // absence-based resurrection unreachable.
+            let absent_reason = if response.resync.is_some() {
+                EvictionReason::StaleResync
+            } else {
+                EvictionReason::Unexplained
+            };
             prev_rows
                 .into_iter()
                 .filter_map(|row| {
@@ -1154,7 +1246,7 @@ where
                     } else if !snapshot_keys.contains(&row.key) && !truncated {
                         Some(EvictedRow {
                             row,
-                            reason: EvictionReason::Unexplained,
+                            reason: absent_reason,
                         })
                     } else {
                         None
@@ -1179,7 +1271,10 @@ where
         state.error.clear();
         drop(state);
         sub.notify_listeners_external();
-        scope_drift
+        PullSettle {
+            scope_drift,
+            retired,
+        }
     }
 
     /// Stable cache compartment for this driver's subscription.

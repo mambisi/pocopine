@@ -82,6 +82,11 @@ pub(crate) trait AnyQuerySubscription: 'static {
     /// across every driver on the client, so the driver that drains
     /// an entry generally does NOT know the entry's Row type.
     fn dequeue_pending_erased(&self, mutation_id: &MutationId) -> bool;
+    /// This subscription's durable cache compartment —
+    /// `local_stream_key(stream, params)`. Type-erased so the feed
+    /// echo's durable clear can enumerate EVERY compartment a
+    /// pending may have been persisted into, regardless of Row type.
+    fn compartment(&self) -> SyncStreamName;
 }
 
 /// One live subscription against `(stream, params)`.
@@ -326,6 +331,10 @@ impl<Row: 'static> AnyQuerySubscription for QuerySubscription<Row> {
             self.notify_listeners();
         }
         removed_any
+    }
+
+    fn compartment(&self) -> SyncStreamName {
+        pocopine_sync::local_stream_key(self.query.stream(), self.query.params())
     }
 }
 
@@ -1990,7 +1999,7 @@ impl QueryClient {
         inner: &Rc<QueryClientInner>,
         stream: &SyncStreamName,
         mutation_id: &MutationId,
-    ) {
+    ) -> bool {
         // Snapshot matching Rc entries first — no registry borrow is
         // held across the notify calls inside the erased dequeue.
         let subs: Vec<Rc<dyn AnyQuerySubscription>> = inner
@@ -2000,8 +2009,56 @@ impl QueryClient {
             .filter(|sub| sub.stream() == stream)
             .cloned()
             .collect();
+        let mut removed_any = false;
         for sub in subs {
-            sub.dequeue_pending_erased(mutation_id);
+            removed_any |= sub.dequeue_pending_erased(mutation_id);
+        }
+        removed_any
+    }
+
+    /// Driver-only: clear durable pending entries for `mutation_ids`
+    /// from EVERY compartment on `stream`, regardless of Row type —
+    /// each live subscription's params-scoped compartment plus the
+    /// bare-stream fallback. The feed-echo retirement path uses this
+    /// after [`Self::dequeue_pending_any`] confirmed an in-memory
+    /// hit, so the persist sweep (a bug detector in steady state)
+    /// finds nothing left to do.
+    pub(crate) async fn clear_persisted_pending_any(
+        inner: &Rc<QueryClientInner>,
+        store: &std::rc::Rc<dyn pocopine_sync::SyncLocalStore>,
+        stream: &SyncStreamName,
+        mutation_ids: &[MutationId],
+    ) {
+        if mutation_ids.is_empty() {
+            return;
+        }
+        let mut compartments: std::collections::BTreeSet<SyncStreamName> = inner
+            .registry
+            .borrow()
+            .values()
+            .filter(|sub| sub.stream() == stream)
+            .map(|sub| sub.compartment())
+            .collect();
+        compartments.insert(stream.clone());
+        for compartment in compartments {
+            let result = pocopine_sync::LocalPushResult {
+                stream: compartment.clone(),
+                collection: None,
+                accepted: mutation_ids.to_vec(),
+                rejected: Vec::new(),
+                rows: Vec::new(),
+                conflicts: Vec::new(),
+                cursor: None,
+            };
+            if let Err(err) = store.mark_push_result(result).await {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    stream = compartment.as_str(),
+                    error = %err,
+                    "sync-query: feed-echo durable clear failed; the \
+                     persist sweep will retry"
+                );
+            }
         }
     }
 

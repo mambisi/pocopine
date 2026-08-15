@@ -38,6 +38,16 @@ pub enum EvictionReason {
     /// as recoverable and re-push; an app with volatile filters should
     /// not.
     Unexplained,
+    /// The row was absent from a snapshot the server explicitly
+    /// marked as a deliberate full re-sync (`resync:
+    /// CursorTruncated` — this client's cursor predates the change
+    /// feed's retained history). The local view is KNOWN stale, so
+    /// the absence carries no information about the row's fate —
+    /// it may have been deleted while we were away. Recovery policy
+    /// MUST NOT re-push these: that is exactly the resurrection
+    /// path from issue #292, now made impossible to hit by
+    /// accident.
+    StaleResync,
 }
 
 /// One canonical row a settled pull removed from the view, plus why.
