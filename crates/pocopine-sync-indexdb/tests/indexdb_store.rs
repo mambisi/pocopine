@@ -159,6 +159,7 @@ async fn indexeddb_store_applies_changes_and_push_results() {
                 op: SyncOp::Upsert,
                 row: Some(updated.clone()),
                 cursor: SyncCursor::new("cursor_2").unwrap(),
+                origin: None,
             }],
             Some(SyncCursor::new("cursor_2").unwrap()),
         ))

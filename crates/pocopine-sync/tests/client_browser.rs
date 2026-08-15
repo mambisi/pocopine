@@ -195,6 +195,7 @@ async fn open_validates_stream_then_pull_renders_snapshot() {
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+                            watermark: None,
                         }]);
                         Ok(json_response(response))
                     }
@@ -312,6 +313,7 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+                            watermark: None,
                         }]);
                         Ok(json_response(response))
                     }
@@ -340,6 +342,7 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
                                     .unwrap(),
                                 ),
                                 cursor: SyncCursor::new("cursor_2").unwrap(),
+                                origin: None,
                             }],
                             Some(SyncCursor::new("cursor_2").unwrap()),
                         );
@@ -445,6 +448,7 @@ async fn open_replays_pending_mutations_before_pull() {
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+                            watermark: None,
                         }])))
                     }
                     SYNC_PUSH_PATH => {
@@ -611,6 +615,7 @@ async fn open_keeps_hydrated_pending_overlay_when_replay_fails() {
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                             schema_version: 1,
+                            watermark: None,
                         }])))
                     }
                     SYNC_PUSH_PATH => {
