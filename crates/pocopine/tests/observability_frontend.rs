@@ -21,7 +21,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "obs-plugin-shell",
-    template_inline = r#"<main><h1>observability</h1><pp-outlet></pp-outlet></main>"#
+    template = poco! {<main><h1>observability</h1><pp-outlet></pp-outlet></main>}
 )]
 struct ObsPluginShell {}
 
@@ -31,7 +31,7 @@ impl ObsPluginShell {}
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "obs-plugin-secret-page",
-    template_inline = r#"<section><p pp-text="id"></p></section>"#
+    template = poco! {<section><p pp-text="id"></p></section>}
 )]
 struct ObsPluginSecretPage {
     #[prop]
@@ -44,7 +44,7 @@ impl ObsPluginSecretPage {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "obs-plugin-custom",
-    template_inline = r#"<section><p>custom observability</p></section>"#
+    template = poco! {<section><p>custom observability</p></section>}
 )]
 struct ObsPluginCustom {}
 

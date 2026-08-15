@@ -31,7 +31,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "urt-leaf",
-    template_inline = r#"<span class="urt-leaf"></span>"#
+    template = poco! {<span class="urt-leaf"></span>}
 )]
 struct UrtLeaf {}
 
@@ -41,7 +41,7 @@ impl UrtLeaf {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "urt-mid",
-    template_inline = r#"<div class="urt-mid"><urt-leaf></urt-leaf></div>"#,
+    template = poco! {<div class="urt-mid"><urt-leaf></urt-leaf></div>},
     uses = [UrtLeaf],
 )]
 struct UrtMid {}
@@ -52,7 +52,7 @@ impl UrtMid {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "urt-root",
-    template_inline = r#"<div class="urt-root"><urt-mid></urt-mid></div>"#,
+    template = poco! {<div class="urt-root"><urt-mid></urt-mid></div>},
     uses = [UrtMid],
 )]
 struct UrtRoot {}
@@ -67,7 +67,7 @@ impl UrtRoot {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "urt-sibling",
-    template_inline = r#"<span class="urt-sibling"></span>"#
+    template = poco! {<span class="urt-sibling"></span>}
 )]
 struct UrtSibling {}
 
@@ -79,7 +79,7 @@ impl UrtSibling {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "urt-cycle-a",
-    template_inline = r#"<span class="urt-cycle-a"></span>"#,
+    template = poco! {<span class="urt-cycle-a"></span>},
     uses = [UrtCycleB],
 )]
 struct UrtCycleA {}
@@ -90,7 +90,7 @@ impl UrtCycleA {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "urt-cycle-b",
-    template_inline = r#"<span class="urt-cycle-b"></span>"#,
+    template = poco! {<span class="urt-cycle-b"></span>},
     uses = [UrtCycleA],
 )]
 struct UrtCycleB {}

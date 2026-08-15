@@ -37,7 +37,7 @@ struct BrowserPost {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "sync-browser-board",
-    template_inline = r#"
+    template = poco! {
     <section class="sync-browser-board">
       <output class="row-count" pp-text="posts.rows.length"></output>
       <p class="error" pp-text="posts.error"></p>
@@ -47,7 +47,7 @@ struct BrowserPost {
         </template>
       </ol>
     </section>
-    "#
+    }
 )]
 struct SyncBrowserBoard {
     posts: CollectionState<BrowserPost>,
@@ -72,7 +72,7 @@ impl SyncBrowserBoard {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "sync-browser-push-board",
-    template_inline = r#"
+    template = poco! {
     <section class="sync-browser-push-board">
       <p class="error" pp-text="posts.error"></p>
       <ol class="posts">
@@ -81,7 +81,7 @@ impl SyncBrowserBoard {
         </template>
       </ol>
     </section>
-    "#
+    }
 )]
 struct SyncBrowserPushBoard {
     posts: CollectionState<BrowserPost>,
@@ -123,7 +123,7 @@ impl SyncBrowserPushBoard {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "sync-browser-online-push-board",
-    template_inline = r#"
+    template = poco! {
     <section class="sync-browser-online-push-board">
       <p class="error" pp-text="posts.error"></p>
       <ol class="posts">
@@ -132,7 +132,7 @@ impl SyncBrowserPushBoard {
         </template>
       </ol>
     </section>
-    "#
+    }
 )]
 struct SyncBrowserOnlinePushBoard {
     posts: CollectionState<BrowserPost>,

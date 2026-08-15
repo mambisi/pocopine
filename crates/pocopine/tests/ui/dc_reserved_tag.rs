@@ -1,6 +1,6 @@
 use pocopine::component;
 
-#[component(template_inline = "<div></div>")]
+#[component(template = poco! { <div></div> })]
 struct PpComponent {}
 
 fn main() {}

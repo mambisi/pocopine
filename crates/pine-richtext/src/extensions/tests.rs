@@ -12,7 +12,7 @@ use crate::schema_basic;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[pocopine::component(
     name = "typed-task-item-extension-fixture",
-    template_inline = r#"<div class="typed-task-item-fixture" pp-owned-content></div>"#
+    template = poco! {<div class="typed-task-item-fixture" pp-owned-content></div>}
 )]
 struct TypedTaskItemFixture {
     checked: bool,

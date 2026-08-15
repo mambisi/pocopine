@@ -27,7 +27,7 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "app-plugin-direct-home",
-    template_inline = r#"<div class="app-plugin-direct-home">direct</div>"#
+    template = poco! {<div class="app-plugin-direct-home">direct</div>}
 )]
 struct AppPluginDirectHome {}
 
@@ -37,7 +37,7 @@ impl AppPluginDirectHome {}
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "app-plugin-macro-home",
-    template_inline = r#"<div class="app-plugin-macro-home">macro</div>"#
+    template = poco! {<div class="app-plugin-macro-home">macro</div>}
 )]
 struct AppPluginMacroHome {}
 
@@ -47,7 +47,7 @@ impl AppPluginMacroHome {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "app-plugin-observed-home",
-    template_inline = r#"<div class="app-plugin-observed-home">observed</div>"#
+    template = poco! {<div class="app-plugin-observed-home">observed</div>}
 )]
 struct AppPluginObservedHome {}
 
@@ -69,7 +69,7 @@ impl AppPluginObservedHome {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "app-plugin-hook-target",
-    template_inline = r#"<div class="app-plugin-hook-target">target</div>"#
+    template = poco! {<div class="app-plugin-hook-target">target</div>}
 )]
 struct AppPluginHookTarget {}
 
@@ -79,7 +79,7 @@ impl AppPluginHookTarget {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "app-plugin-hook-other",
-    template_inline = r#"<div class="app-plugin-hook-other">other</div>"#
+    template = poco! {<div class="app-plugin-hook-other">other</div>}
 )]
 struct AppPluginHookOther {}
 
@@ -89,7 +89,7 @@ impl AppPluginHookOther {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "app-plugin-cta-button",
-    template_inline = r#"<button class="app-plugin-cta" @click="track_click">CTA</button>"#
+    template = poco! {<button class="app-plugin-cta" @click="track_click">CTA</button>}
 )]
 struct AppPluginCtaButton {}
 

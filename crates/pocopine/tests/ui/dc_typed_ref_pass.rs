@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template_inline = "<p>child</p>")]
+#[component(template = poco! { <p>child</p> })]
 struct DcTypedChild {}
 
 #[handlers]
@@ -11,7 +11,7 @@ impl DcTypedChild {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     uses = [DcTypedChild],
-    template_inline = r#"<pp-component :is="active"></pp-component>"#,
+    template = poco! {<pp-component :is="active"></pp-component>},
 )]
 struct DcTypedHost {
     active: Option<ComponentRef<DcTypedHost>>,

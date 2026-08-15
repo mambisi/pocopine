@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "handler-context-ui-pass",
-    template_inline = "<button>pass</button>"
+    template = poco! { <button>pass</button> }
 )]
 struct ContextPositions {}
 

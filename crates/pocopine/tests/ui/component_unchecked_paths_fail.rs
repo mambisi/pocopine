@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "unchecked-paths-fixture",
-    template_inline = "<div></div>",
+    template = poco! { <div></div> },
     unchecked_paths = "yes"
 )]
 struct UncheckedPathsFixture {

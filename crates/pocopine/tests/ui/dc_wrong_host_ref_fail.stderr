@@ -1,8 +1,8 @@
 error[E0277]: the trait bound `std::option::Option<pocopine::ComponentRef<DcSourceHost>>: pocopine::__private::DynamicComponentSelection<DcTargetHost>` is not satisfied
   --> tests/ui/dc_wrong_host_ref_fail.rs:21:23
    |
-21 |     template_inline = r#"<pp-component :is="active"></pp-component>"#,
-   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+21 |     template = poco! {<pp-component :is="active"></pp-component>},
+   |                       ^ unsatisfied trait bound
    |
 help: the trait `DynamicComponentSelection<DcTargetHost>` is not implemented for `std::option::Option<pocopine::ComponentRef<DcSourceHost>>`
       but trait `DynamicComponentSelection<DcSourceHost>` is implemented for it

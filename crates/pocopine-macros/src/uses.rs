@@ -63,7 +63,7 @@ impl UsesTable {
 /// set of component types; the list is plain type paths only —
 /// no kebab strings, no tag overrides, no resolution table.
 /// Caller validates non-empty + mutual exclusion with
-/// `template` / `template_inline`.
+/// the `template` argument (a path or a `poco!` body).
 pub(crate) fn parse_extends_array(value: Expr) -> syn::Result<Vec<Path>> {
     let Expr::Array(arr) = value else {
         return Err(syn::Error::new(

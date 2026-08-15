@@ -223,7 +223,7 @@ fn listen_event_count(target: &Element, event_name: &str) -> Rc<Cell<u32>> {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-line-chart class="sales-chart"
                    label="Sales"
@@ -238,7 +238,7 @@ fn listen_event_count(target: &Element, event_name: &str) -> Rc<Cell<u32>> {
                    show_markers="true"
                    pp-bind:points="points"></pine-line-chart>
 </div>
-"#)]
+})]
 struct LineChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -259,7 +259,7 @@ impl Default for LineChartFixture {
 impl LineChartFixture {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-line-chart class="custom-tooltip-line"
                    label="Sales"
@@ -273,7 +273,7 @@ impl LineChartFixture {}
                    tooltip="none"
                    pp-bind:points="points"></pine-line-chart>
 </div>
-"#)]
+})]
 struct CustomTooltipLineChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -294,7 +294,7 @@ impl Default for CustomTooltipLineChartFixture {
 impl CustomTooltipLineChartFixture {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r##"
+#[component(template = poco! {
 <div>
   <pine-layer-chart class="metro-chart"
                     label="Metro"
@@ -360,7 +360,7 @@ impl CustomTooltipLineChartFixture {}
     </pine-chart-layer>
   </pine-layer-chart>
 </div>
-"##)]
+})]
 struct LayeredChartFixture {
     line: Vec<ChartLayerPoint>,
 }
@@ -380,7 +380,7 @@ impl Default for LayeredChartFixture {
 impl LayeredChartFixture {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r##"
+#[component(template = poco! {
 <div>
   <pine-cartesian-chart class="composed-line-chart"
                         label="Composed revenue"
@@ -402,7 +402,7 @@ impl LayeredChartFixture {}
                       pp-bind:points="actual"></pine-line-series>
   </pine-cartesian-chart>
 </div>
-"##)]
+})]
 struct ComposedCartesianFixture {
     actual: Vec<ChartPoint>,
 }
@@ -419,7 +419,7 @@ impl Default for ComposedCartesianFixture {
 impl ComposedCartesianFixture {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r##"
+#[component(template = poco! {
 <div>
   <pine-cartesian-chart class="combo-chart"
                         label="Combo revenue"
@@ -481,7 +481,7 @@ impl ComposedCartesianFixture {}
                                     font_weight="700"></pine-cartesian-reference-label>
   </pine-cartesian-chart>
 </div>
-"##)]
+})]
 struct ComboCartesianFixture {
     actual: Vec<ChartBar>,
     target: Vec<ChartBar>,
@@ -1070,7 +1070,7 @@ async fn pie_chart_animates_survivor_renormalization_when_middle_slice_is_remove
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-line-chart class="multi-line-chart"
                    label="Multi"
@@ -1083,7 +1083,7 @@ async fn pie_chart_animates_survivor_renormalization_when_middle_slice_is_remove
                    show_markers="true"
                    pp-bind:series="series"></pine-line-chart>
 </div>
-"#)]
+})]
 struct MultiLineChartFixture {
     series: Vec<ChartLineSeries>,
 }
@@ -1171,7 +1171,7 @@ async fn multi_line_chart_renders_series_metadata_and_hover() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-scatter-chart class="segment-scatter"
                       label="Segments"
@@ -1186,7 +1186,7 @@ async fn multi_line_chart_renders_series_metadata_and_hover() {
                       point_radius="5"
                       pp-bind:series="series"></pine-scatter-chart>
 </div>
-"#)]
+})]
 struct ScatterChartFixture {
     series: Vec<ChartScatterSeries>,
 }
@@ -1302,7 +1302,7 @@ async fn scatter_chart_renders_points_axes_and_hover() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="add-area-forecast" @click="add_forecast">Add forecast</button>
   <button class="remove-area-forecast" @click="remove_forecast">Remove forecast</button>
@@ -1319,7 +1319,7 @@ async fn scatter_chart_renders_points_axes_and_hover() {
                    show_markers="true"
                    pp-bind:series="series"></pine-area-chart>
 </div>
-"#)]
+})]
 struct AreaChartFixture {
     series: Vec<ChartAreaSeries>,
 }
@@ -1735,7 +1735,7 @@ async fn area_chart_keeps_existing_series_nodes_when_adding_series() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="swap" @click="swap">Swap</button>
   <span class="swap-count" pp-text="swaps"></span>
@@ -1749,7 +1749,7 @@ async fn area_chart_keeps_existing_series_nodes_when_adding_series() {
                    margin_left="0"
                    pp-bind:points="points"></pine-line-chart>
 </div>
-"#)]
+})]
 struct ReactiveChartFixture {
     points: Vec<ChartPoint>,
     swaps: u32,
@@ -1804,7 +1804,7 @@ async fn line_chart_recomputes_when_bound_points_change() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-line-chart class="empty-chart"
                    label="Empty"
@@ -1812,7 +1812,7 @@ async fn line_chart_recomputes_when_bound_points_change() {
                    height="100"
                    pp-bind:points="points"></pine-line-chart>
 </div>
-"#)]
+})]
 struct EmptyChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -1846,7 +1846,7 @@ async fn line_chart_reports_empty_state() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="animated-swap" @click="swap">Swap</button>
   <pine-line-chart class="animated-chart"
@@ -1858,7 +1858,7 @@ async fn line_chart_reports_empty_state() {
                    height="100"
                    pp-bind:points="points"></pine-line-chart>
 </div>
-"#)]
+})]
 struct AnimatedChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -1902,7 +1902,7 @@ async fn chart_animation_props_emit_css_hooks() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-line-chart class="invalid-chart"
                    label="Invalid"
@@ -1910,7 +1910,7 @@ async fn chart_animation_props_emit_css_hooks() {
                    height="100"
                    pp-bind:points="points"></pine-line-chart>
 </div>
-"#)]
+})]
 struct InvalidChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -1952,7 +1952,7 @@ async fn line_chart_reports_invalid_state_and_status() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-bar-chart class="revenue-bars"
                   label="Revenue"
@@ -1968,7 +1968,7 @@ async fn line_chart_reports_invalid_state_and_status() {
                   y_max="10"
                   pp-bind:data="bars"></pine-bar-chart>
 </div>
-"#)]
+})]
 struct BarChartFixture {
     bars: Vec<ChartBar>,
 }
@@ -2100,7 +2100,7 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-bar-chart class="grouped-bars"
                   label="Grouped"
@@ -2117,7 +2117,7 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
                   y_max="10"
                   pp-bind:series="series"></pine-bar-chart>
 </div>
-"#)]
+})]
 struct GroupedBarChartFixture {
     series: Vec<ChartBarSeries>,
 }
@@ -2192,7 +2192,7 @@ async fn grouped_bar_chart_renders_series_metadata() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-bar-chart class="stacked-bars"
                   label="Stacked"
@@ -2209,7 +2209,7 @@ async fn grouped_bar_chart_renders_series_metadata() {
                   y_max="10"
                   pp-bind:series="series"></pine-bar-chart>
 </div>
-"#)]
+})]
 struct StackedBarChartFixture {
     series: Vec<ChartBarSeries>,
 }
@@ -2275,7 +2275,7 @@ async fn stacked_bar_chart_accumulates_segments() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="add-paid" @click="add_paid">Add paid</button>
   <button class="remove-referral" @click="remove_referral">Remove referral</button>
@@ -2300,7 +2300,7 @@ async fn stacked_bar_chart_accumulates_segments() {
                   pp-bind:center_value="center_value"
                   pp-bind:data="data"></pine-pie-chart>
 </div>
-"#)]
+})]
 struct PieChartFixture {
     data: Vec<ChartPieSlice>,
     inner_radius: f64,
@@ -2494,7 +2494,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-radial-bar-chart class="readiness-chart"
                          label="Readiness"
@@ -2510,7 +2510,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
                          center_value="63%"
                          pp-bind:data="data"></pine-radial-bar-chart>
 </div>
-"#)]
+})]
 struct RadialBarChartFixture {
     data: Vec<ChartRadialBar>,
 }
@@ -2530,7 +2530,7 @@ impl Default for RadialBarChartFixture {
 impl RadialBarChartFixture {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="swap-radial" @click="swap">Swap</button>
   <pine-radial-bar-chart class="animated-rings"
@@ -2548,7 +2548,7 @@ impl RadialBarChartFixture {}
                          animation_easing="cubic-bezier(0.22, 1, 0.36, 1)"
                          pp-bind:data="data"></pine-radial-bar-chart>
 </div>
-"#)]
+})]
 struct RadialAnimationFixture {
     data: Vec<ChartRadialBar>,
 }
@@ -3055,7 +3055,7 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="swap-legend" @click="swap">Swap</button>
   <pine-chart-legend class="fixture-legend"
@@ -3063,7 +3063,7 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
                      interactive="true"
                      pp-bind:items="items"></pine-chart-legend>
 </div>
-"#)]
+})]
 struct LegendFixture {
     items: Vec<LegendItem>,
 }
@@ -3153,7 +3153,7 @@ async fn chart_legend_renders_items_and_updates() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-line-chart class="controlled-line"
                    label="Controlled"
@@ -3170,7 +3170,7 @@ async fn chart_legend_renders_items_and_updates() {
                      @pp:chart:legend-toggle="toggle"
                      pp-bind:items="legend"></pine-chart-legend>
 </div>
-"#)]
+})]
 struct ControlledLegendFixture {
     series: Vec<ChartLineSeries>,
     legend: Vec<LegendItem>,
@@ -3267,7 +3267,7 @@ async fn legend_toggle_can_control_chart_visibility() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div class="responsive-host" style="width: 320px">
   <pine-chart-responsive class="responsive-chart" aspect_ratio="2">
     <pine-line-chart class="responsive-line"
@@ -3283,7 +3283,7 @@ async fn legend_toggle_can_control_chart_visibility() {
                      pp-bind:points="points"></pine-line-chart>
   </pine-chart-responsive>
 </div>
-"#)]
+})]
 struct ResponsiveChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -3353,7 +3353,7 @@ async fn responsive_container_resizes_child_chart_props() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div class="padded-responsive-host" style="width: 360px">
   <style>
     .padded-responsive {
@@ -3378,7 +3378,7 @@ async fn responsive_container_resizes_child_chart_props() {
                      pp-bind:points="points"></pine-line-chart>
   </pine-chart-responsive>
 </div>
-"#)]
+})]
 struct PaddedResponsiveChartFixture {
     points: Vec<ChartPoint>,
 }
@@ -3442,7 +3442,7 @@ async fn responsive_container_sizes_to_inner_frame_when_padded() {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div class="demo-responsive-shell" style="width: 900px">
   <style>
     .demo-responsive-shell {
@@ -3512,7 +3512,7 @@ async fn responsive_container_sizes_to_inner_frame_when_padded() {
                     pp-bind:data="slices"></pine-pie-chart>
   </pine-chart-responsive>
 </div>
-"#)]
+})]
 struct DemoResponsiveChartFixture {
     points: Vec<ChartPoint>,
     slices: Vec<ChartPieSlice>,

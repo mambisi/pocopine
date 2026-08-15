@@ -44,6 +44,7 @@ pub mod owned_content;
 pub mod path;
 pub mod payload_scope;
 pub mod plugin;
+pub mod poco_template;
 pub mod profiler;
 pub mod progress;
 pub mod props;

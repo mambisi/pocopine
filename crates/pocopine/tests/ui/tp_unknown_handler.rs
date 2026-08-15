@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "tp-unknown-handler",
-    template_inline = r#"<button pp-on:click="rest">reset</button>"#
+    template = poco! {<button pp-on:click="rest">reset</button>}
 )]
 struct TpUnknownHandler {
     count: i32,

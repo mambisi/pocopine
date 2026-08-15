@@ -31,7 +31,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "ub-leaf-a",
-    template_inline = r#"<span class="ub-leaf-a"></span>"#
+    template = poco! {<span class="ub-leaf-a"></span>}
 )]
 struct UbLeafA {}
 
@@ -41,7 +41,7 @@ impl UbLeafA {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "ub-leaf-b",
-    template_inline = r#"<span class="ub-leaf-b"></span>"#
+    template = poco! {<span class="ub-leaf-b"></span>}
 )]
 struct UbLeafB {}
 
@@ -57,7 +57,7 @@ struct UbBundle;
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "ub-nested-leaf",
-    template_inline = r#"<span class="ub-nested-leaf"></span>"#
+    template = poco! {<span class="ub-nested-leaf"></span>}
 )]
 struct UbNestedLeaf {}
 
@@ -77,7 +77,7 @@ struct UbOuter;
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "ub-cycle-leaf-a",
-    template_inline = r#"<span class="ub-cycle-leaf-a"></span>"#
+    template = poco! {<span class="ub-cycle-leaf-a"></span>}
 )]
 struct UbCycleLeafA {}
 
@@ -87,7 +87,7 @@ impl UbCycleLeafA {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "ub-cycle-leaf-b",
-    template_inline = r#"<span class="ub-cycle-leaf-b"></span>"#
+    template = poco! {<span class="ub-cycle-leaf-b"></span>}
 )]
 struct UbCycleLeafB {}
 

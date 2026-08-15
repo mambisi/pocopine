@@ -15,7 +15,7 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-owned-mount-fixture",
-    template_inline = r#"<div class="typed-owned-mount"><span pp-text="value"></span></div>"#
+    template = poco! {<div class="typed-owned-mount"><span pp-text="value"></span></div>}
 )]
 struct TypedOwnedMountFixture {
     #[prop]
@@ -74,7 +74,7 @@ mod browser {
     #[derive(Default, Serialize, Deserialize)]
     #[component(
         name = "typed-pre-release-child",
-        template_inline = r#"<span class="typed-pre-release-child">child</span>"#
+        template = poco! {<span class="typed-pre-release-child">child</span>}
     )]
     struct TypedPreReleaseChild;
 
@@ -88,7 +88,7 @@ mod browser {
     #[derive(Default, Serialize, Deserialize)]
     #[component(
         name = "typed-pre-release-parent",
-        template_inline = r#"<div class="typed-pre-release-parent"><typed-pre-release-child></typed-pre-release-child></div>"#,
+        template = poco! {<div class="typed-pre-release-parent"><typed-pre-release-child></typed-pre-release-child></div>},
         uses = [TypedPreReleaseChild]
     )]
     struct TypedPreReleaseParent;

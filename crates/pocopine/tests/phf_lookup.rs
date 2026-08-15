@@ -14,7 +14,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-lookup-home",
-    template_inline = r#"<div class="phf-lookup-home"></div>"#
+    template = poco! {<div class="phf-lookup-home"></div>}
 )]
 struct PhfLookupHome {}
 
@@ -24,7 +24,7 @@ impl PhfLookupHome {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-lookup-planned",
-    template_inline = r#"<div><span pp-text="label"></span></div>"#
+    template = poco! {<div><span pp-text="label"></span></div>}
 )]
 struct PhfLookupPlanned {
     label: String,
@@ -36,7 +36,7 @@ impl PhfLookupPlanned {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-lookup-fragment-plan",
-    template_inline = r#"<div><template pp-if="visible"><span pp-text="label"></span></template></div>"#
+    template = poco! {<div><template pp-if="visible"><span pp-text="label"></span></template></div>}
 )]
 struct PhfLookupFragmentPlan {
     visible: bool,
@@ -49,7 +49,7 @@ impl PhfLookupFragmentPlan {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-lookup-fallback",
-    template_inline = r#"<section class="phf-lookup-fallback"></section>"#
+    template = poco! {<section class="phf-lookup-fallback"></section>}
 )]
 struct PhfLookupFallback {}
 

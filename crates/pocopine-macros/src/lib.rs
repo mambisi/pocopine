@@ -77,6 +77,9 @@ mod template_plan;
 mod template_paths;
 // RFC-100 — `asset!` content-addressed asset references.
 mod assets;
+// RFC-116 — `poco!` inline templates: verbatim source recovery off the
+// macro body, validated through the same parser `.poco` files use.
+mod poco_inline;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -97,7 +100,7 @@ mod assets;
 /// Returns `Ok(None)` when the template is clean.
 /// Source for `validate_template_or_emit_errors` — either a path
 /// to read at expansion time (the `template = "Foo.poco"` shape)
-/// or a pre-loaded HTML string (the `template_inline = "..."`
+/// or a pre-loaded HTML string (the `template = poco! { ... }`
 /// shape, intended for test fixtures).
 enum TemplateSource<'a> {
     File(&'a LitStr),
@@ -107,6 +110,7 @@ enum TemplateSource<'a> {
 fn validate_template_or_emit_errors(
     template_source: TemplateSource<'_>,
     component_name: &str,
+    force_lenient: bool,
 ) -> Result<
     (
         Option<proc_macro2::TokenStream>,
@@ -114,7 +118,10 @@ fn validate_template_or_emit_errors(
     ),
     TokenStream,
 > {
-    let lenient = is_lenient_mode();
+    // `force_lenient` covers RFC-116's speculative-expansion path: the
+    // recovered source is a lossy token re-print, so validating it would
+    // report failures rustc itself would never see.
+    let lenient = force_lenient || is_lenient_mode();
     match template_source {
         TemplateSource::Inline { source, anchor } => {
             validate_inline_source(&source, anchor, component_name, lenient)
@@ -704,15 +711,19 @@ pub(crate) const HTML5_ELEMENTS: &[&str] = &[
 struct ComponentArgs {
     name: Option<LitStr>,
     template: Option<LitStr>,
-    /// Inline-template alternative to `template = "Foo.poco"`.
-    /// When set, the literal is used directly as the template
-    /// HTML source — no file resolution, no `include_str!`
-    /// rebuild dependency. Mutually exclusive with `template`.
-    /// Intended for test-only fixtures where authoring a
-    /// per-test `.html` file is overhead the assertion doesn't
-    /// justify; production components should still use the file
-    /// path so the template lives in its own source-of-truth.
-    template_inline: Option<LitStr>,
+    /// RFC-116 — `template = poco! { … }`, as recovered from the macro body.
+    /// Kept alongside [`Self::inline_source`] because only this carries the
+    /// `lossy` flag that speculative expansion needs.
+    template_poco: Option<poco_inline::RecoveredTemplate>,
+    /// The inline template as a `LitStr`, derived from `template_poco` at the
+    /// end of parsing.
+    ///
+    /// **Not an author-facing argument.** RFC-116 removed the
+    /// `template_inline = "..."` key; this is purely the desugar target that
+    /// lets one inline representation feed the whole downstream ladder
+    /// (validation, plan compilation, RFC-111 / RFC-112 assertions) exactly
+    /// as it did before.
+    inline_source: Option<LitStr>,
     style: Option<LitStr>,
     role: Option<LitStr>,
     /// Force a specific CSS `display` value on the OUTER custom
@@ -751,7 +762,7 @@ struct ComponentArgs {
     /// component as a bundle: a tag-less type marker that
     /// re-exports the registration of every type in the list
     /// via its own `register()`. Mutually exclusive with
-    /// `template` / `template_inline`.
+    /// the `template` argument (a path or a `poco!` body).
     extends: Option<Vec<syn::Path>>,
     /// Escape hatch for compile-time template-path validation
     /// (`unchecked_paths = "true"`). Skips the marker-reference
@@ -809,20 +820,60 @@ impl Parse for ComponentArgs {
                 continue;
             }
 
+            // RFC-116 — `template = poco! { <div>…</div> }`. Recover the
+            // body verbatim and hand the pipeline the same `LitStr` shape a
+            // string template produces, spanned on the HTML so every
+            // downstream diagnostic points into the template.
+            if kv.path.is_ident("template")
+                && let Expr::Macro(expr_macro) = &kv.value
+                && expr_macro.mac.path.segments.last().is_some_and(|segment| {
+                    segment.ident == "poco" && expr_macro.mac.path.segments.len() <= 2
+                })
+            {
+                if args.template.is_some() || args.template_poco.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &kv.path,
+                        "duplicate `template` argument",
+                    ));
+                }
+                let recovered = poco_inline::recover(expr_macro.mac.tokens.clone().into())?;
+                args.template_poco = Some(recovered);
+                continue;
+            }
+
             let lit = match kv.value {
                 Expr::Lit(ExprLit {
                     lit: Lit::Str(s), ..
                 }) => s,
                 other => {
-                    return Err(syn::Error::new_spanned(other, "expected a string literal"));
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "expected a string literal, or `poco! { <div>…</div> }` for `template`",
+                    ));
                 }
             };
             if kv.path.is_ident("name") {
                 set_once(&mut args.name, lit, &kv.path, "name")?;
             } else if kv.path.is_ident("template") {
+                if args.template_poco.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &kv.path,
+                        "duplicate `template` argument",
+                    ));
+                }
                 set_once(&mut args.template, lit, &kv.path, "template")?;
             } else if kv.path.is_ident("template_inline") {
-                set_once(&mut args.template_inline, lit, &kv.path, "template_inline")?;
+                // RFC-116 removed the key. Name the replacement rather than
+                // reporting an unknown argument: the two forms differ in
+                // shape (a string literal became HTML tokens), so the
+                // rewrite is not obvious from the key name alone.
+                return Err(syn::Error::new_spanned(
+                    &kv.path,
+                    "`template_inline = \"...\"` was removed — write the template as \
+                     HTML instead:\n\n    template = poco! { <div>…</div> }\n\n\
+                     Text that Rust's lexer rejects (apostrophes, `—`, `©`, emoji) \
+                     goes in quotes: `<p>\"Don't stop\"</p>`.",
+                ));
             } else if kv.path.is_ident("style") {
                 set_once(&mut args.style, lit, &kv.path, "style")?;
             } else if kv.path.is_ident("role") {
@@ -862,11 +913,18 @@ impl Parse for ComponentArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
-                    "unknown key — expected one of: name, template, template_inline, \
-                     style, role, display, transition, transition_in, transition_out, \
-                     animate, uses, extends, unchecked_paths",
+                    "unknown key — expected one of: name, template, style, role, \
+                     display, transition, transition_in, transition_out, animate, \
+                     uses, extends, unchecked_paths",
                 ));
             }
+        }
+        // RFC-116 — desugar `template = poco! { … }` into the inline slot.
+        // Everything downstream (validation, plan compilation, RFC-111 path
+        // assertions, RFC-112 selection assertions) then sees exactly one
+        // inline representation, spanned on the HTML body.
+        if let Some(recovered) = &args.template_poco {
+            args.inline_source = Some(poco_inline::as_component_literal(recovered));
         }
         Ok(args)
     }
@@ -1739,15 +1797,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    if args.template.is_some() && args.template_inline.is_some() {
-        return syn::Error::new_spanned(
-            &struct_ident,
-            "`template = \"...\"` and `template_inline = \"...\"` are mutually \
-             exclusive — pick one source-of-truth for the template.",
-        )
-        .to_compile_error()
-        .into();
-    }
+    // RFC-116 folded the two template sources into one key, so "a path and an
+    // inline body were both given" is now caught as a duplicate `template`
+    // argument while parsing, with the span on the second one.
 
     // RFC 060 Tier 3 — bundle mode (`extends = [...]`) is a
     // tagless re-export marker. It owns no template, no style,
@@ -1774,8 +1826,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // / `transition*` / `animate` would mislead the author
         // into thinking the bundle carries them.
         let bundle_disallowed: &[(&str, bool)] = &[
-            ("template", args.template.is_some()),
-            ("template_inline", args.template_inline.is_some()),
+            // Either form of `template` — a path or a `poco!` body.
+            (
+                "template",
+                args.template.is_some() || args.inline_source.is_some(),
+            ),
             ("style", args.style.is_some()),
             ("role", args.role.is_some()),
             ("display", args.display.is_some()),
@@ -1857,7 +1912,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         return out.into();
     }
 
-    let template_path: Option<LitStr> = if args.template_inline.is_some() {
+    let template_path: Option<LitStr> = if args.inline_source.is_some() {
         None
     } else {
         Some(match &args.template {
@@ -2858,23 +2913,30 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Also keeps the parsed AST in scope for RFC 049's
     // consumer-side slot-contract scan, run below when the
     // consumer declared a `uses = [...]` list.
-    let template_source = match (&args.template_inline, &template_path) {
+    let template_source = match (&args.inline_source, &template_path) {
         (Some(lit), _) => TemplateSource::Inline {
             source: lit.value(),
             anchor: lit,
         },
         (None, Some(path)) => TemplateSource::File(path),
         // Unreachable — `template_path` is `None` only when
-        // `template_inline` is `Some`, but we still want a
+        // an inline body is `Some`, but we still want a
         // safe fallback rather than `unreachable!` so the
         // expansion is robust to future refactors.
         (None, None) => TemplateSource::File(template_path.as_ref().unwrap()),
     };
-    let (template_warnings, template_ast) =
-        match validate_template_or_emit_errors(template_source, &name_str) {
-            Ok((warning, ast)) => (warning.unwrap_or_else(proc_macro2::TokenStream::new), ast),
-            Err(token_stream) => return token_stream,
-        };
+    let template_source_is_lossy = args
+        .template_poco
+        .as_ref()
+        .is_some_and(|recovered| recovered.lossy);
+    let (template_warnings, template_ast) = match validate_template_or_emit_errors(
+        template_source,
+        &name_str,
+        template_source_is_lossy,
+    ) {
+        Ok((warning, ast)) => (warning.unwrap_or_else(proc_macro2::TokenStream::new), ast),
+        Err(token_stream) => return token_stream,
+    };
 
     // RFC 049 consumer-side scan — emit trait-bound assertions
     // for each (parent, child) pair where both tags resolve
@@ -2956,7 +3018,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             let span = args
                 .template
                 .as_ref()
-                .or(args.template_inline.as_ref())
+                .or(args.inline_source.as_ref())
                 .map(|l| l.span())
                 .unwrap_or_else(proc_macro2::Span::call_site);
             template_paths::emit_path_assertions(
@@ -2988,7 +3050,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             let span = args
                 .template
                 .as_ref()
-                .or(args.template_inline.as_ref())
+                .or(args.inline_source.as_ref())
                 .map(|literal| literal.span())
                 .unwrap_or_else(proc_macro2::Span::call_site);
             template_paths::emit_dynamic_component_selection_assertions(
@@ -3062,7 +3124,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // when the `.poco` changes.
     let template_source_for_compile = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
         cleaned.to_string()
-    } else if let Some(inline) = args.template_inline.as_ref() {
+    } else if let Some(inline) = args.inline_source.as_ref() {
         let source = template_ast
             .as_ref()
             .map(|ast| ast.source.as_str())
@@ -3097,8 +3159,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let template_literal_tokens = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
         let lit = proc_macro2::Literal::string(cleaned);
         quote! { #lit }
-    } else if let Some(inline) = args.template_inline.as_ref() {
-        // `template_inline` always carries the source verbatim;
+    } else if let Some(inline) = args.inline_source.as_ref() {
+        // the inline body always carries its source verbatim;
         // the row-plan stamps and cleaned-HTML serialiser handle
         // the file-source path above, so reaching this branch
         // means the macro had nothing to rewrite.
@@ -3121,7 +3183,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else if row_plans.stamps.is_empty() {
         let path = template_path
             .as_ref()
-            .expect("file-template path resolves when template_inline is absent");
+            .expect("file-template path resolves when no inline body is present");
         quote! { include_str!(#path) }
     } else {
         let source = template_ast
@@ -3207,7 +3269,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // re-run the macro when the `.poco` file changes. Inline
     // templates have no file to watch, so the pin is omitted —
     // the literal IS the source-of-truth for those.
-    let template_rebuild_pin_tokens = match (&args.template_inline, &template_path) {
+    let template_rebuild_pin_tokens = match (&args.inline_source, &template_path) {
         (Some(_), _) => quote! {},
         (None, Some(path)) => quote! { const _: &str = include_str!(#path); },
         (None, None) => quote! {},
@@ -7317,4 +7379,32 @@ pub fn app(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn asset(input: TokenStream) -> TokenStream {
     assets::expand(input)
+}
+
+/// RFC-116 — an inline `.poco` template, written as bare HTML.
+///
+/// The body is real HTML with the usual poco sugar; it is validated at
+/// expansion time by the same parser that reads `.poco` files and expands to
+/// a [`PocoTemplate`](pocopine_core::poco_template::PocoTemplate) carrying
+/// the source verbatim.
+///
+/// ```ignore
+/// const CARD: PocoTemplate = poco! {
+///     <div class="card">
+///         <span pp-text="title"></span>
+///         <button @click="dismiss">{{ label }}</button>
+///     </div>
+/// };
+/// ```
+///
+/// The body must lex as Rust tokens, which ordinary prose sometimes does not
+/// (`don't`, `©`, `—`, emoji). Wrap such runs in quotes — a string literal is
+/// one opaque token, and its contents land in the template as static text:
+///
+/// ```ignore
+/// poco! { <p>"Don't stop — © 2026"</p> }
+/// ```
+#[proc_macro]
+pub fn poco(input: TokenStream) -> TokenStream {
+    poco_inline::expand(input)
 }

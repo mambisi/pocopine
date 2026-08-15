@@ -32,7 +32,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-refs-child",
-    template_inline = r#"<div class="trc">child mounted</div>"#
+    template = poco! {<div class="trc">child mounted</div>}
 )]
 struct TypedRefsChild {
     seed: u32,
@@ -80,9 +80,9 @@ fn reset_observations() {
 #[component(
     name = "typed-refs-parent",
     uses = [TypedRefsChild],
-    template_inline = r#"<div class="trp">
+    template = poco! {<div class="trp">
         <typed-refs-child pp-ref="body"></typed-refs-child>
-    </div>"#
+    </div>}
 )]
 struct TypedRefsParent {}
 
@@ -193,11 +193,11 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-refs-lifted-parent",
-    template_inline = r#"<div class="trlp">
+    template = poco! {<div class="trlp">
         <template pp-if="true">
             <span pp-ref="lifted">inside pp-if body</span>
         </template>
-    </div>"#
+    </div>}
 )]
 struct TypedRefsLiftedParent {}
 
@@ -217,12 +217,12 @@ impl TypedRefsLiftedParent {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-refs-conditional",
-    template_inline = r#"<div class="tr-conditional">
+    template = poco! {<div class="tr-conditional">
         <button class="tr-toggle" @click="toggle">toggle</button>
         <template pp-if="open">
             <span pp-ref="conditional">conditional</span>
         </template>
-    </div>"#
+    </div>}
 )]
 struct TypedRefsConditional {
     open: bool,
@@ -305,10 +305,10 @@ async fn generated_refs_struct_includes_pp_refs_from_lifted_bodies() {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-refs-kebab",
-    template_inline = r#"<div class="trk">
+    template = poco! {<div class="trk">
         <span pp-ref="form-root">a</span>
         <span pp-ref="title-input">b</span>
-    </div>"#
+    </div>}
 )]
 struct TypedRefsKebab {}
 

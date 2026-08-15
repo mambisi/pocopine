@@ -8,7 +8,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "fh-nested-cell", template_inline = r#"<div></div>"#)]
+#[component(name = "fh-nested-cell", template = poco! {<div></div>})]
 struct NestedCellComp {
     coords: (f64, f64),
     guard: Option<std::cell::Cell<u32>>,

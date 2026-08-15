@@ -1,0 +1,10 @@
+error: ␛[1m␛[91merror␛[0m: ␛[1mpocopine: inline template for component `poco-multi-root` has more than one root element␛[0m
+        ␛[1m␛[94m-->␛[0m <inline template for poco-multi-root>:2:5
+         ␛[1m␛[94m|␛[0m
+       ␛[1m␛[94m2 |␛[0m     <div>b</div>
+         ␛[1m␛[94m|␛[0m     ␛[1m␛[91m^^^^^␛[0m ␛[1m␛[91madditional root — drops at runtime␛[0m
+         ␛[1m␛[94m|␛[0m
+ --> tests/ui/poco_multi_root.rs:8:5
+  |
+8 |     <div>a</div>
+  |     ^

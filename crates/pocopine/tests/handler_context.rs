@@ -16,7 +16,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "handler-context-probe",
-    template_inline = "<button>probe</button>"
+    template = poco! { <button>probe</button> }
 )]
 struct HandlerContextProbe {
     before: String,

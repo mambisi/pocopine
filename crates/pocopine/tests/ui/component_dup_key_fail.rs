@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "dup-key-fixture",
-    template_inline = "<div></div>",
+    template = poco! { <div></div> },
     role = "panel",
     role = "toolbar"
 )]

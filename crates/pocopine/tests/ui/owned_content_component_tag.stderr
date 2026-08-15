@@ -8,7 +8,7 @@ error: pocopine: template plan error in component `owned-content-component-tag`
   |
 5 | / #[component(
 6 | |     name = "owned-content-component-tag",
-7 | |     template_inline = "<main><external-panel pp-owned-content></external-panel></main>"
+7 | |     template = poco! { <main><external-panel pp-owned-content></external-panel></main> }
 8 | | )]
   | |__^
   |

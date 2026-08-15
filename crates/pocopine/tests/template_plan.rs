@@ -59,7 +59,7 @@ struct Rfc064ExprNested {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rfc064-expr-host",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <span class="r64-ident" pp-text="label"></span>
         <span class="r64-field" pp-text="nested.label"></span>
         <span class="r64-literal" pp-text="'literal'"></span>
@@ -67,7 +67,7 @@ struct Rfc064ExprNested {
         <span class="r64-compare" pp-text="count > 2"></span>
         <span class="r64-bool" pp-text="ready && count > 2"></span>
         <span class="r64-fallback" pp-text="count > 2 ? 'yes' : 'no'"></span>
-    </div>"#
+    </div>}
 )]
 struct Rfc064ExprHost {
     label: String,
@@ -392,7 +392,7 @@ impl PlanIfChildHost {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-component-directive-child",
-    template_inline = r#"<button class="pcdc-button"><slot></slot></button>"#
+    template = poco! {<button class="pcdc-button"><slot></slot></button>}
 )]
 struct PlanComponentDirectiveChild {}
 
@@ -405,7 +405,7 @@ impl PlanComponentDirectiveChild {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-component-directive-host",
-    template_inline = r#"<div class="pcdh-root">
+    template = poco! {<div class="pcdh-root">
         <button class="pcdh-toggle-if" @click="toggle_open">toggle branch</button>
         <button class="pcdh-toggle-show" @click="toggle_visible">toggle visibility</button>
         <span class="pcdh-clicks" pp-text="clicks"></span>
@@ -417,7 +417,7 @@ impl PlanComponentDirectiveChild {}
         <plan-component-directive-child data-pcdh="show" class="pcdh-show-child" pp-show="visible">
             Shown
         </plan-component-directive-child>
-    </div>"#
+    </div>}
 )]
 struct PlanComponentDirectiveHost {
     open: bool,
@@ -446,13 +446,13 @@ impl PlanComponentDirectiveHost {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-show-style-host",
-    template_inline = r#"<div class="pssh-root">
+    template = poco! {<div class="pssh-root">
         <button class="pssh-toggle" @click="toggle_visible">toggle visibility</button>
         <button class="pssh-update" @click="update_styles">update styles</button>
         <div class="pssh-show-first" pp-show="visible" :style="style_value"></div>
         <div class="pssh-style-first" :style="style_value" pp-show="visible"></div>
         <div class="pssh-bound-display" pp-show="visible" :style="display_style"></div>
-    </div>"#
+    </div>}
 )]
 struct PlanShowStyleHost {
     visible: bool,
@@ -824,7 +824,7 @@ struct Rfc068SvgLine {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rfc068-svg-for-host",
-    template_inline = r#"<svg class="r68-svg" viewBox="0 0 100 100">
+    template = poco! {<svg class="r68-svg" viewBox="0 0 100 100">
         <g class="r68-lines">
           <template pp-for="line in lines" pp-key="line.id">
             <g class="r68-row" :data-line-id="line.id">
@@ -840,7 +840,7 @@ struct Rfc068SvgLine {
             </g>
           </template>
         </g>
-    </svg>"#
+    </svg>}
 )]
 struct Rfc068SvgForHost {
     lines: Vec<Rfc068SvgLine>,
@@ -875,7 +875,7 @@ struct Rfc064KeyedRow {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rfc064-keyed-fast-host",
-    template_inline = r#"<div class="r64k-root">
+    template = poco! {<div class="r64k-root">
         <button class="r64k-append" pp-on:click="append_row">append</button>
         <button class="r64k-prepend" pp-on:click="prepend_row">prepend</button>
         <button class="r64k-swap" pp-on:click="swap_rows">swap</button>
@@ -885,7 +885,7 @@ struct Rfc064KeyedRow {
             <li class="r64k-row" pp-text="row.label"></li>
           </template>
         </ul>
-    </div>"#
+    </div>}
 )]
 struct Rfc064KeyedFastHost {
     rows: Vec<Rfc064KeyedRow>,
@@ -941,7 +941,7 @@ impl Rfc064KeyedFastHost {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rfc064-generic-prepend-host",
-    template_inline = r#"<div class="r64g-root">
+    template = poco! {<div class="r64g-root">
         <button class="r64g-prepend" pp-on:click="prepend_row">prepend</button>
         <ul>
           <template pp-for="row in rows" pp-key="row.id">
@@ -951,7 +951,7 @@ impl Rfc064KeyedFastHost {
             </li>
           </template>
         </ul>
-    </div>"#
+    </div>}
 )]
 struct Rfc064GenericPrependHost {
     rows: Vec<Rfc064KeyedRow>,
@@ -1015,7 +1015,7 @@ impl PlanIfBodyHost {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-specialized",
-    template_inline = r#"<div><span class="psa-value" pp-text="message"></span></div>"#
+    template = poco! {<div><span class="psa-value" pp-text="message"></span></div>}
 )]
 struct PlanSpecialized {
     message: String,
@@ -1033,7 +1033,7 @@ impl PlanSpecialized {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-specialized-big",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <span pp-text="message"></span><span pp-text="message"></span>
         <span pp-text="message"></span><span pp-text="message"></span>
         <span pp-text="message"></span><span pp-text="message"></span>
@@ -1051,7 +1051,7 @@ impl PlanSpecialized {
         <span pp-text="message"></span><span pp-text="message"></span>
         <span pp-text="message"></span><span pp-text="message"></span>
         <span class="psb-last" pp-text="message"></span>
-    </div>"#
+    </div>}
 )]
 struct PlanSpecializedBig {
     message: String,
@@ -1074,7 +1074,7 @@ fn doc() -> web_sys::Document {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-cond-chain-host",
-    template_inline = r#"
+    template = poco! {
 <div class="pcc-root">
   <button class="pcc-bump" pp-on:click="bump">+</button>
   <template pp-if="count > 5">
@@ -1087,7 +1087,7 @@ fn doc() -> web_sys::Document {
   <template pp-else>
     <p class="pcc-branch pcc-zero">zero</p>
   </template>
-</div>"#
+</div>}
 )]
 struct PlanCondChainHost {
     count: i32,
@@ -1115,7 +1115,7 @@ enum MatchStatus {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "plan-match-host",
-    template_inline = r#"
+    template = poco! {
 <div class="pm-root">
   <button class="pm-next" pp-on:click="next">next</button>
   <template pp-match="status">
@@ -1130,7 +1130,7 @@ enum MatchStatus {
       <p class="pm-arm pm-other">other</p>
     </template>
   </template>
-</div>"#
+</div>}
 )]
 struct PlanMatchHost {
     status: MatchStatus,

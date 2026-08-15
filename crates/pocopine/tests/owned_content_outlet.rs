@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "owned-content-outlet-fixture",
-    template_inline = r#"
+    template = poco! {
         <section class="shell">
             <header>chrome</header>
             <main class="body"><div class="outlet" pp-owned-content></div></main>
         </section>
-    "#
+    }
 )]
 struct OwnedContentOutletFixture;
 
@@ -22,7 +22,7 @@ impl OwnedContentOutletFixture {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "owned-content-root-outlet-fixture",
-    template_inline = r#"<main class="root-outlet" pp-owned-content></main>"#
+    template = poco! {<main class="root-outlet" pp-owned-content></main>}
 )]
 struct OwnedContentRootOutletFixture;
 
@@ -32,7 +32,7 @@ impl OwnedContentRootOutletFixture {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "owned-content-atom-fixture",
-    template_inline = r#"<figure class="atom-shell"></figure>"#
+    template = poco! {<figure class="atom-shell"></figure>}
 )]
 struct OwnedContentAtomFixture;
 

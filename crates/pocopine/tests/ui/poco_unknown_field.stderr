@@ -1,0 +1,12 @@
+error[E0080]: evaluation panicked:
+              error: unknown template path root `countt`
+               --> <inline template for poco-unknown-field>:1:21
+                |
+              1 | <div><span pp-text="countt"></span></div>
+                |                     ^^^^^^ `PocoUnknownField` has no field or #[computed] value with that name
+                |
+                = help: a field with a similar name exists: `count`
+  --> tests/ui/poco_unknown_field.rs:10:5
+   |
+10 |     <div><span pp-text="countt"></span></div>
+   |     ^ evaluation of `_` failed here

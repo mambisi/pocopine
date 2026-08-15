@@ -23,12 +23,12 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "dc-dynamic-alpha",
-    template_inline = r#"<article class="dc-alpha">
+    template = poco! {<article class="dc-alpha">
         <span class="dc-alpha-label" pp-text="label"></span>
         <span class="dc-alpha-setup" pp-text="setup_label"></span>
         <span class="dc-alpha-count" pp-text="count"></span>
         <button class="dc-alpha-bump" @click="bump">bump</button>
-    </article>"#
+    </article>}
 )]
 struct DynamicAlpha {
     #[prop]
@@ -56,9 +56,9 @@ impl DynamicAlpha {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "dc-dynamic-beta",
-    template_inline = r#"<article class="dc-beta">
+    template = poco! {<article class="dc-beta">
         <span class="dc-beta-label" pp-text="label"></span>
-    </article>"#
+    </article>}
 )]
 struct DynamicBeta {
     #[prop]
@@ -80,7 +80,7 @@ impl DynamicBeta {
 #[component(
     name = "dc-dynamic-host",
     uses = [DynamicAlpha, DynamicBeta],
-    template_inline = r#"<section class="dc-host">
+    template = poco! {<section class="dc-host">
         <pp-component
             :is="key"
             :label="label"
@@ -90,7 +90,7 @@ impl DynamicBeta {
         <button class="dc-show-beta" @click="show_beta">beta</button>
         <button class="dc-show-empty" @click="show_empty">empty</button>
         <button class="dc-rename" @click="rename">rename</button>
-    </section>"#
+    </section>}
 )]
 struct DynamicHost {
     key: Option<ComponentRef<DynamicHost>>,
@@ -125,11 +125,11 @@ impl DynamicHost {
 #[component(
     name = "dc-keep-alive-host",
     uses = [DynamicAlpha, DynamicBeta],
-    template_inline = r#"<section class="dc-keep-host">
+    template = poco! {<section class="dc-keep-host">
         <pp-component :is="key" :label="label" keep-alive></pp-component>
         <button class="dc-keep-alpha" @click="show_alpha">alpha</button>
         <button class="dc-keep-beta" @click="show_beta">beta</button>
-    </section>"#
+    </section>}
 )]
 struct KeepAliveHost {
     key: Option<ComponentRef<KeepAliveHost>>,
@@ -156,10 +156,10 @@ impl KeepAliveHost {
 #[component(
     name = "dc-data-driven-host",
     uses = [DynamicAlpha],
-    template_inline = r#"<section>
+    template = poco! {<section>
         <pp-component :is="key" label="data-driven"></pp-component>
         <button class="dc-show-unknown" @click="show_unknown">unknown</button>
-    </section>"#
+    </section>}
 )]
 struct DataDrivenHost {
     key: Option<ComponentRef<DataDrivenHost>>,
@@ -199,7 +199,7 @@ impl UntypedSelectionStore {}
 #[component(
     name = "dc-untyped-selection-host",
     uses = [DynamicAlpha],
-    template_inline = r#"<pp-component :is="$store.dc_untyped_selection.key"></pp-component>"#
+    template = poco! {<pp-component :is="$store.dc_untyped_selection.key"></pp-component>}
 )]
 struct UntypedSelectionHost {}
 
@@ -229,7 +229,7 @@ impl ForeignSelectionStore {}
 #[component(
     name = "dc-foreign-selection-host",
     uses = [DynamicAlpha],
-    template_inline = r#"<pp-component :is="$store.dc_foreign_selection.key"></pp-component>"#,
+    template = poco! {<pp-component :is="$store.dc_foreign_selection.key"></pp-component>},
 )]
 struct ForeignSelectionHost {}
 

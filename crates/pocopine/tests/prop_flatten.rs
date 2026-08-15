@@ -85,7 +85,7 @@ struct SizeLeaves {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "flatten-map-target", template_inline = r#"<div></div>"#)]
+#[component(name = "flatten-map-target", template = poco! {<div></div>})]
 struct FlattenMapTarget {
     #[prop(flatten = ["label", "color"])]
     style: StyleLeaves,
@@ -116,7 +116,7 @@ fn flatten_container_of_maps_each_leaf_to_its_own_container() {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "flatten-free-target", template_inline = r#"<div></div>"#)]
+#[component(name = "flatten-free-target", template = poco! {<div></div>})]
 struct FlattenFreeTarget {
     #[prop]
     title: String,
@@ -141,7 +141,7 @@ struct RangeLeaves {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "model-flatten-map-target", template_inline = r#"<div></div>"#)]
+#[component(name = "model-flatten-map-target", template = poco! {<div></div>})]
 struct ModelFlattenMapTarget {
     #[model(flatten = ["start", "end"])]
     range: RangeLeaves,
@@ -181,7 +181,7 @@ struct WatchLeaves {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "flatten-watch-child",
-    template_inline = r#"<div><span class="lbl" pp-text="label"></span></div>"#
+    template = poco! {<div><span class="lbl" pp-text="label"></span></div>}
 )]
 struct FlattenWatchChild {
     #[prop(flatten = ["label", "color"])]
@@ -208,10 +208,10 @@ impl FlattenWatchChild {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "flatten-watch-parent",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <flatten-watch-child pp-bind:label="child_label"></flatten-watch-child>
         <button class="bump" pp-on:click="bump"></button>
-    </div>"#
+    </div>}
 )]
 struct FlattenWatchParent {
     child_label: String,
@@ -286,11 +286,11 @@ struct BareLeaves {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "bare-flatten-target",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <span class="b-heading" pp-text="heading"></span>
         <span class="b-code" pp-text="code"></span>
         <span class="b-enabled" pp-text="enabled"></span>
-    </div>"#
+    </div>}
 )]
 struct BareFlattenTarget {
     #[prop(flatten)]
@@ -369,7 +369,7 @@ struct BareWatchLeaves {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "bare-flatten-watch-child",
-    template_inline = r#"<div><span class="lbl" pp-text="label"></span></div>"#
+    template = poco! {<div><span class="lbl" pp-text="label"></span></div>}
 )]
 struct BareFlattenWatchChild {
     #[prop(flatten)]
@@ -396,10 +396,10 @@ impl BareFlattenWatchChild {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "bare-flatten-watch-parent",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <bare-flatten-watch-child pp-bind:label="child_label"></bare-flatten-watch-child>
         <button class="bump" pp-on:click="bump"></button>
-    </div>"#
+    </div>}
 )]
 struct BareFlattenWatchParent {
     child_label: String,
@@ -469,9 +469,9 @@ struct OptionLeaves {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "option-flatten-target",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <button class="probe" pp-on:click="probe"></button>
-    </div>"#
+    </div>}
 )]
 struct OptionFlattenTarget {
     #[prop(flatten)]

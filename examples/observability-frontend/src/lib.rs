@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "obs-frontend-shell",
-    template_inline = r#"
+    template = poco! {
     <div class="shell">
       <header>
         <h1>Frontend observability</h1>
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
         <pp-outlet></pp-outlet>
       </main>
     </div>
-    "#
+    }
 )]
 pub struct ObsFrontendShell {}
 
@@ -31,14 +31,14 @@ impl ObsFrontendShell {}
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "obs-frontend-home",
-    template_inline = r#"
+    template = poco! {
     <section>
       <h2>Home</h2>
       <p>Open DevTools to see structured pocopine events in the console.</p>
       <button @click="track_feature">Track feature</button>
       <p>Tracked feature uses: <output pp-text="tracked"></output></p>
     </section>
-    "#
+    }
 )]
 pub struct ObsFrontendHome {
     pub tracked: u32,
@@ -59,7 +59,7 @@ impl ObsFrontendHome {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "obs-frontend-report",
-    template_inline = r#"
+    template = poco! {
     <section>
       <h2>Report</h2>
       <p>Current report: <output pp-text="id"></output></p>
@@ -83,7 +83,7 @@ impl ObsFrontendHome {
       </div>
       <p>Latest metric event: <output pp-text="latest_metric"></output></p>
     </section>
-    "#
+    }
 )]
 pub struct ObsFrontendReport {
     #[prop]
@@ -127,12 +127,12 @@ impl ObsFrontendReport {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "obs-frontend-not-found",
-    template_inline = r#"
+    template = poco! {
     <section>
       <h2>Not Found</h2>
       <p>The requested route does not exist.</p>
     </section>
-    "#
+    }
 )]
 pub struct ObsFrontendNotFound {}
 

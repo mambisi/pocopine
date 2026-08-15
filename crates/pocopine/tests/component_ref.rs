@@ -4,14 +4,14 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "dc-ref-allowed", template_inline = "<p>allowed</p>")]
+#[component(name = "dc-ref-allowed", template = poco! { <p>allowed</p> })]
 struct AllowedChild {}
 
 #[handlers]
 impl AllowedChild {}
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "dc-ref-unlisted", template_inline = "<p>unlisted</p>")]
+#[component(name = "dc-ref-unlisted", template = poco! { <p>unlisted</p> })]
 struct UnlistedChild {}
 
 #[handlers]
@@ -21,7 +21,7 @@ impl UnlistedChild {}
 #[component(
     name = "dc-ref-host",
     uses = [AllowedChild],
-    template_inline = r#"<pp-component :is="active"></pp-component>"#,
+    template = poco! {<pp-component :is="active"></pp-component>},
 )]
 struct RefHost {
     active: Option<ComponentRef<RefHost>>,
@@ -34,7 +34,7 @@ impl RefHost {}
 #[component(
     name = "dc-ref-other-host",
     uses = [AllowedChild],
-    template_inline = "<div>other host</div>",
+    template = poco! { <div>other host</div> },
 )]
 struct OtherHost {}
 

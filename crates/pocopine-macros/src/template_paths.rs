@@ -92,7 +92,7 @@ type Roots = BTreeMap<(RootKind, String), RootCtx>;
 /// `skip_bindable` disables field/computed checks (bare-flatten
 /// components) while keeping handler checks; `own_fields` feeds
 /// the similar-name suggestion; `span` anchors the errors
-/// (the `template` / `template_inline` argument's literal).
+/// (the `template` argument’s literal, or the `poco!` body).
 pub fn emit_path_assertions(
     ast: &TemplateAst,
     struct_ident: &syn::Ident,

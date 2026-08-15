@@ -26,7 +26,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 // ─── fixtures ───────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "phf-home", template_inline = r#"<div class="phf-home"></div>"#)]
+#[component(name = "phf-home", template = poco! {<div class="phf-home"></div>})]
 struct PhfHome {}
 
 #[handlers]
@@ -35,7 +35,7 @@ impl PhfHome {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-about",
-    template_inline = r#"<div class="phf-about"></div>"#
+    template = poco! {<div class="phf-about"></div>}
 )]
 struct PhfAbout {}
 
@@ -45,7 +45,7 @@ impl PhfAbout {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-leaf",
-    template_inline = r#"<span class="phf-leaf"></span>"#
+    template = poco! {<span class="phf-leaf"></span>}
 )]
 struct PhfLeaf {}
 
@@ -55,7 +55,7 @@ impl PhfLeaf {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "phf-host",
-    template_inline = r#"<div class="phf-host"><phf-leaf></phf-leaf></div>"#,
+    template = poco! {<div class="phf-host"><phf-leaf></phf-leaf></div>},
     uses = [PhfLeaf],
 )]
 struct PhfHost {}
@@ -136,7 +136,7 @@ fn run_with_registry_walks_vtables_and_transitive_uses() {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "phf-unregistered-by-route-static",
-    template_inline = r#"<div class="phf-unregistered-by-route-static"></div>"#
+    template = poco! {<div class="phf-unregistered-by-route-static"></div>}
 )]
 struct PhfUnregisteredByRouteStatic {}
 

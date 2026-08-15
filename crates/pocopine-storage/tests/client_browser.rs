@@ -42,7 +42,7 @@ impl StorageObjectScope for AvatarObjects {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "storage-plugin-probe",
-    template_inline = r#"<div class="storage-plugin-probe"></div>"#
+    template = poco! {<div class="storage-plugin-probe"></div>}
 )]
 struct StoragePluginProbe;
 
@@ -57,7 +57,7 @@ impl StoragePluginProbe {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "upload-plugin-probe",
-    template_inline = r#"<div class="upload-plugin-probe"></div>"#
+    template = poco! {<div class="upload-plugin-probe"></div>}
 )]
 struct UploadPluginProbe;
 

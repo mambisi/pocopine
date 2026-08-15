@@ -6,7 +6,7 @@ struct NotAContextExtractor;
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "handler-context-ui-missing-trait",
-    template_inline = "<button>fail</button>"
+    template = poco! { <button>fail</button> }
 )]
 struct MissingTrait {}
 

@@ -1,0 +1,5 @@
+error: duplicate `template` argument
+  --> tests/ui/poco_dup_template.rs:10:5
+   |
+10 |     template = poco! { <div>x</div> }
+   |     ^^^^^^^^

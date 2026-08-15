@@ -22,7 +22,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-child",
-    template_inline = r#"<span class="lds-child" data-mounted="yes">child mounted</span>"#
+    template = poco! {<span class="lds-child" data-mounted="yes">child mounted</span>}
 )]
 struct LdsChild {}
 
@@ -32,7 +32,7 @@ impl LdsChild {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-ghost-inner",
-    template_inline = r#"<span class="lds-ghost-inner">inner</span>"#
+    template = poco! {<span class="lds-ghost-inner">inner</span>}
 )]
 struct LdsGhostInner {}
 
@@ -46,7 +46,7 @@ impl LdsGhostInner {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-ghost-outer",
-    template_inline = r#"<span class="lds-ghost-outer">outer</span>"#
+    template = poco! {<span class="lds-ghost-outer">outer</span>}
 )]
 struct LdsGhostOuter {}
 
@@ -60,7 +60,7 @@ impl LdsGhostOuter {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-ghost-host",
-    template_inline = r#"<section class="lds-ghost-host"><slot></slot></section>"#,
+    template = poco! {<section class="lds-ghost-host"><slot></slot></section>},
     uses = [LdsGhostInner, LdsGhostOuter],
 )]
 struct LdsGhostHost {}
@@ -71,11 +71,11 @@ impl LdsGhostHost {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-default-host",
-    template_inline = r#"
+    template = poco! {
 <section class="lds-default-host">
   <slot></slot>
 </section>
-"#,
+},
     uses = [LdsChild],
 )]
 struct LdsDefaultHost {}
@@ -86,12 +86,12 @@ impl LdsDefaultHost {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-named-host",
-    template_inline = r#"
+    template = poco! {
 <section class="lds-named-host">
   <header><slot name="title">fallback title</slot></header>
   <main><slot></slot></main>
 </section>
-"#
+}
 )]
 struct LdsNamedHost {}
 
@@ -101,12 +101,12 @@ impl LdsNamedHost {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-double-host",
-    template_inline = r#"
+    template = poco! {
 <section class="lds-double-host">
   <div class="lds-first"><slot></slot></div>
   <div class="lds-second"><slot></slot></div>
 </section>
-"#,
+},
     uses = [LdsChild],
 )]
 struct LdsDoubleHost {}
@@ -117,14 +117,14 @@ impl LdsDoubleHost {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-if-slot-host",
-    template_inline = r#"
+    template = poco! {
 <section class="lds-if-slot-host">
   <button class="lds-toggle" @click="toggle">toggle</button>
   <template pp-if="open">
     <slot></slot>
   </template>
 </section>
-"#,
+},
     uses = [LdsChild],
 )]
 struct LdsIfSlotHost {
@@ -145,11 +145,11 @@ impl LdsIfSlotHost {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "lds-captured-scoped-host",
-    template_inline = r#"
+    template = poco! {
 <section class="lds-captured-scoped-host">
   <slot name="row" :label="label"></slot>
 </section>
-"#
+}
 )]
 struct LdsCapturedScopedHost {
     label: String,

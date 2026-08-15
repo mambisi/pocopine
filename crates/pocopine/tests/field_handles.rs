@@ -32,7 +32,7 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "fh-uploader",
-    template_inline = r#"<div class="prog" pp-text="progress"></div>"#
+    template = poco! {<div class="prog" pp-text="progress"></div>}
 )]
 struct FhUploader {
     progress: f64,

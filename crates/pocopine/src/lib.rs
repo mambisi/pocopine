@@ -61,9 +61,11 @@ pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{
-    Emit, Props, RouteComponent, app, asset, client_module, component, handlers, job, protected,
-    server, store,
+    Emit, Props, RouteComponent, app, asset, client_module, component, handlers, job, poco,
+    protected, server, store,
 };
+// RFC-116 — the type `poco!` expands to.
+pub use pocopine_core::poco_template::PocoTemplate;
 
 pub mod auth {
     pub use pocopine_auth::*;
@@ -112,10 +114,10 @@ pub mod prelude {
         MountError, MountInitError, MountSetup, MountedSubtree, NavigationFailure,
         NavigationResult, NearestParent, OwnedContentOutletComponent, OwnedContentOutletError,
         PageLink, PageMeta, PageMetaContext, PageMetaTag, Parent, Permission, Plugin,
-        PluginValidationError, Plugins, Prefetch, PrefetchResult, PrefetchSkip, PrefetchTrigger,
-        Principal, Props, ReturnTo, Role, RouteComponent, RouteConfig, RouteContext,
-        RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLayoutBuilder, RouteLoader,
-        RouteLocation, RouteMeta, RouteMetaKey, RouteName, RouteNavigationCompleted,
+        PluginValidationError, Plugins, PocoTemplate, Prefetch, PrefetchResult, PrefetchSkip,
+        PrefetchTrigger, Principal, Props, ReturnTo, Role, RouteComponent, RouteConfig,
+        RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLayoutBuilder,
+        RouteLoader, RouteLocation, RouteMeta, RouteMetaKey, RouteName, RouteNavigationCompleted,
         RouteNavigationFailed, RouteNavigationStarted, RouteQuery, RouteRecordId, RouteRejection,
         RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
         RouteTargetBuilder, RouteTargetError, RouteUrl, RwSignal, Scope, ScopeId, ServerError,
@@ -126,7 +128,7 @@ pub mod prelude {
         emit_cancelable_from, emit_event, emit_event_from, emit_from, emit_from_host, emit_model,
         emit_model_field, emit_raw, emit_raw_from, encode_route_fragment,
         encode_route_path_segment, encode_route_query_part, go, handlers, inject_key, job,
-        navigate, on, on_cleanup, on_emit, prefetch, prepend_list_inline, protected, push,
+        navigate, on, on_cleanup, on_emit, poco, prefetch, prepend_list_inline, protected, push,
         remove_list_at_inline, replace, resolve_owned_content_outlet,
         resolve_owned_content_outlet_from_root, rw_signal, signal, spawn, spawn_for_scope,
         spawn_latest, spawn_latest_for_scope, spawn_scoped, store, this, watch,
@@ -194,6 +196,9 @@ pub mod __private {
         StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
+    // RFC-116 — `poco!` expands to a `PocoTemplate::__new(...)` call through
+    // this path, so the macro never depends on the app's import list.
+    pub use pocopine_core::poco_template::PocoTemplate;
     pub use pocopine_core::templates_plan::{
         StaticInterpTarget, StaticTemplatePlan, apply_static_pp_as_plan,
         capture_static_interp_target, capture_static_slot_outlet, install_static_binding,
