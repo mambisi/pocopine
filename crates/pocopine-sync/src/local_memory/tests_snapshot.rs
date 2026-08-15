@@ -64,6 +64,7 @@ async fn memory_store_applies_incremental_changes() {
                     op: SyncOp::Upsert,
                     row: Some(updated.clone()),
                     cursor: cursor.clone(),
+                    origin: None,
                 },
                 SyncChange {
                     stream: stream.clone(),
@@ -72,6 +73,7 @@ async fn memory_store_applies_incremental_changes() {
                     op: SyncOp::Upsert,
                     row: Some(second.clone()),
                     cursor: cursor.clone(),
+                    origin: None,
                 },
             ],
             Some(cursor),
@@ -148,6 +150,7 @@ async fn memory_store_apply_changes_delete_missing_key_is_noop() {
                 op: SyncOp::Delete,
                 row: None,
                 cursor: cursor.clone(),
+                origin: None,
             }],
             Some(cursor),
         ))
@@ -194,6 +197,7 @@ async fn memory_store_apply_changes_reset_then_upsert_keeps_only_post_reset_rows
                         SyncRow::new("ignored", serde_json::json!({"title": "Pre-reset"})).unwrap(),
                     ),
                     cursor: cursor.clone(),
+                    origin: None,
                 },
                 SyncChange {
                     stream: stream.clone(),
@@ -202,6 +206,7 @@ async fn memory_store_apply_changes_reset_then_upsert_keeps_only_post_reset_rows
                     op: SyncOp::Reset,
                     row: None,
                     cursor: cursor.clone(),
+                    origin: None,
                 },
                 SyncChange {
                     stream: stream.clone(),
@@ -210,6 +215,7 @@ async fn memory_store_apply_changes_reset_then_upsert_keeps_only_post_reset_rows
                     op: SyncOp::Upsert,
                     row: Some(after_reset.clone()),
                     cursor: cursor.clone(),
+                    origin: None,
                 },
             ],
             Some(cursor),
@@ -251,6 +257,7 @@ async fn memory_store_apply_changes_reset_without_row_clears_rows() {
                 op: SyncOp::Reset,
                 row: None,
                 cursor: cursor.clone(),
+                origin: None,
             }],
             Some(cursor),
         ))

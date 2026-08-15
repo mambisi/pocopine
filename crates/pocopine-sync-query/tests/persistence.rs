@@ -159,6 +159,7 @@ fn open_response(schema_version: u32, cursor: Option<SyncCursor>) -> SyncOpenRes
         schema_version,
         scope: None,
         params: StreamParams::new(),
+        watermark: None,
     }])
 }
 

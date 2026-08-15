@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::SyncResult;
 
-use super::{RowKey, RowVersion, SyncCollectionName, SyncCursor, SyncStreamName};
+use super::{MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor, SyncStreamName};
 
 /// Current sync protocol identifier.
 pub const SYNC_PROTOCOL_V1: &str = "pocopine.sync.v1";
@@ -39,6 +39,41 @@ pub enum SyncOp {
 pub enum SyncPullMode {
     Snapshot,
     Incremental,
+}
+
+/// Why the server answered a CURSORED pull with a full snapshot
+/// instead of an incremental batch. Stamped on `SyncPullResponse`
+/// so the client knows the snapshot is a deliberate, authoritative
+/// replacement — its local rows are KNOWN stale, and absences must
+/// never reach absence-interpreting recovery policy (sync-query
+/// classifies them `EvictionReason::StaleResync`, not `Unexplained`).
+///
+/// This is the loud half of the SPORC-style truncation watermark:
+/// "too old to serve incrementally" is an explicit protocol outcome,
+/// not a silent degradation into ambiguous absences.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncResyncReason {
+    /// The client's cursor predates the change log's oldest retained
+    /// position — the history between them has been GC'd, so the
+    /// only correct answer is a full snapshot the client adopts
+    /// wholesale (wipe-and-resync semantics).
+    CursorTruncated,
+}
+
+/// Machine-readable class attached to a [`SyncRejectedMutation`]
+/// when the rejection means more than "this one write failed".
+/// `None` (the wire default) is an ordinary rejection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncRejectCode {
+    /// The mutation's per-device counter regressed below a counter
+    /// the server already accepted for the same device — the client
+    /// identity is duplicated or restored from backup (two tabs
+    /// sharing one device id, a restored IndexedDB). The client's
+    /// durable identity can no longer be trusted; recovery is a
+    /// fresh device identity + wipe-and-resync, not a retry.
+    IdentityFault,
 }
 
 /// Row payload plus sync metadata.
@@ -138,6 +173,16 @@ pub struct SyncChange<T> {
     pub op: SyncOp,
     pub row: Option<SyncRow<T>>,
     pub cursor: SyncCursor,
+    /// The client mutation that produced this change, when the
+    /// change log recorded one. This is the feed echo (SPORC §3.1
+    /// step 6): a client that observes its OWN mutation id here
+    /// knows the write committed — even if the push response that
+    /// would have said so was lost — and retires the matching
+    /// pending overlay through the type-erased path. `None` for
+    /// changes with no recorded originator (server-side writes,
+    /// imports, log impls that don't track it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MutationId>,
 }
 
 #[cfg(test)]

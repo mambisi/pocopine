@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    MutationId, RowKey, SYNC_PROTOCOL_V1, StreamParams, SyncCollectionName, SyncCursor, SyncRow,
-    SyncScope, SyncStreamName, SyncTombstone, deserialize_params_null_as_default,
+    MutationId, RowKey, SYNC_PROTOCOL_V1, StreamParams, SyncCollectionName, SyncCursor,
+    SyncRejectCode, SyncResyncReason, SyncRow, SyncScope, SyncStreamName, SyncTombstone,
+    deserialize_params_null_as_default,
 };
 
 /// Stream accepted by an open response.
@@ -53,6 +54,14 @@ pub struct SyncOpenStream {
     /// [`SyncStreamSource::scope`]: crate::SyncStreamSource::scope
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<SyncScope>,
+    /// Oldest change-log position the source still retains for this
+    /// stream (the truncation watermark), when the source keeps an
+    /// ordered change feed. Informational at `/open` time — the
+    /// server, not the client, decides cursor-vs-watermark ordering
+    /// (cursors are opaque to clients) — but useful for diagnostics
+    /// and for ops alarms on "clients regularly below the watermark".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<SyncCursor>,
 }
 
 /// Default schema version when the wire field is missing or the source
@@ -132,6 +141,27 @@ pub struct SyncPullResponse<T> {
     /// caught at settle time, not just at `/open`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<SyncScope>,
+    /// Oldest change-log position the source still retains (see
+    /// [`SyncOpenStream::watermark`]). Stamped on pull responses from
+    /// feed-capable sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<SyncCursor>,
+    /// Set when the server answered a CURSORED pull with `Snapshot`
+    /// mode because it could not serve incrementally (see
+    /// [`SyncResyncReason`]). The snapshot is a deliberate full
+    /// replacement: the client treats absences as known-stale
+    /// (`StaleResync`), never as unexplained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resync: Option<SyncResyncReason>,
+    /// Integrity stamp over this response's row set — the digest of
+    /// the sorted `(key, version)` pairs of `rows`, computed by the
+    /// server just before send. The client recomputes over the rows
+    /// it RECEIVED and warns loudly on mismatch, catching corruption
+    /// between the two (truncating proxies, cache mixes, middleware
+    /// that rewrites bodies). Snapshot mode only; `None` when the
+    /// server doesn't stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 impl<T> SyncPullResponse<T> {
@@ -152,6 +182,9 @@ impl<T> SyncPullResponse<T> {
             cursor,
             has_more: false,
             scope: None,
+            watermark: None,
+            resync: None,
+            digest: None,
         }
     }
 
@@ -172,6 +205,9 @@ impl<T> SyncPullResponse<T> {
             cursor,
             has_more: false,
             scope: None,
+            watermark: None,
+            resync: None,
+            digest: None,
         }
     }
 
@@ -184,6 +220,25 @@ impl<T> SyncPullResponse<T> {
     /// Attach the responding principal's scope to this response.
     pub fn with_scope(mut self, scope: Option<SyncScope>) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Attach the change log's truncation watermark.
+    pub fn with_watermark(mut self, watermark: Option<SyncCursor>) -> Self {
+        self.watermark = watermark;
+        self
+    }
+
+    /// Mark this snapshot as a deliberate full re-sync (the server
+    /// could not serve the client's cursor incrementally).
+    pub fn with_resync(mut self, reason: SyncResyncReason) -> Self {
+        self.resync = Some(reason);
+        self
+    }
+
+    /// Attach the server-computed integrity digest over `rows`.
+    pub fn with_digest(mut self, digest: Option<String>) -> Self {
+        self.digest = digest;
         self
     }
 }
@@ -210,6 +265,29 @@ pub struct SyncRejectedMutation {
     pub mutation_id: MutationId,
     pub key: Option<RowKey>,
     pub reason: String,
+    /// Machine-readable rejection class for rejections that mean
+    /// more than "this one write failed" (see [`SyncRejectCode`]).
+    /// `None` is an ordinary rejection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<SyncRejectCode>,
+}
+
+impl SyncRejectedMutation {
+    /// Ordinary rejection with no machine-readable class.
+    pub fn new(mutation_id: MutationId, key: Option<RowKey>, reason: impl Into<String>) -> Self {
+        Self {
+            mutation_id,
+            key,
+            reason: reason.into(),
+            code: None,
+        }
+    }
+
+    /// Attach a machine-readable rejection class.
+    pub fn with_code(mut self, code: SyncRejectCode) -> Self {
+        self.code = Some(code);
+        self
+    }
 }
 
 /// Push response for one stream.
@@ -374,5 +452,68 @@ mod tests {
         let value = serde_json::to_value(&bare).unwrap();
         assert!(value.get("tombstones").is_none());
         assert!(value.get("scope").is_none());
+    }
+
+    #[test]
+    fn pull_response_watermark_resync_digest_round_trip() {
+        use super::super::SyncResyncReason;
+
+        // A feed-less response omits all three keys on the wire.
+        let bare = SyncPullResponse::<String>::snapshot(
+            SyncStreamName::new("posts").unwrap(),
+            SyncCollectionName::new("posts").unwrap(),
+            Vec::new(),
+            None,
+        );
+        let value = serde_json::to_value(&bare).unwrap();
+        assert!(value.get("watermark").is_none());
+        assert!(value.get("resync").is_none());
+        assert!(value.get("digest").is_none());
+
+        // A watermark-stamped forced-resync snapshot round-trips,
+        // and the resync reason serializes snake_case.
+        let stamped = SyncPullResponse::<String>::snapshot(
+            SyncStreamName::new("posts").unwrap(),
+            SyncCollectionName::new("posts").unwrap(),
+            Vec::new(),
+            Some(SyncCursor::new("41").unwrap()),
+        )
+        .with_watermark(Some(SyncCursor::new("41").unwrap()))
+        .with_resync(SyncResyncReason::CursorTruncated)
+        .with_digest(Some("fnv1a:00ff".to_string()));
+        let value = serde_json::to_value(&stamped).unwrap();
+        assert_eq!(
+            value.get("resync"),
+            Some(&serde_json::json!("cursor_truncated"))
+        );
+        let decoded: SyncPullResponse<String> = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.watermark, Some(SyncCursor::new("41").unwrap()));
+        assert_eq!(decoded.resync, Some(SyncResyncReason::CursorTruncated));
+        assert_eq!(decoded.digest, Some("fnv1a:00ff".to_string()));
+    }
+
+    #[test]
+    fn rejected_mutation_code_round_trips_and_defaults_none() {
+        use super::super::SyncRejectCode;
+
+        // The constructor default carries no code and omits the key
+        // on the wire.
+        let plain = SyncRejectedMutation::new(
+            MutationId::new("device_abc:7").unwrap(),
+            None,
+            "bad payload",
+        );
+        let value = serde_json::to_value(&plain).unwrap();
+        assert!(value.get("code").is_none());
+
+        // The identity-fault code round-trips snake_case.
+        let fault = plain.with_code(SyncRejectCode::IdentityFault);
+        let value = serde_json::to_value(&fault).unwrap();
+        assert_eq!(
+            value.get("code"),
+            Some(&serde_json::json!("identity_fault"))
+        );
+        let decoded: SyncRejectedMutation = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.code, Some(SyncRejectCode::IdentityFault));
     }
 }

@@ -879,6 +879,7 @@ where
                             mutation_id,
                             key,
                             reason,
+                            code: None,
                         });
                         continue;
                     }
@@ -892,6 +893,7 @@ where
                             mutation_id,
                             key,
                             reason: format!("invalid Source mutation payload: {err}"),
+                            code: None,
                         });
                         continue;
                     }
@@ -905,6 +907,7 @@ where
                             "Source payload op `{:?}` does not match wire op `{op:?}`",
                             payload.sync_op()
                         ),
+                        code: None,
                     });
                     continue;
                 }
@@ -915,6 +918,7 @@ where
                         mutation_id,
                         key,
                         reason: "Source mutation row key does not match payload id".to_string(),
+                        code: None,
                     });
                     continue;
                 }
@@ -945,6 +949,7 @@ where
                             reason: format!(
                                 "mutation id was already accepted with different contents ({diff})"
                             ),
+                            code: None,
                         });
                     }
                     continue;
@@ -1060,6 +1065,7 @@ async fn apply_payload<S: Source>(
                     mutation_id,
                     key: Some(key),
                     reason: "create does not accept a base row version".to_string(),
+                    code: None,
                 }));
             }
             let row = source.create(ctx, p.id, p.draft).await?;

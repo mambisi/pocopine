@@ -156,6 +156,7 @@ fn open_response(schema_version: u32, cursor: Option<SyncCursor>) -> SyncOpenRes
         schema_version,
         scope: None,
         params: pocopine_sync::StreamParams::new(),
+        watermark: None,
     }])
 }
 
@@ -695,6 +696,7 @@ async fn incremental_upserts_beat_retained_tombstones_for_the_same_key() {
                                         .unwrap(),
                                     ),
                                     cursor: SyncCursor::new("c_2").unwrap(),
+                                    origin: None,
                                 };
                                 SyncPullResponse::incremental(
                                     SyncStreamName::new(STREAM).unwrap(),

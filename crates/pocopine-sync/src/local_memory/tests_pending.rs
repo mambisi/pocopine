@@ -345,6 +345,7 @@ async fn memory_store_push_result_only_clears_matching_pending_mutations() {
         mutation_id: rejected.id,
         key: rejected.key,
         reason: "not allowed".to_string(),
+        code: None,
     });
 
     store
