@@ -50,6 +50,8 @@ pub struct PocopineConfig {
     /// A project with a `[tailwind]` block but no `[stylekit]` block
     /// defers to Tailwind instead.
     pub stylekit: Option<StylekitConfig>,
+    /// RFC-117 `pocopine fmt` rules. Absent means the defaults apply.
+    pub fmt: Option<FmtConfig>,
     /// RFC-100 asset pipeline. When present, `pocopine assets push`
     /// (and `pocopine deploy`, before the app flip) syncs the
     /// project's `assets/` tree to the configured S3-compatible
@@ -165,6 +167,59 @@ impl Default for LoaderConfig {
 
 fn default_loader_bool() -> bool {
     true
+}
+
+/// How hard a `pocopine fmt` rule bites. Mirrors clippy's model: the
+/// developer decides, per rule, between silence, a report, and a rewrite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FmtLevel {
+    /// Rule does not run.
+    Off,
+    /// Report, but change nothing. `--fix` promotes this to `Fix`.
+    Warn,
+    /// Rewrite on a plain `pocopine fmt`.
+    Fix,
+}
+
+/// `[package.metadata.pocopine.fmt]` — RFC-117 structural rules.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct FmtConfig {
+    /// Line count separating "small enough to live inline" from "big
+    /// enough to deserve its own file". `0` disables both rules below.
+    #[serde(default = "default_fmt_threshold")]
+    pub inline_threshold: usize,
+    /// Pull a `.poco` file under the threshold into `template = poco! { … }`.
+    #[serde(default = "default_fmt_inline")]
+    pub inline_small_templates: FmtLevel,
+    /// Report an inline body at or over the threshold; `--fix` writes it
+    /// out to `<Struct>.poco`. Defaults to `warn` rather than `fix`
+    /// because extracting creates a file, which is the author's call.
+    #[serde(default = "default_fmt_extract")]
+    pub extract_large_inline: FmtLevel,
+}
+
+impl Default for FmtConfig {
+    fn default() -> Self {
+        Self {
+            inline_threshold: default_fmt_threshold(),
+            inline_small_templates: default_fmt_inline(),
+            extract_large_inline: default_fmt_extract(),
+        }
+    }
+}
+
+fn default_fmt_threshold() -> usize {
+    150
+}
+
+fn default_fmt_inline() -> FmtLevel {
+    FmtLevel::Fix
+}
+
+fn default_fmt_extract() -> FmtLevel {
+    FmtLevel::Warn
 }
 
 fn default_sk_input() -> String {

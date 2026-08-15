@@ -56,6 +56,23 @@ pub enum Cmd {
     /// Run the pocopine language server over stdio (used by the VSCode
     /// extension and other LSP clients). Backed by pocopine-template-parser.
     Lsp(LspArgs),
+    /// Keep templates in canonical form (RFC-117): small ones inline as
+    /// `poco! { … }`, large ones in their own `.poco` file.
+    Fmt(FmtArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct FmtArgs {
+    /// Project directory (defaults to the current one).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// Report what would change and exit non-zero if anything would —
+    /// writes nothing. The CI shape.
+    #[arg(long)]
+    pub check: bool,
+    /// Also apply rules configured as `warn`, for this run only.
+    #[arg(long, conflicts_with = "check")]
+    pub fix: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
