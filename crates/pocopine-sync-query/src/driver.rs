@@ -791,6 +791,20 @@ where
                         &entry.stream,
                         &entry.mutation_id,
                     );
+                    // Clear the durable entries too. Every rollback
+                    // is a lifecycle exit and every exit clears its
+                    // durable half explicitly — leaving it to the
+                    // persist sweep would make a legitimate path
+                    // trip the sweep's steady-state bug detector.
+                    if let Some(store) = self.local_store.clone() {
+                        QueryClient::clear_persisted_pending_any(
+                            &client_inner,
+                            &store,
+                            &entry.stream,
+                            std::slice::from_ref(&entry.mutation_id),
+                        )
+                        .await;
+                    }
                 }
             }
         }

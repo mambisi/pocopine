@@ -524,6 +524,190 @@ async fn pending_mutation_persists_and_replays_on_hydrate() {
         .await;
 }
 
+// ─── P2 (SPORC hardening): every persisted pending is replayable ────
+
+thread_local! {
+    static PUSH_BODIES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A durable pending wearing the reserved `__crud` envelope (the
+/// shape the Mutator-less `push`/`push_typed` overlays persist under)
+/// replays as a RAW WIRE mutation on the next boot: the server sees
+/// the original self-describing payload, the overlay retires, and the
+/// durable entry clears. Pre-P2 this exact seed was the immortal
+/// ghost of issue #292 — persisted, unreplayable, re-hydrated
+/// forever.
+#[tokio::test]
+async fn crud_enveloped_pending_replays_raw_and_clears_durably() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            PUSH_BODIES.with(|b| b.borrow_mut().clear());
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    SYNC_PULL_PATH => Ok(json_response(&snapshot_response(vec![]))),
+                    pocopine_sync::SYNC_PUSH_PATH => {
+                        PUSH_BODIES.with(|b| b.borrow_mut().push(req.body.clone()));
+                        let mut response = pocopine_sync::SyncPushResponse::<Value>::new(
+                            SyncStreamName::new(STREAM).unwrap(),
+                        );
+                        response
+                            .accepted
+                            .push(MutationId::new("device_seed:9").unwrap());
+                        Ok(json_response(&response))
+                    }
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+
+            // Seed the compartment the way a mid-flight persist
+            // would have: server truth applied (rows: []) plus a
+            // stuck __crud pending whose overlay paints a ghost.
+            let store = Rc::new(MemoryLocalStore::new());
+            let stream = SyncStreamName::new(STREAM).unwrap();
+            let params = {
+                let mut p = StreamParams::new();
+                p.insert("workspace_id".into(), serde_json::json!("W1"));
+                p
+            };
+            let compartment = local_stream_key(&stream, &params);
+            let ghost = Issue {
+                id: "ghost_1".into(),
+                workspace_id: "W1".into(),
+                title: "deleted long ago".into(),
+            };
+            let bare_payload = serde_json::json!({
+                "op": "create",
+                "id": "ghost_1",
+                "draft": { "workspace_id": "W1", "title": "deleted long ago" },
+            });
+            let envelope = serde_json::json!({
+                "__mutator": "__crud",
+                "__payload": bare_payload,
+            });
+            let mutation = pocopine_sync::ClientMutation::new(
+                MutationId::new("device_seed:9").unwrap(),
+                pocopine_sync::SyncOp::Upsert,
+                envelope,
+            )
+            .key("ghost_1")
+            .unwrap();
+            let pending = pocopine_sync::LocalPendingMutation::new(mutation).with_optimistic_row(
+                Some(
+                    SyncRow::new("ghost_1", serde_json::to_value(&ghost).unwrap())
+                        .unwrap()
+                        .pending(true),
+                ),
+            );
+            store
+                .enqueue_pending_mutation(&compartment, pending)
+                .await
+                .unwrap();
+
+            // Boot. Hydrate paints the ghost; the replay tick must
+            // resolve the reserved route, re-push the BARE payload,
+            // and retire everything.
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+
+            // The wire push carried the SELF-DESCRIBING payload, not
+            // the persistence envelope.
+            let bodies = PUSH_BODIES.with(|b| b.borrow().clone());
+            assert_eq!(bodies.len(), 1, "exactly one raw-wire replay push");
+            assert!(
+                bodies[0].contains("\"op\":\"create\"") && !bodies[0].contains("__mutator"),
+                "replay pushes the bare wire payload: {}",
+                bodies[0]
+            );
+
+            // Ghost gone from the view, overlay retired, durable
+            // entry cleared — nothing left for the sweep.
+            assert!(view.rows().is_empty(), "ghost must not render");
+            assert_eq!(view.state().pending().len(), 0);
+            let durable = store.pending_mutations(&compartment).await.unwrap();
+            assert!(durable.is_empty(), "durable pending cleared on accept");
+        })
+        .await;
+}
+
+/// A mutate() pending's `{__mutator: NAME}` envelope survives the
+/// post-pull `persist_snapshot` re-enqueue. Pre-P2, that re-enqueue
+/// wrote the overlay's BARE wire payload over the enveloped durable
+/// entry — so a reload after any settled pull dropped the queued
+/// mutation on the floor ("missing mutator name envelope"), silently
+/// losing an offline write.
+#[tokio::test]
+async fn mutate_envelope_survives_mid_flight_persists() {
+    let local = LocalSet::new();
+    local
+        .run_until(async {
+            reset_middleware();
+            install_middleware(|req: FetchRequest, _next: FetchNext| async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(&open_response(1, None))),
+                    SYNC_PULL_PATH => Ok(json_response(&snapshot_response(vec![]))),
+                    other => Err(ServerError::Network(format!("unexpected {other}"))),
+                }
+            });
+            FLAKY_MODE.with(|m| *m.borrow_mut() = FlakyMode::Offline);
+            FLAKY_HITS.with(|h| h.borrow_mut().clear());
+
+            let store = Rc::new(MemoryLocalStore::new());
+            let store_handle: Rc<dyn SyncLocalStore> = store.clone();
+            let client = query_client_plugin()
+                .config(test_config_with_store(store_handle))
+                .into_client();
+            client.register_mutator::<FlakyCreate>();
+            let view = client.observe(Issue::query().eq(issues::field::workspace_id, "W1").build());
+            settle(2).await;
+
+            let ctx = StubContext::new();
+            let payload = Issue {
+                id: "issue_offline".into(),
+                workspace_id: "W1".into(),
+                title: "queued".into(),
+            };
+            let _ = client
+                .mutate::<FlakyCreate>(payload, &ctx)
+                .await
+                .expect_err("offline mutate returns transport error");
+            assert_eq!(view.state().pending().len(), 1);
+
+            // Let SEVERAL poll ticks land while the pending is live —
+            // each settled pull runs persist_snapshot, which
+            // re-enqueues the overlay's mutation over the durable
+            // entry. The envelope must survive every one of them.
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(45)).await;
+            }
+            let stream = SyncStreamName::new(STREAM).unwrap();
+            let params = {
+                let mut p = StreamParams::new();
+                p.insert("workspace_id".into(), serde_json::json!("W1"));
+                p
+            };
+            let compartment = local_stream_key(&stream, &params);
+            let durable = store.pending_mutations(&compartment).await.unwrap();
+            assert_eq!(durable.len(), 1, "pending survives while offline");
+            assert_eq!(
+                durable[0].payload.get("__mutator"),
+                Some(&serde_json::json!("flaky_create")),
+                "the mutator-name envelope must survive persist_snapshot \
+                 re-enqueues — a bare payload here is a lost offline write \
+                 on the next reload"
+            );
+        })
+        .await;
+}
+
 // ─── Test 4: multi-compartment isolation ──────────────────────────
 
 #[tokio::test]
