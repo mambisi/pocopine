@@ -489,6 +489,8 @@ impl<S: Source> SourceResourceBuilder<S> {
             mutation_log_provenance,
             mutation_log_default_warned: Arc::new(std::sync::OnceLock::new()),
             change_log,
+            deletes_pushed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            delete_visibility_warned: Arc::new(std::sync::OnceLock::new()),
         }
     }
 }
@@ -547,6 +549,15 @@ pub struct SourceResource<S: Source, IdOf> {
     /// source doesn't actually append to would be a silent hole
     /// generator, the opposite of the point.
     change_log: Option<Arc<dyn crate::feed::ChangeLog<S::Row>>>,
+    /// Sticky: a Delete mutation has been dispatched on this stream.
+    /// Feeds the delete-visibility detector below.
+    deletes_pushed: Arc<std::sync::atomic::AtomicBool>,
+    /// One-shot latch for the delete-visibility warning: deletes
+    /// have happened, the source has no change feed, and a snapshot
+    /// pull shipped zero tombstones — clients are seeing deletes as
+    /// unexplained absences (issue #292's application-contract root
+    /// cause). Loud once.
+    delete_visibility_warned: Arc<std::sync::OnceLock<()>>,
 }
 
 impl<S, IdOf> SourceResource<S, IdOf>
@@ -713,6 +724,8 @@ where
         let collection = self.collection.clone();
         let max_snapshot_rows = self.max_snapshot_rows;
         let change_log = self.change_log.clone();
+        let deletes_pushed = self.deletes_pushed.clone();
+        let delete_visibility_warned = self.delete_visibility_warned.clone();
         Box::pin(async move {
             if request.stream != stream {
                 return Err(SyncError::UnknownStream(request.stream.to_string()));
@@ -875,6 +888,31 @@ where
             // by a single connection don't see interleaved queries.
             let tombstones = source.list_tombstones(source_ctx, &query).await?;
 
+            // Delete-visibility detector (issue #292 lesson 4):
+            // deletes HAVE happened on this stream, the source keeps
+            // no change feed, and this snapshot ships zero
+            // tombstones — so from any client's point of view those
+            // deletes are unexplained absences, the exact ambiguity
+            // an absence-based self-heal "fixes" by resurrecting
+            // data. Loud once per process.
+            if tombstones.is_empty()
+                && change_log.is_none()
+                && deletes_pushed.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                delete_visibility_warned.get_or_init(|| {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = %stream,
+                        "sync-query: deletes have been pushed on this stream \
+                         but this snapshot carries no tombstones and the \
+                         source has no change feed — clients see those \
+                         deletes as UNEXPLAINED ABSENCES, which recovery \
+                         policy may wrongly re-push (issue #292). Implement \
+                         Source::list_tombstones or Source::change_log."
+                    );
+                });
+            }
+
             let mut sync_rows: Vec<SyncRow<Value>> = Vec::with_capacity(rows.len());
             for row in rows {
                 let key = (id_of)(&row).to_row_key()?;
@@ -958,6 +996,7 @@ where
         let mutation_log = self.mutation_log.clone();
         let mutation_log_provenance = self.mutation_log_provenance;
         let mutation_log_default_warned = self.mutation_log_default_warned.clone();
+        let deletes_pushed = self.deletes_pushed.clone();
         let stream = self.stream.clone();
         let collection = self.collection.clone();
         Box::pin(async move {
@@ -1141,6 +1180,11 @@ where
                         );
                     }
                     continue;
+                }
+
+                // Feed the delete-visibility detector (see pull).
+                if op == SyncOp::Delete {
+                    deletes_pushed.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 // Dispatch to the source.
