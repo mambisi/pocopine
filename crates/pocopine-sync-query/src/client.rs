@@ -820,11 +820,22 @@ impl QueryClient {
             pocopine_sync::ClientMutation::new(mutation_id.clone(), wire_op, payload_value.clone());
         wire_mutation.key = row_key;
 
-        // 1. Optimistic apply.
+        // 1. Optimistic apply. The overlay's stored mutation carries
+        // the `{__mutator: "__crud", __payload}` persistence envelope
+        // FROM BIRTH — the payload is self-describing CRUD, so if a
+        // mid-flight persist captures this overlay durably, the next
+        // boot replays it through the reserved raw-wire route instead
+        // of hitting the unreplayable-pending trap (issue #292 root
+        // cause 2). The wire push below still sends the BARE payload.
+        let mut overlay_mutation = wire_mutation.clone();
+        overlay_mutation.payload = crate::mutator::wrap_persisted_payload(
+            crate::mutator::CRUD_REPLAY_MUTATOR,
+            wire_mutation.payload.clone(),
+        );
         self.route_optimistic_changes::<Row>(
             &stream,
             &mutation_id,
-            &wire_mutation,
+            &overlay_mutation,
             std::slice::from_ref(&change),
         );
 
@@ -959,10 +970,20 @@ impl QueryClient {
         let wire_mutation =
             pocopine_sync::ClientMutation::new(mutation_id.clone(), wire_op, payload_value.clone());
 
+        // The overlay's stored mutation carries the `{__mutator:
+        // M::NAME, __payload}` envelope from birth, matching what
+        // `persist_pending_mutation` writes durably — so a
+        // mid-flight `persist_snapshot` re-enqueue can never
+        // DOWNGRADE the durable entry to a bare payload and strand
+        // the replay route (the envelope-downgrade cousin of issue
+        // #292's root cause 2). The wire push keeps the bare shape.
+        let mut overlay_mutation = wire_mutation.clone();
+        overlay_mutation.payload =
+            crate::mutator::wrap_persisted_payload(M::NAME, wire_mutation.payload.clone());
         self.route_optimistic_changes::<M::Row>(
             &stream,
             &mutation_id,
-            &wire_mutation,
+            &overlay_mutation,
             &local_changes,
         );
 
@@ -1885,6 +1906,21 @@ impl QueryClient {
                             return ReplayOutcome::Rejected;
                         }
                     };
+                    // Reserved route: pendings from the Mutator-less
+                    // push paths replay as RAW WIRE mutations — the
+                    // payload is self-describing CRUD the server
+                    // dispatches on; no registry entry exists or is
+                    // needed. This is what makes EVERY persisted
+                    // overlay replayable (issue #292 root cause 2).
+                    if mutator_name == crate::mutator::CRUD_REPLAY_MUTATOR {
+                        return Self::replay_crud_hydrated(
+                            &client_inner,
+                            &stream,
+                            &mutation,
+                            &push_url,
+                        )
+                        .await;
+                    }
                     // Lookup by (stream, NAME) so two streams that
                     // register a common mutator name like `create`
                     // don't overwrite each other (codex P1).
@@ -1937,6 +1973,94 @@ impl QueryClient {
     /// caller's replay attempt observed `StillOffline`).
     pub(crate) fn reinsert_replay_entry(inner: &Rc<QueryClientInner>, entry: ReplayEntry) {
         inner.replay_queue.borrow_mut().push_back(entry);
+    }
+
+    /// Replay a hydrated Mutator-less pending (`__crud` envelope) by
+    /// re-POSTing the original wire mutation. The payload is
+    /// self-describing (`MutationPayload`'s tagged `op`), the
+    /// mutation id is the original — so the server's idempotency log
+    /// makes a replay-after-accept a clean no-op accept.
+    ///
+    /// On accept the overlay is retired immediately (type-erased)
+    /// and its durable entries cleared; the canonical row arrives on
+    /// the next `/pull` (and the feed echo would retire the overlay
+    /// anyway on feed-capable sources — the paths compose). On
+    /// reject the caller's `Rejected` arm performs the erased
+    /// rollback. Transport-shaped failures re-queue for the next
+    /// tick.
+    async fn replay_crud_hydrated(
+        client_inner: &Rc<QueryClientInner>,
+        stream: &SyncStreamName,
+        mutation: &ClientMutation<Value>,
+        push_url: &str,
+    ) -> crate::driver::ReplayOutcome {
+        use crate::driver::ReplayOutcome;
+        // Rebuild the BARE wire mutation: unwrap the persistence
+        // envelope, keep id / op / key / base_version verbatim.
+        let payload = match crate::mutator::unwrap_persisted_payload(&mutation.payload) {
+            Some((_, inner)) => inner,
+            None => mutation.payload.clone(),
+        };
+        let mut wire = mutation.clone();
+        wire.payload = payload;
+        let request = pocopine_sync::SyncPushRequest::new(stream.clone(), [wire]);
+        let response = match pocopine_core::fetch::call::<
+            pocopine_sync::SyncPushRequest<Value>,
+            pocopine_sync::SyncPushResponse<Value>,
+        >(push_url, &request)
+        .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                // Transport-shaped failure (offline, 5xx, auth
+                // hiccup): keep the pending for the next tick. The
+                // original id makes unbounded retries safe.
+                tracing::info!(
+                    target: "pocopine.log",
+                    stream = stream.as_str(),
+                    mutation_id = %mutation.id,
+                    error = %err,
+                    "sync-query: __crud replay transport failure; will retry",
+                );
+                return ReplayOutcome::StillOffline;
+            }
+        };
+        let accepted = response.accepted.iter().any(|id| id == &mutation.id);
+        let rejected = response
+            .rejected
+            .iter()
+            .any(|r| r.mutation_id == mutation.id)
+            || response
+                .conflicts
+                .iter()
+                .any(|c| c.mutation_id == mutation.id);
+        if accepted {
+            // Retire now rather than waiting for the echo: the view
+            // must not wear a pending badge for a write the server
+            // just confirmed.
+            Self::dequeue_pending_any(client_inner, stream, &mutation.id);
+            if let Some(store) = client_inner
+                .config
+                .as_ref()
+                .and_then(|c| c.local_store.clone())
+            {
+                Self::clear_persisted_pending_any(
+                    client_inner,
+                    &store,
+                    stream,
+                    std::slice::from_ref(&mutation.id),
+                )
+                .await;
+            }
+            ReplayOutcome::Accepted
+        } else if rejected {
+            // Caller's Rejected arm rolls back type-erasedly.
+            ReplayOutcome::Rejected
+        } else {
+            // The server answered but never mentioned our id —
+            // treat like a transport fault and retry next tick.
+            ReplayOutcome::StillOffline
+        }
     }
 
     /// Driver-only: roll back the optimistic overlay for `mutation_id`

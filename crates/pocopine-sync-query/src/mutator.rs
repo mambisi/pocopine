@@ -159,6 +159,16 @@ pub(crate) const PERSISTED_MUTATOR_KEY: &str = "__mutator";
 /// Re-export name used inside this module so the persisted-payload
 /// envelope key is centralized.
 pub(crate) const PERSISTED_PAYLOAD_KEY: &str = "__payload";
+/// Reserved envelope NAME for pendings created by the Mutator-less
+/// push paths (`push` / `push_typed`). Their wire payload is already
+/// self-describing (`MutationPayload`'s `{"op": "create" | "update"
+/// | "delete", …}` — the server dispatches on it), so the replay is
+/// a RAW WIRE replay: re-POST the original mutation and let the
+/// idempotency log dedupe. No `Mutator` registration involved —
+/// which is exactly why these pendings used to be unreplayable
+/// (issue #292 root cause 2); the reserved route closes that hole
+/// for every persisted overlay.
+pub(crate) const CRUD_REPLAY_MUTATOR: &str = "__crud";
 
 /// Wrap the wire payload + mutator NAME into a persistence envelope.
 ///
