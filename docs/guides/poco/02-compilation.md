@@ -38,6 +38,93 @@ Beyond the basics, `#[component]` accepts:
 | `animate = "flip"` | Enables FLIP layout animation on keyed `pp-for` rows. |
 | `uses = [TypeA, TypeB]` | Registers child component types transitively from this component's `register()` and activates compile-time slot-contract checking. |
 | `extends = [TypeA, TypeB]` | Bundle marker: this type re-exports the registration of every listed type. Mutually exclusive with `template`, `style`, `role`, `display`, and animation args. |
+| `template = poco! { … }` | An inline template written as bare HTML instead of a file path. See below. |
+
+## Inline templates: `poco!`
+
+`template` takes one of two forms — a path to a `.poco` file, or an inline
+`poco!` body:
+
+```rust
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = poco! {
+    <div class="counter">
+        <button pp-on:click="increment">+</button>
+        <span pp-text="count"></span>
+    </div>
+})]
+pub struct Counter {
+    pub count: i32,
+}
+```
+
+The body is ordinary HTML with the usual `pp-*` directives — not a DSL, and
+not Rust mixed into markup. Both forms run the identical compile-time ladder
+(parse, single-root, slot contracts, `pp-for` plans, template-path
+validation), so an inline template is checked exactly as strictly as a file
+one, with errors pointing at the offending line inside your `.rs`.
+
+`poco!` also works on its own, returning a `PocoTemplate`:
+
+```rust
+const ROWS: PocoTemplate = poco! { <li>a</li> <li>b</li> };
+```
+
+Standalone templates may be fragments; the single-root rule applies only once
+a template becomes a component's.
+
+### Text that Rust's lexer rejects
+
+The body is tokenized by rustc before pocopine ever sees it, and some ordinary
+prose does not survive that step: apostrophes (`don't`), typographic symbols
+(`— … © · ← ⌘`), emoji, and backslashes. Wrap such text in quotes — a string
+literal is a single token, so its contents are never inspected:
+
+```poco
+<p>"Don't stop — © 2026 · ⌘K 🎉"</p>
+```
+
+Quoted runs land in the template as static text, HTML-escaped for you, so
+`"5 < 10 & rising"` renders correctly with no entity juggling. Quoting is
+per-run — `<p>Hello "don't" world</p>` mixes freely — and attribute values are
+never affected.
+
+Prose that looks like a Rust lifetime is fine unquoted (`'tis`, `the 'static
+lifetime`), because those lex as real tokens. When something does need
+quoting, `pocopine build`, `run` and `dev` tell you which character and where
+before cargo runs, so you get a message naming the template rather than a bare
+tokenizer error.
+
+Reach for a `.poco` file when a template is large enough to deserve one. Both
+forms are fully supported by Stylekit class extraction and `pocopine lsp`.
+
+### `pocopine fmt` owns the boundary
+
+Rather than leaving "how big is too big" to taste, a rule decides it:
+
+```
+pocopine fmt           # apply the rules
+pocopine fmt --check   # report only, non-zero exit if anything would change
+pocopine fmt --fix     # also apply rules configured as `warn`
+```
+
+By default a template under **150 lines** is pulled inline and its `.poco`
+file removed, and an inline body at or over that is reported so you can
+extract it with `--fix`. Both directions preserve indentation, so moving a
+template back and forth returns the identical file.
+
+Tune it in `Cargo.toml`:
+
+```toml
+[package.metadata.pocopine.fmt]
+inline-threshold = 150
+inline-small-templates = "fix"   # off | warn | fix
+extract-large-inline = "warn"
+```
+
+`pocopine fmt` never edits template *content*. A template holding text the
+Rust lexer rejects is reported and left alone, because escaping it
+automatically would double-escape any HTML entities already in it.
 
 ## What the macro emits
 

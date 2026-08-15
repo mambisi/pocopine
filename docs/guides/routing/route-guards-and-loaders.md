@@ -33,7 +33,7 @@ use pocopine_auth::require_auth;
 use pocopine_auth_client::predicate_guard;
 
 #[derive(Default)]
-#[component(template_inline = "<div>...</div>")]
+#[component(template = poco! { <div>...</div> })]
 struct Dashboard {
     user: AuthUser,
     stats: DashboardStats,
