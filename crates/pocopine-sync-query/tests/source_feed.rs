@@ -492,6 +492,118 @@ async fn tenant_scoped_feed_filter_hides_other_tenants_changes() {
     );
 }
 
+// ── P4: client-order preservation ───────────────────────────────────
+
+#[tokio::test]
+async fn reused_id_with_divergent_contents_rejects_as_identity_fault() {
+    let source = FeedSource::new();
+    let resource = resource(source);
+
+    // First push: accepted.
+    let id = mutation_id(5);
+    let first = wire_mutation(
+        id.clone(),
+        MutationPayload::create(
+            "r1".to_string(),
+            IssueDraft {
+                workspace_id: "W1".into(),
+                title: "original".into(),
+            },
+        ),
+    );
+    let push = SyncPushRequest::new(SyncStreamName::new(STREAM).unwrap(), [first]);
+    let response = resource.push(ctx(), push).await.unwrap();
+    assert_eq!(response.accepted.len(), 1);
+
+    // Same id re-minted with DIFFERENT contents — the signature of a
+    // duplicated or backup-restored client identity (the durable
+    // counter never legitimately re-mints an id).
+    let divergent = wire_mutation(
+        id.clone(),
+        MutationPayload::create(
+            "r1".to_string(),
+            IssueDraft {
+                workspace_id: "W1".into(),
+                title: "DIFFERENT".into(),
+            },
+        ),
+    );
+    let push = SyncPushRequest::new(SyncStreamName::new(STREAM).unwrap(), [divergent]);
+    let response = resource.push(ctx(), push).await.unwrap();
+    assert!(response.accepted.is_empty());
+    assert_eq!(response.rejected.len(), 1);
+    assert_eq!(
+        response.rejected[0].code,
+        Some(pocopine_sync::SyncRejectCode::IdentityFault),
+        "divergent re-mint is classified as an identity fault, not an \
+         ordinary rejection"
+    );
+}
+
+#[tokio::test]
+async fn counter_regression_warns_but_still_processes() {
+    let source = FeedSource::new();
+    let resource = resource(source);
+
+    // Newer counter first…
+    let push = SyncPushRequest::new(
+        SyncStreamName::new(STREAM).unwrap(),
+        [wire_mutation(
+            mutation_id(7),
+            MutationPayload::create(
+                "n1".to_string(),
+                IssueDraft {
+                    workspace_id: "W1".into(),
+                    title: "newer".into(),
+                },
+            ),
+        )],
+    );
+    assert_eq!(resource.push(ctx(), push).await.unwrap().accepted.len(), 1);
+
+    // …then an older queued mutation replays late. Legitimate (client
+    // pushes are not strictly ordered): it must still be ACCEPTED —
+    // the regression is telemetry, not a gate.
+    let push = SyncPushRequest::new(
+        SyncStreamName::new(STREAM).unwrap(),
+        [wire_mutation(
+            mutation_id(6),
+            MutationPayload::create(
+                "n2".to_string(),
+                IssueDraft {
+                    workspace_id: "W1".into(),
+                    title: "older, queued offline".into(),
+                },
+            ),
+        )],
+    );
+    let response = resource.push(ctx(), push).await.unwrap();
+    assert_eq!(
+        response.accepted.len(),
+        1,
+        "an out-of-order replay of a NEW mutation is legitimate and processes"
+    );
+
+    // And an exact replay of an accepted mutation stays an idempotent
+    // accept (counter equality defers to the idempotency log).
+    let push = SyncPushRequest::new(
+        SyncStreamName::new(STREAM).unwrap(),
+        [wire_mutation(
+            mutation_id(6),
+            MutationPayload::create(
+                "n2".to_string(),
+                IssueDraft {
+                    workspace_id: "W1".into(),
+                    title: "older, queued offline".into(),
+                },
+            ),
+        )],
+    );
+    let response = resource.push(ctx(), push).await.unwrap();
+    assert_eq!(response.accepted.len(), 1, "exact replay idempotent-accepts");
+    assert!(response.rejected.is_empty());
+}
+
 #[tokio::test]
 async fn unparseable_cursor_answers_too_old_not_a_guess() {
     let source = FeedSource::new();
