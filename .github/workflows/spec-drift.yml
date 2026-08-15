@@ -1,0 +1,68 @@
+name: spec-drift
+
+# Watch the deploy hosts' published API schemas and fail loudly when one
+# moves under us. Each adapter ships a `tests/spec_drift.rs` that pins a
+# checksum of the surface it depends on, plus structural and field-level
+# assertions naming the exact operations and keys its client sends and
+# reads.
+#
+# Those tests SKIP when the vendor endpoint is unreachable, so that an
+# offline `cargo test` stays green. That default is wrong for a job whose
+# entire purpose is reaching the vendor, so this workflow sets
+# POCOPINE_REQUIRE_SPEC_DRIFT=1 — here, unreachable is a failure, not a
+# shrug. Without this job the env var has no caller and the drift tests
+# only ever run in their skip-friendly mode.
+#
+# This job never blocks normal CI — it runs weekly + on demand. A failure
+# means "a host's API moved; review the diff, reconcile the client, and
+# re-pin the checksum", not "the build is broken". The failing test names
+# the file to reconcile and prints the hash to paste.
+
+on:
+  schedule:
+    # Mondays 07:00 UTC, an hour after tailwind-conformance so the two
+    # weekly watchers don't contend for runners.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/pocopine-deploy-cloudflare-pages/**'
+      - 'crates/pocopine-deploy-railway/**'
+      - 'crates/pocopine-deploy-render/**'
+      - '.github/workflows/spec-drift.yml'
+
+concurrency:
+  group: spec-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: ${{ matrix.adapter }}
+    runs-on: ubuntu-latest
+    # One host's outage or re-pin shouldn't hide another's drift.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - pocopine-deploy-cloudflare-pages
+          - pocopine-deploy-railway
+          - pocopine-deploy-render
+    env:
+      # Turn "couldn't reach the vendor" from a skip into a failure.
+      POCOPINE_REQUIRE_SPEC_DRIFT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-21
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: spec-drift
+          cache-targets: false
+      - name: Check ${{ matrix.adapter }} against its published schema
+        run: cargo test -p ${{ matrix.adapter }} --test spec_drift -- --nocapture
