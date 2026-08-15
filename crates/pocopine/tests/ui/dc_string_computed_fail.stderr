@@ -1,8 +1,8 @@
 error[E0277]: the trait bound `std::string::String: pocopine::__private::DynamicComponentSelection<DcStringComputedHost>` is not satisfied
  --> tests/ui/dc_string_computed_fail.rs:5:31
   |
-5 | #[component(template_inline = r#"<pp-component :is="active"></pp-component>"#)]
-  |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `pocopine::__private::DynamicComponentSelection<DcStringComputedHost>` is not implemented for `std::string::String`
+5 | #[component(template = poco! {<pp-component :is="active"></pp-component>})]
+  |                               ^ the trait `pocopine::__private::DynamicComponentSelection<DcStringComputedHost>` is not implemented for `std::string::String`
   |
 help: the following other types implement trait `pocopine::__private::DynamicComponentSelection<Host>`
  --> $WORKSPACE/crates/pocopine-core/src/app.rs

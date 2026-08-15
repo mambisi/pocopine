@@ -10,7 +10,7 @@ help: the trait `ComponentUses<DcUnlistedChild>` is not implemented for `DcUsesH
    |
 19 | / #[component(
 20 | |     uses = [DcAllowedChild],
-21 | |     template_inline = r#"<pp-component :is="active"></pp-component>"#,
+21 | |     template = poco! {<pp-component :is="active"></pp-component>},
 22 | | )]
    | |__^
    = help: for that trait implementation, expected `DcAllowedChild`, found `DcUnlistedChild`

@@ -1095,7 +1095,7 @@ mod selection_sync_browser_tests {
     #[derive(Default, serde::Serialize, serde::Deserialize)]
     #[pocopine::component(
         name = "node-view-manager-task-item-fixture",
-        template_inline = r#"<div class="manager-task-item-fixture" pp-owned-content></div>"#
+        template = poco! {<div class="manager-task-item-fixture" pp-owned-content></div>}
     )]
     struct ManagerTaskItemFixture {
         checked: bool,

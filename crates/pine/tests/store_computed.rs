@@ -94,11 +94,11 @@ impl DemoStore {
 // ── host component that binds the store computed ───────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div class="demo-host">
   <span class="d-len" pp-text="$store.demo.filtered_len"></span>
 </div>
-"#)]
+})]
 struct DemoHost {}
 
 #[handlers]

@@ -5,7 +5,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "fh-cell", template_inline = r#"<div></div>"#)]
+#[component(name = "fh-cell", template = poco! {<div></div>})]
 struct CellComp {
     count: std::cell::Cell<u32>,
 }

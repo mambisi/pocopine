@@ -8,5 +8,5 @@ error[E0080]: evaluation panicked:
                 = help: a field with a similar name exists: `count`
   --> tests/ui/tp_unknown_field.rs:12:23
    |
-12 |     template_inline = r#"<div><span pp-text="countt"></span></div>"#
-   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here
+12 |     template = poco! {<div><span pp-text="countt"></span></div>}
+   |                       ^ evaluation of `_` failed here

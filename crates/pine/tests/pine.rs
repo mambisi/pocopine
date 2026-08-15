@@ -16,12 +16,12 @@ wasm_bindgen_test_configure!(run_in_browser);
 // ─── helpers ──────────────────────────────────────────────────────
 
 macro_rules! compiled_fixture {
-    ($name:ident, $template:literal) => {
-        compiled_fixture!($name, $template, {});
+    ($name:ident, { $($template:tt)* }) => {
+        compiled_fixture!($name, { $($template)* }, {});
     };
-    ($name:ident, $template:literal, { $($field:ident : $ty:ty),* $(,)? }) => {
+    ($name:ident, { $($template:tt)* }, { $($field:ident : $ty:ty),* $(,)? }) => {
         #[derive(Default, serde::Serialize, serde::Deserialize)]
-        #[component(template_inline = $template)]
+        #[component(template = poco! { $($template)* })]
         struct $name {
             $(pub $field: $ty,)*
         }
@@ -205,7 +205,7 @@ fn dispatch_pointer_click(target: &Element) {
 
 compiled_fixture!(
     ButtonRenderFixture,
-    r#"<div><pine-button variant="primary" size="sm" disabled="true">Save</pine-button></div>"#
+    { <div><pine-button variant="primary" size="sm" disabled="true">Save</pine-button></div> }
 );
 
 // Variants and size props flow onto `data-*` attributes; the
@@ -241,7 +241,7 @@ async fn button_renders_data_attrs_and_disabled() {
 
 compiled_fixture!(
     ButtonAsFixture,
-    r##"<div><pine-button pp-as variant="ghost"><a href="#" class="mine">Docs</a></pine-button></div>"##
+    { <div><pine-button pp-as variant="ghost"><a href="#" class="mine">Docs</a></pine-button></div> }
 );
 
 // `pp-as` on the component tag replaces the template's `<button>`
@@ -272,7 +272,7 @@ async fn button_pp_as_hoists_author_element() {
 
 compiled_fixture!(
     TabsCompoundFixture,
-    r#"
+    {
 <div>
   <pine-tabs-root value="a">
     <pine-tabs-list>
@@ -283,7 +283,7 @@ compiled_fixture!(
     <pine-tabs-content value="b" class="tc-panel-b">Panel B</pine-tabs-content>
   </pine-tabs-root>
 </div>
-"#
+ }
 );
 
 // Compound Tabs: clicking a Trigger flips Root.value;
@@ -382,7 +382,7 @@ async fn tabs_compound_select_via_trigger_mirrors_siblings() {
 
 compiled_fixture!(
     TooltipFocusFixture,
-    r#"
+    {
 <div>
   <pine-tooltip-root>
     <pine-tooltip-trigger><button id="tt-c-trig">hover me</button></pine-tooltip-trigger>
@@ -391,7 +391,7 @@ compiled_fixture!(
     </pine-tooltip-portal>
   </pine-tooltip-root>
 </div>
-"#
+ }
 );
 
 // Focusing the trigger shows the tooltip immediately (no delay
@@ -449,7 +449,7 @@ async fn tooltip_compound_shows_on_focus_and_hides_on_blur() {
 
 compiled_fixture!(
     SwitchFixture,
-    r#"<div><pine-switch checked="false"></pine-switch></div>"#
+    { <div><pine-switch checked="false"></pine-switch></div> }
 );
 
 #[wasm_bindgen_test]
@@ -502,7 +502,7 @@ async fn switch_toggles_aria_and_emits_model_event() {
 
 compiled_fixture!(
     CheckboxFixture,
-    r#"<div><pine-checkbox state="indeterminate"></pine-checkbox></div>"#
+    { <div><pine-checkbox state="indeterminate"></pine-checkbox></div> }
 );
 
 #[wasm_bindgen_test]
@@ -563,7 +563,7 @@ impl MenuHost {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger>open</pine-dropdown-menu-trigger>
@@ -576,14 +576,14 @@ impl MenuHost {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct CompoundMenuHost {}
 #[handlers]
 impl CompoundMenuHost {}
 
 compiled_fixture!(
     DropdownModalFixture,
-    r#"
+    {
 <div>
   <pine-dropdown-menu-root modal="true">
     <pine-dropdown-menu-trigger class="dm-modal-trigger">open</pine-dropdown-menu-trigger>
@@ -594,7 +594,7 @@ compiled_fixture!(
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#
+ }
 );
 
 // Opening a menu via the trigger teleports Content to body, sets
@@ -832,7 +832,7 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <div class="dm-card" @click="card_click">
     <span class="dm-card-clicks" pp-text="card_clicks"></span>
@@ -847,7 +847,7 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     </pine-dropdown-menu-root>
   </div>
 </div>
-"#)]
+})]
 struct DropdownClickableParentHost {
     card_clicks: u32,
 }
@@ -998,7 +998,7 @@ async fn dropdown_menu_outside_events_are_preventable() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="dm-model-open" @click="open_it">open</button>
   <span class="dm-model-state" pp-text="menu_open ? 'open' : 'closed'"></span>
@@ -1011,7 +1011,7 @@ async fn dropdown_menu_outside_events_are_preventable() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct DropdownModelHost {
     menu_open: bool,
 }
@@ -1069,7 +1069,7 @@ async fn dropdown_menu_pp_model_open_round_trips_through_parent() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="pv-trig">open</pine-dropdown-menu-trigger>
@@ -1081,7 +1081,7 @@ async fn dropdown_menu_pp_model_open_round_trips_through_parent() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct PreventableSelectHost {}
 #[handlers]
 impl PreventableSelectHost {}
@@ -1185,7 +1185,7 @@ async fn dropdown_menu_items_activate_from_keyboard() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="rg-trig">open</pine-dropdown-menu-trigger>
@@ -1193,11 +1193,11 @@ async fn dropdown_menu_items_activate_from_keyboard() {
       <pine-dropdown-menu-content>
         <pine-dropdown-menu-radio-group value="a">
           <pine-dropdown-menu-radio-item class="rg-a" value="a">
-            <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+            <pine-dropdown-menu-item-indicator>"●"</pine-dropdown-menu-item-indicator>
             A
           </pine-dropdown-menu-radio-item>
           <pine-dropdown-menu-radio-item class="rg-b" value="b">
-            <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+            <pine-dropdown-menu-item-indicator>"●"</pine-dropdown-menu-item-indicator>
             B
           </pine-dropdown-menu-radio-item>
         </pine-dropdown-menu-radio-group>
@@ -1205,7 +1205,7 @@ async fn dropdown_menu_items_activate_from_keyboard() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct RadioGroupMenuHost {}
 #[handlers]
 impl RadioGroupMenuHost {}
@@ -1274,7 +1274,7 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="ck-trig">open</pine-dropdown-menu-trigger>
@@ -1282,7 +1282,7 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
       <pine-dropdown-menu-content>
         <pine-dropdown-menu-checkbox-item class="ck-one">
           <pine-dropdown-menu-item-indicator>
-            <span class="ck-dot">✓</span>
+            <span class="ck-dot">"✓"</span>
           </pine-dropdown-menu-item-indicator>
           One
         </pine-dropdown-menu-checkbox-item>
@@ -1290,7 +1290,7 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct CheckboxMenuHost {}
 #[handlers]
 impl CheckboxMenuHost {}
@@ -1377,7 +1377,7 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="gl-trig">open</pine-dropdown-menu-trigger>
@@ -1393,7 +1393,7 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct GroupLabelMenuHost {}
 #[handlers]
 impl GroupLabelMenuHost {}
@@ -1452,7 +1452,7 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="sub-root-t">open</pine-dropdown-menu-trigger>
@@ -1460,7 +1460,7 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
       <pine-dropdown-menu-content>
         <pine-dropdown-menu-item class="s-i-a">A</pine-dropdown-menu-item>
         <pine-dropdown-menu-sub>
-          <pine-dropdown-menu-sub-trigger class="s-sub-t">More…</pine-dropdown-menu-sub-trigger>
+          <pine-dropdown-menu-sub-trigger class="s-sub-t">"More…"</pine-dropdown-menu-sub-trigger>
           <pine-dropdown-menu-sub-content>
             <pine-dropdown-menu-item class="s-i-b">B</pine-dropdown-menu-item>
           </pine-dropdown-menu-sub-content>
@@ -1469,7 +1469,7 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct SubMenuHost {}
 #[handlers]
 impl SubMenuHost {}
@@ -1681,7 +1681,7 @@ async fn dropdown_menu_sub_click_toggle_reopens_after_close() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="file-root-t">File</pine-dropdown-menu-trigger>
@@ -1705,7 +1705,7 @@ async fn dropdown_menu_sub_click_toggle_reopens_after_close() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct FileDropdownSubMenuHost {
     bumps: u32,
 }
@@ -1842,7 +1842,7 @@ async fn dropdown_menu_closes_submenu_before_parent_content() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="svp-root-t">open</pine-dropdown-menu-trigger>
@@ -1859,7 +1859,7 @@ async fn dropdown_menu_closes_submenu_before_parent_content() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct SubPreventableSelectHost {}
 #[handlers]
 impl SubPreventableSelectHost {}
@@ -1975,7 +1975,7 @@ async fn dropdown_menu_sub_select_prevent_keeps_parent_and_sub_open() {
 // cycle.
 compiled_fixture!(
     DropdownSubCleanupFixture,
-    r#"
+    {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="sc-root-t">open</pine-dropdown-menu-trigger>
@@ -1991,7 +1991,7 @@ compiled_fixture!(
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2036,7 +2036,7 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="ar-trig">open</pine-dropdown-menu-trigger>
@@ -2048,7 +2048,7 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct ArrowMenuHost {}
 #[handlers]
 impl ArrowMenuHost {}
@@ -2088,7 +2088,7 @@ async fn dropdown_menu_arrow_mirrors_content_side() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="sar-root-t">open</pine-dropdown-menu-trigger>
@@ -2105,7 +2105,7 @@ async fn dropdown_menu_arrow_mirrors_content_side() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct SubArrowMenuHost {}
 #[handlers]
 impl SubArrowMenuHost {}
@@ -2156,7 +2156,7 @@ async fn dropdown_menu_sub_arrow_mirrors_subcontent_side() {
 // machine — overrides from `bottom-start+4` to `top-end+12`.
 compiled_fixture!(
     DropdownContentConfigFixture,
-    r#"
+    {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="cfg-trig">open</pine-dropdown-menu-trigger>
@@ -2167,7 +2167,7 @@ compiled_fixture!(
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2205,7 +2205,7 @@ async fn dropdown_menu_content_config_props_override_anchor() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="t1">one</pine-dropdown-menu-trigger>
@@ -2224,7 +2224,7 @@ async fn dropdown_menu_content_config_props_override_anchor() {
     </pine-dropdown-menu-portal>
   </pine-dropdown-menu-root>
 </div>
-"#)]
+})]
 struct TwoMenusHost {}
 #[handlers]
 impl TwoMenusHost {}
@@ -2289,14 +2289,14 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
 // Uses a tiny 1x1 `data:` URL so the load fires deterministically.
 compiled_fixture!(
     AvatarImageLoadFixture,
-    r#"
+    {
 <div>
   <pine-avatar-root>
     <pine-avatar-image src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=" alt="tiny"></pine-avatar-image>
     <pine-avatar-fallback><span class="av-fb">AB</span></pine-avatar-fallback>
   </pine-avatar-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2360,13 +2360,13 @@ async fn avatar_fallback_hides_after_image_loads() {
 // are both `role = "visual"` → `<span data-pine-role="visual">`.
 compiled_fixture!(
     AvatarRoleFixture,
-    r#"
+    {
 <div>
   <pine-avatar-root>
     <pine-avatar-fallback><span class="fb">AB</span></pine-avatar-fallback>
   </pine-avatar-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2408,7 +2408,7 @@ async fn avatar_root_carries_data_pine_role_visual() {
 // one closes any other.
 compiled_fixture!(
     AccordionFixture,
-    r#"
+    {
 <div>
   <pine-accordion-root type="single" collapsible="true">
     <pine-accordion-item value="a">
@@ -2421,7 +2421,7 @@ compiled_fixture!(
     </pine-accordion-item>
   </pine-accordion-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2488,7 +2488,7 @@ async fn accordion_single_collapsible_exclusive_toggle() {
 // substrate scales beyond menus.
 compiled_fixture!(
     CollapsibleFixture,
-    r#"
+    {
 <div>
   <pine-collapsible-root>
     <pine-collapsible-trigger class="cp-trig">Toggle</pine-collapsible-trigger>
@@ -2497,7 +2497,7 @@ compiled_fixture!(
     </pine-collapsible-content>
   </pine-collapsible-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2552,7 +2552,7 @@ async fn collapsible_trigger_toggles_and_content_mounts() {
 // `data-pine-popover-trigger` stamp, Escape closes.
 compiled_fixture!(
     PopoverOpenFixture,
-    r#"
+    {
 <div>
   <pine-popover-root>
     <pine-popover-trigger class="pt-trig">open</pine-popover-trigger>
@@ -2563,12 +2563,12 @@ compiled_fixture!(
     </pine-popover-portal>
   </pine-popover-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     PopoverModalFixture,
-    r#"
+    {
 <div>
   <pine-popover-root modal="true">
     <pine-popover-trigger class="pm-trigger">open</pine-popover-trigger>
@@ -2579,7 +2579,7 @@ compiled_fixture!(
     </pine-popover-portal>
   </pine-popover-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -2689,7 +2689,7 @@ async fn popover_modal_locks_scroll_until_close() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <div class="pc-card" @click="card_click">
     <span class="pc-card-clicks" pp-text="card_clicks"></span>
@@ -2703,7 +2703,7 @@ async fn popover_modal_locks_scroll_until_close() {
     </pine-popover-root>
   </div>
 </div>
-"#)]
+})]
 struct PopoverClickableParentHost {
     card_clicks: u32,
 }
@@ -2923,7 +2923,7 @@ async fn popover_pp_model_open_round_trips_through_parent() {
 
 compiled_fixture!(
     DateRangePickerFixture,
-    r#"<div><pine-date-range-picker placeholder="2024-06-15"></pine-date-range-picker></div>"#
+    { <div><pine-date-range-picker placeholder="2024-06-15"></pine-date-range-picker></div> }
 );
 
 #[wasm_bindgen_test]
@@ -3069,7 +3069,7 @@ async fn dialog_pp_model_open_round_trips_through_parent() {
 // ─── PineDialog ───────────────────────────────────────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-dialog-root>
     <pine-dialog-trigger class="dg-trig">open</pine-dialog-trigger>
@@ -3084,7 +3084,7 @@ async fn dialog_pp_model_open_round_trips_through_parent() {
     </pine-dialog-portal>
   </pine-dialog-root>
 </div>
-"#)]
+})]
 struct DialogTeleportHost {}
 #[handlers]
 impl DialogTeleportHost {}
@@ -3197,7 +3197,7 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
 // fire on the hoisted element — otherwise the dialog never opens.
 compiled_fixture!(
     DialogTriggerAsFixture,
-    r#"
+    {
 <div>
   <pine-dialog-root>
     <pine-dialog-trigger pp-as>
@@ -3213,7 +3213,7 @@ compiled_fixture!(
     </pine-dialog-portal>
   </pine-dialog-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3278,7 +3278,7 @@ async fn dialog_trigger_pp_as_click_opens_dialog() {
 // `inject<Root>() = None` and the dialog stayed open.
 compiled_fixture!(
     DialogCloseSiblingsFixture,
-    r#"
+    {
 <div>
   <pine-dialog-root pp-model:open="dialog_open">
     <pine-dialog-trigger pp-as>
@@ -3301,7 +3301,7 @@ compiled_fixture!(
     </pine-dialog-portal>
   </pine-dialog-root>
 </div>
-"#,
+ },
     { dialog_open: bool }
 );
 
@@ -3383,7 +3383,7 @@ async fn dialog_pp_as_close_siblings_both_fire() {
 // no Root value update, no `pp:update:value`, no aria mutation.
 compiled_fixture!(
     DialogRadioGroupFixture,
-    r#"
+    {
 <div>
   <pine-dialog-root pp-model:open="dialog_open">
     <pine-dialog-trigger class="drg-open">Open preferences</pine-dialog-trigger>
@@ -3399,7 +3399,7 @@ compiled_fixture!(
   </pine-dialog-root>
   <span class="density-state" pp-text="density"></span>
 </div>
-"#,
+ },
     {
         dialog_open: bool,
         density: String
@@ -3530,7 +3530,7 @@ async fn radio_group_item_in_portaled_dialog_selects_root() {
 // which the merged `@click="toggle"` then catches.
 compiled_fixture!(
     DialogComposedButtonFixture,
-    r#"
+    {
 <div>
   <pine-dialog-root>
     <pine-dialog-trigger pp-as>
@@ -3546,7 +3546,7 @@ compiled_fixture!(
     </pine-dialog-portal>
   </pine-dialog-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3630,7 +3630,7 @@ async fn dialog_trigger_composes_pine_button() {
 // that A's Content disappears when B's mounts.
 compiled_fixture!(
     TooltipProviderFixture,
-    r#"
+    {
 <div>
   <pine-tooltip-provider delay_duration="0">
     <pine-tooltip-root>
@@ -3643,7 +3643,7 @@ compiled_fixture!(
     </pine-tooltip-root>
   </pine-tooltip-provider>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3711,7 +3711,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
 // an Item closes the menu.
 compiled_fixture!(
     ContextMenuFixture,
-    r#"
+    {
 <div>
   <pine-context-menu-root>
     <pine-context-menu-trigger>
@@ -3726,7 +3726,7 @@ compiled_fixture!(
     </pine-context-menu-portal>
   </pine-context-menu-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3794,12 +3794,12 @@ async fn context_menu_right_click_opens_and_item_closes() {
 // native click-through to the paired input Just Works.
 compiled_fixture!(
     LabelFixture,
-    r#"
+    {
 <div>
   <pine-label target="the-input">Email</pine-label>
   <input id="the-input" type="text">
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3820,13 +3820,13 @@ async fn label_renders_native_label_with_for_attr() {
 // `aria-orientation="horizontal"`; `decorative` drops them.
 compiled_fixture!(
     SeparatorFixture,
-    r#"
+    {
 <div>
   <pine-separator class="s-one"></pine-separator>
   <pine-separator class="s-two" orientation="vertical"></pine-separator>
   <pine-separator class="s-three" decorative="true"></pine-separator>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3860,24 +3860,24 @@ async fn separator_role_and_orientation_flags() {
 // mirrors `data-value` / `data-max` / `data-state` reactively.
 compiled_fixture!(
     ProgressDeterminateFixture,
-    r#"
+    {
 <div>
   <pine-progress-root value="42" max="100">
     <pine-progress-indicator></pine-progress-indicator>
   </pine-progress-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     ProgressIndeterminateFixture,
-    r#"
+    {
 <div>
   <pine-progress-root value="-1">
     <pine-progress-indicator class="ind2"></pine-progress-indicator>
   </pine-progress-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3927,7 +3927,7 @@ async fn progress_determinate_and_indeterminate_states() {
 // `ratio` prop flows into inline `style="aspect-ratio: …"`.
 compiled_fixture!(
     AspectRatioFixture,
-    r#"<div><pine-aspect-ratio ratio="1.777"></pine-aspect-ratio></div>"#
+    { <div><pine-aspect-ratio ratio="1.777"></pine-aspect-ratio></div> }
 );
 
 #[wasm_bindgen_test]
@@ -3951,7 +3951,7 @@ async fn aspect_ratio_sets_css_aspect_ratio() {
 // and Separator inside picks up the inverted orientation.
 compiled_fixture!(
     ToolbarFixture,
-    r#"
+    {
 <div>
   <pine-toolbar-root orientation="horizontal">
     <pine-toolbar-button>A</pine-toolbar-button>
@@ -3959,7 +3959,7 @@ compiled_fixture!(
     <pine-toolbar-button>B</pine-toolbar-button>
   </pine-toolbar-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -3990,7 +3990,7 @@ async fn toolbar_orientation_flows_to_separator() {
 // the delays to 0 so the test doesn't need to wait real time.
 compiled_fixture!(
     HoverCardFixture,
-    r##"
+    {
 <div>
   <pine-hover-card-root open_delay="0" close_delay="0">
     <pine-hover-card-trigger>
@@ -4003,7 +4003,7 @@ compiled_fixture!(
     </pine-hover-card-portal>
   </pine-hover-card-root>
 </div>
-"##
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4055,7 +4055,7 @@ async fn hover_card_hover_opens_and_leave_closes() {
 // emits `pp:update:pressed` for two-way `pp-model:pressed` binding.
 compiled_fixture!(
     ToggleFixture,
-    r#"<div><pine-toggle class="tg">B</pine-toggle></div>"#
+    { <div><pine-toggle class="tg">B</pine-toggle></div> }
 );
 
 #[wasm_bindgen_test]
@@ -4104,7 +4104,7 @@ async fn toggle_click_flips_state_and_emits() {
 // the selection (value = "").
 compiled_fixture!(
     ToggleGroupSingleFixture,
-    r#"
+    {
 <div>
   <pine-toggle-group-root>
     <pine-toggle-group-item value="a" class="tgi-a">A</pine-toggle-group-item>
@@ -4112,7 +4112,7 @@ compiled_fixture!(
     <pine-toggle-group-item value="c" class="tgi-c">C</pine-toggle-group-item>
   </pine-toggle-group-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4165,7 +4165,7 @@ async fn toggle_group_single_mode_exclusive_selection() {
 // independently; other items keep their state.
 compiled_fixture!(
     ToggleGroupMultipleFixture,
-    r#"
+    {
 <div>
   <pine-toggle-group-root type="multiple">
     <pine-toggle-group-item value="bold" class="tgm-b">B</pine-toggle-group-item>
@@ -4173,7 +4173,7 @@ compiled_fixture!(
     <pine-toggle-group-item value="underline" class="tgm-u">U</pine-toggle-group-item>
   </pine-toggle-group-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4224,7 +4224,7 @@ async fn toggle_group_multiple_mode_independent_selection() {
 // Root's element so `pp-model:value` can two-way bind.
 compiled_fixture!(
     RadioGroupClickFixture,
-    r#"
+    {
 <div>
   <pine-radio-group-root>
     <pine-radio-group-item value="a" class="rg-a">A</pine-radio-group-item>
@@ -4232,7 +4232,7 @@ compiled_fixture!(
     <pine-radio-group-item value="c" class="rg-c">C</pine-radio-group-item>
   </pine-radio-group-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4304,14 +4304,14 @@ async fn radio_group_click_selects_and_emits() {
 // Disabled Item ignores clicks; disabled Root disables all items.
 compiled_fixture!(
     RadioGroupDisabledFixture,
-    r#"
+    {
 <div>
   <pine-radio-group-root value="a">
     <pine-radio-group-item value="a" class="rg2-a">A</pine-radio-group-item>
     <pine-radio-group-item value="b" disabled="true" class="rg2-b">B</pine-radio-group-item>
   </pine-radio-group-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4341,7 +4341,7 @@ async fn radio_group_respects_disabled() {
 // `inject<ScopeId>(CHECKED_OWNER_KEY)` + `watch_scope_field`.
 compiled_fixture!(
     RadioGroupIndicatorFixture,
-    r#"
+    {
 <div>
   <pine-radio-group-root>
     <pine-radio-group-item value="a" class="rg3-a">
@@ -4354,7 +4354,7 @@ compiled_fixture!(
     </pine-radio-group-item>
   </pine-radio-group-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4428,7 +4428,7 @@ async fn radio_group_indicator_mirrors_item_checked() {
 // (alerts require an explicit Action or Cancel choice).
 compiled_fixture!(
     AlertDialogRoleFixture,
-    r#"
+    {
 <div>
   <pine-alert-dialog-root>
     <pine-alert-dialog-trigger class="ad-trig">open</pine-alert-dialog-trigger>
@@ -4443,7 +4443,7 @@ compiled_fixture!(
     </pine-alert-dialog-portal>
   </pine-alert-dialog-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4503,7 +4503,7 @@ async fn alert_dialog_renders_alertdialog_role_and_ignores_overlay_click() {
 // Action and Cancel both close the alert dialog.
 compiled_fixture!(
     AlertDialogActionFixture,
-    r#"
+    {
 <div>
   <pine-alert-dialog-root>
     <pine-alert-dialog-trigger class="ad2-trig">open</pine-alert-dialog-trigger>
@@ -4516,7 +4516,7 @@ compiled_fixture!(
     </pine-alert-dialog-portal>
   </pine-alert-dialog-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4578,7 +4578,7 @@ async fn alert_dialog_action_and_cancel_close() {
 // any prop-drilling.
 compiled_fixture!(
     ButtonBubbleFixture,
-    r#"<div><pine-button>Hit me</pine-button></div>"#
+    { <div><pine-button>Hit me</pine-button></div> }
 );
 
 #[wasm_bindgen_test]
@@ -4621,7 +4621,7 @@ async fn button_clicks_bubble_through_pine_button_tag() {
 // "text" without disturbing author-supplied attributes.
 compiled_fixture!(
     PasswordToggleFixture,
-    r#"
+    {
 <div>
   <pine-password-toggle-field-root>
     <pine-password-toggle-field-input>
@@ -4632,7 +4632,7 @@ compiled_fixture!(
     </pine-password-toggle-field-toggle>
   </pine-password-toggle-field-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -4695,17 +4695,17 @@ async fn password_toggle_field_toggle_flips_input_type() {
 // each keystroke. Numeric filter drops non-digit input.
 compiled_fixture!(
     OtpField4NumericFixture,
-    r#"<div><pine-otp-field length="4" type="numeric"></pine-otp-field></div>"#
+    { <div><pine-otp-field length="4" type="numeric"></pine-otp-field></div> }
 );
 
 compiled_fixture!(
     OtpField4Fixture,
-    r#"<div><pine-otp-field length="4"></pine-otp-field></div>"#
+    { <div><pine-otp-field length="4"></pine-otp-field></div> }
 );
 
 compiled_fixture!(
     OtpField3Fixture,
-    r#"<div><pine-otp-field length="3"></pine-otp-field></div>"#
+    { <div><pine-otp-field length="3"></pine-otp-field></div> }
 );
 
 #[wasm_bindgen_test]
@@ -5130,26 +5130,26 @@ async fn otp_field_backspace_walks_back_and_clears() {
 // the new numeric value.
 compiled_fixture!(
     SliderKeyboardFixture,
-    r#"
+    {
 <div>
   <pine-slider-root min="0" max="100" step="10" value="50">
     <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>
     <pine-slider-thumb></pine-slider-thumb>
   </pine-slider-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     SliderPointerFixture,
-    r#"
+    {
 <div>
   <pine-slider-root min="0" max="100" step="10" value="0">
     <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>
     <pine-slider-thumb></pine-slider-thumb>
   </pine-slider-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -5387,7 +5387,7 @@ async fn slider_drag_updates_value_continuously() {
 // `pp-model:value` binding round-trips.
 compiled_fixture!(
     SelectClickFixture,
-    r#"
+    {
 <div>
   <pine-select-root>
     <pine-select-trigger>
@@ -5402,12 +5402,12 @@ compiled_fixture!(
     </pine-select-portal>
   </pine-select-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     SelectEscapeFixture,
-    r#"
+    {
 <div>
   <pine-select-root value="b">
     <pine-select-trigger><pine-select-value>-</pine-select-value></pine-select-trigger>
@@ -5419,7 +5419,7 @@ compiled_fixture!(
     </pine-select-portal>
   </pine-select-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -5557,7 +5557,7 @@ async fn select_escape_closes_and_aria_selected_mirrors_value() {
 // ─── PineCombobox ─────────────────────────────────────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-combobox-root>
     <pine-combobox-input placeholder="Search"></pine-combobox-input>
@@ -5571,7 +5571,7 @@ async fn select_escape_closes_and_aria_selected_mirrors_value() {
     </pine-combobox-portal>
   </pine-combobox-root>
 </div>
-"#)]
+})]
 struct ComboboxFilterHost {}
 #[handlers]
 impl ComboboxFilterHost {}
@@ -5720,7 +5720,7 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
 // and closes the palette.
 compiled_fixture!(
     CommandFixture,
-    r#"
+    {
 <div>
   <pine-command-root>
     <pine-command-portal>
@@ -5736,7 +5736,7 @@ compiled_fixture!(
     </pine-command-portal>
   </pine-command-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -5824,7 +5824,7 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
 // treats the associated Input as inside via a data-attr bridge.
 compiled_fixture!(
     ComboboxMouseFixture,
-    r#"
+    {
 <div>
   <pine-combobox-root>
     <pine-combobox-input></pine-combobox-input>
@@ -5835,12 +5835,12 @@ compiled_fixture!(
     </pine-combobox-portal>
   </pine-combobox-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     ComboboxTypingFixture,
-    r#"
+    {
 <div>
   <pine-combobox-root>
     <pine-combobox-input placeholder=""></pine-combobox-input>
@@ -5852,7 +5852,7 @@ compiled_fixture!(
     </pine-combobox-portal>
   </pine-combobox-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -5983,7 +5983,7 @@ async fn combobox_accumulates_typed_characters_in_input_value() {
 // nested=3). Fixed by starting the walk one level above own tag.
 compiled_fixture!(
     TreeLevelsFixture,
-    r#"
+    {
 <div>
   <pine-tree-root type="single">
     <pine-tree-item value="a" class="t-a">
@@ -5997,24 +5997,24 @@ compiled_fixture!(
     </pine-tree-item>
   </pine-tree-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     TreeTopLevelFixture,
-    r#"
+    {
 <div>
   <pine-tree-root type="single">
     <pine-tree-item value="a" class="t-a">a</pine-tree-item>
     <pine-tree-item value="b" class="t-b">b</pine-tree-item>
   </pine-tree-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     TreeToggleFixture,
-    r#"
+    {
 <div>
   <pine-tree-root type="single">
     <pine-tree-item value="a" class="t-a">
@@ -6024,12 +6024,12 @@ compiled_fixture!(
     </pine-tree-item>
   </pine-tree-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     TreeLeafFixture,
-    r#"
+    {
 <div>
   <pine-tree-root type="single">
     <pine-tree-item value="leaf" class="t-leaf">
@@ -6038,7 +6038,7 @@ compiled_fixture!(
     </pine-tree-item>
   </pine-tree-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -6194,7 +6194,7 @@ async fn tree_click_item_selects_in_single_mode() {
 // partial sums during registration.
 compiled_fixture!(
     SplitterInitialFixture,
-    r#"
+    {
 <div>
   <pine-splitter-group direction="horizontal">
     <pine-splitter-panel default-size="25" min-size="10" class="sp-a"></pine-splitter-panel>
@@ -6204,12 +6204,12 @@ compiled_fixture!(
     <pine-splitter-panel default-size="25" min-size="10" class="sp-c"></pine-splitter-panel>
   </pine-splitter-group>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     SplitterAriaFixture,
-    r#"
+    {
 <div>
   <pine-splitter-group direction="horizontal">
     <pine-splitter-panel default-size="20"></pine-splitter-panel>
@@ -6219,12 +6219,12 @@ compiled_fixture!(
     <pine-splitter-panel default-size="20"></pine-splitter-panel>
   </pine-splitter-group>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     SplitterKeyboardFixture,
-    r#"
+    {
 <div>
   <pine-splitter-group direction="horizontal">
     <pine-splitter-panel default-size="30" class="sp-a"></pine-splitter-panel>
@@ -6234,7 +6234,7 @@ compiled_fixture!(
     <pine-splitter-panel default-size="30" class="sp-c"></pine-splitter-panel>
   </pine-splitter-group>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -6372,7 +6372,7 @@ fn tags_root_values(host: &Element) -> Vec<String> {
 // Item's own `on_setup` still land in the text.
 compiled_fixture!(
     TagsInitialFixture,
-    r#"
+    {
 <div>
   <pine-tags-input-root class="t-root">
     <pine-tags-input-item value="alpha" class="t-a">
@@ -6383,18 +6383,18 @@ compiled_fixture!(
     </pine-tags-input-item>
   </pine-tags-input-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     TagsInputOnlyFixture,
-    r#"
+    {
 <div>
   <pine-tags-input-root>
     <pine-tags-input-input class="t-input"></pine-tags-input-input>
   </pine-tags-input-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -6560,14 +6560,14 @@ async fn tags_input_backspace_on_empty_pops_last_tag() {
 // Clicking the Clear button empties Root.values.
 compiled_fixture!(
     TagsClearFixture,
-    r#"
+    {
 <div>
   <pine-tags-input-root>
     <pine-tags-input-input class="t-input"></pine-tags-input-input>
     <pine-tags-input-clear class="t-clear">Clear</pine-tags-input-clear>
   </pine-tags-input-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -7122,14 +7122,14 @@ async fn setattr_round_trip_normalises_event_shorthand() {
 // delivery.
 compiled_fixture!(
     FormFixture,
-    r#"
+    {
 <div>
   <pine-form-root>
     <input name="x">
     <button type="submit" class="fm-submit">Save</button>
   </pine-form-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -7179,7 +7179,7 @@ async fn form_prevents_default_and_emits_pp_submit() {
 // ids; `aria-errormessage` references just the Error id.
 compiled_fixture!(
     FieldWiringFixture,
-    r#"
+    {
 <div>
   <pine-field-root name="fullname">
     <pine-field-label>Name</pine-field-label>
@@ -7190,12 +7190,12 @@ compiled_fixture!(
     <pine-field-error>Please enter your name.</pine-field-error>
   </pine-field-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     FieldStateFixture,
-    r#"
+    {
 <div>
   <pine-field-root name="email">
     <pine-field-label>Email</pine-field-label>
@@ -7204,12 +7204,12 @@ compiled_fixture!(
     </pine-field-control>
   </pine-field-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     FieldInvalidFixture,
-    r#"
+    {
 <div>
   <pine-field-root name="x" invalid="true">
     <pine-field-label>X</pine-field-label>
@@ -7219,14 +7219,14 @@ compiled_fixture!(
     <pine-field-error class="fd-err">Bad.</pine-field-error>
   </pine-field-root>
 </div>
-"#
+ }
 );
 
 compiled_fixture!(
     FieldFormErrorsFixture,
-    r#"
+    {
 <div>
-  <pine-form-root errors='{"email":"Required"}'>
+  <pine-form-root errors="{&quot;email&quot;:&quot;Required&quot;}">
     <pine-field-root name="email">
       <pine-field-label>Email</pine-field-label>
       <pine-field-control>
@@ -7241,7 +7241,7 @@ compiled_fixture!(
     </pine-field-root>
   </pine-form-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -7410,7 +7410,7 @@ async fn field_picks_up_form_errors_by_name() {
 // even though the Legend isn't a native `<legend>`.
 compiled_fixture!(
     FieldsetFixture,
-    r#"
+    {
 <div>
   <pine-fieldset-root disabled="true">
     <pine-fieldset-legend>Account</pine-fieldset-legend>
@@ -7418,7 +7418,7 @@ compiled_fixture!(
     <input type="text" class="fs-last">
   </pine-fieldset-root>
 </div>
-"#
+ }
 );
 
 #[wasm_bindgen_test]
@@ -7466,29 +7466,29 @@ async fn fieldset_wires_legend_id_and_disables_descendants() {
 // writes back to the parent.
 compiled_fixture!(
     InputSeedFixture,
-    r#"<div><pine-input value="hello" placeholder="Name"></pine-input></div>"#
+    { <div><pine-input value="hello" placeholder="Name"></pine-input></div> }
 );
 
-compiled_fixture!(InputEmptyFixture, r#"<div><pine-input></pine-input></div>"#);
+compiled_fixture!(InputEmptyFixture, { <div><pine-input></pine-input></div> });
 
 compiled_fixture!(
     DateFieldFixture,
-    r#"<div><pine-date-field value="2024-01-15"></pine-date-field></div>"#
+    { <div><pine-date-field value="2024-01-15"></pine-date-field></div> }
 );
 
 compiled_fixture!(
     TimeFieldFixture,
-    r#"<div><pine-time-field value="01:30"></pine-time-field></div>"#
+    { <div><pine-time-field value="01:30"></pine-time-field></div> }
 );
 
 compiled_fixture!(
     DateRangeFieldFixture,
-    r#"<div><pine-date-range-field></pine-date-range-field></div>"#
+    { <div><pine-date-range-field></pine-date-range-field></div> }
 );
 
 compiled_fixture!(
     TimeRangeFieldFixture,
-    r#"<div><pine-time-range-field step="60"></pine-time-range-field></div>"#
+    { <div><pine-time-range-field step="60"></pine-time-range-field></div> }
 );
 
 #[wasm_bindgen_test]
@@ -7785,19 +7785,19 @@ async fn time_range_field_tab_bridges_start_end_edges() {
 // chain-walk regression below catches the same underlying
 // bug across all branches.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-tags-input-root id="tags-root" pp-model:values="values">
     <template pp-for="tag in values" pp-key="tag">
       <pine-tags-input-item :value="tag" class="chip">
         <pine-tags-input-item-text></pine-tags-input-item-text>
-        <pine-tags-input-item-delete class="chip-x">×</pine-tags-input-item-delete>
+        <pine-tags-input-item-delete class="chip-x">"×"</pine-tags-input-item-delete>
       </pine-tags-input-item>
     </template>
     <pine-tags-input-input class="t-input"></pine-tags-input-input>
   </pine-tags-input-root>
 </div>
-"#)]
+})]
 struct TagsInputChipHost {
     values: Vec<String>,
 }
@@ -7948,18 +7948,18 @@ async fn tags_input_per_chip_inject_chain_reaches_root() {
 // transitions for speed; the user's report may be specific to
 // the animated path).
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-tags-input-root pp-model:values="values">
     <template pp-for="tag in values" pp-key="tag">
       <pine-tags-input-item :value="tag" class="chip500">
         <pine-tags-input-item-text></pine-tags-input-item-text>
-        <pine-tags-input-item-delete class="chip500-x">×</pine-tags-input-item-delete>
+        <pine-tags-input-item-delete class="chip500-x">"×"</pine-tags-input-item-delete>
       </pine-tags-input-item>
     </template>
   </pine-tags-input-root>
 </div>
-"#)]
+})]
 struct TagsInput500Host {
     values: Vec<String>,
 }

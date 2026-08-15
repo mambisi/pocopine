@@ -16,12 +16,12 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "static-prop-coercion-target",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <span class="font-weight" pp-text="font_weight"></span>
         <span class="optional-code" pp-text="optional_code"></span>
         <span class="count" pp-text="count"></span>
         <span class="enabled" pp-text="enabled"></span>
-    </div>"#
+    </div>}
 )]
 struct StaticPropCoercionTarget {
     #[prop]
@@ -106,11 +106,11 @@ struct FlattenLeaves {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "prop-flatten-target",
-    template_inline = r#"<div>
+    template = poco! {<div>
         <span class="leaf-label" pp-text="label"></span>
         <span class="leaf-code" pp-text="code"></span>
         <span class="leaf-enabled" pp-text="enabled"></span>
-    </div>"#
+    </div>}
 )]
 struct PropFlattenTarget {
     #[prop(flatten = ["label", "code", "enabled"])]

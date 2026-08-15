@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "tp-unchecked",
-    template_inline = r#"<span pp-text="not_a_field"></span>"#,
+    template = poco! {<span pp-text="not_a_field"></span>},
     unchecked_paths = "true"
 )]
 struct TpUnchecked {

@@ -100,13 +100,13 @@ fn dispatch_click(target: &Element) {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(
     display = "contents",
-    template_inline = r#"
+    template = poco! {
 <root style="display:contents">
   <input class="mp-input" pp-model="search" />
   <span class="mp-q">{{ search }}</span>
   <span class="mp-n">{{ filtered.length }}</span>
 </root>
-"#
+}
 )]
 struct MemberPicker {
     search: String,
@@ -128,11 +128,11 @@ impl MemberPicker {
 // ── control: no teleport ───────────────────────────────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div class="plain-host">
   <member-picker></member-picker>
 </div>
-"#)]
+})]
 struct PlainHost {}
 
 #[handlers]
@@ -168,7 +168,7 @@ async fn computed_reruns_without_teleport() {
 // ── bare teleport: member-picker is a direct child of the body ─────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="toggle" @click="toggle">t</button>
   <template pp-if="open" pp-teleport="body">
@@ -177,7 +177,7 @@ async fn computed_reruns_without_teleport() {
     </div>
   </template>
 </div>
-"#)]
+})]
 struct BareTeleportHost {
     open: bool,
 }
@@ -229,7 +229,7 @@ async fn computed_reruns_in_bare_teleport() {
 // ── popover-slotted: the exact shape from the issue ────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <pine-popover-root>
     <pine-popover-trigger class="pop-trig">open</pine-popover-trigger>
@@ -240,7 +240,7 @@ async fn computed_reruns_in_bare_teleport() {
     </pine-popover-portal>
   </pine-popover-root>
 </div>
-"#)]
+})]
 struct PopoverSlottedHost {}
 
 #[handlers]
@@ -308,13 +308,13 @@ async fn computed_reruns_in_popover_slot() {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(
     display = "contents",
-    template_inline = r#"
+    template = poco! {
 <root style="display:contents">
   <input class="mpw-input" pp-model="search" />
   <span class="mpw-q">{{ search }}</span>
   <span class="mpw-n">{{ count }}</span>
 </root>
-"#
+}
 )]
 struct MemberPickerWatch {
     search: String,
@@ -335,11 +335,11 @@ impl MemberPickerWatch {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div class="plain-watch-host">
   <member-picker-watch></member-picker-watch>
 </div>
-"#)]
+})]
 struct PlainWatchHost {}
 
 #[handlers]
@@ -372,7 +372,7 @@ async fn watch_fires_without_teleport() {
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template_inline = r#"
+#[component(template = poco! {
 <div>
   <button class="toggle-w" @click="toggle">t</button>
   <template pp-if="open" pp-teleport="body">
@@ -381,7 +381,7 @@ async fn watch_fires_without_teleport() {
     </div>
   </template>
 </div>
-"#)]
+})]
 struct BareTeleportWatchHost {
     open: bool,
 }

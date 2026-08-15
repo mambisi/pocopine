@@ -1,0 +1,7 @@
+error: poco!: empty template — the macro body must contain a template, e.g. `poco! { <div>…</div> }`
+ --> tests/ui/poco_empty.rs:6:13
+  |
+6 |     let _ = poco! {};
+  |             ^^^^^^^^
+  |
+  = note: this error originates in the macro `poco` (in Nightly builds, run with -Z macro-backtrace for more info)

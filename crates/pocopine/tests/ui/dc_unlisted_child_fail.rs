@@ -2,14 +2,14 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template_inline = "<p>allowed</p>")]
+#[component(template = poco! { <p>allowed</p> })]
 struct DcAllowedChild {}
 
 #[handlers]
 impl DcAllowedChild {}
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template_inline = "<p>not listed</p>")]
+#[component(template = poco! { <p>not listed</p> })]
 struct DcUnlistedChild {}
 
 #[handlers]
@@ -18,7 +18,7 @@ impl DcUnlistedChild {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     uses = [DcAllowedChild],
-    template_inline = r#"<pp-component :is="active"></pp-component>"#,
+    template = poco! {<pp-component :is="active"></pp-component>},
 )]
 struct DcUsesHost {
     active: Option<ComponentRef<DcUsesHost>>,

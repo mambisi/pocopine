@@ -42,12 +42,12 @@ struct StaticHeaderProps {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-slot-static-host",
-    template_inline = r#"
+    template = poco! {
 <section class="typed-slot-static-host">
   <slot name="header" :queue_size="queue_size" :all_done="all_done"></slot>
   <div class="body">content</div>
 </section>
-"#
+}
 )]
 #[slot(name = "header", props = StaticHeaderProps)]
 struct TypedSlotStaticHost {
@@ -76,7 +76,7 @@ struct UploadFileLite {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-slot-iterated-host",
-    template_inline = r#"
+    template = poco! {
 <section class="typed-slot-iterated-host">
   <ul>
     <li pp-for="file in files">
@@ -84,7 +84,7 @@ struct UploadFileLite {
     </li>
   </ul>
 </section>
-"#
+}
 )]
 #[slot(name = "row", props = UploadFileLite)]
 struct TypedSlotIteratedHost {
@@ -116,7 +116,7 @@ struct IteratedRowFlat {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "typed-slot-mixed-host",
-    template_inline = r#"
+    template = poco! {
 <section class="typed-slot-mixed-host">
   <ul>
     <li pp-for="file in files">
@@ -124,7 +124,7 @@ struct IteratedRowFlat {
     </li>
   </ul>
 </section>
-"#
+}
 )]
 #[slot(name = "row", props = IteratedRowFlat)]
 struct TypedSlotMixedHost {
@@ -143,12 +143,12 @@ impl TypedSlotMixedHost {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "untyped-slot-host",
-    template_inline = r#"
+    template = poco! {
 <section class="untyped-slot-host">
   <slot></slot>
   <slot name="footer"></slot>
 </section>
-"#
+}
 )]
 #[slot(default)]
 #[slot(name = "footer")]

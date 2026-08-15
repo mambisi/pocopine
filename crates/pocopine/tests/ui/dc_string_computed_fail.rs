@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template_inline = r#"<pp-component :is="active"></pp-component>"#)]
+#[component(template = poco! {<pp-component :is="active"></pp-component>})]
 struct DcStringComputedHost {
     route: String,
 }

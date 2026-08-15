@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "tp-unknown-field",
-    template_inline = r#"<div><span pp-text="countt"></span></div>"#
+    template = poco! {<div><span pp-text="countt"></span></div>}
 )]
 struct TpUnknownField {
     count: i32,

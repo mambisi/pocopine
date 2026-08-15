@@ -1,5 +1,5 @@
 error: `<pp-component :is>` must be a path to a typed `ComponentRef<Host>` or `Option<ComponentRef<Host>>`; construct the selection with `ComponentRef::of::<Child>()` in a `ComponentRef<Host>` context (or host-scoped `from_registered_name` at an external boundary) and move conditional logic into a typed Rust field or `#[computed]` value
  --> tests/ui/dc_literal_ref_fail.rs:5:31
   |
-5 | #[component(template_inline = r#"<pp-component :is="'dc-literal-child'"></pp-component>"#)]
-  |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5 | #[component(template = poco! {<pp-component :is="'dc-literal-child'"></pp-component>})]
+  |                               ^

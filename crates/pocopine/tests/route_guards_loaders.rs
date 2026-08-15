@@ -92,7 +92,7 @@ fn navigate_to(path: &str) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rgl-allow-home",
-    template_inline = r#"<div class="rgl-allow-home">allow ok</div>"#
+    template = poco! {<div class="rgl-allow-home">allow ok</div>}
 )]
 struct GuardAllowHome {}
 
@@ -129,7 +129,7 @@ async fn guard_allow_mounts_component() {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rgl-reject-home",
-    template_inline = r#"<div>should never paint</div>"#
+    template = poco! {<div>should never paint</div>}
 )]
 struct GuardRejectHome {}
 
@@ -177,7 +177,7 @@ async fn guard_reject_paints_default_error_surface() {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "rgl-redirect-source", template_inline = r#"<div>source</div>"#)]
+#[component(name = "rgl-redirect-source", template = poco! {<div>source</div>})]
 struct GuardRedirectSource {}
 
 #[handlers]
@@ -194,7 +194,7 @@ impl RouteComponent for GuardRedirectSource {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-redirect-target",
-    template_inline = r#"<div class="rgl-redirect-target">at target</div>"#
+    template = poco! {<div class="rgl-redirect-target">at target</div>}
 )]
 struct GuardRedirectTarget {}
 
@@ -235,7 +235,7 @@ struct LoadedDashboardData {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rgl-loader-home",
-    template_inline = r#"<div class="rgl-loader-home">loaded:<span pp-text="label"></span></div>"#
+    template = poco! {<div class="rgl-loader-home">loaded:<span pp-text="label"></span></div>}
 )]
 struct LoaderHome {
     label: String,
@@ -286,7 +286,7 @@ async fn loader_ok_flows_into_component_setup() {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rgl-loader-unauth",
-    template_inline = r#"<div>should never paint</div>"#
+    template = poco! {<div>should never paint</div>}
 )]
 struct LoaderUnauthorized {}
 
@@ -307,7 +307,7 @@ impl RouteComponent for LoaderUnauthorized {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-loader-login",
-    template_inline = r#"<div class="rgl-loader-login">login</div>"#
+    template = poco! {<div class="rgl-loader-login">login</div>}
 )]
 struct LoaderLogin {}
 
@@ -350,7 +350,7 @@ async fn loader_unauthorized_dispatches_through_rejection_handler() {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-not-found",
-    template_inline = r#"<div class="rgl-not-found">404 surface</div>"#
+    template = poco! {<div class="rgl-not-found">404 surface</div>}
 )]
 struct NotFoundSurface {}
 
@@ -358,7 +358,7 @@ struct NotFoundSurface {}
 impl NotFoundSurface {}
 
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
-#[component(name = "rgl-known-route", template_inline = r#"<div>known</div>"#)]
+#[component(name = "rgl-known-route", template = poco! {<div>known</div>})]
 struct KnownRoute {}
 
 #[handlers]
@@ -392,7 +392,7 @@ async fn not_found_component_mounts_for_unmatched_url() {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-error-surface",
-    template_inline = r#"<div class="rgl-error-surface">app error UI</div>"#
+    template = poco! {<div class="rgl-error-surface">app error UI</div>}
 )]
 struct CustomErrorSurface {}
 
@@ -400,7 +400,7 @@ struct CustomErrorSurface {}
 impl CustomErrorSurface {}
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "rgl-error-rejected", template_inline = r#"<div>never</div>"#)]
+#[component(name = "rgl-error-rejected", template = poco! {<div>never</div>})]
 struct ErrorRejectedRoute {}
 
 #[handlers]
@@ -450,7 +450,7 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rgl-reeval-protected",
-    template_inline = r#"<div class="rgl-reeval-protected">protected</div>"#
+    template = poco! {<div class="rgl-reeval-protected">protected</div>}
 )]
 struct ReevalProtected {}
 
@@ -549,7 +549,7 @@ async fn server_idempotent_marks_fetch_request_replay_safe() {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "rgl-abort-slow",
-    template_inline = r#"<div>slow loader should never paint</div>"#
+    template = poco! {<div>slow loader should never paint</div>}
 )]
 struct AbortSlowRoute {}
 
@@ -568,7 +568,7 @@ impl RouteComponent for AbortSlowRoute {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "rgl-abort-target",
-    template_inline = r#"<div class="rgl-abort-target">target</div>"#
+    template = poco! {<div class="rgl-abort-target">target</div>}
 )]
 struct AbortTargetRoute {}
 

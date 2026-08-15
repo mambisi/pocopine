@@ -1,0 +1,9 @@
+error: `template_inline = "..."` was removed — write the template as HTML instead:
+
+           template = poco! { <div>…</div> }
+
+       Text that Rust's lexer rejects (apostrophes, `—`, `©`, emoji) goes in quotes: `<p>"Don't stop"</p>`.
+  --> tests/ui/poco_template_inline_removed.rs:10:5
+   |
+10 |     template_inline = r#"<div><span pp-text="count"></span></div>"#
+   |     ^^^^^^^^^^^^^^^

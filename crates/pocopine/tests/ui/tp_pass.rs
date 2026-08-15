@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "tp-pass",
-    template_inline = r#"<div>
+    template = poco! {<div>
   <span pp-text="count"></span>
   <span pp-text="shout"></span>
   <button pp-on:click="reset">r</button>
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
   <button @click="pick(count)">pick</button>
   <span pp-text="$store.prefs.theme"></span>
   <template pp-for="item in items"><b pp-text="item"></b><i pp-text="$index"></i></template>
-</div>"#
+</div>}
 )]
 struct TpPass {
     count: i32,

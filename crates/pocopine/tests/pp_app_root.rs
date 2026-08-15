@@ -40,7 +40,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "pap-home",
-    template_inline = r#"<div class="pap-home" data-mounted="yes">home mounted</div>"#
+    template = poco! {<div class="pap-home" data-mounted="yes">home mounted</div>}
 )]
 struct PapHome {}
 
@@ -50,7 +50,7 @@ impl PapHome {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-subtree",
-    template_inline = r#"<span class="pap-subtree" data-mounted="yes">subtree mounted</span>"#
+    template = poco! {<span class="pap-subtree" data-mounted="yes">subtree mounted</span>}
 )]
 struct PapSubtree {}
 
@@ -60,7 +60,7 @@ impl PapSubtree {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-remount",
-    template_inline = r#"<span class="pap-remount">remount</span>"#
+    template = poco! {<span class="pap-remount">remount</span>}
 )]
 struct PapRemount {}
 
@@ -78,7 +78,7 @@ impl PapRemount {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-watched",
-    template_inline = r#"<span class="pap-watched" pp-text="value"></span>"#
+    template = poco! {<span class="pap-watched" pp-text="value"></span>}
 )]
 struct PapWatched {
     value: u32,
@@ -93,7 +93,7 @@ impl PapWatched {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-observe-child",
-    template_inline = r#"<span class="pap-observe-child" pp-text="value"></span>"#
+    template = poco! {<span class="pap-observe-child" pp-text="value"></span>}
 )]
 struct PapObserveChild {
     #[observe(PAP_OBSERVE_ROOT)]
@@ -106,7 +106,7 @@ impl PapObserveChild {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-observe-root",
-    template_inline = r#"<div><pap-observe-child></pap-observe-child></div>"#,
+    template = poco! {<div><pap-observe-child></pap-observe-child></div>},
     uses = [PapObserveChild],
 )]
 struct PapObserveRoot {
@@ -126,7 +126,7 @@ impl PapObserveRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-ghost-inner",
-    template_inline = r#"<span class="pap-ghost-inner">inner</span>"#
+    template = poco! {<span class="pap-ghost-inner">inner</span>}
 )]
 struct PapGhostInner {}
 
@@ -140,7 +140,7 @@ impl PapGhostInner {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-ghost-outer",
-    template_inline = r#"<section class="pap-ghost-outer">outer</section>"#
+    template = poco! {<section class="pap-ghost-outer">outer</section>}
 )]
 struct PapGhostOuter {}
 

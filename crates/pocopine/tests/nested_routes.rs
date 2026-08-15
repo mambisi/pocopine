@@ -31,12 +31,12 @@ fn event(value: impl Into<String>) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "nr-admin-layout",
-    template_inline = r#"<section class="nr-layout">
+    template = poco! {<section class="nr-layout">
         <span class="nr-layout-data" pp-text="loader_data"></span>
         <span class="nr-layout-count" pp-text="count"></span>
         <button class="nr-layout-bump" @click="bump">bump</button>
         <pp-outlet></pp-outlet>
-    </section>"#
+    </section>}
 )]
 struct NestedAdminLayout {
     loader_data: String,
@@ -76,7 +76,7 @@ impl RouteComponent for NestedAdminLayout {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "nr-admin-index",
-    template_inline = r#"<div class="nr-index">index</div>"#
+    template = poco! {<div class="nr-index">index</div>}
 )]
 struct NestedAdminIndex {}
 
@@ -86,10 +86,10 @@ impl NestedAdminIndex {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "nr-admin-user",
-    template_inline = r#"<div class="nr-user">
+    template = poco! {<div class="nr-user">
         <span class="nr-user-id" pp-text="user_id"></span>
         <span class="nr-user-data" pp-text="loader_data"></span>
-    </div>"#
+    </div>}
 )]
 struct NestedAdminUser {
     #[prop]
@@ -125,7 +125,7 @@ impl RouteComponent for NestedAdminUser {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "nr-admin-settings",
-    template_inline = r#"<div class="nr-settings" pp-text="loader_data"></div>"#
+    template = poco! {<div class="nr-settings" pp-text="loader_data"></div>}
 )]
 struct NestedAdminSettings {
     loader_data: String,
@@ -155,11 +155,11 @@ impl RouteComponent for NestedAdminSettings {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "nr-safe-nav-source",
-    template_inline = r#"<div class="nr-safe-nav-source">
+    template = poco! {<div class="nr-safe-nav-source">
         <button class="nr-safe-navigate" @click="go_navigate">navigate</button>
         <button class="nr-safe-push" @click="go_push">push</button>
         <button class="nr-safe-replace" @click="go_replace">replace</button>
-    </div>"#
+    </div>}
 )]
 struct SafeNavigationSource {}
 
@@ -200,7 +200,7 @@ impl SafeNavigationSource {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "nr-safe-nav-navigate-target",
-    template_inline = r#"<div class="nr-safe-nav-navigate-target">navigate target</div>"#
+    template = poco! {<div class="nr-safe-nav-navigate-target">navigate target</div>}
 )]
 struct SafeNavigateTarget {}
 
@@ -214,7 +214,7 @@ impl SafeNavigateTarget {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "nr-safe-nav-push-target",
-    template_inline = r#"<div class="nr-safe-nav-push-target">push target</div>"#
+    template = poco! {<div class="nr-safe-nav-push-target">push target</div>}
 )]
 struct SafePushTarget {}
 
@@ -228,7 +228,7 @@ impl SafePushTarget {
 #[derive(Default, Serialize, Deserialize, RouteComponent)]
 #[component(
     name = "nr-safe-nav-replace-target",
-    template_inline = r#"<div class="nr-safe-nav-replace-target">replace target</div>"#
+    template = poco! {<div class="nr-safe-nav-replace-target">replace target</div>}
 )]
 struct SafeReplaceTarget {}
 
@@ -242,7 +242,7 @@ impl SafeReplaceTarget {
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "nr-safe-guard-source",
-    template_inline = r#"<button class="nr-safe-guard-reevaluate" @click="reject">reject</button>"#
+    template = poco! {<button class="nr-safe-guard-reevaluate" @click="reject">reject</button>}
 )]
 struct SafeGuardSource {}
 
