@@ -906,11 +906,22 @@ impl QueryClient {
                         .collect();
                     if !canonical.is_empty() {
                         self.route_canonical_changes::<Row>(&stream, &mutation_id, &canonical);
+                        // Every lifecycle exit clears its own durable
+                        // half (SPORC P5 doctrine): a mid-flight
+                        // persist may have captured this overlay
+                        // durably, and leaving that entry to the
+                        // persist sweep would trip the sweep's
+                        // steady-state leak detector on a perfectly
+                        // legitimate path.
+                        self.clear_persisted_pending::<Row>(&stream, &mutation_id)
+                            .await;
                     }
                     // No echo (e.g. an accepted delete): keep the
                     // overlay — dequeuing without a canonical change
                     // would resurface the not-yet-pulled canonical row;
-                    // the next /pull (or its tombstone) settles it.
+                    // the next /pull (or its tombstone, or the FEED
+                    // ECHO carrying this mutation id) settles it and
+                    // clears the durable side there.
                     guard.disarm();
                     Ok(())
                 } else if mutation_id_rejected_or_conflicted {
