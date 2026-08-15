@@ -358,6 +358,32 @@ pub enum MutationReservation {
     AlreadyAccepted(AcceptedMutation),
 }
 
+/// Result of [`MutationLog::observe_device_counter`] — the
+/// client-order-preservation telemetry (SPORC P4).
+///
+/// A device's mutation counter is durably reserved client-side and
+/// never legitimately rewinds. A regression therefore signals a
+/// duplicated or restored client identity (an IndexedDB restored
+/// from backup, two tabs cloned onto one device id). It is a
+/// DETECTOR, not a gate: the push path warns loudly but still
+/// processes the mutation, because client pushes are not strictly
+/// ordered (an offline-queued older mutation legitimately replays
+/// after a newer one succeeded). The sound *rejection* signal is a
+/// reused id with DIVERGENT contents, which the idempotency check
+/// catches and classifies `SyncRejectCode::IdentityFault`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CounterCheck {
+    /// The counter advanced past everything previously observed for
+    /// this device (or the log doesn't track counters).
+    Monotonic,
+    /// The counter is at or below the highest already observed for
+    /// this device in this scope.
+    Regressed {
+        /// The highest counter observed before this mutation.
+        highest: u64,
+    },
+}
+
 // ---- Host-only items below ---------------------------------------
 // The MutationLog trait threads `pocopine_core::server::RequestContext`,
 // which is itself cfg-gated to non-wasm. Everything above this
@@ -424,6 +450,23 @@ mod host {
             ctx: &RequestContext,
             mutation_id: &MutationId,
         ) -> SyncResult<Option<AcceptedMutation>>;
+
+        /// Atomically observe a device's mutation counter and report
+        /// whether it advanced (see [`super::CounterCheck`]). Called
+        /// by the push adapter for every mutation whose id parses as
+        /// `device:counter`, BEFORE reservation. Implementations
+        /// track the highest counter per `(scope, device)` with a
+        /// compare-and-raise; the default is a no-op so custom logs
+        /// opt in.
+        async fn observe_device_counter(
+            &self,
+            ctx: &RequestContext,
+            device: &str,
+            counter: u64,
+        ) -> SyncResult<super::CounterCheck> {
+            let _ = (ctx, device, counter);
+            Ok(super::CounterCheck::Monotonic)
+        }
     }
 
     /// Function used by `MemoryMutationLog::with_scope_fn` to project an
@@ -436,6 +479,9 @@ mod host {
     #[derive(Clone)]
     pub struct MemoryMutationLog<Row> {
         accepted: Arc<Mutex<BTreeMap<(String, String), AcceptedMutation>>>,
+        /// Highest observed mutation counter per `(scope, device)` —
+        /// the client-order-preservation telemetry (SPORC P4).
+        counters: Arc<Mutex<BTreeMap<(String, String), u64>>>,
         scope: MemoryScopeFn,
         _marker: std::marker::PhantomData<fn() -> Row>,
     }
@@ -459,6 +505,7 @@ mod host {
         pub fn new() -> Self {
             Self {
                 accepted: Arc::new(Mutex::new(BTreeMap::new())),
+                counters: Arc::new(Mutex::new(BTreeMap::new())),
                 scope: Arc::new(|_ctx| Ok(String::new())),
                 _marker: std::marker::PhantomData,
             }
@@ -474,6 +521,7 @@ mod host {
         {
             Self {
                 accepted: Arc::new(Mutex::new(BTreeMap::new())),
+                counters: Arc::new(Mutex::new(BTreeMap::new())),
                 scope: Arc::new(scope),
                 _marker: std::marker::PhantomData,
             }
@@ -525,6 +573,29 @@ mod host {
             Ok(accepted
                 .get(&(scope, mutation_id.as_str().to_string()))
                 .cloned())
+        }
+
+        async fn observe_device_counter(
+            &self,
+            ctx: &RequestContext,
+            device: &str,
+            counter: u64,
+        ) -> SyncResult<super::CounterCheck> {
+            let scope = (self.scope)(ctx)?;
+            // Single lock hold: the compare-and-raise is atomic, so
+            // two concurrent pushes from a cloned device identity
+            // can't both read the same highest.
+            let mut counters = self
+                .counters
+                .lock()
+                .map_err(|_| SyncError::backend("memory mutation log lock poisoned"))?;
+            let entry = counters.entry((scope, device.to_string())).or_insert(0);
+            if counter > *entry {
+                *entry = counter;
+                Ok(super::CounterCheck::Monotonic)
+            } else {
+                Ok(super::CounterCheck::Regressed { highest: *entry })
+            }
         }
     }
 }

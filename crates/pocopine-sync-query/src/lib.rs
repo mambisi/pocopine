@@ -115,8 +115,9 @@ pub use feed::{
 // the old `Crud*` names for back-compat.
 // Pure data types — always exported.
 pub use write::{
-    AcceptedMutation, Conflict, CreatePayload, DeletePayload, DeleteResult, MutationPayload,
-    MutationReservation, OptimisticRowFn, TypedMutation, UpdatePayload, WriteResult,
+    AcceptedMutation, Conflict, CounterCheck, CreatePayload, DeletePayload, DeleteResult,
+    MutationPayload, MutationReservation, OptimisticRowFn, TypedMutation, UpdatePayload,
+    WriteResult,
 };
 
 // Host-only: the trait + impl depend on `pocopine_core::server::RequestContext`.

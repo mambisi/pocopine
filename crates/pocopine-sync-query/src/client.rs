@@ -719,7 +719,7 @@ impl QueryClient {
                     payload_value,
                 );
                 wire.key = wire_row_key;
-                let request = pocopine_sync::SyncPushRequest::new(stream, [wire]);
+                let request = pocopine_sync::SyncPushRequest::new(stream.clone(), [wire]);
                 let response = pocopine_core::fetch::call::<
                     pocopine_sync::SyncPushRequest<Value>,
                     pocopine_sync::SyncPushResponse<Value>,
@@ -736,6 +736,7 @@ impl QueryClient {
                 // path's response inspection so a server rejection
                 // surfaces as `Err(...)` instead of a silent
                 // "succeeded" with the write actually dropped.
+                warn_identity_faults(&stream, &response);
                 if response
                     .rejected
                     .iter()
@@ -872,6 +873,7 @@ impl QueryClient {
                 // rejected/conflicted push leaves the optimistic
                 // overlay alive indefinitely unless the guard
                 // rolls it back.
+                warn_identity_faults(&stream, &response);
                 let mutation_id_accepted = response.accepted.iter().any(|id| id == &mutation_id);
                 let mutation_id_rejected_or_conflicted = response
                     .rejected
@@ -2025,6 +2027,7 @@ impl QueryClient {
                 return ReplayOutcome::StillOffline;
             }
         };
+        warn_identity_faults(stream, &response);
         let accepted = response.accepted.iter().any(|id| id == &mutation.id);
         let rejected = response
             .rejected
@@ -2196,6 +2199,30 @@ impl QueryClient {
         stream: &SyncStreamName,
     ) -> Vec<Rc<QuerySubscription<Row>>> {
         collect_subscriptions_on_stream_inner(&self.inner, stream)
+    }
+}
+
+/// Warn loudly when a push response carries an IDENTITY FAULT
+/// rejection (SPORC P4): the server saw this device re-mint an
+/// already-accepted mutation id with different contents, which means
+/// the durable client identity is duplicated or restored from backup.
+/// Retrying cannot succeed; the recovery is a fresh device identity +
+/// wipe-and-resync.
+fn warn_identity_faults(stream: &SyncStreamName, response: &pocopine_sync::SyncPushResponse<Value>) {
+    for rejected in &response.rejected {
+        if rejected.code == Some(pocopine_sync::SyncRejectCode::IdentityFault) {
+            tracing::warn!(
+                target: "pocopine.log",
+                stream = stream.as_str(),
+                mutation_id = %rejected.mutation_id,
+                reason = %rejected.reason,
+                "sync-query: IDENTITY FAULT — this device's durable identity \
+                 re-minted an accepted mutation id with different contents \
+                 (cloned tab sharing one device id, or a local store restored \
+                 from backup). Mint a fresh device identity and wipe-and-resync; \
+                 retries of this mutation can never succeed."
+            );
+        }
     }
 }
 

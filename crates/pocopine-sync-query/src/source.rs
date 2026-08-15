@@ -1072,6 +1072,33 @@ where
                     continue;
                 }
 
+                // Client-order-preservation telemetry (SPORC P4): a
+                // device's durably-reserved counter never legitimately
+                // rewinds, so a regression on a NEW mutation signals a
+                // duplicated or restored client identity. WARN, don't
+                // reject — an offline-queued older mutation replaying
+                // after a newer one succeeded is legitimate (client
+                // pushes are not strictly ordered). The sound
+                // rejection signal is a reused id with DIVERGENT
+                // contents, classified IdentityFault below.
+                if let Some((device, counter)) = parse_device_counter(mutation_id.as_str())
+                    && let crate::write::CounterCheck::Regressed { highest } = mutation_log
+                        .observe_device_counter(&ctx, device, counter)
+                        .await?
+                {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        stream = %stream,
+                        device,
+                        counter,
+                        highest,
+                        "sync-query: device mutation counter regressed — a \
+                         replay of an old queued mutation, or a duplicated / \
+                         restored client identity. If this repeats without a \
+                         matching idempotent accept, suspect a cloned device id."
+                    );
+                }
+
                 // Atomic reserve-or-return-existing (RFC 090 review
                 // #3). Validation already passed; the reservation
                 // contract is now safe — only known-decodable
@@ -1091,15 +1118,27 @@ where
                         // Genuine same-mutation-id conflict (client
                         // changed semantics). Name what diverged
                         // for diagnosability (review-of-review #12).
+                        //
+                        // Classified IdentityFault: a device that
+                        // durably reserves its counters can only
+                        // re-mint an id with different contents when
+                        // its identity is duplicated or restored
+                        // from backup (two tabs cloned onto one
+                        // device id, an IndexedDB rolled back). The
+                        // client's recovery is a fresh device
+                        // identity + wipe-and-resync, never a retry.
                         let diff = describe_replay_diff(&prior, op, &expected_key, &payload_value);
-                        response.rejected.push(SyncRejectedMutation {
-                            mutation_id,
-                            key,
-                            reason: format!(
-                                "mutation id was already accepted with different contents ({diff})"
-                            ),
-                            code: None,
-                        });
+                        response.rejected.push(
+                            SyncRejectedMutation::new(
+                                mutation_id,
+                                key,
+                                format!(
+                                    "mutation id was already accepted with different \
+                                     contents ({diff})"
+                                ),
+                            )
+                            .with_code(pocopine_sync::SyncRejectCode::IdentityFault),
+                        );
                     }
                     continue;
                 }
@@ -1153,6 +1192,18 @@ where
             Ok(response)
         })
     }
+}
+
+/// Parse a framework-minted mutation id (`device:counter`) into its
+/// halves. `None` for ids that don't follow the convention (custom
+/// clients) — counter telemetry simply doesn't apply to them.
+fn parse_device_counter(id: &str) -> Option<(&str, u64)> {
+    let (device, counter) = id.rsplit_once(':')?;
+    let counter = counter.parse::<u64>().ok()?;
+    if device.is_empty() {
+        return None;
+    }
+    Some((device, counter))
 }
 
 /// Translate one typed feed entry into its wire `SyncChange`,
