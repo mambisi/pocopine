@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, Message, ModelRef, Role, StepId, StepKind, StepStatus,
-    ThinkingLevel, ToolDescriptor, events,
+    ThinkingLevel, ToolDescriptor, Usage, events,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -405,16 +405,24 @@ async fn maybe_compact<A: AiAgent>(
     thread: &AgentThreadHandle,
 ) -> AgenkitResult<()> {
     let max_output = config.max_tokens.unwrap_or(1024);
-    if let Some((folded, kept)) = compact_thread(
+    // Compaction gets its own step under this run, so its model call is traced
+    // and metered exactly like the turn's own steps.
+    let observer = loop_core::TraceObserver {
+        run,
+        agent_step: run.next_step_id(),
+    };
+    if let Some(compaction) = compact_thread(
         thread,
         model,
         provider,
         cx,
         max_output,
         &config.compaction_provider_options,
+        &observer,
     )
     .await?
     {
+        let (folded, kept) = (compaction.folded, compaction.kept);
         run.emit(
             run.event(
                 events::AI_THREAD_CHECKPOINTED,
@@ -437,6 +445,21 @@ async fn maybe_compact<A: AiAgent>(
 ///
 /// Shared by the single-shot agent loop ([`maybe_compact`]) and the long-lived
 /// runtime ([`super::runtime`]); the caller emits its own checkpoint event.
+/// What one compaction pass cost and folded away.
+///
+/// `usage` is the reason this is a struct rather than the old `(folded, kept)`
+/// tuple: the summarization call bills the caller like any other model call, so
+/// the caller needs its tokens to record them. Dropping them here is what made
+/// compaction spend invisible to `AgentSession::usage()`/`cost()`.
+pub(crate) struct Compaction {
+    /// Messages folded into the summary.
+    pub(crate) folded: u64,
+    /// Messages kept verbatim in the active context.
+    pub(crate) kept: u64,
+    /// Tokens the summarization call itself consumed.
+    pub(crate) usage: Usage,
+}
+
 pub(crate) async fn compact_thread(
     thread: &AgentThreadHandle,
     model: &ModelRef,
@@ -444,7 +467,8 @@ pub(crate) async fn compact_thread(
     cx: &ProviderContext,
     max_output: u32,
     provider_options: &serde_json::Map<String, serde_json::Value>,
-) -> AgenkitResult<Option<(u64, u64)>> {
+    observer: &(dyn loop_core::LoopObserver + Sync),
+) -> AgenkitResult<Option<Compaction>> {
     // Without catalog metadata we can't size the window — skip (degrade, no error).
     let Some(catalog_model) = super::catalog::lookup(model) else {
         return Ok(None);
@@ -484,12 +508,17 @@ pub(crate) async fn compact_thread(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let summary = summarize(transcript, model, provider, cx, provider_options).await?;
+    let (summary, usage) =
+        summarize(transcript, model, provider, cx, provider_options, observer).await?;
     let (folded, kept) = (older.len() as u64, recent.len() as u64);
     thread
         .checkpoint(Message::system(summary), recent.to_vec())
         .await?;
-    Ok(Some((folded, kept)))
+    Ok(Some(Compaction {
+        folded,
+        kept,
+        usage,
+    }))
 }
 
 /// The token budget for the recent tail [`maybe_compact`] keeps verbatim. Older
@@ -544,13 +573,18 @@ async fn summarize(
     provider: &Arc<dyn Provider>,
     cx: &ProviderContext,
     provider_options: &serde_json::Map<String, serde_json::Value>,
-) -> AgenkitResult<String> {
+    observer: &(dyn loop_core::LoopObserver + Sync),
+) -> AgenkitResult<(String, Usage)> {
     let request = compaction_request(transcript, model, provider_options);
-    Ok(provider
-        .generate(request, cx)
+    // Through `run_model_step`, not `provider.generate` directly: compaction is a
+    // real model call against the caller's account, so it emits the same
+    // request/response spans — and the same token usage and catalog cost — as any
+    // other step. Calling the provider directly is what made this spend invisible.
+    let response = loop_core::run_model_step(provider, request, cx, model, observer)
         .await
-        .map_err(super::generate::reclassify_overflow)?
-        .text_output())
+        .map_err(super::generate::reclassify_overflow)?;
+    let usage = response.usage.unwrap_or_default();
+    Ok((response.text_output(), usage))
 }
 
 fn compaction_request(
