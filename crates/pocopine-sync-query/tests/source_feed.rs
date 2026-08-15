@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex};
 use pocopine_core::server::RequestContext;
 use pocopine_sync::{
     ClientMutation, MutationId, RowKey, SyncCursor, SyncOp, SyncPullMode, SyncPullRequest,
-    SyncPushRequest, SyncResyncReason, SyncResult, SyncStreamName, SyncStreamSource,
+    SyncPushRequest, SyncResult, SyncResyncReason, SyncStreamName, SyncStreamSource,
 };
-use pocopine_sync_query::feed::{ChangeLog, ChangesSince, MemoryChangeLog};
+use pocopine_sync_query::feed::{ChangeLog, MemoryChangeLog};
 use pocopine_sync_query::source::{
     DeleteResult, Source, SourceFuture, SourceStream, WriteMeta, WriteResult,
     source as build_source,
@@ -241,7 +241,10 @@ fn mutation_id(n: u64) -> MutationId {
 
 /// Build a wire push mutation from a typed payload (op + key derived
 /// the way the client builder does).
-fn wire_mutation(id: MutationId, payload: MutationPayload<String, IssueDraft>) -> ClientMutation<Value> {
+fn wire_mutation(
+    id: MutationId,
+    payload: MutationPayload<String, IssueDraft>,
+) -> ClientMutation<Value> {
     let op = payload.sync_op();
     let key = payload.id().clone();
     let value = serde_json::to_value(&payload).unwrap();
@@ -268,9 +271,8 @@ async fn cursorless_pull_snapshots_and_stamps_head_cursor() {
     // Integrity stamp (P6): the digest recomputes over the received
     // rows — the exact check the client runs before settling.
     let stamped = response.digest.as_deref().expect("snapshot is stamped");
-    let recomputed = pocopine_sync::snapshot_digest(
-        response.rows.iter().map(|r| (&r.key, r.version.as_ref())),
-    );
+    let recomputed =
+        pocopine_sync::snapshot_digest(response.rows.iter().map(|r| (&r.key, r.version.as_ref())));
     assert_eq!(stamped, recomputed);
 }
 
@@ -334,7 +336,10 @@ async fn cursor_below_watermark_forces_loud_resync() {
     source.server_upsert(issue("b", "W1", "two")); // seq 3
     // GC through seq 2 — clients at cursor < 2 can no longer be
     // served incrementally (they'd miss the delete of "a").
-    source.log.gc_through(&SyncCursor::new("2").unwrap()).unwrap();
+    source
+        .log
+        .gc_through(&SyncCursor::new("2").unwrap())
+        .unwrap();
     let resource = resource(source);
 
     let response = resource.pull(ctx(), pull_request(Some("1"))).await.unwrap();
@@ -607,7 +612,11 @@ async fn counter_regression_warns_but_still_processes() {
         )],
     );
     let response = resource.push(ctx(), push).await.unwrap();
-    assert_eq!(response.accepted.len(), 1, "exact replay idempotent-accepts");
+    assert_eq!(
+        response.accepted.len(),
+        1,
+        "exact replay idempotent-accepts"
+    );
     assert!(response.rejected.is_empty());
 }
 

@@ -921,6 +921,7 @@ mod tests {
                     op: SyncOp::Upsert,
                     row: Some(updated.clone()),
                     cursor: SyncCursor::new("cursor_2").unwrap(),
+                    origin: None,
                 },
                 SyncChange {
                     stream: stream.clone(),
@@ -929,6 +930,7 @@ mod tests {
                     op: SyncOp::Upsert,
                     row: Some(new_row.clone()),
                     cursor: SyncCursor::new("cursor_2").unwrap(),
+                    origin: None,
                 },
             ],
             Some(SyncCursor::new("cursor_2").unwrap()),
@@ -1083,6 +1085,7 @@ mod tests {
                 mutation_id: MutationId::new("device_abc:1").unwrap(),
                 key: Some(RowKey::new("post_1").unwrap()),
                 reason: "invalid".to_string(),
+                code: None,
             }],
             rows: Vec::new(),
             conflicts: vec![SyncConflict {
@@ -1297,6 +1300,7 @@ mod tests {
                         SyncRow::new("ignored", serde_json::json!({"title": "Pre-reset"})).unwrap(),
                     ),
                     cursor: cursor.clone(),
+                    origin: None,
                 },
                 SyncChange {
                     stream: stream.clone(),
@@ -1305,6 +1309,7 @@ mod tests {
                     op: SyncOp::Reset,
                     row: None,
                     cursor: cursor.clone(),
+                    origin: None,
                 },
                 SyncChange {
                     stream: stream.clone(),
@@ -1313,6 +1318,7 @@ mod tests {
                     op: SyncOp::Upsert,
                     row: Some(after_reset.clone()),
                     cursor: cursor.clone(),
+                    origin: None,
                 },
             ],
             Some(cursor),
@@ -1401,6 +1407,7 @@ mod tests {
                 op: SyncOp::Delete,
                 row: None,
                 cursor: cursor.clone(),
+                origin: None,
             }],
             Some(cursor),
         )))

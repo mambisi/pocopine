@@ -205,8 +205,7 @@ fn handle_pull(body: &str) -> SyncPullResponse<Value> {
 /// case the write STILL APPLIES but the response is a network error
 /// (the lost-ack window).
 fn handle_push(body: &str) -> Result<SyncPushResponse<Value>, ServerError> {
-    let request: SyncPushRequest<Value> =
-        serde_json::from_str(body).expect("push request decodes");
+    let request: SyncPushRequest<Value> = serde_json::from_str(body).expect("push request decodes");
     let mut response = SyncPushResponse::new(stream_name());
     let drop_response = SERVER.with(|s| s.borrow().drop_push_response);
     for mutation in request.mutations {
@@ -240,15 +239,17 @@ fn install_mock_server() {
     __reset_middleware_chain_for_test();
     install_middleware(|req: FetchRequest, _next: FetchNext| async move {
         match req.url.as_str() {
-            SYNC_OPEN_PATH => Ok(json_response(&SyncOpenResponse::new(vec![SyncOpenStream {
-                stream: stream_name(),
-                collection: collection_name(),
-                cursor: None,
-                schema_version: 1,
-                scope: None,
-                params: StreamParams::new(),
-                watermark: None,
-            }]))),
+            SYNC_OPEN_PATH => Ok(json_response(&SyncOpenResponse::new(vec![
+                SyncOpenStream {
+                    stream: stream_name(),
+                    collection: collection_name(),
+                    cursor: None,
+                    schema_version: 1,
+                    scope: None,
+                    params: StreamParams::new(),
+                    watermark: None,
+                },
+            ]))),
             SYNC_PULL_PATH => Ok(json_response(&handle_pull(&req.body))),
             SYNC_PUSH_PATH => handle_push(&req.body).map(|r| json_response(&r)),
             other => Err(ServerError::Network(format!("unexpected {other}"))),
@@ -350,9 +351,8 @@ async fn g1_envelope_less_ghost_stays_dead_across_three_boots() {
             )
             .key("ghost_1")
             .unwrap();
-            let pending = pocopine_sync::LocalPendingMutation::new(mutation).with_optimistic_row(
-                Some(wire_row(&ghost).pending(true)),
-            );
+            let pending = pocopine_sync::LocalPendingMutation::new(mutation)
+                .with_optimistic_row(Some(wire_row(&ghost).pending(true)));
             store
                 .enqueue_pending_mutation(&compartment(), pending)
                 .await
@@ -429,8 +429,7 @@ async fn g3_delete_within_retention_arrives_as_feed_op_and_heals_nothing() {
             assert_eq!(ids, vec!["a".to_string()], "the delete applied");
             // The durable snapshot agrees (no ghost on next boot).
             let persisted = store.hydrate_stream(&compartment()).await.unwrap();
-            let persisted_ids: Vec<&str> =
-                persisted.rows.iter().map(|r| r.key.as_str()).collect();
+            let persisted_ids: Vec<&str> = persisted.rows.iter().map(|r| r.key.as_str()).collect();
             assert_eq!(persisted_ids, vec!["a"]);
 
             // The eviction is classified Deleted — the naive heal
@@ -501,7 +500,11 @@ async fn g4_delete_beyond_retention_forces_loud_resync_with_zero_unexplained() {
             ticks(8).await;
 
             let ids: Vec<String> = view.rows().into_iter().map(|r| r.id).collect();
-            assert_eq!(ids, vec!["a".to_string()], "the resync snapshot is current truth");
+            assert_eq!(
+                ids,
+                vec!["a".to_string()],
+                "the resync snapshot is current truth"
+            );
 
             // The absence of "b" is KNOWN-stale, never Unexplained —
             // so the naive heal has nothing to resurrect.
@@ -511,7 +514,10 @@ async fn g4_delete_beyond_retention_forces_loud_resync_with_zero_unexplained() {
                     .iter()
                     .any(|e| e.row.key.as_str() == "b" && e.reason == EvictionReason::StaleResync),
                 "the offline-past-retention absence classifies StaleResync, got: {:?}",
-                evictions.iter().map(|e| (e.row.key.as_str(), e.reason)).collect::<Vec<_>>()
+                evictions
+                    .iter()
+                    .map(|e| (e.row.key.as_str(), e.reason))
+                    .collect::<Vec<_>>()
             );
             assert!(
                 evictions
@@ -646,7 +652,10 @@ async fn lost_push_ack_is_healed_by_the_feed_echo_exactly_once() {
                 "the feed echo retired the pending"
             );
             let ids: Vec<String> = view.rows().into_iter().map(|r| r.id).collect();
-            assert!(ids.iter().any(|id| id == "x1"), "the canonical row renders: {ids:?}");
+            assert!(
+                ids.iter().any(|id| id == "x1"),
+                "the canonical row renders: {ids:?}"
+            );
             assert_coherence(&view, &store, "echo").await;
 
             // Exactly-once server-side: the replay tick may re-push
@@ -715,7 +724,11 @@ async fn corrupted_snapshot_is_refused_and_previous_state_kept() {
             SERVER.with(|s| s.borrow_mut().lie_digest = None);
             ticks(6).await;
             let ids: Vec<String> = view.rows().into_iter().map(|r| r.id).collect();
-            assert_eq!(ids, vec!["a".to_string()], "clean snapshot settles normally");
+            assert_eq!(
+                ids,
+                vec!["a".to_string()],
+                "clean snapshot settles normally"
+            );
         })
         .await;
 }

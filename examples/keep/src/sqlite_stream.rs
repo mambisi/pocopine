@@ -244,6 +244,7 @@ impl<R: KeepRow> Source for SqliteKeepSource<R> {
     fn create<'a>(
         &'a self,
         _ctx: Self::Context,
+        _meta: pocopine_sync_query::WriteMeta,
         id: Self::Id,
         draft: Self::Draft,
     ) -> SourceFuture<'a, SyncResult<Self::Row>> {
@@ -257,6 +258,7 @@ impl<R: KeepRow> Source for SqliteKeepSource<R> {
     fn update<'a>(
         &'a self,
         _ctx: Self::Context,
+        _meta: pocopine_sync_query::WriteMeta,
         id: Self::Id,
         draft: Self::Draft,
         expected_version: Option<RowVersion>,
@@ -285,6 +287,7 @@ impl<R: KeepRow> Source for SqliteKeepSource<R> {
     fn delete<'a>(
         &'a self,
         _ctx: Self::Context,
+        _meta: pocopine_sync_query::WriteMeta,
         id: Self::Id,
         expected_version: Option<RowVersion>,
     ) -> SourceFuture<'a, SyncResult<DeleteResult<Self::Row>>> {
@@ -507,6 +510,12 @@ mod tests {
     use pocopine_sync::SyncStreamName;
     use pocopine_sync_query::Query;
 
+    fn test_meta(n: u64) -> pocopine_sync_query::WriteMeta {
+        pocopine_sync_query::WriteMeta {
+            mutation_id: pocopine_sync::MutationId::new(format!("device_test:{n}")).unwrap(),
+        }
+    }
+
     fn note_draft(title: &str, updated_at_ms: u64) -> KeepNoteDraft {
         KeepNoteDraft {
             title: title.to_string(),
@@ -547,7 +556,12 @@ mod tests {
         let source = KeepNoteSource::open(path.clone()).unwrap();
 
         let row = source
-            .create((), "note_1".to_string(), note_draft("Hello", 10))
+            .create(
+                (),
+                test_meta(1),
+                "note_1".to_string(),
+                note_draft("Hello", 10),
+            )
             .await
             .unwrap();
         assert_eq!(row.title, "Hello");
@@ -565,7 +579,7 @@ mod tests {
         let source = KeepNoteSource::open(path.clone()).unwrap();
 
         source
-            .create((), "n".to_string(), note_draft("v10", 10))
+            .create((), test_meta(2), "n".to_string(), note_draft("v10", 10))
             .await
             .unwrap();
 
@@ -573,6 +587,7 @@ mod tests {
         let result = source
             .update(
                 (),
+                test_meta(3),
                 "n".to_string(),
                 note_draft("v99", 99),
                 Some(RowVersion::new("5").unwrap()),
@@ -590,6 +605,7 @@ mod tests {
         let ok = source
             .update(
                 (),
+                test_meta(4),
                 "n".to_string(),
                 note_draft("v20", 20),
                 Some(RowVersion::new("10").unwrap()),
