@@ -63,6 +63,9 @@ pub(crate) struct AgenkitInner {
     pub(crate) flows: FlowRegistry,
     pub(crate) state: Arc<AppState>,
     pub(crate) thread_store: Arc<dyn AgentThreadStore>,
+    /// The implementor-owned artifact capture wiring (RFC-122), when the host
+    /// configured a sink. Absent ⇒ `ctx.artifacts()` errors loudly.
+    pub(crate) artifacts: Option<super::artifact::ArtifactRuntime>,
     /// When set, only these model aliases may be resolved (§D10). Enforced
     /// before any provider call.
     pub(crate) model_allowlist: Option<HashSet<String>>,
@@ -537,6 +540,8 @@ pub struct AgenkitBuilder {
     flows: FlowRegistry,
     state: AppState,
     thread_store: Option<Arc<dyn AgentThreadStore>>,
+    artifact_sink: Option<Arc<dyn super::artifact::ArtifactSink>>,
+    artifact_append_budget: Option<usize>,
     model_allowlist: HashSet<String>,
 }
 
@@ -621,6 +626,28 @@ impl AgenkitBuilder {
         self
     }
 
+    /// Wire the implementor-owned artifact capture sink (RFC-122 §1). Without
+    /// one, `ctx.artifacts()` errors loudly and image-output models are
+    /// rejected at request build.
+    pub fn artifact_sink<S: super::artifact::ArtifactSink + 'static>(mut self, sink: S) -> Self {
+        self.artifact_sink = Some(Arc::new(sink));
+        self
+    }
+
+    /// Wire an already-shared artifact sink.
+    pub fn artifact_sink_arc(mut self, sink: Arc<dyn super::artifact::ArtifactSink>) -> Self {
+        self.artifact_sink = Some(sink);
+        self
+    }
+
+    /// Override the per-stream ephemeral budget for `Append`-mode media
+    /// chunks (RFC-122 §5.2; defaults to
+    /// [`MAX_APPEND_STREAM_BYTES`](pocopine_agenkit_core::MAX_APPEND_STREAM_BYTES)).
+    pub fn artifact_append_budget(mut self, bytes: usize) -> Self {
+        self.artifact_append_budget = Some(bytes);
+        self
+    }
+
     /// Allowlist a model alias. Once any alias is allowlisted, only allowlisted
     /// aliases may be resolved — rejected before any provider call (§D10).
     pub fn allow_model(mut self, alias: impl Into<String>) -> Self {
@@ -661,6 +688,12 @@ impl AgenkitBuilder {
                 thread_store: self
                     .thread_store
                     .unwrap_or_else(|| Arc::new(SessionThreadStore::in_memory())),
+                artifacts: self.artifact_sink.map(|sink| super::artifact::ArtifactRuntime {
+                    sink,
+                    append_budget: self
+                        .artifact_append_budget
+                        .unwrap_or(pocopine_agenkit_core::MAX_APPEND_STREAM_BYTES),
+                }),
                 model_allowlist: (!self.model_allowlist.is_empty()).then_some(self.model_allowlist),
                 run_seq: AtomicU64::new(0),
             }),

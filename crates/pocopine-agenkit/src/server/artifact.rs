@@ -22,10 +22,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ArtifactRef};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use pocopine_agenkit_core::{
+    AgenkitError, AgenkitResult, AgentThreadId, ArtifactRef, MAX_APPEND_CHUNK_BYTES,
+    MAX_PREVIEW_CHUNK_BYTES, MediaGroupRef, WireArtifactOrigin, WireMediaMode,
+};
 use pocopine_auth::Principal;
 
-use super::session::{BlobStore, ThreadId};
+use super::session::BlobStore;
 
 /// The boxed future all [`ArtifactSink`] methods return.
 pub type ArtifactFuture<'a, T> = Pin<Box<dyn Future<Output = AgenkitResult<T>> + Send + 'a>>;
@@ -71,7 +76,7 @@ pub struct ArtifactCx {
     /// ownership rules against this, exactly as `SessionStore` impls do.
     pub principal: Principal,
     /// The producing thread, when the capture happens inside a session turn.
-    pub thread: Option<ThreadId>,
+    pub thread: Option<AgentThreadId>,
     /// The producer.
     pub origin: ArtifactOrigin,
 }
@@ -248,6 +253,391 @@ impl ArtifactSink for BlobArtifactSink {
     }
 }
 
+/// How a stream's chunks relate to each other and to the final bytes
+/// (RFC-122 §5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaStreamMode {
+    /// Each chunk is a COMPLETE low-fidelity encoding that REPLACES the
+    /// previous one (progressive-fidelity image partials). Chunks are never
+    /// the authoritative bytes; [`MediaStream::finish_with`] is required.
+    Preview,
+    /// Chunks CONCATENATE into the byte stream in order (audio/video live
+    /// view). [`MediaStream::finish`] may use the concatenation as the final
+    /// bytes.
+    Append,
+}
+
+impl MediaStreamMode {
+    fn wire(self) -> WireMediaMode {
+        match self {
+            Self::Preview => WireMediaMode::Preview,
+            Self::Append => WireMediaMode::Append,
+        }
+    }
+}
+
+/// What to open a streamed capture for (RFC-122 §2).
+#[derive(Clone, Debug)]
+pub struct MediaStreamSpec {
+    /// IANA media type of the bytes being produced.
+    pub media_type: String,
+    /// Optional display name.
+    pub name: Option<String>,
+    /// How chunks compose.
+    pub mode: MediaStreamMode,
+    /// Lineage, as on [`NewArtifact`] (RFC-122 §2.2).
+    pub derived_from: Vec<String>,
+}
+
+/// Where capture-surface events go: the conversational runtime forwards them
+/// onto its `AgentEvent` firehose; the typed run is a no-op today (the flow
+/// wire has no artifact events yet).
+pub(crate) trait ArtifactEvents: Send + Sync {
+    fn media_started(
+        &self,
+        stream_id: &str,
+        media_type: &str,
+        name: Option<&str>,
+        mode: WireMediaMode,
+        group: Option<&MediaGroupRef>,
+        origin: &WireArtifactOrigin,
+    );
+    fn media_chunk(&self, stream_id: &str, seq: u32, data_base64: &str);
+    fn artifact_produced(
+        &self,
+        stream_id: Option<&str>,
+        artifact: &ArtifactRef,
+        group: Option<&MediaGroupRef>,
+        derived_from: &[String],
+        origin: &WireArtifactOrigin,
+    );
+}
+
+/// The no-op event surface (typed runs, tests).
+pub(crate) struct NoopArtifactEvents;
+
+impl ArtifactEvents for NoopArtifactEvents {
+    fn media_started(
+        &self,
+        _stream_id: &str,
+        _media_type: &str,
+        _name: Option<&str>,
+        _mode: WireMediaMode,
+        _group: Option<&MediaGroupRef>,
+        _origin: &WireArtifactOrigin,
+    ) {
+    }
+    fn media_chunk(&self, _stream_id: &str, _seq: u32, _data_base64: &str) {}
+    fn artifact_produced(
+        &self,
+        _stream_id: Option<&str>,
+        _artifact: &ArtifactRef,
+        _group: Option<&MediaGroupRef>,
+        _derived_from: &[String],
+        _origin: &WireArtifactOrigin,
+    ) {
+    }
+}
+
+/// The host-wired half a dispatcher needs to hand tools a capture surface:
+/// built once per turn from the runtime's configured sink + event channel.
+pub(crate) struct ArtifactDispatch {
+    pub(crate) sink: Arc<dyn ArtifactSink>,
+    pub(crate) events: Arc<dyn ArtifactEvents>,
+    pub(crate) thread: Option<AgentThreadId>,
+    pub(crate) append_budget: usize,
+}
+
+/// The sink + append-budget pair stored on the runtime when the host wires
+/// `.artifact_sink(...)`.
+#[derive(Clone)]
+pub(crate) struct ArtifactRuntime {
+    pub(crate) sink: Arc<dyn ArtifactSink>,
+    pub(crate) append_budget: usize,
+}
+
+struct ArtifactsInner {
+    sink: Arc<dyn ArtifactSink>,
+    events: Arc<dyn ArtifactEvents>,
+    principal: Principal,
+    thread: Option<AgentThreadId>,
+    call_id: String,
+    tool_id: String,
+    /// Dense output slot within the invocation (RFC-122 §1): one per capture
+    /// (a `put` or an opened stream), minted in production order.
+    ordinal: AtomicU32,
+    /// Group ids minted within the invocation.
+    group_seq: AtomicU32,
+    append_budget: usize,
+}
+
+impl ArtifactsInner {
+    fn origin(&self, output_ordinal: u32) -> ArtifactOrigin {
+        ArtifactOrigin::Tool {
+            call_id: self.call_id.clone(),
+            tool_id: self.tool_id.clone(),
+            output_ordinal,
+        }
+    }
+
+    fn wire_origin(&self) -> WireArtifactOrigin {
+        WireArtifactOrigin::Tool {
+            id: self.call_id.clone(),
+            tool: self.tool_id.clone(),
+        }
+    }
+}
+
+/// The artifact capture surface handed to tool code (RFC-122 §2), reached via
+/// `ctx.artifacts()`. Scoped to one tool invocation: every capture carries
+/// the call's provenance, and every event it emits reaches the turn's
+/// firehose without the tool touching the event surface.
+#[derive(Clone)]
+pub struct Artifacts {
+    inner: Arc<ArtifactsInner>,
+}
+
+impl Artifacts {
+    /// Build the per-invocation surface (dispatcher-only).
+    pub(crate) fn for_tool_call(
+        dispatch: &ArtifactDispatch,
+        principal: Principal,
+        call_id: String,
+        tool_id: String,
+    ) -> Self {
+        Self {
+            inner: Arc::new(ArtifactsInner {
+                sink: dispatch.sink.clone(),
+                events: dispatch.events.clone(),
+                principal,
+                thread: dispatch.thread.clone(),
+                call_id,
+                tool_id,
+                ordinal: AtomicU32::new(0),
+                group_seq: AtomicU32::new(0),
+                append_budget: dispatch.append_budget,
+            }),
+        }
+    }
+
+    /// Capture `artifact` through the implementor's sink and emit
+    /// `ArtifactProduced`. Returns the minted reference — embed it (or its
+    /// `uri`) in the tool's ordinary JSON output.
+    pub async fn put(&self, artifact: NewArtifact) -> AgenkitResult<ArtifactRef> {
+        self.put_with(artifact, None, None).await
+    }
+
+    /// Open a streamed capture: live chunks out, one final artifact in.
+    /// Emits `MediaStarted` immediately and drives the rest of the RFC-122 §3
+    /// stream without the tool ever touching the event surface.
+    pub fn stream(&self, spec: MediaStreamSpec) -> MediaStream {
+        self.stream_with(spec, None)
+    }
+
+    /// Open a multi-output group (n-variant sampling, storyboard batches):
+    /// captures opened through it share a minted group id and auto-increment
+    /// a dense index. `expected` is the declared output count when known up
+    /// front — intent, not promise (RFC-122 §5.3).
+    pub fn group(&self, expected: Option<u32>) -> ArtifactGroup {
+        let n = self.inner.group_seq.fetch_add(1, Ordering::Relaxed);
+        ArtifactGroup {
+            artifacts: self.clone(),
+            id: format!("{}.g{n}", self.inner.call_id),
+            expected,
+            next_index: AtomicU32::new(0),
+        }
+    }
+
+    async fn put_with(
+        &self,
+        artifact: NewArtifact,
+        stream_id: Option<&str>,
+        group: Option<&MediaGroupRef>,
+    ) -> AgenkitResult<ArtifactRef> {
+        let ordinal = self.inner.ordinal.fetch_add(1, Ordering::Relaxed);
+        self.capture(artifact, ordinal, stream_id, group).await
+    }
+
+    /// Sink the bytes under an already-minted ordinal and emit the terminal
+    /// event (shared by direct puts and finishing streams).
+    async fn capture(
+        &self,
+        artifact: NewArtifact,
+        ordinal: u32,
+        stream_id: Option<&str>,
+        group: Option<&MediaGroupRef>,
+    ) -> AgenkitResult<ArtifactRef> {
+        let cx = ArtifactCx {
+            principal: self.inner.principal.clone(),
+            thread: self.inner.thread.clone(),
+            origin: self.inner.origin(ordinal),
+        };
+        let derived_from = artifact.derived_from.clone();
+        let reference = self.inner.sink.put(&cx, artifact).await?;
+        self.inner.events.artifact_produced(
+            stream_id,
+            &reference,
+            group,
+            &derived_from,
+            &self.inner.wire_origin(),
+        );
+        Ok(reference)
+    }
+
+    fn stream_with(&self, spec: MediaStreamSpec, group: Option<MediaGroupRef>) -> MediaStream {
+        let ordinal = self.inner.ordinal.fetch_add(1, Ordering::Relaxed);
+        let stream_id = format!("{}.m{ordinal}", self.inner.call_id);
+        self.inner.events.media_started(
+            &stream_id,
+            &spec.media_type,
+            spec.name.as_deref(),
+            spec.mode.wire(),
+            group.as_ref(),
+            &self.inner.wire_origin(),
+        );
+        MediaStream {
+            artifacts: self.clone(),
+            stream_id,
+            ordinal,
+            spec,
+            group,
+            seq: 0,
+            appended: Vec::new(),
+            wire_sent: 0,
+        }
+    }
+}
+
+/// A multi-output group (RFC-122 §5.3): captures share one group id with
+/// dense indexes, so a consumer can slot the variants of one generation.
+pub struct ArtifactGroup {
+    artifacts: Artifacts,
+    id: String,
+    expected: Option<u32>,
+    next_index: AtomicU32,
+}
+
+impl ArtifactGroup {
+    fn next_ref(&self) -> MediaGroupRef {
+        MediaGroupRef {
+            id: self.id.clone(),
+            index: self.next_index.fetch_add(1, Ordering::Relaxed),
+            expected: self.expected,
+        }
+    }
+
+    /// Capture one grouped output (see [`Artifacts::put`]).
+    pub async fn put(&self, artifact: NewArtifact) -> AgenkitResult<ArtifactRef> {
+        let group = self.next_ref();
+        self.artifacts.put_with(artifact, None, Some(&group)).await
+    }
+
+    /// Open one grouped streamed capture (see [`Artifacts::stream`]).
+    pub fn stream(&self, spec: MediaStreamSpec) -> MediaStream {
+        let group = self.next_ref();
+        self.artifacts.stream_with(spec, Some(group))
+    }
+}
+
+/// One streamed capture (RFC-122 §5): live chunks out under the declared
+/// mode, one final artifact in. Chunks are ephemeral — the artifact is the
+/// source of truth. Dropping the stream without finishing is an abort: no
+/// `ArtifactProduced` is emitted and consumers discard its chunks.
+pub struct MediaStream {
+    artifacts: Artifacts,
+    stream_id: String,
+    /// The output slot minted at open, so interleaved streams keep stable
+    /// production order.
+    ordinal: u32,
+    spec: MediaStreamSpec,
+    group: Option<MediaGroupRef>,
+    seq: u32,
+    /// `Append` mode: the authoritative concatenation (kept even when a
+    /// chunk is dropped from the wire — the live view is a courtesy).
+    appended: Vec<u8>,
+    /// Base64 bytes emitted on the wire so far (`Append` budget accounting).
+    wire_sent: usize,
+}
+
+impl MediaStream {
+    /// This stream's wire correlation id.
+    pub fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
+
+    /// Emit one live chunk under the stream's declared mode. Ephemeral; a
+    /// chunk over the mode's byte bound — or past the `Append` stream budget
+    /// — is dropped with a warning, never truncated (RFC-122 §5.2). In
+    /// `Append` mode the bytes still count toward [`finish`](Self::finish)
+    /// regardless: wire drops never corrupt the artifact.
+    pub fn chunk(&mut self, data: &[u8]) {
+        let encoded = pocopine_codec::base64_encode(data);
+        let within = match self.spec.mode {
+            MediaStreamMode::Preview => encoded.len() <= MAX_PREVIEW_CHUNK_BYTES,
+            MediaStreamMode::Append => {
+                self.appended.extend_from_slice(data);
+                encoded.len() <= MAX_APPEND_CHUNK_BYTES
+                    && self.wire_sent + encoded.len() <= self.artifacts.inner.append_budget
+            }
+        };
+        if !within {
+            tracing::warn!(
+                target: "pocopine.log",
+                stream_id = %self.stream_id,
+                chunk_bytes = encoded.len(),
+                mode = ?self.spec.mode,
+                "media chunk dropped from the wire (over its byte bound); \
+                 the final artifact is unaffected"
+            );
+            return;
+        }
+        self.artifacts
+            .inner
+            .events
+            .media_chunk(&self.stream_id, self.seq, &encoded);
+        self.seq += 1;
+        self.wire_sent += encoded.len();
+    }
+
+    /// Capture explicit authoritative bytes through the sink and emit
+    /// `ArtifactProduced`. Valid in both modes; required in `Preview`
+    /// (previews are never the artifact).
+    pub async fn finish_with(self, bytes: Vec<u8>) -> AgenkitResult<ArtifactRef> {
+        self.capture(bytes).await
+    }
+
+    /// `Append` mode only: capture the concatenation of the appended chunks
+    /// as the final bytes. Errors in `Preview` mode.
+    pub async fn finish(mut self) -> AgenkitResult<ArtifactRef> {
+        if self.spec.mode != MediaStreamMode::Append {
+            return Err(AgenkitError::validation(format!(
+                "media stream `{}` is Preview-mode: previews are never the \
+                 authoritative bytes — pass them to finish_with",
+                self.stream_id
+            )));
+        }
+        let bytes = std::mem::take(&mut self.appended);
+        self.capture(bytes).await
+    }
+
+    /// Abandon the stream: no artifact event is emitted; consumers discard
+    /// its chunks when the producing call completes without a matching
+    /// `ArtifactProduced`.
+    pub fn abort(self) {}
+
+    async fn capture(self, bytes: Vec<u8>) -> AgenkitResult<ArtifactRef> {
+        let artifact = NewArtifact {
+            media_type: self.spec.media_type.clone(),
+            name: self.spec.name.clone(),
+            bytes,
+            derived_from: self.spec.derived_from.clone(),
+        };
+        self.artifacts
+            .capture(artifact, self.ordinal, Some(&self.stream_id), self.group.as_ref())
+            .await
+    }
+}
+
 /// The executable conformance suite for an [`ArtifactSink`] impl
 /// (RFC-122 §1; template: the thread store's `verify_owner_semantics`).
 ///
@@ -335,7 +725,7 @@ mod tests {
     fn cx() -> ArtifactCx {
         ArtifactCx {
             principal: Principal::anonymous(),
-            thread: Some(ThreadId::new("th_1")),
+            thread: Some(AgentThreadId::new("th_1")),
             origin: ArtifactOrigin::Model,
         }
     }
@@ -422,6 +812,184 @@ mod tests {
         }
         let err = verify_artifact_sink(&LyingSink).await.unwrap_err();
         assert!(err.to_string().contains("digest honesty"), "{err}");
+    }
+
+    #[derive(Default)]
+    struct RecordingEvents {
+        log: Mutex<Vec<String>>,
+    }
+
+    impl ArtifactEvents for RecordingEvents {
+        fn media_started(
+            &self,
+            stream_id: &str,
+            media_type: &str,
+            _name: Option<&str>,
+            mode: WireMediaMode,
+            group: Option<&MediaGroupRef>,
+            _origin: &WireArtifactOrigin,
+        ) {
+            self.log.lock().unwrap().push(format!(
+                "started {stream_id} {media_type} {mode:?} group={:?}",
+                group.map(|g| (g.id.clone(), g.index, g.expected))
+            ));
+        }
+        fn media_chunk(&self, stream_id: &str, seq: u32, data_base64: &str) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("chunk {stream_id} {seq} {}b", data_base64.len()));
+        }
+        fn artifact_produced(
+            &self,
+            stream_id: Option<&str>,
+            artifact: &ArtifactRef,
+            group: Option<&MediaGroupRef>,
+            derived_from: &[String],
+            _origin: &WireArtifactOrigin,
+        ) {
+            self.log.lock().unwrap().push(format!(
+                "produced {:?} {} group={:?} derived={derived_from:?}",
+                stream_id,
+                artifact.media_type,
+                group.map(|g| g.index)
+            ));
+        }
+    }
+
+    fn surface(
+        sink: Arc<dyn ArtifactSink>,
+        budget: usize,
+    ) -> (Artifacts, Arc<RecordingEvents>) {
+        let events = Arc::new(RecordingEvents::default());
+        let dispatch = ArtifactDispatch {
+            sink,
+            events: events.clone(),
+            thread: Some(AgentThreadId::new("th_1")),
+            append_budget: budget,
+        };
+        let artifacts = Artifacts::for_tool_call(
+            &dispatch,
+            Principal::anonymous(),
+            "call_1".to_string(),
+            "image.generate".to_string(),
+        );
+        (artifacts, events)
+    }
+
+    #[tokio::test]
+    async fn put_captures_and_emits_the_terminal_event() {
+        let sink = MemoryArtifactSink::new();
+        let (artifacts, events) = surface(Arc::new(sink.clone()), 1024);
+        let reference = artifacts.put(png(b"pixels")).await.unwrap();
+        assert_eq!(sink.bytes(&reference.id).as_deref(), Some(&b"pixels"[..]));
+        let log = events.log.lock().unwrap().clone();
+        assert_eq!(log, vec!["produced None image/png group=None derived=[]"]);
+    }
+
+    #[tokio::test]
+    async fn preview_stream_emits_started_chunks_and_produced_in_order() {
+        let (artifacts, events) = surface(Arc::new(MemoryArtifactSink::new()), 1024);
+        let mut stream = artifacts.stream(MediaStreamSpec {
+            media_type: "image/png".to_string(),
+            name: Some("out.png".to_string()),
+            mode: MediaStreamMode::Preview,
+            derived_from: vec!["art_0".to_string()],
+        });
+        stream.chunk(b"lofi");
+        stream.chunk(b"hifi");
+        let reference = stream.finish_with(b"final pixels".to_vec()).await.unwrap();
+        assert_eq!(reference.len, 12);
+
+        let log = events.log.lock().unwrap().clone();
+        assert_eq!(
+            log,
+            vec![
+                "started call_1.m0 image/png Preview group=None".to_string(),
+                "chunk call_1.m0 0 8b".to_string(),
+                "chunk call_1.m0 1 8b".to_string(),
+                "produced Some(\"call_1.m0\") image/png group=None derived=[\"art_0\"]".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_finish_without_bytes_is_a_loud_error() {
+        let (artifacts, _) = surface(Arc::new(MemoryArtifactSink::new()), 1024);
+        let stream = artifacts.stream(MediaStreamSpec {
+            media_type: "image/png".to_string(),
+            name: None,
+            mode: MediaStreamMode::Preview,
+            derived_from: Vec::new(),
+        });
+        let err = stream.finish().await.unwrap_err();
+        assert!(err.to_string().contains("finish_with"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn append_stream_concatenates_and_survives_wire_drops() {
+        // Budget of 12 base64 bytes: the first chunk (8) fits, the second
+        // (8) would exceed it and is dropped from the wire — but finish()
+        // still captures BOTH chunks (the wire is a courtesy view).
+        let sink = MemoryArtifactSink::new();
+        let (artifacts, events) = surface(Arc::new(sink.clone()), 12);
+        let mut stream = artifacts.stream(MediaStreamSpec {
+            media_type: "video/mp4".to_string(),
+            name: None,
+            mode: MediaStreamMode::Append,
+            derived_from: Vec::new(),
+        });
+        stream.chunk(b"aaaaaa");
+        stream.chunk(b"bbbbbb");
+        let reference = stream.finish().await.unwrap();
+        assert_eq!(
+            sink.bytes(&reference.id).as_deref(),
+            Some(&b"aaaaaabbbbbb"[..])
+        );
+        let log = events.log.lock().unwrap().clone();
+        assert_eq!(log.len(), 3, "started + ONE chunk + produced: {log:?}");
+        assert!(log[1].starts_with("chunk"), "{log:?}");
+    }
+
+    #[tokio::test]
+    async fn aborted_stream_emits_no_artifact() {
+        let (artifacts, events) = surface(Arc::new(MemoryArtifactSink::new()), 1024);
+        let mut stream = artifacts.stream(MediaStreamSpec {
+            media_type: "image/png".to_string(),
+            name: None,
+            mode: MediaStreamMode::Preview,
+            derived_from: Vec::new(),
+        });
+        stream.chunk(b"partial");
+        stream.abort();
+        let log = events.log.lock().unwrap().clone();
+        assert!(
+            !log.iter().any(|line| line.starts_with("produced")),
+            "{log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn groups_share_an_id_and_index_densely() {
+        let (artifacts, events) = surface(Arc::new(MemoryArtifactSink::new()), 1024);
+        let group = artifacts.group(Some(2));
+        group.put(png(b"variant a")).await.unwrap();
+        group.put(png(b"variant b")).await.unwrap();
+        // A second group mints a distinct id; an ungrouped put carries none.
+        let other = artifacts.group(None);
+        other.put(png(b"solo")).await.unwrap();
+        artifacts.put(png(b"free")).await.unwrap();
+
+        let log = events.log.lock().unwrap().clone();
+        assert_eq!(
+            log,
+            vec![
+                "produced None image/png group=Some(0) derived=[]".to_string(),
+                "produced None image/png group=Some(1) derived=[]".to_string(),
+                "produced None image/png group=Some(0) derived=[]".to_string(),
+                "produced None image/png group=None derived=[]".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]
