@@ -49,7 +49,10 @@ pub use artifact::{
     MediaStreamSpec, MemoryArtifactSink, NewArtifact, verify_artifact_sink,
 };
 pub use bridge::{stream_filter, to_server_error};
-pub use catalog::{Model, ModelPricing, models};
+pub use catalog::{
+    GenerationKind, GenerationModel, Model, ModelPricing, generation_models, lookup_generation,
+    models,
+};
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};
 pub use credentials::{EnvCredentials, ProviderCredential, ProviderCredentials, SecretString};
 pub use embed::{AiEmbedder, DynEmbedder, EmbedderRegistry};

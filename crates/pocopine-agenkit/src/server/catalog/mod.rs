@@ -27,8 +27,10 @@
 #[allow(clippy::module_inception)]
 mod catalog;
 mod generated;
+mod generation;
 
 pub use catalog::{Model, ModelPricing, all, lookup};
+pub use generation::{GenerationKind, GenerationModel, generation_models, lookup_generation};
 
 /// Typed `ModelRef` const handles for the known models, grouped by provider
 /// (`models::anthropic::CLAUDE_OPUS_4_8`). Generated from the same LiteLLM data
