@@ -8,6 +8,7 @@
 
 pub mod agenkit;
 pub mod agent;
+pub mod artifact;
 pub mod bridge;
 pub mod catalog;
 pub mod context;
@@ -42,6 +43,10 @@ pub mod tool;
 
 pub use agenkit::{Agenkit, AgenkitBuilder, FlowCall, FlowKey, TypedFlowCall, with_principal};
 pub use agent::{AgentRun, AiAgent, AiAgentBuilder};
+pub use artifact::{
+    ArtifactCx, ArtifactFuture, ArtifactOrigin, ArtifactSink, ArtifactSinkCapabilities,
+    BlobArtifactSink, MemoryArtifactSink, NewArtifact, verify_artifact_sink,
+};
 pub use bridge::{stream_filter, to_server_error};
 pub use catalog::{Model, ModelPricing, models};
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};
