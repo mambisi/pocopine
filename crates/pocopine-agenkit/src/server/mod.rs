@@ -50,8 +50,8 @@ pub use artifact::{
 };
 pub use bridge::{stream_filter, to_server_error};
 pub use catalog::{
-    GenerationKind, GenerationModel, Model, ModelPricing, generation_models, lookup_generation,
-    models,
+    GenerationKind, GenerationModel, ImageGenerationConfig, Model, ModelPricing,
+    VideoGenerationConfig, generation_models, lookup_generation, models,
 };
 pub use context::{AiContext, AiToolContext, AppState, EmbedContext, RetrievalContext};
 pub use credentials::{EnvCredentials, ProviderCredential, ProviderCredentials, SecretString};

@@ -19,7 +19,7 @@
 //! [`lookup_generation`] matches exact ids first, then the longest
 //! `-`-boundary prefix, so a dated alias resolves to its family entry.
 
-use pocopine_agenkit_core::ModelRef;
+use pocopine_agenkit_core::{AgenkitError, AgenkitResult, ModelRef};
 
 /// What a generation model produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +122,160 @@ pub fn lookup_generation(model: &ModelRef) -> Option<&'static GenerationModel> {
     best
 }
 
+/// Knobs for an image-generation tool call, shaped on what the grounded
+/// provider (Seedream) actually takes. Serde + `JsonSchema` so an app tool
+/// embeds it directly in its typed input:
+///
+/// ```ignore
+/// #[derive(Deserialize, schemars::JsonSchema)]
+/// struct ImageGenIn {
+///     prompt: String,
+///     #[serde(default, flatten)]
+///     config: ImageGenerationConfig,
+/// }
+/// ```
+///
+/// Per-call *inputs* stay out on purpose: the prompt and any source-image
+/// artifact refs (RFC-122 §2.1 chaining → §2.2 `derived_from` lineage) are
+/// the tool's own fields, so lineage is declared explicitly, never smuggled
+/// through config.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ImageGenerationConfig {
+    /// Output size — a provider preset (`"1K"`, `"2K"`, `"4K"`) or exact
+    /// dimensions (`"2048x2048"`). `None` ⇒ the provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// Batch generation: produce a consistent set of up to this many images
+    /// (Seedream `sequential_image_generation`). Bounded by the registry's
+    /// `sequential_images` ceiling — [`validate`](Self::validate) enforces
+    /// it. Maps to an RFC-122 §5.3 group's `expected`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_images: Option<u32>,
+    /// Stream each completed image as it finishes (SSE). Requires a model
+    /// the registry marks `streaming`; each event is a complete image the
+    /// tool captures as its own artifact.
+    pub stream: bool,
+    /// Provider watermarking (the provider default is on).
+    pub watermark: bool,
+    /// Deterministic seed, when reproducibility matters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+}
+
+impl Default for ImageGenerationConfig {
+    fn default() -> Self {
+        Self {
+            size: None,
+            max_images: None,
+            stream: false,
+            watermark: true,
+            seed: None,
+        }
+    }
+}
+
+impl ImageGenerationConfig {
+    /// Reject a config the resolved model cannot honor, before any provider
+    /// call (work-or-loud): a batch on a model without sequential support, a
+    /// batch over the model's ceiling, streaming where unsupported, or an
+    /// image config aimed at a video model. An alias the registry doesn't
+    /// index passes — the provider decides.
+    pub fn validate(&self, model: &ModelRef) -> AgenkitResult<()> {
+        let Some(entry) = lookup_generation(model) else {
+            return Ok(());
+        };
+        if entry.kind != GenerationKind::Image {
+            return Err(AgenkitError::config(format!(
+                "model `{model}` generates {:?}, not images",
+                entry.kind
+            )));
+        }
+        if let Some(requested) = self.max_images {
+            match entry.sequential_images {
+                None => {
+                    return Err(AgenkitError::config(format!(
+                        "model `{model}` does not support batch generation \
+                         (max_images = {requested} requested)"
+                    )));
+                }
+                Some(ceiling) if requested > ceiling || requested == 0 => {
+                    return Err(AgenkitError::config(format!(
+                        "model `{model}` supports 1..={ceiling} images per \
+                         request (max_images = {requested} requested)"
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+        if self.stream && !entry.streaming {
+            return Err(AgenkitError::config(format!(
+                "model `{model}` does not stream generation output"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Knobs for a video-generation tool call, shaped on what the grounded
+/// provider (Seedance, async task API) actually takes. Same embedding story
+/// as [`ImageGenerationConfig`]; the prompt and any first-frame source-image
+/// artifact ref (image-to-video, §2.1) are the tool's own input fields.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct VideoGenerationConfig {
+    /// Clip length in seconds. `None` ⇒ the provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u32>,
+    /// Output resolution preset (`"480p"`, `"720p"`, `"1080p"`). `None` ⇒
+    /// the provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+    /// Aspect ratio (`"16:9"`, `"9:16"`, `"1:1"`, `"adaptive"` — adaptive
+    /// derives from the source image on image-to-video). `None` ⇒ the
+    /// provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<String>,
+    /// Hold the camera fixed (no provider-invented camera motion).
+    pub camera_fixed: bool,
+    /// Provider watermarking (the provider default is on).
+    pub watermark: bool,
+    /// Deterministic seed, when reproducibility matters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+}
+
+impl Default for VideoGenerationConfig {
+    fn default() -> Self {
+        Self {
+            duration_seconds: None,
+            resolution: None,
+            ratio: None,
+            camera_fixed: false,
+            watermark: true,
+            seed: None,
+        }
+    }
+}
+
+impl VideoGenerationConfig {
+    /// Reject a config the resolved model cannot honor (see
+    /// [`ImageGenerationConfig::validate`]): today that is aiming a video
+    /// config at a non-video model. An unindexed alias passes.
+    pub fn validate(&self, model: &ModelRef) -> AgenkitResult<()> {
+        let Some(entry) = lookup_generation(model) else {
+            return Ok(());
+        };
+        if entry.kind != GenerationKind::Video {
+            return Err(AgenkitError::config(format!(
+                "model `{model}` generates {:?}, not video",
+                entry.kind
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +308,77 @@ mod tests {
                 assert!(entry.image_input, "{} must accept image input", entry.id);
             }
         }
+    }
+
+    #[test]
+    fn image_config_validates_against_the_registry() {
+        let seedream_45 = ModelRef::new("byteplus/seedream-4-5-251128");
+        let pro_50 = ModelRef::new("byteplus/seedream-5-0-pro");
+
+        // Defaults pass everywhere an image model resolves.
+        let config = ImageGenerationConfig::default();
+        assert!(config.validate(&seedream_45).is_ok());
+        assert!(config.validate(&pro_50).is_ok());
+
+        // Batch + stream fit 4.5 but not 5.0-pro (no sequential, no stream).
+        let batch = ImageGenerationConfig {
+            max_images: Some(4),
+            stream: true,
+            ..ImageGenerationConfig::default()
+        };
+        assert!(batch.validate(&seedream_45).is_ok());
+        let err = batch.validate(&pro_50).unwrap_err();
+        assert!(err.to_string().contains("batch"), "{err}");
+
+        // Over the declared ceiling fails loudly.
+        let over = ImageGenerationConfig {
+            max_images: Some(16),
+            ..ImageGenerationConfig::default()
+        };
+        assert!(over.validate(&seedream_45).is_err());
+
+        // Aiming an image config at a video model is a config error; an
+        // alias the registry doesn't index passes (the provider decides).
+        let video = ModelRef::new("byteplus/seedance-1-5-pro-251215");
+        assert!(config.validate(&video).is_err());
+        assert!(batch.validate(&ModelRef::new("other/imagegen-x")).is_ok());
+    }
+
+    #[test]
+    fn video_config_validates_kind_only() {
+        let config = VideoGenerationConfig {
+            duration_seconds: Some(5),
+            resolution: Some("1080p".to_string()),
+            ..VideoGenerationConfig::default()
+        };
+        assert!(
+            config
+                .validate(&ModelRef::new("byteplus/dreamina-seedance-2-0-260128"))
+                .is_ok()
+        );
+        let err = config
+            .validate(&ModelRef::new("byteplus/seedream-4-5-251128"))
+            .unwrap_err();
+        assert!(err.to_string().contains("not video"), "{err}");
+        assert!(config.validate(&ModelRef::new("other/videogen-x")).is_ok());
+    }
+
+    #[test]
+    fn configs_round_trip_serde_with_partial_json() {
+        // Tool args arrive as partial JSON: absent fields take defaults
+        // (watermark stays on), and defaults serialize compactly.
+        let config: ImageGenerationConfig =
+            serde_json::from_str(r#"{"size":"2K","max_images":4}"#).unwrap();
+        assert!(config.watermark);
+        assert!(!config.stream);
+        assert_eq!(config.max_images, Some(4));
+
+        let json = serde_json::to_string(&ImageGenerationConfig::default()).unwrap();
+        assert!(!json.contains("size"), "{json}");
+        let back: ImageGenerationConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ImageGenerationConfig::default());
+
+        let video: VideoGenerationConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(video, VideoGenerationConfig::default());
     }
 }
