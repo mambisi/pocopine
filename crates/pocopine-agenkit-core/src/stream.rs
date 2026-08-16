@@ -7,7 +7,10 @@
 //! payloads. The facade applies a final redaction chokepoint before the wire
 //! (§D10), but these types only model client-safe fields to begin with.
 
-use crate::{ParallelGroupId, ParallelJoin, StepId, StepKind};
+use crate::{
+    ArtifactRef, MediaGroupRef, ParallelGroupId, ParallelJoin, StepId, StepKind,
+    WireArtifactOrigin, WireMediaMode,
+};
 
 /// A single public progress event for a streaming flow.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -279,6 +282,57 @@ pub enum AgentWireEvent {
         /// Why it was blocked (redacted).
         reason: String,
     },
+    /// A streamed media capture began (RFC-122 §3): a tool's `MediaStream`,
+    /// or the model backstop.
+    MediaStarted {
+        /// Correlates this stream's chunks and its terminal artifact event.
+        stream_id: String,
+        /// IANA media type of the bytes being produced.
+        media_type: String,
+        /// Optional display name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// How chunks compose: `preview` (replace) or `append` (§5.2).
+        mode: WireMediaMode,
+        /// Multi-output correlation (§5.3); absent for a lone output.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<MediaGroupRef>,
+        /// Who is producing.
+        origin: WireArtifactOrigin,
+    },
+    /// One live chunk of a streamed capture. **Ephemeral** — never persisted,
+    /// exactly like `AssistantDelta`. Its meaning follows the stream's
+    /// declared mode: a `preview` chunk is a complete low-fidelity encoding
+    /// replacing its predecessor; an `append` chunk concatenates.
+    MediaChunk {
+        /// The stream this chunk belongs to.
+        stream_id: String,
+        /// Monotonic per `stream_id` from 0.
+        seq: u32,
+        /// Chunk payload, base64. Bounded per mode (§5.2).
+        data_base64: String,
+    },
+    /// Terminal, persisted: AI-produced bytes were captured into the
+    /// implementor's sink (RFC-122 §3). The one artifact event for BOTH
+    /// origins.
+    ArtifactProduced {
+        /// Present when a chunk stream preceded this; absent for a plain
+        /// capture.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream_id: Option<String>,
+        /// The captured artifact's reference.
+        artifact: ArtifactRef,
+        /// Mirrors `MediaStarted`'s group so a consumer that missed the
+        /// start still slots the artifact (§5.3).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<MediaGroupRef>,
+        /// Byte-level ancestry (§2.2): ids of the artifacts this one refines
+        /// or derives from. Empty for a fresh generation.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        derived_from: Vec<String>,
+        /// Who produced it.
+        origin: WireArtifactOrigin,
+    },
     /// The thread was compacted.
     Compacted {
         /// How many messages were folded into the summary.
@@ -423,5 +477,104 @@ mod tests {
         assert_eq!(event, AgentWireEvent::Unknown);
         let reason: WireStopReason = serde_json::from_str(r#""new_reason""#).unwrap();
         assert_eq!(reason, WireStopReason::Unknown);
+    }
+
+    #[test]
+    fn media_events_round_trip_with_optional_fields_omitted() {
+        let started = AgentWireEvent::MediaStarted {
+            stream_id: "ms_1".to_string(),
+            media_type: "image/png".to_string(),
+            name: None,
+            mode: WireMediaMode::Preview,
+            group: None,
+            origin: WireArtifactOrigin::Tool {
+                id: "call_1".to_string(),
+                tool: "image.generate".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&started).unwrap();
+        assert!(json.contains(r#""event":"media_started""#));
+        assert!(json.contains(r#""mode":"preview""#));
+        assert!(!json.contains("group"));
+        assert!(!json.contains("name"));
+        assert_eq!(serde_json::from_str::<AgentWireEvent>(&json).unwrap(), started);
+
+        let chunk = AgentWireEvent::MediaChunk {
+            stream_id: "ms_1".to_string(),
+            seq: 0,
+            data_base64: "aGVsbG8=".to_string(),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains(r#""event":"media_chunk""#));
+        assert_eq!(serde_json::from_str::<AgentWireEvent>(&json).unwrap(), chunk);
+    }
+
+    #[test]
+    fn artifact_produced_carries_group_and_lineage() {
+        let produced = AgentWireEvent::ArtifactProduced {
+            stream_id: Some("ms_1".to_string()),
+            artifact: ArtifactRef {
+                id: "art_9".to_string(),
+                uri: Some("ak:file/xyz".to_string()),
+                media_type: "image/png".to_string(),
+                name: Some("v2.png".to_string()),
+                sha256: "bb".repeat(32),
+                len: 42,
+            },
+            group: Some(MediaGroupRef {
+                id: "grp_1".to_string(),
+                index: 1,
+                expected: Some(4),
+            }),
+            derived_from: vec!["art_1".to_string()],
+            origin: WireArtifactOrigin::Model,
+        };
+        let json = serde_json::to_string(&produced).unwrap();
+        assert!(json.contains(r#""event":"artifact_produced""#));
+        assert!(json.contains(r#""derived_from":["art_1"]"#));
+        assert!(json.contains(r#""expected":4"#));
+        assert_eq!(
+            serde_json::from_str::<AgentWireEvent>(&json).unwrap(),
+            produced
+        );
+
+        // A fresh, ungrouped, unstreamed capture serializes minimally.
+        let bare = AgentWireEvent::ArtifactProduced {
+            stream_id: None,
+            artifact: ArtifactRef {
+                id: "art_2".to_string(),
+                uri: None,
+                media_type: "application/pdf".to_string(),
+                name: None,
+                sha256: "cc".repeat(32),
+                len: 7,
+            },
+            group: None,
+            derived_from: Vec::new(),
+            origin: WireArtifactOrigin::Tool {
+                id: "call_2".to_string(),
+                tool: "pdf.write".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&bare).unwrap();
+        assert!(!json.contains("derived_from"));
+        assert!(!json.contains("stream_id"));
+        assert!(!json.contains("group"));
+        assert_eq!(serde_json::from_str::<AgentWireEvent>(&json).unwrap(), bare);
+    }
+
+    #[test]
+    fn unknown_media_mode_inside_a_known_event_does_not_kill_decoding() {
+        // The mode enum has its own `other` fallback: a newer server's mode
+        // string decodes as `Unknown` rather than failing the whole event.
+        let json = r#"{"event":"media_started","stream_id":"m","media_type":"video/mp4",
+                       "mode":"interleave_v2","origin":{"kind":"model"}}"#;
+        let event: AgentWireEvent = serde_json::from_str(json).unwrap();
+        match event {
+            AgentWireEvent::MediaStarted { mode, .. } => {
+                assert_eq!(mode, WireMediaMode::Unknown)
+            }
+            other => panic!("expected MediaStarted, got {other:?}"),
+        }
     }
 }

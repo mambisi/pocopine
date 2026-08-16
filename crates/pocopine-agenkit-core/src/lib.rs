@@ -35,6 +35,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod artifact;
 pub mod content;
 pub mod embed;
 pub mod enums;
@@ -55,6 +56,11 @@ pub mod tool_name;
 pub mod trace;
 
 pub use agent::AiAgentDescriptor;
+pub use artifact::{
+    ARTIFACT_KEY, ArtifactRef, MAX_APPEND_CHUNK_BYTES, MAX_APPEND_STREAM_BYTES,
+    MAX_PREVIEW_CHUNK_BYTES, MediaGroupRef, WireArtifactOrigin, WireMediaMode, artifact_ref_value,
+    as_artifact_ref,
+};
 pub use content::{Content, ContentPart, MediaPart, Message};
 pub use embed::{EmbedderDescriptor, Embedding, EmbeddingBatch};
 pub use enums::{
