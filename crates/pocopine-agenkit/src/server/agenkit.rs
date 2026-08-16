@@ -688,12 +688,14 @@ impl AgenkitBuilder {
                 thread_store: self
                     .thread_store
                     .unwrap_or_else(|| Arc::new(SessionThreadStore::in_memory())),
-                artifacts: self.artifact_sink.map(|sink| super::artifact::ArtifactRuntime {
-                    sink,
-                    append_budget: self
-                        .artifact_append_budget
-                        .unwrap_or(pocopine_agenkit_core::MAX_APPEND_STREAM_BYTES),
-                }),
+                artifacts: self
+                    .artifact_sink
+                    .map(|sink| super::artifact::ArtifactRuntime {
+                        sink,
+                        append_budget: self
+                            .artifact_append_budget
+                            .unwrap_or(pocopine_agenkit_core::MAX_APPEND_STREAM_BYTES),
+                    }),
                 model_allowlist: (!self.model_allowlist.is_empty()).then_some(self.model_allowlist),
                 run_seq: AtomicU64::new(0),
             }),

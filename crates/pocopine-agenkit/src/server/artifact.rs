@@ -110,8 +110,11 @@ pub trait ArtifactSink: Send + Sync {
     }
 
     /// Store the bytes under the caller's authority and mint a reference.
-    fn put<'a>(&'a self, cx: &'a ArtifactCx, artifact: NewArtifact)
-    -> ArtifactFuture<'a, ArtifactRef>;
+    fn put<'a>(
+        &'a self,
+        cx: &'a ArtifactCx,
+        artifact: NewArtifact,
+    ) -> ArtifactFuture<'a, ArtifactRef>;
 }
 
 /// Reject `artifact` if it exceeds `max_bytes` — the shared enforcement the
@@ -633,7 +636,12 @@ impl MediaStream {
             derived_from: self.spec.derived_from.clone(),
         };
         self.artifacts
-            .capture(artifact, self.ordinal, Some(&self.stream_id), self.group.as_ref())
+            .capture(
+                artifact,
+                self.ordinal,
+                Some(&self.stream_id),
+                self.group.as_ref(),
+            )
             .await
     }
 }
@@ -678,13 +686,9 @@ pub(crate) async fn capture_response_media(
             derived_from: Vec::new(),
         };
         let reference = dispatch.sink.put(&cx, artifact).await?;
-        dispatch.events.artifact_produced(
-            None,
-            &reference,
-            None,
-            &[],
-            &WireArtifactOrigin::Model,
-        );
+        dispatch
+            .events
+            .artifact_produced(None, &reference, None, &[], &WireArtifactOrigin::Model);
         // The persisted form: bytes live in the sink, the message carries the
         // ref. Replay maps this to a text placeholder at wire build.
         *part = ContentPart::Media(MediaPart {
@@ -755,9 +759,10 @@ pub async fn verify_artifact_sink(sink: &dyn ArtifactSink) -> AgenkitResult<()> 
     }
 
     // Idempotent re-put: same cx + bytes must not error.
-    let again = sink.put(&cx, artifact).await.map_err(|e| {
-        AgenkitError::validation(format!("sink rejects an identical re-put: {e}"))
-    })?;
+    let again = sink
+        .put(&cx, artifact)
+        .await
+        .map_err(|e| AgenkitError::validation(format!("sink rejects an identical re-put: {e}")))?;
     if again.sha256 != expected_sha {
         return Err(AgenkitError::validation(
             "sink re-put returned a ref for different bytes",
@@ -844,7 +849,9 @@ mod tests {
 
     #[tokio::test]
     async fn conformance_passes_for_shipped_sinks() {
-        verify_artifact_sink(&MemoryArtifactSink::new()).await.unwrap();
+        verify_artifact_sink(&MemoryArtifactSink::new())
+            .await
+            .unwrap();
         verify_artifact_sink(&MemoryArtifactSink::new().with_max_bytes(1024))
             .await
             .unwrap();
@@ -921,10 +928,7 @@ mod tests {
         }
     }
 
-    fn surface(
-        sink: Arc<dyn ArtifactSink>,
-        budget: usize,
-    ) -> (Artifacts, Arc<RecordingEvents>) {
+    fn surface(sink: Arc<dyn ArtifactSink>, budget: usize) -> (Artifacts, Arc<RecordingEvents>) {
         let events = Arc::new(RecordingEvents::default());
         let dispatch = ArtifactDispatch {
             sink,
@@ -1061,9 +1065,7 @@ mod tests {
         struct AdvisoryCapSink(MemoryArtifactSink);
         impl ArtifactSink for AdvisoryCapSink {
             fn capabilities(&self) -> ArtifactSinkCapabilities {
-                ArtifactSinkCapabilities {
-                    max_bytes: Some(8),
-                }
+                ArtifactSinkCapabilities { max_bytes: Some(8) }
             }
             fn put<'a>(
                 &'a self,

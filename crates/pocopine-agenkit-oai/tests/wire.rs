@@ -464,7 +464,7 @@ async fn streams_text_deltas_and_usage_from_sse() {
                 text.push_str(&fragment);
             }
             StreamChunk::Usage(reported) => usage = Some(reported),
-            StreamChunk::ToolCall(_) | StreamChunk::Thinking { .. } => {}
+            StreamChunk::ToolCall(_) | StreamChunk::Thinking { .. } | StreamChunk::Media(_) => {}
         }
     }
     assert_eq!(text, "uploads use presigned URLs");

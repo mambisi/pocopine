@@ -276,7 +276,7 @@ async fn streams_text_deltas_and_usage() {
                 text.push_str(&fragment);
             }
             StreamChunk::Usage(reported) => usage = Some(reported),
-            StreamChunk::ToolCall(_) | StreamChunk::Thinking { .. } => {}
+            StreamChunk::ToolCall(_) | StreamChunk::Thinking { .. } | StreamChunk::Media(_) => {}
         }
     }
     assert_eq!(text, "uploads use presigned URLs");
@@ -376,7 +376,7 @@ async fn truncated_stream_still_emits_tool_call_and_usage() {
         match chunk.unwrap() {
             StreamChunk::ToolCall(call) => tool_call = Some(call),
             StreamChunk::Usage(reported) => usage = Some(reported),
-            StreamChunk::Text(_) | StreamChunk::Thinking { .. } => {}
+            StreamChunk::Text(_) | StreamChunk::Thinking { .. } | StreamChunk::Media(_) => {}
         }
     }
     let call = tool_call.expect("truncated stream must still emit the tool call");
