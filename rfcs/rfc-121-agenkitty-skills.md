@@ -1,7 +1,8 @@
 # RFC-121: agenkitty skills — an Anthropic-compatible skill loader
 
 **Status:** Implemented (P1–P3 on this branch; P4 marketplace resolver remains a future RFC)
-**Crates:** `agenkitty-skills` (new: loader library + CLI binary), `agenkitty` (new `skill.*` tool family), `agenkitty-core` (`[skills]` config section)
+**Crates:** `agenkitty-skills` (new: loader library), `agenkitty` (new `skill.*` tool family + `agenkitty skills` CLI subcommand), `agenkitty-core` (`[skills]` config section)
+**Revision (post-merge):** the CLI shipped initially as a standalone `agenkitty-skills` binary behind a `cli` feature; it has since been folded into the `agenkitty` binary as the `skills` subcommand — one binary to install, same four commands, same JSON envelope (`agenkitty-skills/v1`) and exit-code contract. References to "the binary" below read as `agenkitty skills`.
 **Relates to:** the plugin-marketplace research verdict (2026-07-06; phase 1 = SKILL.md loader), the earlier plugin-package draft (tentatively RFC-114, uncommitted — phase 2 territory), RFC-118 (subagent primitives, attenuation recipe), RFC-093 (agenkit), RFC-069 (logging)
 
 ## Summary
@@ -15,11 +16,12 @@ consumption modes:
    discover skill directories, validate `SKILL.md` against the spec, render a
    byte-budgeted index for system-prompt injection, and serve skill bodies and bundled
    resources on demand.
-2. **Binary execution mode.** The same crate ships a standalone `agenkitty-skills`
-   binary (feature-gated so library consumers never pull CLI deps) with
-   `validate` / `list` / `inspect` / `index` subcommands and stable, versioned `--json`
-   output — usable from shells, CI gates, editors, and non-Rust tooling without linking
-   the runtime.
+2. **Binary execution mode.** The same loader from the command line — the
+   `agenkitty skills` subcommand (revised from an initial standalone binary; see the
+   Revision note above) with `validate` / `list` / `inspect` / `index` and stable,
+   versioned `--json` output — usable from shells, CI gates, editors, and non-Rust
+   tooling. Unlike `run`/`doctor` it resolves no project config: a pure function over
+   the directories it is pointed at.
 
 The agenkitty runtime consumes the library through a new `skill.*` tool family
 (`skill.use`, `skill.read`) that implements the standard's **progressive disclosure**:
@@ -70,7 +72,7 @@ flowchart LR
         CAT --> BODY["body(name) / read_resource(...)"]
     end
 
-    subgraph bin ["agenkitty-skills (binary, feature 'cli')"]
+    subgraph bin ["agenkitty skills (CLI subcommand)"]
         V["validate / list / inspect / index<br/>--json, exit codes 0/1/2"]
     end
 
@@ -97,12 +99,12 @@ Following the established split (portable data in `agenkitty-core`, host executi
 
 | Crate | Contents | Why here |
 |---|---|---|
-| `agenkitty-skills` (new) | `SkillLoader`, `SkillCatalog`, `LoadedSkill`, `SkillMeta`, `SkillDiagnostic`, index rendering, body/resource reads, digesting; `[[bin]]` behind feature `cli` | Library mode must not drag the runtime's dependency tree (tokio, rmcp, provider stacks). Binary mode must be buildable standalone. Mirrors the standard's own `skills-ref` reference-library shape. |
+| `agenkitty-skills` (new) | `SkillLoader`, `SkillCatalog`, `LoadedSkill`, `SkillMeta`, `SkillDiagnostic`, index rendering, body/resource reads, digesting | Library mode must not drag the runtime's dependency tree (tokio, rmcp, provider stacks). Mirrors the standard's own `skills-ref` reference-library shape. The CLI surface lives in `agenkitty` as the `skills` subcommand (post-merge revision). |
 | `agenkitty-core` | `SkillsConfigSection` in `AgenkittyConfig` | `AgenkittyConfig` is `#[serde(deny_unknown_fields)]` — a `[skills]` table in `.agenkitty/config.toml` hard-errors unless the section exists here. Pure serde data, wasm-safe. |
 | `agenkitty` | `src/tools/skills/` family: `SkillRuntime`, `skill.use`, `skill.read`, registry, specs, README | Needs `AiTool`, the admission stack, the fs confinement helpers (`pub(crate)` in `tools/fs/common.rs`), and the prompt-composition seam — all host-layer. |
 
-`agenkitty` depends on `agenkitty-skills` (default features, i.e. without `cli`).
-Nothing else in the workspace does until it wants to.
+`agenkitty` depends on `agenkitty-skills`. Nothing else in the workspace does
+until it wants to.
 
 ## Format contract (normative)
 
@@ -243,8 +245,8 @@ Design notes:
 
 ## Binary execution mode — CLI contract
 
-`cargo install agenkitty-skills --features cli` (workspace: `cargo run -p
-agenkitty-skills --features cli --`). Subcommands:
+`agenkitty skills <command>` (post-merge revision; originally a standalone
+binary). Subcommands:
 
 | Command | Behavior |
 |---|---|

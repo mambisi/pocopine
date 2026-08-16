@@ -64,7 +64,6 @@ name = "agenkitty-skills"
 version = "0.1.1"
 dependencies = [
  "agenkitty-core",
- "clap",
  "pocopine-crypto",
  "serde",
  "serde_json",

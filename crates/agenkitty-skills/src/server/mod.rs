@@ -12,9 +12,6 @@ mod meta;
 mod sanitize;
 mod subst;
 
-#[cfg(feature = "cli")]
-pub mod cli;
-
 pub use catalog::{
     LoadedSkill, ReadOpts, ResourceChunk, SKILLS_PROMPT_HEADER, SkillBody, SkillCatalog,
 };

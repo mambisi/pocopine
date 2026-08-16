@@ -1,8 +1,8 @@
-//! Binary execution mode: exit-code matrix and JSON envelope stability
-//! (RFC-121 § Binary execution mode). Drives the real `agenkitty-skills`
-//! binary via `CARGO_BIN_EXE`; run with `--features cli`.
+//! `agenkitty skills` subcommand: exit-code matrix and JSON envelope
+//! stability (RFC-121 binary execution mode, folded into the framework
+//! binary). Drives the real `agenkitty` binary via `CARGO_BIN_EXE`.
 
-#![cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::fs;
 use std::path::Path;
@@ -10,12 +10,12 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_agenkitty-skills"))
-}
-
 fn run(args: &[&str]) -> Output {
-    bin().args(args).output().expect("binary runs")
+    Command::new(env!("CARGO_BIN_EXE_agenkitty"))
+        .arg("skills")
+        .args(args)
+        .output()
+        .expect("binary runs")
 }
 
 fn stdout(output: &Output) -> String {

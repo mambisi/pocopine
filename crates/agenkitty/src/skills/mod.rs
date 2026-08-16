@@ -1,39 +1,39 @@
-//! Binary execution mode (RFC-121): the loader as a standalone CLI.
+//! `agenkitty skills` — the loader's CLI surface (RFC-121 binary execution
+//! mode, folded into the framework binary). The model-facing tool family
+//! lives separately at [`crate::tools::skills`]; this module is the
+//! operator-facing surface.
 //!
-//! Four subcommands over the same library the runtime embeds:
-//! `validate` judges skill directories/roots (exit 1 on spec violations),
-//! `list` reports the catalog, `inspect` dumps one skill in full, and
-//! `index` renders the exact level-1 prompt block the runtime would inject.
+//! Four subcommands over the same `agenkitty-skills` library the runtime
+//! embeds: `validate` judges skill directories/roots (exit 1 on spec
+//! violations), `list` reports the catalog, `inspect` dumps one skill in
+//! full, and `index` renders the exact level-1 prompt block the runtime
+//! would inject.
 //!
-//! `--json` output is a versioned envelope (`"schema": "agenkitty-skills/v1"`)
-//! that only evolves additively within v1. No default roots and no config
-//! resolution here: the binary is a pure function over what it is pointed at.
+//! `--json` output is a versioned envelope (`"schema": "agenkitty-skills/v1"`
+//! — the envelope's schema identity, unchanged by where the CLI lives) that
+//! only evolves additively within v1. No default roots and no config
+//! resolution here: the subcommand is a pure function over what it is
+//! pointed at, unlike `run`/`doctor` which resolve project config.
 
 use std::io::Write;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use agenkitty_skills::{
+    LoadedSkill, Severity, SkillDiagnostic, SkillLimits, SkillLoader, load_skill_dir,
+};
+use clap::{Args, Subcommand};
 use serde_json::{Value as JsonValue, json};
-
-use super::catalog::LoadedSkill;
-use super::discover::{SkillLoader, load_skill_dir};
-use super::meta::{Severity, SkillDiagnostic, SkillLimits};
 
 pub const JSON_SCHEMA_TAG: &str = "agenkitty-skills/v1";
 
-#[derive(Parser)]
-#[command(
-    name = "agenkitty-skills",
-    version,
-    about = "Agent Skills (agentskills.io) loader for the Agenkitty framework"
-)]
-pub struct Cli {
+#[derive(Debug, Args)]
+pub struct SkillsArgs {
     #[command(subcommand)]
-    command: Command,
+    command: SkillsCmd,
 }
 
-#[derive(Subcommand)]
-enum Command {
+#[derive(Debug, Subcommand)]
+enum SkillsCmd {
     /// Validate skill directories (and/or whole roots) against the spec.
     Validate {
         /// Skill directories to validate (each must contain SKILL.md).
@@ -71,21 +71,20 @@ enum Command {
     },
 }
 
-/// Parse argv, execute, and return the process exit code.
-pub fn run() -> i32 {
-    let cli = Cli::parse();
+/// Execute against stdout and return the process exit code.
+pub fn run(args: SkillsArgs) -> i32 {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    execute(cli, &mut out)
+    execute(args, &mut out)
 }
 
-/// Testable entry point: everything `run` does, minus argv and process exit.
-pub fn execute(cli: Cli, out: &mut impl Write) -> i32 {
-    match cli.command {
-        Command::Validate { dirs, root, json } => validate(dirs, root, json, out),
-        Command::List { root, json } => list(root, json, out),
-        Command::Inspect { name, root, json } => inspect(&name, root, json, out),
-        Command::Index { root, budget } => index(root, budget, out),
+/// Testable entry point: everything `run` does, minus the stdout binding.
+pub fn execute(args: SkillsArgs, out: &mut impl Write) -> i32 {
+    match args.command {
+        SkillsCmd::Validate { dirs, root, json } => validate(dirs, root, json, out),
+        SkillsCmd::List { root, json } => list(root, json, out),
+        SkillsCmd::Inspect { name, root, json } => inspect(&name, root, json, out),
+        SkillsCmd::Index { root, budget } => index(root, budget, out),
     }
 }
 

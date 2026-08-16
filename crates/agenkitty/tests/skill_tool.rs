@@ -230,6 +230,22 @@ async fn fork_narrows_prompt_and_enforcement_together() {
     assert_eq!(err.kind(), "tool_policy");
 }
 
+#[test]
+fn compose_system_prompt_gates_on_the_tool_set() {
+    let tmp = TempDir::new().unwrap();
+    // Default config discovers `.agents/skills` under the project root.
+    write_skill(&tmp.path().join(".agents/skills"), "greeter", "");
+    let runner = agenkitty::supervisor::FrameworkRunner::mock_for_project(tmp.path()).unwrap();
+
+    let with_skills = runner.compose_system_prompt("base", &["skill.use".to_string()]);
+    assert!(with_skills.starts_with("base\n\n## Skills"));
+    assert!(with_skills.contains("- greeter:"));
+
+    // Without skill.use in the tool set the prompt never advertises it.
+    let without = runner.compose_system_prompt("base", &["fs.read".to_string()]);
+    assert_eq!(without, "base");
+}
+
 #[tokio::test]
 async fn disabled_config_yields_an_empty_runtime() {
     let tmp = TempDir::new().unwrap();
