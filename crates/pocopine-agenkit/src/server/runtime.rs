@@ -27,10 +27,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, ArtifactRef, Content,
-    CostEstimate, MediaGroupRef, Message, ModelRef, Redactor, RunId, StepId, StepKind, StepStatus,
-    ThinkingLevel, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, WireArtifactOrigin,
-    WireMediaMode, WireStopReason, events,
+    AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, ArtifactRef, Content, CostEstimate,
+    MediaGroupRef, Message, ModelRef, Redactor, RunId, StepId, StepKind, StepStatus, ThinkingLevel,
+    ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, WireArtifactOrigin, WireMediaMode,
+    WireStopReason, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -1560,7 +1560,9 @@ impl AgentSessionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{Agenkit, AiTool, AiToolContext, BoxFuture, MemoryArtifactSink, MockProvider};
+    use crate::server::{
+        Agenkit, AiTool, AiToolContext, BoxFuture, MemoryArtifactSink, MockProvider,
+    };
     use futures::StreamExt;
     use pocopine_agenkit_core::{ModelRef, Role, ToolDescriptor as Td};
     use serde::{Deserialize, Serialize};
@@ -1748,7 +1750,9 @@ mod tests {
         let mut kinds = Vec::new();
         while let Some(event) = rx.recv().await {
             kinds.push(match event {
-                AgentEvent::MediaStarted { media_type, mode, .. } => {
+                AgentEvent::MediaStarted {
+                    media_type, mode, ..
+                } => {
                     assert_eq!(media_type, "image/png");
                     assert_eq!(mode, WireMediaMode::Preview);
                     "media_started"
@@ -1757,7 +1761,11 @@ mod tests {
                     assert_eq!(seq, 0);
                     "media_chunk"
                 }
-                AgentEvent::ArtifactProduced { stream_id, artifact, .. } => {
+                AgentEvent::ArtifactProduced {
+                    stream_id,
+                    artifact,
+                    ..
+                } => {
                     assert!(stream_id.is_some());
                     assert_eq!(artifact.len, b"final pixels".len() as u64);
                     "artifact_produced"
@@ -1795,14 +1803,17 @@ mod tests {
         ) -> BoxFuture<'a, AgenkitResult<crate::server::GenerateResponse>> {
             Box::pin(async {
                 let mut response = crate::server::GenerateResponse::text("behold:");
-                response.content.parts.push(
-                    pocopine_agenkit_core::ContentPart::Media(pocopine_agenkit_core::MediaPart {
-                        media_type: "image/png".to_string(),
-                        url: None,
-                        data_base64: Some(pocopine_codec::base64_encode(b"raw pixels")),
-                        name: Some("gen.png".to_string()),
-                    }),
-                );
+                response
+                    .content
+                    .parts
+                    .push(pocopine_agenkit_core::ContentPart::Media(
+                        pocopine_agenkit_core::MediaPart {
+                            media_type: "image/png".to_string(),
+                            url: None,
+                            data_base64: Some(pocopine_codec::base64_encode(b"raw pixels")),
+                            name: Some("gen.png".to_string()),
+                        },
+                    ));
                 Ok(response)
             })
         }
@@ -1845,14 +1856,18 @@ mod tests {
         let url = media.url.as_deref().unwrap();
         assert!(url.starts_with("artifact:"), "{url}");
         assert_eq!(
-            sink.bytes(url.strip_prefix("artifact:").unwrap()).as_deref(),
+            sink.bytes(url.strip_prefix("artifact:").unwrap())
+                .as_deref(),
             Some(&b"raw pixels"[..])
         );
 
         drop(tx);
         let mut produced = false;
         while let Some(event) = rx.recv().await {
-            if let AgentEvent::ArtifactProduced { origin, stream_id, .. } = event {
+            if let AgentEvent::ArtifactProduced {
+                origin, stream_id, ..
+            } = event
+            {
                 assert_eq!(origin, WireArtifactOrigin::Model);
                 assert!(stream_id.is_none());
                 produced = true;
@@ -2101,6 +2116,94 @@ mod tests {
         // A second prompt appends another turn (multi-turn conversation).
         let _ = session.prompt("again").collect::<Vec<_>>().await;
         assert_eq!(session.history().await.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn media_chunks_ride_the_wire_uncapped_while_ref_strings_are_capped() {
+        // §D10 / RFC-122 §3: the chunk payload is framework-generated binary
+        // bounded at the capture surface — exempt from the text caps and the
+        // secret classifier. Ref strings get the standard caps.
+        let mut adapter =
+            AgentEventRedactor::new(Redactor::new().secret_classifier(|t| t.contains("sk-live")));
+
+        let big = "A".repeat(100_000).replace("AAAA", "sk-live"); // trips any text classifier
+        let wire = adapter
+            .redact(&AgentEvent::MediaChunk {
+                stream_id: "m0".to_string(),
+                seq: 3,
+                data_base64: big.clone(),
+            })
+            .unwrap();
+        match wire {
+            AgentWireEvent::MediaChunk {
+                stream_id,
+                seq,
+                data_base64,
+            } => {
+                assert_eq!((stream_id.as_str(), seq), ("m0", 3));
+                assert_eq!(data_base64, big, "chunks must cross uncapped, unclassified");
+            }
+            other => panic!("expected MediaChunk, got {other:?}"),
+        }
+
+        // A sink minting a pathological multi-KB uri/name is truncated at the
+        // wire (the conformance suite flags it earlier).
+        let wire = adapter
+            .redact(&AgentEvent::ArtifactProduced {
+                stream_id: None,
+                artifact: ArtifactRef {
+                    id: "art_1".to_string(),
+                    uri: Some("u".repeat(10_000)),
+                    media_type: "image/png".to_string(),
+                    name: Some("n".repeat(10_000)),
+                    sha256: "ab".repeat(32),
+                    len: 9,
+                },
+                group: None,
+                derived_from: vec!["art_0".to_string()],
+                origin: WireArtifactOrigin::Model,
+            })
+            .unwrap();
+        match wire {
+            AgentWireEvent::ArtifactProduced {
+                artifact,
+                derived_from,
+                ..
+            } => {
+                // Caps + the truncation ellipsis `…` (3 bytes).
+                assert!(artifact.uri.unwrap().len() <= 2048 + 3);
+                assert!(artifact.name.unwrap().len() <= 256 + 3);
+                assert_eq!(artifact.sha256.len(), 64);
+                assert_eq!(derived_from, vec!["art_0".to_string()]);
+            }
+            other => panic!("expected ArtifactProduced, got {other:?}"),
+        }
+
+        // MediaStarted display strings are capped too.
+        let wire = adapter
+            .redact(&AgentEvent::MediaStarted {
+                stream_id: "m1".to_string(),
+                media_type: "image/png".to_string(),
+                name: Some("x".repeat(5_000)),
+                mode: WireMediaMode::Preview,
+                group: Some(MediaGroupRef {
+                    id: "g0".to_string(),
+                    index: 1,
+                    expected: Some(4),
+                }),
+                origin: WireArtifactOrigin::Tool {
+                    id: "call_1".to_string(),
+                    tool: "image.generate".to_string(),
+                },
+            })
+            .unwrap();
+        match wire {
+            AgentWireEvent::MediaStarted { name, group, .. } => {
+                assert!(name.unwrap().len() <= 256 + 3);
+                assert_eq!(group.unwrap().expected, Some(4));
+            }
+            other => panic!("expected MediaStarted, got {other:?}"),
+        }
     }
 
     #[test]

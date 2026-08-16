@@ -982,7 +982,11 @@ mod tests {
     fn image_output_gate_requires_a_sink_only_for_flagged_models() {
         // Catalog-flagged image-output model (LiteLLM: gpt-5.1 emits images).
         let flagged = ModelRef::new("openai/gpt-5.1");
-        assert!(super::super::catalog::lookup(&flagged).unwrap().image_output);
+        assert!(
+            super::super::catalog::lookup(&flagged)
+                .unwrap()
+                .image_output
+        );
         let err = ensure_image_output_capturable(&flagged, false).unwrap_err();
         assert!(err.to_string().contains("artifact_sink"), "{err}");
         assert!(ensure_image_output_capturable(&flagged, true).is_ok());

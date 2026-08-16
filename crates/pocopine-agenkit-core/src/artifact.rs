@@ -181,8 +181,7 @@ mod tests {
     fn media_mode_and_origin_degrade_to_unknown() {
         let mode: WireMediaMode = serde_json::from_str(r#""interleave_v2""#).unwrap();
         assert_eq!(mode, WireMediaMode::Unknown);
-        let origin: WireArtifactOrigin =
-            serde_json::from_str(r#"{"kind":"scheduler"}"#).unwrap();
+        let origin: WireArtifactOrigin = serde_json::from_str(r#"{"kind":"scheduler"}"#).unwrap();
         assert_eq!(origin, WireArtifactOrigin::Unknown);
     }
 

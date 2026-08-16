@@ -48,7 +48,7 @@ async fn drain(
             StreamChunk::Text(t) => text.push_str(&t),
             StreamChunk::ToolCall(c) => tools.push(c),
             StreamChunk::Usage(u) => usage = Some(u.total()),
-            StreamChunk::Thinking { .. } => {}
+            StreamChunk::Thinking { .. } | StreamChunk::Media(_) => {}
         }
     }
     (text, tools, usage)

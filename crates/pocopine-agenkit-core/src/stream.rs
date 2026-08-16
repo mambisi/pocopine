@@ -497,7 +497,10 @@ mod tests {
         assert!(json.contains(r#""mode":"preview""#));
         assert!(!json.contains("group"));
         assert!(!json.contains("name"));
-        assert_eq!(serde_json::from_str::<AgentWireEvent>(&json).unwrap(), started);
+        assert_eq!(
+            serde_json::from_str::<AgentWireEvent>(&json).unwrap(),
+            started
+        );
 
         let chunk = AgentWireEvent::MediaChunk {
             stream_id: "ms_1".to_string(),
@@ -506,7 +509,10 @@ mod tests {
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains(r#""event":"media_chunk""#));
-        assert_eq!(serde_json::from_str::<AgentWireEvent>(&json).unwrap(), chunk);
+        assert_eq!(
+            serde_json::from_str::<AgentWireEvent>(&json).unwrap(),
+            chunk
+        );
     }
 
     #[test]

@@ -258,7 +258,7 @@ impl Artifacts {
     /// Emits `MediaStarted` (with a runtime-minted `stream_id`) immediately,
     /// and drives the rest of the §3 stream without the tool ever touching
     /// the event surface.
-    pub fn stream(&self, spec: MediaStreamSpec) -> AgenkitResult<MediaStream>;
+    pub fn stream(&self, spec: MediaStreamSpec) -> MediaStream;
 
     /// Open a multi-output group (n-variant sampling, storyboard batches):
     /// streams and puts opened through it share a runtime-minted group id
@@ -269,10 +269,11 @@ impl Artifacts {
 }
 
 impl MediaStream {
-    /// Emit one live chunk under the stream's declared mode. Ephemeral; a
-    /// chunk over the mode's byte bound (§5) is dropped with a warning,
-    /// never truncated.
-    pub fn chunk(&mut self, data: &[u8]) -> AgenkitResult<()>;
+    /// Emit one live chunk under the stream's declared mode. Ephemeral and
+    /// infallible: a chunk over the mode's byte bound (§5) is dropped with a
+    /// warning, never truncated — dropping is lossless, so there is no error
+    /// to surface.
+    pub fn chunk(&mut self, data: &[u8]);
 
     /// Capture explicit authoritative bytes through the sink and emit
     /// `ArtifactProduced`. Valid in both modes; required in `Preview`.
