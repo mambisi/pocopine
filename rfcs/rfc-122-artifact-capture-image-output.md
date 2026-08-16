@@ -24,9 +24,13 @@ This RFC adds that contract:
    (`ImageStarted`, `ImagePreview`, `ArtifactProduced`) so clients get a typed,
    streamed signal, including progressive image previews while a generation
    model is still drawing.
-4. **Model image output** — a catalog `image_output` capability, response-side
-   wire mapping, and a runtime capture step that routes generated images
-   through the sink before anything is persisted.
+4. **Image generation as a tool, streaming included** — a streaming capture
+   handle (`ctx.artifacts().stream_image(...)`) so an app-owned tool wrapping
+   any image API drives the same progressive-preview stream. Model-native
+   image output is a **backstop, deliberately not the primary path** (§4): the
+   catalog gains an `image_output` flag and the runtime a never-drop capture
+   rule, but response-side wire mapping is deferred until a shipped wire can
+   actually carry it.
 
 Artifacts travel as **references, not payloads**. Bytes cross exactly one
 boundary — into the sink — and everything else (model transcript, wire events,
@@ -92,26 +96,29 @@ event stream, and is unavailable to any other embedder of the framework.
 
 ```mermaid
 sequenceDiagram
-    participant M as Model (image_output)
+    participant M as Orchestrator model
     participant R as Runtime (agenkit)
+    participant T as image.generate (AiTool, app-owned)
     participant S as ArtifactSink (app impl)
     participant W as Wire (SSE client)
 
-    M->>R: image output begins
+    M->>R: tool call: image.generate { prompt }
+    R->>T: dispatch (allowlist + before_tool_call gate)
+    T->>R: ctx.artifacts().stream_image(media_type, name)
     R->>W: ImageStarted { image_id, media_type }
-    M-->>R: partial preview (provider-specific)
+    T-->>R: forwards provider partial
     R->>W: ImagePreview { image_id, seq, data_base64 }  %% ephemeral, bounded
-    M->>R: final image bytes
+    T->>R: finish(final bytes)
     R->>S: put(cx, NewArtifact { bytes, media_type, name })
     S-->>R: ArtifactRef { id, uri, sha256, len }
-    R->>W: ArtifactProduced { image_id, artifact }
-    Note over R: assistant Message persists the REF (url-form MediaPart) — never bytes
+    R->>W: ArtifactProduced { image_id, artifact, origin: Tool }
+    R->>M: tool result JSON embeds the ref
+    Note over R: transcript carries the REF — never bytes
 ```
 
-The tool path is the same picture minus the model: a tool calls
-`ctx.artifacts().put(...)` mid-execution, the runtime emits `ArtifactProduced`
-(origin `Tool`), and the tool embeds the returned ref in its ordinary JSON
-output.
+A tool with nothing to stream just calls `ctx.artifacts().put(...)` — one
+`ArtifactProduced`, no preview prelude. The model-native backstop (§4) is the
+same tail of the picture with the runtime itself standing where the tool does.
 
 ## §1 The `ArtifactSink` contract
 
@@ -220,8 +227,37 @@ impl AiContext {
 
 impl Artifacts {
     pub async fn put(&self, artifact: NewArtifact) -> AgenkitResult<ArtifactRef>;
+
+    /// Open a streamed image capture: previews out, one final artifact in.
+    /// Emits `ImageStarted` (with a runtime-minted `image_id`) immediately,
+    /// and drives the rest of the §3 stream without the tool ever touching
+    /// the event surface.
+    pub fn stream_image(&self, media_type: impl Into<String>, name: Option<String>)
+        -> AgenkitResult<ImageStream>;
+}
+
+impl ImageStream {
+    /// Emit one progressive preview — a COMPLETE low-fidelity image (§5
+    /// replace semantics). Previews are ephemeral; one over the byte bound
+    /// is dropped with a warning, never truncated.
+    pub fn preview(&mut self, data: &[u8]) -> AgenkitResult<()>;
+
+    /// Capture the final bytes through the sink and emit `ArtifactProduced`.
+    pub async fn finish(self, bytes: Vec<u8>) -> AgenkitResult<ArtifactRef>;
+
+    /// Abandon the stream: no artifact event is emitted; consumers discard
+    /// previews when the tool completes/fails without a matching
+    /// `ArtifactProduced`. Dropping the handle without `finish` is `abort`.
+    pub fn abort(self);
 }
 ```
+
+This is how a tool wrapping a streaming image API (progressive-fidelity
+partials) delivers the same live UX as native model streaming would — the
+tool forwards each partial into `preview` and hands the final bytes to
+`finish`. The image *prompt* stays visible in the tool's `args`, gated by
+`before_tool_call`, and metered as its own call — none of which a
+model-native generation would pass through.
 
 `Artifacts` is constructed per tool call by the dispatcher, carrying the
 `ArtifactCx` (principal, thread, `ArtifactOrigin::Tool` with the live call id
@@ -248,7 +284,8 @@ decode fallback, and agenkitty's event fold already ends in `_ => {}`
 (`agenkitty/src/app/agent.rs:1328`).
 
 ```rust
-/// A model image output began.
+/// A streamed image capture began (a tool's `ImageStream`, or the model
+/// backstop of §4).
 ImageStarted {
     /// Correlates the preview stream and the terminal artifact event.
     image_id: String,
@@ -269,7 +306,8 @@ ImagePreview {
 /// Terminal, persisted: AI-produced bytes were captured into the
 /// implementor's sink. The one artifact event for BOTH origins.
 ArtifactProduced {
-    /// Present when a preview stream preceded this (model image output).
+    /// Present when a preview stream preceded this (`stream_image` or the
+    /// model backstop); absent for a plain `put`.
     image_id: Option<String>,
     artifact: ArtifactRef,
     origin: WireArtifactOrigin, // Model | Tool { id, tool }
@@ -291,10 +329,37 @@ secret classifier: it is framework-generated binary payload with its own byte
 bound (§5), not tool/model text. The exemption is per-field and bounded, not a
 policy hole.
 
-## §4 Model image output
+## §4 Model-native image output: a backstop, deliberately not the primary path
+
+The primary integration for image *generation* is an app-owned tool (e.g.
+`image.generate`, the `pdf.write` pattern) using §2's `stream_image`. That is
+a design position, not an accident of sequencing:
+
+- **It decouples two model choices.** Model-native output couples "best
+  orchestrator" to "can draw" — and no frontier orchestrator model draws,
+  while no image model runs a good agent loop. A tool lets any `tools: true`
+  orchestrator drive any image model, including ones with no chat wire at all
+  (dedicated endpoints, local diffusion).
+- **It inherits the entire §D5/§D10 machinery for free.** Allowlist,
+  `before_tool_call` approval (image generation costs money and carries
+  content-policy risk), error-feedback-and-retry instead of a failed turn,
+  per-call usage provenance, and an inspectable/replaceable prompt in the
+  tool's `args`. Model-native generation bypasses every one of these.
+- **No shipped wire can carry it today.** The OAI crate targets
+  chat-completions-shaped gateways (which do not emit images), DashScope's
+  image models live on a separate async endpoint, and the anthropic wire has
+  no image output. Response-side mapping would be speculative plumbing with
+  zero grounding providers — colliding with this RFC's own non-goals.
+
+What model-native support would add over the tool — single-generation
+text/image interleaving with full conversational context (Gemini-style
+editing loops) — is real, and is exactly what the **deferred** part below
+picks up when a wire exists to ground it.
+
+### §4.1 What ships now (the backstop)
 
 **Catalog.** Models gain `image_output: bool`, alongside `vision`/`tools`.
-Consulted, not just stored, in both directions:
+Consulted, not just stored:
 
 - Request-time gate (mirrors the vision gate in `ensure_media_support`): a
   resolved model **positively** marked `image_output: true` with **no
@@ -302,21 +367,15 @@ Consulted, not just stored, in both directions:
   call — "model `x` produces images but no artifact sink is configured; wire
   one with `.artifact_sink(...)`". Unlisted aliases pass; the capture-time
   backstop below still protects them.
-- Capture-time backstop: a provider that returns image output anyway (alias
-  the catalog doesn't index) captures if a sink exists, and otherwise fails
-  the turn loudly. Silently dropping generated bytes is never an option
+- Capture-time backstop: any wire that surfaces inline media in an assistant
+  response captures through the sink if one exists, and otherwise fails the
+  turn loudly. Silently dropping generated bytes is never an option
   (work-or-loud, PR #270 doctrine).
 
-**Response mapping.** The OAI and Qwen wires learn to parse image output from
-responses into internal `ContentPart::Media` parts carrying inline
-`data_base64` (the anthropic wire has no image output; its catalog entries
-stay `image_output: false`). These inline parts are **runtime-internal**: they
-exist between the wire adapter and the capture step, and are never persisted,
-never emitted, never re-sent.
-
-**Capture step.** When a model step's assembled response contains media parts,
-the runtime — before persisting the assistant message or emitting
-`AssistantText` — routes each one through the sink
+**Capture rule.** When a model step's assembled response contains media parts
+(inline `data_base64`, runtime-internal only — never persisted, never
+emitted, never re-sent), the runtime — before persisting the assistant
+message or emitting `AssistantText` — routes each one through the sink
 (`ArtifactOrigin::Model`) and **replaces it in the message content** with the
 persisted ref form:
 
@@ -340,13 +399,21 @@ point of view. A future wire that genuinely accepts assistant image input can
 declare it via a capability and receive the real part; nothing in the
 persisted shape has to change.
 
-**Streaming plumbing.** `LoopObserver` gains `image_started` / `image_preview`
-callbacks (default no-op, like the existing hooks); the streamed-step adapters
-surface provider partial-image events through them. Providers without preview
-streaming emit zero previews and the contract degrades to
+### §4.2 What is deferred until a wire grounds it
+
+Response-side wire parsing of image output (OAI/Qwen adapters) and the
+`LoopObserver` `image_started` / `image_preview` plumbing that would let the
+*model's* stream drive previews. When a provider wire this workspace ships
+can genuinely interleave text and image output, this section graduates: the
+capture rule, persistence shape, replay mapping, and §3 wire events above are
+already the contract, so graduating is wiring work, not a redesign. Providers
+without preview streaming will emit zero previews and degrade to
 `ImageStarted` → `ArtifactProduced`, which clients must already handle.
 
 ## §5 Streaming semantics
+
+These rules bind every preview producer identically — a tool's `ImageStream`
+today, the model backstop when §4.2 graduates:
 
 - **Ordering.** For one `image_id`: `ImageStarted` strictly precedes any
   `ImagePreview`; `seq` is monotonic from 0; `ArtifactProduced` (with that
@@ -416,6 +483,7 @@ called out in §9. The framework-side guarantee is that the ref is durably
 | `sink.put` fails (model origin) | Turn fails; generated bytes without capture is data loss |
 | `NewArtifact.bytes` exceeds declared `max_bytes` | Sink errors before storing; surfaced per origin as above |
 | Preview exceeds `MAX_IMAGE_PREVIEW_BYTES` | Dropped + `tracing` warn (lossless: previews are ephemeral) |
+| `ImageStream` aborted / dropped without `finish` | No `ArtifactProduced`; consumers discard previews for that `image_id` |
 | Tool calls `ctx.artifacts()` with no sink | `AgenkitResult` error the tool may catch to degrade to text |
 | Inline-bytes media in assistant/tool message at request build | Hard error (unchanged from PR #270) |
 | Url-form assistant media at request build | Deterministic text placeholder per wire (§4, documented) |
@@ -436,7 +504,11 @@ called out in §9. The framework-side guarantee is that the ref is durably
 3. Extend the reload projection (`display_turns`) to surface url-form media
    parts and `$artifact` refs — closing the "streams but vanishes on reload"
    gap for model-origin images.
-4. Migrate `pdf.write` to `ctx.artifacts().put(...)`, keeping its markdown
+4. Ship image generation as an app tool (`image.generate`, the `pdf.write`
+   pattern) over the app's chosen image API, driving `stream_image` for
+   progressive previews. An agent skill can layer usage guidance on top of
+   the tool; the executable capability itself is the tool.
+5. Migrate `pdf.write` to `ctx.artifacts().put(...)`, keeping its markdown
    link output verbatim.
 
 **Companion change (recommended, separately scoped):** widen
@@ -454,6 +526,8 @@ back to a vision model as user-message media in a later turn.
 - **Audio/video output streaming.** The replace-semantics preview stream is
   image-shaped; other modalities get their own variants when a real provider
   wire exists to ground them (no speculative generality).
+- **A framework-shipped `image.generate` tool.** Which image API to call,
+  at what cost, under which policy is app territory; §9 shows the pattern.
 - **Artifact retrieval, GC, quotas, or serving** — implementor surface.
 - **A plugin/registry system for sinks.** One trait, one builder method
   (house rule: small enumerable surfaces).
