@@ -1,0 +1,36 @@
+[package]
+name = "agenkitty-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent Skills (agentskills.io) loader for the Agenkitty framework: discovery, validation, progressive-disclosure reads, and a standalone CLI."
+
+# Binary execution mode (RFC-121): the same loader as a standalone CLI with
+# stable JSON output. Feature-gated so library consumers never pull clap.
+[[bin]]
+name = "agenkitty-skills"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["dep:clap"]
+
+[dependencies]
+# `looks_like_secret` — the one shared secret-content classifier (F3). The
+# always-on skill index runs frontmatter text through it (RFC-121 S2).
+agenkitty-core = { workspace = true }
+# sha256 skill digests (house rule: all hashing through pocopine-crypto).
+pocopine-crypto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# SKILL.md frontmatter is YAML per the agentskills.io spec. serde_norway is
+# the maintained drop-in fork of the archived serde_yaml; it is confined to
+# `frontmatter.rs` (raw values are converted to `serde_json::Value` at the
+# public surface) so it stays swappable.
+serde_norway = "0.9"
+clap = { version = "4", features = ["derive"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
