@@ -56,6 +56,12 @@ pub struct Model {
     /// Whether the model can produce audio output.
     #[serde(default)]
     pub audio_output: bool,
+    /// Whether the model can produce image output (RFC-122 §4.1). Consulted
+    /// at request build: an image-output model with no `ArtifactSink` wired
+    /// is a config error, and returned image bytes are captured through the
+    /// sink rather than ever riding the transcript.
+    #[serde(default)]
+    pub image_output: bool,
     /// Whether the model accepts PDF/document input.
     #[serde(default)]
     pub pdf_input: bool,
