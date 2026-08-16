@@ -21,21 +21,24 @@ This RFC adds that contract:
 2. **A tool surface** — `ctx.artifacts().put(...)`, so any `AiTool` can produce
    an artifact without protocol changes.
 3. **A wire contract** — three additive `AgentWireEvent` variants
-   (`ImageStarted`, `ImagePreview`, `ArtifactProduced`) so clients get a typed,
-   streamed signal, including progressive image previews while a generation
-   model is still drawing.
-4. **Image generation as a tool, streaming included** — a streaming capture
-   handle (`ctx.artifacts().stream_image(...)`) so an app-owned tool wrapping
-   any image API drives the same progressive-preview stream. Model-native
-   image output is a **backstop, deliberately not the primary path** (§4): the
-   catalog gains an `image_output` flag and the runtime a never-drop capture
-   rule, but response-side wire mapping is deferred until a shipped wire can
-   actually carry it.
+   (`MediaStarted`, `MediaChunk`, `ArtifactProduced`) so clients get a typed,
+   streamed signal. One byte-stream shape covers two declared modes:
+   replace-semantics **previews** (progressive image fidelity) and bounded
+   append-semantics **chunks** (audio/video live view), plus a group
+   correlator for multi-output generations.
+4. **Generation as a tool, streaming included** — a streaming capture handle
+   (`ctx.artifacts().stream(...)`) so an app-owned tool wrapping any
+   generative API drives the same stream. Model-native image output is a
+   **backstop, deliberately not the primary path** (§4): the catalog gains an
+   `image_output` flag and the runtime a never-drop capture rule, but
+   response-side wire mapping is deferred until a shipped wire can actually
+   carry it.
 
 Artifacts travel as **references, not payloads**. Bytes cross exactly one
 boundary — into the sink — and everything else (model transcript, wire events,
 session log) carries a ref of ~100 bytes. The one deliberate exception is the
-ephemeral preview stream, which is bounded and never persisted.
+ephemeral live-view stream (previews / bounded byte chunks), which is
+size-bounded and never persisted.
 
 ## The problem, with the receipts
 
@@ -104,14 +107,14 @@ sequenceDiagram
 
     M->>R: tool call: image.generate { prompt }
     R->>T: dispatch (allowlist + before_tool_call gate)
-    T->>R: ctx.artifacts().stream_image(media_type, name)
-    R->>W: ImageStarted { image_id, media_type }
+    T->>R: ctx.artifacts().stream(spec)
+    R->>W: MediaStarted { stream_id, media_type, mode }
     T-->>R: forwards provider partial
-    R->>W: ImagePreview { image_id, seq, data_base64 }  %% ephemeral, bounded
-    T->>R: finish(final bytes)
+    R->>W: MediaChunk { stream_id, seq, data_base64 }  %% ephemeral, bounded
+    T->>R: finish_with(final bytes)
     R->>S: put(cx, NewArtifact { bytes, media_type, name })
     S-->>R: ArtifactRef { id, uri, sha256, len }
-    R->>W: ArtifactProduced { image_id, artifact, origin: Tool }
+    R->>W: ArtifactProduced { stream_id, artifact, origin: Tool }
     R->>M: tool result JSON embeds the ref
     Note over R: transcript carries the REF — never bytes
 ```
@@ -225,39 +228,69 @@ impl AiContext {
     pub fn artifacts(&self) -> AgenkitResult<Artifacts>;
 }
 
+/// How a stream's chunks relate to each other and to the final bytes (§5).
+pub enum MediaStreamMode {
+    /// Each chunk is a COMPLETE low-fidelity encoding that REPLACES the
+    /// previous one (progressive-fidelity image partials). Chunks are never
+    /// the authoritative bytes; `finish_with` is required.
+    Preview,
+    /// Chunks CONCATENATE into the byte stream in order (audio/video live
+    /// view). `finish()` may use the concatenation as the final bytes.
+    Append,
+}
+
+pub struct MediaStreamSpec {
+    pub media_type: String,
+    pub name: Option<String>,
+    pub mode: MediaStreamMode,
+}
+
 impl Artifacts {
     pub async fn put(&self, artifact: NewArtifact) -> AgenkitResult<ArtifactRef>;
 
-    /// Open a streamed image capture: previews out, one final artifact in.
-    /// Emits `ImageStarted` (with a runtime-minted `image_id`) immediately,
+    /// Open a streamed capture: live chunks out, one final artifact in.
+    /// Emits `MediaStarted` (with a runtime-minted `stream_id`) immediately,
     /// and drives the rest of the §3 stream without the tool ever touching
     /// the event surface.
-    pub fn stream_image(&self, media_type: impl Into<String>, name: Option<String>)
-        -> AgenkitResult<ImageStream>;
+    pub fn stream(&self, spec: MediaStreamSpec) -> AgenkitResult<MediaStream>;
+
+    /// Open a multi-output group (n-variant sampling, storyboard batches):
+    /// streams and puts opened through it share a runtime-minted group id
+    /// and auto-increment their index. `expected` is the declared output
+    /// count when the producer knows it up front (UI placeholders), a hint
+    /// rather than a promise (§5.3).
+    pub fn group(&self, expected: Option<u32>) -> ArtifactGroup;
 }
 
-impl ImageStream {
-    /// Emit one progressive preview — a COMPLETE low-fidelity image (§5
-    /// replace semantics). Previews are ephemeral; one over the byte bound
-    /// is dropped with a warning, never truncated.
-    pub fn preview(&mut self, data: &[u8]) -> AgenkitResult<()>;
+impl MediaStream {
+    /// Emit one live chunk under the stream's declared mode. Ephemeral; a
+    /// chunk over the mode's byte bound (§5) is dropped with a warning,
+    /// never truncated.
+    pub fn chunk(&mut self, data: &[u8]) -> AgenkitResult<()>;
 
-    /// Capture the final bytes through the sink and emit `ArtifactProduced`.
-    pub async fn finish(self, bytes: Vec<u8>) -> AgenkitResult<ArtifactRef>;
+    /// Capture explicit authoritative bytes through the sink and emit
+    /// `ArtifactProduced`. Valid in both modes; required in `Preview`.
+    pub async fn finish_with(self, bytes: Vec<u8>) -> AgenkitResult<ArtifactRef>;
+
+    /// `Append` mode only: capture the concatenation of the appended chunks
+    /// as the final bytes. Errors in `Preview` mode (previews are not the
+    /// artifact).
+    pub async fn finish(self) -> AgenkitResult<ArtifactRef>;
 
     /// Abandon the stream: no artifact event is emitted; consumers discard
-    /// previews when the tool completes/fails without a matching
-    /// `ArtifactProduced`. Dropping the handle without `finish` is `abort`.
+    /// its chunks when the tool completes/fails without a matching
+    /// `ArtifactProduced`. Dropping the handle without finishing is `abort`.
     pub fn abort(self);
 }
 ```
 
-This is how a tool wrapping a streaming image API (progressive-fidelity
-partials) delivers the same live UX as native model streaming would — the
-tool forwards each partial into `preview` and hands the final bytes to
-`finish`. The image *prompt* stays visible in the tool's `args`, gated by
-`before_tool_call`, and metered as its own call — none of which a
-model-native generation would pass through.
+This is how a tool wrapping any streaming generative API delivers the same
+live UX native model streaming would: an image tool forwards each
+progressive partial as a `Preview` chunk and hands the final bytes to
+`finish_with`; a video/audio tool (a Seedance-class wrapper) appends real
+byte chunks and calls `finish`. The generation *prompt* stays visible in the
+tool's `args`, gated by `before_tool_call`, and metered as its own call —
+none of which a model-native generation would pass through.
 
 `Artifacts` is constructed per tool call by the dispatcher, carrying the
 `ArtifactCx` (principal, thread, `ArtifactOrigin::Tool` with the live call id
@@ -315,32 +348,40 @@ decode fallback, and agenkitty's event fold already ends in `_ => {}`
 (`agenkitty/src/app/agent.rs:1328`).
 
 ```rust
-/// A streamed image capture began (a tool's `ImageStream`, or the model
+/// A streamed media capture began (a tool's `MediaStream`, or the model
 /// backstop of §4).
-ImageStarted {
-    /// Correlates the preview stream and the terminal artifact event.
-    image_id: String,
+MediaStarted {
+    /// Correlates this stream's chunks and its terminal artifact event.
+    stream_id: String,
     media_type: String,
     name: Option<String>,
+    /// How chunks compose: `preview` (replace) or `append` (§5). Declared
+    /// once per stream; a consumer's fold is chosen here.
+    mode: WireMediaMode,
+    /// Multi-output correlation (§5.3), absent for a lone output.
+    group: Option<MediaGroupRef>, // { id: String, index: u32, expected: Option<u32> }
 },
-/// A progressive preview of the image being generated. **Ephemeral** — never
-/// persisted, exactly like `AssistantDelta`. Each preview is a COMPLETE
-/// low-fidelity encoding that REPLACES the previous one (matching how image
-/// providers stream partials); it is not an append-chunk.
-ImagePreview {
-    image_id: String,
-    /// Monotonic per image_id; a consumer renders the highest seq it has.
+/// One live chunk of a streamed capture. **Ephemeral** — never persisted,
+/// exactly like `AssistantDelta`. Its meaning follows the stream's declared
+/// mode: a `preview` chunk is a COMPLETE low-fidelity encoding replacing the
+/// previous one; an `append` chunk concatenates onto its predecessors.
+MediaChunk {
+    stream_id: String,
+    /// Monotonic per stream_id from 0.
     seq: u32,
-    /// Complete preview payload, base64. Bounded (§5).
+    /// Chunk payload, base64. Bounded per mode (§5).
     data_base64: String,
 },
 /// Terminal, persisted: AI-produced bytes were captured into the
 /// implementor's sink. The one artifact event for BOTH origins.
 ArtifactProduced {
-    /// Present when a preview stream preceded this (`stream_image` or the
-    /// model backstop); absent for a plain `put`.
-    image_id: Option<String>,
+    /// Present when a chunk stream preceded this (`stream` or the model
+    /// backstop); absent for a plain `put`.
+    stream_id: Option<String>,
     artifact: ArtifactRef,
+    /// Mirrors `MediaStarted.group` so a consumer that missed the start
+    /// still slots the artifact (§5.3).
+    group: Option<MediaGroupRef>,
     origin: WireArtifactOrigin, // Model | Tool { id, tool }
 },
 ```
@@ -350,20 +391,20 @@ The streaming symmetry the contract already has, extended:
 | | ephemeral (live view) | terminal (persisted) |
 |---|---|---|
 | text | `AssistantDelta` (append) | `AssistantText` → text part |
-| image | `ImagePreview` (replace) | `ArtifactProduced` → ref |
+| media | `MediaChunk` (mode-declared: replace or append) | `ArtifactProduced` → ref |
 
 Redaction (§D10): `ArtifactRef` string fields (`id`, `uri`, `name`,
 `media_type`) pass through `Redactor::text_to_limit` with the standard caps —
 they are small by contract, so this is enforcement, not ceremony.
-`ImagePreview.data_base64` is exempt from the JSON string cap and from the
+`MediaChunk.data_base64` is exempt from the JSON string cap and from the
 secret classifier: it is framework-generated binary payload with its own byte
-bound (§5), not tool/model text. The exemption is per-field and bounded, not a
-policy hole.
+bounds (§5), not tool/model text. The exemption is per-field and bounded, not
+a policy hole.
 
 ## §4 Model-native image output: a backstop, deliberately not the primary path
 
 The primary integration for image *generation* is an app-owned tool (e.g.
-`image.generate`, the `pdf.write` pattern) using §2's `stream_image`. That is
+`image.generate`, the `pdf.write` pattern) using §2's `stream`. That is
 a design position, not an accident of sequencing:
 
 - **It decouples two model choices.** Model-native output couples "best
@@ -433,37 +474,80 @@ persisted shape has to change.
 ### §4.2 What is deferred until a wire grounds it
 
 Response-side wire parsing of image output (OAI/Qwen adapters) and the
-`LoopObserver` `image_started` / `image_preview` plumbing that would let the
-*model's* stream drive previews. When a provider wire this workspace ships
-can genuinely interleave text and image output, this section graduates: the
+`LoopObserver` media-stream plumbing that would let the *model's* stream
+drive `Preview` chunks. When a provider wire this workspace ships can
+genuinely interleave text and image output, this section graduates: the
 capture rule, persistence shape, replay mapping, and §3 wire events above are
 already the contract, so graduating is wiring work, not a redesign. Providers
-without preview streaming will emit zero previews and degrade to
-`ImageStarted` → `ArtifactProduced`, which clients must already handle.
+without partial streaming will emit zero chunks and degrade to
+`MediaStarted` → `ArtifactProduced`, which clients must already handle.
 
 ## §5 Streaming semantics
 
-These rules bind every preview producer identically — a tool's `ImageStream`
-today, the model backstop when §4.2 graduates:
+These rules bind every producer identically — a tool's `MediaStream` today,
+the model backstop when §4.2 graduates.
 
-- **Ordering.** For one `image_id`: `ImageStarted` strictly precedes any
-  `ImagePreview`; `seq` is monotonic from 0; `ArtifactProduced` (with that
-  `image_id`) is last. Events for different images may interleave with text
-  deltas; `image_id` is the correlation key.
-- **Replacement, not append.** Each preview is a complete image; a consumer
-  renders the latest and discards the rest. This matches provider reality
-  (progressive-fidelity partials) and means a dropped preview is lossless.
-- **Bounds.** A preview larger than `MAX_IMAGE_PREVIEW_BYTES` (1 MiB of
-  base64) is dropped with a `tracing` warning, not truncated — a truncated
-  image is garbage, and previews are ephemeral by contract. The final artifact
-  is unaffected.
+### §5.1 Shared rules (both modes)
+
+- **Ordering.** For one `stream_id`: `MediaStarted` strictly precedes any
+  `MediaChunk`; `seq` is monotonic from 0; `ArtifactProduced` (with that
+  `stream_id`) is last. `stream_id` is the correlation key.
+- **Interleaving.** Chunks of different streams may interleave with each
+  other and with text deltas — concurrent generations are legal. Placement
+  in prose is not a wire concern: the persisted assistant `Content` keeps
+  parts in final order (§6), and a live consumer folds events in arrival
+  order.
 - **Abort.** A turn aborted mid-generation emits no `ArtifactProduced`; the
-  sink is not called; previews already emitted are the consumer's to discard.
+  sink is not called; chunks already emitted are the consumer's to discard.
   (`Stopped { reason: Aborted }` is already the terminal signal.)
-- **Persistence.** Previews are never written to the session log, mirroring
+- **Persistence.** Chunks are never written to the session log, mirroring
   `AssistantDelta`'s documented ephemerality. An older client, or one that
-  ignores previews entirely, sees exactly the pre-RFC behavior plus one final
-  typed event.
+  ignores chunks entirely, sees exactly the pre-RFC behavior plus one final
+  typed event. The live view is a courtesy; the artifact is the source of
+  truth.
+
+### §5.2 The two modes
+
+- **`Preview` (replace).** Each chunk is a complete low-fidelity encoding; a
+  consumer renders the highest `seq` and discards the rest. Matches
+  progressive-fidelity image partials, and makes a dropped preview lossless.
+  Bound: a chunk over `MAX_PREVIEW_CHUNK_BYTES` (1 MiB base64) is dropped
+  with a `tracing` warning, not truncated — a truncated image is garbage.
+- **`Append` (concatenate).** Chunks concatenate in `seq` order into the
+  byte stream; a consumer may begin progressive playback (audio, video).
+  Bounds: `MAX_APPEND_CHUNK_BYTES` (256 KiB base64) per chunk, plus a
+  per-stream ephemeral budget `MAX_APPEND_STREAM_BYTES` (8 MiB default,
+  host-tunable) after which further chunks are dropped (warn) and consumers
+  wait for the ref. The agent wire is deliberately **not** a media-delivery
+  protocol: a 100 MB video belongs on the implementor's serving surface
+  (a progressive URL behind the `ArtifactRef`), not on base64 SSE. The
+  budget keeps the live view honest for short media without turning the
+  event stream into a CDN.
+
+### §5.3 Multi-output generations
+
+Some producers emit several outputs per invocation — n-variant image
+sampling, storyboard batches, a model interleaving multiple images with
+prose. The contract composes this from primitives already defined instead of
+inventing a multiplexed stream object:
+
+- **One stream per output.** Every output gets its own `stream_id` (or a
+  plain `put` when there is nothing to stream). "Multi-image stream" on the
+  wire is `stream_id` interleaving, nothing more.
+- **Grouping.** Outputs of one invocation share a
+  `MediaGroupRef { id, index, expected }`: a runtime-minted group id, this
+  output's dense index from 0 (matching `ArtifactOrigin`'s
+  `output_ordinal`), and the declared count when the producer knows it up
+  front — `n = 4` sampling lets a UI render four placeholders immediately.
+  `expected` is intent, not promise: one variant can fail and its stream
+  abort while its siblings complete, so a consumer treats the group as done
+  when the producing tool call completes, not when `expected` is reached.
+  `ArtifactProduced` mirrors the group, so a consumer that missed
+  `MediaStarted` still slots the artifact correctly.
+- **Interleaved text-and-image output** (Gemini-style storybooks, via the §4
+  backstop when it graduates) needs nothing extra: each image is one stream
+  opened and finished in sequence between text deltas, and the persisted
+  message keeps every part at its position (§6).
 
 ## §6 Persistence and replay
 
@@ -513,8 +597,10 @@ called out in §9. The framework-side guarantee is that the ref is durably
 | `sink.put` fails (tool origin) | Follows `ToolErrorMode` — fed back to the model as the tool's error |
 | `sink.put` fails (model origin) | Turn fails; generated bytes without capture is data loss |
 | `NewArtifact.bytes` exceeds declared `max_bytes` | Sink errors before storing; surfaced per origin as above |
-| Preview exceeds `MAX_IMAGE_PREVIEW_BYTES` | Dropped + `tracing` warn (lossless: previews are ephemeral) |
-| `ImageStream` aborted / dropped without `finish` | No `ArtifactProduced`; consumers discard previews for that `image_id` |
+| Chunk exceeds its mode's byte bound (§5.2) | Dropped + `tracing` warn (lossless: chunks are ephemeral) |
+| `Append` stream exceeds its ephemeral budget | Further chunks dropped (warn); the final artifact is unaffected |
+| `MediaStream` aborted / dropped without finishing | No `ArtifactProduced`; consumers discard chunks for that `stream_id` |
+| `finish()` on a `Preview`-mode stream | Error — previews are never the authoritative bytes; use `finish_with` |
 | Tool calls `ctx.artifacts()` with no sink | `AgenkitResult` error the tool may catch to degrade to text |
 | Inline-bytes media in assistant/tool message at request build | Hard error (unchanged from PR #270) |
 | Url-form assistant media at request build | Deterministic text placeholder per wire (§4, documented) |
@@ -530,15 +616,17 @@ called out in §9. The framework-side guarantee is that the ref is durably
    (`reserve → bytes_verified → published`) is an internal upgrade invisible
    to the framework contract.
 2. Add match arms for the three new events in `app/agent.rs` (currently
-   `_ => {}`); render `ImagePreview` progressively and swap in the resolved
+   `_ => {}`); render `MediaChunk`s per their mode and swap in the resolved
    artifact on `ArtifactProduced`.
 3. Extend the reload projection (`display_turns`) to surface url-form media
    parts and `$artifact` refs — closing the "streams but vanishes on reload"
    gap for model-origin images.
 4. Ship image generation as an app tool (`image.generate`, the `pdf.write`
-   pattern) over the app's chosen image API, driving `stream_image` for
-   progressive previews. An agent skill can layer usage guidance on top of
-   the tool; the executable capability itself is the tool.
+   pattern) over the app's chosen image API, driving a `Preview`-mode
+   `stream` for progressive partials. A video tool (a Seedance-class
+   wrapper) is the same pattern in `Append` mode. An agent skill can layer
+   usage guidance on top of either; the executable capability itself is the
+   tool.
 5. Migrate `pdf.write` to `ctx.artifacts().put(...)`, keeping its markdown
    link output verbatim.
 
@@ -554,9 +642,11 @@ back to a vision model as user-message media in a later turn.
 - **Assistant `MediaPart` as a wire input format.** No provider accepts it;
   the placeholder mapping in §4 is the contract until a wire declares
   otherwise.
-- **Audio/video output streaming.** The replace-semantics preview stream is
-  image-shaped; other modalities get their own variants when a real provider
-  wire exists to ground them (no speculative generality).
+- **Media delivery and playback protocols.** `Append` mode is a bounded live
+  view, not HLS/DASH; bulk delivery of large media is the implementor's
+  serving surface, reached through the `ArtifactRef`. (Audio/video *capture*
+  is in scope via `Append` mode — grounded by the §2.1 tool path, which needs
+  no provider wire.)
 - **A framework-shipped `image.generate` tool.** Which image API to call,
   at what cost, under which policy is app territory; §9 shows the pattern.
 - **Artifact retrieval, GC, quotas, or serving** — implementor surface.
@@ -569,10 +659,10 @@ back to a vision model as user-message media in a later turn.
 1. Should `ArtifactRef.uri` be required rather than `Option`? Headless sinks
    argue for optional; every wire consumer then needs an id-resolution story.
    Current position: optional, with the conformance suite warning when absent.
-2. Multi-image turns: is `output_ordinal` on `ArtifactOrigin::Tool` enough, or
-   does `Model` origin also need an ordinal for deterministic replay naming?
-   Current position: add it when a provider actually emits multiple images per
-   step.
+2. `Append`-mode defaults: are 256 KiB chunks and an 8 MiB per-stream budget
+   the right bounds? Both are host-tunable; tune against the first real
+   video/audio tool before freezing the defaults. (Multi-output ordinals,
+   previously open here, are resolved by §5.3's `MediaGroupRef`.)
 3. Should the runtime auto-append a prose line (`[generated image: ...]`) to
    `AssistantText` for model-origin artifacts, so text-only consumers see
    *something* without projection changes? Current position: no — it forges
