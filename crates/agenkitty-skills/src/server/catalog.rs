@@ -13,10 +13,16 @@ use std::path::PathBuf;
 
 use serde_json::Value as JsonValue;
 
-use crate::error::SkillError;
-use crate::meta::{ClaudeExt, SkillDiagnostic, SkillLimits, SkillMeta};
-use crate::sanitize::{bound_text, sanitize_multiline};
-use crate::{confine, subst};
+use super::error::SkillError;
+use super::meta::{ClaudeExt, SkillDiagnostic, SkillLimits, SkillMeta};
+use super::sanitize::{bound_text, sanitize_multiline};
+use super::{confine, subst};
+
+/// The framing text above the level-1 index — the one place the wording
+/// lives, shared by every renderer (RFC-121 § System-prompt injection).
+pub const SKILLS_PROMPT_HEADER: &str = "## Skills\nThe following skills are available. When a \
+     skill's description matches the task, call the skill.use tool with its name to load the \
+     full instructions; read its bundled files with skill.read.";
 
 /// One loaded, validated skill.
 #[derive(Clone, Debug)]
@@ -34,6 +40,8 @@ pub struct LoadedSkill {
     pub digest: [u8; 32],
     /// Set when an earlier root claimed the same name.
     pub shadowed_by: Option<PathBuf>,
+    /// Hex form of `digest`, computed once at discovery via pocopine-crypto.
+    pub(crate) digest_hex: String,
     pub(crate) body: String,
     pub(crate) resources: Vec<String>,
     pub(crate) index_entry: String,
@@ -51,17 +59,13 @@ impl LoadedSkill {
         &self.resources
     }
 
-    pub fn digest_hex(&self) -> String {
-        self.digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+    pub fn digest_hex(&self) -> &str {
+        &self.digest_hex
     }
 
     /// Short digest prefix for log fields (RFC-121 S8).
-    pub fn digest_short(&self) -> String {
-        let hex = self.digest_hex();
-        hex[..8.min(hex.len())].to_string()
+    pub fn digest_short(&self) -> &str {
+        &self.digest_hex[..8.min(self.digest_hex.len())]
     }
 }
 
@@ -151,6 +155,11 @@ impl SkillCatalog {
     /// predicate admits — the seam an attenuated subagent view renders
     /// through, so prompt and enforcement cannot disagree (RFC-121 §
     /// Subagents).
+    ///
+    /// Budget semantics are prefix-stable: the first line that does not fit
+    /// ends the index, and it plus every remaining skill counts as omitted.
+    /// Raising the budget only ever extends the list; it never reorders
+    /// which skills appear.
     pub fn render_index_where(
         &self,
         budget: usize,
@@ -164,6 +173,10 @@ impl SkillCatalog {
             .filter(|skill| !skill.ext.disable_model_invocation)
             .filter(|skill| predicate(skill))
         {
+            if omitted > 0 {
+                omitted += 1;
+                continue;
+            }
             let line = format!("- {}: {}\n", skill.meta.name, skill.index_entry);
             if out.len() + line.len() <= budget {
                 out.push_str(&line);
@@ -180,6 +193,29 @@ impl SkillCatalog {
         out
     }
 
+    /// The full level-1 prompt block — the framing header plus the index —
+    /// exactly as a runtime injects it. One canonical rendering shared by the
+    /// runtime, the CLI `index` subcommand, and library hosts, so a string
+    /// audited in one place is the string the model sees. Empty when no
+    /// skill is advertisable.
+    pub fn render_prompt_part(&self, budget: usize) -> String {
+        self.render_prompt_part_where(budget, |_| true)
+    }
+
+    /// [`render_prompt_part`](Self::render_prompt_part) restricted to skills
+    /// the predicate admits.
+    pub fn render_prompt_part_where(
+        &self,
+        budget: usize,
+        predicate: impl FnMut(&LoadedSkill) -> bool,
+    ) -> String {
+        let index = self.render_index_where(budget, predicate);
+        if index.is_empty() {
+            return String::new();
+        }
+        format!("{SKILLS_PROMPT_HEADER}\n{index}")
+    }
+
     /// Level 2: the sanitized, argument-substituted, bounded body.
     ///
     /// Deliberately does not check `disable-model-invocation` — the host
@@ -190,14 +226,17 @@ impl SkillCatalog {
             .skills
             .get(name)
             .ok_or_else(|| SkillError::NotFound(format!("skill `{name}` not found")))?;
-        let sanitized = sanitize_multiline(&skill.body);
+        // Substitution runs FIRST so the caller-supplied argument string is
+        // sanitized along with the author text — otherwise `arguments` would
+        // be an unsanitized side channel into the "sanitized" body (S2/S4).
         let substituted = match args {
             Some(raw) if !raw.trim().is_empty() => {
-                subst::substitute(&sanitized, raw, &skill.ext.arguments)
+                subst::substitute(&skill.body, raw, &skill.ext.arguments)
             }
-            _ => sanitized,
+            _ => skill.body.clone(),
         };
-        let (body, truncated) = bound_text(&substituted, self.limits.body_byte_limit);
+        let sanitized = sanitize_multiline(&substituted);
+        let (body, truncated) = bound_text(&sanitized, self.limits.body_byte_limit);
         Ok(SkillBody {
             name: skill.meta.name.clone(),
             body,

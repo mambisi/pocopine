@@ -144,22 +144,22 @@ async fn doctor(args: DoctorArgs) -> Result<()> {
         "  .agenkitty/instructions.md: {}",
         yes_no(project.agenkitty_instructions.is_some())
     );
-    let config = crate::project::load_project_config(&project.root)?;
-    if config.skills.enabled {
-        let catalog = agenkitty_skills::SkillLoader::new(crate::tools::resolve_skill_roots(
-            &project.root,
-            &config.skills,
-        ))
-        .with_limits(crate::tools::limits_from_config(&config.skills))
-        .discover();
-        let errors = catalog
-            .diagnostics()
-            .iter()
-            .filter(|d| d.severity == agenkitty_skills::Severity::Error)
-            .count();
-        println!("  skills: {} loaded, {} error(s)", catalog.len(), errors);
-    } else {
-        println!("  skills: disabled");
+    // Doctor diagnoses; it must not die on the config it is diagnosing.
+    match crate::project::load_project_config(&project.root) {
+        Ok(config) if config.skills.enabled => {
+            // The same pipeline the runtime uses, so doctor reports exactly
+            // what a run would load.
+            let catalog =
+                crate::tools::SkillRuntime::from_config(&project.root, &config.skills).catalog();
+            let errors = catalog
+                .diagnostics()
+                .iter()
+                .filter(|d| d.severity == agenkitty_skills::Severity::Error)
+                .count();
+            println!("  skills: {} loaded, {} error(s)", catalog.len(), errors);
+        }
+        Ok(_) => println!("  skills: disabled"),
+        Err(err) => println!("  config: INVALID — {err:#}"),
     }
     Ok(())
 }
@@ -167,6 +167,10 @@ async fn doctor(args: DoctorArgs) -> Result<()> {
 async fn run_prompt(args: RunArgs) -> Result<()> {
     let project = ProjectContext::discover(&args.path)
         .with_context(|| format!("discover project at `{}`", args.path.display()))?;
+    // Read the base prompt before the runner is built so an unreadable
+    // instructions file fails fast, before any session-root directories are
+    // created on disk.
+    let base_system = project.system_prompt()?;
     let tool_ids = resolve_tool_ids(&args.tools).map_err(|err| anyhow::anyhow!(err))?;
     let session_root = resolve_session_root(&project.root, args.session_root.as_deref());
     let (runner, model) = match args.provider {
@@ -177,12 +181,9 @@ async fn run_prompt(args: RunArgs) -> Result<()> {
         ProviderArg::Qwen => qwen_runner(args.model, args.env_file, &project.root, &session_root)?,
     };
     // The skill index (RFC-121 level 1) rides as a fourth system-prompt part,
-    // rendered from the same runtime view the skill.* tools enforce.
-    let mut system = project.system_prompt()?;
-    if let Some(part) = runner.skill_runtime().system_prompt_part() {
-        system.push_str("\n\n");
-        system.push_str(&part);
-    }
+    // rendered from the same runtime view the skill.* tools enforce and
+    // gated on the skill tools actually being in the run's tool set.
+    let system = runner.compose_system_prompt(&base_system, &tool_ids);
     // Approver selection: `--yes` auto-approves (the explicit opt-out for
     // CI/piped runs); otherwise prompt the operator when on a terminal;
     // otherwise no approver, so every Ask fails closed (the secure default —

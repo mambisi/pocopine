@@ -26,14 +26,13 @@ pub(crate) fn substitute(body: &str, raw_args: &str, declared: &[String]) -> Str
                 i += 1;
             }
             let run_len = i - run_start;
-            let followed_by_placeholder =
-                parse_placeholder(&body[i..], declared, &positional, raw_args).is_some();
-            if followed_by_placeholder && run_len % 2 == 1 {
+            let placeholder = parse_placeholder(&body[i..], declared, &positional, raw_args);
+            if let Some((token_len, _)) = placeholder
+                && run_len % 2 == 1
+            {
                 // Odd run: one backslash is the escape; the placeholder stays
                 // literal.
                 out.push_str(&"\\".repeat(run_len - 1));
-                let (token_len, _) = parse_placeholder(&body[i..], declared, &positional, raw_args)
-                    .expect("checked above");
                 out.push_str(&body[i..i + token_len]);
                 i += token_len;
             } else {
@@ -45,7 +44,7 @@ pub(crate) fn substitute(body: &str, raw_args: &str, declared: &[String]) -> Str
             && let Some((token_len, expansion)) =
                 parse_placeholder(&body[i..], declared, &positional, raw_args)
         {
-            if body[i..].starts_with("$ARGUMENTS") && !body[i..].starts_with("$ARGUMENTS[") {
+            if &body[i..i + token_len] == "$ARGUMENTS" {
                 saw_arguments_placeholder = true;
             }
             out.push_str(&expansion);
@@ -78,17 +77,19 @@ fn parse_placeholder(
 ) -> Option<(usize, String)> {
     let after = rest.strip_prefix('$')?;
 
-    // `$ARGUMENTS[N]` before `$ARGUMENTS`.
-    if let Some(indexed) = after.strip_prefix("ARGUMENTS[") {
-        let close = indexed.find(']')?;
-        let digits = &indexed[..close];
-        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
-            let index: usize = digits.parse().ok()?;
-            let token_len = 1 + "ARGUMENTS[".len() + close + 1;
-            let value = positional.get(index).cloned().unwrap_or_default();
-            return Some((token_len, value));
-        }
-        return None;
+    // `$ARGUMENTS[N]` before `$ARGUMENTS`. A malformed bracket (`$ARGUMENTS[x`
+    // or unclosed) falls through to the plain-`$ARGUMENTS` check below —
+    // `[` is a non-ident boundary char, so the scanner's own contract says
+    // the plain token expands and the bracket text stays literal.
+    if let Some(indexed) = after.strip_prefix("ARGUMENTS[")
+        && let Some(close) = indexed.find(']')
+        && !indexed[..close].is_empty()
+        && indexed[..close].bytes().all(|b| b.is_ascii_digit())
+    {
+        let index: usize = indexed[..close].parse().ok()?;
+        let token_len = 1 + "ARGUMENTS[".len() + close + 1;
+        let value = positional.get(index).cloned().unwrap_or_default();
+        return Some((token_len, value));
     }
     if let Some(tail) = after.strip_prefix("ARGUMENTS") {
         // Reject `$ARGUMENTSX` — the token must end at a word boundary.
@@ -269,5 +270,16 @@ mod tests {
     fn dollar_arguments_prefix_of_longer_word_is_literal() {
         let out = substitute("$ARGUMENTSX stays", "a", &[]);
         assert!(out.starts_with("$ARGUMENTSX stays"));
+    }
+
+    #[test]
+    fn malformed_bracket_falls_back_to_plain_arguments() {
+        // `[` is a non-ident boundary, so `$ARGUMENTS` expands and the
+        // malformed bracket text stays literal — and the trailer is not
+        // appended because the plain placeholder was present.
+        let out = substitute("See $ARGUMENTS[see docs].", "a b", &[]);
+        assert_eq!(out, "See a b[see docs].");
+        let out = substitute("Open $ARGUMENTS[0 now", "x", &[]);
+        assert_eq!(out, "Open x[0 now");
     }
 }

@@ -11,12 +11,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use agenkitty_core::secrets::looks_like_secret;
-use pocopine_crypto::sha256;
+use pocopine_crypto::{sha256, sha256_hex};
 
-use crate::catalog::{LoadedSkill, SkillCatalog};
-use crate::frontmatter::parse_skill_file;
-use crate::meta::{Severity, SkillDiagnostic, SkillLimits};
-use crate::sanitize::{bound_text, sanitize_single_line};
+use super::catalog::{LoadedSkill, SkillCatalog};
+use super::frontmatter::parse_skill_file;
+use super::meta::{Severity, SkillDiagnostic, SkillLimits};
+use super::sanitize::{bound_text, sanitize_single_line};
 
 /// Discovers skills under an ordered list of roots.
 pub struct SkillLoader {
@@ -123,69 +123,76 @@ impl SkillLoader {
         }
 
         let skill_md = skill_dir.join("SKILL.md");
-        let metadata = match fs::symlink_metadata(&skill_md) {
+        // `fs::metadata` follows symlinks, so a symlinked SKILL.md is sized by
+        // its target — the cap cannot be bypassed via a link whose own
+        // metadata is only the target-path length.
+        let metadata = match fs::metadata(&skill_md) {
             Ok(metadata) => metadata,
             Err(_) => {
-                catalog.diagnostics.push(SkillDiagnostic {
-                    severity: Severity::Info,
-                    dir: entry_path.to_path_buf(),
-                    name: None,
-                    rule: "skill.no-skill-md",
-                    message: "directory has no SKILL.md; skipped".to_string(),
-                });
+                catalog.diagnostics.push(SkillDiagnostic::new(
+                    Severity::Info,
+                    entry_path,
+                    None,
+                    "skill.no-skill-md",
+                    "directory has no SKILL.md; skipped",
+                ));
                 return;
             }
         };
         if metadata.len() > self.limits.skill_md_max_bytes as u64 {
-            catalog.diagnostics.push(SkillDiagnostic {
-                severity: Severity::Error,
-                dir: entry_path.to_path_buf(),
-                name: Some(entry_name.to_string()),
-                rule: "skill.oversize",
-                message: format!(
+            catalog.diagnostics.push(SkillDiagnostic::new(
+                Severity::Error,
+                entry_path,
+                Some(entry_name),
+                "skill.oversize",
+                format!(
                     "SKILL.md is {} bytes (limit {})",
                     metadata.len(),
                     self.limits.skill_md_max_bytes
                 ),
-            });
+            ));
             return;
         }
         let bytes = match fs::read(&skill_md) {
             Ok(bytes) => bytes,
             Err(err) => {
-                catalog.diagnostics.push(SkillDiagnostic {
-                    severity: Severity::Error,
-                    dir: entry_path.to_path_buf(),
-                    name: Some(entry_name.to_string()),
-                    rule: "skill.io",
-                    message: format!("cannot read SKILL.md: {err}"),
-                });
+                catalog.diagnostics.push(SkillDiagnostic::new(
+                    Severity::Error,
+                    entry_path,
+                    Some(entry_name),
+                    "skill.io",
+                    format!("cannot read SKILL.md: {err}"),
+                ));
                 return;
             }
         };
-        let source = match String::from_utf8(bytes.clone()) {
+        // Digest before the UTF-8 conversion consumes the buffer (no clone);
+        // the hex form is computed once here per the codec-crypto house rule.
+        let digest = sha256(&bytes);
+        let digest_hex = sha256_hex(&bytes);
+        let source = match String::from_utf8(bytes) {
             Ok(source) => source,
             Err(_) => {
-                catalog.diagnostics.push(SkillDiagnostic {
-                    severity: Severity::Error,
-                    dir: entry_path.to_path_buf(),
-                    name: Some(entry_name.to_string()),
-                    rule: "skill.encoding",
-                    message: "SKILL.md is not valid UTF-8".to_string(),
-                });
+                catalog.diagnostics.push(SkillDiagnostic::new(
+                    Severity::Error,
+                    entry_path,
+                    Some(entry_name),
+                    "skill.encoding",
+                    "SKILL.md is not valid UTF-8",
+                ));
                 return;
             }
         };
 
         let parsed = parse_skill_file(entry_name, &source);
         for pending in &parsed.diagnostics {
-            catalog.diagnostics.push(SkillDiagnostic {
-                severity: pending.severity,
-                dir: entry_path.to_path_buf(),
-                name: Some(entry_name.to_string()),
-                rule: pending.rule,
-                message: pending.message.clone(),
-            });
+            catalog.diagnostics.push(SkillDiagnostic::new(
+                pending.severity,
+                entry_path,
+                Some(entry_name),
+                pending.rule,
+                pending.message.clone(),
+            ));
         }
         let Some(meta) = parsed.meta else {
             return; // error diagnostics above carry the exclusion
@@ -206,7 +213,8 @@ impl SkillLoader {
             raw: parsed.raw,
             root: skill_dir,
             source_root: source_root.to_path_buf(),
-            digest: sha256(&bytes),
+            digest,
+            digest_hex,
             shadowed_by: None,
             body: parsed.body,
             resources,
@@ -218,16 +226,16 @@ impl SkillLoader {
                 slot.insert(skill);
             }
             std::collections::btree_map::Entry::Occupied(winner) => {
-                catalog.diagnostics.push(SkillDiagnostic {
-                    severity: Severity::Info,
-                    dir: entry_path.to_path_buf(),
-                    name: Some(skill.meta.name.clone()),
-                    rule: "name.shadowed",
-                    message: format!(
+                catalog.diagnostics.push(SkillDiagnostic::new(
+                    Severity::Info,
+                    entry_path,
+                    Some(&skill.meta.name),
+                    "name.shadowed",
+                    format!(
                         "shadowed by `{}` from an earlier root",
                         winner.get().root.display()
                     ),
-                });
+                ));
                 let mut shadowed = skill;
                 shadowed.shadowed_by = Some(winner.get().root.clone());
                 catalog.shadowed.push(shadowed);
@@ -270,7 +278,10 @@ impl SkillLoader {
     /// Bounded inventory of non-`SKILL.md` files, relative slash-normalized
     /// paths, sorted. Symlinked directories are not descended (loop safety);
     /// files remain reachable via `read_resource`, which confines on the
-    /// resolved path.
+    /// resolved path. Dot-directories (`.git`, …) are not descended, and
+    /// paths the confinement layer would refuse (`.env*`, key material) are
+    /// not advertised — `skill.use` must never list a resource `skill.read`
+    /// will reject.
     fn resource_inventory(
         &self,
         skill_dir: &Path,
@@ -298,13 +309,22 @@ impl SkillLoader {
                     continue;
                 };
                 if metadata.is_dir() {
-                    stack.push(child);
+                    let hidden = child
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with('.'));
+                    if !hidden {
+                        stack.push(child);
+                    }
                     continue;
                 }
                 let Ok(relative) = child.strip_prefix(skill_dir) else {
                     continue;
                 };
-                let display = crate::confine::normalize_slashes(&relative.display().to_string());
+                if super::confine::is_secret_path(relative) {
+                    continue;
+                }
+                let display = super::confine::normalize_slashes(&relative.display().to_string());
                 if display == "SKILL.md" {
                     continue;
                 }

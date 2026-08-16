@@ -45,7 +45,6 @@ pub struct SkillRuntime {
     /// The runtime-level view. `None` = every catalog skill. A forked child
     /// runtime carries the narrowed set (RFC-118 attenuation recipe).
     visible: Option<BTreeSet<String>>,
-    index_byte_budget: usize,
     contexts: Mutex<HashMap<String, CurrentSkillContext>>,
     token_seq: AtomicU64,
     activations: Mutex<HashMap<String, HashSet<String>>>,
@@ -53,11 +52,9 @@ pub struct SkillRuntime {
 
 impl SkillRuntime {
     pub fn new(catalog: SkillCatalog) -> Self {
-        let index_byte_budget = catalog.limits().index_byte_budget;
         Self {
             catalog: RwLock::new(Arc::new(catalog)),
             visible: None,
-            index_byte_budget,
             contexts: Mutex::new(HashMap::new()),
             token_seq: AtomicU64::new(0),
             activations: Mutex::new(HashMap::new()),
@@ -134,20 +131,23 @@ impl SkillRuntime {
 
     /// The `## Skills` system-prompt part (level 1), rendered through the
     /// runtime's view so prompt and enforcement cannot disagree. `None` when
-    /// no skill is advertisable.
+    /// no skill is advertisable. The budget always comes from the *current*
+    /// catalog's limits, so a `refresh` with new budgets takes effect here.
     pub fn system_prompt_part(&self) -> Option<String> {
+        self.system_prompt_part_for_view(None)
+    }
+
+    /// [`system_prompt_part`](Self::system_prompt_part) for a caller that
+    /// will narrow via `CurrentSkillContext::visible` — the same intersection
+    /// the tools enforce, so a context-attenuated subagent's prompt never
+    /// advertises a skill its `skill.use` would refuse.
+    pub fn system_prompt_part_for_view(&self, narrow: Option<&BTreeSet<String>>) -> Option<String> {
         let catalog = self.catalog();
-        let index = catalog.render_index_where(self.index_byte_budget, |skill| {
+        let part = catalog.render_prompt_part_where(catalog.limits().index_byte_budget, |skill| {
             self.runtime_visible(&skill.meta.name)
+                && narrow.is_none_or(|visible| visible.contains(&skill.meta.name))
         });
-        if index.is_empty() {
-            return None;
-        }
-        Some(format!(
-            "## Skills\nThe following skills are available. When a skill's description matches \
-             the task, call the skill.use tool with its name to load the full instructions; \
-             read its bundled files with skill.read.\n{index}"
-        ))
+        if part.is_empty() { None } else { Some(part) }
     }
 
     /// Record that `name` was activated for this session key.
@@ -195,7 +195,6 @@ impl SkillRuntime {
         Ok(SkillRuntime {
             catalog: RwLock::new(catalog),
             visible: child_visible,
-            index_byte_budget: self.index_byte_budget,
             contexts: Mutex::new(HashMap::new()),
             token_seq: AtomicU64::new(0),
             activations: Mutex::new(HashMap::new()),
@@ -318,5 +317,17 @@ mod tests {
     #[test]
     fn empty_runtime_has_no_prompt_part() {
         assert_eq!(SkillRuntime::empty().system_prompt_part(), None);
+    }
+
+    #[test]
+    fn config_defaults_agree_with_loader_defaults() {
+        // The [skills] section defaults live in agenkitty-core and cannot
+        // import SkillLimits (dependency direction); this guard keeps the
+        // duplicated numbers from drifting.
+        let from_config = limits_from_config(&SkillsConfigSection::default());
+        let library = SkillLimits::default();
+        assert_eq!(from_config.entry_byte_cap, library.entry_byte_cap);
+        assert_eq!(from_config.index_byte_budget, library.index_byte_budget);
+        assert_eq!(from_config.body_byte_limit, library.body_byte_limit);
     }
 }

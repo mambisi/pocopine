@@ -101,6 +101,24 @@ pub struct SkillDiagnostic {
     pub message: String,
 }
 
+impl SkillDiagnostic {
+    pub fn new(
+        severity: Severity,
+        dir: impl Into<PathBuf>,
+        name: Option<&str>,
+        rule: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity,
+            dir: dir.into(),
+            name: name.map(str::to_string),
+            rule,
+            message: message.into(),
+        }
+    }
+}
+
 /// Byte budgets and caps applied by the loader and the read APIs. All outputs
 /// of the catalog are bounded by construction (RFC-121 S4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
