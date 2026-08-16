@@ -39,7 +39,7 @@ pub mod cli;
 #[cfg(not(target_arch = "wasm32"))]
 pub use catalog::{LoadedSkill, ReadOpts, ResourceChunk, SkillBody, SkillCatalog};
 #[cfg(not(target_arch = "wasm32"))]
-pub use discover::{SkillLoader, default_roots};
+pub use discover::{SkillLoader, default_roots, load_skill_dir};
 #[cfg(not(target_arch = "wasm32"))]
 pub use error::SkillError;
 #[cfg(not(target_arch = "wasm32"))]

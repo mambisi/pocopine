@@ -19,11 +19,12 @@ use crate::project::load_project_config;
 use crate::tools::session::{redact_json_value, redact_text_to_limit};
 use crate::tools::{
     ArtifactRuntime, ArtifactScope, CurrentArtifactContext, CurrentMemoryContext,
-    CurrentSessionContext, InMemoryArtifactStore, LocalArtifactStore, LocalJsonlMemoryStore,
-    LocalJsonlSessionMetadataStore, MemoryRuntime, SecretRuntime, SessionRuntime,
-    builtin_tool_specs, current_time_ms, known_artifact_tool_ids, known_memory_tool_ids,
-    known_session_tool_ids, register_memory_tools, register_session_tools,
-    register_tools_with_all_runtimes_and_artifacts, session_event_from_framework,
+    CurrentSessionContext, CurrentSkillContext, InMemoryArtifactStore, LocalArtifactStore,
+    LocalJsonlMemoryStore, LocalJsonlSessionMetadataStore, MemoryRuntime, SecretRuntime,
+    SessionRuntime, SkillRuntime, builtin_tool_specs, current_time_ms, known_artifact_tool_ids,
+    known_memory_tool_ids, known_session_tool_ids, known_skill_tool_ids, register_memory_tools,
+    register_session_tools, register_tools_with_all_runtimes_artifacts_and_skills,
+    session_event_from_framework,
 };
 use agenkitty_core::config::PolicyConfigSection;
 use agenkitty_core::{
@@ -67,6 +68,11 @@ pub struct FrameworkRunner {
     /// can share the runner's one approver with the secret-grant gate. Empty
     /// (no resolver) for runners that don't register secret tools.
     secret_runtime: Arc<SecretRuntime>,
+    /// The skill runtime registered with the tools (RFC-121). Empty for
+    /// project-less runners; the project constructors discover per the
+    /// `[skills]` config. Retained so the host can render the system-prompt
+    /// index from the same view the tools enforce.
+    skill_runtime: Arc<SkillRuntime>,
     /// Stable project id for this runner, derived from the canonical project
     /// root. `None` for project-less runners (mock / bare provider). Used to seed
     /// `SessionIdentity::project_id` on a fresh run so project/agent memory has a
@@ -131,6 +137,7 @@ impl FrameworkRunner {
             memory_runtime,
             artifact_runtime: Arc::new(ArtifactRuntime::in_memory()),
             secret_runtime: Arc::new(SecretRuntime::empty()),
+            skill_runtime: Arc::new(SkillRuntime::empty()),
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
             policy: default_policy(),
@@ -212,6 +219,7 @@ impl FrameworkRunner {
             memory_runtime,
             artifact_runtime: Arc::new(ArtifactRuntime::in_memory()),
             secret_runtime: Arc::new(SecretRuntime::empty()),
+            skill_runtime: Arc::new(SkillRuntime::empty()),
             project_id: None,
             transcript_store: SessionStoreKind::InMemory,
             policy: default_policy(),
@@ -253,23 +261,23 @@ impl FrameworkRunner {
         root: impl AsRef<Path>,
     ) -> Result<Self> {
         let project_id = Some(project_id_from_root(root.as_ref()));
-        let policy = Arc::new(PolicyEvaluator::new(
-            load_project_config(root.as_ref())?.policy,
-            builtin_tool_specs(),
-        ));
+        let config = load_project_config(root.as_ref())?;
+        let policy = Arc::new(PolicyEvaluator::new(config.policy, builtin_tool_specs()));
         let session_runtime = Arc::new(SessionRuntime::in_memory());
         let memory_runtime = Arc::new(MemoryRuntime::in_memory());
         let artifact_runtime = Arc::new(ArtifactRuntime::new(Arc::new(
             InMemoryArtifactStore::new().with_workspace_root(root.as_ref()),
         )));
         let secret_runtime = Arc::new(SecretRuntime::empty());
-        let agenkit = register_tools_with_all_runtimes_and_artifacts(
+        let skill_runtime = Arc::new(SkillRuntime::from_config(root.as_ref(), &config.skills));
+        let agenkit = register_tools_with_all_runtimes_artifacts_and_skills(
             builder,
             root,
             session_runtime.clone(),
             memory_runtime.clone(),
             secret_runtime.clone(),
             artifact_runtime.clone(),
+            skill_runtime.clone(),
         )?
         .build()?;
         Ok(Self {
@@ -278,6 +286,7 @@ impl FrameworkRunner {
             memory_runtime,
             artifact_runtime,
             secret_runtime,
+            skill_runtime,
             project_id,
             transcript_store: SessionStoreKind::InMemory,
             policy,
@@ -291,10 +300,8 @@ impl FrameworkRunner {
         session_root: impl AsRef<Path>,
     ) -> Result<Self> {
         let project_id = Some(project_id_from_root(root.as_ref()));
-        let policy = Arc::new(PolicyEvaluator::new(
-            load_project_config(root.as_ref())?.policy,
-            builtin_tool_specs(),
-        ));
+        let config = load_project_config(root.as_ref())?;
+        let policy = Arc::new(PolicyEvaluator::new(config.policy, builtin_tool_specs()));
         let session_root = session_root.as_ref();
         let transcript_root = session_root.join("threads");
         let metadata_root = session_root.join("metadata");
@@ -314,13 +321,15 @@ impl FrameworkRunner {
                 .with_workspace_root(root.as_ref()),
         )));
         let secret_runtime = Arc::new(SecretRuntime::empty());
-        let agenkit = register_tools_with_all_runtimes_and_artifacts(
+        let skill_runtime = Arc::new(SkillRuntime::from_config(root.as_ref(), &config.skills));
+        let agenkit = register_tools_with_all_runtimes_artifacts_and_skills(
             builder.thread_store(thread_store),
             root,
             session_runtime.clone(),
             memory_runtime.clone(),
             secret_runtime.clone(),
             artifact_runtime.clone(),
+            skill_runtime.clone(),
         )?
         .build()?;
         Ok(Self {
@@ -329,11 +338,19 @@ impl FrameworkRunner {
             memory_runtime,
             artifact_runtime,
             secret_runtime,
+            skill_runtime,
             project_id,
             transcript_store: SessionStoreKind::LocalJsonl,
             policy,
             approver: None,
         })
+    }
+
+    /// The skill runtime registered with this runner's tools (RFC-121). Hosts
+    /// render the system-prompt skill index from it so prompt and enforcement
+    /// share one view.
+    pub fn skill_runtime(&self) -> Arc<SkillRuntime> {
+        self.skill_runtime.clone()
     }
 
     /// Install the host approver for `Ask` policy decisions. One approver is
@@ -365,12 +382,15 @@ impl FrameworkRunner {
         let current_memory: Arc<Mutex<Option<CurrentMemoryContext>>> = Arc::new(Mutex::new(None));
         let current_artifact: Arc<Mutex<Option<CurrentArtifactContext>>> =
             Arc::new(Mutex::new(None));
+        let current_skill: Arc<Mutex<Option<CurrentSkillContext>>> = Arc::new(Mutex::new(None));
         let session_runtime_for_hook = self.session_runtime.clone();
         let memory_runtime_for_hook = self.memory_runtime.clone();
         let artifact_runtime_for_hook = self.artifact_runtime.clone();
+        let skill_runtime_for_hook = self.skill_runtime.clone();
         let current_session_for_hook = current_session.clone();
         let current_memory_for_hook = current_memory.clone();
         let current_artifact_for_hook = current_artifact.clone();
+        let current_skill_for_hook = current_skill.clone();
         let policy_for_hook = self.policy.clone();
         let approver_for_hook = self.approver.clone();
         let session = AgentSession::builder(&self.agenkit)
@@ -383,9 +403,11 @@ impl FrameworkRunner {
                 let session_runtime = session_runtime_for_hook.clone();
                 let memory_runtime = memory_runtime_for_hook.clone();
                 let artifact_runtime = artifact_runtime_for_hook.clone();
+                let skill_runtime = skill_runtime_for_hook.clone();
                 let current_session = current_session_for_hook.clone();
                 let current_memory = current_memory_for_hook.clone();
                 let current_artifact = current_artifact_for_hook.clone();
+                let current_skill = current_skill_for_hook.clone();
                 Box::pin(async move {
                     let tool = call.tool_id.as_str();
                     // The central policy gate (F1) runs first: a denied call
@@ -440,6 +462,18 @@ impl FrameworkRunner {
                             };
                         };
                         return match memory_runtime.inject_context_args(args, context) {
+                            Ok(args) => ToolDecision::ReplaceArgs { args },
+                            Err(reason) => ToolDecision::Block { reason },
+                        };
+                    }
+                    if known_skill_tool_ids().contains(&tool) {
+                        let context = current_skill.lock().ok().and_then(|guard| guard.clone());
+                        let Some(context) = context else {
+                            return ToolDecision::Block {
+                                reason: "skill context is not available".to_string(),
+                            };
+                        };
+                        return match skill_runtime.inject_context_args(args, context) {
                             Ok(args) => ToolDecision::ReplaceArgs { args },
                             Err(reason) => ToolDecision::Block { reason },
                         };
@@ -516,6 +550,13 @@ impl FrameworkRunner {
                 thread_id: Some(thread_id.clone()),
             });
         }
+        if let Ok(mut current) = current_skill.lock() {
+            *current = Some(CurrentSkillContext {
+                agent_id: report_identity.agent_id.clone(),
+                thread_id: Some(thread_id.clone()),
+                visible: None,
+            });
+        }
 
         let started = FrameworkEvent::started(format!("started session {thread_id}"));
         self.session_runtime
@@ -547,6 +588,9 @@ impl FrameworkRunner {
             *current = None;
         }
         if let Ok(mut current) = current_artifact.lock() {
+            *current = None;
+        }
+        if let Ok(mut current) = current_skill.lock() {
             *current = None;
         }
 

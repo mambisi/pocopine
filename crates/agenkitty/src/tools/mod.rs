@@ -11,6 +11,7 @@ pub mod patch;
 pub mod process;
 pub mod secrets;
 pub mod session;
+pub mod skills;
 pub mod specs;
 
 use std::path::Path;
@@ -78,6 +79,11 @@ pub use secrets::{
     SecretRequestOutput, SecretRequestPolicy, SecretRequestTool, SecretRevokeInput,
     SecretRevokeOutput, SecretRevokeTool, SecretRuntime, SecretScope, SecretUseInput,
     SecretUseOutput, SecretUseTool, known_secret_tool_ids, register_secret_tools,
+};
+pub use skills::{
+    CurrentSkillContext, SKILL_READ_TOOL_ID, SKILL_USE_TOOL_ID, SkillReadInput, SkillReadOutput,
+    SkillReadTool, SkillRuntime, SkillUseInput, SkillUseOutput, SkillUseTool, known_skill_tool_ids,
+    limits_from_config, register_skill_tools, resolve_skill_roots, resolve_skill_tool_ids,
 };
 pub use specs::builtin_tool_specs;
 
@@ -202,9 +208,39 @@ pub fn register_tools_with_all_runtimes_and_artifacts(
     Ok(builder)
 }
 
+/// Register the repo tools plus the skill family against a caller-owned
+/// skill runtime (RFC-121). The runner passes the same runtime it injects per
+/// tool call so the `context_token` handshake resolves.
+#[allow(clippy::too_many_arguments)]
+pub fn register_tools_with_all_runtimes_artifacts_and_skills(
+    builder: AgenkitBuilder,
+    root: impl AsRef<Path>,
+    session_runtime: Arc<SessionRuntime>,
+    memory_runtime: Arc<MemoryRuntime>,
+    secret_runtime: Arc<SecretRuntime>,
+    artifact_runtime: Arc<ArtifactRuntime>,
+    skill_runtime: Arc<SkillRuntime>,
+) -> AgenkitResult<AgenkitBuilder> {
+    Ok(register_skill_tools(
+        register_tools_with_all_runtimes_and_artifacts(
+            builder,
+            root,
+            session_runtime,
+            memory_runtime,
+            secret_runtime,
+            artifact_runtime,
+        )?,
+        skill_runtime,
+    ))
+}
+
 pub fn default_read_only_tool_ids() -> Vec<String> {
     let mut ids = default_fs_read_only_tool_ids();
     ids.extend(default_session_tool_ids());
+    // Skills are read-only and advertised by the system-prompt index; the
+    // tools must be callable by default for that flow to work. With no
+    // catalog they answer `not_found` and cost nothing.
+    ids.extend(known_skill_tool_ids().map(String::from));
     ids
 }
 
@@ -247,6 +283,7 @@ fn is_known_tool_id(id: &str) -> bool {
         || known_artifact_tool_ids().contains(&id)
         || known_patch_tool_ids().contains(&id)
         || known_secret_tool_ids().contains(&id)
+        || known_skill_tool_ids().contains(&id)
         || is_known_process_tool_id(id)
 }
 
@@ -280,6 +317,23 @@ mod tests {
         assert_eq!(
             resolve_tool_ids(&[SECRET_LIST_TOOL_ID.to_string()]).unwrap(),
             vec![SECRET_LIST_TOOL_ID.to_string()]
+        );
+    }
+
+    #[test]
+    fn skill_tools_are_known_and_default() {
+        // In the default read-only set: the system-prompt index advertises
+        // them, so they must be callable without explicit `--tools` opt-in.
+        let defaults = default_read_only_tool_ids();
+        for id in known_skill_tool_ids() {
+            assert!(defaults.contains(&id.to_string()));
+        }
+        assert_eq!(
+            resolve_tool_ids(&["skill.use,skill.read".to_string()]).unwrap(),
+            vec![
+                SKILL_USE_TOOL_ID.to_string(),
+                SKILL_READ_TOOL_ID.to_string()
+            ]
         );
     }
 

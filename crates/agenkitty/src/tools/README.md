@@ -15,6 +15,7 @@ Core tool families:
 - `session`: expose thread/run context and continuation state.
 - `secrets`: request scoped secret handles without exposing raw values by default.
 - `mcp`: connect to external MCP servers and surface their tools through Agenkitty policy.
+- `skills`: progressive disclosure of Agent Skills (agentskills.io) folders via the `agenkitty-skills` loader.
 
 Tool folders keep the public README for the shipped tool family. Completed
 plans, build notes, and speculative tool-family docs do not live here.
