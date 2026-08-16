@@ -275,6 +275,37 @@ single key is an artifact reference. Tool payloads must not use a top-level
 the recommended belt-and-braces, since a textual ref survives every text-only
 projection.
 
+### §2.1 Artifacts as tool inputs: chaining specialized models
+
+Refs make AI-produced bytes *addressable*, and addressable output is input:
+an artifact produced in one turn is a handle the orchestrator can pass to a
+specialized generator in the next — an image artifact into an image-to-video
+tool (Seedance-class models), a generated image back into an editing tool, a
+rendered chart into a document tool. Whether the consuming side is a plain
+`AiTool` or an app-composed subagent behind one is orchestration the
+framework does not model (subagent composition is app territory, RFC-118);
+the artifact contract only cares that the ref is the handle.
+
+- **Passing is just arg passing.** The model already holds the ref — it saw
+  it in the producing tool's output and can cite its `uri` in prose — so
+  "animate the image you just made" is an ordinary JSON argument, visible in
+  `args`, gated by `before_tool_call`, allowlisted like everything else.
+- **Resolution is the implementor's, by design.** The framework never
+  dereferences a ref — `ArtifactSink` has no `get` (§1). The app tool
+  wrapping the specialized model reads bytes from the app's own storage via
+  the app's own scheme (`ak:file/<key>` → files plane), enforcing the same
+  principal scoping the sink applied at capture. A framework-level resolver
+  would turn agenkit into a byte broker and reopen the boundary §1 closed.
+- **Origins compose.** A model-backstop artifact (§4.1) chains into a
+  consuming tool exactly like a tool-produced one; the ref shape is the
+  contract, not the producer. And the consumer is usually also a producer —
+  the Seedance tool captures its video through the same sink, so chains of
+  arbitrary depth never put bytes on the transcript or the wire.
+
+With the §9 companion (`prompt(Content)`), the same handle loops back a third
+way — as user-message image media to a vision orchestrator — closing the
+generate → inspect → regenerate loop.
+
 ## §3 The wire contract
 
 Three additive variants on `AgentEvent` (trusted firehose) and
@@ -546,3 +577,8 @@ back to a vision model as user-message media in a later turn.
    `AssistantText` for model-origin artifacts, so text-only consumers see
    *something* without projection changes? Current position: no — it forges
    model output; the typed event and the persisted ref are the contract.
+4. Should `Artifacts` grow a server-side read (`open(ref) -> bytes`) so a
+   framework-portable consumer tool could dereference without app knowledge?
+   Current position: no — consuming tools are app tools and resolve their own
+   scheme (§2.1); revisit only if a real portable tool materializes, and even
+   then as a separate capability the sink opts into, never a required method.
