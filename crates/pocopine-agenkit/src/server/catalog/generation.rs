@@ -8,12 +8,12 @@
 //! affair in every tool.
 //!
 //! **Hand-authored, deliberately.** The chat catalog is generated from
-//! LiteLLM's data; LiteLLM carries **no** ByteDance generation rows under a
-//! volcengine/byteplus provider (checked 2026-08-16), and per-image /
-//! per-second pricing doesn't fit the token-priced [`Model`](super::Model)
-//! shape. Until an upstream machine-readable source exists, this file is the
-//! list — ids from the BytePlus ModelArk docs. If LiteLLM grows these rows,
-//! fold this into `gen-model-catalog` and delete the hand list.
+//! LiteLLM's data; LiteLLM carries no usable generation rows for these
+//! providers (checked 2026-08-16), and per-image / per-second pricing
+//! doesn't fit the token-priced [`Model`](super::Model) shape. Until an
+//! upstream machine-readable source exists, this file is the list — ids from
+//! the BytePlus ModelArk, OpenAI, and Gemini docs. If LiteLLM grows these
+//! rows, fold this into `gen-model-catalog` and delete the hand list.
 //!
 //! Ark ids often carry a release-date suffix (`seedream-4-5-251128`);
 //! [`lookup_generation`] matches exact ids first, then the longest
@@ -45,13 +45,15 @@ pub struct GenerationModel {
     /// on Seedream) — maps to a §5.3 group's `expected`. `None` = one output
     /// per request.
     pub sequential_images: Option<u32>,
-    /// Whether the provider streams each completed output as it finishes
-    /// (Seedream SSE) — each event is a complete output, captured as its own
-    /// artifact, not a preview chunk.
+    /// Whether the provider can stream incremental output. The fold is
+    /// provider-defined and the wrapping tool maps it onto RFC-122 §5:
+    /// Seedream SSE emits each COMPLETED image of a batch (one `group.put`
+    /// per event); OpenAI `partial_images` emits progressive previews of one
+    /// image (`MediaStream` `Preview` chunks, then `finish_with`).
     pub streaming: bool,
 }
 
-/// The registry (BytePlus ModelArk families).
+/// The registry, grouped by provider (BytePlus ModelArk, OpenAI, Gemini).
 pub fn generation_models() -> &'static [GenerationModel] {
     static MODELS: std::sync::OnceLock<Vec<GenerationModel>> = std::sync::OnceLock::new();
     MODELS.get_or_init(|| {
@@ -95,6 +97,70 @@ pub fn generation_models() -> &'static [GenerationModel] {
             },
             // Seedance 2.5 is announced on ModelArk; add its id here once the
             // exact string is confirmed against the docs/console.
+            //
+            // ---- OpenAI (images API + videos API) ----
+            GenerationModel {
+                // `n` up to 10 per request; `stream` + `partial_images`
+                // delivers progressive previews (the §5.2 Preview fold);
+                // edits take source images.
+                id: ModelRef::from_static("openai/gpt-image-1"),
+                kind: GenerationKind::Image,
+                image_input: true,
+                sequential_images: Some(10),
+                streaming: true,
+            },
+            GenerationModel {
+                id: ModelRef::from_static("openai/gpt-image-1-mini"),
+                kind: GenerationKind::Image,
+                image_input: true,
+                sequential_images: Some(10),
+                streaming: true,
+            },
+            GenerationModel {
+                // Async videos API; image-to-video via `input_reference`.
+                id: ModelRef::from_static("openai/sora-2"),
+                kind: GenerationKind::Video,
+                image_input: true,
+                sequential_images: None,
+                streaming: false,
+            },
+            GenerationModel {
+                id: ModelRef::from_static("openai/sora-2-pro"),
+                kind: GenerationKind::Video,
+                image_input: true,
+                sequential_images: None,
+                streaming: false,
+            },
+            // ---- Gemini ("Nano Banana" family: chat-multimodal image
+            // output via generateContent, not a dedicated images endpoint;
+            // editing with multi-reference input is the family signature.
+            // No declared per-request batch knob, so no ceiling here.) ----
+            GenerationModel {
+                id: ModelRef::from_static("gemini/gemini-2.5-flash-image"),
+                kind: GenerationKind::Image,
+                image_input: true,
+                sequential_images: None,
+                streaming: false,
+            },
+            GenerationModel {
+                // Nano Banana 2.
+                id: ModelRef::from_static("gemini/gemini-3.1-flash-image"),
+                kind: GenerationKind::Image,
+                image_input: true,
+                sequential_images: None,
+                streaming: false,
+            },
+            GenerationModel {
+                // Nano Banana Pro; `-preview` release aliases resolve here
+                // via the dated/suffixed prefix lookup.
+                id: ModelRef::from_static("gemini/gemini-3-pro-image"),
+                kind: GenerationKind::Image,
+                image_input: true,
+                sequential_images: None,
+                streaming: false,
+            },
+            // Veo (Gemini video): add once the exact GA id string is
+            // confirmed against the docs/console.
         ]
     })
 }
@@ -142,35 +208,58 @@ pub fn lookup_generation(model: &ModelRef) -> Option<&'static GenerationModel> {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ImageGenerationConfig {
-    /// Output size — a provider preset (`"1K"`, `"2K"`, `"4K"`) or exact
-    /// dimensions (`"2048x2048"`). `None` ⇒ the provider default.
+    /// Output size — a provider preset (Seedream `"1K"`/`"2K"`/`"4K"`) or
+    /// exact dimensions (`"2048x2048"`, OpenAI `"1024x1536"`). `None` ⇒ the
+    /// provider default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
-    /// Batch generation: produce a consistent set of up to this many images
-    /// (Seedream `sequential_image_generation`). Bounded by the registry's
+    /// Aspect ratio for providers that take it separately from `size`
+    /// (Gemini `aspect_ratio`: `"1:1"`, `"16:9"`, `"21:9"`, ...). A provider
+    /// that expresses ratio through `size` dimensions ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<String>,
+    /// Quality preset where the provider has one (OpenAI `"low"` /
+    /// `"medium"` / `"high"` / `"auto"`). `None` ⇒ the provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    /// Batch generation: produce a set of up to this many images (Seedream
+    /// `sequential_image_generation`, OpenAI `n`). Bounded by the registry's
     /// `sequential_images` ceiling — [`validate`](Self::validate) enforces
     /// it. Maps to an RFC-122 §5.3 group's `expected`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_images: Option<u32>,
-    /// Stream each completed image as it finishes (SSE). Requires a model
-    /// the registry marks `streaming`; each event is a complete image the
-    /// tool captures as its own artifact.
+    /// Stream incremental output. Requires a model the registry marks
+    /// `streaming`; the fold is provider-defined (see
+    /// [`GenerationModel::streaming`]).
     pub stream: bool,
-    /// Provider watermarking (the provider default is on).
+    /// Provider watermarking, where the provider exposes the knob (Seedream;
+    /// Gemini's SynthID and OpenAI's C2PA metadata are always-on and ignore
+    /// it). Default on, matching provider defaults.
     pub watermark: bool,
     /// Deterministic seed, when reproducibility matters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
+    /// Provider-specific request fields, merged verbatim into the wire call
+    /// by the wrapping tool — the same escape hatch as
+    /// [`GenerateRequest::provider_options`](crate::server::GenerateRequest):
+    /// OpenAI `background`/`partial_images`/`moderation`, Gemini
+    /// `image_config` extras, Seedream extras. Prefer a typed knob where one
+    /// exists.
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub provider_options: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for ImageGenerationConfig {
     fn default() -> Self {
         Self {
             size: None,
+            ratio: None,
+            quality: None,
             max_images: None,
             stream: false,
             watermark: true,
             seed: None,
+            provider_options: serde_json::Map::new(),
         }
     }
 }
@@ -236,13 +325,23 @@ pub struct VideoGenerationConfig {
     /// provider default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ratio: Option<String>,
+    /// Generate synchronized audio, where the model supports it (Seedance
+    /// 2.0, Veo). `None` ⇒ the provider default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<bool>,
     /// Hold the camera fixed (no provider-invented camera motion).
     pub camera_fixed: bool,
-    /// Provider watermarking (the provider default is on).
+    /// Provider watermarking, where the provider exposes the knob (always-on
+    /// provenance metadata elsewhere ignores it). Default on.
     pub watermark: bool,
     /// Deterministic seed, when reproducibility matters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
+    /// Provider-specific request fields, merged verbatim into the wire call
+    /// by the wrapping tool (Sora exact `size` dimensions, Veo
+    /// `negative_prompt`, ...). Prefer a typed knob where one exists.
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub provider_options: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for VideoGenerationConfig {
@@ -251,9 +350,11 @@ impl Default for VideoGenerationConfig {
             duration_seconds: None,
             resolution: None,
             ratio: None,
+            audio: None,
             camera_fixed: false,
             watermark: true,
             seed: None,
+            provider_options: serde_json::Map::new(),
         }
     }
 }
@@ -308,6 +409,59 @@ mod tests {
                 assert!(entry.image_input, "{} must accept image input", entry.id);
             }
         }
+    }
+
+    #[test]
+    fn openai_and_gemini_families_resolve_with_their_declared_shapes() {
+        // OpenAI: batches up to n=10, progressive-preview streaming.
+        let gpt = lookup_generation(&ModelRef::new("openai/gpt-image-1")).unwrap();
+        assert_eq!(gpt.kind, GenerationKind::Image);
+        assert_eq!(gpt.sequential_images, Some(10));
+        assert!(gpt.streaming && gpt.image_input);
+
+        // Nano Banana Pro: `-preview` release aliases resolve to the family.
+        let pro = lookup_generation(&ModelRef::new("gemini/gemini-3-pro-image-preview")).unwrap();
+        assert_eq!(pro.id.as_str(), "gemini/gemini-3-pro-image");
+        assert_eq!(pro.sequential_images, None);
+
+        // Sora is video with i2v input.
+        let sora = lookup_generation(&ModelRef::new("openai/sora-2-pro")).unwrap();
+        assert_eq!(sora.kind, GenerationKind::Video);
+        assert!(sora.image_input);
+    }
+
+    #[test]
+    fn cross_provider_configs_validate_per_registry_shape() {
+        // A batch-of-8 streaming config fits gpt-image-1 (n<=10, previews)…
+        let batch = ImageGenerationConfig {
+            max_images: Some(8),
+            stream: true,
+            quality: Some("high".to_string()),
+            ..ImageGenerationConfig::default()
+        };
+        assert!(batch.validate(&ModelRef::new("openai/gpt-image-1")).is_ok());
+        // …but not Nano Banana (no declared batch knob, no stream knob).
+        assert!(
+            batch
+                .validate(&ModelRef::new("gemini/gemini-3-pro-image"))
+                .is_err()
+        );
+        // A ratio-only config is the Gemini-shaped happy path.
+        let gemini = ImageGenerationConfig {
+            ratio: Some("21:9".to_string()),
+            ..ImageGenerationConfig::default()
+        };
+        assert!(
+            gemini
+                .validate(&ModelRef::new("gemini/gemini-3.1-flash-image"))
+                .is_ok()
+        );
+        // Audio-on video config validates on Sora (kind check only).
+        let video = VideoGenerationConfig {
+            audio: Some(true),
+            ..VideoGenerationConfig::default()
+        };
+        assert!(video.validate(&ModelRef::new("openai/sora-2")).is_ok());
     }
 
     #[test]
