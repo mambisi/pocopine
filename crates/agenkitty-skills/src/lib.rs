@@ -9,9 +9,9 @@
 //! - **Library**: embed [`SkillLoader`] / [`SkillCatalog`] directly. Sync,
 //!   deterministic, no runtime dependencies; every output is sanitized and
 //!   byte-bounded by construction.
-//! - **Binary**: the `agenkitty-skills` CLI (feature `cli`) exposes the same
-//!   loader as `validate` / `list` / `inspect` / `index` with stable
-//!   versioned JSON output.
+//! - **CLI**: the `agenkitty skills` subcommand (in the `agenkitty` binary)
+//!   exposes the same loader as `validate` / `list` / `inspect` / `index`
+//!   with stable versioned JSON output.
 //!
 //! The `skill.*` tool family in the `agenkitty` crate builds on this; nothing
 //! here executes scripts, dispatches hooks, or spawns anything.

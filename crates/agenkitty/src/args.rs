@@ -27,6 +27,8 @@ enum Command {
     Doctor(DoctorArgs),
     /// Run one prompt through the local framework runner.
     Run(RunArgs),
+    /// Inspect, validate, and render Agent Skills (RFC-121) without a run.
+    Skills(crate::skills::SkillsArgs),
     /// Internal: the bubblewrap egress-proxy entrypoint. Not a user command — it
     /// runs the real command behind an in-namespace loopback→UDS relay.
     #[cfg(unix)]
@@ -58,11 +60,13 @@ struct RunArgs {
     #[arg(long)]
     model: Option<String>,
     /// Comma-separated tool ids to expose to the agent. Use `none` to disable
-    /// tools for a run.
+    /// tools for a run. The default matches `default_read_only_tool_ids`,
+    /// including the skill tools — the `## Skills` prompt part is gated on
+    /// `skill.use` being present here.
     #[arg(
         long,
         value_delimiter = ',',
-        default_value = "fs.search,fs.list,fs.read,fs.stat,fs.exists,session.info,session.events"
+        default_value = "fs.search,fs.list,fs.read,fs.stat,fs.exists,session.info,session.events,skill.use,skill.read"
     )]
     tools: Vec<String>,
     /// Agent id persisted on the thread.
@@ -125,6 +129,12 @@ pub async fn run() -> Result<()> {
     match cli.command {
         Command::Doctor(args) => doctor(args).await,
         Command::Run(args) => run_prompt(args).await,
+        Command::Skills(args) => {
+            // The skills CLI carries its own 0/1/2 exit-code contract
+            // (success / findings / usage), so it exits directly instead of
+            // flattening into anyhow's single failure code.
+            std::process::exit(crate::skills::run(args));
+        }
         #[cfg(unix)]
         Command::EgressShim(args) => {
             // Replace this process's exit status with the wrapped command's.

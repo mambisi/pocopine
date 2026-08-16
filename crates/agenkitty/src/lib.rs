@@ -30,6 +30,8 @@ pub mod sandbox_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sessions;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod skills;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod supervisor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tools;

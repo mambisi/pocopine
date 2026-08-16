@@ -4,18 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Agent Skills (agentskills.io) loader for the Agenkitty framework: discovery, validation, progressive-disclosure reads, and a standalone CLI."
-
-# Binary execution mode (RFC-121): the same loader as a standalone CLI with
-# stable JSON output. Feature-gated so library consumers never pull clap.
-[[bin]]
-name = "agenkitty-skills"
-path = "src/main.rs"
-required-features = ["cli"]
-
-[features]
-default = []
-cli = ["dep:clap"]
+description = "Agent Skills (agentskills.io) loader library for the Agenkitty framework: discovery, validation, and progressive-disclosure reads. The CLI surface is the `agenkitty skills` subcommand."
 
 [dependencies]
 # `looks_like_secret` — the one shared secret-content classifier (F3). The
@@ -30,7 +19,6 @@ serde_json = { workspace = true }
 # `frontmatter.rs` (raw values are converted to `serde_json::Value` at the
 # public surface) so it stays swappable.
 serde_norway = "0.9"
-clap = { version = "4", features = ["derive"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

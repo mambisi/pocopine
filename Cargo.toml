@@ -109,7 +109,7 @@ exclude = [
 # CLI's own target dir from default wasm builds so `cargo build -p counter
 # --target wasm32-unknown-unknown` doesn't pull in host-only deps.
 [workspace.metadata.hosts]
-cli = ["pocopine-cli", "gen-model-catalog", "agenkitty", "agenkitty-skills"]
+cli = ["pocopine-cli", "gen-model-catalog", "agenkitty"]
 
 [workspace.package]
 version = "0.1.1"

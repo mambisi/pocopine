@@ -3,8 +3,9 @@
 Progressive disclosure of [Agent Skills](https://agentskills.io) — folders of
 `SKILL.md` instructions plus bundled files — per RFC-121. The
 `agenkitty-skills` crate owns discovery, validation, sanitization, and path
-confinement (and doubles as a standalone CLI: `validate` / `list` / `inspect`
-/ `index`); this family adds the host seams.
+confinement; the `agenkitty skills` subcommand (`validate` / `list` /
+`inspect` / `index`) exposes the same loader from the CLI; this family adds
+the host seams.
 
 ## Tools
 
