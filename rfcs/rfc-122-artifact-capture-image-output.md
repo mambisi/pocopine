@@ -157,6 +157,10 @@ pub struct NewArtifact {
     pub media_type: String,
     pub name: Option<String>,
     pub bytes: Vec<u8>,
+    /// Ids of artifacts this one was derived from (§2.2): the source image
+    /// of an edit, the still a video was animated from. Empty = fresh
+    /// generation.
+    pub derived_from: Vec<String>,
 }
 
 /// Provenance the framework attaches to every capture. Mirrors the
@@ -243,6 +247,8 @@ pub struct MediaStreamSpec {
     pub media_type: String,
     pub name: Option<String>,
     pub mode: MediaStreamMode,
+    /// Lineage, as on `NewArtifact` (§2.2).
+    pub derived_from: Vec<String>,
 }
 
 impl Artifacts {
@@ -339,6 +345,48 @@ With the §9 companion (`prompt(Content)`), the same handle loops back a third
 way — as user-message image media to a vision orchestrator — closing the
 generate → inspect → regenerate loop.
 
+### §2.2 Refinement: follow-up generations are derived artifacts
+
+"Make the hat red" is the normal second turn of any generation flow. The
+contract keeps it immutable and additive:
+
+- **A refinement is a NEW artifact, always.** Refs are immutable: an id,
+  once minted, resolves to the same bytes forever. A transcript that cites
+  turn N's image must replay unchanged after turn N+1 edits it — mutating in
+  place would rewrite history. "Latest version" is a consumer-side reading
+  of lineage, never framework state.
+- **Lineage is declared by the producer.** The refining tool passes the
+  source ref id(s) it actually consumed as `derived_from` (on `NewArtifact` /
+  `MediaStreamSpec`); the runtime threads it to the sink and onto
+  `ArtifactProduced`. The framework does not infer it — it cannot know which
+  JSON args were semantically inputs (§2.1) — so declaring is on the tool,
+  and an empty `derived_from` reads as a fresh generation.
+- **The refinement instruction is not lineage.** The prompt and parameters
+  that turned source into result already live in the tool's `args` — visible,
+  approval-gated, traced. A sink may record them as its own metadata
+  (agenkitty's thread-fs `semantic_revision` / `derivation_digest` columns
+  are exactly this slot); the framework contract carries byte-level ancestry
+  only.
+- **Groups and lineage are orthogonal.** A group (§5.3) relates siblings of
+  ONE invocation; `derived_from` relates artifacts ACROSS invocations and
+  turns. Refining variant 2 of a four-up group yields a new artifact derived
+  from that one sibling.
+- **Presentation is consumer policy.** Version rails, supersedes-collapse,
+  diff views — all readable straight off `derived_from` on the event, no app
+  lookup needed at render time.
+
+The conversational loop this yields: the orchestrator already holds the
+source ref from turn N (tool output, prose); turn N+1 passes it plus the
+instruction to the refining tool as ordinary args; the tool resolves bytes
+app-side (§2.1) and captures the result with `derived_from = [source]`. The
+chain extends indefinitely — refs all the way down, bytes never on the
+transcript.
+
+One implementor obligation falls out: a sink must not garbage-collect an
+artifact still referenced by a live thread's transcript — lineage extends
+reachability, it never replaces it. (GC itself stays implementor territory,
+per Non-goals.)
+
 ## §3 The wire contract
 
 Three additive variants on `AgentEvent` (trusted firehose) and
@@ -382,6 +430,9 @@ ArtifactProduced {
     /// Mirrors `MediaStarted.group` so a consumer that missed the start
     /// still slots the artifact (§5.3).
     group: Option<MediaGroupRef>,
+    /// Byte-level ancestry (§2.2): ids of the artifacts this one refines or
+    /// derives from. Empty for a fresh generation.
+    derived_from: Vec<String>,
     origin: WireArtifactOrigin, // Model | Tool { id, tool }
 },
 ```
@@ -583,6 +634,12 @@ called out in §9. The framework-side guarantee is that the ref is durably
 - **Reserved shapes are verified, not trusted.** `$artifact` follows the
   `$session_blob` rule: exact single-key match, and consumers treat contents
   as data. Nothing in a ref is executable or resolved by the framework.
+- **Lineage ids are claims until the sink says otherwise.** `derived_from`
+  values arrive from tool code; a sink SHOULD verify each id exists and is
+  visible to the capturing principal before recording it (a forged id must
+  not link someone else's artifact into a thread's history). The framework
+  passes lineage through opaquely, so this check belongs where the ids can
+  be resolved — the sink.
 - **Previews and visual secrets.** The secret classifier is text-shaped and is
   not run on image payloads; a model can draw a secret it was shown. This is
   an accepted, documented residual risk — the same one `attachment.read`
