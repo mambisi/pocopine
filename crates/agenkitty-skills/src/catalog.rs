@@ -144,12 +144,25 @@ impl SkillCatalog {
     /// omission line when the budget cuts skills off (nothing is silently
     /// invisible). Deterministic by name.
     pub fn render_index(&self, budget: usize) -> String {
+        self.render_index_where(budget, |_| true)
+    }
+
+    /// [`render_index`](Self::render_index) restricted to skills the
+    /// predicate admits — the seam an attenuated subagent view renders
+    /// through, so prompt and enforcement cannot disagree (RFC-121 §
+    /// Subagents).
+    pub fn render_index_where(
+        &self,
+        budget: usize,
+        mut predicate: impl FnMut(&LoadedSkill) -> bool,
+    ) -> String {
         let mut out = String::new();
         let mut omitted = 0usize;
         for skill in self
             .skills
             .values()
             .filter(|skill| !skill.ext.disable_model_invocation)
+            .filter(|skill| predicate(skill))
         {
             let line = format!("- {}: {}\n", skill.meta.name, skill.index_entry);
             if out.len() + line.len() <= budget {

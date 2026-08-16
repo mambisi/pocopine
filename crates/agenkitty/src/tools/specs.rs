@@ -25,7 +25,7 @@ use super::{
     NET_RESOLVE_TOOL_ID, PATCH_APPLY_TOOL_ID, PATCH_PREVIEW_TOOL_ID, SECRET_LIST_TOOL_ID,
     SECRET_REQUEST_TOOL_ID, SECRET_REVOKE_TOOL_ID, SECRET_USE_TOOL_ID, SESSION_CHECKPOINT_TOOL_ID,
     SESSION_EVENTS_TOOL_ID, SESSION_INFO_TOOL_ID, SESSION_NOTE_TOOL_ID, SESSION_SEARCH_TOOL_ID,
-    SESSION_SUMMARY_TOOL_ID,
+    SESSION_SUMMARY_TOOL_ID, SKILL_READ_TOOL_ID, SKILL_USE_TOOL_ID,
 };
 
 fn fs_read(id: &str, description: &str) -> ToolSpec {
@@ -96,6 +96,11 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         write_allow(SESSION_NOTE_TOOL_ID, "Record a session note"),
         write_allow(SESSION_SUMMARY_TOOL_ID, "Record a session summary"),
         write_allow(SESSION_CHECKPOINT_TOOL_ID, "Record a session checkpoint"),
+        // skills — progressive disclosure of Agent Skills (RFC-121): reads
+        // confined to discovered skill directories; the family's own
+        // visibility/activation gates run inside the tools.
+        fs_read(SKILL_USE_TOOL_ID, "Load a skill's instructions"),
+        fs_read(SKILL_READ_TOOL_ID, "Read a bundled skill resource"),
         // memory — the agent's namespaced durable notebook (opt-in family).
         read(MEMORY_SEARCH_TOOL_ID, "Search durable memory"),
         read(MEMORY_READ_TOOL_ID, "Read a memory entry"),

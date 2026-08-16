@@ -22,6 +22,9 @@ path = "tests/fixtures/mcp_fixture_server.rs"
 agenkitty-core = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Agent Skills loader (RFC-121): the skill.* family is a thin consumer of the
+# agenkitty-skills library; discovery/validation/sanitization live there.
+agenkitty-skills = { workspace = true }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"

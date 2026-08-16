@@ -16,6 +16,8 @@ pub struct AgenkittyConfig {
     pub workspace: WorkspaceConfigSection,
     #[serde(default)]
     pub policy: PolicyConfigSection,
+    #[serde(default)]
+    pub skills: SkillsConfigSection,
 }
 
 // `default`: a partial `[agent]` table (e.g. only `model`) fills its other
@@ -89,6 +91,39 @@ pub struct PolicyConfigSection {
     pub network_mode: Option<ToolMode>,
 }
 
+/// Agent Skills discovery + budget knobs (RFC-121). The host layer's skill
+/// loader consumes these; this crate only carries the shape (wasm-safe serde
+/// data, like every section here).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SkillsConfigSection {
+    pub enabled: bool,
+    /// Ordered discovery roots; earlier roots win name collisions. Relative
+    /// paths resolve against the project root.
+    pub roots: Vec<PathBuf>,
+    /// Byte budget for the always-on skill index in the system prompt.
+    pub index_byte_budget: usize,
+    /// Per-skill cap on the index entry (description + when_to_use).
+    pub entry_byte_cap: usize,
+    /// Cap on a `skill.use` body; excess is truncated loudly.
+    pub body_byte_limit: usize,
+}
+
+impl Default for SkillsConfigSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            roots: vec![
+                PathBuf::from(".agents/skills"),
+                PathBuf::from(".claude/skills"),
+            ],
+            index_byte_budget: 16 * 1024,
+            entry_byte_cap: 1536,
+            body_byte_limit: 64 * 1024,
+        }
+    }
+}
+
 fn default_max_steps() -> u32 {
     8
 }
@@ -132,6 +167,28 @@ mod tests {
         // A typo must never silently fail open to the default policy.
         assert!(toml::from_str::<PolicyConfigSection>("write_mdoe = \"deny\"").is_err());
         assert!(toml::from_str::<AgenkittyConfig>("[polciy]\nwrite_mode = \"deny\"").is_err());
+    }
+
+    #[test]
+    fn skills_section_defaults_and_overrides() {
+        let config = AgenkittyConfig::default();
+        assert!(config.skills.enabled);
+        assert_eq!(
+            config.skills.roots,
+            vec![
+                PathBuf::from(".agents/skills"),
+                PathBuf::from(".claude/skills")
+            ]
+        );
+
+        let config: AgenkittyConfig =
+            toml::from_str("[skills]\nenabled = false\nroots = [\"vendor/skills\"]\n").unwrap();
+        assert!(!config.skills.enabled);
+        assert_eq!(config.skills.roots, vec![PathBuf::from("vendor/skills")]);
+        assert_eq!(config.skills.index_byte_budget, 16 * 1024); // defaulted
+
+        // Typos in the section are hard errors like everywhere else.
+        assert!(toml::from_str::<AgenkittyConfig>("[skills]\nenbaled = false\n").is_err());
     }
 
     #[test]

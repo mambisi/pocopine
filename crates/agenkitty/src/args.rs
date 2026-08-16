@@ -144,13 +144,29 @@ async fn doctor(args: DoctorArgs) -> Result<()> {
         "  .agenkitty/instructions.md: {}",
         yes_no(project.agenkitty_instructions.is_some())
     );
+    let config = crate::project::load_project_config(&project.root)?;
+    if config.skills.enabled {
+        let catalog = agenkitty_skills::SkillLoader::new(crate::tools::resolve_skill_roots(
+            &project.root,
+            &config.skills,
+        ))
+        .with_limits(crate::tools::limits_from_config(&config.skills))
+        .discover();
+        let errors = catalog
+            .diagnostics()
+            .iter()
+            .filter(|d| d.severity == agenkitty_skills::Severity::Error)
+            .count();
+        println!("  skills: {} loaded, {} error(s)", catalog.len(), errors);
+    } else {
+        println!("  skills: disabled");
+    }
     Ok(())
 }
 
 async fn run_prompt(args: RunArgs) -> Result<()> {
     let project = ProjectContext::discover(&args.path)
         .with_context(|| format!("discover project at `{}`", args.path.display()))?;
-    let system = project.system_prompt()?;
     let tool_ids = resolve_tool_ids(&args.tools).map_err(|err| anyhow::anyhow!(err))?;
     let session_root = resolve_session_root(&project.root, args.session_root.as_deref());
     let (runner, model) = match args.provider {
@@ -160,6 +176,13 @@ async fn run_prompt(args: RunArgs) -> Result<()> {
         ),
         ProviderArg::Qwen => qwen_runner(args.model, args.env_file, &project.root, &session_root)?,
     };
+    // The skill index (RFC-121 level 1) rides as a fourth system-prompt part,
+    // rendered from the same runtime view the skill.* tools enforce.
+    let mut system = project.system_prompt()?;
+    if let Some(part) = runner.skill_runtime().system_prompt_part() {
+        system.push_str("\n\n");
+        system.push_str(&part);
+    }
     // Approver selection: `--yes` auto-approves (the explicit opt-out for
     // CI/piped runs); otherwise prompt the operator when on a terminal;
     // otherwise no approver, so every Ask fails closed (the secure default —
