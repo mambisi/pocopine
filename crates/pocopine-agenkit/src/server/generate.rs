@@ -179,8 +179,16 @@ impl Ai {
     async fn run(&self, json_schema: Option<serde_json::Value>) -> AgenkitResult<GenerateResponse> {
         let mut request = self.build_request(json_schema)?;
         self.inner.check_model_allowed(&request.model)?;
+        // RFC-122 §4.1: an image-output model needs a wired sink before the
+        // first provider call (the loop paths capture; this one-shot returns
+        // the response to the caller, but the gate keeps configs honest).
+        super::provider::ensure_image_output_capturable(
+            &request.model,
+            self.inner.artifacts.is_some(),
+        )?;
         let provider = self.inner.providers.resolve(&request.model)?;
         apply_structured_fallback(&mut request, provider.as_ref());
+        let request = request.normalize_media_for_wire();
         let cx = self.provider_context(provider.id()).await?;
         let model = request.model.clone();
         let model_meta = super::catalog::lookup(&model);
@@ -314,6 +322,7 @@ impl Ai {
         };
         let mut text = String::new();
         let mut thinking_parts: Vec<ContentPart> = Vec::new();
+        let mut media_parts: Vec<ContentPart> = Vec::new();
         let mut tool_calls = Vec::new();
         let mut usage = None;
         let mut failure = None;
@@ -369,6 +378,12 @@ impl Ai {
                     }
                 }
                 Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
+                // Media rides the assembled response to the flow author
+                // verbatim (RFC-122: never silently dropped). The flow wire
+                // has no artifact events — capture is the loop paths' job.
+                Ok(StreamChunk::Media(media)) => {
+                    media_parts.push(ContentPart::Media(media));
+                }
                 Ok(StreamChunk::Usage(reported)) => {
                     usage = Some(reported);
                     if let Some(run) = &self.tracer {
@@ -396,14 +411,17 @@ impl Ai {
                 } else {
                     FinishReason::ToolCalls
                 };
-                // Reasoning parts (if any) precede the answer text — they ride
-                // the content server-side for replay; `as_text()` skips them so
-                // the user-visible output stays text-only.
-                let content = if thinking_parts.is_empty() {
+                // Reasoning parts (if any) precede the answer text, media
+                // follows it — they ride the content server-side for replay;
+                // `as_text()` skips them so the user-visible output stays
+                // text-only.
+                let content = if thinking_parts.is_empty() && media_parts.is_empty() {
                     Content::text(text)
                 } else {
-                    thinking_parts.push(ContentPart::text(text));
-                    Content::from_parts(thinking_parts)
+                    let mut parts = thinking_parts;
+                    parts.push(ContentPart::text(text));
+                    parts.extend(media_parts);
+                    Content::from_parts(parts)
                 };
                 Ok(GenerateResponse {
                     content,

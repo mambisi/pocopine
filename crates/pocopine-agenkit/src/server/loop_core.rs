@@ -108,6 +108,9 @@ pub(crate) async fn run_model_step(
     // runs on a spawned (Send) task, so the observer must be shareable.
     observer: &(dyn LoopObserver + Sync),
 ) -> AgenkitResult<GenerateResponse> {
+    // RFC-122 §4.1 replay: persisted assistant artifact refs become text
+    // placeholders before any wire sees them.
+    let request = request.normalize_media_for_wire();
     let step = observer.model_request(model);
     let response = provider
         .generate(request, cx)
@@ -133,6 +136,9 @@ pub(crate) async fn run_model_step_streamed(
     model: &ModelRef,
     observer: &(dyn LoopObserver + Sync),
 ) -> AgenkitResult<GenerateResponse> {
+    // RFC-122 §4.1 replay: persisted assistant artifact refs become text
+    // placeholders before any wire sees them.
+    let request = request.normalize_media_for_wire();
     let step = observer.model_request(model);
 
     // Honor the declared streaming capability: stream natively when supported,
@@ -145,6 +151,7 @@ pub(crate) async fn run_model_step_streamed(
 
     let mut text = String::new();
     let mut thinking_parts: Vec<ContentPart> = Vec::new();
+    let mut media_parts: Vec<ContentPart> = Vec::new();
     let mut tool_calls = Vec::new();
     let mut usage = None;
     while let Some(chunk) = stream.next().await {
@@ -156,6 +163,10 @@ pub(crate) async fn run_model_step_streamed(
             Ok(StreamChunk::Thinking { text, signature }) => {
                 thinking_parts.push(ContentPart::thinking(text, signature));
             }
+            // Media rides the assembled content (RFC-122 §4.1): the caller's
+            // capture rule sinks inline bytes before persist/stream. Never a
+            // delta — model-side preview streaming is deferred (§4.2).
+            Ok(StreamChunk::Media(media)) => media_parts.push(ContentPart::Media(media)),
             Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
             Ok(StreamChunk::Usage(reported)) => usage = Some(reported),
             // A mid-stream failure fails the step (partial text is discarded —
@@ -171,13 +182,16 @@ pub(crate) async fn run_model_step_streamed(
     } else {
         FinishReason::ToolCalls
     };
-    // Reasoning parts (if any) precede the answer text — parity with the
-    // non-streamed response shape, so replay/persistence see one contract.
-    let content = if thinking_parts.is_empty() {
+    // Reasoning parts (if any) precede the answer text, media follows it —
+    // parity with the non-streamed response shape, so replay/persistence see
+    // one contract.
+    let content = if thinking_parts.is_empty() && media_parts.is_empty() {
         Content::text(text)
     } else {
-        thinking_parts.push(ContentPart::text(text));
-        Content::from_parts(thinking_parts)
+        let mut parts = thinking_parts;
+        parts.push(ContentPart::text(text));
+        parts.extend(media_parts);
+        Content::from_parts(parts)
     };
     let response = GenerateResponse {
         content,

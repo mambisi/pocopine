@@ -41,6 +41,7 @@ struct Entry {
     web_search: bool,
     audio_input: bool,
     audio_output: bool,
+    image_output: bool,
     pdf_input: bool,
     structured_output: bool,
     input: f64,
@@ -52,6 +53,13 @@ struct Entry {
 /// Read one of LiteLLM's `supports_*` capability booleans (absent ⇒ false).
 fn supports(m: &Map<String, Value>, k: &str) -> bool {
     m.get(k).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Whether LiteLLM's `supported_output_modalities` names `modality`.
+fn outputs_modality(m: &Map<String, Value>, modality: &str) -> bool {
+    m.get("supported_output_modalities")
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(modality)))
 }
 
 fn main() -> ExitCode {
@@ -170,6 +178,7 @@ fn map_entry(key: &str, v: &Value) -> Option<Entry> {
         web_search: supports(m, "supports_web_search"),
         audio_input: supports(m, "supports_audio_input"),
         audio_output: supports(m, "supports_audio_output"),
+        image_output: outputs_modality(m, "image"),
         pdf_input: supports(m, "supports_pdf_input"),
         structured_output: supports(m, "supports_response_schema"),
         input: per_mtok(input),
@@ -215,7 +224,7 @@ fn render(entries: &[Entry], consts: &[(String, String)]) -> String {
         s.push_str(&format!(
             "        Model {{ id: models::{provider}::{name}, context_window: {}, max_output: {}, \
              reasoning: {}, vision: {}, tools: {}, web_search: {}, audio_input: {}, \
-             audio_output: {}, pdf_input: {}, structured_output: {}, \
+             audio_output: {}, image_output: {}, pdf_input: {}, structured_output: {}, \
              pricing: ModelPricing {{ input: {}, output: {}, \
              cache_read: {}, cache_creation: {} }} }},\n",
             e.context_window,
@@ -226,6 +235,7 @@ fn render(entries: &[Entry], consts: &[(String, String)]) -> String {
             e.web_search,
             e.audio_input,
             e.audio_output,
+            e.image_output,
             e.pdf_input,
             e.structured_output,
             lit(e.input),
@@ -298,6 +308,9 @@ fn render_models(entries: &[Entry], consts: &[(String, String)], s: &mut String)
             }
             if e.vision {
                 tags.push("vision".to_string());
+            }
+            if e.image_output {
+                tags.push("image output".to_string());
             }
             s.push_str(&format!("        /// `{}` · {}\n", e.id, tags.join(" · ")));
             s.push_str(&format!(
