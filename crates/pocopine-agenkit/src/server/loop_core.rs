@@ -24,6 +24,7 @@ use pocopine_agenkit_core::{
 };
 
 use super::agenkit::AgenkitInner;
+use super::artifact::{ArtifactDispatch, Artifacts};
 use super::context::AiContext;
 use super::provider::{
     FinishReason, GenerateRequest, GenerateResponse, Provider, ProviderContext, StreamChunk,
@@ -205,6 +206,7 @@ pub(crate) async fn dispatch_tool_calls<H>(
     before_tool_call: Option<&H>,
     error_mode: ToolErrorMode,
     observer: &(dyn LoopObserver + Sync),
+    artifacts: Option<&ArtifactDispatch>,
 ) -> AgenkitResult<Vec<Message>>
 where
     H: for<'a> Fn(&'a ToolCall) -> BoxFuture<'a, ToolDecision> + ?Sized,
@@ -300,7 +302,20 @@ where
                     ToolDecision::ReplaceArgs { args } => args,
                     _ => call.args.clone(),
                 };
-                match tool.call_json(args, ctx.clone()).await {
+                // A runtime with an `ArtifactSink` wired hands this call its
+                // per-invocation capture surface (RFC-122 §2): the tool
+                // reaches it as `ctx.artifacts()`, and every capture carries
+                // the call's provenance without the tool declaring anything.
+                let call_ctx = match artifacts {
+                    Some(dispatch) => ctx.clone().with_artifacts(Artifacts::for_tool_call(
+                        dispatch,
+                        ctx.principal().clone(),
+                        call.id.clone(),
+                        call.tool_id.clone(),
+                    )),
+                    None => ctx.clone(),
+                };
+                match tool.call_json(args, call_ctx).await {
                     Ok(output) => {
                         observer.tool_completed(step, call, &output);
                         serde_json::to_string(&output).map_err(|e| {

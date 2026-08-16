@@ -311,6 +311,20 @@ async fn run_loop<A: AiAgent>(
     };
     let agent_label = format!("agent `{}`", A::ID);
 
+    // Artifact capture (RFC-122 §2) works on the typed run too; only the
+    // event surface differs — the flow wire has no artifact events yet, so
+    // captures land in the sink silently (the returned ref is the signal).
+    let artifact_dispatch = run
+        .inner
+        .artifacts
+        .as_ref()
+        .map(|a| super::artifact::ArtifactDispatch {
+            sink: a.sink.clone(),
+            events: std::sync::Arc::new(super::artifact::NoopArtifactEvents),
+            thread: thread.map(|t| t.id.clone()),
+            append_budget: a.append_budget,
+        });
+
     for _ in 0..config.max_steps {
         let request = GenerateRequest {
             model: model.clone(),
@@ -380,6 +394,7 @@ async fn run_loop<A: AiAgent>(
                 >,
                 ToolErrorMode::Propagate,
                 &observer,
+                artifact_dispatch.as_ref(),
             )
             .await?,
         );

@@ -49,6 +49,10 @@ impl AppState {
 pub struct AiContext {
     state: Arc<AppState>,
     principal: Principal,
+    /// The per-invocation artifact capture surface (RFC-122 §2) — present
+    /// only for a tool call dispatched by a runtime with an `ArtifactSink`
+    /// wired.
+    artifacts: Option<super::artifact::Artifacts>,
 }
 
 impl AiContext {
@@ -59,7 +63,17 @@ impl AiContext {
 
     /// Build a context bound to the caller principal.
     pub(crate) fn with_principal(state: Arc<AppState>, principal: Principal) -> Self {
-        Self { state, principal }
+        Self {
+            state,
+            principal,
+            artifacts: None,
+        }
+    }
+
+    /// Attach the per-invocation capture surface (dispatcher-only).
+    pub(crate) fn with_artifacts(mut self, artifacts: super::artifact::Artifacts) -> Self {
+        self.artifacts = Some(artifacts);
+        self
     }
 
     /// Fetch a framework-mediated app resource by key, downcast to `T`.
@@ -73,6 +87,19 @@ impl AiContext {
     /// flow was invoked with a principal (§D5/§D10).
     pub fn principal(&self) -> &Principal {
         &self.principal
+    }
+
+    /// The artifact capture surface (RFC-122 §2), or a loud config error when
+    /// the host wired no [`ArtifactSink`](super::artifact::ArtifactSink). A
+    /// tool that can degrade should treat the error as "artifacts
+    /// unavailable" and fall back to text.
+    pub fn artifacts(&self) -> AgenkitResult<super::artifact::Artifacts> {
+        self.artifacts.clone().ok_or_else(|| {
+            AgenkitError::config(
+                "no artifact sink configured: wire one with \
+                 Agenkit::builder().artifact_sink(...)",
+            )
+        })
     }
 }
 

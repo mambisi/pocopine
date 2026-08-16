@@ -27,15 +27,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
-    AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, Content, CostEstimate, Message,
-    ModelRef, Redactor, RunId, StepId, StepKind, StepStatus, ThinkingLevel, ThreadRetention,
-    ToolCall, ToolDescriptor, TraceId, Usage, WireStopReason, events,
+    AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, ArtifactRef, Content,
+    CostEstimate, MediaGroupRef, Message, ModelRef, Redactor, RunId, StepId, StepKind, StepStatus,
+    ThinkingLevel, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, WireArtifactOrigin,
+    WireMediaMode, WireStopReason, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::agenkit::{Agenkit, AgenkitInner};
+use super::artifact::{ArtifactDispatch, ArtifactEvents};
 use super::context::AiContext;
 pub use super::loop_core::ToolDecision;
 use super::loop_core::{
@@ -124,6 +126,47 @@ pub enum AgentEvent {
         tool: String,
         /// Why the hook blocked it.
         reason: String,
+    },
+    /// A streamed media capture began (RFC-122 §3): a tool's `MediaStream`,
+    /// or the model backstop.
+    MediaStarted {
+        /// Correlates this stream's chunks and its terminal artifact event.
+        stream_id: String,
+        /// IANA media type of the bytes being produced.
+        media_type: String,
+        /// Optional display name.
+        name: Option<String>,
+        /// How chunks compose: preview (replace) or append (§5.2).
+        mode: WireMediaMode,
+        /// Multi-output correlation (§5.3); absent for a lone output.
+        group: Option<MediaGroupRef>,
+        /// Who is producing.
+        origin: WireArtifactOrigin,
+    },
+    /// One live chunk of a streamed capture. Ephemeral like
+    /// [`AssistantDelta`](AgentEvent::AssistantDelta): never persisted.
+    MediaChunk {
+        /// The stream this chunk belongs to.
+        stream_id: String,
+        /// Monotonic per `stream_id` from 0.
+        seq: u32,
+        /// Chunk payload, base64 (bounded per mode, §5.2).
+        data_base64: String,
+    },
+    /// Terminal, persisted: AI-produced bytes were captured into the
+    /// implementor's sink (RFC-122 §3).
+    ArtifactProduced {
+        /// Present when a chunk stream preceded this; absent for a plain
+        /// capture.
+        stream_id: Option<String>,
+        /// The captured artifact's reference.
+        artifact: ArtifactRef,
+        /// Mirrors `MediaStarted`'s group (§5.3).
+        group: Option<MediaGroupRef>,
+        /// Byte-level ancestry (§2.2); empty for a fresh generation.
+        derived_from: Vec<String>,
+        /// Who produced it.
+        origin: WireArtifactOrigin,
     },
     /// The thread was compacted (L2): `folded` older messages → one summary.
     Compacted {
@@ -370,6 +413,48 @@ fn redact_agent_event(event: &AgentEvent, redactor: &Redactor) -> AgentWireEvent
             tool: tool.clone(),
             reason: redactor.text(reason),
         },
+        // Media/artifact events (RFC-122 §3): ref fields are small by
+        // contract, so the standard caps are enforcement, not ceremony. The
+        // chunk payload is deliberately exempt from the JSON string cap and
+        // the classifier — framework-generated binary bounded at the capture
+        // surface (§5.2), not tool/model text.
+        AgentEvent::MediaStarted {
+            stream_id,
+            media_type,
+            name,
+            mode,
+            group,
+            origin,
+        } => AgentWireEvent::MediaStarted {
+            stream_id: stream_id.clone(),
+            media_type: redactor.text_to_limit(media_type, 256),
+            name: name.as_deref().map(|n| redactor.text_to_limit(n, 256)),
+            mode: *mode,
+            group: group.clone(),
+            origin: origin.clone(),
+        },
+        AgentEvent::MediaChunk {
+            stream_id,
+            seq,
+            data_base64,
+        } => AgentWireEvent::MediaChunk {
+            stream_id: stream_id.clone(),
+            seq: *seq,
+            data_base64: data_base64.clone(),
+        },
+        AgentEvent::ArtifactProduced {
+            stream_id,
+            artifact,
+            group,
+            derived_from,
+            origin,
+        } => AgentWireEvent::ArtifactProduced {
+            stream_id: stream_id.clone(),
+            artifact: redact_artifact_ref(artifact, redactor),
+            group: group.clone(),
+            derived_from: derived_from.clone(),
+            origin: origin.clone(),
+        },
         AgentEvent::Compacted { folded } => AgentWireEvent::Compacted { folded: *folded },
         AgentEvent::Stopped { reason } => AgentWireEvent::Stopped {
             reason: match reason {
@@ -381,6 +466,26 @@ fn redact_agent_event(event: &AgentEvent, redactor: &Redactor) -> AgentWireEvent
         AgentEvent::Failed { error } => AgentWireEvent::Failed {
             error: redactor.text(error),
         },
+    }
+}
+
+/// Cap every [`ArtifactRef`] string at the wire (RFC-122 §3): a sink minting
+/// a pathological multi-KB uri or name gets truncated here — and the
+/// conformance suite flags it earlier.
+fn redact_artifact_ref(artifact: &ArtifactRef, redactor: &Redactor) -> ArtifactRef {
+    ArtifactRef {
+        id: redactor.text_to_limit(&artifact.id, 256),
+        uri: artifact
+            .uri
+            .as_deref()
+            .map(|u| redactor.text_to_limit(u, 2048)),
+        media_type: redactor.text_to_limit(&artifact.media_type, 256),
+        name: artifact
+            .name
+            .as_deref()
+            .map(|n| redactor.text_to_limit(n, 256)),
+        sha256: redactor.text_to_limit(&artifact.sha256, 64),
+        len: artifact.len,
     }
 }
 
@@ -535,6 +640,9 @@ pub struct AgentLoop {
     inner: Arc<AgenkitInner>,
     principal: Principal,
     config: AgentConfig,
+    /// The session thread this loop runs inside, if any — capture provenance
+    /// for artifacts (RFC-122 §1). A bare loop has none.
+    thread: Option<AgentThreadId>,
 }
 
 impl AgentLoop {
@@ -543,7 +651,14 @@ impl AgentLoop {
             inner,
             principal,
             config,
+            thread: None,
         }
+    }
+
+    /// Attach the producing session thread (capture provenance).
+    pub(crate) fn with_thread(mut self, thread: AgentThreadId) -> Self {
+        self.thread = Some(thread);
+        self
     }
 
     /// The resolved model for this loop (config override, else runtime default).
@@ -633,6 +748,16 @@ impl AgentLoop {
         // Adapt the `Arc` hook into a borrowable `&dyn Fn` for the shared dispatcher.
         let before = controls.hooks.before_tool_call.as_deref();
 
+        // The artifact capture wiring for this turn (RFC-122 §2), when the
+        // host configured a sink: events ride the same firehose the observer
+        // feeds, via a clonable sender the tool-held surface can outlive.
+        let artifact_dispatch = self.inner.artifacts.as_ref().map(|a| ArtifactDispatch {
+            sink: a.sink.clone(),
+            events: Arc::new(ChannelArtifactEvents(events.clone())),
+            thread: self.thread.clone(),
+            append_budget: a.append_budget,
+        });
+
         // The model↔tool steps, with the agent step closed afterwards so the trace
         // run is balanced on every exit (idle / steered / max-steps / error).
         let outcome: AgenkitResult<StopReason> = async {
@@ -696,6 +821,7 @@ impl AgentLoop {
                         before,
                         ToolErrorMode::FeedBack,
                         &observer,
+                        artifact_dispatch.as_ref(),
                     )
                     .await?,
                 );
@@ -788,6 +914,58 @@ impl LoopObserver for RuntimeObserver<'_> {
             id: call.id.clone(),
             tool: call.tool_id.clone(),
             reason: reason.to_string(),
+        });
+    }
+}
+
+/// Forwards capture-surface events (RFC-122 §2) onto the turn's `AgentEvent`
+/// firehose. The sender is `'static` + clonable — unlike the borrowed
+/// [`RuntimeObserver`] — so a tool-held `MediaStream` streams chunks live
+/// while the tool still runs.
+struct ChannelArtifactEvents(UnboundedSender<AgentEvent>);
+
+impl ArtifactEvents for ChannelArtifactEvents {
+    fn media_started(
+        &self,
+        stream_id: &str,
+        media_type: &str,
+        name: Option<&str>,
+        mode: WireMediaMode,
+        group: Option<&MediaGroupRef>,
+        origin: &WireArtifactOrigin,
+    ) {
+        let _ = self.0.send(AgentEvent::MediaStarted {
+            stream_id: stream_id.to_string(),
+            media_type: media_type.to_string(),
+            name: name.map(str::to_string),
+            mode,
+            group: group.cloned(),
+            origin: origin.clone(),
+        });
+    }
+
+    fn media_chunk(&self, stream_id: &str, seq: u32, data_base64: &str) {
+        let _ = self.0.send(AgentEvent::MediaChunk {
+            stream_id: stream_id.to_string(),
+            seq,
+            data_base64: data_base64.to_string(),
+        });
+    }
+
+    fn artifact_produced(
+        &self,
+        stream_id: Option<&str>,
+        artifact: &ArtifactRef,
+        group: Option<&MediaGroupRef>,
+        derived_from: &[String],
+        origin: &WireArtifactOrigin,
+    ) {
+        let _ = self.0.send(AgentEvent::ArtifactProduced {
+            stream_id: stream_id.map(str::to_string),
+            artifact: artifact.clone(),
+            group: group.cloned(),
+            derived_from: derived_from.to_vec(),
+            origin: origin.clone(),
         });
     }
 }
@@ -1081,7 +1259,8 @@ impl AgentSession {
             self.inner.clone(),
             self.principal.clone(),
             self.config.clone(),
-        );
+        )
+        .with_thread(self.thread.id.clone());
         // Reuse the credential-resolved context the turn already produced for
         // compaction, so a BYOK store isn't hit a second time per prompt.
         let (reason, cx, usage) = agent_loop
@@ -1369,7 +1548,7 @@ impl AgentSessionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{Agenkit, AiTool, AiToolContext, BoxFuture, MockProvider};
+    use crate::server::{Agenkit, AiTool, AiToolContext, BoxFuture, MemoryArtifactSink, MockProvider};
     use futures::StreamExt;
     use pocopine_agenkit_core::{ModelRef, Role, ToolDescriptor as Td};
     use serde::{Deserialize, Serialize};
@@ -1472,6 +1651,156 @@ mod tests {
             request.provider_options.get("enable_search"),
             Some(&serde_json::json!(true))
         );
+    }
+
+    /// A tool that captures an image through `ctx.artifacts()` (RFC-122 §2),
+    /// degrading to a plain-text answer when no sink is wired.
+    struct Painter;
+    #[derive(Deserialize, schemars::JsonSchema)]
+    struct PaintIn {}
+    #[derive(Serialize, schemars::JsonSchema)]
+    struct PaintOut {
+        result: String,
+    }
+    impl AiTool for Painter {
+        const ID: &'static str = "paint";
+        type Input = PaintIn;
+        type Output = PaintOut;
+        fn descriptor() -> Td {
+            Td::new("paint", "Generate an image")
+        }
+        fn call(
+            &self,
+            _input: PaintIn,
+            ctx: AiToolContext,
+        ) -> BoxFuture<'_, AgenkitResult<PaintOut>> {
+            Box::pin(async move {
+                match ctx.artifacts() {
+                    Ok(artifacts) => {
+                        let mut stream =
+                            artifacts.stream(crate::server::artifact::MediaStreamSpec {
+                                media_type: "image/png".to_string(),
+                                name: Some("art.png".to_string()),
+                                mode: crate::server::artifact::MediaStreamMode::Preview,
+                                derived_from: Vec::new(),
+                            });
+                        stream.chunk(b"low fidelity preview");
+                        let reference = stream.finish_with(b"final pixels".to_vec()).await?;
+                        Ok(PaintOut {
+                            result: reference.uri.unwrap_or(reference.id),
+                        })
+                    }
+                    Err(e) => Ok(PaintOut {
+                        result: format!("degraded: {e}"),
+                    }),
+                }
+            })
+        }
+    }
+
+    fn painting_runtime(sink: Option<MemoryArtifactSink>) -> Agenkit {
+        let mut builder = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("paint", "paint", serde_json::json!({}))
+                    .default_text("done"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Painter);
+        if let Some(sink) = sink {
+            builder = builder.artifact_sink(sink);
+        }
+        builder.build().unwrap()
+    }
+
+    #[tokio::test]
+    async fn tool_captures_stream_events_ride_the_turn_firehose() {
+        let sink = MemoryArtifactSink::new();
+        let agenkit = painting_runtime(Some(sink.clone()));
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new().tools(["paint"]),
+        );
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("paint")];
+        let (stop, _, _) = loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
+        assert_eq!(stop, StopReason::Idle);
+        // The sink holds the FINAL bytes (not the preview).
+        assert_eq!(sink.len(), 1);
+
+        drop(tx);
+        let mut kinds = Vec::new();
+        while let Some(event) = rx.recv().await {
+            kinds.push(match event {
+                AgentEvent::MediaStarted { media_type, mode, .. } => {
+                    assert_eq!(media_type, "image/png");
+                    assert_eq!(mode, WireMediaMode::Preview);
+                    "media_started"
+                }
+                AgentEvent::MediaChunk { seq, .. } => {
+                    assert_eq!(seq, 0);
+                    "media_chunk"
+                }
+                AgentEvent::ArtifactProduced { stream_id, artifact, .. } => {
+                    assert!(stream_id.is_some());
+                    assert_eq!(artifact.len, b"final pixels".len() as u64);
+                    "artifact_produced"
+                }
+                AgentEvent::ToolCompleted { output, .. } => {
+                    // The tool's own output embeds the minted uri.
+                    assert!(output["result"].as_str().unwrap().starts_with("artifact:"));
+                    "tool_completed"
+                }
+                _ => continue,
+            });
+        }
+        assert_eq!(
+            kinds,
+            vec![
+                "media_started",
+                "media_chunk",
+                "artifact_produced",
+                "tool_completed"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_sink_ctx_artifacts_errors_loudly_and_tools_can_degrade() {
+        let agenkit = painting_runtime(None);
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new().tools(["paint"]),
+        );
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("paint")];
+        loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
+        drop(tx);
+        let mut saw_degraded = false;
+        while let Some(event) = rx.recv().await {
+            match event {
+                AgentEvent::ToolCompleted { output, .. } => {
+                    let result = output["result"].as_str().unwrap();
+                    assert!(result.contains("no artifact sink configured"), "{result}");
+                    saw_degraded = true;
+                }
+                AgentEvent::MediaStarted { .. }
+                | AgentEvent::MediaChunk { .. }
+                | AgentEvent::ArtifactProduced { .. } => {
+                    panic!("no artifact events without a sink")
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_degraded);
     }
 
     #[tokio::test]

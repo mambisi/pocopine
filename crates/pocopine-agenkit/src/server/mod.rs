@@ -44,8 +44,9 @@ pub mod tool;
 pub use agenkit::{Agenkit, AgenkitBuilder, FlowCall, FlowKey, TypedFlowCall, with_principal};
 pub use agent::{AgentRun, AiAgent, AiAgentBuilder};
 pub use artifact::{
-    ArtifactCx, ArtifactFuture, ArtifactOrigin, ArtifactSink, ArtifactSinkCapabilities,
-    BlobArtifactSink, MemoryArtifactSink, NewArtifact, verify_artifact_sink,
+    ArtifactCx, ArtifactFuture, ArtifactGroup, ArtifactOrigin, ArtifactSink,
+    ArtifactSinkCapabilities, Artifacts, BlobArtifactSink, MediaStream, MediaStreamMode,
+    MediaStreamSpec, MemoryArtifactSink, NewArtifact, verify_artifact_sink,
 };
 pub use bridge::{stream_filter, to_server_error};
 pub use catalog::{Model, ModelPricing, models};
