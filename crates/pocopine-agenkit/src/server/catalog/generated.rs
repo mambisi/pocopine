@@ -35,6 +35,13 @@ pub(super) fn generated() -> Vec<Model> {
         Model { id: models::anthropic::CLAUDE_SONNET_4_5_20250929, context_window: 200000, max_output: 64000, reasoning: true, vision: true, tools: true, web_search: true, audio_input: false, audio_output: false, image_output: false, pdf_input: true, structured_output: true, pricing: ModelPricing { input: 3.0, output: 15.0, cache_read: 0.3, cache_creation: 3.75 } },
         Model { id: models::anthropic::CLAUDE_SONNET_4_6, context_window: 1000000, max_output: 64000, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: true, structured_output: true, pricing: ModelPricing { input: 3.0, output: 15.0, cache_read: 0.3, cache_creation: 3.75 } },
         Model { id: models::anthropic::CLAUDE_SONNET_5, context_window: 1000000, max_output: 128000, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: true, structured_output: true, pricing: ModelPricing { input: 2.0, output: 10.0, cache_read: 0.2, cache_creation: 2.5 } },
+        Model { id: models::byteplus::DEEPSEEK_V3_2_251201, context_window: 98304, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::byteplus::DOUBAO_SEED_2_0_CODE_PREVIEW_260215, context_window: 256000, max_output: 128000, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::byteplus::DOUBAO_SEED_2_0_LITE_260215, context_window: 256000, max_output: 128000, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::byteplus::DOUBAO_SEED_2_0_MINI_260215, context_window: 256000, max_output: 128000, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::byteplus::DOUBAO_SEED_2_0_PRO_260215, context_window: 256000, max_output: 128000, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::byteplus::GLM_4_7_251222, context_window: 204800, max_output: 131072, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::byteplus::KIMI_K2_THINKING_251104, context_window: 229376, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::openai::CHATGPT_4O_LATEST, context_window: 128000, max_output: 4096, reasoning: false, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: true, structured_output: false, pricing: ModelPricing { input: 5.0, output: 15.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_3_5_TURBO, context_window: 16385, max_output: 4096, reasoning: false, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.5, output: 1.5, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::openai::GPT_3_5_TURBO_0125, context_window: 16385, max_output: 4096, reasoning: false, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.5, output: 1.5, cache_read: 0.0, cache_creation: 0.0 } },
@@ -119,22 +126,38 @@ pub(super) fn generated() -> Vec<Model> {
         Model { id: models::qwen::GLM_5_2, context_window: 1048576, max_output: 131072, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: true, pricing: ModelPricing { input: 1.4, output: 4.4, cache_read: 0.28, cache_creation: 0.0 } },
         Model { id: models::qwen::KIMI_K2_7_CODE, context_window: 229376, max_output: 16384, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: true, pricing: ModelPricing { input: 0.95, output: 4.0, cache_read: 0.19, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_CODER, context_window: 1000000, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.3, output: 1.5, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_FLASH, context_window: 997952, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_FLASH_2025_07_28, context_window: 997952, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_MAX, context_window: 30720, max_output: 8192, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 1.6, output: 6.4, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_PLUS, context_window: 129024, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_PLUS_2025_01_25, context_window: 129024, max_output: 8192, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_PLUS_2025_04_28, context_window: 129024, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_PLUS_2025_07_14, context_window: 129024, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.4, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS_2025_07_28, context_window: 997952, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS_2025_09_11, context_window: 997952, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN_PLUS_LATEST, context_window: 997952, max_output: 32768, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_TURBO, context_window: 129024, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_TURBO_2024_11_01, context_window: 1000000, max_output: 8192, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_TURBO_2025_04_28, context_window: 1000000, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN_TURBO_LATEST, context_window: 1000000, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.05, output: 0.2, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_30B_A3B, context_window: 129024, max_output: 16384, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_CODER_FLASH, context_window: 997952, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_CODER_FLASH_2025_07_28, context_window: 997952, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_CODER_PLUS, context_window: 997952, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_CODER_PLUS_2025_07_22, context_window: 997952, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_MAX, context_window: 258048, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_MAX_2026_01_23, context_window: 258048, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_MAX_PREVIEW, context_window: 258048, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_NEXT_80B_A3B_INSTRUCT, context_window: 262144, max_output: 65536, reasoning: false, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.15, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_NEXT_80B_A3B_THINKING, context_window: 262144, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.15, output: 1.2, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_VL_235B_A22B_INSTRUCT, context_window: 131072, max_output: 32768, reasoning: false, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.4, output: 1.6, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_VL_235B_A22B_THINKING, context_window: 131072, max_output: 32768, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.4, output: 4.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_VL_32B_INSTRUCT, context_window: 131072, max_output: 32768, reasoning: false, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.16, output: 0.64, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_VL_32B_THINKING, context_window: 131072, max_output: 32768, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.16, output: 2.87, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_VL_PLUS, context_window: 260096, max_output: 32768, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_5_PLUS, context_window: 991808, max_output: 65536, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_7_MAX, context_window: 991808, max_output: 65536, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: true, pricing: ModelPricing { input: 2.5, output: 7.5, cache_read: 0.5, cache_creation: 0.0 } },
+        Model { id: models::qwen::QWEN3_7_PLUS, context_window: 991808, max_output: 65536, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: true, pricing: ModelPricing { input: 0.0, output: 0.0, cache_read: 0.0, cache_creation: 0.0 } },
         Model { id: models::qwen::QWEN3_8_MAX, context_window: 991808, max_output: 131072, reasoning: true, vision: true, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: true, pricing: ModelPricing { input: 2.0, output: 6.0, cache_read: 0.25, cache_creation: 0.0 } },
         Model { id: models::qwen::QWQ_PLUS, context_window: 98304, max_output: 8192, reasoning: true, vision: false, tools: true, web_search: false, audio_input: false, audio_output: false, image_output: false, pdf_input: false, structured_output: false, pricing: ModelPricing { input: 0.8, output: 2.4, cache_read: 0.0, cache_creation: 0.0 } },
     ]
@@ -204,6 +227,25 @@ pub mod models {
         pub const CLAUDE_SONNET_4_6: ModelRef = ModelRef::from_static("anthropic/claude-sonnet-4-6");
         /// `anthropic/claude-sonnet-5` · 1M ctx · reasoning · vision
         pub const CLAUDE_SONNET_5: ModelRef = ModelRef::from_static("anthropic/claude-sonnet-5");
+    }
+
+    /// byteplus model handles.
+    pub mod byteplus {
+        use super::ModelRef;
+        /// `byteplus/deepseek-v3-2-251201` · 98304 ctx · reasoning
+        pub const DEEPSEEK_V3_2_251201: ModelRef = ModelRef::from_static("byteplus/deepseek-v3-2-251201");
+        /// `byteplus/doubao-seed-2-0-code-preview-260215` · 256K ctx · reasoning · vision
+        pub const DOUBAO_SEED_2_0_CODE_PREVIEW_260215: ModelRef = ModelRef::from_static("byteplus/doubao-seed-2-0-code-preview-260215");
+        /// `byteplus/doubao-seed-2-0-lite-260215` · 256K ctx · reasoning · vision
+        pub const DOUBAO_SEED_2_0_LITE_260215: ModelRef = ModelRef::from_static("byteplus/doubao-seed-2-0-lite-260215");
+        /// `byteplus/doubao-seed-2-0-mini-260215` · 256K ctx · reasoning · vision
+        pub const DOUBAO_SEED_2_0_MINI_260215: ModelRef = ModelRef::from_static("byteplus/doubao-seed-2-0-mini-260215");
+        /// `byteplus/doubao-seed-2-0-pro-260215` · 256K ctx · reasoning · vision
+        pub const DOUBAO_SEED_2_0_PRO_260215: ModelRef = ModelRef::from_static("byteplus/doubao-seed-2-0-pro-260215");
+        /// `byteplus/glm-4-7-251222` · 204800 ctx · reasoning
+        pub const GLM_4_7_251222: ModelRef = ModelRef::from_static("byteplus/glm-4-7-251222");
+        /// `byteplus/kimi-k2-thinking-251104` · 229376 ctx · reasoning
+        pub const KIMI_K2_THINKING_251104: ModelRef = ModelRef::from_static("byteplus/kimi-k2-thinking-251104");
     }
 
     /// openai model handles.
@@ -382,6 +424,10 @@ pub mod models {
         pub const KIMI_K2_7_CODE: ModelRef = ModelRef::from_static("qwen/kimi-k2.7-code");
         /// `qwen/qwen-coder` · 1M ctx · reasoning
         pub const QWEN_CODER: ModelRef = ModelRef::from_static("qwen/qwen-coder");
+        /// `qwen/qwen-flash` · 997952 ctx · reasoning
+        pub const QWEN_FLASH: ModelRef = ModelRef::from_static("qwen/qwen-flash");
+        /// `qwen/qwen-flash-2025-07-28` · 997952 ctx · reasoning
+        pub const QWEN_FLASH_2025_07_28: ModelRef = ModelRef::from_static("qwen/qwen-flash-2025-07-28");
         /// `qwen/qwen-max` · 30720 ctx · reasoning
         pub const QWEN_MAX: ModelRef = ModelRef::from_static("qwen/qwen-max");
         /// `qwen/qwen-plus` · 129024 ctx · reasoning
@@ -392,6 +438,12 @@ pub mod models {
         pub const QWEN_PLUS_2025_04_28: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-04-28");
         /// `qwen/qwen-plus-2025-07-14` · 129024 ctx · reasoning
         pub const QWEN_PLUS_2025_07_14: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-07-14");
+        /// `qwen/qwen-plus-2025-07-28` · 997952 ctx · reasoning
+        pub const QWEN_PLUS_2025_07_28: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-07-28");
+        /// `qwen/qwen-plus-2025-09-11` · 997952 ctx · reasoning
+        pub const QWEN_PLUS_2025_09_11: ModelRef = ModelRef::from_static("qwen/qwen-plus-2025-09-11");
+        /// `qwen/qwen-plus-latest` · 997952 ctx · reasoning
+        pub const QWEN_PLUS_LATEST: ModelRef = ModelRef::from_static("qwen/qwen-plus-latest");
         /// `qwen/qwen-turbo` · 129024 ctx · reasoning
         pub const QWEN_TURBO: ModelRef = ModelRef::from_static("qwen/qwen-turbo");
         /// `qwen/qwen-turbo-2024-11-01` · 1M ctx · reasoning
@@ -400,6 +452,22 @@ pub mod models {
         pub const QWEN_TURBO_2025_04_28: ModelRef = ModelRef::from_static("qwen/qwen-turbo-2025-04-28");
         /// `qwen/qwen-turbo-latest` · 1M ctx · reasoning
         pub const QWEN_TURBO_LATEST: ModelRef = ModelRef::from_static("qwen/qwen-turbo-latest");
+        /// `qwen/qwen3-30b-a3b` · 129024 ctx · reasoning
+        pub const QWEN3_30B_A3B: ModelRef = ModelRef::from_static("qwen/qwen3-30b-a3b");
+        /// `qwen/qwen3-coder-flash` · 997952 ctx · reasoning
+        pub const QWEN3_CODER_FLASH: ModelRef = ModelRef::from_static("qwen/qwen3-coder-flash");
+        /// `qwen/qwen3-coder-flash-2025-07-28` · 997952 ctx · reasoning
+        pub const QWEN3_CODER_FLASH_2025_07_28: ModelRef = ModelRef::from_static("qwen/qwen3-coder-flash-2025-07-28");
+        /// `qwen/qwen3-coder-plus` · 997952 ctx · reasoning
+        pub const QWEN3_CODER_PLUS: ModelRef = ModelRef::from_static("qwen/qwen3-coder-plus");
+        /// `qwen/qwen3-coder-plus-2025-07-22` · 997952 ctx · reasoning
+        pub const QWEN3_CODER_PLUS_2025_07_22: ModelRef = ModelRef::from_static("qwen/qwen3-coder-plus-2025-07-22");
+        /// `qwen/qwen3-max` · 258048 ctx · reasoning
+        pub const QWEN3_MAX: ModelRef = ModelRef::from_static("qwen/qwen3-max");
+        /// `qwen/qwen3-max-2026-01-23` · 258048 ctx · reasoning
+        pub const QWEN3_MAX_2026_01_23: ModelRef = ModelRef::from_static("qwen/qwen3-max-2026-01-23");
+        /// `qwen/qwen3-max-preview` · 258048 ctx · reasoning
+        pub const QWEN3_MAX_PREVIEW: ModelRef = ModelRef::from_static("qwen/qwen3-max-preview");
         /// `qwen/qwen3-next-80b-a3b-instruct` · 262144 ctx
         pub const QWEN3_NEXT_80B_A3B_INSTRUCT: ModelRef = ModelRef::from_static("qwen/qwen3-next-80b-a3b-instruct");
         /// `qwen/qwen3-next-80b-a3b-thinking` · 262144 ctx · reasoning
@@ -412,8 +480,14 @@ pub mod models {
         pub const QWEN3_VL_32B_INSTRUCT: ModelRef = ModelRef::from_static("qwen/qwen3-vl-32b-instruct");
         /// `qwen/qwen3-vl-32b-thinking` · 131072 ctx · reasoning · vision
         pub const QWEN3_VL_32B_THINKING: ModelRef = ModelRef::from_static("qwen/qwen3-vl-32b-thinking");
+        /// `qwen/qwen3-vl-plus` · 260096 ctx · reasoning · vision
+        pub const QWEN3_VL_PLUS: ModelRef = ModelRef::from_static("qwen/qwen3-vl-plus");
+        /// `qwen/qwen3.5-plus` · 991808 ctx · reasoning · vision
+        pub const QWEN3_5_PLUS: ModelRef = ModelRef::from_static("qwen/qwen3.5-plus");
         /// `qwen/qwen3.7-max` · 991808 ctx · reasoning
         pub const QWEN3_7_MAX: ModelRef = ModelRef::from_static("qwen/qwen3.7-max");
+        /// `qwen/qwen3.7-plus` · 991808 ctx · reasoning · vision
+        pub const QWEN3_7_PLUS: ModelRef = ModelRef::from_static("qwen/qwen3.7-plus");
         /// `qwen/qwen3.8-max` · 991808 ctx · reasoning · vision
         pub const QWEN3_8_MAX: ModelRef = ModelRef::from_static("qwen/qwen3.8-max");
         /// `qwen/qwq-plus` · 98304 ctx · reasoning

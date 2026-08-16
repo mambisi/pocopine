@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 const DEFAULT_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const DEFAULT_OUT_DIR: &str = "crates/pocopine-agenkit/src/server/catalog";
-const PROVIDERS: &[&str] = &["anthropic", "openai", "qwen"];
+const PROVIDERS: &[&str] = &["anthropic", "byteplus", "openai", "qwen"];
 
 /// One mapped catalog entry (provider/model with our normalized fields).
 #[derive(Default)]
@@ -147,7 +147,12 @@ fn map_entry(key: &str, v: &Value) -> Option<Entry> {
         return None;
     }
 
-    let input = num(m, "input_cost_per_token")?;
+    // Missing pricing is not a reason to drop a model: the catalog's job is
+    // capability/context gating (vision, tools, image_output, windows), and
+    // cost estimation is documented to degrade gracefully. LiteLLM lacks
+    // prices for some real, current rows (qwen3.x, doubao-seed-2.0) — those
+    // enter with 0.0 rates rather than silently vanishing from the list.
+    let input = num(m, "input_cost_per_token").unwrap_or(0.0);
     let context_window = u32_from(num_u(m, "max_input_tokens").or_else(|| num_u(m, "max_tokens"))?);
     if context_window == 0 {
         return None;
@@ -195,6 +200,15 @@ fn normalized_provider(provider: &str) -> Option<&'static str> {
         // LiteLLM catalogs Alibaba Cloud Model Studio / Qwen compatible-mode
         // rows under the provider name used on the wire.
         "dashscope" | "qwen" => Some("qwen"),
+        // LiteLLM catalogs ByteDance's Seed/Doubao chat family under the
+        // China-region provider name; BytePlus ModelArk (the international
+        // surface, OpenAI-compatible chat wire) serves the same family. Some
+        // international model ids differ from the China ids — an alias the
+        // catalog doesn't index degrades gracefully, so mismatches are
+        // harmless. Seedream/Seedance (image/video generation) are tool
+        // territory (RFC-122 §4), not chat entries, and are mode-filtered
+        // out by design.
+        "volcengine" | "byteplus" => Some("byteplus"),
         _ => None,
     }
 }
