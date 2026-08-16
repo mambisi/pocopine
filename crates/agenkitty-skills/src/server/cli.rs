@@ -15,9 +15,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use serde_json::{Value as JsonValue, json};
 
-use crate::catalog::LoadedSkill;
-use crate::discover::{SkillLoader, load_skill_dir};
-use crate::meta::{Severity, SkillDiagnostic, SkillLimits};
+use super::catalog::LoadedSkill;
+use super::discover::{SkillLoader, load_skill_dir};
+use super::meta::{Severity, SkillDiagnostic, SkillLimits};
 
 pub const JSON_SCHEMA_TAG: &str = "agenkitty-skills/v1";
 
@@ -60,7 +60,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Render the exact level-1 index block the runtime would inject.
+    /// Render the exact level-1 prompt block (header + index) the runtime
+    /// would inject.
     Index {
         #[arg(long, required = true)]
         root: Vec<PathBuf>,
@@ -101,10 +102,11 @@ fn validate(dirs: Vec<PathBuf>, roots: Vec<PathBuf>, json: bool, out: &mut impl 
     }
 
     let mut diagnostics: Vec<SkillDiagnostic> = Vec::new();
-    let mut checked = 0usize;
+    // One skill directory checked per positional dir, plus every skill a
+    // root scan finds.
+    let mut checked = dirs.len();
     for dir in &dirs {
         let catalog = load_skill_dir(dir, SkillLimits::default());
-        checked += catalog.len() + usize::from(catalog.is_empty());
         diagnostics.extend(catalog.diagnostics().iter().cloned());
     }
     if !roots.is_empty() {
@@ -233,7 +235,9 @@ fn inspect(name: &str, roots: Vec<PathBuf>, json: bool, out: &mut impl Write) ->
 fn index(roots: Vec<PathBuf>, budget: Option<usize>, out: &mut impl Write) -> i32 {
     let catalog = SkillLoader::new(roots).discover();
     let budget = budget.unwrap_or(catalog.limits().index_byte_budget);
-    let _ = write!(out, "{}", catalog.render_index(budget));
+    // The full prompt block — header included — so what is audited here is
+    // byte-for-byte what a runtime injects.
+    let _ = write!(out, "{}", catalog.render_prompt_part(budget));
     0
 }
 

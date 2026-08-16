@@ -78,13 +78,24 @@ fn sanitize(text: &str, keep_line_whitespace: bool) -> String {
 }
 
 /// Truncate to `max_bytes` on a UTF-8 boundary, appending a visible marker
-/// when bytes were dropped. Returns whether truncation happened.
+/// when bytes were dropped. Returns whether truncation happened. The output
+/// never exceeds `max_bytes`: when the cap is too small to even hold the
+/// marker, the text is cut bare — a bound that can overshoot is not a bound.
 pub fn bound_text(text: &str, max_bytes: usize) -> (String, bool) {
     if text.len() <= max_bytes {
         return (text.to_string(), false);
     }
     const MARKER: &str = "…(truncated)…";
-    let budget = max_bytes.saturating_sub(MARKER.len());
+    let budget = if max_bytes > MARKER.len() {
+        max_bytes - MARKER.len()
+    } else {
+        // No room for the marker within the cap; truncate bare.
+        let mut end = max_bytes.min(text.len());
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        return (text[..end].to_string(), true);
+    };
     let mut end = budget.min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
@@ -118,11 +129,21 @@ mod tests {
 
     #[test]
     fn bound_text_truncates_on_char_boundary() {
-        let (bounded, truncated) = bound_text("héllo wörld", 8);
+        let (bounded, truncated) = bound_text(&"héllo wörld".repeat(4), 30);
         assert!(truncated);
         assert!(bounded.ends_with("…(truncated)…"));
+        assert!(bounded.len() <= 30);
         let (kept, untruncated) = bound_text("short", 100);
         assert_eq!(kept, "short");
         assert!(!untruncated);
+    }
+
+    #[test]
+    fn bound_text_never_exceeds_a_tiny_cap() {
+        // A cap smaller than the marker truncates bare instead of overshooting.
+        let (bounded, truncated) = bound_text("héllo wörld", 8);
+        assert!(truncated);
+        assert!(bounded.len() <= 8, "{} > 8", bounded.len());
+        assert!("héllo wörld".starts_with(&bounded));
     }
 }

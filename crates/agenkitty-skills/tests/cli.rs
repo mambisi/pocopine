@@ -122,7 +122,13 @@ fn index_renders_the_exact_prompt_block() {
 
     let out = run(&["index", "--root", root.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stdout(&out), "- alpha: First skill. Use early.\n");
+    // Header + index: byte-for-byte the block a runtime injects.
+    let text = stdout(&out);
+    assert!(text.starts_with("## Skills\n"), "{text}");
+    assert!(
+        text.ends_with("\n- alpha: First skill. Use early.\n"),
+        "{text}"
+    );
 
     let tiny = run(&["index", "--root", root.to_str().unwrap(), "--budget", "4"]);
     assert!(stdout(&tiny).contains("1 more skill omitted"));

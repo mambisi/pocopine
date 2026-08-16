@@ -15,34 +15,13 @@
 //!
 //! The `skill.*` tool family in the `agenkitty` crate builds on this; nothing
 //! here executes scripts, dispatches hooks, or spawns anything.
+//!
+//! The crate is host-only (filesystem access); the target gate below is the
+//! only `#[cfg(target_arch = …)]` in the crate, per the
+//! client-server-modules convention.
 
 #[cfg(not(target_arch = "wasm32"))]
-mod catalog;
-#[cfg(not(target_arch = "wasm32"))]
-mod confine;
-#[cfg(not(target_arch = "wasm32"))]
-mod discover;
-#[cfg(not(target_arch = "wasm32"))]
-mod error;
-#[cfg(not(target_arch = "wasm32"))]
-mod frontmatter;
-#[cfg(not(target_arch = "wasm32"))]
-mod meta;
-#[cfg(not(target_arch = "wasm32"))]
-mod sanitize;
-#[cfg(not(target_arch = "wasm32"))]
-mod subst;
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
-pub mod cli;
+mod server;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use catalog::{LoadedSkill, ReadOpts, ResourceChunk, SkillBody, SkillCatalog};
-#[cfg(not(target_arch = "wasm32"))]
-pub use discover::{SkillLoader, default_roots, load_skill_dir};
-#[cfg(not(target_arch = "wasm32"))]
-pub use error::SkillError;
-#[cfg(not(target_arch = "wasm32"))]
-pub use meta::{ClaudeExt, ForkHint, Severity, SkillDiagnostic, SkillLimits, SkillMeta};
-#[cfg(not(target_arch = "wasm32"))]
-pub use sanitize::{sanitize_multiline, sanitize_single_line};
+pub use server::*;

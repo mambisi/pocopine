@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use serde_json::Value as JsonValue;
 use serde_norway::Value as YamlValue;
 
-use crate::meta::{ClaudeExt, ForkHint, Severity, SkillMeta};
+use super::meta::{ClaudeExt, ForkHint, Severity, SkillMeta};
 
 /// A diagnostic before the discovery layer attaches the skill directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,23 +331,11 @@ fn parse_extension_fields(
     ext.effort = string_field(mapping, "effort", diagnostics);
     ext.argument_hint = string_field(mapping, "argument-hint", diagnostics);
 
-    if let Some(value) = mapping.get("disable-model-invocation") {
-        match lenient_bool(value) {
-            Some(flag) => ext.disable_model_invocation = flag,
-            None => diagnostics.push(PendingDiagnostic::warning(
-                "ext.bool",
-                "`disable-model-invocation` is not a boolean; ignored",
-            )),
-        }
+    if let Some(flag) = bool_field(mapping, "disable-model-invocation", diagnostics) {
+        ext.disable_model_invocation = flag;
     }
-    if let Some(value) = mapping.get("user-invocable") {
-        match lenient_bool(value) {
-            Some(flag) => ext.user_invocable = flag,
-            None => diagnostics.push(PendingDiagnostic::warning(
-                "ext.bool",
-                "`user-invocable` is not a boolean; ignored",
-            )),
-        }
+    if let Some(flag) = bool_field(mapping, "user-invocable", diagnostics) {
+        ext.user_invocable = flag;
     }
 
     ext.disallowed_tools = tool_list(
@@ -364,14 +352,8 @@ fn parse_extension_fields(
                 agent: string_field(mapping, "agent", diagnostics),
                 ..ForkHint::default()
             };
-            if let Some(value) = mapping.get("background") {
-                match lenient_bool(value) {
-                    Some(flag) => fork.background = flag,
-                    None => diagnostics.push(PendingDiagnostic::warning(
-                        "ext.bool",
-                        "`background` is not a boolean; ignored",
-                    )),
-                }
+            if let Some(flag) = bool_field(mapping, "background", diagnostics) {
+                fork.background = flag;
             }
             ext.fork = Some(fork);
         }
@@ -394,6 +376,26 @@ fn parse_extension_fields(
     }
 
     ext
+}
+
+/// A lenient-boolean extension field; non-boolean values degrade to a
+/// warning, never an error.
+fn bool_field(
+    mapping: &BTreeMap<String, YamlValue>,
+    key: &'static str,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<bool> {
+    let value = mapping.get(key)?;
+    match lenient_bool(value) {
+        Some(flag) => Some(flag),
+        None => {
+            diagnostics.push(PendingDiagnostic::warning(
+                "ext.bool",
+                format!("`{key}` is not a boolean; ignored"),
+            ));
+            None
+        }
+    }
 }
 
 fn string_field(

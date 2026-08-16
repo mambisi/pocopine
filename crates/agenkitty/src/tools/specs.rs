@@ -308,6 +308,11 @@ mod tests {
         );
         ids.extend(known_patch_tool_ids().iter().map(|id| id.to_string()));
         ids.extend(known_secret_tool_ids().iter().map(|id| id.to_string()));
+        ids.extend(
+            super::super::known_skill_tool_ids()
+                .iter()
+                .map(|id| id.to_string()),
+        );
         #[cfg(unix)]
         ids.extend(
             super::super::known_process_tool_ids()

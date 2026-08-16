@@ -10,7 +10,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::SkillError;
+use super::error::SkillError;
 
 /// Resolve `rel` inside the (already canonical) skill root, refusing
 /// escapes and secret-looking paths.
@@ -66,7 +66,7 @@ fn reject_secret_path(path: &Path) -> Result<(), SkillError> {
     Ok(())
 }
 
-fn is_secret_path(path: &Path) -> bool {
+pub(crate) fn is_secret_path(path: &Path) -> bool {
     let components = path
         .components()
         .filter_map(|component| match component {

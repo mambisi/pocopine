@@ -1,6 +1,6 @@
 # RFC-121: agenkitty skills — an Anthropic-compatible skill loader
 
-**Status:** Draft (for evaluation)
+**Status:** Implemented (P1–P3 on this branch; P4 marketplace resolver remains a future RFC)
 **Crates:** `agenkitty-skills` (new: loader library + CLI binary), `agenkitty` (new `skill.*` tool family), `agenkitty-core` (`[skills]` config section)
 **Relates to:** the plugin-marketplace research verdict (2026-07-06; phase 1 = SKILL.md loader), the earlier plugin-package draft (tentatively RFC-114, uncommitted — phase 2 territory), RFC-118 (subagent primitives, attenuation recipe), RFC-093 (agenkit), RFC-069 (logging)
 

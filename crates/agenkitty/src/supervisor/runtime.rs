@@ -353,6 +353,23 @@ impl FrameworkRunner {
         self.skill_runtime.clone()
     }
 
+    /// Compose the full system prompt for a run: the caller's base prompt
+    /// plus the skills index. The index is appended only when the resolved
+    /// tool set actually carries `skill.use` — the prompt must never
+    /// instruct the model to call a tool the provider was not given.
+    pub fn compose_system_prompt(&self, base: &str, tool_ids: &[String]) -> String {
+        let mut system = base.to_string();
+        if tool_ids
+            .iter()
+            .any(|id| id == crate::tools::SKILL_USE_TOOL_ID)
+            && let Some(part) = self.skill_runtime.system_prompt_part()
+        {
+            system.push_str("\n\n");
+            system.push_str(&part);
+        }
+        system
+    }
+
     /// Install the host approver for `Ask` policy decisions. One approver is
     /// shared across every gate: the central dispatch gate (`self.approver`),
     /// the artifact runtime (project-scoped writes), and the secret runtime
