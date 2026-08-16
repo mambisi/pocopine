@@ -14,6 +14,7 @@ members = [
     "crates/pocopine",
     "crates/agenkitty",
     "crates/agenkitty-core",
+    "crates/agenkitty-skills",
     "crates/pocopine-agenkit",
     "crates/pocopine-agenkit-anthropic",
     "crates/pocopine-agenkit-core",
@@ -108,7 +109,7 @@ exclude = [
 # CLI's own target dir from default wasm builds so `cargo build -p counter
 # --target wasm32-unknown-unknown` doesn't pull in host-only deps.
 [workspace.metadata.hosts]
-cli = ["pocopine-cli", "gen-model-catalog", "agenkitty"]
+cli = ["pocopine-cli", "gen-model-catalog", "agenkitty", "agenkitty-skills"]
 
 [workspace.package]
 version = "0.1.1"
@@ -124,6 +125,7 @@ repository = "https://github.com/mambisi/pocopine"
 pocopine-agenkit = { path = "crates/pocopine-agenkit", version = "0.1.0" }
 pocopine-agenkit-core = { path = "crates/pocopine-agenkit-core", version = "0.1.0" }
 agenkitty-core = { path = "crates/agenkitty-core", version = "0.1.1" }
+agenkitty-skills = { path = "crates/agenkitty-skills", version = "0.1.1" }
 pocopine-agenkit-anthropic = { path = "crates/pocopine-agenkit-anthropic", version = "0.1.0" }
 pocopine-agenkit-macros = { path = "crates/pocopine-agenkit-macros", version = "0.1.0" }
 pocopine-agenkit-oai = { path = "crates/pocopine-agenkit-oai", version = "0.1.0" }
