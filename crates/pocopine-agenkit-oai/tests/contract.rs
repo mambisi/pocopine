@@ -106,6 +106,33 @@ async fn decodes_a_spec_shaped_tool_call_stream() {
     assert_eq!(tools[0].args, json!({"location": "SF"}));
 }
 
+/// Kimi Code on DashScope repeats empty call ids and function names on argument
+/// chunks. They are continuation sentinels, not replacements for the identity
+/// supplied by the first chunk.
+const EMPTY_TOOL_IDENTITY_DELTAS_SSE: &str = r#"data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","model":"kimi-k2.7-code","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"functions.site_project_write:0","type":"function","function":{"name":"site_project_write","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","model":"kimi-k2.7-code","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"{\"path\":"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","model":"kimi-k2.7-code","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"\"index.html\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","model":"kimi-k2.7-code","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keeps_tool_identity_when_continuation_deltas_repeat_empty_strings() {
+    let server = MockServer::start().await;
+    mount_sse(&server, EMPTY_TOOL_IDENTITY_DELTAS_SSE).await;
+
+    let (_text, tools, _usage) = drain(&provider(&server)).await;
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].id, "functions.site_project_write:0");
+    assert_eq!(tools[0].tool_id, "site_project_write");
+    assert_eq!(tools[0].args, json!({"path": "index.html"}));
+}
+
 /// A non-streaming `chat.completion` object carrying `tool_calls`.
 #[tokio::test]
 async fn decodes_a_spec_shaped_tool_call_response() {

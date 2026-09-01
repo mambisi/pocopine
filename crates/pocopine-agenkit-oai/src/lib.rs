@@ -415,11 +415,16 @@ fn apply_event(
         }
         for delta in choice.delta.tool_calls {
             let acc = tools.entry(delta.index).or_default();
-            if let Some(id) = delta.id {
+            // Some OpenAI-compatible gateways (observed with Kimi Code on
+            // DashScope) repeat `id: ""` and `function.name: ""` on every
+            // argument fragment after sending the real values in the first
+            // chunk. Those empty continuation fields mean "unchanged"; they
+            // must not erase the identity required to dispatch the call.
+            if let Some(id) = delta.id.filter(|id| !id.is_empty()) {
                 acc.id = id;
             }
             if let Some(function) = delta.function {
-                if let Some(name) = function.name {
+                if let Some(name) = function.name.filter(|name| !name.is_empty()) {
                     acc.name = name;
                 }
                 if let Some(arguments) = function.arguments {
