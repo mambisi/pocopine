@@ -330,6 +330,7 @@ impl RailwayClient {
                 cron_schedule: None,
                 dockerfile_path: None,
                 draining_seconds: None,
+                pre_deploy_timeout_seconds: None,
                 healthcheck_path: cfg.healthcheck_path.clone(),
                 healthcheck_timeout: None,
                 ipv6_egress_enabled: None,
