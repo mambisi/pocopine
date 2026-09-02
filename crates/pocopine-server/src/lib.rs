@@ -44,7 +44,9 @@ pub use assets::{
     ASSETS_ACCESS_KEY_ID_ENV, ASSETS_BUCKET_ENV, ASSETS_ENDPOINT_ENV, ASSETS_REGION_ENV,
     ASSETS_SECRET_ACCESS_KEY_ENV,
 };
-pub use observability::request_event_layer;
+pub use observability::{
+    REQUEST_ID_HEADER, RequestEventOptions, request_event_layer, request_event_layer_with,
+};
 pub use plugin::{
     HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, PluginValidationError, RequestId,
     ServerBootFailed, ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed,
@@ -57,6 +59,10 @@ pub use plugin::{
     has_server_listening_hooks, next_request_id,
 };
 pub use pocopine_core::server::{Extension, FromRequestContext, RequestContext};
+/// Span/field name constants (RFC-123); re-exported for the `#[server]`
+/// macro expansion, which spells `::pocopine_server::pocopine_observe::…`.
+#[doc(hidden)]
+pub use pocopine_observe;
 pub use server::{Server, ServerPlugin};
 pub use server_functions::{
     ServerFunctionRoute, ServerFunctionRouteConflict, install_server_functions,
