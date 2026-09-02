@@ -17,3 +17,4 @@ inventory = { workspace = true }
 redis = { version = "0.27", features = ["tokio-comp"] }
 tokio = { version = "1", features = ["time"] }
 tracing = { workspace = true }
+pocopine-observe = { workspace = true }
