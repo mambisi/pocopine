@@ -17,6 +17,11 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 serde_json = "1"
 tracing = { workspace = true }
 inventory = { workspace = true }
+pocopine-observe = { workspace = true }
+# RFC-123 §5.3 — `otel` feature: W3C `traceparent` in/out on the request
+# span. Dependency-only; enabled by `pocopine-logging/otlp`.
+opentelemetry = { version = "0.31", optional = true, features = ["trace"] }
+tracing-opentelemetry = { version = "0.32", optional = true }
 # RFC-107 — streaming server functions: the SSE response helper frames a
 # `StreamServerResult<T>` into `axum::response::Sse`.
 pocopine-core = { workspace = true }
@@ -28,6 +33,10 @@ futures = "0.3"
 # POCOPINE_ASSETS_BUCKET is set).
 pocopine-assets = { workspace = true }
 
+[features]
+default = []
+otel = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
+
 [dependencies]
 pocopine-auth = { workspace = true }
 serde = { workspace = true }
@@ -35,3 +44,4 @@ serde = { workspace = true }
 # Host-only tests (the crate is empty on wasm32, see lib.rs cfg).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = "3"
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }

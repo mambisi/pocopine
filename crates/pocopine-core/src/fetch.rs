@@ -23,6 +23,12 @@
 //! responses — and the freeze removes the seam where untrusted code
 //! could install itself after the trust boundary closed.
 
+/// Request header carrying the client's per-page-load session id
+/// (RFC-123 §5.4 / Phase 3). Generated once per app boot on the client,
+/// recorded as the `session.id` field of the server's request span. It
+/// is a correlation id, never a credential.
+pub const CLIENT_SESSION_HEADER: &str = "x-pocopine-session";
+
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;

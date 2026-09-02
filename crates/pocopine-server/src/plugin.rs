@@ -156,6 +156,9 @@ pub struct HttpRequestStarted {
     pub path: String,
     pub route_pattern: Option<String>,
     pub request_id: u64,
+    /// The client's per-page-load session id (`x-pocopine-session`),
+    /// when it sent a well-formed one (RFC-123 §5.4).
+    pub session_id: Option<String>,
 }
 
 /// Emitted after the response status is known. `duration_ms` covers
@@ -167,6 +170,8 @@ pub struct HttpRequestCompleted {
     pub path: String,
     pub route_pattern: Option<String>,
     pub request_id: u64,
+    /// See [`HttpRequestStarted::session_id`].
+    pub session_id: Option<String>,
     pub status: u16,
     pub duration_ms: f64,
 }
@@ -179,6 +184,8 @@ pub struct HttpRequestFailed {
     pub path: String,
     pub route_pattern: Option<String>,
     pub request_id: u64,
+    /// See [`HttpRequestStarted::session_id`].
+    pub session_id: Option<String>,
     pub reason: &'static str,
     pub duration_ms: f64,
 }

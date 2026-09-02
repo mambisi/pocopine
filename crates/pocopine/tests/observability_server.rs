@@ -257,6 +257,16 @@ fn server_observability_emits_boot_failure_for_invalid_address() {
 
     assert!(fields(started).contains("not an address"));
     assert!(fields(failed).contains("address_parse"));
+
+    // RFC-123 §3.4 — boot events hang from `pocopine.server.boot`, which
+    // closed as an error with the same stable classification.
+    assert_eq!(started.ancestry(), ["pocopine.server.boot"]);
+    assert_eq!(failed.ancestry(), ["pocopine.server.boot"]);
+    let boot = capture.span("pocopine.server.boot");
+    assert_eq!(boot.field("otel.kind"), Some("internal"));
+    assert_eq!(boot.field("server.address"), Some("not an address"));
+    assert_eq!(boot.field("otel.status_code"), Some("ERROR"));
+    assert_eq!(boot.field("error.type"), Some("address_parse"));
 }
 
 fn find_observed_event<'a>(
