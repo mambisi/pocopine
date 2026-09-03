@@ -344,6 +344,10 @@ target, `pocopine.trace`:
 | `pocopine.ai.run` / `pocopine.ai.turn` | an agenkit flow invocation / a conversational turn | whatever is current |
 | `pocopine.ai.step` | `ctx.step`, agent runs, parallel groups and branches, reducers, retrievals | the enclosing `ai.*` |
 | `pocopine.ai.model` / `pocopine.ai.tool` | each model call / tool execution | the enclosing `ai.*` |
+| `pocopine.realtime.session` | one WebSocket session on the realtime gateway, for the socket's life | the upgrade's `http.request` |
+| `pocopine.realtime.message` | one inbound frame handled / one outbound data frame delivered | `realtime.session` |
+| `pocopine.live.event` | one SSE event delivered (replayed or live) | the `http.request` carrying the stream |
+| `pocopine.collab.apply` / `pocopine.collab.checkpoint` | one fan-out update folded / one detached checkpoint | root |
 
 Span fields use OpenTelemetry semantic-convention names where one exists
 (`http.request.method`, `http.route`, `http.response.status_code`,
@@ -377,6 +381,26 @@ The plugin applies the request layer at finalization, outside
 authentication and every other plugin layer, so auth failures and routes
 added by later plugins are inside the span too (`Server::request_events`
 is the same mechanism without the plugin).
+
+**Streaming responses.** The request span covers the response *body*, not
+just the headers: it is entered on every frame and closes at end-of-stream,
+the way tower-http's `TraceLayer` does. A live SSE stream, a streaming
+server function, or a long download is therefore one `http.request` span
+for its whole life, and everything the producer emits lands inside it. A
+WebSocket session gets its own `pocopine.realtime.session` span under the
+upgrade request, with a short `pocopine.realtime.message` per frame; hub
+tasks that fan out to many connections (the collab apply loop, detached
+checkpoints) get short root spans of their own and never inherit a
+connection's. The long-lived spans are the one deliberate exception to
+"spans are short": a backend sees them when they close, and their message
+children arrive first. Filter one out with
+`pocopine.trace[pocopine.realtime.session]=off` if that is unwanted.
+
+**Jobs link back to their enqueuer.** With `logging-otlp` on, an enqueued
+job carries the enqueuer's `traceparent`; `pocopine.job.run` records it as
+`pocopine.job.enqueue_traceparent` and adds an OpenTelemetry span link to
+it. The run stays a root of its own trace — a job is linked to, not a child
+of, the request that queued it.
 
 Two headers ride along. Every response carries `x-request-id` with the
 request's `pocopine.request_id` (opt out with
