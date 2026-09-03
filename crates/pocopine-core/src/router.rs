@@ -1520,9 +1520,7 @@ fn mount_current() -> Option<NavigationFailure> {
         .unwrap_or_default();
     // RFC-123 §5.5: a page view is a span and the root of its own trace;
     // opened whether or not hooks are installed.
-    let navigation_span =
-        crate::client_trace::navigation_started(&path, route_pattern, component_name);
-    let _mounting = navigation_span.enter();
+    crate::client_trace::navigation_started(&path, route_pattern, component_name);
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationStarted {
             path: path.clone(),
@@ -2067,16 +2065,12 @@ fn dispatch_route_rejection(
     });
     crate::client_trace::navigation_failed(rejection.reason(source));
     if has_route_hooks {
-        // The asynchronous loader path runs outside the mount; keep the
-        // event under the page view's span (RFC-123 §5.5).
-        crate::client_trace::in_view(|| {
-            crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                path: path.to_string(),
-                route_pattern,
-                component: Some(matched.component_name()),
-                reason: rejection.reason(source),
-                duration_ms: elapsed_since(start_ms),
-            });
+        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+            path: path.to_string(),
+            route_pattern,
+            component: Some(matched.component_name()),
+            reason: rejection.reason(source),
+            duration_ms: elapsed_since(start_ms),
         });
     }
     match action {

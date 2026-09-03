@@ -38,9 +38,6 @@ struct View {
 thread_local! {
     /// The current page view. Replacing it drops — closes — the previous one.
     static VIEW: RefCell<Option<View>> = const { RefCell::new(None) };
-    /// The boot span, kept as the fallback parent for calls made before the
-    /// first navigation — and every call in an app without routes.
-    static BOOT: RefCell<Option<View>> = const { RefCell::new(None) };
     /// Whether the relay is on, and therefore whether `traceparent` is sent.
     static RELAY: Cell<bool> = const { Cell::new(false) };
 }
@@ -59,27 +56,6 @@ pub fn trace_relay_enabled() -> bool {
 /// The ids of the current page view, if a navigation has happened.
 pub fn current_view() -> Option<ViewContext> {
     VIEW.with(|view| view.borrow().as_ref().map(|v| v.context.clone()))
-}
-
-/// The ids of the boot span, once the app has started booting.
-pub fn boot_context() -> Option<ViewContext> {
-    BOOT.with(|boot| boot.borrow().as_ref().map(|v| v.context.clone()))
-}
-
-/// Close the current page view now — the relay calls this on page hide so
-/// the view span reaches the backend with the calls it parented, instead of
-/// staying open in a tab that is going away.
-pub fn close_view() {
-    VIEW.with(|view| view.borrow_mut().take());
-}
-
-/// Run `f` inside the current page view's span, or plainly if there is none.
-pub(crate) fn in_view<T>(f: impl FnOnce() -> T) -> T {
-    let span = VIEW.with(|view| view.borrow().as_ref().map(|v| v.span.clone()));
-    match span {
-        Some(span) => span.in_scope(f),
-        None => f(),
-    }
 }
 
 /// A fresh 32-hex W3C trace id.
@@ -123,31 +99,19 @@ fn mint_hex(len: usize) -> String {
     hex
 }
 
-/// `pocopine.client.boot` — a root with its own trace id, remembered as
-/// the fallback parent for calls made outside any page view.
+/// `pocopine.client.boot` — a root with its own trace id.
 pub(crate) fn boot_span() -> Span {
-    let context = ViewContext {
-        trace_id: mint_trace_id(),
-        span_id: mint_span_id(),
-    };
-    let span = tracing::info_span!(
+    tracing::info_span!(
         target: TRACE_TARGET,
         parent: None,
         spans::CLIENT_BOOT,
         otel.kind = "internal",
         session.id = crate::fetch::client_session_id(),
-        pocopine.trace_id = context.trace_id.as_str(),
-        pocopine.span_id = context.span_id.as_str(),
+        pocopine.trace_id = mint_trace_id().as_str(),
+        pocopine.span_id = mint_span_id().as_str(),
         otel.status_code = Empty,
         error.type = Empty,
-    );
-    BOOT.with(|boot| {
-        *boot.borrow_mut() = Some(View {
-            span: span.clone(),
-            context,
-        })
-    });
-    span
+    )
 }
 
 pub(crate) fn close_ok(span: &Span) {
@@ -161,12 +125,7 @@ pub(crate) fn close_err(span: &Span, reason: &str) {
 
 /// A navigation began: open `pocopine.client.navigation` with a fresh trace
 /// id and make it the current view. The previous view's span closes here.
-/// Returns a handle so the caller can enter the span for the mount.
-pub(crate) fn navigation_started(
-    path: &str,
-    route_pattern: Option<&str>,
-    component: Option<&str>,
-) -> Span {
+pub(crate) fn navigation_started(path: &str, route_pattern: Option<&str>, component: Option<&str>) {
     let context = ViewContext {
         trace_id: mint_trace_id(),
         span_id: mint_span_id(),
@@ -191,9 +150,7 @@ pub(crate) fn navigation_started(
     if let Some(component) = component {
         span.record(fields::COMPONENT, component);
     }
-    let handle = span.clone();
     VIEW.with(|view| *view.borrow_mut() = Some(View { span, context }));
-    handle
 }
 
 /// The current navigation finished mounting.
@@ -225,20 +182,11 @@ pub(crate) struct CallSpan {
 impl CallSpan {
     pub(crate) fn open(route: &str) -> Self {
         let span_id = mint_span_id();
-        // Parent: the page view, else the boot span, else a root.
-        let view = VIEW
-            .with(|view| {
-                view.borrow()
-                    .as_ref()
-                    .map(|v| (v.span.clone(), v.context.clone()))
-            })
-            .or_else(|| {
-                BOOT.with(|boot| {
-                    boot.borrow()
-                        .as_ref()
-                        .map(|v| (v.span.clone(), v.context.clone()))
-                })
-            });
+        let view = VIEW.with(|view| {
+            view.borrow()
+                .as_ref()
+                .map(|v| (v.span.clone(), v.context.clone()))
+        });
         let (trace_id, parent_span_id) = match &view {
             Some((_, context)) => (context.trace_id.clone(), Some(context.span_id.clone())),
             None => (mint_trace_id(), None),
@@ -341,33 +289,16 @@ mod tests {
     }
 
     #[test]
-    fn a_call_joins_the_current_view_or_the_boot() {
-        let _boot = boot_span();
-        let boot = boot_context().expect("boot context");
-        let before_navigation = CallSpan::open("/api/warmup");
-        assert_eq!(
-            before_navigation.trace_id, boot.trace_id,
-            "no view yet: the boot parents it"
-        );
-
-        let _nav = navigation_started("/threads/1", Some("/threads/:id"), Some("Thread"));
+    fn a_call_joins_the_current_view() {
+        navigation_started("/threads/1", Some("/threads/:id"), Some("Thread"));
         let view = current_view().expect("view");
-        assert_ne!(view.trace_id, boot.trace_id);
         let call = CallSpan::open("/api/summarize");
         assert_eq!(call.trace_id, view.trace_id);
-
-        let _nav2 = navigation_started("/other", None, None);
+        navigation_started("/other", None, None);
         assert_ne!(
             current_view().unwrap().trace_id,
             view.trace_id,
             "new view, new trace"
-        );
-        close_view();
-        assert_eq!(current_view(), None);
-        let after_close = CallSpan::open("/api/late");
-        assert_eq!(
-            after_close.trace_id, boot.trace_id,
-            "back to the boot as parent"
         );
     }
 }
