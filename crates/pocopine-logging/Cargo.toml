@@ -22,6 +22,7 @@ tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-server = { workspace = true }
+serde_json = "1"
 opentelemetry = { version = "0.31", optional = true, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31", optional = true, default-features = false, features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.31", optional = true, features = ["trace"] }
@@ -31,6 +32,27 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 pocopine-core = { workspace = true, default-features = false }
 js-sys = { workspace = true }
+serde_json = "1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 wasm-bindgen = { workspace = true }
-web-sys = { version = "0.3", features = ["console"] }
+wasm-bindgen-futures = { workspace = true }
+# RFC-123 §5.5 — the trace relay posts closed client spans with a raw
+# `fetch` (never through the server-function client, which would open
+# spans of its own) and `sendBeacon` on page hide.
+web-sys = { version = "0.3", features = [
+    "console",
+    "EventTarget",
+    "Headers",
+    "Navigator",
+    "Request",
+    "RequestInit",
+    "Response",
+    "Window",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pocopine-observe = { workspace = true, features = ["test-support"] }
+tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
+# The `otlp` relay test exports through an in-memory span exporter.
+opentelemetry_sdk = { version = "0.31", features = ["trace", "testing"] }
