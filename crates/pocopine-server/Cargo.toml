@@ -45,6 +45,3 @@ serde = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = "3"
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
-# RFC-123 §5.3 test support: an in-process tracer provider for the
-# `otel` feature's traceparent round-trip test (no exporter needed).
-opentelemetry_sdk = { version = "0.31", features = ["trace"] }

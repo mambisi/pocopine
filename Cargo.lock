@@ -7824,7 +7824,6 @@ dependencies = [
  "futures",
  "inventory",
  "opentelemetry",
- "opentelemetry_sdk",
  "pocopine-assets",
  "pocopine-auth",
  "pocopine-core",
