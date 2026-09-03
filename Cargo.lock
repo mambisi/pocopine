@@ -7830,6 +7830,7 @@ dependencies = [
  "axum 0.7.9",
  "futures",
  "http-body 1.0.1",
+ "http-body-util",
  "inventory",
  "opentelemetry",
  "opentelemetry_sdk",
