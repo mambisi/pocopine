@@ -138,13 +138,13 @@ impl MutatorRemoteContext for StubContext {
 
 /// JSON body for a successful fetch response.
 fn json_response<T: serde::Serialize>(body: &T) -> FetchResponse {
-    FetchResponse::new(
-        200,
-        format!(
+    FetchResponse {
+        status: 200,
+        body: format!(
             "{{\"Ok\":{}}}",
             serde_json::to_string(body).expect("test body serializable")
         ),
-    )
+    }
 }
 
 /// Build a `SyncOpenResponse` for our test stream.

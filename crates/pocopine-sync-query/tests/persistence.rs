@@ -142,13 +142,13 @@ impl MutatorRemoteContext for StubContext {
 }
 
 fn json_response<T: serde::Serialize>(body: &T) -> FetchResponse {
-    FetchResponse::new(
-        200,
-        format!(
+    FetchResponse {
+        status: 200,
+        body: format!(
             "{{\"Ok\":{}}}",
             serde_json::to_string(body).expect("test body serializable")
         ),
-    )
+    }
 }
 
 fn open_response(schema_version: u32, cursor: Option<SyncCursor>) -> SyncOpenResponse {
