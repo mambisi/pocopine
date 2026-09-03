@@ -329,8 +329,16 @@ impl HttpBody for SpannedBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, axum::Error>>> {
         let this = self.get_mut();
-        let _entered = this.span.enter();
-        Pin::new(&mut this.inner).poll_frame(cx)
+        let poll = {
+            let _entered = this.span.enter();
+            Pin::new(&mut this.inner).poll_frame(cx)
+        };
+        // Terminal: release the span now rather than when the consumer
+        // gets around to dropping the (now empty) body.
+        if matches!(poll, Poll::Ready(None) | Poll::Ready(Some(Err(_)))) {
+            this.span = tracing::Span::none();
+        }
+        poll
     }
 
     fn is_end_stream(&self) -> bool {
