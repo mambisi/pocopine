@@ -1141,31 +1141,26 @@ impl AgentSession {
         self.controls.abort.store(false, Ordering::Relaxed);
 
         let session = self.clone();
-        // Carry the caller's span into the task so the `ai.turn` opened
-        // inside is its child, not a new root (RFC-123 §4).
-        tokio::spawn(
-            async move {
-                let _ = tx.send(AgentEvent::Started);
-                let result = session.run_one_prompt(text, &tx).await;
-                // Release the turn lock and drop any steer left unconsumed, so it
-                // can't leak into the next prompt.
-                if let Ok(mut queue) = session.controls.queue.lock() {
-                    queue.clear();
+        tokio::spawn(async move {
+            let _ = tx.send(AgentEvent::Started);
+            let result = session.run_one_prompt(text, &tx).await;
+            // Release the turn lock and drop any steer left unconsumed, so it
+            // can't leak into the next prompt.
+            if let Ok(mut queue) = session.controls.queue.lock() {
+                queue.clear();
+            }
+            session.busy.store(false, Ordering::Release);
+            match result {
+                Ok(reason) => {
+                    let _ = tx.send(AgentEvent::Stopped { reason });
                 }
-                session.busy.store(false, Ordering::Release);
-                match result {
-                    Ok(reason) => {
-                        let _ = tx.send(AgentEvent::Stopped { reason });
-                    }
-                    Err(error) => {
-                        let _ = tx.send(AgentEvent::Failed {
-                            error: error.to_string(),
-                        });
-                    }
+                Err(error) => {
+                    let _ = tx.send(AgentEvent::Failed {
+                        error: error.to_string(),
+                    });
                 }
             }
-            .instrument(tracing::Span::current()),
-        );
+        });
         UnboundedReceiverStream::new(rx)
     }
 

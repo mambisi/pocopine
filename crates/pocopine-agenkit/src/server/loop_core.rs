@@ -336,9 +336,6 @@ where
 
         let result_text = match decision {
             ToolDecision::Block { reason } => {
-                // A policy block is a terminal outcome for the span too.
-                tool_span.record("otel.status_code", "ERROR");
-                tool_span.record("error.type", "blocked");
                 tool_span.in_scope(|| observer.tool_blocked(call, &reason));
                 serde_json::json!({ "blocked": reason }).to_string()
             }

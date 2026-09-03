@@ -1226,7 +1226,6 @@ return redis.call(
     fn job_span(envelope: &JobEnvelope, backend: &'static str) -> tracing::Span {
         tracing::info_span!(
             target: pocopine_observe::TRACE_TARGET,
-            parent: None,
             pocopine_observe::spans::JOB_RUN,
             otel.kind = "consumer",
             pocopine.job.name = %envelope.job_name,
@@ -1644,10 +1643,7 @@ return redis.call(
     /// flows through the worker's normal retry/dead-letter path
     /// instead of unwinding the worker task.
     async fn run_handler_safely(handler: JobHandler, payload: Vec<u8>) -> JobResult<()> {
-        // A spawned task does not inherit the current span; carry the
-        // `pocopine.job.run` span in so the handler's own events — and any
-        // agenkit run it starts — stay under the attempt (RFC-123 §3.3).
-        match tokio::spawn(handler(payload).instrument(tracing::Span::current())).await {
+        match tokio::spawn(handler(payload)).await {
             Ok(result) => result,
             Err(join_err) => {
                 let msg = match join_err.try_into_panic() {

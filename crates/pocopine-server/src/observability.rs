@@ -17,12 +17,11 @@
 //! # }
 //! ```
 //!
-//! **Prefer [`crate::Server::request_events`].** It applies this layer
-//! last, at finalization — outside auth and every plugin layer, and
-//! around routes plugins add later — so authentication and everything
-//! else a request touches sit inside the span. `Server::layer(
-//! request_event_layer())` is the manual form: it wraps only routes
-//! that exist at the call site and sits *inside* `Server::with_auth`.
+//! **Install after routes.** axum's `Router::layer` (which
+//! [`crate::Server::layer`] calls under the hood) only wraps routes
+//! that exist at the call site — routes added later (e.g. by other
+//! plugins via `Server::route` or `Server::router_mut`) silently
+//! bypass the layer and emit no events.
 //!
 //! ## The span
 //!
@@ -78,10 +77,6 @@ pub struct RequestEventOptions {
     /// remote parent (RFC-123 §5.3). Only observed with the `otel`
     /// feature; default `true`.
     pub accept_trace_context: bool,
-    /// Echo the request span's own `traceparent` on the response
-    /// (RFC-123 §5.4). Only observed with the `otel` feature; default
-    /// `true`.
-    pub trace_context_header: bool,
 }
 
 impl Default for RequestEventOptions {
@@ -89,7 +84,6 @@ impl Default for RequestEventOptions {
         Self {
             request_id_header: true,
             accept_trace_context: true,
-            trace_context_header: true,
         }
     }
 }
@@ -106,11 +100,6 @@ impl RequestEventOptions {
 
     pub fn with_accept_trace_context(mut self, enabled: bool) -> Self {
         self.accept_trace_context = enabled;
-        self
-    }
-
-    pub fn with_trace_context_header(mut self, enabled: bool) -> Self {
-        self.trace_context_header = enabled;
         self
     }
 }
@@ -178,12 +167,8 @@ async fn request_event_middleware(
 
     // Field names are spelled inline (tracing takes identifiers) and
     // must match `pocopine_observe::fields`.
-    // `parent: None`: a request is a root (RFC-123 §2.2) even when an outer
-    // tower layer has its own span entered; the only parent it may get is a
-    // remote `traceparent`, applied explicitly below.
     let span = tracing::info_span!(
         target: TRACE_TARGET,
-        parent: None,
         spans::HTTP_REQUEST,
         otel.kind = "server",
         otel.name = Empty,
@@ -287,9 +272,7 @@ async fn request_event_middleware(
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
     #[cfg(feature = "otel")]
-    if options.trace_context_header {
-        otel::inject_trace_context(&span, response.headers_mut());
-    }
+    otel::inject_trace_context(&span, response.headers_mut());
 
     response
 }

@@ -521,16 +521,11 @@ fn stream_flow_to_client(
     let principal = principal.unwrap_or_else(current_principal);
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    // Carry the caller's span (a server function, a job) into the task so
-    // the `ai.run` opened inside is its child, not a new root (RFC-123 §4).
-    tokio::spawn(
-        async move {
-            let _ = agenkit
-                .run_flow_inner(&id, input, Some(principal), Some(tx))
-                .await;
-        }
-        .instrument(tracing::Span::current()),
-    );
+    tokio::spawn(async move {
+        let _ = agenkit
+            .run_flow_inner(&id, input, Some(principal), Some(tx))
+            .await;
+    });
 
     let stream = UnboundedReceiverStream::new(rx)
         .filter_map(move |event| async move {
