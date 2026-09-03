@@ -37,6 +37,17 @@
 //! emitted while the request is in flight — framework or app — hangs
 //! from it.
 //!
+//! ## Streaming responses
+//!
+//! `next.run(request)` resolves when the response *headers* are ready;
+//! a streaming body (SSE from `pocopine-live`, a streaming `#[server]`
+//! function, a long download) is polled afterwards. The layer wraps the
+//! body so the span is entered on every frame and closes at
+//! end-of-stream — the same thing tower-http's `TraceLayer` does — so
+//! everything a producer emits while streaming lands inside
+//! `pocopine.http.request`. Status and the hook events are still
+//! recorded at header time; only the span's lifetime extends.
+//!
 //! ## Cost
 //!
 //! Apps with the span filtered off **and** no HTTP-event hooks
@@ -48,13 +59,17 @@
 //! `#[server]` macro reads the stamp out of extensions to share a
 //! correlation id with the HTTP layer.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
+use axum::body::{Body, Bytes};
 use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::Route;
+use http_body::{Body as HttpBody, Frame, SizeHint};
 use pocopine_core::fetch::CLIENT_SESSION_HEADER;
 use pocopine_observe::{TRACE_TARGET, fields, spans};
 use tower::Layer;
@@ -291,7 +306,40 @@ async fn request_event_middleware(
         otel::inject_trace_context(&span, response.headers_mut());
     }
 
-    response
+    // RFC-123 Phase 4: keep the span for the body's lifetime.
+    let (parts, body) = response.into_parts();
+    Response::from_parts(parts, Body::new(SpannedBody { inner: body, span }))
+}
+
+/// A response body that enters the request span on every poll and, by
+/// holding the last handle to it, closes the span at end-of-stream (or
+/// when the consumer drops the body). `axum::body::Body` is `Unpin`, so
+/// no projection is needed.
+struct SpannedBody {
+    inner: Body,
+    span: tracing::Span,
+}
+
+impl HttpBody for SpannedBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, axum::Error>>> {
+        let this = self.get_mut();
+        let _entered = this.span.enter();
+        Pin::new(&mut this.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
 }
 
 /// The client's per-page-load session id, if it sent one and it is
