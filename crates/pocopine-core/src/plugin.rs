@@ -217,6 +217,12 @@ pub struct ServerFunctionClientCompleted {
     pub route: String,
     pub duration_ms: f64,
     pub status_code: u16,
+    /// The server's `pocopine.request_id`, from the `x-request-id` response
+    /// header (RFC-123 §5.5). `None` when the server did not send one.
+    pub request_id: Option<u64>,
+    /// The server's trace id, from the `traceparent` response header
+    /// (present only when the server exports traces).
+    pub trace_id: Option<String>,
 }
 
 /// Emitted after a generated `#[server]` client request fails before
@@ -229,6 +235,11 @@ pub struct ServerFunctionClientFailed {
     pub route: String,
     pub duration_ms: f64,
     pub error_kind: &'static str,
+    /// See [`ServerFunctionClientCompleted::request_id`]; `None` when the
+    /// failure happened before any response arrived.
+    pub request_id: Option<u64>,
+    /// See [`ServerFunctionClientCompleted::trace_id`].
+    pub trace_id: Option<String>,
 }
 
 /// Component-scoped framework event.
