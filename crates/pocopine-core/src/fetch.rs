@@ -135,74 +135,9 @@ impl FetchRequest {
 /// surrounding `Result`. Body is always the raw response text;
 /// `fetch::call` does the JSON decode after the chain returns.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct FetchResponse {
     pub status: u16,
     pub body: String,
-    /// The server's `pocopine.request_id`, from `x-request-id`
-    /// (RFC-123 §5.5). Middleware that synthesizes a response leaves it
-    /// `None`.
-    pub request_id: Option<u64>,
-    /// The server's W3C `traceparent` response header, verbatim, when it
-    /// sent one.
-    pub trace_parent: Option<String>,
-}
-
-impl FetchResponse {
-    /// A response with no server correlation ids — what middleware that
-    /// short-circuits (a cache, a test double) constructs.
-    pub fn new(status: u16, body: impl Into<String>) -> Self {
-        Self {
-            status,
-            body: body.into(),
-            request_id: None,
-            trace_parent: None,
-        }
-    }
-
-    /// The trace id half of [`Self::trace_parent`], when it is well-formed.
-    pub fn trace_id(&self) -> Option<String> {
-        self.trace_parent
-            .as_deref()
-            .and_then(trace_id_from_traceparent)
-    }
-}
-
-/// The 32-hex trace id of a W3C `traceparent` (`00-<trace>-<span>-<flags>`),
-/// or `None` for anything that is not shaped like one.
-pub fn trace_id_from_traceparent(value: &str) -> Option<String> {
-    let mut parts = value.split('-');
-    let version = parts.next()?;
-    let trace_id = parts.next()?;
-    let span_id = parts.next()?;
-    let flags = parts.next()?;
-    let hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
-    if parts.next().is_some()
-        || !hex(version, 2)
-        || !hex(trace_id, 32)
-        || !hex(span_id, 16)
-        || !hex(flags, 2)
-        || trace_id.bytes().all(|b| b == b'0')
-    {
-        return None;
-    }
-    Some(trace_id.to_ascii_lowercase())
-}
-
-/// The server correlation ids a response carried, for the client hooks.
-#[derive(Clone, Debug, Default)]
-struct ResponseIds {
-    request_id: Option<u64>,
-    trace_id: Option<String>,
-}
-
-impl ResponseIds {
-    fn of(response: &FetchResponse) -> Self {
-        Self {
-            request_id: response.request_id,
-            trace_id: response.trace_id(),
-        }
-    }
 }
 
 /// Middleware-chain continuation. `run` either invokes the next
@@ -474,7 +409,7 @@ where
     let body = match serde_json::to_string(args) {
         Ok(body) => body,
         Err(err) => {
-            observe.failed("serialize", ResponseIds::default());
+            observe.failed("serialize");
             return Err(ServerError::Network(format!("serialize args: {err}")));
         }
     };
@@ -502,27 +437,26 @@ where
     let response = match next.run(request).await {
         Ok(response) => response,
         Err(err) => {
-            observe.failed(server_error_kind(&err), ResponseIds::default());
+            observe.failed(server_error_kind(&err));
             return Err(err);
         }
     };
 
-    let ids = ResponseIds::of(&response);
     if !(200..300).contains(&response.status) {
-        observe.failed("http_status", ids);
+        observe.failed("http_status");
         return Err(ServerError::Network(format!("HTTP {}", response.status)));
     }
 
     let outer: ServerResult<R> = match serde_json::from_str(&response.body) {
         Ok(outer) => outer,
         Err(err) => {
-            observe.failed("parse_response", ids.clone());
+            observe.failed("parse_response");
             return Err(ServerError::Network(format!("parse response: {err}")));
         }
     };
     match &outer {
-        Ok(_) => observe.completed(response.status, ids),
-        Err(err) => observe.failed(server_error_kind(err), ids),
+        Ok(_) => observe.completed(response.status),
+        Err(err) => observe.failed(server_error_kind(err)),
     }
     outer
 }
@@ -759,21 +693,7 @@ async fn perform_fetch(request: FetchRequest) -> Result<FetchResponse, ServerErr
         .as_string()
         .ok_or_else(|| ServerError::Network("body was not a string".into()))?;
 
-    // RFC-123 §5.5: the server's ids, so the client side of the call can
-    // name the exact server span.
-    let request_id = response_header(&resp, "x-request-id").and_then(|v| v.trim().parse().ok());
-    let trace_parent = response_header(&resp, "traceparent");
-
-    Ok(FetchResponse {
-        status,
-        body,
-        request_id,
-        trace_parent,
-    })
-}
-
-fn response_header(resp: &Response, name: &str) -> Option<String> {
-    resp.headers().get(name).ok().flatten()
+    Ok(FetchResponse { status, body })
 }
 
 struct FetchObservation {
@@ -799,7 +719,7 @@ impl FetchObservation {
         }
     }
 
-    fn completed(&self, status_code: u16, ids: ResponseIds) {
+    fn completed(&self, status_code: u16) {
         let Some(route) = self.route.as_ref() else {
             return;
         };
@@ -807,12 +727,10 @@ impl FetchObservation {
             route: route.clone(),
             duration_ms: self.elapsed_ms(),
             status_code,
-            request_id: ids.request_id,
-            trace_id: ids.trace_id,
         });
     }
 
-    fn failed(&self, error_kind: &'static str, ids: ResponseIds) {
+    fn failed(&self, error_kind: &'static str) {
         let Some(route) = self.route.as_ref() else {
             return;
         };
@@ -820,8 +738,6 @@ impl FetchObservation {
             route: route.clone(),
             duration_ms: self.elapsed_ms(),
             error_kind,
-            request_id: ids.request_id,
-            trace_id: ids.trace_id,
         });
     }
 
@@ -859,34 +775,6 @@ fn public_url_path(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn traceparent_trace_id_is_parsed_strictly() {
-        assert_eq!(
-            super::trace_id_from_traceparent(
-                "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"
-            )
-            .as_deref(),
-            Some("4bf92f3577b34da6a3ce929d0e0e4736")
-        );
-        for bad in [
-            "",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
-            "00-4bf92f3577b34da6a3ce929d0e0e47-00f067aa0ba902b7-01",
-            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
-            "zz-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-        ] {
-            assert_eq!(super::trace_id_from_traceparent(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn synthesized_responses_carry_no_server_ids() {
-        let response = super::FetchResponse::new(200, "{}");
-        assert_eq!(response.request_id, None);
-        assert_eq!(response.trace_id(), None);
-    }
-
     #[test]
     fn client_session_id_is_stable_and_well_formed() {
         let first = super::client_session_id();

@@ -426,7 +426,12 @@ mod tests {
         let seen_inner = seen.clone();
         install_middleware(move |request: FetchRequest, _next: FetchNext| {
             *seen_inner.borrow_mut() = Some(request);
-            async move { Ok(FetchResponse::new(200, r#"{"Ok":null}"#.to_string())) }
+            async move {
+                Ok(FetchResponse {
+                    status: 200,
+                    body: r#"{"Ok":null}"#.to_string(),
+                })
+            }
         });
 
         let _ = block_on(pocopine_core::fetch::call::<(), ()>("/probe", &()));
@@ -547,12 +552,15 @@ mod tests {
                     l.len()
                 };
                 if attempt == 1 {
-                    Ok(FetchResponse::new(
-                        401,
-                        r#"{"Err":{"Unauthorized":"token expired"}}"#.to_string(),
-                    ))
+                    Ok(FetchResponse {
+                        status: 401,
+                        body: r#"{"Err":{"Unauthorized":"token expired"}}"#.to_string(),
+                    })
                 } else {
-                    Ok(FetchResponse::new(200, r#"{"Ok":null}"#.to_string()))
+                    Ok(FetchResponse {
+                        status: 200,
+                        body: r#"{"Ok":null}"#.to_string(),
+                    })
                 }
             }
         });
@@ -680,7 +688,10 @@ mod tests {
                 if let Some(s) = active_session() {
                     s.set_principal(Principal::anonymous());
                 }
-                Ok(FetchResponse::new(200, r#"{"Ok":null}"#.to_string()))
+                Ok(FetchResponse {
+                    status: 200,
+                    body: r#"{"Ok":null}"#.to_string(),
+                })
             }
         });
         captured
@@ -707,7 +718,10 @@ mod tests {
         install();
 
         install_middleware(|_req: FetchRequest, _next: FetchNext| async move {
-            Ok(FetchResponse::new(200, r#"{"Ok":null}"#.to_string()))
+            Ok(FetchResponse {
+                status: 200,
+                body: r#"{"Ok":null}"#.to_string(),
+            })
         });
 
         let result = block_on(pocopine_core::fetch::call::<(), ()>("/probe", &()));
@@ -846,12 +860,15 @@ mod tests {
                     n
                 };
                 if attempt == 1 {
-                    Ok(FetchResponse::new(
-                        401,
-                        r#"{"Err":{"Unauthorized":"token expired"}}"#.to_string(),
-                    ))
+                    Ok(FetchResponse {
+                        status: 401,
+                        body: r#"{"Err":{"Unauthorized":"token expired"}}"#.to_string(),
+                    })
                 } else {
-                    Ok(FetchResponse::new(200, r#"{"Ok":null}"#.to_string()))
+                    Ok(FetchResponse {
+                        status: 200,
+                        body: r#"{"Ok":null}"#.to_string(),
+                    })
                 }
             }
         });

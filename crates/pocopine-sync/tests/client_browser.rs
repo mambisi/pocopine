@@ -981,10 +981,10 @@ async fn online_push_success_updates_state_without_persisting_local_outcome() {
 }
 
 fn json_response<T: Serialize>(value: T) -> pocopine::fetch::FetchResponse {
-    pocopine::fetch::FetchResponse::new(
-        200,
-        serde_json::to_string(&Ok::<T, pocopine::ServerError>(value)).unwrap(),
-    )
+    pocopine::fetch::FetchResponse {
+        status: 200,
+        body: serde_json::to_string(&Ok::<T, pocopine::ServerError>(value)).unwrap(),
+    }
 }
 
 async fn settle() {

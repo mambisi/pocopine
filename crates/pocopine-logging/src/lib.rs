@@ -1388,40 +1388,30 @@ mod web {
 
     impl Hook<ServerFunctionClientCompleted> for FrontendObservability {
         fn call(&self, event: ServerFunctionClientCompleted) {
-            // RFC-123 §5.5: the server's ids ride the client event, so a
-            // console line names the exact server span.
-            let mut context = self.context_with_route(&event.route);
-            context.trace_id = event.trace_id;
-            let mut observed = ObservedEvent::trace("server_function_client_completed")
-                .context(context)
-                .field("route", event.route, FieldPrivacy::Public)
-                .field("duration_ms", event.duration_ms, FieldPrivacy::Public)
-                .field(
-                    "status_code",
-                    event.status_code as u64,
-                    FieldPrivacy::Public,
-                );
-            if let Some(request_id) = event.request_id {
-                observed = observed.field("request_id", request_id, FieldPrivacy::Public);
-            }
-            self.emit(observed);
+            self.emit(
+                ObservedEvent::trace("server_function_client_completed")
+                    .context(self.context_with_route(&event.route))
+                    .field("route", event.route, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public)
+                    .field(
+                        "status_code",
+                        event.status_code as u64,
+                        FieldPrivacy::Public,
+                    ),
+            );
         }
     }
 
     impl Hook<ServerFunctionClientFailed> for FrontendObservability {
         fn call(&self, event: ServerFunctionClientFailed) {
-            let mut context = self.context_with_route(&event.route);
-            context.trace_id = event.trace_id;
-            let mut observed = ObservedEvent::log("server_function_client_failed")
-                .priority(EventPriority::High)
-                .context(context)
-                .field("route", event.route, FieldPrivacy::Public)
-                .field("duration_ms", event.duration_ms, FieldPrivacy::Public)
-                .field("error_kind", event.error_kind, FieldPrivacy::Public);
-            if let Some(request_id) = event.request_id {
-                observed = observed.field("request_id", request_id, FieldPrivacy::Public);
-            }
-            self.emit(observed);
+            self.emit(
+                ObservedEvent::log("server_function_client_failed")
+                    .priority(EventPriority::High)
+                    .context(self.context_with_route(&event.route))
+                    .field("route", event.route, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public)
+                    .field("error_kind", event.error_kind, FieldPrivacy::Public),
+            );
         }
     }
 
