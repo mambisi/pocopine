@@ -1,6 +1,6 @@
 # RFC-123: Span space — one trunk of work every event hangs from
 
-**Status:** Phases 1–4 implemented (server trunk, agenkit spans, cross-tier link on `feat/rfc-123-span-space`; long-lived streams and job links on `feat/rfc-123-phase-4`); Phase 5 (the client end: browser spans, shared trace id, relay — §5.5) open
+**Status:** Phases 1–3 implemented (server trunk, agenkit spans, cross-tier link) on `feat/rfc-123-span-space`; Phase 4 (long-lived streams, job enqueue links) and Phase 5 (the client end: browser spans, shared trace id, relay — §5.5) open
 **Crates:** `pocopine-observe` (span-name and field constants), `pocopine-server` (`pocopine.http.request`, optional `otel` feature for parent linking), `pocopine-macros` (`pocopine.server_function` fields), `pocopine-jobs` (`pocopine.job.run`), `pocopine-agenkit` (`pocopine.ai.*`), `pocopine-logging` (fills `ObserveContext.trace_id`, feature wiring), `pocopine-core` (Phase 3 only: `traceparent` on server-function fetches)
 **Relates to:** RFC-069 (observability — this is the "first-class route and server-function instrumentation points" and "OpenTelemetry adapter" phases it deferred), RFC-093 (agenkit — the `TraceEvent` stream stays the stable schema; spans are added beside it), RFC-119 (authority is explicit — a span never carries a principal, only a hash)
 
@@ -84,18 +84,13 @@ buys nothing and breaks anyone filtering on it.
 | `pocopine.ai.step` | `ctx.step`, `ctx.parallel`, `ctx.reduce`, `ctx.retrieve` | internal | `ai.run` / `ai.turn` / enclosing `ai.step` |
 | `pocopine.ai.model` | `loop_core::run_model_step` | client | enclosing `ai.*` |
 | `pocopine.ai.tool` | tool execution inside the agent loop | internal | enclosing `ai.*` |
-| `pocopine.realtime.session` | `pocopine-realtime` upgrade handler, one WebSocket for its life | server | the upgrade's `http.request` |
-| `pocopine.realtime.message` | one inbound frame handled / one outbound data frame delivered | internal | `realtime.session` |
-| `pocopine.live.event` | `pocopine-live`, one SSE event delivered (replayed or live) | internal | the `http.request` carrying the stream |
-| `pocopine.collab.apply` | `pocopine-collab` per-topic apply loop, one fold | internal | root |
-| `pocopine.collab.checkpoint` | `pocopine-collab` detached checkpoint + trim | internal | root |
 | `pocopine.client.boot` | `pocopine-core` app boot (wasm) | internal | root |
 | `pocopine.client.navigation` | `pocopine-core` router, one page view (wasm) | internal | root — the trace every server call of that view joins |
 | `pocopine.client.server_function` | `pocopine-core` fetch, one server-function call (wasm) | client | `client.navigation`, or `client.boot` before the first navigation |
 
 Adding a name means adding a row here and a constant in `pocopine-observe`.
-The stream rows are Phase 4: the request span itself covers a streaming
-body (§9), so SSE producers need no session span of their own. The
+Long-lived streams (`pocopine-live` SSE, collab and sync sessions) are
+deliberately absent from Phases 1–3 — see §9 Phase 4 and §10. The
 `pocopine.client.*` rows are Phase 5 (§5.5); they exist only in the wasm
 build and reach a backend only through the relay.
 
