@@ -13,6 +13,7 @@ otlp = [
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
     "dep:tracing-opentelemetry",
+    "pocopine-server/otel",
 ]
 
 [dependencies]

@@ -29,6 +29,45 @@
 /// is a correlation id, never a credential.
 pub const CLIENT_SESSION_HEADER: &str = "x-pocopine-session";
 
+/// The client's session id for this app boot: 32 lowercase hex chars,
+/// minted once and sent on every server-function call as
+/// [`CLIENT_SESSION_HEADER`]. The server records it as `session.id` on
+/// its request span, so every call from one page load is one query
+/// away in any trace backend (RFC-123 §5.4). It is deliberately *not* a
+/// `traceparent`: with no client exporter, that would make every
+/// server trace the child of a span no backend ever receives.
+pub fn client_session_id() -> &'static str {
+    static SESSION: once_cell::sync::Lazy<String> = once_cell::sync::Lazy::new(mint_session_id);
+    SESSION.as_str()
+}
+
+/// Correlation id, not a secret: entropy is hashed through
+/// `pocopine-crypto` only so the shape is uniform and unguessable enough
+/// not to collide across tabs.
+fn mint_session_id() -> String {
+    let mut seed = String::new();
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::fmt::Write as _;
+        for _ in 0..4 {
+            let _ = write!(seed, "{:x}", js_sys::Math::random().to_bits());
+        }
+        let _ = write!(seed, "{:x}", js_sys::Date::now().to_bits());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::fmt::Write as _;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let _ = write!(seed, "{now:x}{:x}", std::process::id());
+    }
+    let mut hex = pocopine_crypto::blake3_hex(seed.as_bytes());
+    hex.truncate(32);
+    hex
+}
+
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
@@ -378,7 +417,13 @@ where
         url: url.to_string(),
         method: "POST".to_string(),
         body,
-        headers: vec![("content-type".to_string(), "application/json".to_string())],
+        headers: vec![
+            ("content-type".to_string(), "application/json".to_string()),
+            (
+                CLIENT_SESSION_HEADER.to_string(),
+                client_session_id().to_string(),
+            ),
+        ],
         abort_signal: options.abort_signal,
         replay_safe: options.replay_safe,
     };
@@ -469,6 +514,7 @@ where
         web_sys::Headers::new().map_err(|e| ServerError::Network(format!("headers: {e:?}")))?;
     let _ = headers.set("content-type", "application/json");
     let _ = headers.set("accept", "text/event-stream");
+    let _ = headers.set(CLIENT_SESSION_HEADER, client_session_id());
     init.set_headers(&headers);
 
     let req = Request::new_with_str_and_init(url, &init)
@@ -728,6 +774,19 @@ fn public_url_path(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn client_session_id_is_stable_and_well_formed() {
+        let first = super::client_session_id();
+        let second = super::client_session_id();
+        assert_eq!(first, second, "minted once per boot");
+        assert_eq!(first.len(), 32);
+        assert!(
+            first
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+    }
+
     use super::*;
 
     fn reset() {
