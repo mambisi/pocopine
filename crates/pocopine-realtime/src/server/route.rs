@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument as _;
 
 use axum::Router;
 use axum::body::Body;
@@ -166,6 +167,18 @@ async fn upgrade_handler(State(gateway): State<WsGateway>, request: Request<Body
         parts.headers.clone(),
         parts.extensions.clone(),
     );
+    // RFC-123 Phase 4: the session span is a child of the request span
+    // (current here, in the handler) and lives for the socket. axum runs
+    // the upgrade callback on a spawned task, which inherits nothing, so
+    // the span is minted here and moved in.
+    let session_span = tracing::info_span!(
+        target: pocopine_observe::TRACE_TARGET,
+        pocopine_observe::spans::REALTIME_SESSION,
+        otel.kind = "server",
+        pocopine.realtime.session_id = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+        error.type = tracing::field::Empty,
+    );
     match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         // Cap message/frame size at the transport layer so an oversized message
         // is rejected before the whole payload is buffered (the in-handler
@@ -174,7 +187,7 @@ async fn upgrade_handler(State(gateway): State<WsGateway>, request: Request<Body
             .protocols([WS_PROTOCOL_V1])
             .max_message_size(config.max_frame_bytes)
             .max_frame_size(config.max_frame_bytes)
-            .on_upgrade(move |socket| run_session(socket, gateway, ctx)),
+            .on_upgrade(move |socket| run_session(socket, gateway, ctx).instrument(session_span)),
         Err(rejection) => rejection.into_response(),
     }
 }
@@ -193,6 +206,10 @@ struct TopicEntry {
 /// Per-connection state machine.
 struct Session {
     session_id: String,
+    /// The `pocopine.realtime.session` span; topic pumps are instrumented
+    /// with it explicitly, since they are spawned while an inbound message
+    /// span is current.
+    span: tracing::Span,
     gateway: WsGateway,
     ctx: RequestContext,
     out: mpsc::Sender<Message>,
@@ -214,16 +231,23 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(config.outbound_queue.max(1));
 
     // Writer task: drains the bounded outbound queue to the socket.
-    let writer = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            if sink.send(msg).await.is_err() {
-                break;
+    let writer = tokio::spawn(
+        async move {
+            while let Some(msg) = out_rx.recv().await {
+                if sink.send(msg).await.is_err() {
+                    break;
+                }
             }
+            let _ = sink.close().await;
         }
-        let _ = sink.close().await;
-    });
+        .instrument(tracing::Span::current()),
+    );
 
     let session_id = gateway.next_session_id();
+    tracing::Span::current().record(
+        pocopine_observe::fields::REALTIME_SESSION_ID,
+        session_id.as_str(),
+    );
     tracing::info!(target: LOG_TARGET, session = %session_id, "ws session opened");
 
     let hello = Control::Hello {
@@ -237,6 +261,7 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
     }
 
     let mut session = Session {
+        span: tracing::Span::current(),
         session_id,
         gateway,
         ctx,
@@ -257,7 +282,30 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
         tokio::select! {
             inbound = stream.next() => match inbound {
                 Some(Ok(Message::Binary(data))) => {
-                    if let Err(err) = session.handle_message(&data).await {
+                    let message_span = tracing::info_span!(
+                        target: pocopine_observe::TRACE_TARGET,
+                        pocopine_observe::spans::REALTIME_MESSAGE,
+                        pocopine.message.direction = "in",
+                        pocopine.message.bytes = data.len() as u64,
+                        pocopine.message.kind = tracing::field::Empty,
+                        pocopine.realtime.topic_ref = tracing::field::Empty,
+                        otel.status_code = tracing::field::Empty,
+                        error.type = tracing::field::Empty,
+                    );
+                    let handled = session
+                        .handle_message(&data)
+                        .instrument(message_span.clone())
+                        .await;
+                    match &handled {
+                        Ok(()) => {
+                            message_span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "OK");
+                        }
+                        Err(_) => {
+                            message_span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "ERROR");
+                            message_span.record(pocopine_observe::fields::ERROR_TYPE, "bad_frame");
+                        }
+                    }
+                    if let Err(err) = handled {
                         tracing::warn!(
                             target: LOG_TARGET,
                             session = %session.session_id,
@@ -298,6 +346,7 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
 
     session.shutdown();
     writer.abort();
+    tracing::Span::current().record(pocopine_observe::fields::OTEL_STATUS_CODE, "OK");
     tracing::info!(target: LOG_TARGET, session = %session.session_id, "ws session closed");
 }
 
@@ -334,6 +383,14 @@ impl Session {
             });
         }
         let frame = Frame::decode(data)?;
+        {
+            let span = tracing::Span::current();
+            span.record(pocopine_observe::fields::MESSAGE_KIND, frame.kind.as_str());
+            span.record(
+                pocopine_observe::fields::REALTIME_TOPIC_REF,
+                frame.topic_ref,
+            );
+        }
         match frame.kind {
             FrameKind::Control => self.handle_control(&frame).await,
             FrameKind::Subscribe => self.handle_subscribe(&frame).await,
@@ -551,14 +608,17 @@ impl Session {
                 .as_ref()
                 .is_none_or(|handler| !handler.outbound_starts_paused()),
         );
-        let pump = tokio::spawn(pump_topic(
-            stream,
-            self.out.clone(),
-            subprotocol_id,
-            topic_ref,
-            topic_name.to_string(),
-            outbound_gate.clone(),
-        ));
+        let pump = tokio::spawn(
+            pump_topic(
+                stream,
+                self.out.clone(),
+                subprotocol_id,
+                topic_ref,
+                topic_name.to_string(),
+                outbound_gate.clone(),
+            )
+            .instrument(self.span.clone()),
+        );
         self.topics.insert(
             topic_ref,
             TopicEntry {
@@ -625,7 +685,22 @@ async fn pump_topic(
                 // than leaking it or draining replay while paused.
                 outbound_gate.wait_until_open().await;
                 let frame = Frame::data(subprotocol_id, topic_ref, seq, payload);
-                if out.send(Message::Binary(frame.encode())).await.is_err() {
+                let encoded = frame.encode();
+                let message_span = tracing::info_span!(
+                    target: pocopine_observe::TRACE_TARGET,
+                    pocopine_observe::spans::REALTIME_MESSAGE,
+                    pocopine.message.direction = "out",
+                    pocopine.message.kind = "data",
+                    pocopine.message.bytes = encoded.len() as u64,
+                    pocopine.message.seq = seq,
+                    pocopine.realtime.topic_ref = topic_ref,
+                );
+                if out
+                    .send(Message::Binary(encoded))
+                    .instrument(message_span)
+                    .await
+                    .is_err()
+                {
                     break; // connection closed
                 }
             }
