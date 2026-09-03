@@ -411,6 +411,51 @@ fn parallel_branches_are_children_of_their_group() {
             Some("left" | "right")
         ));
     }
+
+    // Branch terminal events are recorded at join time, inside the branch.
+    let branch_completed: Vec<Ev> = cap
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e.event_name.as_deref() == Some("ai_step_completed"))
+        .cloned()
+        .collect();
+    assert_eq!(branch_completed.len(), 2, "{branch_completed:?}");
+    for ev in branch_completed {
+        assert_eq!(
+            ev.ancestry,
+            ["pocopine.ai.run", "pocopine.ai.step", "pocopine.ai.step"],
+            "{ev:?}"
+        );
+    }
+}
+
+#[test]
+fn streamed_flow_keeps_the_callers_span_as_parent() {
+    use tracing::Instrument as _;
+
+    let cap = capture(|| {
+        block_on(
+            async {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                let out = runtime()
+                    .flow("answer_question")
+                    .input(QuestionInput {
+                        question: "uploads?".into(),
+                    })
+                    .stream_into(tx)
+                    .await
+                    .unwrap();
+                assert_eq!(out["text"], "presigned");
+                while rx.recv().await.is_some() {}
+            }
+            .instrument(tracing::info_span!("caller")),
+        );
+    });
+    let caller = cap.one("caller");
+    let run = cap.one("pocopine.ai.run");
+    assert_eq!(run.parent, Some(caller.id), "ai.run hangs from the caller");
 }
 
 #[test]

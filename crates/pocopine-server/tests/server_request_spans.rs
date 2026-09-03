@@ -10,14 +10,17 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use pocopine_auth::{AuthFuture, AuthProvider, AuthUser};
 use pocopine_server::axum::Router;
 use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
 use pocopine_server::axum::routing::get;
 use pocopine_server::tower::ServiceExt;
 use pocopine_server::{
-    RequestEventOptions, RequestId, Server, request_event_layer, request_event_layer_with,
+    RequestContext, RequestEventOptions, RequestId, Server, request_event_layer,
+    request_event_layer_with,
 };
+use tracing::Instrument as _;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Subscriber};
@@ -37,6 +40,7 @@ fn registry_lock() -> MutexGuard<'static, ()> {
 struct Span {
     name: String,
     target: String,
+    parent: Option<u64>,
     fields: BTreeMap<String, String>,
     events_inside: Vec<String>,
 }
@@ -80,14 +84,18 @@ impl<S> Layer<S> for Capture
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         let mut visitor = Visitor::default();
         attrs.record(&mut visitor);
+        let parent = ctx
+            .span(id)
+            .and_then(|span| span.parent().map(|parent| parent.id().into_u64()));
         self.0.lock().unwrap().push((
             id.into_u64(),
             Span {
                 name: attrs.metadata().name().into(),
                 target: attrs.metadata().target().into(),
+                parent,
                 fields: visitor.0,
                 events_inside: Vec::new(),
             },
@@ -318,5 +326,70 @@ fn unmatched_route_has_no_http_route_and_a_method_only_name() {
     assert_eq!(
         span.fields.get("otel.status_code").map(String::as_str),
         Some("OK")
+    );
+}
+
+/// An auth provider that logs while authenticating — the log line must
+/// land inside the request span even though auth is applied outermost by
+/// `try_finalize`.
+struct LoggingAuth;
+
+impl AuthProvider for LoggingAuth {
+    fn authenticate<'a>(&'a self, _ctx: &'a RequestContext) -> AuthFuture<'a, Option<AuthUser>> {
+        Box::pin(async {
+            tracing::warn!(target: "pocopine.log", "auth provider probe");
+            Ok(Some(AuthUser::new("u1")))
+        })
+    }
+}
+
+#[test]
+fn request_events_wrap_auth_and_ignore_ambient_spans() {
+    let _lock = registry_lock();
+    pocopine_server::__reset_for_test();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let (capture, status) = with_capture(|| {
+        rt.block_on(
+            async {
+                let router =
+                    Server::new(Router::new().route("/users/:id", get(|| async { "hello" })))
+                        .with_auth(LoggingAuth)
+                        .request_events(RequestEventOptions::default())
+                        .try_finalize()
+                        .expect("finalize");
+                router
+                    .oneshot(
+                        Request::builder()
+                            .uri("/users/1")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            }
+            // An ambient span from some outer layer must not become the
+            // request span's parent: requests are roots (RFC-123 §2.2).
+            .instrument(tracing::info_span!("ambient")),
+        )
+    });
+    assert_eq!(status, StatusCode::OK);
+
+    let spans = capture.spans();
+    let request = spans
+        .iter()
+        .find(|s| s.name == "pocopine.http.request")
+        .expect("request span");
+    assert_eq!(request.parent, None, "{request:?}");
+    assert!(
+        request
+            .events_inside
+            .iter()
+            .any(|m| m == "auth provider probe"),
+        "auth ran inside the request span: {request:?}"
     );
 }

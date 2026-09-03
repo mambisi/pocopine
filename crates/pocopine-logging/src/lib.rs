@@ -19,9 +19,9 @@ mod server {
         EventClass, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, emit_tracing,
     };
     use pocopine_server::{
-        HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, Server, ServerBootFailed,
-        ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed, ServerFunctionRejected,
-        ServerFunctionStarted, ServerHook, ServerListening, ServerPlugin, request_event_layer,
+        HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, RequestEventOptions, Server,
+        ServerBootFailed, ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed,
+        ServerFunctionRejected, ServerFunctionStarted, ServerHook, ServerListening, ServerPlugin,
     };
     use tracing_subscriber::fmt as tracing_fmt;
     use tracing_subscriber::prelude::*;
@@ -106,6 +106,14 @@ mod server {
         pub http_requests: bool,
         pub server_functions: bool,
         pub include_unmatched_paths: bool,
+        /// Echo `x-request-id` on every response (RFC-123 §5.4). Default `true`.
+        pub request_id_header: bool,
+        /// Echo the request span's `traceparent` on every response; only
+        /// observed with `otlp` (RFC-123 §5.4). Default `true`.
+        pub trace_context_header: bool,
+        /// Adopt an incoming `traceparent` as the request span's remote
+        /// parent; only observed with `otlp` (RFC-123 §5.3). Default `true`.
+        pub accept_trace_context: bool,
     }
 
     impl ServerObservabilityConfig {
@@ -147,6 +155,21 @@ mod server {
             self.include_unmatched_paths = enabled;
             self
         }
+
+        pub fn with_request_id_header(mut self, enabled: bool) -> Self {
+            self.request_id_header = enabled;
+            self
+        }
+
+        pub fn with_trace_context_header(mut self, enabled: bool) -> Self {
+            self.trace_context_header = enabled;
+            self
+        }
+
+        pub fn with_accept_trace_context(mut self, enabled: bool) -> Self {
+            self.accept_trace_context = enabled;
+            self
+        }
     }
 
     impl Default for ServerObservabilityConfig {
@@ -158,6 +181,9 @@ mod server {
                 http_requests: true,
                 server_functions: true,
                 include_unmatched_paths: false,
+                request_id_header: true,
+                trace_context_header: true,
+                accept_trace_context: true,
             }
         }
     }
@@ -196,6 +222,9 @@ mod server {
                 http_requests,
                 server_functions,
                 include_unmatched_paths,
+                request_id_header,
+                trace_context_header,
+                accept_trace_context,
             } = self.config;
 
             let mut server = server.provide_plugin(ServerObservability {
@@ -205,7 +234,14 @@ mod server {
             });
 
             if http_requests || server_functions {
-                server = server.layer(request_event_layer());
+                // Applied at finalization, outside auth and every plugin
+                // layer (RFC-123 §3.1).
+                server = server.request_events(
+                    RequestEventOptions::new()
+                        .with_request_id_header(request_id_header)
+                        .with_trace_context_header(trace_context_header)
+                        .with_accept_trace_context(accept_trace_context),
+                );
             }
 
             if boot {

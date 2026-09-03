@@ -373,10 +373,15 @@ first) objects beside `fields`, so one request is one query:
 jq -c 'select(.spans[]? | .["pocopine.request_id"] == 42)' server.jsonl
 ```
 
+The plugin applies the request layer at finalization, outside
+authentication and every other plugin layer, so auth failures and routes
+added by later plugins are inside the span too (`Server::request_events`
+is the same mechanism without the plugin).
+
 Two headers ride along. Every response carries `x-request-id` with the
 request's `pocopine.request_id` (opt out with
-`RequestEventOptions::new().with_request_id_header(false)` via
-`request_event_layer_with`). Every server-function call from the browser
+`ServerObservabilityConfig::new().with_request_id_header(false)`, or
+`RequestEventOptions` when installing the layer by hand). Every server-function call from the browser
 sends `x-pocopine-session`, a per-page-load id the server records as
 `session.id`, so all calls from one page load are one query away in any
 backend. It is a correlation id, not a credential, and not a
@@ -454,10 +459,10 @@ The OpenTelemetry layer exports the spans from the table above and attaches
 each `pocopine.trace` event to its enclosing span; `otel.kind`,
 `otel.status_code`, and the `gen_ai.*` fields map straight onto the
 exported span. Incoming W3C `traceparent` headers become the request
-span's remote parent (opt out with
-`RequestEventOptions::new().with_accept_trace_context(false)`), the
-response echoes the server's own `traceparent`, and observed events get
-their `trace_id` context filled from the exported trace. Sampling is the
+span's remote parent, the response echoes the server's own `traceparent`,
+and observed events get their `trace_id` context filled from the exported
+trace. Both are opt-out on `ServerObservabilityConfig`
+(`with_accept_trace_context(false)`, `with_trace_context_header(false)`). Sampling is the
 standard `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` pair, read by the
 SDK. Logs still go to the local compact/pretty/JSON formatter. Production
 deployments can route JSON logs with their platform log agent and route
