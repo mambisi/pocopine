@@ -7,7 +7,6 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tracing::Instrument as _;
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, Message, ModelRef, Role, StepId, StepKind, StepStatus,
@@ -200,7 +199,6 @@ impl<A: AiAgent> AgentRun<A> {
             .ok_or_else(|| AgenkitError::config(format!("agent `{}` requires input", A::ID)))?;
 
         let agent_step = run.next_step_id();
-        let span = super::spans::step_span("agent", &agent_step, A::ID);
         let mut started = run
             .event(
                 events::AI_STEP_STARTED,
@@ -213,7 +211,7 @@ impl<A: AiAgent> AgentRun<A> {
         if let Some(parent) = &parent_step {
             started = started.with_parent(parent.clone());
         }
-        span.in_scope(|| run.emit(started));
+        run.emit(started);
 
         let result = run_loop::<A>(
             &run,
@@ -224,10 +222,8 @@ impl<A: AiAgent> AgentRun<A> {
             &agent_step,
             thread.as_ref(),
         )
-        .instrument(span.clone())
         .await;
-        super::spans::close(&span, &result);
-        span.in_scope(|| match &result {
+        match &result {
             Ok(_) => run.emit(
                 run.event(
                     events::AI_STEP_COMPLETED,
@@ -243,7 +239,7 @@ impl<A: AiAgent> AgentRun<A> {
                     .with_field("agent_id", A::ID)
                     .with_error(error.clone()),
             ),
-        });
+        }
 
         // The thread turn-append + compaction now happen inside `run_loop` on
         // the success path (it holds the resolved credential context).

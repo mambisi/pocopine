@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::Instrument as _;
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, FlowStreamEvent, ModelRef, RunId, StepKind, StepStatus, TraceId,
@@ -170,68 +169,59 @@ impl Agenkit {
         let descriptor = handler.descriptor();
         let ctx = AiFlowContext::new(run.clone(), id.to_string(), descriptor.manifest.clone());
 
-        // RFC-123 §4 — `pocopine.ai.run` wraps the invocation; every step,
-        // model, and tool span below hangs from it.
-        let span = super::spans::run_span(id, &run_id, &trace_id);
-        let result = async {
-            run.emit(
-                run.event(
-                    events::AI_FLOW_STARTED,
-                    StepKind::Custom,
-                    StepStatus::Started,
-                )
-                .with_field("flow_id", id),
-            );
-            run.stream(FlowStreamEvent::FlowStarted {
-                run_id: run_id.as_str().to_string(),
-                trace_id: trace_id.as_str().to_string(),
-            });
+        run.emit(
+            run.event(
+                events::AI_FLOW_STARTED,
+                StepKind::Custom,
+                StepStatus::Started,
+            )
+            .with_field("flow_id", id),
+        );
+        run.stream(FlowStreamEvent::FlowStarted {
+            run_id: run_id.as_str().to_string(),
+            trace_id: trace_id.as_str().to_string(),
+        });
 
-            let result = handler.run_json(input, ctx).await;
-            match &result {
-                Ok(value) => {
-                    // Surface the final typed result as user-visible output BEFORE
-                    // the lifecycle `completed`, so clients keyed on `FlowCompleted`
-                    // as end-of-stream still receive the result (no-op when not
-                    // streaming, since the sink is absent). Skip it when the flow
-                    // already streamed its output via `stream_text`, to avoid
-                    // duplicating the result.
-                    if !run.output_was_streamed() {
-                        run.stream(FlowStreamEvent::OutputDelta {
-                            text: value.to_string(),
-                        });
-                    }
-                    run.stream(FlowStreamEvent::OutputCompleted);
-                    run.emit(
-                        run.event(
-                            events::AI_FLOW_COMPLETED,
-                            StepKind::Custom,
-                            StepStatus::Completed,
-                        )
-                        .with_field("flow_id", id),
-                    );
-                    run.stream(FlowStreamEvent::FlowCompleted {
-                        run_id: run_id.as_str().to_string(),
+        let result = handler.run_json(input, ctx).await;
+        match &result {
+            Ok(value) => {
+                // Surface the final typed result as user-visible output BEFORE
+                // the lifecycle `completed`, so clients keyed on `FlowCompleted`
+                // as end-of-stream still receive the result (no-op when not
+                // streaming, since the sink is absent). Skip it when the flow
+                // already streamed its output via `stream_text`, to avoid
+                // duplicating the result.
+                if !run.output_was_streamed() {
+                    run.stream(FlowStreamEvent::OutputDelta {
+                        text: value.to_string(),
                     });
                 }
-                Err(error) => {
-                    run.emit(
-                        run.event(events::AI_FLOW_FAILED, StepKind::Custom, StepStatus::Failed)
-                            .with_field("flow_id", id)
-                            .with_error(error.clone()),
-                    );
-                    run.stream(FlowStreamEvent::FlowFailed {
-                        run_id: run_id.as_str().to_string(),
-                        error_kind: error.kind().to_string(),
-                        trace_id: trace_id.as_str().to_string(),
-                    });
-                }
+                run.stream(FlowStreamEvent::OutputCompleted);
+                run.emit(
+                    run.event(
+                        events::AI_FLOW_COMPLETED,
+                        StepKind::Custom,
+                        StepStatus::Completed,
+                    )
+                    .with_field("flow_id", id),
+                );
+                run.stream(FlowStreamEvent::FlowCompleted {
+                    run_id: run_id.as_str().to_string(),
+                });
             }
-            result
+            Err(error) => {
+                run.emit(
+                    run.event(events::AI_FLOW_FAILED, StepKind::Custom, StepStatus::Failed)
+                        .with_field("flow_id", id)
+                        .with_error(error.clone()),
+                );
+                run.stream(FlowStreamEvent::FlowFailed {
+                    run_id: run_id.as_str().to_string(),
+                    error_kind: error.kind().to_string(),
+                    trace_id: trace_id.as_str().to_string(),
+                });
+            }
         }
-        .instrument(span.clone())
-        .await;
-        super::spans::close(&span, &result);
         result
     }
 

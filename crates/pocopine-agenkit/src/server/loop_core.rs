@@ -15,7 +15,6 @@
 //! cost/usage metering, closing the formerly-duplicated loops.
 
 use std::sync::Arc;
-use tracing::Instrument as _;
 
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -112,22 +111,12 @@ pub(crate) async fn run_model_step(
     // RFC-122 §4.1 replay: persisted assistant artifact refs become text
     // placeholders before any wire sees them.
     let request = request.normalize_media_for_wire();
-    let span = super::spans::model_span(model, provider.id(), None);
-    let step = span.in_scope(|| observer.model_request(model));
-    if let Some(step) = &step {
-        span.record("pocopine.ai.step_id", step.as_str());
-    }
-    let result = provider
+    let step = observer.model_request(model);
+    let response = provider
         .generate(request, cx)
-        .instrument(span.clone())
         .await
-        .map_err(super::generate::reclassify_overflow);
-    super::spans::close(&span, &result);
-    let response = result?;
-    if let Some(usage) = response.usage {
-        super::spans::record_usage(&span, &usage);
-    }
-    span.in_scope(|| observer.model_response(step, model, response.usage));
+        .map_err(super::generate::reclassify_overflow)?;
+    observer.model_response(step, model, response.usage);
     Ok(response)
 }
 
@@ -150,80 +139,67 @@ pub(crate) async fn run_model_step_streamed(
     // RFC-122 §4.1 replay: persisted assistant artifact refs become text
     // placeholders before any wire sees them.
     let request = request.normalize_media_for_wire();
-    let span = super::spans::model_span(model, provider.id(), None);
-    let step = span.in_scope(|| observer.model_request(model));
-    if let Some(step) = &step {
-        span.record("pocopine.ai.step_id", step.as_str());
-    }
+    let step = observer.model_request(model);
 
-    let result: AgenkitResult<GenerateResponse> = async {
-        // Honor the declared streaming capability: stream natively when supported,
-        // else adapt a one-shot generation to the streaming contract (§D13).
-        let mut stream = if provider.capabilities().streaming {
-            provider.generate_stream(request, cx)
-        } else {
-            super::provider::fallback_stream(provider.as_ref(), request, cx)
-        };
+    // Honor the declared streaming capability: stream natively when supported,
+    // else adapt a one-shot generation to the streaming contract (§D13).
+    let mut stream = if provider.capabilities().streaming {
+        provider.generate_stream(request, cx)
+    } else {
+        super::provider::fallback_stream(provider.as_ref(), request, cx)
+    };
 
-        let mut text = String::new();
-        let mut thinking_parts: Vec<ContentPart> = Vec::new();
-        let mut media_parts: Vec<ContentPart> = Vec::new();
-        let mut tool_calls = Vec::new();
-        let mut usage = None;
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                Ok(StreamChunk::Text(delta)) => {
-                    observer.assistant_delta(&delta);
-                    text.push_str(&delta);
-                }
-                Ok(StreamChunk::Thinking { text, signature }) => {
-                    thinking_parts.push(ContentPart::thinking(text, signature));
-                }
-                // Media rides the assembled content (RFC-122 §4.1): the caller's
-                // capture rule sinks inline bytes before persist/stream. Never a
-                // delta — model-side preview streaming is deferred (§4.2).
-                Ok(StreamChunk::Media(media)) => media_parts.push(ContentPart::Media(media)),
-                Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
-                Ok(StreamChunk::Usage(reported)) => usage = Some(reported),
-                // A mid-stream failure fails the step (partial text is discarded —
-                // the caller's turn fails and nothing is persisted, so a consumer
-                // never sees deltas confirmed by a final message).
-                Err(error) => return Err(super::generate::reclassify_overflow(error)),
+    let mut text = String::new();
+    let mut thinking_parts: Vec<ContentPart> = Vec::new();
+    let mut media_parts: Vec<ContentPart> = Vec::new();
+    let mut tool_calls = Vec::new();
+    let mut usage = None;
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(StreamChunk::Text(delta)) => {
+                observer.assistant_delta(&delta);
+                text.push_str(&delta);
             }
+            Ok(StreamChunk::Thinking { text, signature }) => {
+                thinking_parts.push(ContentPart::thinking(text, signature));
+            }
+            // Media rides the assembled content (RFC-122 §4.1): the caller's
+            // capture rule sinks inline bytes before persist/stream. Never a
+            // delta — model-side preview streaming is deferred (§4.2).
+            Ok(StreamChunk::Media(media)) => media_parts.push(ContentPart::Media(media)),
+            Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
+            Ok(StreamChunk::Usage(reported)) => usage = Some(reported),
+            // A mid-stream failure fails the step (partial text is discarded —
+            // the caller's turn fails and nothing is persisted, so a consumer
+            // never sees deltas confirmed by a final message).
+            Err(error) => return Err(super::generate::reclassify_overflow(error)),
         }
-        drop(stream);
+    }
+    drop(stream);
 
-        let finish_reason = if tool_calls.is_empty() {
-            FinishReason::Stop
-        } else {
-            FinishReason::ToolCalls
-        };
-        // Reasoning parts (if any) precede the answer text, media follows it —
-        // parity with the non-streamed response shape, so replay/persistence see
-        // one contract.
-        let content = if thinking_parts.is_empty() && media_parts.is_empty() {
-            Content::text(text)
-        } else {
-            let mut parts = thinking_parts;
-            parts.push(ContentPart::text(text));
-            parts.extend(media_parts);
-            Content::from_parts(parts)
-        };
-        Ok(GenerateResponse {
-            content,
-            tool_calls,
-            usage,
-            finish_reason,
-        })
-    }
-    .instrument(span.clone())
-    .await;
-    super::spans::close(&span, &result);
-    let response = result?;
-    if let Some(usage) = response.usage {
-        super::spans::record_usage(&span, &usage);
-    }
-    span.in_scope(|| observer.model_response(step, model, response.usage));
+    let finish_reason = if tool_calls.is_empty() {
+        FinishReason::Stop
+    } else {
+        FinishReason::ToolCalls
+    };
+    // Reasoning parts (if any) precede the answer text, media follows it —
+    // parity with the non-streamed response shape, so replay/persistence see
+    // one contract.
+    let content = if thinking_parts.is_empty() && media_parts.is_empty() {
+        Content::text(text)
+    } else {
+        let mut parts = thinking_parts;
+        parts.push(ContentPart::text(text));
+        parts.extend(media_parts);
+        Content::from_parts(parts)
+    };
+    let response = GenerateResponse {
+        content,
+        tool_calls,
+        usage,
+        finish_reason,
+    };
+    observer.model_response(step, model, response.usage);
     Ok(response)
 }
 
@@ -317,11 +293,7 @@ where
         let Some(tool) = inner.tools.get(&call.tool_id) else {
             continue;
         };
-        let tool_span = super::spans::tool_span(&call.tool_id, None);
-        let step = tool_span.in_scope(|| observer.tool_started(call));
-        if let Some(step) = &step {
-            tool_span.record("pocopine.ai.step_id", step.as_str());
-        }
+        let step = observer.tool_started(call);
 
         // `before_tool_call` hook (L3): block (approval/trust gate) or replace the
         // arguments before running. Receives the full [`ToolCall`] so a policy
@@ -336,7 +308,7 @@ where
 
         let result_text = match decision {
             ToolDecision::Block { reason } => {
-                tool_span.in_scope(|| observer.tool_blocked(call, &reason));
+                observer.tool_blocked(call, &reason);
                 serde_json::json!({ "blocked": reason }).to_string()
             }
             decision => {
@@ -357,14 +329,9 @@ where
                     )),
                     None => ctx.clone(),
                 };
-                let outcome = tool
-                    .call_json(args, call_ctx)
-                    .instrument(tool_span.clone())
-                    .await;
-                super::spans::close(&tool_span, &outcome);
-                match outcome {
+                match tool.call_json(args, call_ctx).await {
                     Ok(output) => {
-                        tool_span.in_scope(|| observer.tool_completed(step, call, &output));
+                        observer.tool_completed(step, call, &output);
                         serde_json::to_string(&output).map_err(|e| {
                             AgenkitError::internal(format!(
                                 "tool `{}` output encode: {e}",
@@ -376,7 +343,7 @@ where
                         ToolErrorMode::Propagate => return Err(error),
                         ToolErrorMode::FeedBack => {
                             let kind = error.to_string();
-                            tool_span.in_scope(|| observer.tool_failed(call, &kind));
+                            observer.tool_failed(call, &kind);
                             serde_json::json!({ "error": kind }).to_string()
                         }
                     },

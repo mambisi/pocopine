@@ -11,7 +11,6 @@ use pocopine_agenkit_core::{
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tracing::Instrument as _;
 
 use super::flow::AiFlowContext;
 
@@ -39,29 +38,24 @@ impl<'a, C> ReduceBuilder<'a, C> {
         self
     }
 
-    /// Mint the reducer step and its `pocopine.ai.step` span (RFC-123 §4);
-    /// the started event is emitted inside the span.
-    fn emit_started(&self, kind: ReducerKind) -> (StepId, tracing::Span) {
+    fn emit_started(&self, kind: ReducerKind) -> StepId {
         let run = self.ctx.run_state();
         let step_id = run.next_step_id();
-        let span = super::spans::step_span("reducer", &step_id, &self.name);
-        span.in_scope(|| {
-            run.emit(
-                run.event(
-                    events::AI_REDUCER_STARTED,
-                    StepKind::Reducer,
-                    StepStatus::Started,
-                )
-                .with_step(step_id.clone())
-                .with_field("name", self.name.clone())
-                .with_field("reducer_kind", format!("{kind:?}"))
-                .with_field("candidates", self.candidates.len() as u64),
+        run.emit(
+            run.event(
+                events::AI_REDUCER_STARTED,
+                StepKind::Reducer,
+                StepStatus::Started,
             )
-        });
+            .with_step(step_id.clone())
+            .with_field("name", self.name.clone())
+            .with_field("reducer_kind", format!("{kind:?}"))
+            .with_field("candidates", self.candidates.len() as u64),
+        );
         run.stream(FlowStreamEvent::ReducerStarted {
             step_id: step_id.clone(),
         });
-        (step_id, span)
+        step_id
     }
 
     fn emit_decision(&self, step_id: StepId, decision: &ReducerDecision) {
@@ -88,7 +82,7 @@ impl<'a, C> ReduceBuilder<'a, C> {
 impl<C: Serialize> ReduceBuilder<'_, C> {
     /// Reduce via a model judge, validating the merged answer into `O`.
     pub async fn schema<O: DeserializeOwned + schemars::JsonSchema>(self) -> AgenkitResult<O> {
-        let (step_id, span) = self.emit_started(ReducerKind::ModelJudge);
+        let step_id = self.emit_started(ReducerKind::ModelJudge);
         let candidates_json = serde_json::to_string(&self.candidates).unwrap_or_default();
         let prompt = format!(
             "Candidate answers (JSON array):\n{candidates_json}\n\nReturn the single best, \
@@ -104,9 +98,7 @@ impl<C: Serialize> ReduceBuilder<'_, C> {
             .prompt(prompt)
             .schema::<O>()
             .generate_structured()
-            .instrument(span.clone())
             .await;
-        super::spans::close(&span, &result);
 
         let decision = match &result {
             Ok(_) => ReducerDecision::accept(ReducerKind::ModelJudge, "judge merged candidates", 0)
@@ -116,7 +108,7 @@ impl<C: Serialize> ReduceBuilder<'_, C> {
             // host/credential internals (§D10/§D12).
             Err(error) => ReducerDecision::reject(ReducerKind::ModelJudge, error.kind()),
         };
-        span.in_scope(|| self.emit_decision(step_id, &decision));
+        self.emit_decision(step_id, &decision);
         result
     }
 
@@ -125,7 +117,7 @@ impl<C: Serialize> ReduceBuilder<'_, C> {
     where
         F: FnOnce(Vec<C>) -> AgenkitResult<O>,
     {
-        let (step_id, span) = self.emit_started(ReducerKind::Deterministic);
+        let step_id = self.emit_started(ReducerKind::Deterministic);
         // Move candidates out via destructure so the closure can consume them
         // without partially moving `self` (the decision emit needs ctx + name).
         let ReduceBuilder {
@@ -135,27 +127,24 @@ impl<C: Serialize> ReduceBuilder<'_, C> {
             ..
         } = self;
         let count = candidates.len() as u32;
-        let result = span.in_scope(|| reducer(candidates));
-        super::spans::close(&span, &result);
+        let result = reducer(candidates);
         let decision = match &result {
             Ok(_) => ReducerDecision::accept(ReducerKind::Deterministic, "deterministic fold", 0)
                 .with_candidates(count),
             Err(error) => ReducerDecision::reject(ReducerKind::Deterministic, error.kind()),
         };
         let run = ctx.run_state();
-        span.in_scope(|| {
-            run.emit(
-                run.event(
-                    events::AI_REDUCER_COMPLETED,
-                    StepKind::Reducer,
-                    StepStatus::Completed,
-                )
-                .with_step(step_id.clone())
-                .with_field("name", name)
-                .with_field("accepted", decision.accepted)
-                .with_field("reason", decision.reason),
+        run.emit(
+            run.event(
+                events::AI_REDUCER_COMPLETED,
+                StepKind::Reducer,
+                StepStatus::Completed,
             )
-        });
+            .with_step(step_id.clone())
+            .with_field("name", name)
+            .with_field("accepted", decision.accepted)
+            .with_field("reason", decision.reason),
+        );
         run.stream(FlowStreamEvent::ReducerDecision {
             step_id: step_id.clone(),
             accepted: decision.accepted,
