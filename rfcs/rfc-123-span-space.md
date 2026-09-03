@@ -1,6 +1,6 @@
 # RFC-123: Span space — one trunk of work every event hangs from
 
-**Status:** Phases 1–4 implemented (server trunk, agenkit spans, cross-tier link on `feat/rfc-123-span-space`; long-lived streams and job links on `feat/rfc-123-phase-4`); Phase 5 (the client end: browser spans, shared trace id, relay — §5.5) open
+**Status:** Implemented — Phases 1–3 on `feat/rfc-123-span-space` (PR #301), Phase 4 on `feat/rfc-123-phase-4` (PR #302), Phase 5 (the client end, §5.5) on `feat/rfc-123-phase-5`; §10 open questions remain
 **Crates:** `pocopine-observe` (span-name and field constants), `pocopine-server` (`pocopine.http.request`, optional `otel` feature for parent linking), `pocopine-macros` (`pocopine.server_function` fields), `pocopine-jobs` (`pocopine.job.run`), `pocopine-agenkit` (`pocopine.ai.*`), `pocopine-logging` (fills `ObserveContext.trace_id`, feature wiring), `pocopine-core` (Phase 3 only: `traceparent` on server-function fetches)
 **Relates to:** RFC-069 (observability — this is the "first-class route and server-function instrumentation points" and "OpenTelemetry adapter" phases it deferred), RFC-093 (agenkit — the `TraceEvent` stream stays the stable schema; spans are added beside it), RFC-119 (authority is explicit — a span never carries a principal, only a hash)
 
