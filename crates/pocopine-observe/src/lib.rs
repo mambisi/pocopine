@@ -46,6 +46,20 @@ pub mod spans {
     pub const AI_MODEL: &str = "pocopine.ai.model";
     /// One tool execution inside an agent loop.
     pub const AI_TOOL: &str = "pocopine.ai.tool";
+    /// One WebSocket session on the realtime gateway (`otel.kind = server`).
+    /// Child of [`HTTP_REQUEST`]; lives for the socket (RFC-123 Phase 4).
+    pub const REALTIME_SESSION: &str = "pocopine.realtime.session";
+    /// One inbound frame handled, or one outbound frame delivered, on a
+    /// realtime session. Child of [`REALTIME_SESSION`].
+    pub const REALTIME_MESSAGE: &str = "pocopine.realtime.message";
+    /// One live (SSE) event produced for a subscriber. Child of the
+    /// [`HTTP_REQUEST`] whose body carries the stream.
+    pub const LIVE_EVENT: &str = "pocopine.live.event";
+    /// One fan-out update folded into a collab document by the per-topic
+    /// apply loop. Root: the loop belongs to no request.
+    pub const COLLAB_APPLY: &str = "pocopine.collab.apply";
+    /// One collab checkpoint + fan-out trim. Root.
+    pub const COLLAB_CHECKPOINT: &str = "pocopine.collab.checkpoint";
 
     /// Every span name, for exhaustive checks.
     pub const ALL: &[&str] = &[
@@ -58,6 +72,11 @@ pub mod spans {
         AI_STEP,
         AI_MODEL,
         AI_TOOL,
+        REALTIME_SESSION,
+        REALTIME_MESSAGE,
+        LIVE_EVENT,
+        COLLAB_APPLY,
+        COLLAB_CHECKPOINT,
     ];
 }
 
@@ -117,6 +136,220 @@ pub mod fields {
     pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
     pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
     pub const GEN_AI_TOOL_NAME: &str = "gen_ai.tool.name";
+
+    /// The gateway-minted id of one WebSocket session (not the client's
+    /// page-load `session.id`).
+    pub const REALTIME_SESSION_ID: &str = "pocopine.realtime.session_id";
+    pub const REALTIME_TOPIC_REF: &str = "pocopine.realtime.topic_ref";
+    /// `control` / `subscribe` / `unsubscribe` / `data`.
+    pub const MESSAGE_KIND: &str = "pocopine.message.kind";
+    /// `in` (received from the peer) or `out` (delivered to the peer).
+    pub const MESSAGE_DIRECTION: &str = "pocopine.message.direction";
+    pub const MESSAGE_BYTES: &str = "pocopine.message.bytes";
+    pub const MESSAGE_SEQ: &str = "pocopine.message.seq";
+    pub const LIVE_KIND: &str = "pocopine.live.kind";
+    pub const LIVE_CURSOR: &str = "pocopine.live.cursor";
+    pub const COLLAB_TOPIC: &str = "pocopine.collab.topic";
+    pub const COLLAB_SEQ: &str = "pocopine.collab.seq";
+    /// The W3C `traceparent` a job was enqueued under, when the enqueuer
+    /// had one (RFC-123 Phase 4).
+    pub const JOB_ENQUEUE_TRACEPARENT: &str = "pocopine.job.enqueue_traceparent";
+}
+
+/// A span-aware capture layer for tests in other crates: every span with
+/// its fields (recorded at open and later), its parent, whether it closed,
+/// and every event with the names of its enclosing spans, root first.
+/// Behind the `test-support` feature; never enabled by a runtime crate.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::collections::BTreeMap;
+    use std::fmt;
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::registry::LookupSpan;
+
+    #[derive(Clone, Debug)]
+    pub struct CapturedSpan {
+        pub id: u64,
+        pub name: String,
+        pub target: String,
+        pub parent: Option<u64>,
+        pub fields: BTreeMap<String, String>,
+        pub closed: bool,
+    }
+
+    impl CapturedSpan {
+        pub fn field(&self, name: &str) -> Option<&str> {
+            self.fields.get(name).map(String::as_str)
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct CapturedEvent {
+        pub target: String,
+        pub fields: BTreeMap<String, String>,
+        /// Enclosing span names, root first.
+        pub spans: Vec<String>,
+        /// Id of the innermost enclosing span.
+        pub span: Option<u64>,
+    }
+
+    impl CapturedEvent {
+        pub fn field(&self, name: &str) -> Option<&str> {
+            self.fields.get(name).map(String::as_str)
+        }
+
+        pub fn ancestry(&self) -> Vec<&str> {
+            self.spans.iter().map(String::as_str).collect()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    pub struct SpanCapture {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl SpanCapture {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Run `f` with this capture installed as the thread-local default
+        /// subscriber. Drive a current-thread runtime inside `f` so spawned
+        /// tasks run under it too.
+        pub fn run<T>(&self, f: impl FnOnce() -> T) -> T {
+            let subscriber = tracing_subscriber::registry().with(self.clone());
+            tracing::subscriber::with_default(subscriber, f)
+        }
+
+        pub fn spans(&self) -> Vec<CapturedSpan> {
+            self.spans.lock().expect("span capture poisoned").clone()
+        }
+
+        pub fn spans_named(&self, name: &str) -> Vec<CapturedSpan> {
+            self.spans()
+                .into_iter()
+                .filter(|span| span.name == name)
+                .collect()
+        }
+
+        /// The one span opened with `name`; panics if there are zero or many.
+        pub fn span(&self, name: &str) -> CapturedSpan {
+            let mut found = self.spans_named(name);
+            assert_eq!(
+                found.len(),
+                1,
+                "expected exactly one `{name}` span: {:?}",
+                self.spans()
+            );
+            found.remove(0)
+        }
+
+        pub fn events(&self) -> Vec<CapturedEvent> {
+            self.events.lock().expect("span capture poisoned").clone()
+        }
+
+        pub fn events_with_message(&self, target: &str, message: &str) -> Vec<CapturedEvent> {
+            self.events()
+                .into_iter()
+                .filter(|event| event.target == target && event.field("message") == Some(message))
+                .collect()
+        }
+    }
+
+    #[derive(Default)]
+    struct FieldVisitor(BTreeMap<String, String>);
+
+    impl Visit for FieldVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.0.insert(field.name().to_owned(), value.to_owned());
+        }
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+        fn record_f64(&mut self, field: &Field, value: f64) {
+            self.0.insert(field.name().to_owned(), value.to_string());
+        }
+        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+            self.0.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+    }
+
+    impl<S> Layer<S> for SpanCapture
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+            let mut visitor = FieldVisitor::default();
+            attrs.record(&mut visitor);
+            let parent = ctx
+                .span(id)
+                .and_then(|span| span.parent().map(|parent| parent.id().into_u64()));
+            self.spans
+                .lock()
+                .expect("span capture poisoned")
+                .push(CapturedSpan {
+                    id: id.into_u64(),
+                    name: attrs.metadata().name().to_owned(),
+                    target: attrs.metadata().target().to_owned(),
+                    parent,
+                    fields: visitor.0,
+                    closed: false,
+                });
+        }
+
+        fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
+            let mut visitor = FieldVisitor::default();
+            values.record(&mut visitor);
+            let mut spans = self.spans.lock().expect("span capture poisoned");
+            if let Some(span) = spans.iter_mut().find(|span| span.id == id.into_u64()) {
+                span.fields.extend(visitor.0);
+            }
+        }
+
+        fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
+            let mut spans = self.spans.lock().expect("span capture poisoned");
+            if let Some(span) = spans.iter_mut().find(|span| span.id == id.into_u64()) {
+                span.closed = true;
+            }
+        }
+
+        fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+            let mut visitor = FieldVisitor::default();
+            event.record(&mut visitor);
+            let spans = ctx
+                .event_scope(event)
+                .map(|scope| {
+                    scope
+                        .from_root()
+                        .map(|span| span.name().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.events
+                .lock()
+                .expect("span capture poisoned")
+                .push(CapturedEvent {
+                    target: event.metadata().target().to_owned(),
+                    fields: visitor.0,
+                    spans,
+                    span: ctx.event_span(event).map(|span| span.id().into_u64()),
+                });
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -820,7 +1053,7 @@ mod tests {
             );
             assert!(seen.insert(*name), "span `{name}` listed twice");
         }
-        assert_eq!(spans::ALL.len(), 9);
+        assert_eq!(spans::ALL.len(), 14);
     }
 
     #[test]

@@ -46,6 +46,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tracing::Instrument as _;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -393,9 +394,7 @@ impl SubprotocolHandler for CollabSync {
             let fanout = self.fanout.clone();
             let topic = topic.clone();
             let seq = state.last_folded.load(Ordering::Relaxed);
-            tokio::spawn(async move {
-                checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, seq).await;
-            });
+            tokio::spawn(checkpoint_task(store, fanout, topic, doc, seq));
         }
         state.apply_loop.abort();
     }
@@ -492,13 +491,24 @@ async fn run_apply_loop(
     loop {
         match stream.next().await {
             Ok(Some((seq, payload))) => {
+                // RFC-123 Phase 4: the apply loop belongs to no request, so each
+                // fold is its own short root span.
+                let apply_span = tracing::info_span!(
+                    target: pocopine_observe::TRACE_TARGET,
+                    parent: None,
+                    pocopine_observe::spans::COLLAB_APPLY,
+                    pocopine.collab.topic = topic.as_str(),
+                    pocopine.collab.seq = seq,
+                );
                 // Broadcasts are tagged `Update` messages; a malformed or
                 // non-Update frame must never kill the convergence loop.
-                if let Ok(CollabMessage::Update(update)) = CollabMessage::decode(&payload)
-                    && let Ok(doc) = doc.lock()
-                {
-                    let _ = doc.apply_update(&update);
-                }
+                apply_span.in_scope(|| {
+                    if let Ok(CollabMessage::Update(update)) = CollabMessage::decode(&payload)
+                        && let Ok(doc) = doc.lock()
+                    {
+                        let _ = doc.apply_update(&update);
+                    }
+                });
                 highest_seq = highest_seq.max(seq);
                 last_folded.store(highest_seq, Ordering::Relaxed);
                 folded += 1;
@@ -523,9 +533,9 @@ async fn run_apply_loop(
                             doc.clone(),
                             highest_seq,
                         );
-                        checkpoint = Some(tokio::spawn(async move {
-                            checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, seq).await;
-                        }));
+                        checkpoint = Some(tokio::spawn(checkpoint_task(
+                            store, fanout, topic, doc, seq,
+                        )));
                     }
                 }
             }
@@ -616,6 +626,33 @@ async fn subscribe_recovering(
 /// [`CHECKPOINT_TIMEOUT`]: a slow store degrades to "checkpoint skipped, retry
 /// next batch" instead of stalling convergence, and the store's monotonic guard
 /// makes a later fresher checkpoint correct regardless.
+/// A detached checkpoint under its own root span (RFC-123 Phase 4): it
+/// belongs to no request, and the span closes as OK or ERROR from the
+/// store's answer.
+async fn checkpoint_task(
+    store: Arc<dyn CollabStore>,
+    fanout: Arc<dyn Fanout>,
+    topic: Topic,
+    doc: Arc<Mutex<CollabDocument>>,
+    seq: u64,
+) {
+    let span = tracing::info_span!(
+        target: pocopine_observe::TRACE_TARGET,
+        parent: None,
+        pocopine_observe::spans::COLLAB_CHECKPOINT,
+        pocopine.collab.topic = topic.as_str(),
+        pocopine.collab.seq = seq,
+        otel.status_code = tracing::field::Empty,
+    );
+    let saved = checkpoint_and_trim(store.as_ref(), &fanout, &topic, &doc, seq)
+        .instrument(span.clone())
+        .await;
+    span.record(
+        pocopine_observe::fields::OTEL_STATUS_CODE,
+        if saved { "OK" } else { "ERROR" },
+    );
+}
+
 async fn checkpoint_and_trim(
     store: &dyn CollabStore,
     fanout: &Arc<dyn Fanout>,

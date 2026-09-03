@@ -66,3 +66,5 @@ redis = { version = "0.27", features = ["tokio-comp"] }
 bytes = "1"
 async-trait = "0.1"
 pocopine-events = { workspace = true }
+pocopine-observe = { workspace = true, features = ["test-support"] }
+pocopine-server = { workspace = true }
